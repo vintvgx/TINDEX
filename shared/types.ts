@@ -1,5 +1,6 @@
 // Shared types between mobile app and Supabase functions
 
+
 export interface User {
   id: string;
   email: string;
