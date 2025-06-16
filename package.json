@@ -1,0 +1,28 @@
+{
+  "name": "blog-generator-project",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "mobile"
+  ],
+  "scripts": {
+    "mobile:start": "cd mobile && npm start",
+    "mobile:android": "cd mobile && npm run android", 
+    "mobile:ios": "cd mobile && npm run ios",
+    "mobile:install": "cd mobile && npm install",
+    
+    "supabase:start": "supabase start",
+    "supabase:stop": "supabase stop",
+    "supabase:status": "supabase status",
+    "supabase:reset": "supabase db reset",
+    "supabase:deploy": "supabase functions deploy",
+    "supabase:logs": "supabase functions logs",
+    
+    "dev": "concurrently \"npm run supabase:start\" \"npm run mobile:start\"",
+    "setup": "npm run mobile:install && supabase start",
+    "clean": "cd mobile && npm run clean && supabase stop"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
