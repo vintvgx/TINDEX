@@ -38,3 +38,16 @@ export const supabase = createClient(
 
 // Export environment variables for other functions to use
 export { env } 
+
+
+export interface ApiKeys {
+  NEWS_API_KEY: string,
+  SERP_API_KEY: string
+}
+
+export enum PriorityLevel {
+  DEBUG = "debug",
+  LOW = "low",
+  NORMAL = "normal",
+  HIGH =  "high"
+}
