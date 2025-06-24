@@ -1,5 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { ApiKeys, PriorityLevel } from "../shared/client";
+import { NEWS_API_THUNDER_PACERS_DATA_06_16_25, SERP_API_THUNDER_PACERS_DATA_06_23_25, SERP_OCGN_DATA } from "./DATA";
 
 /**
  * Supabase serverless function to generate blog post
@@ -12,12 +14,17 @@ interface BlogGenerationRequest {
   topicName?: string;
   userId: string;
   targetLength?: number;
-  priority?: "low" | "normal" | "high";
+  priority?: PriorityLevel
 }
 
 serve(async (req) => {
+  console.log("=== BLOG GENERATION START ===");
+  console.log("Request method:", req.method);
+  console.log("Request URL:", req.url);
+
   // Handle CORS
   if (req.method === "OPTIONS") {
+    console.log("CORS preflight request handled");
     return new Response("ok", {
       headers: {
         "Access-Control-Allow-Origin": "*",
@@ -29,161 +36,310 @@ serve(async (req) => {
   }
 
   try {
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL") ?? "",
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+    console.log("Creating Supabase client...");
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+    console.log("Supabase URL exists:", !!supabaseUrl);
+    console.log("Supabase Key exists:", !!supabaseKey);
+    console.log(
+      "Supabase URL (partial):",
+      supabaseUrl ? supabaseUrl : "not set"
+    );
+    console.log(
+      "Supabase Key (partial):",
+      supabaseKey ? supabaseKey : "not set"
     );
 
-    // create supabase client
-    // const supabaseUrl = "https://djpgoofhctzmbgcuxdqr.supabase.co";
-    // //TODO delete after testing
-    // const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRqcGdvb2ZoY3R6bWJnY3V4ZHFyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTAwMzI2MDgsImV4cCI6MjA2NTYwODYwOH0.vSwKF3G01IgDzaLzqfgdhOGclitwsKnRqhwnwRH8Oug'
-    // const supabase = createClient(supabaseUrl, supabaseKey);
+    if (!supabaseUrl) {
+      throw new Error("SUPABASE_URL environment variable is not set");
+    }
+    if (!supabaseKey) {
+      throw new Error(
+        "SUPABASE_SERVICE_ROLE_KEY environment variable is not set"
+      );
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    console.log("Supabase client created successfully");
+
+    // Test Supabase connection
+    console.log("=== TESTING SUPABASE CONNECTION ===");
+    try {
+      console.log("Test 2: Basic select from topics...");
+      const { data: topicsData, error: topicsError } = await supabase
+        .from("topics")
+        .select("id")
+        .limit(1);
+
+      if (topicsError) {
+        console.error("❌ Topics table test failed:", topicsError);
+        console.error(
+          "Topics error details:",
+          JSON.stringify(topicsError, null, 2)
+        );
+      } else {
+        console.log(
+          "✅ Topics table test successful, found",
+          topicsData?.length || 0,
+          "records"
+        );
+      }
+    } catch (testError) {
+      console.error("❌ Topics table test exception:", testError);
+    }
 
     if (req.method !== "POST") {
-      return new Response("Method not allowed", { status: 405 });
+      console.log("Invalid method:", req.method);
+      throw new Error(
+        `Method ${req.method} not allowed. Only POST is supported.`
+      );
+    }
+
+    console.log("Parsing request body...");
+    let requestBody;
+    try {
+      requestBody = await req.json();
+      console.log("Request body parsed:", JSON.stringify(requestBody, null, 2));
+    } catch (parseError) {
+      console.error("Failed to parse request body:", parseError);
+      throw new Error("Invalid JSON in request body: " + parseError.message);
     }
 
     const {
       topicId,
       topicName,
       userId,
-      targetLength = 800,
-    }: BlogGenerationRequest = await req.json();
+      targetLength = 500, //TODO change this based on the priority status
+      priority
+    }: BlogGenerationRequest = requestBody;
 
-     // Validate input - must have either topicId or topicName
-     if (!topicId && !topicName) {
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: "Either topicId or topicName must be provided",
-        }),
-        {
-          headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-          },
-          status: 400,
-        }
+    console.log("Extracted parameters:");
+    console.log("- topicId:", topicId);
+    console.log("- topicName:", topicName);
+    console.log("- userId:", userId);
+    console.log("- targetLength:", targetLength);
+
+    // Validate input - must have either topicId or topicName
+    if (!topicId && !topicName) {
+      console.error(
+        "Validation failed: Neither topicId nor topicName provided"
       );
+      throw new Error("Either topicId or topicName must be provided");
     }
 
+    if (!userId) {
+      console.error("Validation failed: userId not provided");
+      throw new Error("userId is required");
+    }
+
+    console.log("Input validation passed");
+
     // Create generation job
+    console.log("Creating generation job...");
     const jobId = crypto.randomUUID();
-    const { error: jobError } = await supabase.from("generation_jobs").insert({
+    console.log("Generated job ID:", jobId);
+
+    const jobInsertData = {
       id: jobId,
-      topic_id: topicId,
+      topic_id: topicId ? topicId : null,
       user_id: userId,
       status: "processing",
       current_step: "initializing",
       started_at: new Date().toISOString(),
-    });
+    };
+    console.log("Job insert data:", JSON.stringify(jobInsertData, null, 2));
 
-    if (jobError) throw jobError;
+    const { data: jobData, error: jobError } = await supabase
+      .from("generation_jobs")
+      .insert(jobInsertData)
+      .select();
+
+    if (jobError) {
+      console.error("Failed to create generation job:", jobError);
+      throw new Error(`Failed to create generation job: ${jobError.message}`);
+    }
+    console.log("Generation job created successfully");
 
     // Get topic details
-    // const { data: topic, error: topicError } = await supabase
-    //   .from("topics")
-    //   .select("*")
-    //   .eq("id", topicId)
-    //   .single();
+    console.log("Getting or creating topic...");
+    const {topic, topicIdentification} = await getOrCreateTopic(supabase, topicId, topicName, userId);
 
-      const { topic: providedTopicName, topicId: providedTopicId, topicError, createError } = await getOrCreateTopic(
-        supabase,
-        topicId,
-        topicName,
-        userId
-      );
-  
-
-    if (topicError || createError || !providedTopicName) {
-      console.log("Topic not within topic db. Continuing with generation...");
-      // throw new Error("Topic not found");
-    }
-
-    // Step 1: Research
+    // Step 1: Research Topic
+    console.log("=== STEP 1: RESEARCH ===");
     await updateJobProgress(supabase, jobId, 20, "research");
-    const researchData = await researchTopic(providedTopicName.name, supabase);
+    const researchData = await researchTopic(supabase,topic, topicIdentification, priority);
+
+    console.log("Research completed, data keys:", Object.keys(researchData));
 
     // Step 2: Generate content
+    console.log("=== STEP 2: CONTENT GENERATION ===");
     await updateJobProgress(supabase, jobId, 50, "generation");
-    const blogContent = await generateAIContent(
-      providedTopicName.name,
-      researchData,
-      targetLength
-    );
+    // const blogContent = await generateAIContent(
+    //   finalTopicName,
+    //   researchData,
+    //   targetLength
+    // );
+    console.log("Content generation completed");
+    // console.log("Generated content preview:", {
+    //   title: blogContent.title,
+    //   wordCount: blogContent.wordCount,
+    //   readingTime: blogContent.readingTime,
+    //   contentLength: blogContent.content?.length || 0
+    // });
 
     // Step 3: Enhance
-    await updateJobProgress(supabase, jobId, 80, "enhancement");
-    const enhancedContent = await enhanceWithMedia(blogContent);
+    console.log("=== STEP 3: ENHANCEMENT ===");
+    // await updateJobProgress(supabase, jobId, 80, "enhancement");
+    // const enhancedContent = await enhanceWithMedia(blogContent);
+    // console.log("Content enhancement completed");
 
     // Save blog post
+    console.log("=== STEP 4: SAVING BLOG POST ===");
+    const blogPostData = {
+      topic_id: "f7a8b9c0-1234-5678-9abc-def012345678",
+      user_id: "a1b2c3d4-5678-90ab-cdef-123456789012",
+      title: "Understanding Machine Learning: A Complete Guide",
+      content:
+        "Machine learning is transforming industries worldwide. This comprehensive guide covers the basics, applications, and future trends of ML technology.",
+      meta_description:
+        "Learn about machine learning basics, applications, and future trends in this comprehensive guide for beginners and professionals.",
+      keywords: ["machine learning", "AI", "technology", "automation"],
+      hashtags: ["#MachineLearning", "#AI", "#Tech"],
+      word_count: 150,
+      reading_time: 2,
+      status: "published",
+      generation_job_id: "job_789abc12-3456-7890-abcd-ef1234567890",
+      seo_data: {
+        metaDescription: "Learn ML basics",
+        keywords: ["AI"],
+        readabilityScore: 85,
+      },
+      multimedia_data: { images: [], videos: [], tables: [] },
+      research_data: {
+        newsArticles: [],
+        serpApiData: [],
+        trendingInfo: [],
+        statistics: [],
+        recentDevelopments: [],
+        keyFacts: [],
+      },
+      published_at: new Date().toISOString(),
+    };
+    // const blogPostData = {
+    //   topic_id: providedTopicId,
+    //   user_id: userId,
+    //   title: enhancedContent.title,
+    //   content: enhancedContent.content,
+    //   meta_description: enhancedContent.seo?.metaDescription,
+    //   keywords: enhancedContent.keywords,
+    //   hashtags: enhancedContent.hashtags,
+    //   word_count: enhancedContent.wordCount,
+    //   reading_time: enhancedContent.readingTime,
+    //   status: "published",
+    //   generation_job_id: jobId,
+    //   seo_data: enhancedContent.seo,
+    //   multimedia_data: enhancedContent.multimedia,
+    //   research_data: researchData,
+    //   published_at: new Date().toISOString(),
+    // };
+    console.log(
+      "Blog post data to insert:",
+      JSON.stringify(blogPostData, null, 2)
+    );
+
+    // Adds the blog post to DB
     const { data: blogPost, error: insertError } = await supabase
       .from("blog_posts")
-      .insert({
-        topic_id: topicId,
-        user_id: userId,
-        title: enhancedContent.title,
-        content: enhancedContent.content,
-        meta_description: enhancedContent.seo?.metaDescription,
-        keywords: enhancedContent.keywords,
-        hashtags: enhancedContent.hashtags,
-        word_count: enhancedContent.wordCount,
-        reading_time: enhancedContent.readingTime,
-        status: "published",
-        generation_job_id: jobId,
-        seo_data: enhancedContent.seo,
-        multimedia_data: enhancedContent.multimedia,
-        research_data: researchData,
-        published_at: new Date().toISOString(),
-      })
+      .insert(blogPostData)
       .select()
       .single();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      console.error("Failed to insert blog post:", insertError);
+      throw new Error(`Failed to save blog post: ${insertError.message}`);
+    }
+
+    console.log("Blog post saved successfully, ID:", blogPost.id);
 
     // Complete job
+    console.log("=== STEP 5: COMPLETING JOB ===");
     await updateJobProgress(supabase, jobId, 100, "completed");
-    await supabase
+
+    const jobUpdateData = {
+      status: "completed",
+      completed_at: new Date().toISOString(),
+      result_data: { blog_post_id: blogPost.id, result: blogPost.status },
+    };
+    console.log("Job completion data:", JSON.stringify(jobUpdateData, null, 2));
+
+    const { error: jobCompleteError } = await supabase
       .from("generation_jobs")
-      .update({
-        status: "completed",
-        completed_at: new Date().toISOString(),
-        result_data: { blog_post_id: blogPost.id, result: blogPost.status },
-      })
+      .update(jobUpdateData)
       .eq("id", jobId);
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        jobId,
-        blogPostId: blogPost.id,
-        message: "Blog post generated successfully",
-      }),
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-        },
-        status: 200,
-      }
-    );
-  } catch (error) {
-    console.error("Generation error:", error);
+    if (jobCompleteError) {
+      console.error("Failed to complete job:", jobCompleteError);
+      throw new Error(`Failed to complete job: ${jobCompleteError.message}`);
+    }
 
-    return new Response(
-      JSON.stringify({
-        success: false,
-        error: error.message,
-      }),
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-        },
-        status: 500,
-      }
+    console.log("Job completed successfully");
+    const successResponse = {
+      success: true,
+      jobId,
+      blogPostId: blogPost.id,
+      message: "Blog post generated successfully",
+    };
+
+    const debugResponse = {
+      success: true,
+      jobId,
+      blogPostId: blogPost.id,
+      message: "Blog post generated successfully",
+      blogPostData: blogPost,
+    };
+    console.log(
+      "Returning success response:",
+      JSON.stringify(successResponse, null, 2)
     );
+    console.log("=== BLOG GENERATION SUCCESS ===");
+
+    return new Response(JSON.stringify(debugResponse), {
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      },
+      status: 200,
+    });
+  } catch (error) {
+    console.error("=== BLOG GENERATION ERROR ===");
+    console.error("Error type:", error.constructor.name);
+    console.error("Error message:", error.message);
+    console.error("Error stack:", error.stack);
+    console.error("Error cause:", error.cause);
+    console.error(
+      "Full error object:",
+      JSON.stringify(error, Object.getOwnPropertyNames(error), 2)
+    );
+
+    const errorResponse = {
+      success: false,
+      error: error.message,
+      details: error.stack,
+      errorType: error.constructor.name,
+    };
+    console.log(
+      "Returning error response:",
+      JSON.stringify(errorResponse, null, 2)
+    );
+
+    return new Response(JSON.stringify(errorResponse), {
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      },
+      status: 500,
+    });
   }
 });
 
@@ -193,88 +349,138 @@ async function updateJobProgress(
   progress: number,
   step: string
 ) {
-  console.log("Update job Progress:", progress);
-  await supabase
-    .from("generation_jobs")
-    .update({
+  console.log(`Updating job progress: ${progress}% - ${step}`);
+  try {
+    const updateData = {
       progress,
       current_step: step,
-    })
-    .eq("id", jobId);
+    };
+    console.log(
+      "Job progress update data:",
+      JSON.stringify(updateData, null, 2)
+    );
+
+    const { error } = await supabase
+      .from("generation_jobs")
+      .update(updateData)
+      .eq("id", jobId);
+
+    if (error) {
+      console.error("Failed to update job progress:", error);
+      throw new Error(`Failed to update job progress: ${error.message}`);
+    }
+    console.log("Job progress updated successfully");
+  } catch (error) {
+    console.error("Error in updateJobProgress:", error);
+    throw error;
+  }
 }
 
 /**
- * Looks up the data of the specified topic and returns information on the topic
+ * Looks up the data of the specified topic and returns information on the topic.
+ * First, checks if the topic has any data available in the cache
  *
- * TODO: optimize to generate data based on the trending topic or most recent data
- * TODO: apply statistical information to generate tables with AI
+ *  @param supabase DB
+ * @param topic name of searched topic
+ * @param topicIdentification id of topic
+ * @returns
  */
-async function researchTopic(topic: string, supabase: any, topicId?: string) {
+async function researchTopic(supabase: any, topic: string, topicIdentification: string, priority?: PriorityLevel) {
+  console.log("=== RESEARCH TOPIC START ===");
+  console.log(`Researching topic: "${topic}"`);
+
+  // Go through cache data and return if data is found, else continue to research topic
+  let cachedData = fetchCacheTopic(supabase, topic, topicIdentification);
+  if (cachedData) return cachedData;
+
+  // The record for the data being cached
   let cacheRecordId = null;
 
-  console.log(`Researching: ${topic}`);
-
-  // Check if we have cached data first (optional - for performance)
-  // Return the cached data
-  if (topicId) {
-    const { data: cachedData } = await supabase
-      .from("research_topic_cache")
-      .select("*")
-      .eq("topic_id", topicId)
-      .gte(
-        "research_date",
-        new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-      ) // Within last 24 hours
-      .single();
-
-    if (cachedData) {
-      console.log("Using cached research data");
-      return {
-        newsArticles: cachedData.news_articles || [],
-        trendingInfo: cachedData.trending_info || [],
-        statistics: cachedData.statistics || [],
-        recentDevelopments: cachedData.recent_developments || [],
-        keyFacts: cachedData.key_facts || [],
-      };
-    }
-  }
-
+  // No cache data for topic - start new research
   try {
-    // Set initial status to pending if we have a topicId
-    if (topicId) {
-      const { data: pendingRecord, error: insertError } = await supabase
-        .from("research_topic_cache")
-        .insert({
-          topic_id: topicId,
-          research_status: "pending",
-        })
-        .select("id")
-        .single();
+    console.log("Starting fresh research...");
 
-      if (!insertError && pendingRecord) {
-        cacheRecordId = pendingRecord.id;
+    // Set initial status to pending if we have a topicId
+    //NOTE: Topic is created within getORCreateTopic() func (if topic/topicID return it, else create new one)
+    if (topicIdentification) {
+      // Start new search by creating cache record (update with information after completing research)
+      console.log("Creating pending cache record...");
+      try {
+        const pendingData = {
+          topic_id: topicIdentification,
+          research_status: "pending",
+        };
+        console.log(
+          "Pending cache data:",
+          JSON.stringify(pendingData, null, 2)
+        );
+
+        const { data: pendingRecord, error: insertError } = await supabase
+          .from("research_topic_cache")
+          .insert(pendingData)
+          .select("id")
+          .single();
+
+        if (insertError) {
+          console.error("Failed to create pending cache record:", insertError);
+          // Continue without caching
+        } else if (pendingRecord) {
+          // Cache record successfully created - set cacheRecordID
+          cacheRecordId = pendingRecord.id;
+          console.log("Pending cache record created with ID:", cacheRecordId);
+        }
+      } catch (pendingError) {
+        console.error("Error creating pending cache record:", pendingError);
+        // Continue without caching
       }
     }
-    const newsApiKey = Deno.env.get("NEWS_API_KEY");
-    const serpApiKey = Deno.env.get("SERP_API_KEY");
+
+    // Get API keys
+    //TODO fix error (6/23/25)
+    const keys: ApiKeys = fetchAPIKeys()
+
+    console.log("Fetching news data...");
+    const newsApiData = await fetchNewsApi(
+      topic,
+      keys.NEWS_API_KEY,
+      priority
+    );
+    console.log("News API data received:", {
+      articlesCount: newsApiData.articles?.length || 0,
+      status: newsApiData.status,
+      totalResults: newsApiData.totalResults,
+    });
+
+    console.log("Fetching SERP data...");
+    const serpData = await fetchSerpAPIData(
+      topic,
+      keys.SERP_API_KEY,
+      priority
+    );
+    console.log("SERP API data received:", {
+      resultsCount: serpData?.length || 0,
+      status: serpData.search_metadata.status,
+
+    });
 
 
-    const newsApiData = await fetchNewsApi(topic, newsApiKey);
-    const serpData = await fetchSerpAPIData(topic, serpApiKey);
+    //TODO Go through returned data from serp api + news api, figure out how data is being parsed and handled once the data is combinded. 
+    //TODO update the blog post generation prompt to better parse data and provide most relevant information 
+    // TODO store blog post generation with research data to be used in conjunction with blog post generation 
+    // tODO example, use serpApiData.answer_box.finance_results -> to display current price, whether market is closed or open, price improvement, 
 
-    if (newsApiData.articles) { 
-      const processedArticles = newsApiData.articles.map(article => ({
+    if (newsApiData.articles) {
+      const processedArticles = newsApiData.articles.map((article) => ({
         title: article.title,
         description: article.description,
         source: article.source.name,
         publishedAt: article.publishedAt,
         url: article.url,
         imageUrl: article.urlToImage,
-        content: article.content
+        content: article.content,
       }));
-      console.log("Research Data: Processed Articles - ", processedArticles)
+      console.log("Processed articles count:", processedArticles.length);
     }
-
 
     const researchResult = {
       newsArticles: newsApiData.articles || [],
@@ -285,30 +491,46 @@ async function researchTopic(topic: string, supabase: any, topicId?: string) {
       keyFacts: [],
     };
 
+    console.log("Research result summary:", {
+      newsArticles: researchResult.newsArticles.length,
+      serpApiData: researchResult.serpApiData.length,
+      trendingInfo: researchResult.trendingInfo.length,
+      statistics: researchResult.statistics.length,
+      recentDevelopments: researchResult.recentDevelopments.length,
+      keyFacts: researchResult.keyFacts.length,
+    });
+
     // Save successful research data to cache
     if (topicId && cacheRecordId) {
-      const { error: updateError } = await supabase
-        .from("research_topic_cache")
-        .update({
+      console.log("Updating cache with research results...");
+      try {
+        const cacheUpdateData = {
           news_articles: researchResult.newsArticles,
           trending_info: researchResult.trendingInfo,
           statistics: researchResult.statistics,
           recent_developments: researchResult.recentDevelopments,
           key_facts: researchResult.keyFacts,
+          serp_api_data: serpData,
           research_status: "completed",
-        })
-        .eq("id", cacheRecordId);
+        };
 
-      if (updateError) {
-        console.error("Failed to update cache:", updateError);
-      } else {
-        console.log("Research data cached successfully");
+        const { error: updateError } = await supabase
+          .from("research_topic_cache")
+          .update(cacheUpdateData)
+          .eq("id", cacheRecordId);
+
+        if (updateError) {
+          console.error("Failed to update cache:", updateError);
+        } else {
+          console.log("Research data cached successfully");
+        }
+      } catch (updateError) {
+        console.error("Error updating cache:", updateError);
       }
     } else if (topicId) {
-      // If we don't have a cache record ID, try direct insert
-      const { error: insertError } = await supabase
-        .from("research_topic_cache")
-        .insert({
+      console.log("Inserting new cache record...");
+      try {
+        const cacheInsertData = {
           topic_id: topicId,
           news_articles: researchResult.newsArticles,
           trending_info: researchResult.trendingInfo,
@@ -317,155 +539,292 @@ async function researchTopic(topic: string, supabase: any, topicId?: string) {
           key_facts: researchResult.keyFacts,
           serp_api_data: serpData,
           research_status: "completed",
-        });
+        };
 
-      if (insertError) {
-        console.error("Failed to cache research data:", insertError);
-      } else {
-        console.log("Research data cached successfully");
+        const { error: insertError } = await supabase
+          .from("research_topic_cache")
+          .insert(cacheInsertData);
+
+        if (insertError) {
+          console.error("Failed to cache research data:", insertError);
+        } else {
+          console.log("Research data cached successfully");
+        }
+      } catch (insertError) {
+        console.error("Error inserting cache data:", insertError);
       }
     }
 
+    console.log("=== RESEARCH TOPIC SUCCESS ===");
     return researchResult;
   } catch (error) {
+    console.error("=== RESEARCH TOPIC ERROR ===");
     console.error("Research error:", error);
 
     // Update cache with error status if we have a record
     if (topicId && cacheRecordId) {
-      await supabase
-        .from("research_topic_cache")
-        .update({
+      console.log("Updating cache with error status...");
+      try {
+        await supabase
+          .from("research_topic_cache")
+          .update({
+            research_status: "failed",
+            error_message:
+              error instanceof Error ? error.message : "Unknown error",
+          })
+          .eq("id", cacheRecordId);
+        console.log("Cache updated with error status");
+      } catch (updateError) {
+        console.error("Failed to update cache with error:", updateError);
+      }
+    } else if (topicId) {
+      console.log("Inserting failed cache record...");
+      try {
+        await supabase.from("research_topic_cache").insert({
+          topic_id: topicId,
           research_status: "failed",
           error_message:
             error instanceof Error ? error.message : "Unknown error",
-        })
-        .eq("id", cacheRecordId);
-    } else if (topicId) {
-      // Insert failed record
-      await supabase.from("research_topic_cache").insert({
-        topic_id: topicId,
-        research_status: "failed",
-        error_message: error instanceof Error ? error.message : "Unknown error",
-        news_articles: [],
-        trending_info: [],
-        statistics: [],
-        recent_developments: [],
-        key_facts: [],
-      });
+          news_articles: [],
+          trending_info: [],
+          statistics: [],
+          recent_developments: [],
+          key_facts: [],
+        });
+        console.log("Failed cache record inserted");
+      } catch (insertError) {
+        console.error("Failed to insert error cache record:", insertError);
+      }
     }
 
-    return {
+    const fallbackResult = {
       newsArticles: [],
       trendingInfo: [],
       statistics: [],
       recentDevelopments: [],
       keyFacts: [],
     };
+    console.log("Returning fallback research result");
+    return fallbackResult;
   }
 }
 
-async function fetchNewsApi(topic: string, apiKey: string) {
-  try {
-    const newsResponse = await fetch(
-      `https://newsapi.org/v2/everything?q=${encodeURIComponent(
-        topic
-      )}&apiKey=${Deno.env.get("NEWS_API_KEY")}&pageSize=5`
-    );
-    const newsData = await newsResponse.json();
-    console.log("Research Topic (newsData):", newsData);
+async function fetchNewsApi(topic: string, apiKey: string, priority?: PriorityLevel) {
+  console.log("=== FETCH NEWS API START ===");
+  console.log("Topic:", topic);
+  console.log("API Key exists:", !!apiKey);
 
-    return newsData
+  if (priority == PriorityLevel.DEBUG) {
+    //Return mocked data if debugging
+    console.log("Debugging enabled. Returning NEWS API THUNDER PACERS 06/16/2025 data...")
+    return JSON.stringify(NEWS_API_THUNDER_PACERS_DATA_06_16_25, null, 2)
+  }
+ 
+  if (!apiKey) {
+    //TODO remove / fetchAPIKeys throws an error if the keys are not present
+    console.warn("No News API key provided, returning empty result");
+    return { articles: [] };
+  }
+
+  try {
+    const encodedTopic = encodeURIComponent(topic);
+    const url = `https://newsapi.org/v2/everything?q=${encodedTopic}&apiKey=${apiKey}&pageSize=5`;
+    console.debug(
+      "News API URL (without key):",
+      url.replace(apiKey, "[REDACTED]")
+    );
+
+    console.log("Making News API request...");
+    const newsResponse = await fetch(url);
+    console.log("News API response status:", newsResponse.status);
+    console.log("News API response ok:", newsResponse.ok);
+
+    if (!newsResponse.ok) {
+      const errorText = await newsResponse.text();
+      console.error("News API error response:", errorText);
+      throw new Error(
+        `News API request failed with status ${newsResponse.status}: ${errorText}`
+      );
+    }
+
+    console.log("Parsing News API response...");
+    const newsData = await newsResponse.json();
+    console.log("News API response data:", {
+      status: newsData.status,
+      totalResults: newsData.totalResults,
+      articlesCount: newsData.articles?.length || 0,
+    });
+
+    if (newsData.status === "error") {
+      console.error("News API returned error:", newsData);
+      throw new Error(`News API error: ${newsData.message || "Unknown error"}`);
+    }
+
+    console.log("=== FETCH NEWS API SUCCESS ===");
+    return newsData;
   } catch (error) {
+    console.error("=== FETCH NEWS API ERROR ===");
     console.error("NewsApi request failed:", error);
-    throw error;
+    throw new Error(`News API fetch failed: ${error.message}`);
   }
 }
 
 /**
  * Fetch data from SerpAPI for search results
- * Add this function to your code after the fetchNewsApi function
  */
-async function fetchSerpAPIData(topic: string, apiKey: string) {
+async function fetchSerpAPIData(topic: string, apiKey: string, priority?: PriorityLevel) {
+  console.log("=== FETCH SERP API START ===");
+  console.debug("Topic:", topic);
+  console.debug("API Key exists:", !!apiKey);
+
+  if (priority == PriorityLevel.DEBUG) {
+    //Return mocked data if debugging
+    console.log("Debugging enabled. Returning SERP_API_THUNDER_PACERS_DATA 06/23/25 data...")
+    return JSON.stringify(SERP_API_THUNDER_PACERS_DATA_06_23_25, null, 2)
+  }
+
   if (!apiKey) {
+    //TODO remove / fetchAPIKeys throws an error if the keys are not present
     console.warn("SERP_API_KEY not found, skipping SerpAPI data");
     return [];
   }
 
   try {
-    const serpResponse = await fetch(
-      `https://serpapi.com/search.json?q=${encodeURIComponent(topic)}&api_key=${apiKey}&engine=google&num=10`
+    const encodedTopic = encodeURIComponent(topic);
+    const url = `https://serpapi.com/search.json?q=${encodedTopic}&api_key=${apiKey}&engine=google&num=10`;
+    console.log(
+      "SERP API URL (without key):",
+      url.replace(apiKey, "[REDACTED]")
     );
-    
+
+    console.log("Making SERP API request...");
+    const serpResponse = await fetch(url);
+    console.log("SERP API response status:", serpResponse.status);
+    console.log("SERP API response ok:", serpResponse.ok);
+
     if (!serpResponse.ok) {
-      throw new Error(`SerpAPI request failed: ${serpResponse.status}`);
+      const errorText = await serpResponse.text();
+      console.error("SERP API error response:", errorText);
+      throw new Error(
+        `SerpAPI request failed with status ${serpResponse.status}: ${errorText}`
+      );
     }
-    
+
+    console.log("Parsing SERP API response...");
     const serpData = await serpResponse.json();
-    console.log("SerpAPI data:", serpData);
+    console.log("SERP API response data keys:", Object.keys(serpData));
+    console.log(
+      "SERP API organic results count:",
+      serpData.organic_results?.length || 0
+    );
+
+    if (serpData.error) {
+      console.error("SERP API returned error:", serpData.error);
+      throw new Error(`SERP API error: ${serpData.error}`);
+    }
 
     // Extract organic results if available
     const organicResults = serpData.organic_results || [];
-    
-    return organicResults.map((result: any) => ({
+    console.log("Processing organic results...");
+
+    const processedResults = organicResults.map((result: any) => ({
       title: result.title,
       link: result.link,
       snippet: result.snippet,
       displayedLink: result.displayed_link,
-      position: result.position
+      position: result.position,
     }));
+
+    console.log("Processed SERP results count:", processedResults.length);
+    console.log("=== FETCH SERP API SUCCESS ===");
+    return processedResults;
   } catch (error) {
+    console.error("=== FETCH SERP API ERROR ===");
     console.error("SerpAPI request failed:", error);
-    return []; // Return empty array instead of throwing to prevent breaking the flow
+    // Return empty array instead of throwing to prevent breaking the flow
+    console.log("Returning empty SERP results due to error");
+    return [];
   }
 }
 
-
 /**
  * Uses claude to generate a blog post based on the specified topic.
- *
- * TODO: update to return blog post in markdown language
- * TODO: ensure statistical information is displayed in tables , utilize the use of blog post type definitions
- *
- * @param topic
- * @param researchData
- * @param targetLength
- * @returns
  */
 async function generateAIContent(
   topic: string,
   researchData: any,
   targetLength: number
 ) {
-  console.log(`Generating content for: ${topic}`);
+  console.log("=== GENERATE AI CONTENT START ===");
+  console.log(`Topic: "${topic}"`);
+  console.log("Target length:", targetLength);
+  console.log("Research data available:", !!researchData);
+
+  const anthropicApiKey = Deno.env.get("ANTHROPIC_API_KEY");
+  console.log("Anthropic API Key exists:", !!anthropicApiKey);
+
+  if (!anthropicApiKey) {
+    console.error("ANTHROPIC_API_KEY not found");
+    throw new Error("ANTHROPIC_API_KEY environment variable is not set");
+  }
 
   try {
+    const requestBody = {
+      model: "claude-3-5-sonnet-20241022",
+      max_tokens: 1024,
+      temperature: 0.7,
+      messages: [
+        {
+          role: "user",
+          content: `You are an expert blog writer. Create engaging, well-structured content.
+
+Write a ${targetLength}-word blog post about "${topic}". Include a compelling title, structured content with headings, and conclude with key takeaways.`,
+        },
+      ],
+    };
+
+    console.log("Making Anthropic API request...");
+    console.log("Request body:", JSON.stringify(requestBody, null, 2));
+
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
-        "x-api-key": Deno.env.get("ANTHROPIC_API_KEY")!,
+        "x-api-key": anthropicApiKey,
         "anthropic-version": "2023-06-01",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: "claude-3-5-sonnet-20241022",
-        max_tokens: 1024,
-        // max_tokens: Math.min(4096, Math.floor(targetLength * 1.5)),
-        temperature: 0.7,
-        messages: [
-          {
-            role: "user",
-            content: `You are an expert blog writer. Create engaging, well-structured content.
-
-Write a ${targetLength}-word blog post about "${topic}". Include a compelling title, structured content with headings, and conclude with key takeaways.`,
-          },
-        ],
-      }),
+      body: JSON.stringify(requestBody),
     });
 
-    const data = await response.json();
-    const content = data.content[0].text;
+    console.log("Anthropic API response status:", response.status);
+    console.log("Anthropic API response ok:", response.ok);
 
-    return {
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Anthropic API error response:", errorText);
+      throw new Error(
+        `Anthropic API request failed with status ${response.status}: ${errorText}`
+      );
+    }
+
+    console.log("Parsing Anthropic API response...");
+    const data = await response.json();
+    console.log("Anthropic API response data keys:", Object.keys(data));
+    console.log("Content array length:", data.content?.length || 0);
+
+    if (!data.content || !data.content[0] || !data.content[0].text) {
+      console.error("Invalid response structure from Anthropic API:", data);
+      throw new Error("Invalid response structure from Anthropic API");
+    }
+
+    const content = data.content[0].text;
+    console.log("Generated content length:", content.length);
+    console.log(
+      "Generated content preview:",
+      content.substring(0, 200) + "..."
+    );
+
+    const result = {
       title: `Understanding ${topic}: A Comprehensive Guide`,
       content: content,
       keywords: [topic.toLowerCase()],
@@ -473,9 +832,22 @@ Write a ${targetLength}-word blog post about "${topic}". Include a compelling ti
       wordCount: content.split(" ").length,
       readingTime: Math.ceil(content.split(" ").length / 200),
     };
+
+    console.log("AI content generation result:", {
+      title: result.title,
+      wordCount: result.wordCount,
+      readingTime: result.readingTime,
+      keywordsCount: result.keywords.length,
+      hashtagsCount: result.hashtags.length,
+    });
+
+    console.log("=== GENERATE AI CONTENT SUCCESS ===");
+    return result;
   } catch (error) {
+    console.error("=== GENERATE AI CONTENT ERROR ===");
     console.error("AI generation error:", error);
-    return {
+
+    const fallbackResult = {
       title: `Understanding ${topic}`,
       content: `This is a comprehensive guide about ${topic}. Content generation encountered an issue, but this fallback ensures you still receive valuable information.`,
       keywords: [topic.toLowerCase()],
@@ -483,20 +855,20 @@ Write a ${targetLength}-word blog post about "${topic}". Include a compelling ti
       wordCount: 50,
       readingTime: 1,
     };
+
+    console.log("Returning fallback AI content");
+    return fallbackResult;
   }
 }
 
 /**
- * TODO: Enhance blog post by appending a cover, adding multimedia to a post, etc.
- * NOTE: Currently returns the blog post as is
- *
- * @param blogContent
- * @returns
+ * Enhance blog post by appending a cover, adding multimedia to a post, etc.
  */
 async function enhanceWithMedia(blogContent: any) {
-  console.log("Enhancing with multimedia");
+  console.log("=== ENHANCE WITH MEDIA START ===");
+  console.log("Blog content keys:", Object.keys(blogContent));
 
-  return {
+  const enhanced = {
     ...blogContent,
     multimedia: {
       images: [],
@@ -504,28 +876,49 @@ async function enhanceWithMedia(blogContent: any) {
       tables: [],
     },
     seo: {
-      metaDescription: blogContent.content.substring(0, 155),
-      keywords: blogContent.keywords,
+      metaDescription:
+        blogContent.content?.substring(0, 155) || "Generated blog content",
+      keywords: blogContent.keywords || [],
       readabilityScore: 85,
     },
   };
+
+  console.log("Enhancement completed");
+  console.log("Enhanced content keys:", Object.keys(enhanced));
+  console.log("=== ENHANCE WITH MEDIA SUCCESS ===");
+
+  return enhanced;
 }
 
 /**
- * Get existing topic or create a new one
+ * Get existing topic or create a new one.
+ *
+ * @param supabase DB
+ * @param providedTopicId the topic id provided
+ * @param providedTopicName the topic name provided
+ * @param userId the identification of the user making the request
+ * 
+ * 
  */
 async function getOrCreateTopic(
   supabase: any,
   providedTopicId?: string,
   providedTopicName?: string,
   userId?: string
-) {
+) { // create Return Promise to return topic + topicID
   let topic;
-  let topicId;
-  let topicError;
-  let createError;
+  let topicIdentification;
+
+  if (!providedTopicId && !providedTopicName) {
+    throw new Error ("No topic information provided. Canceling request")
+  }
 
   // If topicId is provided, try to fetch it
+  // If topicId id not found, start search for topic name
+  // NOTE: If user is selecting a topic by its name, when they trigger the blog post, the app should send the topic ID to look for the topic
+  // Return the topic name to handle the request instead of using the topic id (Topic id is used for internal records and storing)
+  // TODO Update throughout to return the topic name instead of the id (topic string will be used when fetching data and generating blog post)
+  // TODO Update to topic (instead of using TopicName - topic could be a string)
   if (providedTopicId) {
     const { data: existingTopic, error: topicError } = await supabase
       .from("topics")
@@ -535,21 +928,19 @@ async function getOrCreateTopic(
 
     if (existingTopic && !topicError) {
       topic = existingTopic;
-      topicId = existingTopic.id;
+      topicIdentification = existingTopic.id;
       console.log(`Found existing topic by ID: ${topic.name}`);
-    } else if (providedTopicName) {
-      // If topic not found by ID but name is provided, search by name
-      console.log(`Topic ID ${providedTopicId} not found, searching by name: ${providedTopicName}`);
-      return getOrCreateTopic(supabase, undefined, providedTopicName, userId);
-    } else {
-      throw new Error(`Topic with ID ${providedTopicId} not found`);
+    } else if (topicError) {
+      // NOTE: If there is an error fetching the topic by its ID, the user should not go forward as their would be a newly created topic for a 
+      // topic that exists. This is an internal error and the user should be notified and the topic should be re-fetched.
+      throw new Error(`INTERNAL ERROR: Detected an error fetching the topic id [${providedTopicId}] from the DB.`)
     }
-  } 
+  }
   // If only topicName is provided, search by name
   else if (providedTopicName) {
     // Normalize the topic name for consistent searching
     const normalizedName = normalizeTopicName(providedTopicName);
-    
+
     // First, try to find existing topic by normalized name
     const { data: existingTopics, error: searchError } = await supabase
       .from("topics")
@@ -559,15 +950,15 @@ async function getOrCreateTopic(
     if (!searchError && existingTopics && existingTopics.length > 0) {
       // Use the first matching topic
       topic = existingTopics[0];
-      topicId = topic.id;
+      topicIdentification = topic.id;
       console.log(`Found existing topic by name: ${topic.name}`);
     } else {
-      // Create new topic
+      // Create new topic (no topic id or name within DB)
       console.log(`Creating new topic: ${providedTopicName}`);
-      
+
       const newTopicId = crypto.randomUUID();
       const slug = generateSlug(providedTopicName);
-      
+
       const { data: newTopic, error: createError } = await supabase
         .from("topics")
         .insert({
@@ -587,32 +978,150 @@ async function getOrCreateTopic(
 
       if (createError) {
         // Check if it's a unique constraint error (topic might have been created concurrently)
-        if (createError.code === '23505') {
+        if (createError.code === "23505") {
           // Try to fetch again
           const { data: retryTopic } = await supabase
             .from("topics")
             .select("*")
             .ilike("name", normalizedName)
             .single();
-          
+
           if (retryTopic) {
             topic = retryTopic;
-            topicId = retryTopic.id;
+            topicIdentification = retryTopic.id;
           } else {
-            throw createError;
+            throw new Error ("Error creating topic. Canceling request");
           }
         } else {
-          throw createError;
+          throw new Error ("Error creating topic. Canceling request");
         }
       } else {
         topic = newTopic;
-        topicId = newTopic.id;
-        console.log(`Created new topic: ${topic.name} (ID: ${topicId})`);
+        topicIdentification = newTopic.id;
+        console.log(`Created new topic: ${topic.name} (ID: ${topicIdentification})`);
       }
     }
   }
 
-  return { topic, topicId, topicError, createError };
+  return {topic, topicIdentification};
+}
+
+/**
+ * Checks if the requested topic has cached data.
+ * Retrieves the cached data and returns to the user, otherwise researches the topic.
+ * NOTE: Only returns data if search happened within the same week.
+ *
+ * @param supabase DB
+ * @param topic name of searched topic
+ * @param topicIdentification id of topic
+ * @returns
+ */
+async function fetchCacheTopic(
+  supabase: any,
+  topic?: string,
+  topicIdentification?: string
+) {
+  if (topicIdentification || topic) {
+    console.log("Checking for cached research data...");
+    try {
+      let cachedData: any = null;
+      let cacheError: any = null;
+
+      // Priority 1: Search by topic id
+      if (topicIdentification) {
+        console.log("Searching cache by topic ID...");
+        const { data, error } = await supabase
+          .from("research_topic_cache")
+          .select("*")
+          .eq("topic_id", topicIdentification)
+          .gte(
+            "research_date",
+            new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() // return if search was within the last week ?
+          )
+          .single();
+
+        cachedData = data;
+        cacheError = error;
+      }
+      // Priority 2: Search by topic name (if no topic ID)
+      else if (topic) {
+        console.log("Searching cache by topic name...");
+        const { data, error } = await supabase
+          .from("research_topic_cache")
+          .select("*")
+          .eq("topic_name", topic)
+          .gte(
+            "research_date",
+            new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+          )
+          .single();
+
+        cachedData = data;
+        cacheError = error;
+      }
+
+      if (cacheError) {
+        console.log(
+          "No cached data found or cache query error:",
+          cacheError.message
+        );
+        return undefined
+      } else if (cachedData) {
+        console.log("Found cached research data, using cached result");
+        const cachedResult = {
+          newsArticles: cachedData.news_articles || [],
+          trendingInfo: cachedData.trending_info || [],
+          statistics: cachedData.statistics || [],
+          recentDevelopments: cachedData.recent_developments || [],
+          keyFacts: cachedData.key_facts || [],
+        };
+        console.log("Cached result summary:", {
+          newsArticles: cachedResult.newsArticles.length,
+          trendingInfo: cachedResult.trendingInfo.length,
+          statistics: cachedResult.statistics.length,
+          recentDevelopments: cachedResult.recentDevelopments.length,
+          keyFacts: cachedResult.keyFacts.length,
+        });
+        return cachedResult;
+      }
+    } catch (cacheError) {
+      console.error("Error checking cache:", cacheError);
+      return undefined; // return undefined to trigger new topic research
+    }
+    // if no topic or topicID defined, return undefined
+  } else {
+    console.warn("No topic or topic id for searched topic");
+    return undefined;
+  }
+}
+
+/**
+ * Retrieves the api keys used to fetch data from the external sources. 
+ * Throws error if key is not found or loaded successfully.
+ * 
+ * @returns api keys of external sources
+ */
+async function fetchAPIKeys(): Promise<ApiKeys | undefined> {
+  try {
+    const newsApiKey = Deno.env.get("NEWS_API_KEY");
+    const serpApiKey = Deno.env.get("SERP_API_KEY");
+
+    if (!newsApiKey) {
+      console.warn("NEWS_API_KEY not found");
+      throw new Error(`News API key not found. Canceling request.`);
+    }
+    if (!serpApiKey) {
+      throw new Error(`Serp API key not found. Canceling request.`);
+    }
+    console.log("API Keys loaded.");
+    return {  
+      NEWS_API_KEY: newsApiKey, 
+      SERP_API_KEY: serpApiKey}
+
+  } catch (error) {
+    console.log(`Error fetching API keys: ${error}`);
+    return undefined
+  }
 }
 
 /**
@@ -622,9 +1131,9 @@ function generateSlug(name: string): string {
   return name
     .toLowerCase()
     .trim()
-    .replace(/[^\w\s-]/g, '') // Remove special characters
-    .replace(/\s+/g, '-') // Replace spaces with hyphens
-    .replace(/-+/g, '-'); // Replace multiple hyphens with single hyphen
+    .replace(/[^\w\s-]/g, "") // Remove special characters
+    .replace(/\s+/g, "-") // Replace spaces with hyphens
+    .replace(/-+/g, "-"); // Replace multiple hyphens with single hyphen
 }
 
 /**
@@ -634,27 +1143,42 @@ function normalizeTopicName(name: string): string {
   return name.trim().toLowerCase();
 }
 
-  /**
-   * Helper functions
-   */
-  
-  function  categorizeTopicType(topic: string): string {
-    const lowerTopic = topic.toLowerCase();
-    
-    if (lowerTopic.includes('news') || lowerTopic.includes('breaking') || lowerTopic.includes('latest')) {
-      return 'trending';
-    }
-    if (lowerTopic.includes('election') || lowerTopic.includes('covid') || lowerTopic.includes('war')) {
-      return 'current_events';
-    }
-    if (lowerTopic.includes('technology') || lowerTopic.includes('ai') || lowerTopic.includes('software')) {
-      return 'technology';
-    }
-    if (lowerTopic.includes('research') || lowerTopic.includes('study') || lowerTopic.includes('science')) {
-      return 'academic';
-    }
-    
-    // General
-    return 'evergreen';
+/**
+ * Helper functions
+ */
+
+function categorizeTopicType(topic: string): string {
+  const lowerTopic = topic.toLowerCase();
+
+  if (
+    lowerTopic.includes("news") ||
+    lowerTopic.includes("breaking") ||
+    lowerTopic.includes("latest")
+  ) {
+    return "trending";
   }
-  
+  if (
+    lowerTopic.includes("election") ||
+    lowerTopic.includes("covid") ||
+    lowerTopic.includes("war")
+  ) {
+    return "current_events";
+  }
+  if (
+    lowerTopic.includes("technology") ||
+    lowerTopic.includes("ai") ||
+    lowerTopic.includes("software")
+  ) {
+    return "technology";
+  }
+  if (
+    lowerTopic.includes("research") ||
+    lowerTopic.includes("study") ||
+    lowerTopic.includes("science")
+  ) {
+    return "academic";
+  }
+
+  // General
+  return "evergreen";
+}
