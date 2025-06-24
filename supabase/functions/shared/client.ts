@@ -51,3 +51,8 @@ export enum PriorityLevel {
   NORMAL = "normal",
   HIGH =  "high"
 }
+
+export enum PROMPT_STYLES {
+  basic = "BASIC_PROMPT",
+  inter = "INTERMEDIATE_PROMPT"
+}
