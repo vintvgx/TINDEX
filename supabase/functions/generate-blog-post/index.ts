@@ -124,7 +124,8 @@ serve(async (req) => {
       supabase,
       topicId,
       topicName,
-      userId
+      userId,
+      priority
     );
 
     // Step 2: Research Topic
@@ -194,7 +195,7 @@ serve(async (req) => {
     //   published_at: new Date().toISOString(),
     // };
     const blogPostData = {
-      topic_id: topicIdentification,
+      topic_id: topic.id,
       user_id: userId,
       title: blogContent.title,
       content: blogContent.content,
@@ -341,9 +342,9 @@ async function updateJobProgress(
  * Looks up the data of the specified topic and returns information on the topic.
  * First, checks if the topic has any data available in the cache
  *
- *  @param supabase DB
+ * @param supabase DB
  * @param topic name of searched topic
- * @param topicIdentification id of topic
+ * @param priority level of topic request
  * @returns
  */
 async function researchTopic(
@@ -801,17 +802,22 @@ async function getOrCreateTopic(
   let topicIdentification;
 
   // Return [EVERGREEN] topic when debugging
-  if (priority == PriorityLevel.DEBUG) {
-    const { data: everGreenTopic, error: everGreenError } = await supabase
-    .from("topics")
-    .select("*")
-    .eq("id", '84ac4196-b125-4f52-8d0f-9038d20b6308')
-    .single();
+  // if (priority == PriorityLevel.DEBUG) {
+  //   console.log("Debug mode: Returning evergreen topic");
+  //   const { data: everGreenTopic, error: everGreenError } = await supabase
+  //     .from("topics")
+  //     .select("*")
+  //     .eq("id", '84ac4196-b125-4f52-8d0f-9038d20b6308')
+  //     .single();
 
-    topic = everGreenTopic;
-    topicIdentification = everGreenTopic.id
-    return topic 
-  }
+  //   if (everGreenError) {
+  //     console.error("Error fetching evergreen topic:", everGreenError);
+  //     throw new Error("Failed to fetch debug topic");
+  //   }
+
+  //   topic = everGreenTopic;
+  //   return topic;
+  // }
 
   if (!providedTopicId && !providedTopicName) {
     throw new Error("No topic information provided. Canceling request");
