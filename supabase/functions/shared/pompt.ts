@@ -8,7 +8,7 @@ Write a [TARGET_LENGTH]-word blog post about "[TOPIC]". Include a compelling tit
 Research Data Available:
 [RESEARCH_DATA]
 
-Use the provided research data to inform your content and ensure accuracy.`
+Use the provided relevant and current events research data to inform your content and ensure accuracy.`
 
 const INTERMEDIATE_PROMPT = `You are an expert blog writer and fact-checker. Create engaging, well-structured, and factually accurate content.
 

@@ -676,7 +676,7 @@ async function generateAIContent(
             topic.name,
             targetLength,
             researchData,
-            PROMPT_STYLES.basic
+            PROMPT_STYLES.inter
           ),
         },
       ],
@@ -724,7 +724,7 @@ async function generateAIContent(
     );
 
     const result = {
-      title: `Blog Post for ${topic} created`,
+      title: `Blog Post for ${topic.name} created`,
       content: content,
       // keywords: [topic.toLowerCase()],
       // hashtags: [`#${topic.replace(/\s+/g, "")}`],
