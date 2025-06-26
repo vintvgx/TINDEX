@@ -557,10 +557,427 @@ export const SERP_OCGN_DATA_06_16_25 = {
   },
 };
 
+export const SERP_API_THUNDER_PACERS_DATA_06_23_25 = {
+	"search_metadata": {
+		"id": "685a0bf6f2593adb44753d27",
+		"status": "Success",
+		"json_endpoint": "https://serpapi.com/searches/26f8357059ff1769/685a0bf6f2593adb44753d27.json",
+		"created_at": "2025-06-24 02:22:46 UTC",
+		"processed_at": "2025-06-24 02:22:46 UTC",
+		"google_url": "https://www.google.com/search?q=Pacers%2BThunder&oq=Pacers%2BThunder&uule=w+CAIQICINVW5pdGVkIFN0YXRlcw&hl=en&gl=us&safe=active&sourceid=chrome&ie=UTF-8",
+		"raw_html_file": "https://serpapi.com/searches/26f8357059ff1769/685a0bf6f2593adb44753d27.html",
+		"total_time_taken": 1.32
+	},
+	"search_parameters": {
+		"engine": "google",
+		"q": "Pacers+Thunder",
+		"location_requested": "United+States",
+		"location_used": "United States",
+		"google_domain": "google.com",
+		"hl": "en",
+		"gl": "us",
+		"safe": "active",
+		"device": "desktop"
+	},
+	"search_information": {
+		"query_displayed": "Pacers+Thunder",
+		"total_results": 66300000,
+		"time_taken_displayed": 0.31,
+		"organic_results_state": "Results for exact spelling"
+	},
+	"sports_results": {
+		"title": "Pacers vs Thunder",
+		"game_spotlight": {
+			"league": "NBA",
+			"stadium": "Paycom Center",
+			"stadium_kgmid": "/m/05p8g6",
+			"stage": "NBA Finals, Oklahoma City Thunder wins 4 to 3",
+			"date": "yesterday, 8:00 PM",
+			"status": "Final",
+			"video_highlight_carousel": [
+				{
+					"title": "Game recap",
+					"link": "https://www.youtube.com/watch?v=a4fUMKvmatk&feature=onebox",
+					"duration": "12:45",
+					"thumbnail": "https://ssl.gstatic.com/onebox/media/sports/videos/vita/Ac6c7Z4OvSm3Q8gJ_768x432.jpg"
+				},
+				{
+					"title": "Game recap",
+					"link": "https://stories.nba.com/8ee97a4c-1783-08e7-7d12-3a1a9eb4a682",
+					"thumbnail": "https://ssl.gstatic.com/onebox/media/sports/videos/vita/3FpDFBn2cSVDALfp_768x432.jpg"
+				}
+			],
+			"teams": [
+				{
+					"name": "Indiana Pacers",
+					"thumbnail": "https://ssl.gstatic.com/onebox/media/sports/logos/andumiE_wrpDpXvUgqCGYQ_96x96.png",
+					"kgmid": "/m/0jm9w",
+					"team_stats": {
+						"wins": 3,
+						"losses": 4
+					},
+					"score": {
+						"1": "22",
+						"2": "26",
+						"3": "20",
+						"4": "23",
+						"T": "91"
+					}
+				},
+				{
+					"name": "Oklahoma City Thunder",
+					"thumbnail": "https://ssl.gstatic.com/onebox/media/sports/logos/b4bJ9zKFBDykdSIGUrbWdw_96x96.png",
+					"kgmid": "/m/04cxw5b",
+					"team_stats": {
+						"wins": 4,
+						"losses": 3
+					},
+					"score": {
+						"1": "25",
+						"2": "22",
+						"3": "34",
+						"4": "22",
+						"T": "103"
+					}
+				}
+			],
+			"venue": "Paycom Center"
+		}
+	},
+	"inline_videos": [
+		{
+			"position": 1,
+			"title": "OKC Thunder vs Indiana Pacers | NBA Finals Game 7 ...",
+			"link": "https://www.youtube.com/watch?v=53QChVMD5aY",
+			"thumbnail": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/463ca3db76b41189e47c0ddde3797ed07449595aa6e046f9dc47fe5e437c2717.jpeg",
+			"channel": "Oklahoma City Thunder",
+			"duration": "13:08",
+			"platform": "YouTube"
+		},
+		{
+			"position": 2,
+			"title": "#4 PACERS at #1 THUNDER | NBA FINALS GAME 7 ...",
+			"link": "https://www.youtube.com/watch?v=a4fUMKvmatk",
+			"thumbnail": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/463ca3db76b4118947ead96d12f3443b072f185e7377f23779af64b0acfef89a.jpeg",
+			"channel": "NBA",
+			"duration": "12:45",
+			"platform": "YouTube"
+		},
+		{
+			"position": 3,
+			"title": "Oklahoma City Thunder vs Indiana Pacers Full Game 7 ...",
+			"link": "https://www.youtube.com/watch?v=tBAfu_2xiJ0",
+			"thumbnail": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/463ca3db76b4118939e72420d370777898a064f47080117777c4db37b4d7d836.jpeg",
+			"channel": "GAMETIME HIGHLIGHTS",
+			"duration": "9:17",
+			"platform": "YouTube"
+		}
+	],
+	"related_questions": [
+		{
+			"question": "Did Tyrese Haliburton rupture his Achilles?",
+			"snippet": "In the NBA. But his Achilles tear now likely puts him out all of next. Season. Thank you Shams.",
+			"title": "How does Tyrese Haliburton's Achilles injury impact the Pacers' offseason ...",
+			"link": "https://www.youtube.com/watch?v=wFh1gLUWitw",
+			"displayed_link": null,
+			"source_logo": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/79d82ab67ba8ef98d7024a29949f722873b102dcc072f44714252822bf671944.png",
+			"next_page_token": "eyJvbnMiOiIyNjc5IiwiZmMiOiJFcmNDQ3ZjQlFVeHJkRjkyU0hOSlFqRnNMWFpVY3pOMFkyY3dWR3BrWDFwclVYcHZSRkl0YW5WVk9YWlNhbmRIVUVFMFJ6QlpUa2cwYjNCeUxXeHNOWEExYUZwZlgxb3laVTV4YkZFMldISlplV1ZpZEVzelVUQkNRMDluVkhScFpqbFJPRmg1YmxKRlZrRXhkV2xzTW5nMFMycHZUM2N3VTJ4SVRGWkZOeTFTYzJWQmFrMHlMVEkyWlRoMFdUY3dPVlpCZGs5WGEwTlFXV2gyYVhWV1JWcFVXSE5RTVRadlZVaFdVR1JhVlhJdFJtSkRhRzlNUzNCd2EwTnRVVlpTWWpGclkzUk5NbTVVZDNKMmIxRXpTM1ptVXpoTVUySjZNR05WTFZsSlF6SndjWGhZTWtGUlh6WTJUek5rVlRkMUxWWlpkRGd4WjFOb2N6QkNjeElYT1dkMFlXRk5YMVJPTlMxTE9YVTRVR2t0TmtFNFVUUWFJa0ZHVFVGSFIyOW5YemgxTWtkMmNuYzBlVkF6VjJWQlZtazBTM2t3YnpsbGFYYyIsImZjdiI6IjMiLCJlaSI6IjlndGFhTV9UTjUtSzl1OFBpLTZBOFE0IiwicWMiOiJDZzV3WVdObGNuTWdkR2gxYm1SbGNoQUFmY0pQTEQ4IiwicXVlc3Rpb24iOiJEaWQgVHlyZXNlIEhhbGlidXJ0b24gcnVwdHVyZSBoaXMgQWNoaWxsZXM/IiwibGsiOiJHaXBrYVdRZ2RIbHlaWE5sSUdoaGJHbGlkWEowYjI0Z2NuVndkSFZ5WlNCb2FYTWdZV05vYVd4c1pYTSIsImJzIjoiYzMzUXZXb0NRUlFGWUZJSlU2VmN0cnFkMGFUYUpyRnhVU3lzRWd2QlZJSFozWXQzd21SbW1CODMxclktUng3TFpfRktmbEJjMHR6cWZuRE9FV19pZnFZYVdHNDlCb1M1MUtwS1Bsb0RQcm1ZUEFLcEFKT2FsTllZeW16Zkt4N3lZY01pZmd2cUZ2SkhpRV94TkpjYmhFZ0lDMW1qRDJBOUxDbVpCajNnaGtfTFZocDRuazZnSnZuaGxEV0JsQ3V6M2JnWTVZXzB5OTBmangzY1ZQS0NDMjYySWdzYzVvUXJiWm5BV25rTkRNN2lWR2hxS3JPdjRhbFotNjl3WjBLOGlyc1Z5UWp2S1VTZXdUazB5TFBZNnkzTDdQQlNEUEotMl9sLU5lVHR6UkUiLCJpZCI6ImZjXzlndGFhTV9UTjUtSzl1OFBpLTZBOFE0XzQifQ==",
+			"serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google_related_questions&google_domain=google.com&next_page_token=eyJvbnMiOiIyNjc5IiwiZmMiOiJFcmNDQ3ZjQlFVeHJkRjkyU0hOSlFqRnNMWFpVY3pOMFkyY3dWR3BrWDFwclVYcHZSRkl0YW5WVk9YWlNhbmRIVUVFMFJ6QlpUa2cwYjNCeUxXeHNOWEExYUZwZlgxb3laVTV4YkZFMldISlplV1ZpZEVzelVUQkNRMDluVkhScFpqbFJPRmg1YmxKRlZrRXhkV2xzTW5nMFMycHZUM2N3VTJ4SVRGWkZOeTFTYzJWQmFrMHlMVEkyWlRoMFdUY3dPVlpCZGs5WGEwTlFXV2gyYVhWV1JWcFVXSE5RTVRadlZVaFdVR1JhVlhJdFJtSkRhRzlNUzNCd2EwTnRVVlpTWWpGclkzUk5NbTVVZDNKMmIxRXpTM1ptVXpoTVUySjZNR05WTFZsSlF6SndjWGhZTWtGUlh6WTJUek5rVlRkMUxWWlpkRGd4WjFOb2N6QkNjeElYT1dkMFlXRk5YMVJPTlMxTE9YVTRVR2t0TmtFNFVUUWFJa0ZHVFVGSFIyOW5YemgxTWtkMmNuYzBlVkF6VjJWQlZtazBTM2t3YnpsbGFYYyIsImZjdiI6IjMiLCJlaSI6IjlndGFhTV9UTjUtSzl1OFBpLTZBOFE0IiwicWMiOiJDZzV3WVdObGNuTWdkR2gxYm1SbGNoQUFmY0pQTEQ4IiwicXVlc3Rpb24iOiJEaWQgVHlyZXNlIEhhbGlidXJ0b24gcnVwdHVyZSBoaXMgQWNoaWxsZXM%2FIiwibGsiOiJHaXBrYVdRZ2RIbHlaWE5sSUdoaGJHbGlkWEowYjI0Z2NuVndkSFZ5WlNCb2FYTWdZV05vYVd4c1pYTSIsImJzIjoiYzMzUXZXb0NRUlFGWUZJSlU2VmN0cnFkMGFUYUpyRnhVU3lzRWd2QlZJSFozWXQzd21SbW1CODMxclktUng3TFpfRktmbEJjMHR6cWZuRE9FV19pZnFZYVdHNDlCb1M1MUtwS1Bsb0RQcm1ZUEFLcEFKT2FsTllZeW16Zkt4N3lZY01pZmd2cUZ2SkhpRV94TkpjYmhFZ0lDMW1qRDJBOUxDbVpCajNnaGtfTFZocDRuazZnSnZuaGxEV0JsQ3V6M2JnWTVZXzB5OTBmangzY1ZQS0NDMjYySWdzYzVvUXJiWm5BV25rTkRNN2lWR2hxS3JPdjRhbFotNjl3WjBLOGlyc1Z5UWp2S1VTZXdUazB5TFBZNnkzTDdQQlNEUEotMl9sLU5lVHR6UkUiLCJpZCI6ImZjXzlndGFhTV9UTjUtSzl1OFBpLTZBOFE0XzQifQ%3D%3D"
+		},
+		{
+			"question": "Have the Pacers or Thunder ever won an NBA championship?",
+			"snippet": null,
+			"title": "AI Overview",
+			"link": "https://support.google.com/websearch?p=ai_overviews&hl=en",
+			"displayed_link": null,
+			"next_page_token": "eyJvbnMiOiIyNjc5IiwiZmMiOiJFcmNDQ3ZjQlFVeHJkRjkyU0hOSlFqRnNMWFpVY3pOMFkyY3dWR3BrWDFwclVYcHZSRkl0YW5WVk9YWlNhbmRIVUVFMFJ6QlpUa2cwYjNCeUxXeHNOWEExYUZwZlgxb3laVTV4YkZFMldISlplV1ZpZEVzelVUQkNRMDluVkhScFpqbFJPRmg1YmxKRlZrRXhkV2xzTW5nMFMycHZUM2N3VTJ4SVRGWkZOeTFTYzJWQmFrMHlMVEkyWlRoMFdUY3dPVlpCZGs5WGEwTlFXV2gyYVhWV1JWcFVXSE5RTVRadlZVaFdVR1JhVlhJdFJtSkRhRzlNUzNCd2EwTnRVVlpTWWpGclkzUk5NbTVVZDNKMmIxRXpTM1ptVXpoTVUySjZNR05WTFZsSlF6SndjWGhZTWtGUlh6WTJUek5rVlRkMUxWWlpkRGd4WjFOb2N6QkNjeElYT1dkMFlXRk5YMVJPTlMxTE9YVTRVR2t0TmtFNFVUUWFJa0ZHVFVGSFIyOW5YemgxTWtkMmNuYzBlVkF6VjJWQlZtazBTM2t3YnpsbGFYYyIsImZjdiI6IjMiLCJlaSI6IjlndGFhTV9UTjUtSzl1OFBpLTZBOFE0IiwicWMiOiJDZzV3WVdObGNuTWdkR2gxYm1SbGNoQUFmY0pQTEQ4IiwicXVlc3Rpb24iOiJIYXZlIHRoZSBQYWNlcnMgb3IgVGh1bmRlciBldmVyIHdvbiBhbiBOQkEgY2hhbXBpb25zaGlwPyIsImxrIjoiYzVNeXowZ3NTMVVveVVoVktFaE1UaTBxVnNndkF2Sks4MUpTaXhSU3k0QkVlWDZlUW1LZVFsNVNva0p5Um1KdVFXWi1YbkZHWmdFQSIsImJzIjoiYzMzUXZXb0NRUlFGWUZJSlU2VmN0cnFkMGFUYUpyRnhVU3lzRWd2QlZJSFozWXQzd21SbW1CODMxclktUng3TFpfRktmbEJjMHR6cWZuRE9FV19pZnFZYVdHNDlCb1M1MUtwS1Bsb0RQcm1ZUEFLcEFKT2FsTllZeW16Zkt4N3lZY01pZmd2cUZ2SkhpRV94TkpjYmhFZ0lDMW1qRDJBOUxDbVpCajNnaGtfTFZocDRuazZnSnZuaGxEV0JsQ3V6M2JnWTVZXzB5OTBmangzY1ZQS0NDMjYySWdzYzVvUXJiWm5BV25rTkRNN2lWR2hxS3JPdjRhbFotNjl3WjBLOGlyc1Z5UWp2S1VTZXdUazB5TFBZNnkzTDdQQlNEUEotMl9sLU5lVHR6UkUiLCJpZCI6ImZjXzlndGFhTV9UTjUtSzl1OFBpLTZBOFE0XzQifQ==",
+			"serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google_related_questions&google_domain=google.com&next_page_token=eyJvbnMiOiIyNjc5IiwiZmMiOiJFcmNDQ3ZjQlFVeHJkRjkyU0hOSlFqRnNMWFpVY3pOMFkyY3dWR3BrWDFwclVYcHZSRkl0YW5WVk9YWlNhbmRIVUVFMFJ6QlpUa2cwYjNCeUxXeHNOWEExYUZwZlgxb3laVTV4YkZFMldISlplV1ZpZEVzelVUQkNRMDluVkhScFpqbFJPRmg1YmxKRlZrRXhkV2xzTW5nMFMycHZUM2N3VTJ4SVRGWkZOeTFTYzJWQmFrMHlMVEkyWlRoMFdUY3dPVlpCZGs5WGEwTlFXV2gyYVhWV1JWcFVXSE5RTVRadlZVaFdVR1JhVlhJdFJtSkRhRzlNUzNCd2EwTnRVVlpTWWpGclkzUk5NbTVVZDNKMmIxRXpTM1ptVXpoTVUySjZNR05WTFZsSlF6SndjWGhZTWtGUlh6WTJUek5rVlRkMUxWWlpkRGd4WjFOb2N6QkNjeElYT1dkMFlXRk5YMVJPTlMxTE9YVTRVR2t0TmtFNFVUUWFJa0ZHVFVGSFIyOW5YemgxTWtkMmNuYzBlVkF6VjJWQlZtazBTM2t3YnpsbGFYYyIsImZjdiI6IjMiLCJlaSI6IjlndGFhTV9UTjUtSzl1OFBpLTZBOFE0IiwicWMiOiJDZzV3WVdObGNuTWdkR2gxYm1SbGNoQUFmY0pQTEQ4IiwicXVlc3Rpb24iOiJIYXZlIHRoZSBQYWNlcnMgb3IgVGh1bmRlciBldmVyIHdvbiBhbiBOQkEgY2hhbXBpb25zaGlwPyIsImxrIjoiYzVNeXowZ3NTMVVveVVoVktFaE1UaTBxVnNndkF2Sks4MUpTaXhSU3k0QkVlWDZlUW1LZVFsNVNva0p5Um1KdVFXWi1YbkZHWmdFQSIsImJzIjoiYzMzUXZXb0NRUlFGWUZJSlU2VmN0cnFkMGFUYUpyRnhVU3lzRWd2QlZJSFozWXQzd21SbW1CODMxclktUng3TFpfRktmbEJjMHR6cWZuRE9FV19pZnFZYVdHNDlCb1M1MUtwS1Bsb0RQcm1ZUEFLcEFKT2FsTllZeW16Zkt4N3lZY01pZmd2cUZ2SkhpRV94TkpjYmhFZ0lDMW1qRDJBOUxDbVpCajNnaGtfTFZocDRuazZnSnZuaGxEV0JsQ3V6M2JnWTVZXzB5OTBmangzY1ZQS0NDMjYySWdzYzVvUXJiWm5BV25rTkRNN2lWR2hxS3JPdjRhbFotNjl3WjBLOGlyc1Z5UWp2S1VTZXdUazB5TFBZNnkzTDdQQlNEUEotMl9sLU5lVHR6UkUiLCJpZCI6ImZjXzlndGFhTV9UTjUtSzl1OFBpLTZBOFE0XzQifQ%3D%3D"
+		},
+		{
+			"question": "Who is the blonde girl on the Pacers bench?",
+			"snippet": null,
+			"title": "AI Overview",
+			"link": "https://www.indystar.com/story/sports/nba/pacers/2022/04/13/jenny-boucek-pacers-assistant-coach-nba-trailblazer-wnba-career/7279583001/",
+			"displayed_link": null,
+			"thumbnail": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTQxW25ayXcc8Q2oFRAJIhUwist0kc9Qp_Bf0dIZ4ckreu4g93zNLrxJrn_&s",
+			"next_page_token": "eyJvbnMiOiIyNjc5IiwiZmMiOiJFcmNDQ3ZjQlFVeHJkRjkyU0hOSlFqRnNMWFpVY3pOMFkyY3dWR3BrWDFwclVYcHZSRkl0YW5WVk9YWlNhbmRIVUVFMFJ6QlpUa2cwYjNCeUxXeHNOWEExYUZwZlgxb3laVTV4YkZFMldISlplV1ZpZEVzelVUQkNRMDluVkhScFpqbFJPRmg1YmxKRlZrRXhkV2xzTW5nMFMycHZUM2N3VTJ4SVRGWkZOeTFTYzJWQmFrMHlMVEkyWlRoMFdUY3dPVlpCZGs5WGEwTlFXV2gyYVhWV1JWcFVXSE5RTVRadlZVaFdVR1JhVlhJdFJtSkRhRzlNUzNCd2EwTnRVVlpTWWpGclkzUk5NbTVVZDNKMmIxRXpTM1ptVXpoTVUySjZNR05WTFZsSlF6SndjWGhZTWtGUlh6WTJUek5rVlRkMUxWWlpkRGd4WjFOb2N6QkNjeElYT1dkMFlXRk5YMVJPTlMxTE9YVTRVR2t0TmtFNFVUUWFJa0ZHVFVGSFIyOW5YemgxTWtkMmNuYzBlVkF6VjJWQlZtazBTM2t3YnpsbGFYYyIsImZjdiI6IjMiLCJlaSI6IjlndGFhTV9UTjUtSzl1OFBpLTZBOFE0IiwicWMiOiJDZzV3WVdObGNuTWdkR2gxYm1SbGNoQUFmY0pQTEQ4IiwicXVlc3Rpb24iOiJXaG8gaXMgdGhlIGJsb25kZSBnaXJsIG9uIHRoZSBQYWNlcnMgYmVuY2g/IiwibGsiOiJjNVBTS3NfSVY4Z3NWaWpKU0ZWSXlzblBTMGxWU004c3lsSEl6d01MRlNRbXB4WVZLeVNsNWlWbkFBQSIsImJzIjoiYzMzUXZXb0NRUlFGWUZJSlU2VmN0cnFkMGFUYUpyRnhVU3lzRWd2QlZJSFozWXQzd21SbW1CODMxclktUng3TFpfRktmbEJjMHR6cWZuRE9FV19pZnFZYVdHNDlCb1M1MUtwS1Bsb0RQcm1ZUEFLcEFKT2FsTllZeW16Zkt4N3lZY01pZmd2cUZ2SkhpRV94TkpjYmhFZ0lDMW1qRDJBOUxDbVpCajNnaGtfTFZocDRuazZnSnZuaGxEV0JsQ3V6M2JnWTVZXzB5OTBmangzY1ZQS0NDMjYySWdzYzVvUXJiWm5BV25rTkRNN2lWR2hxS3JPdjRhbFotNjl3WjBLOGlyc1Z5UWp2S1VTZXdUazB5TFBZNnkzTDdQQlNEUEotMl9sLU5lVHR6UkUiLCJpZCI6ImZjXzlndGFhTV9UTjUtSzl1OFBpLTZBOFE0XzQifQ==",
+			"serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google_related_questions&google_domain=google.com&next_page_token=eyJvbnMiOiIyNjc5IiwiZmMiOiJFcmNDQ3ZjQlFVeHJkRjkyU0hOSlFqRnNMWFpVY3pOMFkyY3dWR3BrWDFwclVYcHZSRkl0YW5WVk9YWlNhbmRIVUVFMFJ6QlpUa2cwYjNCeUxXeHNOWEExYUZwZlgxb3laVTV4YkZFMldISlplV1ZpZEVzelVUQkNRMDluVkhScFpqbFJPRmg1YmxKRlZrRXhkV2xzTW5nMFMycHZUM2N3VTJ4SVRGWkZOeTFTYzJWQmFrMHlMVEkyWlRoMFdUY3dPVlpCZGs5WGEwTlFXV2gyYVhWV1JWcFVXSE5RTVRadlZVaFdVR1JhVlhJdFJtSkRhRzlNUzNCd2EwTnRVVlpTWWpGclkzUk5NbTVVZDNKMmIxRXpTM1ptVXpoTVUySjZNR05WTFZsSlF6SndjWGhZTWtGUlh6WTJUek5rVlRkMUxWWlpkRGd4WjFOb2N6QkNjeElYT1dkMFlXRk5YMVJPTlMxTE9YVTRVR2t0TmtFNFVUUWFJa0ZHVFVGSFIyOW5YemgxTWtkMmNuYzBlVkF6VjJWQlZtazBTM2t3YnpsbGFYYyIsImZjdiI6IjMiLCJlaSI6IjlndGFhTV9UTjUtSzl1OFBpLTZBOFE0IiwicWMiOiJDZzV3WVdObGNuTWdkR2gxYm1SbGNoQUFmY0pQTEQ4IiwicXVlc3Rpb24iOiJXaG8gaXMgdGhlIGJsb25kZSBnaXJsIG9uIHRoZSBQYWNlcnMgYmVuY2g%2FIiwibGsiOiJjNVBTS3NfSVY4Z3NWaWpKU0ZWSXlzblBTMGxWU004c3lsSEl6d01MRlNRbXB4WVZLeVNsNWlWbkFBQSIsImJzIjoiYzMzUXZXb0NRUlFGWUZJSlU2VmN0cnFkMGFUYUpyRnhVU3lzRWd2QlZJSFozWXQzd21SbW1CODMxclktUng3TFpfRktmbEJjMHR6cWZuRE9FV19pZnFZYVdHNDlCb1M1MUtwS1Bsb0RQcm1ZUEFLcEFKT2FsTllZeW16Zkt4N3lZY01pZmd2cUZ2SkhpRV94TkpjYmhFZ0lDMW1qRDJBOUxDbVpCajNnaGtfTFZocDRuazZnSnZuaGxEV0JsQ3V6M2JnWTVZXzB5OTBmangzY1ZQS0NDMjYySWdzYzVvUXJiWm5BV25rTkRNN2lWR2hxS3JPdjRhbFotNjl3WjBLOGlyc1Z5UWp2S1VTZXdUazB5TFBZNnkzTDdQQlNEUEotMl9sLU5lVHR6UkUiLCJpZCI6ImZjXzlndGFhTV9UTjUtSzl1OFBpLTZBOFE0XzQifQ%3D%3D"
+		},
+		{
+			"question": "What just happened to Tyrese Haliburton?",
+			"snippet": "Sources: Pacers' Tyrese Haliburton has torn Achilles tendon. Indiana Pacers star Tyrese Haliburton sustained a torn right Achilles tendon in Game 7 of the NBA Finals against Oklahoma City, sources told ESPN on Monday.",
+			"title": "Sources - Pacers' Tyrese Haliburton has torn Achilles tendon - ESPN",
+			"date": "9 hours ago",
+			"link": "https://www.espn.com/nba/story/_/id/45569509/sources-pacers-tyrese-haliburton-torn-achilles-tendon#:~:text=Sources%3A%20Pacers'%20Tyrese%20Haliburton%20has%20torn%20Achilles%20tendon&text=Indiana%20Pacers%20star%20Tyrese%20Haliburton,sources%20told%20ESPN%20on%20Monday.",
+			"displayed_link": "https://www.espn.com › nba › story › sources-pacers-tyr...",
+			"source_logo": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/79d82ab67ba8ef98d7024a29949f72288b13c72b2a8d794eed301acd91a457d1.png",
+			"next_page_token": "eyJvbnMiOiIyNjc5IiwiZmMiOiJFcmNDQ3ZjQlFVeHJkRjkyU0hOSlFqRnNMWFpVY3pOMFkyY3dWR3BrWDFwclVYcHZSRkl0YW5WVk9YWlNhbmRIVUVFMFJ6QlpUa2cwYjNCeUxXeHNOWEExYUZwZlgxb3laVTV4YkZFMldISlplV1ZpZEVzelVUQkNRMDluVkhScFpqbFJPRmg1YmxKRlZrRXhkV2xzTW5nMFMycHZUM2N3VTJ4SVRGWkZOeTFTYzJWQmFrMHlMVEkyWlRoMFdUY3dPVlpCZGs5WGEwTlFXV2gyYVhWV1JWcFVXSE5RTVRadlZVaFdVR1JhVlhJdFJtSkRhRzlNUzNCd2EwTnRVVlpTWWpGclkzUk5NbTVVZDNKMmIxRXpTM1ptVXpoTVUySjZNR05WTFZsSlF6SndjWGhZTWtGUlh6WTJUek5rVlRkMUxWWlpkRGd4WjFOb2N6QkNjeElYT1dkMFlXRk5YMVJPTlMxTE9YVTRVR2t0TmtFNFVUUWFJa0ZHVFVGSFIyOW5YemgxTWtkMmNuYzBlVkF6VjJWQlZtazBTM2t3YnpsbGFYYyIsImZjdiI6IjMiLCJlaSI6IjlndGFhTV9UTjUtSzl1OFBpLTZBOFE0IiwicWMiOiJDZzV3WVdObGNuTWdkR2gxYm1SbGNoQUFmY0pQTEQ4IiwicXVlc3Rpb24iOiJXaGF0IGp1c3QgaGFwcGVuZWQgdG8gVHlyZXNlIEhhbGlidXJ0b24/IiwibGsiOiJHaWQzYUdGMElHcDFjM1FnYUdGd2NHVnVaV1FnZEc4Z2RIbHlaWE5sSUdoaGJHbGlkWEowYjI0IiwiYnMiOiJjMzNRdldvQ1FSUUZZRklKVTZWY3RycWQwYVRhSnJGeFVTeXNFZ3ZCVklIWjNZdDN3bVJtbUI4MzFyWS1SeDdMWl9GS2ZsQmMwdHpxZm5ET0VXX2lmcVlhV0c0OUJvUzUxS3BLUGxvRFBybVlQQUtwQUpPYWxOWVl5bXpmS3g3eVljTWlmZ3ZxRnZKSGlFX3hOSmNiaEVnSUMxbWpEMkE5TENtWkJqM2doa19MVmhwNG5rNmdKdm5obERXQmxDdXozYmdZNVlfMHk5MGZqeDNjVlBLQ0MyNjJJZ3NjNW9RcmJabkFXbmtORE03aVZHaHFLck92NGFsWi02OXdaMEs4aXJzVnlRanZLVVNld1RrMHlMUFk2eTNMN1BCU0RQSi0yX2wtTmVUdHpSRSIsImlkIjoiZmNfOWd0YWFNX1RONS1LOXU4UGktNkE4UTRfNCJ9",
+			"serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google_related_questions&google_domain=google.com&next_page_token=eyJvbnMiOiIyNjc5IiwiZmMiOiJFcmNDQ3ZjQlFVeHJkRjkyU0hOSlFqRnNMWFpVY3pOMFkyY3dWR3BrWDFwclVYcHZSRkl0YW5WVk9YWlNhbmRIVUVFMFJ6QlpUa2cwYjNCeUxXeHNOWEExYUZwZlgxb3laVTV4YkZFMldISlplV1ZpZEVzelVUQkNRMDluVkhScFpqbFJPRmg1YmxKRlZrRXhkV2xzTW5nMFMycHZUM2N3VTJ4SVRGWkZOeTFTYzJWQmFrMHlMVEkyWlRoMFdUY3dPVlpCZGs5WGEwTlFXV2gyYVhWV1JWcFVXSE5RTVRadlZVaFdVR1JhVlhJdFJtSkRhRzlNUzNCd2EwTnRVVlpTWWpGclkzUk5NbTVVZDNKMmIxRXpTM1ptVXpoTVUySjZNR05WTFZsSlF6SndjWGhZTWtGUlh6WTJUek5rVlRkMUxWWlpkRGd4WjFOb2N6QkNjeElYT1dkMFlXRk5YMVJPTlMxTE9YVTRVR2t0TmtFNFVUUWFJa0ZHVFVGSFIyOW5YemgxTWtkMmNuYzBlVkF6VjJWQlZtazBTM2t3YnpsbGFYYyIsImZjdiI6IjMiLCJlaSI6IjlndGFhTV9UTjUtSzl1OFBpLTZBOFE0IiwicWMiOiJDZzV3WVdObGNuTWdkR2gxYm1SbGNoQUFmY0pQTEQ4IiwicXVlc3Rpb24iOiJXaGF0IGp1c3QgaGFwcGVuZWQgdG8gVHlyZXNlIEhhbGlidXJ0b24%2FIiwibGsiOiJHaWQzYUdGMElHcDFjM1FnYUdGd2NHVnVaV1FnZEc4Z2RIbHlaWE5sSUdoaGJHbGlkWEowYjI0IiwiYnMiOiJjMzNRdldvQ1FSUUZZRklKVTZWY3RycWQwYVRhSnJGeFVTeXNFZ3ZCVklIWjNZdDN3bVJtbUI4MzFyWS1SeDdMWl9GS2ZsQmMwdHpxZm5ET0VXX2lmcVlhV0c0OUJvUzUxS3BLUGxvRFBybVlQQUtwQUpPYWxOWVl5bXpmS3g3eVljTWlmZ3ZxRnZKSGlFX3hOSmNiaEVnSUMxbWpEMkE5TENtWkJqM2doa19MVmhwNG5rNmdKdm5obERXQmxDdXozYmdZNVlfMHk5MGZqeDNjVlBLQ0MyNjJJZ3NjNW9RcmJabkFXbmtORE03aVZHaHFLck92NGFsWi02OXdaMEs4aXJzVnlRanZLVVNld1RrMHlMUFk2eTNMN1BCU0RQSi0yX2wtTmVUdHpSRSIsImlkIjoiZmNfOWd0YWFNX1RONS1LOXU4UGktNkE4UTRfNCJ9"
+		}
+	],
+	"organic_results": [
+		{
+			"position": 1,
+			"title": "GAME THREAD: Indiana Pacers (3-3) @ Oklahoma City ...",
+			"link": "https://www.reddit.com/r/nba/comments/1li5hf8/game_thread_indiana_pacers_33_oklahoma_city/",
+			"redirect_link": "https://www.google.com/url?sa=t&source=web&rct=j&opi=89978449&url=https://www.reddit.com/r/nba/comments/1li5hf8/game_thread_indiana_pacers_33_oklahoma_city/&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4QFnoECCoQAQ",
+			"displayed_link": "6.9K+ comments · 23 hours ago",
+			"favicon": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/108ab2aa8bb9053eb6b793e4f3c102139a267301b9c09c7754bd44c25bd24861.png",
+			"snippet": "GAME THREAD: Indiana Pacers (3-3) @ Oklahoma City Thunder (3-3) - (June 23, 2025) ... The Pacers hung around for a long while after the ...",
+			"snippet_highlighted_words": [
+				"Indiana Pacers (3-3) @ Oklahoma City Thunder (3-3"
+			],
+			"sitelinks": {
+				"list": [
+					{
+						"title": "We're gonna get a Thunder-Pacers Finals. Who ...",
+						"link": "https://www.reddit.com/r/NBATalk/comments/1kx6m32/were_gonna_get_a_thunderpacers_finals_who_would/",
+						"answer_count": 979,
+						"date": "May 28, 2025"
+					},
+					{
+						"title": "[Highlight] The Oklahoma City Thunder win their ...",
+						"link": "https://www.reddit.com/r/nba/comments/1li5tlo/highlight_the_oklahoma_city_thunder_win_their/",
+						"answer_count": 1317,
+						"date": "Jun 23, 2025"
+					}
+				]
+			},
+			"source": "Reddit · r/nba"
+		},
+		{
+			"position": 2,
+			"title": "Thunder take Game 7, cap historic season with first title",
+			"link": "https://www.espn.com/nba/story/_/id/45565932/thunder-overwhelm-pacers-game-7-franchise-first-title",
+			"redirect_link": "https://www.google.com/url?sa=t&source=web&rct=j&opi=89978449&url=https://www.espn.com/nba/story/_/id/45565932/thunder-overwhelm-pacers-game-7-franchise-first-title&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4QFnoECCQQAQ",
+			"displayed_link": "https://www.espn.com › nba › story › thunder-overwhe...",
+			"favicon": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/108ab2aa8bb9053eb6b793e4f3c10213b1eb40ce91893a6ca340f7c020e68517.png",
+			"date": "23 hours ago",
+			"snippet": "OKLAHOMA CITY -- The Oklahoma City Thunder took home the 2025 NBA championship -- the first in the franchise's 17 years here -- with a ...",
+			"snippet_highlighted_words": [
+				"Oklahoma City Thunder took home the 2025 NBA championship"
+			],
+			"source": "ESPN"
+		},
+		{
+			"position": 3,
+			"title": "Thunder win Game 7 of the 2025 NBA Finals over Indiana ...",
+			"link": "https://www.nbcnews.com/sports/nba/live-blog/nba-finals-game-7-thunder-pacers-live-updates-rcna214091",
+			"redirect_link": "https://www.google.com/url?sa=t&source=web&rct=j&opi=89978449&url=https://www.nbcnews.com/sports/nba/live-blog/nba-finals-game-7-thunder-pacers-live-updates-rcna214091&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4QFnoECFYQAQ",
+			"displayed_link": "https://www.nbcnews.com › sports › nba › live-blog",
+			"favicon": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/108ab2aa8bb9053eb6b793e4f3c1021302ead499fa763e9864b099f6dc6f9039.png",
+			"date": "23 hours ago",
+			"snippet": "The Oklahoma City Thunder are the 2024-25 NBA champions after they defeated the Indiana Pacers 103-91 in Game 7 of the Finals on Sunday. The ...",
+			"snippet_highlighted_words": [
+				"Indiana Pacers 103"
+			],
+			"source": "NBC News"
+		},
+		{
+			"position": 4,
+			"title": "Thunder 103-91 Pacers (Jun 22, 2025) Final Score",
+			"link": "https://www.espn.com/nba/game/_/gameId/401766128/pacers-thunder",
+			"redirect_link": "https://www.google.com/url?sa=t&source=web&rct=j&opi=89978449&url=https://www.espn.com/nba/game/_/gameId/401766128/pacers-thunder&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4QFnoECCgQAQ",
+			"displayed_link": "https://www.espn.com › nba › game › gameId › pacers-...",
+			"favicon": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/108ab2aa8bb9053eb6b793e4f3c10213956de3c3c1ce7bb4f05b3224f22bf83b.png",
+			"snippet": "Game 7: Shai Gilgeous-Alexander scores 29 points and Thunder beat Pacers 103-91 for NBA title · Game Leaders · Bennedict Mathurin #00 - IND · Shai Gilgeous- ...",
+			"snippet_highlighted_words": [
+				"Thunder beat Pacers 103-91"
+			],
+			"source": "ESPN"
+		},
+		{
+			"position": 5,
+			"title": "Indiana Pacers vs Oklahoma City Thunder Jun 8, 2025 ...",
+			"link": "https://www.nba.com/game/ind-vs-okc-0042400402",
+			"redirect_link": "https://www.google.com/url?sa=t&source=web&rct=j&opi=89978449&url=https://www.nba.com/game/ind-vs-okc-0042400402&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4QFnoECCYQAQ",
+			"displayed_link": "https://www.nba.com › NBA Games",
+			"favicon": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/108ab2aa8bb9053eb6b793e4f3c10213050e750886dd1a7fae0661c7682b3baf.png",
+			"date": "Jun 8, 2025",
+			"snippet": "Shai Gilgeous-Alexander scored 34 points, Alex Caruso added 20 off the bench and the Thunder beat the Indiana Pacers 123-107 on Sunday night to ...",
+			"snippet_highlighted_words": [
+				"Thunder beat the Indiana Pacers 123-107"
+			],
+			"source": "NBA"
+		},
+		{
+			"position": 6,
+			"title": "Pacers vs. Thunder NBA Finals: Tyrese Haliburton's ...",
+			"link": "https://sports.yahoo.com/nba/breaking-news/article/pacers-vs-thunder-nba-finals-tyrese-haliburtons-devastating-injury-a-brutal-reminder-of-the-precariousness-of-the-game-055300107.html",
+			"redirect_link": "https://www.google.com/url?sa=t&source=web&rct=j&opi=89978449&url=https://sports.yahoo.com/nba/breaking-news/article/pacers-vs-thunder-nba-finals-tyrese-haliburtons-devastating-injury-a-brutal-reminder-of-the-precariousness-of-the-game-055300107.html&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4QFnoECCcQAQ",
+			"displayed_link": "https://sports.yahoo.com › nba › breaking-news › article",
+			"favicon": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/108ab2aa8bb9053eb6b793e4f3c10213c215d5f6edd016215c44ba2438936091.png",
+			"snippet": "The Thunder beat the Pacers ... Eight Pacers turnovers led to 18 points, and the Thunder were able to withstand yet another run from Pacers reserve T.J. ...",
+			"snippet_highlighted_words": [
+				"The Thunder beat the Pacers"
+			],
+			"source": "Yahoo Sports"
+		},
+		{
+			"position": 7,
+			"title": "2025 NBA Finals Game 7: Pacers vs Thunder, June 22, 2025",
+			"link": "https://www.basketball-reference.com/boxscores/202506220OKC.html",
+			"redirect_link": "https://www.google.com/url?sa=t&source=web&rct=j&opi=89978449&url=https://www.basketball-reference.com/boxscores/202506220OKC.html&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4QFnoECCUQAQ",
+			"displayed_link": "https://www.basketball-reference.com › Box Scores",
+			"favicon": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/108ab2aa8bb9053eb6b793e4f3c102137feea132eb535840717e6d2acea2ff6c.png",
+			"date": "16 hours ago",
+			"snippet": "IND (91) vs OKC (103). Get the box score, shot charts and play by play summary of the Pacers vs Thunder Game 7, June 22, 2025.",
+			"snippet_highlighted_words": [
+				"Pacers vs Thunder Game 7, June 22, 2025"
+			],
+			"source": "Basketball-Reference.com"
+		},
+		{
+			"position": 8,
+			"title": "PACERS vs THUNDER JUN 05 HIGHLIGHTS",
+			"link": "https://stories.nba.com/b234d7fd-ce7f-999b-304e-3a1a3bd38655",
+			"redirect_link": "https://www.google.com/url?sa=t&source=web&rct=j&opi=89978449&url=https://stories.nba.com/b234d7fd-ce7f-999b-304e-3a1a3bd38655&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4QFnoECCMQAQ",
+			"displayed_link": "https://stories.nba.com › ...",
+			"favicon": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/108ab2aa8bb9053eb6b793e4f3c10213e4d4e97dda9182f5040d5f2953292d96.png",
+			"snippet": "Go To Box Score · Openinghttps://nba.smart.link/dil89fjt2 · More Highlights · Openinghttps://nba.smart.link/dil89fjt2.",
+			"source": "NBA Stories"
+		}
+	],
+	"top_stories": [
+		{
+			"title": "NBA Finals Game 7: Thunder beat Pacers for NBA title behind big game from Shai Gilgeous-Alexander after injury to Tyrese Haliburton",
+			"link": "https://sports.yahoo.com/nba/breaking-news/live/nba-finals-game-7-thunder-beat-pacers-for-nba-title-behind-big-game-from-shai-gilgeous-alexander-after-injury-to-tyrese-haliburton-223022939.html",
+			"source": "Yahoo Sports",
+			"source_logo": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/72498cbecbd0390544ce250a6fb2759ec6be533ee99c089df0a890eb6f3ec578.png",
+			"date": "1 hour ago",
+			"thumbnail": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/72498cbecbd03905f184fb28c91ea36ccc77e8da503a66bd.jpeg"
+		},
+		{
+			"title": "OKC takes Game 7, caps historic season with title",
+			"link": "https://www.espn.com/nba/story/_/id/45565932/thunder-overwhelm-pacers-game-7-franchise-first-title",
+			"source": "ESPN",
+			"source_logo": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/72498cbecbd039050b8fbefee765ee66469e334eb630661279cd63b9ed822774.png",
+			"date": "23 hours ago",
+			"thumbnail": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/72498cbecbd039051bfe7979c0fa28cdc575ffba1c4b85fc.jpeg"
+		},
+		{
+			"title": "Thunder win Game 7 of the 2025 NBA Finals over Indiana Pacers: Full recap and player analysis",
+			"link": "https://www.nbcnews.com/sports/nba/live-blog/nba-finals-game-7-thunder-pacers-live-updates-rcna214091",
+			"source": "NBC News",
+			"source_logo": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/72498cbecbd03905f55e9e2651a85795ec8da007f0d6edcda8c9dac249dc3ce6.png",
+			"date": "23 hours ago",
+			"thumbnail": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/72498cbecbd0390595b0611f9d98b6c8666cc690c392735e.jpeg"
+		},
+		{
+			"title": "Pacers vs. Thunder NBA Finals: Tyrese Haliburton's devastating injury a brutal reminder of the precariousness of the game",
+			"link": "https://sports.yahoo.com/nba/breaking-news/article/pacers-vs-thunder-nba-finals-tyrese-haliburtons-devastating-injury-a-brutal-reminder-of-the-precariousness-of-the-game-055300107.html",
+			"source": "Yahoo Sports",
+			"source_logo": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/72498cbecbd03905921bc4459264dd6cc8cb5675b0a9d310cac5bb2af4030e21.png",
+			"date": "20 hours ago",
+			"thumbnail": "https://serpapi.com/searches/685a0bf6f2593adb44753d27/images/72498cbecbd03905861d33f51ac870a4c39b7c66d5ba1fe1.jpeg"
+		}
+	],
+	"top_stories_link": "https://www.google.com/search?safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&q=Pacers%2BThunder&tbm=nws&source=univ&tbo=u&sa=X&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Qt8YBKAF6BAgdEAM",
+	"top_stories_serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers%2BThunder&safe=active&tbm=nws",
+	"related_searches": [
+		{
+			"block_position": 1,
+			"query": "Pacers vs thunder game 7",
+			"link": "https://www.google.com/search?safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&q=Pacers+vs+thunder+game+7&sa=X&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q1QJ6BAhUEAE",
+			"serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers+vs+thunder+game+7&safe=active"
+		},
+		{
+			"block_position": 1,
+			"query": "Thunder pacers game 7",
+			"link": "https://www.google.com/search?safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&q=Thunder+pacers+game+7&sa=X&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q1QJ6BAhQEAE",
+			"serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Thunder+pacers+game+7&safe=active"
+		},
+		{
+			"block_position": 1,
+			"query": "Pacers vs thunder game 7 stats",
+			"link": "https://www.google.com/search?safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&q=Pacers+vs+thunder+game+7+stats&sa=X&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q1QJ6BAhTEAE",
+			"serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers+vs+thunder+game+7+stats&safe=active"
+		},
+		{
+			"block_position": 1,
+			"query": "Pacers vs thunder game 7 live",
+			"link": "https://www.google.com/search?safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&q=Pacers+vs+thunder+game+7+live&sa=X&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q1QJ6BAhSEAE",
+			"serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers+vs+thunder+game+7+live&safe=active"
+		},
+		{
+			"block_position": 1,
+			"query": "Tyrese Haliburton injury",
+			"link": "https://www.google.com/search?safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&q=Tyrese+Haliburton+injury&sa=X&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q1QJ6BAhREAE",
+			"serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Tyrese+Haliburton+injury&safe=active"
+		},
+		{
+			"block_position": 1,
+			"query": "Pacers vs thunder game 7 score",
+			"link": "https://www.google.com/search?safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&q=Pacers+vs+thunder+game+7+score&sa=X&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q1QJ6BAhNEAE",
+			"serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers+vs+thunder+game+7+score&safe=active"
+		},
+		{
+			"block_position": 1,
+			"query": "Pacers vs thunder game 7 where to watch",
+			"link": "https://www.google.com/search?safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&q=Pacers+vs+thunder+game+7+where+to+watch&sa=X&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q1QJ6BAhPEAE",
+			"serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers+vs+thunder+game+7+where+to+watch&safe=active"
+		},
+		{
+			"block_position": 1,
+			"query": "Pacers vs thunder game 7 live stream",
+			"link": "https://www.google.com/search?safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&q=Pacers+vs+thunder+game+7+live+stream&sa=X&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q1QJ6BAhOEAE",
+			"serpapi_link": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers+vs+thunder+game+7+live+stream&safe=active"
+		}
+	],
+	"dmca_messages": {
+		"title": "Notices about Filtered Results",
+		"messages": [
+			{
+				"content": "In response to a complaint we received under the US Digital Millennium Copyright Act, we have removed 1 result(s) from this page. If you wish, you may read the DMCA complaint that caused the removal(s) at LumenDatabase.org.",
+				"highlighted_words": [
+					{
+						"link": "https://www.google.com/support/answer/1386831",
+						"text": "US Digital Millennium Copyright Act"
+					},
+					{
+						"link": "https://lumendatabase.org/notices/53058464",
+						"text": "read the DMCA complaint"
+					}
+				]
+			}
+		]
+	},
+	"pagination": {
+		"current": 1,
+		"next": "https://www.google.com/search?q=Pacers%2BThunder&safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&ei=9gtaaM_TN5-K9u8Pi-6A8Q4&start=10&sa=N&sstk=Ac65TH7Q6BrrimlGXOaBeF74KxCtdc0FM8VIh0egftvLZCZz606QwbiG51gU4E5NIoDK7D4IDaHZDKHfowalI2Hk7lW-awI0fMtW7A&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q8NMDegQICxAZ",
+		"other_pages": {
+			"2": "https://www.google.com/search?q=Pacers%2BThunder&safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&ei=9gtaaM_TN5-K9u8Pi-6A8Q4&start=10&sa=N&sstk=Ac65TH7Q6BrrimlGXOaBeF74KxCtdc0FM8VIh0egftvLZCZz606QwbiG51gU4E5NIoDK7D4IDaHZDKHfowalI2Hk7lW-awI0fMtW7A&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q8tMDegQICxAH",
+			"3": "https://www.google.com/search?q=Pacers%2BThunder&safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&ei=9gtaaM_TN5-K9u8Pi-6A8Q4&start=20&sa=N&sstk=Ac65TH7Q6BrrimlGXOaBeF74KxCtdc0FM8VIh0egftvLZCZz606QwbiG51gU4E5NIoDK7D4IDaHZDKHfowalI2Hk7lW-awI0fMtW7A&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q8tMDegQICxAJ",
+			"4": "https://www.google.com/search?q=Pacers%2BThunder&safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&ei=9gtaaM_TN5-K9u8Pi-6A8Q4&start=30&sa=N&sstk=Ac65TH7Q6BrrimlGXOaBeF74KxCtdc0FM8VIh0egftvLZCZz606QwbiG51gU4E5NIoDK7D4IDaHZDKHfowalI2Hk7lW-awI0fMtW7A&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q8tMDegQICxAL",
+			"5": "https://www.google.com/search?q=Pacers%2BThunder&safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&ei=9gtaaM_TN5-K9u8Pi-6A8Q4&start=40&sa=N&sstk=Ac65TH7Q6BrrimlGXOaBeF74KxCtdc0FM8VIh0egftvLZCZz606QwbiG51gU4E5NIoDK7D4IDaHZDKHfowalI2Hk7lW-awI0fMtW7A&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q8tMDegQICxAN",
+			"6": "https://www.google.com/search?q=Pacers%2BThunder&safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&ei=9gtaaM_TN5-K9u8Pi-6A8Q4&start=50&sa=N&sstk=Ac65TH7Q6BrrimlGXOaBeF74KxCtdc0FM8VIh0egftvLZCZz606QwbiG51gU4E5NIoDK7D4IDaHZDKHfowalI2Hk7lW-awI0fMtW7A&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q8tMDegQICxAP",
+			"7": "https://www.google.com/search?q=Pacers%2BThunder&safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&ei=9gtaaM_TN5-K9u8Pi-6A8Q4&start=60&sa=N&sstk=Ac65TH7Q6BrrimlGXOaBeF74KxCtdc0FM8VIh0egftvLZCZz606QwbiG51gU4E5NIoDK7D4IDaHZDKHfowalI2Hk7lW-awI0fMtW7A&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q8tMDegQICxAR",
+			"8": "https://www.google.com/search?q=Pacers%2BThunder&safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&ei=9gtaaM_TN5-K9u8Pi-6A8Q4&start=70&sa=N&sstk=Ac65TH7Q6BrrimlGXOaBeF74KxCtdc0FM8VIh0egftvLZCZz606QwbiG51gU4E5NIoDK7D4IDaHZDKHfowalI2Hk7lW-awI0fMtW7A&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q8tMDegQICxAT",
+			"9": "https://www.google.com/search?q=Pacers%2BThunder&safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&ei=9gtaaM_TN5-K9u8Pi-6A8Q4&start=80&sa=N&sstk=Ac65TH7Q6BrrimlGXOaBeF74KxCtdc0FM8VIh0egftvLZCZz606QwbiG51gU4E5NIoDK7D4IDaHZDKHfowalI2Hk7lW-awI0fMtW7A&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q8tMDegQICxAV",
+			"10": "https://www.google.com/search?q=Pacers%2BThunder&safe=active&sca_esv=ce11c28d34d3b287&gl=us&hl=en&ei=9gtaaM_TN5-K9u8Pi-6A8Q4&start=90&sa=N&sstk=Ac65TH7Q6BrrimlGXOaBeF74KxCtdc0FM8VIh0egftvLZCZz606QwbiG51gU4E5NIoDK7D4IDaHZDKHfowalI2Hk7lW-awI0fMtW7A&ved=2ahUKEwjPpsGIgImOAxUfhf0HHQs3IO4Q8tMDegQICxAX"
+		}
+	},
+	"serpapi_pagination": {
+		"current": 1,
+		"next_link": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers%2BThunder&safe=active&start=10",
+		"next": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers%2BThunder&safe=active&start=10",
+		"other_pages": {
+			"2": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers%2BThunder&safe=active&start=10",
+			"3": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers%2BThunder&safe=active&start=20",
+			"4": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers%2BThunder&safe=active&start=30",
+			"5": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers%2BThunder&safe=active&start=40",
+			"6": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers%2BThunder&safe=active&start=50",
+			"7": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers%2BThunder&safe=active&start=60",
+			"8": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers%2BThunder&safe=active&start=70",
+			"9": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers%2BThunder&safe=active&start=80",
+			"10": "https://serpapi.com/search.json?device=desktop&engine=google&gl=us&google_domain=google.com&hl=en&location=United%2BStates&q=Pacers%2BThunder&safe=active&start=90"
+		}
+	}
+}
 
 export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
 	"status": "ok",
-	"totalResults": 68,
+	"totalResults": 68, 
 	"articles": [
 		{
 			"source": {
