@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
-    "version": "1.0.0",
+    "name": "alethia",
+    "slug": "alethia",
+    "version": "0.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "mobile",
@@ -17,7 +17,7 @@
         "CFBundleURLTypes": [
           {
             "CFBundleURLSchemes": [
-             "com.googleusercontent.apps.1064184478567-3n1pm51cp4bm56nmruhvt5tpi0fulkqv"
+              "com.googleusercontent.apps.1064184478567-3n1pm51cp4bm56nmruhvt5tpi0fulkqv"
             ]
           }
         ],
@@ -77,6 +77,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "f8940b92-9850-44b0-b978-3794f49eaf36"
+      }
     }
   }
 }
