@@ -1,6 +1,7 @@
 // import { useShowToast } from "@/components/ui/toast/useToast";
 import { AuthProvider, useAuth } from "@/context/auth/AuthContext";
-// import "@/global.css";
+import "./global.css"
+
 // import { ToastService } from "@/services/ToastService";
 // import { ToastProvider } from "@gluestack-ui/toast";
 import {
