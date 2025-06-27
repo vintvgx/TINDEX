@@ -10,22 +10,22 @@ import {
 import * as AppleAuthentication from "expo-apple-authentication";
 import { nanoid } from "nanoid";
 
-// GoogleSignin.configure({
-//   scopes: ["https://www.googleapis.com/auth/drive.readonly"],
-//   iosClientId:
-//     "49402666160-hrdp0lalkae29cjs5biltjbv9cbc2tsb.apps.googleusercontent.com",
-//   webClientId:
-//     "49402666160-vs5sjj0q2td8k3320j0or0v0fag0k7lr.apps.googleusercontent.com",
-//   profileImageSize: 150,
-// });
+GoogleSignin.configure({
+  scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+  iosClientId:
+    "1064184478567-3n1pm51cp4bm56nmruhvt5tpi0fulkqv.apps.googleusercontent.com",
+  webClientId:
+    "1064184478567-832gl286kq3l3t1o14ue4rqb38fnjg2t.apps.googleusercontent.com",
+  profileImageSize: 150,
+});
 
 // //TODO swtich to this configuration for next build
-// // GoogleSignin.configure({
-// //   scopes: ["https://www.googleapis.com/auth/drive.readonly"],
-// //   iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
-// //   webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
-// //   profileImageSize: Number(process.env.EXPO_PUBLIC_GOOGLE_PROFILE_IMAGE_SIZE) || 150,
-// // });
+// GoogleSignin.configure({
+//   scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+//   iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+//   webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+//   profileImageSize: Number(process.env.EXPO_PUBLIC_GOOGLE_PROFILE_IMAGE_SIZE) || 150,
+// });
 
 export const signInWithGoogle = async () => {
   try {

@@ -1,11 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { ApiKeys, PriorityLevel, PROMPT_STYLES, Topic, TopicReturn } from "../shared/client.ts";
-import { formatPrompt } from "../shared/pompt.ts";
 import {
   NEWS_API_THUNDER_PACERS_DATA_06_16_25,
   SERP_API_THUNDER_PACERS_DATA_06_23_25,
 } from "./DATA.ts";
+import { formatPrompt } from "../shared/prompts.ts";
 
 /**
  * Supabase serverless function to generate blog post
