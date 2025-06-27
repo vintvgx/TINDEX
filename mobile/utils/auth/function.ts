@@ -1,14 +1,14 @@
 // //TODO FIX this file
 // import { TOAST } from "@/components/ui/toast/useToast";
-// import { supabase } from "@/lib/supabase/supabase";
+import { supabase } from "@/lib/supabase/supabase";
 // import { UserMetaData, UserType } from "@/types/user/user";
-// import {
-//   GoogleSignin,
-//   isSuccessResponse,
-//   statusCodes
-// } from "@react-native-google-signin/google-signin";
-// import * as AppleAuthentication from "expo-apple-authentication";
-// import { nanoid } from "nanoid";
+import {
+  GoogleSignin,
+  isSuccessResponse,
+  statusCodes
+} from "@react-native-google-signin/google-signin";
+import * as AppleAuthentication from "expo-apple-authentication";
+import { nanoid } from "nanoid";
 
 // GoogleSignin.configure({
 //   scopes: ["https://www.googleapis.com/auth/drive.readonly"],
@@ -27,128 +27,128 @@
 // //   profileImageSize: Number(process.env.EXPO_PUBLIC_GOOGLE_PROFILE_IMAGE_SIZE) || 150,
 // // });
 
-// export const signInWithGoogle = async (showToast: (type: TOAST, message: string) => void) => {
-//   try {
-//     await GoogleSignin.hasPlayServices();
-//     const response = await GoogleSignin.signIn();
-//     if (isSuccessResponse(response)) {
-//       const { idToken, user } = response.data;
+export const signInWithGoogle = async () => {
+  try {
+    await GoogleSignin.hasPlayServices();
+    const response = await GoogleSignin.signIn();
+    if (isSuccessResponse(response)) {
+      const { idToken, user } = response.data;
 
-//       const { data, error } = await supabase.auth.signInWithIdToken({
-//         provider: "google",
-//         token: idToken!!,
-//       });
+      const { data, error } = await supabase.auth.signInWithIdToken({
+        provider: "google",
+        token: idToken!!,
+      });
 
-//       if (data.session) {
-//         console.log(`Google user signed in: ${data.user.email}`);
-//       } else {
-//         console.error("Google sign-in failed with non-success response");
-//       }
+      if (data.session) {
+        console.log(`Google user signed in: ${data.user.email}`);
+      } else {
+        console.error("Google sign-in failed with non-success response");
+      }
 
-//       // Update user metadata if sign-in was successful
-//       if (data.user) {
-//         const metadataResult = await updateUserMetadata({
-//           firstName: user?.givenName,
-//           lastName: user?.familyName,
-//           email: user.email,
-//         });
+      //TODO Update user metadata if sign-in was successful ?
+    //   if (data.user) {
+    //     const metadataResult = await updateUserMetadata({
+    //       firstName: user?.givenName,
+    //       lastName: user?.familyName,
+    //       email: user.email,
+    //     });
 
-//         if (!metadataResult.success) {
-//           console.warn(
-//             "User created but metadata update failed:",
-//             metadataResult.error
-//           );
-//           showToast(
-//             TOAST.INFO,
-//             `${data.user.email} authenticated successfully. METADATA NOT UPDATED!`
-//           );
-//           return;
-//         }
-//         console.log("User metadata saved successfully");
-//       }
+    //     if (!metadataResult.success) {
+    //       console.warn(
+    //         "User created but metadata update failed:",
+    //         metadataResult.error
+    //       );
+    //       showToast(
+    //         TOAST.INFO,
+    //         `${data.user.email} authenticated successfully. METADATA NOT UPDATED!`
+    //       );
+    //       return;
+    //     }
+    //     console.log("User metadata saved successfully");
+    //   }
 
-//       console.log("Google authentication successful:", data.user);
-//       showToast(TOAST.SUCCESS, `${user.email} authenticated successfully`)
-//     }
-//   } catch (error: any) {
-//     if (error.code === statusCodes.SIGN_IN_CANCELLED) {
-//       // user cancelled the login flow
-//       console.error("User cancelled the login flow");
-//     } else if (error.code === statusCodes.IN_PROGRESS) {
-//       // operation (e.g. sign in) is in progress already
-//       console.error("User sign in is in progress");
-//     } else if (error.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
-//       // play services not available or outdated
-//       console.error("Google play service is not available");
-//     } else {
-//       // some other error happened
-//       console.error("Unknown error occurred.");
-//     }
-//   }
-// }
+      console.log("Google authentication successful:", data.user);
+    //   showToast(TOAST.SUCCESS, `${user.email} authenticated successfully`)
+    }
+  } catch (error: any) {
+    if (error.code === statusCodes.SIGN_IN_CANCELLED) {
+      // user cancelled the login flow
+      console.error("User cancelled the login flow");
+    } else if (error.code === statusCodes.IN_PROGRESS) {
+      // operation (e.g. sign in) is in progress already
+      console.error("User sign in is in progress");
+    } else if (error.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+      // play services not available or outdated
+      console.error("Google play service is not available");
+    } else {
+      // some other error happened
+      console.error("Unknown error occurred.");
+    }
+  }
+}
 
 
-// export const signInWithApple = async (showToast: (type: TOAST, message: string) => void) => {
-//   try {
-//     const credential = await AppleAuthentication.signInAsync({
-//       requestedScopes: [
-//         AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
-//         AppleAuthentication.AppleAuthenticationScope.EMAIL,
-//       ],
-//     });
-//     // Sign in via Supabase Auth.
-//     if (credential.identityToken) {
-//       const { error, data } = await supabase.auth.signInWithIdToken({
-//         provider: "apple",
-//         token: credential.identityToken,
-//       });
+export const signInWithApple = async () => {
+  try {
+    const credential = await AppleAuthentication.signInAsync({
+      requestedScopes: [
+        AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+        AppleAuthentication.AppleAuthenticationScope.EMAIL,
+      ],
+    });
+    // Sign in via Supabase Auth.
+    if (credential.identityToken) {
+      const { error, data } = await supabase.auth.signInWithIdToken({
+        provider: "apple",
+        token: credential.identityToken,
+      });
 
-//       if (error) {
-//         throw error;
-//       }
+      if (error) {
+        throw error;
+      }
 
-//       // Update user metadata if sign-in was successful
-//       if (data.user) {
-//         const metadataResult = await updateUserMetadata({
-//           firstName: credential.fullName?.givenName,
-//           lastName: credential.fullName?.familyName,
-//           email: credential.email,
-//         });
+      //TODO Update user metadata if sign-in was successful ?
+    //   if (data.user) {
+    //     const metadataResult = await updateUserMetadata({
+    //       firstName: credential.fullName?.givenName,
+    //       lastName: credential.fullName?.familyName,
+    //       email: credential.email,
+    //     });
 
-//         if (!metadataResult.success) {
-//           console.warn(
-//             "User created but metadata update failed:",
-//             metadataResult.error
-//           );
-//           showToast(
-//             TOAST.INFO,
-//             "User authenticated successfully. METADATA NOT UPDATED!"
-//           );
-//           return;
-//         }
+    //     if (!metadataResult.success) {
+    //       console.warn(
+    //         "User created but metadata update failed:",
+    //         metadataResult.error
+    //       );
+    //       showToast(
+    //         TOAST.INFO,
+    //         "User authenticated successfully. METADATA NOT UPDATED!"
+    //       );
+    //       return;
+    //     }
 
-//         console.log("User metadata saved successfully");
-//       }
+    //     console.log("User metadata saved successfully");
+    //   }
 
-//       // User is signed in
-//       console.log("Apple authentication successful:", data.user);
-//       showToast(TOAST.SUCCESS, `${data.user.email} authenticated successfully`)
-//     } else {
-//       throw new Error("No identityToken.");
-//     }
-//   } catch (e: unknown) {
-//     showToast(TOAST.ERROR, e as string)
-//     if (
-//       e instanceof Error &&
-//       "code" in e &&
-//       e.code === "ERR_REQUEST_CANCELED"
-//     ) {
-//       console.log("User canceled Apple sign-in");
-//     } else {
-//       console.error("Apple sign-in error:", e);
-//     }
-//   }
-// }
+      // User is signed in
+      console.log("Apple authentication successful:", data.user);
+    //   showToast(TOAST.SUCCESS, `${data.user.email} authenticated successfully`)
+    } else {
+      throw new Error("No identityToken.");
+    }
+  } catch (e: unknown) {
+    // showToast(TOAST.ERROR, e as string)
+    if (
+      e instanceof Error &&
+      "code" in e &&
+      e.code === "ERR_REQUEST_CANCELED"
+    ) {
+      console.log("User canceled Apple sign-in");
+    } else {
+      console.error("Apple sign-in error:", e);
+    }
+  }
+}
 
 
 // /**
