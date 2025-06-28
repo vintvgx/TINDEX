@@ -18,7 +18,7 @@
     ".expo/types/**/*.ts",
     "expo-env.d.ts",
     "nativewind-env.d.ts"
-  ]
+, "babel.config.js"  ]
 }
 // {
 //   "extends": "expo/tsconfig.base",

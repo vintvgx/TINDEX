@@ -20,6 +20,8 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { useColorScheme } from "react-native";
 import "react-native-reanimated";
+import "@/global.css";
+
 // import { GluestackUIProvider } from "../components/ui/gluestack-ui-provider";
 // import LoadingScreen from "./components/LoadingScreen";
 
@@ -37,7 +39,7 @@ export default function RootLayout() {
   });
 
 
-  //TODO IMPLEMEENT showToast + grab functionality from VENT proj
+  //TODO IMPLEMENT showToast + grab functionality from VENT proj
   // const showToast = useShowToast();
   // useEffect(() => {
   //   // Register the toast callback when component mounts

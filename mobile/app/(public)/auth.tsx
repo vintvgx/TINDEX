@@ -1,313 +1,248 @@
-// import { ThemedText } from "@/components/ThemedText";
-// import { ThemedView } from "@/components/ThemedView";
-// import { Button, ButtonText } from "@/components/ui/button";
-// import { useShowToast } from "@/components/ui/toast/useToast";
-// import { signInWithApple, signInWithGoogle } from "@/utils/auth/function";
-// import { Ionicons } from "@expo/vector-icons";
-// import { useTheme } from "@react-navigation/native";
-// import { Stack } from "expo-router";
-// import React, { useEffect, useRef, useState } from "react";
-// import {
-//   Animated,
-//   Dimensions,
-//   Platform,
-//   View,
-//   useColorScheme,
-//   Text,
-// } from "react-native";
-// import { SafeAreaView } from "react-native-safe-area-context";
+//TODO update to use Tailwind
+// "use client"
 
-// const { height } = Dimensions.get("window");
+// import { signInWithApple, signInWithGoogle } from "@/utils/auth/function"
+// import { Ionicons } from "@expo/vector-icons"
+// import { useTheme } from "@react-navigation/native"
+// import { useEffect } from "react"
+// import { Dimensions, View, useColorScheme, Text, TouchableOpacity, StatusBar } from "react-native"
+// import { SafeAreaView } from "react-native-safe-area-context"
+// import { LinearGradient } from "expo-linear-gradient"
+
+// const { height, width } = Dimensions.get("window")
 
 // export default function AuthScreen() {
-//   // const showToast = useShowToast();
-//   const theme = useTheme();
-//   const colorScheme = useColorScheme();
+//   const theme = useTheme()
+//   const colorScheme = useColorScheme()
 
 //   useEffect(() => {
-//     console.log("Color scheme:", colorScheme);
-//   });
+//     console.log("Color scheme:", colorScheme)
+//   }, [])
 
-//   //TODO Check if authGuard is needed
-//   // This will redirect away if user is already authenticated
-//   // useAuthGuard(false, false);
+//   const handleAppleSignIn = async () => {
+//     try {
+//       await signInWithApple()
+//     } catch (error) {
+//       console.error("Apple sign in error:", error)
+//     }
+//   }
 
-//   const [isAuthVisible, setIsAuthVisible] = useState(false);
-//   const slideAnim = useRef(new Animated.Value(height)).current;
-//   const contentAnim = useRef(new Animated.Value(0)).current;
-
-//   const showAuthPanel = () => {
-//     setIsAuthVisible(true);
-//     // Animate auth panel up
-//     Animated.timing(slideAnim, {
-//       toValue: 0,
-//       duration: 300,
-//       useNativeDriver: true,
-//     }).start();
-
-//     // Animate content up to make room for auth panel
-//     Animated.timing(contentAnim, {
-//       toValue: -height * 0.25, // Move up by approximately half the auth panel height
-//       duration: 300,
-//       useNativeDriver: true,
-//     }).start();
-//   };
-
-//   const hideAuthPanel = () => {
-//     // Animate auth panel down
-//     Animated.timing(slideAnim, {
-//       toValue: height,
-//       duration: 300,
-//       useNativeDriver: true,
-//     }).start(() => {
-//       setIsAuthVisible(false);
-//     });
-
-//     // Animate content back to original position
-//     Animated.timing(contentAnim, {
-//       toValue: 0,
-//       duration: 300,
-//       useNativeDriver: true,
-//     }).start();
-//   };
+//   const handleGoogleSignIn = async () => {
+//     try {
+//       await signInWithGoogle()
+//     } catch (error) {
+//       console.error("Google sign in error:", error)
+//     }
+//   }
 
 //   return (
-//     <SafeAreaView style={{ flex: 1, backgroundColor: "white" }}>
-//       <View>
-//         <Text>This is a text</Text>
-//       </View>
+//     <SafeAreaView className="flex-1">
+//       <StatusBar barStyle="light-content" />
+//       <LinearGradient
+//         colors={["#1e3a8a", "#1e40af", "#3b82f6"]}
+//         start={{ x: 0, y: 0 }}
+//         end={{ x: 1, y: 1 }}
+//         className="flex-1"
+//       >
+//         <View className="flex-1 justify-center items-center px-8">
+//           {/* App Title */}
+//           <View className="mb-20">
+//             <Text className="text-white text-6xl font-light tracking-wide text-center">Alethia</Text>
+//           </View>
+
+//           {/* Authentication Buttons */}
+//           <View className="w-full space-y-4">
+//             {/* Apple Sign In Button */}
+//             <TouchableOpacity
+//               onPress={handleAppleSignIn}
+//               className="w-full bg-black rounded-xl py-4 px-6 flex-row items-center justify-center"
+//               activeOpacity={0.8}
+//             >
+//               <Ionicons name="logo-apple" size={20} color="white" />
+//               <Text className="text-white text-lg font-medium ml-3">Continue with Apple</Text>
+//             </TouchableOpacity>
+
+//             {/* Google Sign In Button */}
+//             <TouchableOpacity
+//               onPress={handleGoogleSignIn}
+//               className="w-full bg-white rounded-xl py-4 px-6 flex-row items-center justify-center"
+//               activeOpacity={0.8}
+//             >
+//               <Ionicons name="logo-google" size={20} color="#4285F4" />
+//               <Text className="text-gray-800 text-lg font-medium ml-3">Continue with Google</Text>
+//             </TouchableOpacity>
+//           </View>
+
+//           {/* Terms and Privacy */}
+//           <View className="absolute bottom-12 px-8">
+//             <Text className="text-gray-300 text-sm text-center leading-5">
+//               By continuing, you agree to our <Text className="text-gray-200">Terms of Service</Text> and{" "}
+//               <Text className="text-gray-200">Privacy Policy</Text>
+//             </Text>
+//           </View>
+//         </View>
+//       </LinearGradient>
 //     </SafeAreaView>
-//   );
-// };
+//   )
+// }
+"use client"
 
-import { signInWithApple, signInWithGoogle } from "@/utils/auth/function";
-import { Ionicons } from "@expo/vector-icons";
-import { useTheme } from "@react-navigation/native";
-import { Stack } from "expo-router";
-import React, { useEffect, useRef, useState } from "react";
-import {
-  Animated,
-  Dimensions,
-  Platform,
-  View,
-  useColorScheme,
-  Text,
-  TouchableOpacity,
-  StatusBar,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { LinearGradient } from 'expo-linear-gradient';
+import { signInWithApple, signInWithGoogle } from "@/utils/auth/function"
+import { Ionicons } from "@expo/vector-icons"
+import { useTheme } from "@react-navigation/native"
+import { useEffect } from "react"
+import { Dimensions, View, useColorScheme, Text, TouchableOpacity, StatusBar, StyleSheet } from "react-native"
+import { SafeAreaView } from "react-native-safe-area-context"
+import { LinearGradient } from "expo-linear-gradient"
 
-const { height, width } = Dimensions.get("window");
+const { height, width } = Dimensions.get("window")
 
 export default function AuthScreen() {
-  const theme = useTheme();
-  const colorScheme = useColorScheme();
+  const theme = useTheme()
+  const colorScheme = useColorScheme()
 
   useEffect(() => {
-    console.log("Color scheme:", colorScheme);
-  });
-
-  const [isAuthVisible, setIsAuthVisible] = useState(false);
-  const [isLoading, setIsLoading] = useState({ apple: false, google: false });
-  const slideAnim = useRef(new Animated.Value(height)).current;
-  const contentAnim = useRef(new Animated.Value(0)).current;
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    // Fade in animation on mount
-    Animated.timing(fadeAnim, {
-      toValue: 1,
-      duration: 1000,
-      useNativeDriver: true,
-    }).start();
-  }, []);
-
-  const showAuthPanel = () => {
-    setIsAuthVisible(true);
-    Animated.parallel([
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-      Animated.timing(contentAnim, {
-        toValue: -height * 0.15,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  };
-
-  const hideAuthPanel = () => {
-    Animated.parallel([
-      Animated.timing(slideAnim, {
-        toValue: height,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-      Animated.timing(contentAnim, {
-        toValue: 0,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setIsAuthVisible(false);
-    });
-  };
+    console.log("Color scheme:", colorScheme)
+  }, [])
 
   const handleAppleSignIn = async () => {
-    setIsLoading(prev => ({ ...prev, apple: true }));
     try {
-      await signInWithApple();
+      await signInWithApple()
     } catch (error) {
-      console.error('Apple sign in error:', error);
-    } finally {
-      setIsLoading(prev => ({ ...prev, apple: false }));
+      console.error("Apple sign in error:", error)
     }
-  };
+  }
 
   const handleGoogleSignIn = async () => {
-    setIsLoading(prev => ({ ...prev, google: true }));
     try {
-      await signInWithGoogle();
+      await signInWithGoogle()
     } catch (error) {
-      console.error('Google sign in error:', error);
-    } finally {
-      setIsLoading(prev => ({ ...prev, google: false }));
+      console.error("Google sign in error:", error)
     }
-  };
+  }
 
   return (
-    <>
+    <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
       <LinearGradient
-        colors={['#0f172a', '#1e3a8a', '#334155']}
-        className="flex-1"
+        colors={["#1e3a8a", "#1e40af", "#3b82f6"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.gradient}
       >
-        <SafeAreaView className="flex-1">
-          <Animated.View 
-            className="flex-1 justify-center items-center px-8"
-            style={{
-              transform: [{ translateY: contentAnim }],
-              opacity: fadeAnim,
-            }}
-          >
-            {/* App Name */}
-            <View className="mb-20">
-              <Text 
-                className="text-6xl text-white text-center tracking-tight"
-                style={{
-                  fontWeight: '200',
-                  ...(Platform.OS === 'ios' ? {
-                    fontFamily: 'System',
-                  } : {
-                    fontFamily: 'sans-serif-thin',
-                  }),
-                }}
-              >
-                Alethia
-              </Text>
-            </View>
+        <View style={styles.content}>
+          {/* App Title */}
+          <View style={styles.titleContainer}>
+            <Text style={styles.title}>Alethia</Text>
+          </View>
 
-            {/* Get Started Button */}
+          {/* Authentication Buttons */}
+          <View style={styles.buttonsContainer}>
+            {/* Apple Sign In Button */}
             <TouchableOpacity
-              className="bg-white/10 px-12 py-4 rounded-full border border-white/20"
-              onPress={showAuthPanel}
+              onPress={handleAppleSignIn}
+              style={styles.appleButton}
               activeOpacity={0.8}
             >
-              <Text className="text-white text-lg font-medium text-center">
-                Get Started
-              </Text>
+              <Ionicons name="logo-apple" size={20} color="white" />
+              <Text style={styles.appleButtonText}>Continue with Apple</Text>
             </TouchableOpacity>
-          </Animated.View>
 
-          {/* Auth Panel */}
-          {isAuthVisible && (
-            <Animated.View
-              className="absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl pt-5 pb-10 px-6 shadow-2xl"
-              style={{
-                transform: [{ translateY: slideAnim }],
-                minHeight: height * 0.4,
-                shadowColor: '#000',
-                shadowOffset: {
-                  width: 0,
-                  height: -4,
-                },
-                shadowOpacity: 0.1,
-                shadowRadius: 12,
-                elevation: 8,
-              }}
+            {/* Google Sign In Button */}
+            <TouchableOpacity
+              onPress={handleGoogleSignIn}
+              style={styles.googleButton}
+              activeOpacity={0.8}
             >
-              <View className="flex-row items-center mb-8 relative">
-                <TouchableOpacity
-                  onPress={hideAuthPanel}
-                  className="absolute right-0 p-1"
-                >
-                  <Ionicons name="close" size={24} color="#666" />
-                </TouchableOpacity>
-                <Text className="text-xl font-semibold text-gray-800 flex-1 text-center">
-                  Sign in to continue
-                </Text>
-              </View>
+              <Ionicons name="logo-google" size={20} color="#4285F4" />
+              <Text style={styles.googleButtonText}>Continue with Google</Text>
+            </TouchableOpacity>
+          </View>
 
-              <View className="gap-4 mb-6">
-                {/* Apple Sign In */}
-                {Platform.OS === 'ios' && (
-                  <TouchableOpacity
-                    className="flex-row items-center justify-center py-4 px-6 bg-black rounded-xl gap-3"
-                    onPress={handleAppleSignIn}
-                    disabled={isLoading.apple}
-                    activeOpacity={0.8}
-                  >
-                    {isLoading.apple ? (
-                      <View className="flex-row items-center justify-center">
-                        <Text className="text-white text-base font-medium">
-                          Signing in...
-                        </Text>
-                      </View>
-                    ) : (
-                      <>
-                        <Ionicons name="logo-apple" size={20} color="white" />
-                        <Text className="text-white text-base font-medium">
-                          Continue with Apple
-                        </Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                )}
-
-                {/* Google Sign In */}
-                <TouchableOpacity
-                  className="flex-row items-center justify-center py-4 px-6 bg-white border border-gray-200 rounded-xl gap-3"
-                  onPress={handleGoogleSignIn}
-                  disabled={isLoading.google}
-                  activeOpacity={0.8}
-                >
-                  {isLoading.google ? (
-                    <View className="flex-row items-center justify-center">
-                      <Text className="text-gray-700 text-base font-medium">
-                        Signing in...
-                      </Text>
-                    </View>
-                  ) : (
-                    <>
-                      <Ionicons name="logo-google" size={20} color="#4285F4" />
-                      <Text className="text-gray-700 text-base font-medium">
-                        Continue with Google
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </View>
-
-              <Text className="text-xs text-gray-400 text-center leading-4 px-4">
-                By continuing, you agree to our Terms of Service and Privacy Policy
-              </Text>
-            </Animated.View>
-          )}
-        </SafeAreaView>
+          {/* Terms and Privacy */}
+          <View style={styles.termsContainer}>
+            <Text style={styles.termsText}>
+              By continuing, you agree to our <Text style={styles.termsLink}>Terms of Service</Text> and{" "}
+              <Text style={styles.termsLink}>Privacy Policy</Text>
+            </Text>
+          </View>
+        </View>
       </LinearGradient>
-    </>
-  );
+    </SafeAreaView>
+  )
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  gradient: {
+    flex: 1,
+  },
+  content: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  titleContainer: {
+    marginBottom: 80,
+  },
+  title: {
+    color: 'white',
+    fontSize: 60,
+    fontWeight: '300',
+    letterSpacing: 2,
+    textAlign: 'center',
+  },
+  buttonsContainer: {
+    width: '100%',
+    gap: 16,
+  },
+  appleButton: {
+    width: '100%',
+    backgroundColor: 'black',
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  appleButtonText: {
+    color: 'white',
+    fontSize: 18,
+    fontWeight: '500',
+    marginLeft: 12,
+  },
+  googleButton: {
+    width: '100%',
+    backgroundColor: 'white',
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  googleButtonText: {
+    color: '#374151',
+    fontSize: 18,
+    fontWeight: '500',
+    marginLeft: 12,
+  },
+  termsContainer: {
+    position: 'absolute',
+    bottom: 48,
+    paddingHorizontal: 32,
+  },
+  termsText: {
+    color: '#d1d5db',
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  termsLink: {
+    color: '#e5e7eb',
+  },
+});
