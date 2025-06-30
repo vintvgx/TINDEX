@@ -5,18 +5,22 @@ import { supabase } from "@/lib/supabase/supabase";
 import {
   GoogleSignin,
   isSuccessResponse,
-  statusCodes
+  statusCodes,
 } from "@react-native-google-signin/google-signin";
 import * as AppleAuthentication from "expo-apple-authentication";
 import { nanoid } from "nanoid";
 
 GoogleSignin.configure({
   scopes: ["https://www.googleapis.com/auth/drive.readonly"],
-  iosClientId:
-    "1064184478567-3n1pm51cp4bm56nmruhvt5tpi0fulkqv.apps.googleusercontent.com",
-  webClientId:
-    "1064184478567-832gl286kq3l3t1o14ue4rqb38fnjg2t.apps.googleusercontent.com",
-  profileImageSize: 150,
+  // iosClientId:
+  //   "1064184478567-3n1pm51cp4bm56nmruhvt5tpi0fulkqv.apps.googleusercontent.com",
+  // webClientId:
+  //   "1064184478567-832gl286kq3l3t1o14ue4rqb38fnjg2t.apps.googleusercontent.com",
+  // profileImageSize: 150,
+  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+  profileImageSize:
+    Number(process.env.EXPO_PUBLIC_GOOGLE_PROFILE_IMAGE_SIZE) || 150,
 });
 
 // //TODO swtich to this configuration for next build
@@ -43,32 +47,33 @@ export const signInWithGoogle = async () => {
         console.log(`Google user signed in: ${data.user.email}`);
       } else {
         console.error("Google sign-in failed with non-success response");
+        throw new Error("Google sign-in failed: No session returned");
       }
 
       //TODO Update user metadata if sign-in was successful ?
-    //   if (data.user) {
-    //     const metadataResult = await updateUserMetadata({
-    //       firstName: user?.givenName,
-    //       lastName: user?.familyName,
-    //       email: user.email,
-    //     });
+      //   if (data.user) {
+      //     const metadataResult = await updateUserMetadata({
+      //       firstName: user?.givenName,
+      //       lastName: user?.familyName,
+      //       email: user.email,
+      //     });
 
-    //     if (!metadataResult.success) {
-    //       console.warn(
-    //         "User created but metadata update failed:",
-    //         metadataResult.error
-    //       );
-    //       showToast(
-    //         TOAST.INFO,
-    //         `${data.user.email} authenticated successfully. METADATA NOT UPDATED!`
-    //       );
-    //       return;
-    //     }
-    //     console.log("User metadata saved successfully");
-    //   }
+      //     if (!metadataResult.success) {
+      //       console.warn(
+      //         "User created but metadata update failed:",
+      //         metadataResult.error
+      //       );
+      //       showToast(
+      //         TOAST.INFO,
+      //         `${data.user.email} authenticated successfully. METADATA NOT UPDATED!`
+      //       );
+      //       return;
+      //     }
+      //     console.log("User metadata saved successfully");
+      //   }
 
       console.log("Google authentication successful:", data.user);
-    //   showToast(TOAST.SUCCESS, `${user.email} authenticated successfully`)
+      //   showToast(TOAST.SUCCESS, `${user.email} authenticated successfully`)
     }
   } catch (error: any) {
     if (error.code === statusCodes.SIGN_IN_CANCELLED) {
@@ -85,8 +90,7 @@ export const signInWithGoogle = async () => {
       console.error("Unknown error occurred.");
     }
   }
-}
-
+};
 
 export const signInWithApple = async () => {
   try {
@@ -108,31 +112,31 @@ export const signInWithApple = async () => {
       }
 
       //TODO Update user metadata if sign-in was successful ?
-    //   if (data.user) {
-    //     const metadataResult = await updateUserMetadata({
-    //       firstName: credential.fullName?.givenName,
-    //       lastName: credential.fullName?.familyName,
-    //       email: credential.email,
-    //     });
+      //   if (data.user) {
+      //     const metadataResult = await updateUserMetadata({
+      //       firstName: credential.fullName?.givenName,
+      //       lastName: credential.fullName?.familyName,
+      //       email: credential.email,
+      //     });
 
-    //     if (!metadataResult.success) {
-    //       console.warn(
-    //         "User created but metadata update failed:",
-    //         metadataResult.error
-    //       );
-    //       showToast(
-    //         TOAST.INFO,
-    //         "User authenticated successfully. METADATA NOT UPDATED!"
-    //       );
-    //       return;
-    //     }
+      //     if (!metadataResult.success) {
+      //       console.warn(
+      //         "User created but metadata update failed:",
+      //         metadataResult.error
+      //       );
+      //       showToast(
+      //         TOAST.INFO,
+      //         "User authenticated successfully. METADATA NOT UPDATED!"
+      //       );
+      //       return;
+      //     }
 
-    //     console.log("User metadata saved successfully");
-    //   }
+      //     console.log("User metadata saved successfully");
+      //   }
 
       // User is signed in
       console.log("Apple authentication successful:", data.user);
-    //   showToast(TOAST.SUCCESS, `${data.user.email} authenticated successfully`)
+      //   showToast(TOAST.SUCCESS, `${data.user.email} authenticated successfully`)
     } else {
       throw new Error("No identityToken.");
     }
@@ -148,8 +152,7 @@ export const signInWithApple = async () => {
       console.error("Apple sign-in error:", e);
     }
   }
-}
-
+};
 
 // /**
 //  * Generate a unique username
@@ -376,7 +379,6 @@ export const signInWithApple = async () => {
 //     return false;
 //   }
 // };
-
 
 // /**
 //  * Checks if the user has completed the assessment
