@@ -1,90 +1,3 @@
-//TODO update to use Tailwind
-// "use client"
-
-// import { signInWithApple, signInWithGoogle } from "@/utils/auth/function"
-// import { Ionicons } from "@expo/vector-icons"
-// import { useTheme } from "@react-navigation/native"
-// import { useEffect } from "react"
-// import { Dimensions, View, useColorScheme, Text, TouchableOpacity, StatusBar } from "react-native"
-// import { SafeAreaView } from "react-native-safe-area-context"
-// import { LinearGradient } from "expo-linear-gradient"
-
-// const { height, width } = Dimensions.get("window")
-
-// export default function AuthScreen() {
-//   const theme = useTheme()
-//   const colorScheme = useColorScheme()
-
-//   useEffect(() => {
-//     console.log("Color scheme:", colorScheme)
-//   }, [])
-
-//   const handleAppleSignIn = async () => {
-//     try {
-//       await signInWithApple()
-//     } catch (error) {
-//       console.error("Apple sign in error:", error)
-//     }
-//   }
-
-//   const handleGoogleSignIn = async () => {
-//     try {
-//       await signInWithGoogle()
-//     } catch (error) {
-//       console.error("Google sign in error:", error)
-//     }
-//   }
-
-//   return (
-//     <SafeAreaView className="flex-1">
-//       <StatusBar barStyle="light-content" />
-//       <LinearGradient
-//         colors={["#1e3a8a", "#1e40af", "#3b82f6"]}
-//         start={{ x: 0, y: 0 }}
-//         end={{ x: 1, y: 1 }}
-//         className="flex-1"
-//       >
-//         <View className="flex-1 justify-center items-center px-8">
-//           {/* App Title */}
-//           <View className="mb-20">
-//             <Text className="text-white text-6xl font-light tracking-wide text-center">Alethia</Text>
-//           </View>
-
-//           {/* Authentication Buttons */}
-//           <View className="w-full space-y-4">
-//             {/* Apple Sign In Button */}
-//             <TouchableOpacity
-//               onPress={handleAppleSignIn}
-//               className="w-full bg-black rounded-xl py-4 px-6 flex-row items-center justify-center"
-//               activeOpacity={0.8}
-//             >
-//               <Ionicons name="logo-apple" size={20} color="white" />
-//               <Text className="text-white text-lg font-medium ml-3">Continue with Apple</Text>
-//             </TouchableOpacity>
-
-//             {/* Google Sign In Button */}
-//             <TouchableOpacity
-//               onPress={handleGoogleSignIn}
-//               className="w-full bg-white rounded-xl py-4 px-6 flex-row items-center justify-center"
-//               activeOpacity={0.8}
-//             >
-//               <Ionicons name="logo-google" size={20} color="#4285F4" />
-//               <Text className="text-gray-800 text-lg font-medium ml-3">Continue with Google</Text>
-//             </TouchableOpacity>
-//           </View>
-
-//           {/* Terms and Privacy */}
-//           <View className="absolute bottom-12 px-8">
-//             <Text className="text-gray-300 text-sm text-center leading-5">
-//               By continuing, you agree to our <Text className="text-gray-200">Terms of Service</Text> and{" "}
-//               <Text className="text-gray-200">Privacy Policy</Text>
-//             </Text>
-//           </View>
-//         </View>
-//       </LinearGradient>
-//     </SafeAreaView>
-//   )
-// }
 "use client"
 
 import { signInWithApple, signInWithGoogle } from "@/utils/auth/function"
@@ -246,3 +159,91 @@ const styles = StyleSheet.create({
     color: '#e5e7eb',
   },
 });
+
+//TODO update to use Tailwind
+// "use client"
+
+// import { signInWithApple, signInWithGoogle } from "@/utils/auth/function"
+// import { Ionicons } from "@expo/vector-icons"
+// import { useTheme } from "@react-navigation/native"
+// import { useEffect } from "react"
+// import { Dimensions, View, useColorScheme, Text, TouchableOpacity, StatusBar } from "react-native"
+// import { SafeAreaView } from "react-native-safe-area-context"
+// import { LinearGradient } from "expo-linear-gradient"
+
+// const { height, width } = Dimensions.get("window")
+
+// export default function AuthScreen() {
+//   const theme = useTheme()
+//   const colorScheme = useColorScheme()
+
+//   useEffect(() => {
+//     console.log("Color scheme:", colorScheme)
+//   }, [])
+
+//   const handleAppleSignIn = async () => {
+//     try {
+//       await signInWithApple()
+//     } catch (error) {
+//       console.error("Apple sign in error:", error)
+//     }
+//   }
+
+//   const handleGoogleSignIn = async () => {
+//     try {
+//       await signInWithGoogle()
+//     } catch (error) {
+//       console.error("Google sign in error:", error)
+//     }
+//   }
+
+//   return (
+//     <SafeAreaView className="flex-1">
+//       <StatusBar barStyle="light-content" />
+//       <LinearGradient
+//         colors={["#1e3a8a", "#1e40af", "#3b82f6"]}
+//         start={{ x: 0, y: 0 }}
+//         end={{ x: 1, y: 1 }}
+//         className="flex-1"
+//       >
+//         <View className="flex-1 justify-center items-center px-8">
+//           {/* App Title */}
+//           <View className="mb-20">
+//             <Text className="text-white text-6xl font-light tracking-wide text-center">Alethia</Text>
+//           </View>
+
+//           {/* Authentication Buttons */}
+//           <View className="w-full space-y-4">
+//             {/* Apple Sign In Button */}
+//             <TouchableOpacity
+//               onPress={handleAppleSignIn}
+//               className="w-full bg-black rounded-xl py-4 px-6 flex-row items-center justify-center"
+//               activeOpacity={0.8}
+//             >
+//               <Ionicons name="logo-apple" size={20} color="white" />
+//               <Text className="text-white text-lg font-medium ml-3">Continue with Apple</Text>
+//             </TouchableOpacity>
+
+//             {/* Google Sign In Button */}
+//             <TouchableOpacity
+//               onPress={handleGoogleSignIn}
+//               className="w-full bg-white rounded-xl py-4 px-6 flex-row items-center justify-center"
+//               activeOpacity={0.8}
+//             >
+//               <Ionicons name="logo-google" size={20} color="#4285F4" />
+//               <Text className="text-gray-800 text-lg font-medium ml-3">Continue with Google</Text>
+//             </TouchableOpacity>
+//           </View>
+
+//           {/* Terms and Privacy */}
+//           <View className="absolute bottom-12 px-8">
+//             <Text className="text-gray-300 text-sm text-center leading-5">
+//               By continuing, you agree to our <Text className="text-gray-200">Terms of Service</Text> and{" "}
+//               <Text className="text-gray-200">Privacy Policy</Text>
+//             </Text>
+//           </View>
+//         </View>
+//       </LinearGradient>
+//     </SafeAreaView>
+//   )
+// }
