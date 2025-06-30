@@ -91,7 +91,7 @@ function AppContent() {
       <ThemeProvider
         value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
         {/* <ToastProvider> */}
-          <Slot />
+          <Stack />
           <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
         {/* </ToastProvider> */}
       </ThemeProvider>
