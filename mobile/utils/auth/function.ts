@@ -8,28 +8,27 @@ import {
   statusCodes,
 } from "@react-native-google-signin/google-signin";
 import * as AppleAuthentication from "expo-apple-authentication";
-import { nanoid } from "nanoid";
 
-GoogleSignin.configure({
-  scopes: ["https://www.googleapis.com/auth/drive.readonly"],
-  // iosClientId:
-  //   "1064184478567-3n1pm51cp4bm56nmruhvt5tpi0fulkqv.apps.googleusercontent.com",
-  // webClientId:
-  //   "1064184478567-832gl286kq3l3t1o14ue4rqb38fnjg2t.apps.googleusercontent.com",
-  // profileImageSize: 150,
-  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
-  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
-  profileImageSize:
-    Number(process.env.EXPO_PUBLIC_GOOGLE_PROFILE_IMAGE_SIZE) || 150,
-});
-
-// //TODO swtich to this configuration for next build
 // GoogleSignin.configure({
 //   scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+//   // iosClientId:
+//   //   "1064184478567-3n1pm51cp4bm56nmruhvt5tpi0fulkqv.apps.googleusercontent.com",
+//   // webClientId:
+//   //   "1064184478567-832gl286kq3l3t1o14ue4rqb38fnjg2t.apps.googleusercontent.com",
+//   // profileImageSize: 150,
 //   iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
 //   webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
-//   profileImageSize: Number(process.env.EXPO_PUBLIC_GOOGLE_PROFILE_IMAGE_SIZE) || 150,
+//   profileImageSize:
+//     Number(process.env.EXPO_PUBLIC_GOOGLE_PROFILE_IMAGE_SIZE) || 150,
 // });
+
+// //TODO swtich to this configuration for next build
+GoogleSignin.configure({
+  scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+  profileImageSize: Number(process.env.EXPO_PUBLIC_GOOGLE_PROFILE_IMAGE_SIZE) || 150,
+});
 
 export const signInWithGoogle = async () => {
   try {
@@ -38,15 +37,17 @@ export const signInWithGoogle = async () => {
     if (isSuccessResponse(response)) {
       const { idToken, user } = response.data;
 
+      console.log("Response: ", response)
+
       const { data, error } = await supabase.auth.signInWithIdToken({
         provider: "google",
-        token: idToken!!,
+        token: idToken!,
       });
 
       if (data.session) {
         console.log(`Google user signed in: ${data.user.email}`);
       } else {
-        console.error("Google sign-in failed with non-success response");
+        console.error("Google sign-in failed with non-success response: ", error);
         throw new Error("Google sign-in failed: No session returned");
       }
 
@@ -102,12 +103,16 @@ export const signInWithApple = async () => {
     });
     // Sign in via Supabase Auth.
     if (credential.identityToken) {
+      console.log("Apple authentication successful:", credential.identityToken);
       const { error, data } = await supabase.auth.signInWithIdToken({
         provider: "apple",
         token: credential.identityToken,
       });
 
+      console.log("Apple authentication successful:", data);
+
       if (error) {
+        console.log("Apple authentication error:", error);
         throw error;
       }
 
