@@ -1,9 +1,5 @@
-export interface ApiKeys {
-  NEWS_API_KEY: string,
-  SERP_API_KEY: string
-}
 
-export interface Topic {
+export interface TopicDetails {
   id: string;
   name: string;
   description?: string;
@@ -17,7 +13,7 @@ export interface Topic {
 }
 
 export interface TopicReturn {
-  topic: Topic;
+  topic: TopicDetails;
   topicIdentification: string;
 }
 
@@ -29,13 +25,7 @@ export interface User {
   phone: string;
 }
 
-export enum PriorityLevel {
-  DEBUG = "debug",
-  LOW = "low",
-  NORMAL = "normal",
-  HIGH =  "high"
-}
-
+//TODO: Deprecated ?
 export enum PROMPT_STYLES {
   basic = "BASIC_PROMPT",
   inter = "INTERMEDIATE_PROMPT"

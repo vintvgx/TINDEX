@@ -1,26 +1,39 @@
+//@ts-ignore
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+//@ts-ignore
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { ApiKeys, PriorityLevel, PROMPT_STYLES, Topic, TopicReturn } from "../shared/client.ts";
+
+
+import {
+  PROMPT_STYLES,
+  TopicDetails,
+  TopicReturn,
+} from "../shared/types/client.ts";
 import {
   NEWS_API_THUNDER_PACERS_DATA_06_16_25,
   SERP_API_THUNDER_PACERS_DATA_06_23_25,
 } from "./DATA.ts";
-import { formatPrompt } from "../shared/prompts.ts";
+import { formatPrompt } from "../shared/types/prompts.ts";
+import { ApiKeys, BlogGenerationRequest, PriorityLevel, AlphaVantageData } from "../shared/types/requests.ts";
+import { RESEARCH_STRATEGIES, PROMPT_STYLE_TEMPLATES, ALLOWED_CATEGORIES } from "../shared/utils/constants.ts";
+
+// Data source function mapping
+const DATA_SOURCE_FUNCTIONS = {
+  news: fetchNewsApi,
+  serp: fetchSerpAPIData,
+  alpha_vantage: fetchAlphaVantageData,
+  sports_api: async () => { return { articles: [] }; }, // stub
+  tech_apis: async () => { return { articles: [] }; }, // stub
+  research_apis: async () => { return { articles: [] }; }, // stub
+};
 
 /**
  * Supabase serverless function to generate blog post
+ * 
+ * Steps:
+ * 1. Connect to supabase 
+ * 2. 
  */
-
-// Blog post type
-//TODO move to shared/types.ts
-interface BlogGenerationRequest {
-  topicId?: string;
-  topicName?: string;
-  userId: string;
-  targetLength?: number;
-  priority?: PriorityLevel;
-}
-
 serve(async (req) => {
   console.log("=== BLOG GENERATION START ===");
 
@@ -38,6 +51,8 @@ serve(async (req) => {
   }
 
   try {
+    let requestBody;
+    
     if (req.method !== "POST") {
       console.log("Invalid method:", req.method);
       throw new Error(
@@ -45,27 +60,30 @@ serve(async (req) => {
       );
     }
 
-    console.log("Creating Supabase client...");
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    //TODO! Delete : Test connectClient() first
+    // console.log("Creating Supabase client...");
+    // const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    // const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-    if (!supabaseUrl) {
-      throw new Error("SUPABASE_URL environment variable is not set");
-    }
+    // if (!supabaseUrl) {
+    //   throw new Error("SUPABASE_URL environment variable is not set");
+    // }
 
-    if (!supabaseKey) {
-      throw new Error(
-        "SUPABASE_SERVICE_ROLE_KEY environment variable is not set"
-      );
-    }
+    // if (!supabaseKey) {
+    //   throw new Error(
+    //     "SUPABASE_SERVICE_ROLE_KEY environment variable is not set"
+    //   );
+    // }
 
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    // const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const supabase = connectClient()
 
     if (!supabase) {
-      throw new Error ("Failed to connect to supabase :(")
+      throw new Error("Failed to connect to supabase :(");
     }
 
-    let requestBody;
+
     try {
       requestBody = await req.json();
       console.log("Request body parsed:", JSON.stringify(requestBody, null, 2));
@@ -77,19 +95,11 @@ serve(async (req) => {
     const {
       topicId,
       topicName,
+      categoryName,
       userId,
-      targetLength = 500, //TODO change this based on the priority status 
+      targetLength = 500, //TODO change this based on the priority status
       priority,
     }: BlogGenerationRequest = requestBody;
-
-    //TODO remove : topic validation is in getOrCreateTopic func, after processing Priority.Debug
-    // Validate input - must have either topicId or topicName
-    // if (!topicId && !topicName) {
-    //   console.error(
-    //     "Validation failed: Neither topicId nor topicName provided"
-    //   );
-    //   throw new Error("Either topicId or topicName must be provided");
-    // }
 
     if (!userId) {
       console.error("Validation failed: userId not provided");
@@ -97,6 +107,7 @@ serve(async (req) => {
     }
 
     // Create generation job
+    //TODO Create job manager to keep track of job progress instead of calling within functionality 
     console.log("Creating generation job...");
     const jobId = crypto.randomUUID();
     const jobInsertData = {
@@ -118,22 +129,25 @@ serve(async (req) => {
       throw new Error(`Failed to create generation job: ${jobError.message}`);
     }
     console.log("Generation job created successfully");
+    //TODO End here
 
-    // Step 1: Get Topic
-    const topic = await getOrCreateTopic(
+    // Step 1: Get Topic and Category
+    console.log("=== STEP 1: Get Topic and Category ===");
+    const topicDetails = await getOrCreateTopic(
       supabase,
       topicId,
       topicName,
+      categoryName,
       userId,
       priority
     );
 
     // Step 2: Research Topic
-    console.log("=== STEP 1: RESEARCH ===");
+    console.log("=== STEP 2: Researching Topic ===");
     await updateJobProgress(supabase, jobId, 20, "research");
     const researchData = await researchTopic(
       supabase,
-      topic,
+      topicDetails,
       priority
     );
 
@@ -148,7 +162,7 @@ serve(async (req) => {
     console.log("=== STEP 2: CONTENT GENERATION ===");
     await updateJobProgress(supabase, jobId, 50, "generation");
     const blogContent = await generateAIContent(
-      topic,
+      topicDetails,
       researchData,
       targetLength
     );
@@ -195,7 +209,7 @@ serve(async (req) => {
     //   published_at: new Date().toISOString(),
     // };
     const blogPostData = {
-      topic_id: topic.id,
+      topic_id: topicDetails.id,
       user_id: userId,
       title: blogContent.title,
       content: blogContent.content,
@@ -257,7 +271,7 @@ serve(async (req) => {
       jobId,
       blogPostId: blogPost.id,
       message: "Blog post generated successfully",
-      blogPostData: blogPostData
+      blogPostData: blogPostData,
     };
 
     console.log(
@@ -349,12 +363,11 @@ async function updateJobProgress(
  */
 async function researchTopic(
   supabase: any,
-  topic: Topic,
+  topic: TopicDetails,
   priority?: PriorityLevel
 ) {
   console.log("=== RESEARCH TOPIC START ===");
   console.log(`Researching topic: "${JSON.stringify(topic, null, 2)}"`);
-  
 
   // Go through cache data and return if data is found, else continue to research topic
   let cachedData = await fetchCacheTopic(supabase, topic.name, topic.id);
@@ -368,13 +381,12 @@ async function researchTopic(
     console.log("Starting fresh research...");
 
     // Set initial status to pending if we have a topicId
-    //NOTE: Topic is created within getORCreateTopic() func (if topic/topicID return it, else create new one)
     if (topic.id) {
       // Start new search by creating cache record (update with information after completing research)
       console.log("Creating pending cache record...");
       try {
         const pendingData = {
-          topic_id: topic.id,
+          topic: topic,
           research_status: "pending",
         };
         console.log(
@@ -389,7 +401,7 @@ async function researchTopic(
           .single();
 
         if (insertError) {
-          console.error("Failed to create pending cache record:", insertError);
+          console.error("Failed to create cache record:", insertError);
           // Continue without caching
         } else if (pendingRecord) {
           // Cache record successfully created - set cacheRecordID
@@ -404,30 +416,77 @@ async function researchTopic(
 
     // Get API keys
     const keys: ApiKeys | undefined = await fetchAPIKeys();
+    if (!keys) throw new Error("Failed to fetch API keys");
 
-    if (!keys) {
-      throw new Error("Failed to fetch API keys");
+    // Get strategy for this category
+    const categoryKey = typeof topic.category === 'string' && RESEARCH_STRATEGIES[topic.category] ? topic.category : 'evergreen';
+    console.log(`Research Topic | categoryKey : ${categoryKey}`)
+    const strategy = RESEARCH_STRATEGIES[categoryKey];
+    console.log(`Research Topic | strategy : ${strategy}`)
+
+    const researchResult: any = {};
+
+    // TODO: DEPRECATED - delete when new functionality is verified
+    // console.log("Fetching news data...");
+    // const newsApiData = await fetchNewsApi(
+    //   topic.name,
+    //   keys.NEWS_API_KEY,
+    //   priority
+    // );
+    // console.log("News API data received:", {
+    //   articlesCount: newsApiData.articles?.length || 0,
+    //   status: newsApiData.status,
+    //   totalResults: newsApiData.totalResults,
+    // });
+
+    // console.log("Fetching SERP data...");
+    // const serpData = await fetchSerpAPIData(
+    //   topic.name,
+    //   keys.SERP_API_KEY,
+    //   priority
+    // );
+
+    // if (topic.category == "stocks") {
+    //   console.log("Fetching Alpha Vantage Stock Data");
+    //   const alphaData = await fetchAlphaVantageData(
+    //     topic.name,
+    //     keys.ALPHA_API_KEY,
+    //     priority
+    //   );
+
+    // Dynamically call each data source (sequential for now)
+    for (const source of strategy.dataSources) {
+      const fetchFn = DATA_SOURCE_FUNCTIONS[source];
+      if (!fetchFn) {
+        console.warn(`No fetch function for data source: ${source}`);
+        continue;
+      }
+      let result;
+      if (source === 'news') {
+        console.log(`Fetching news for ${topic.name}`)
+        result = await fetchFn(topic.name, keys.NEWS_API_KEY, priority);
+        researchResult.newsArticles = result;
+      } else if (source === 'serp') {
+        console.log(`Fetching serp for ${topic.name}`)
+        result = await fetchFn(topic.name, keys.SERP_API_KEY, priority);
+        researchResult.serpApiData = result;
+      } else if (source === 'alpha_vantage') {
+        //TODO apply a field in topic for ticker / grab ticker from topic name to better optimize ticker data fetching
+        console.log(`Fetching alpha vantage for ticker: ${topic.name}`)
+        result = await fetchFn(topic.name, keys.ALPHA_API_KEY, priority);
+        researchResult.alphaVantageData = result;
+      } else {
+        // For custom APIs, pass what is needed
+        result = await fetchFn(topic.name, keys, priority);
+        researchResult[source] = result;
+      }
     }
 
-    console.log("Fetching news data...");
-    const newsApiData = await fetchNewsApi(topic.name, keys.NEWS_API_KEY, priority);
-    console.log("News API data received:", {
-      articlesCount: newsApiData.articles?.length || 0,
-      status: newsApiData.status,
-      totalResults: newsApiData.totalResults,
-    });
-
-    console.log("Fetching SERP data...");
-    const serpData = await fetchSerpAPIData(topic.name, keys.SERP_API_KEY, priority);
-
-    const researchResult = {
-      newsArticles: newsApiData,
-      serpApiData: serpData,
-      trendingInfo: [],
-      statistics: [],
-      recentDevelopments: [],
-      keyFacts: [],
-    };
+    // Fill in empty arrays for expected fields if not set
+    researchResult.trendingInfo = researchResult.trendingInfo || [];
+    researchResult.statistics = researchResult.statistics || [];
+    researchResult.recentDevelopments = researchResult.recentDevelopments || [];
+    researchResult.keyFacts = researchResult.keyFacts || [];
 
     console.log("Research Results: ", JSON.stringify(researchResult, null, 2));
 
@@ -441,7 +500,8 @@ async function researchTopic(
           statistics: researchResult.statistics,
           recent_developments: researchResult.recentDevelopments,
           key_facts: researchResult.keyFacts,
-          serp_api_data: serpData,
+          serp_api_data: researchResult.serpApiData,
+          alpha_vantage_data: researchResult.alphaVantageData,
           research_status: "completed",
         };
 
@@ -503,7 +563,7 @@ async function fetchNewsApi(
     );
     return NEWS_API_THUNDER_PACERS_DATA_06_16_25;
   }
-    //TODO move data to its own json file and load dynamically as such
+  //TODO move data to its own json file and load dynamically as such
   // export const loadSerpOcgnData = () => import('./data/serp-ocgn-data.json');
 
   if (!apiKey) {
@@ -558,6 +618,229 @@ async function fetchNewsApi(
 }
 
 /**
+ * Fetch data from Alpha Vantage (stocks) data
+ * 
+ * Returns structured stock data including company overview, news, and real-time pricing
+ */
+async function fetchAlphaVantageData(
+  topic: TopicDetails,
+  apiKey: string,
+  priority?: PriorityLevel
+): Promise<AlphaVantageData> {
+  console.log("=== FETCH ALPHA VANTAGE API START ===");
+  console.debug("Ticker:", topic.name);
+  console.debug("API Key exists:", !!apiKey);
+
+  if (!apiKey) {
+    console.warn("ALPHA_API_KEY not found, returning empty result");
+    return {
+      companyOverview: null,
+      recentNews: [],
+      realTimeData: null,
+      error: "API key not provided"
+    };
+  }
+
+  if (priority == PriorityLevel.DEBUG) {
+    //Return mocked data if debugging
+    console.log(
+      "Debugging enabled. Returning mock Alpha Vantage data..."
+    );
+    return {
+      companyOverview: {
+        Symbol: topic.name,
+        AssetType: "Common Stock",
+        Name: `MOCKED: ${topic.name} Corporation`,
+        Description: `A leading company in the ${topic.name} sector`,
+        CIK: "0001234567",
+        Exchange: "NASDAQ",
+        Currency: "USD",
+        Country: "USA",
+        Sector: "Technology",
+        Industry: "Software",
+        Address: "123 Main St, Tech City, USA",
+        FullTimeEmployees: "1000",
+        FiscalYearEnd: "12-31",
+        LatestQuarter: "2024-12-31",
+        MarketCapitalization: "1000000000",
+        EBITDA: "150000000",
+        PERatio: "25.5",
+        PEGRatio: "1.2",
+        BookValue: "45.00",
+        DividendPerShare: "2.10",
+        DividendYield: "2.1",
+        EPS: "4.50",
+        RevenuePerShareTTM: "85.00",
+        ProfitMargin: "0.15",
+        OperatingMarginTTM: "0.20",
+        ReturnOnAssetsTTM: "0.12",
+        ReturnOnEquityTTM: "0.18",
+        RevenueTTM: "850000000",
+        GrossProfitTTM: "600000000",
+        DilutedEPSTTM: "4.50",
+        QuarterlyEarningsGrowthYOY: "0.15",
+        QuarterlyRevenueGrowthYOY: "0.10",
+        AnalystTargetPrice: "140.00",
+        TrailingPE: "25.5",
+        ForwardPE: "22.0",
+        PriceToSalesRatioTTM: "3.2",
+        PriceToBookRatio: "2.8",
+        EVToRevenue: "2.5",
+        EVToEBITDA: "15.0",
+        Beta: "1.2",
+        "52WeekHigh": "150.00",
+        "52WeekLow": "75.00",
+        "50DayMovingAverage": "125.00",
+        "200DayMovingAverage": "110.00",
+        SharesOutstanding: "10000000",
+        DividendDate: "2024-12-15",
+        ExDividendDate: "2024-12-10"
+      },
+      recentNews: [
+        {
+          title: `${topic.name} Reports Strong Q4 Earnings`,
+          url: `https://example.com/news/${topic.name.toLowerCase()}-earnings`,
+          time_published: "20250115T143000",
+          authors: ["Financial Reporter"],
+          summary: `${topic} exceeded analyst expectations with strong quarterly results.`,
+          banner_image: null,
+          source: "Financial News",
+          category_within_source: "Earnings",
+          source_domain: "example.com",
+          topics: ["earnings", "financial"],
+          overall_sentiment_score: 0.8,
+          overall_sentiment_label: "positive"
+        }
+      ],
+      realTimeData: {
+        "Meta Data": {
+          "1. Information": "Daily Prices (open, high, low, close) and Volumes",
+          "2. Symbol": topic.name,
+          "3. Last Refreshed": "2025-01-15",
+          "4. Output Size": "Compact",
+          "5. Time Zone": "US/Eastern"
+        },
+        "Time Series (Daily)": {
+          "2025-01-15": {
+            "1. open": "125.50",
+            "2. high": "128.75",
+            "3. low": "124.20",
+            "4. close": "127.30",
+            "5. volume": "2500000"
+          }
+        }
+      },
+      error: null
+    };
+  }
+
+  try { 
+    // Extract ticker symbol (remove any additional text)
+    const tickerSymbol = extractTickerSymbol(topic.name);
+    const encodedTicker = encodeURIComponent(tickerSymbol);
+
+    console.log(`Fetching Alpha Vantage data for ticker: ${tickerSymbol}`);
+
+    // Make parallel requests to Alpha Vantage APIs
+    const [companyDataResponse, companyNewsResponse, realTimeResponse] = await Promise.allSettled([
+      // Company Overview
+      fetch(`https://www.alphavantage.co/query?function=OVERVIEW&symbol=${encodedTicker}&apikey=${apiKey}`),
+      
+      // Recent News for the ticker
+      // TODO update date range
+      fetch(`https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers=${encodedTicker}&time_from=20250101T0000&time_to=20250131T2359&limit=10&sort=LATEST&apikey=${apiKey}`),
+      
+      // Real-time daily data
+      fetch(`https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodedTicker}&outputsize=compact&apikey=${apiKey}`)
+    ]);
+
+    // Process company overview data
+    let companyOverview = null;
+    if (companyDataResponse.status === 'fulfilled' && companyDataResponse.value.ok) {
+      const companyData = await companyDataResponse.value.json();
+      if (companyData && Object.keys(companyData).length > 0 && !companyData.Note) {
+        companyOverview = companyData;
+        console.log("Company overview data retrieved successfully");
+      } else {
+        console.warn("No company overview data available or API limit reached");
+      }
+    } else {
+      console.warn("Failed to fetch company overview data");
+    }
+
+    // Process news data
+    let recentNews = [];
+    if (companyNewsResponse.status === 'fulfilled' && companyNewsResponse.value.ok) {
+      const newsData = await companyNewsResponse.value.json();
+      if (newsData && newsData.feed && Array.isArray(newsData.feed)) {
+        recentNews = newsData.feed;
+        console.log(`Retrieved ${recentNews.length} news articles`);
+      } else {
+        console.warn("No news data available or API limit reached");
+      }
+    } else {
+      console.warn("Failed to fetch news data");
+    }
+
+    // Process real-time data
+    let realTimeData = null;
+    if (realTimeResponse.status === 'fulfilled' && realTimeResponse.value.ok) {
+      const timeSeriesData = await realTimeResponse.value.json();
+      if (timeSeriesData && timeSeriesData["Meta Data"] && !timeSeriesData.Note) {
+        realTimeData = timeSeriesData;
+        console.log("Real-time data retrieved successfully");
+      } else {
+        console.warn("No real-time data available or API limit reached");
+      }
+    } else {
+      console.warn("Failed to fetch real-time data");
+    }
+
+    const result = {
+      companyOverview,
+      recentNews,
+      realTimeData,
+      error: null
+    };
+
+    console.log("=== FETCH ALPHA VANTAGE API SUCCESS ===");
+    return result;
+
+  } catch (error) {
+    console.error("=== FETCH ALPHA VANTAGE API ERROR ===");
+    console.error("Alpha Vantage API request failed:", error);
+    
+    return {
+      companyOverview: null,
+      recentNews: [],
+      realTimeData: null,
+      error: `Alpha Vantage API fetch failed: ${error.message}`
+    };
+  }
+}
+
+/**
+ * Extract ticker symbol from topic string
+ * Removes any additional text and returns just the ticker symbol
+ */
+function extractTickerSymbol(topic: string): string {
+  // Remove common words and extract just the ticker
+  const cleanTopic = topic
+    .toUpperCase()
+    .replace(/\s+/g, '') // Remove spaces
+    .replace(/[^A-Z0-9]/g, ''); // Keep only letters and numbers
+  
+  // If it looks like a ticker (3-5 characters, mostly letters), return it
+  if (cleanTopic.length >= 2 && cleanTopic.length <= 5 && /^[A-Z]+[0-9]*$/.test(cleanTopic)) {
+    return cleanTopic;
+  }
+  
+  // Otherwise, try to extract a ticker pattern
+  const tickerMatch = topic.match(/[A-Z]{2,5}/);
+  return tickerMatch ? tickerMatch[0] : topic.toUpperCase();
+}
+
+/**
  * Fetch data from SerpAPI for search results
  */
 async function fetchSerpAPIData(
@@ -574,7 +857,7 @@ async function fetchSerpAPIData(
     console.log(
       "Debugging enabled. Returning SERP_API_THUNDER_PACERS_DATA 06/23/25 data..."
     );
-    return SERP_API_THUNDER_PACERS_DATA_06_23_25
+    return SERP_API_THUNDER_PACERS_DATA_06_23_25;
   }
   //TODO move data to its own json file and load dynamically as such
   // export const loadSerpOcgnData = () => import('./data/serp-ocgn-data.json');
@@ -646,7 +929,7 @@ async function fetchSerpAPIData(
  * Uses claude to generate a blog post based on the specified topic.
  */
 async function generateAIContent(
-  topic: Topic,
+  topic: TopicDetails,
   researchData: any,
   targetLength: number
 ) {
@@ -665,6 +948,17 @@ async function generateAIContent(
   }
 
   try {
+    // Use prompt style from strategy
+    const categoryKey = typeof topic.category === 'string' && RESEARCH_STRATEGIES[topic.category] ? topic.category : 'evergreen';
+
+    console.log("🚀 ~ categoryKey:", categoryKey)
+
+    const strategy = RESEARCH_STRATEGIES[categoryKey];
+    const promptStyleKey = typeof strategy.promptStyle === 'string' && PROMPT_STYLE_TEMPLATES[strategy.promptStyle] ? strategy.promptStyle : 'evergreen_content';
+    const promptTemplate = PROMPT_STYLE_TEMPLATES[promptStyleKey];
+    if (!promptTemplate) throw new Error(`No prompt template for style: ${promptStyleKey}`);
+    const prompt = promptTemplate(topic.name, researchData, targetLength);
+
     const requestBody = {
       model: "claude-3-5-sonnet-20241022",
       max_tokens: 1024,
@@ -672,12 +966,7 @@ async function generateAIContent(
       messages: [
         {
           role: "user",
-          content: formatPrompt(
-            topic.name,
-            targetLength,
-            researchData,
-            PROMPT_STYLES.inter
-          ),
+          content: prompt,
         },
       ],
     };
@@ -794,12 +1083,14 @@ async function getOrCreateTopic(
   supabase: any,
   providedTopicId?: string,
   providedTopicName?: string,
+  providedCategory?: string,
   userId?: string,
   priority?: PriorityLevel
-) : Promise<Topic> {
+): Promise<TopicDetails> {
   // TODO create Return Promise to return topic + topicID
   let topic;
   let topicIdentification;
+  let category: string;
 
   // Return [EVERGREEN] topic when debugging
   // if (priority == PriorityLevel.DEBUG) {
@@ -823,7 +1114,7 @@ async function getOrCreateTopic(
     throw new Error("No topic information provided. Canceling request");
   }
 
-  // 
+  
   if (providedTopicId) {
     const { data: existingTopic, error: topicError } = await supabase
       .from("topics")
@@ -836,8 +1127,6 @@ async function getOrCreateTopic(
       topicIdentification = existingTopic.id;
       console.log(`Found existing topic by ID: ${topic.name}`);
     } else if (topicError) {
-      // NOTE: If there is an error fetching the topic by its ID, the user should not go forward as their would be a newly created topic for a
-      // topic that exists. This is an internal error and the user should be notified and the topic should be re-fetched.
       throw new Error(
         `INTERNAL ERROR: Detected an error fetching the topic id [${providedTopicId}] from the DB.`
       );
@@ -848,13 +1137,13 @@ async function getOrCreateTopic(
     // Normalize the topic name for consistent searching
     const normalizedName = normalizeTopicName(providedTopicName);
 
-    // First, try to find existing topic by normalized name
+    // Try to find existing topic by normalized name
     const { data: existingTopics, error: searchError } = await supabase
       .from("topics")
       .select("*")
       .ilike("name", normalizedName);
 
-    if (!searchError && existingTopics && existingTopics.length > 0) {
+    if (existingTopics && existingTopics.length > 0 && !searchError) {
       // Use the first matching topic
       topic = existingTopics[0];
       topicIdentification = topic.id;
@@ -866,6 +1155,9 @@ async function getOrCreateTopic(
       const newTopicId = crypto.randomUUID();
       const slug = generateSlug(providedTopicName);
 
+      // CATEGORY ASSIGNMENT
+      category = await resolveCategory(providedTopicName, providedCategory);
+
       const { data: newTopic, error: createError } = await supabase
         .from("topics")
         .insert({
@@ -873,7 +1165,7 @@ async function getOrCreateTopic(
           name: providedTopicName,
           slug: slug,
           description: `Topic about ${providedTopicName}`,
-          category: categorizeTopicType(providedTopicName),
+          category: category,
           created_by: userId,
           post_count: 0,
           is_active: true,
@@ -912,7 +1204,7 @@ async function getOrCreateTopic(
     }
   }
 
-  return topic;
+  return topic
 }
 
 /**
@@ -941,7 +1233,16 @@ async function fetchCacheTopic(
         console.log("Searching cache by topic ID...");
         const { data, error } = await supabase
           .from("research_topic_cache")
-          .select("*")
+          .select(`
+            *,
+            topics:topic_id (
+              id,
+              name,
+              description,
+              category,
+              slug
+            )
+          `)
           .eq("topic_id", topicIdentification)
           .gte(
             "research_date",
@@ -957,8 +1258,17 @@ async function fetchCacheTopic(
         console.log("Searching cache by topic name...");
         const { data, error } = await supabase
           .from("research_topic_cache")
-          .select("*")
-          .eq("topic_name", topic)
+          .select(`
+            *,
+            topics:topic_id (
+              id,
+              name,
+              description,
+              category,
+              slug
+            )
+          `)
+          .eq("topics.name", topic)
           .gte(
             "research_date",
             new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
@@ -1016,6 +1326,7 @@ async function fetchAPIKeys(): Promise<ApiKeys | undefined> {
   try {
     const newsApiKey = Deno.env.get("NEWS_API_KEY");
     const serpApiKey = Deno.env.get("SERP_API_KEY");
+    const alphaVantageKey = Deno.env.get("ALPHA_API_KEY");
 
     if (!newsApiKey) {
       console.warn("NEWS_API_KEY not found");
@@ -1024,10 +1335,15 @@ async function fetchAPIKeys(): Promise<ApiKeys | undefined> {
     if (!serpApiKey) {
       throw new Error(`Serp API key not found. Canceling request.`);
     }
+    if (!alphaVantageKey) {
+      console.warn("ALPHA_API_KEY not found");
+      throw new Error(`Alpha Vantage API key not found. Canceling request.`);
+    }
     console.log("API Keys loaded.");
     return {
       NEWS_API_KEY: newsApiKey,
       SERP_API_KEY: serpApiKey,
+      ALPHA_API_KEY: alphaVantageKey,
     };
   } catch (error) {
     console.log(`Error fetching API keys: ${error}`);
@@ -1048,48 +1364,189 @@ function generateSlug(name: string): string {
 }
 
 /**
- * Normalize topic name for consistent searching
+ * Normalize topic name for consistent searching.
+ * Removes any white spaces and converts string to lowercase.
  */
 function normalizeTopicName(name: string): string {
   return name.trim().toLowerCase();
 }
 
 /**
- * Helper functions
+ * Resolves the category for a topic, using user input, keyword mapping, or AI fallback.
+ *
+ * @param topic The topic name
+ * @param providedCategory Optional user-provided category
+ * @returns The resolved category string
+ */
+async function resolveCategory(
+  topic: string,
+  providedCategory?: string
+): Promise<string> {
+  let category;
+  if (providedCategory) {
+    const normalized = providedCategory.toLowerCase().trim();
+    if (ALLOWED_CATEGORIES.includes(normalized)) {
+      console.log(`Category is provided: ${providedCategory}`);
+      return normalized;
+    }
+  }
+  try {
+    category = categorizeTopicType(topic);
+    console.log(`Returning categorized topic type: ${category}`);
+    return category;
+  } catch {
+    try {
+      category = await anthropicCategorizeTopic(topic);
+      console.log(`Returning ai generated topic type: ${category}`);
+      return category;
+    } catch {
+      console.log(`Returning fall safe category EVERGREEN`);
+
+      return "evergreen";
+    }
+  }
+}
+
+/**
+ * Returns a category based on the topic.
+ * The topic is filtered for terms to assign a category, otherwise an error is thrown.
+ * NOTE: AI generated category function is called when error is thrown
+ *
+ * @param topic The topic being used
+ *
+ * @returns the category of the topic
  */
 
 function categorizeTopicType(topic: string): string {
   const lowerTopic = topic.toLowerCase();
 
+  // Keyword-based mapping
   if (
     lowerTopic.includes("news") ||
     lowerTopic.includes("breaking") ||
-    lowerTopic.includes("latest")
+    lowerTopic.includes("headline") ||
+    lowerTopic.includes("update")
   ) {
-    return "trending";
+    return "news";
   }
   if (
-    lowerTopic.includes("election") ||
-    lowerTopic.includes("covid") ||
-    lowerTopic.includes("war")
+    lowerTopic.includes("sports") ||
+    lowerTopic.includes("nba") ||
+    lowerTopic.includes("football") ||
+    lowerTopic.includes("soccer") ||
+    lowerTopic.includes("olympics") ||
+    lowerTopic.includes("basketball") ||
+    lowerTopic.includes("mlb") ||
+    lowerTopic.includes("nfl") ||
+    lowerTopic.includes("warriors") ||
+    lowerTopic.includes("celtics")
   ) {
-    return "current_events";
+    return "sports";
+  }
+  if (
+    lowerTopic.includes("stock") ||
+    lowerTopic.includes("market") ||
+    lowerTopic.includes("nasdaq") ||
+    lowerTopic.includes("dow") ||
+    lowerTopic.includes("shares")
+  ) {
+    return "stocks";
+  }
+  if (
+    lowerTopic.includes("science") ||
+    lowerTopic.includes("research") ||
+    lowerTopic.includes("study") ||
+    lowerTopic.includes("biology") ||
+    lowerTopic.includes("physics")
+  ) {
+    return "science";
   }
   if (
     lowerTopic.includes("technology") ||
+    lowerTopic.includes("tech") ||
     lowerTopic.includes("ai") ||
-    lowerTopic.includes("software")
+    lowerTopic.includes("software") ||
+    lowerTopic.includes("hardware")
   ) {
     return "technology";
   }
-  if (
-    lowerTopic.includes("research") ||
-    lowerTopic.includes("study") ||
-    lowerTopic.includes("science")
-  ) {
-    return "academic";
+
+  // If no keyword match, use AI to classify
+  // This is a synchronous wrapper for an async call, so in real use, you may want to refactor to async/await
+  // For now, we use a synchronous hack with deasync or similar, but here is the async version for Deno:
+  // (You may want to refactor the call site to await this function)
+  throw new Error(
+    "AI category classification required but categorizeTopicType is not async. Refactor to async and call aiCategorizeTopic."
+  );
+}
+
+/**
+ *
+ * Async AI-based categorization of the topic (to be called if no keyword match)
+ *
+ * @param topic the topic being used
+ * @returns the category of the topic
+ */
+export async function anthropicCategorizeTopic(topic: string): Promise<string> {
+  const anthropicApiKey = Deno.env.get("ANTHROPIC_API_KEY");
+  if (!anthropicApiKey) {
+    throw new Error("ANTHROPIC_API_KEY environment variable is not set");
   }
 
-  // General
-  return "evergreen";
+  const prompt = `Given the following topic, classify it into one of the following categories: news, sports, stocks, science, technology, or evergreen (as other). Only return the category name.\n\nTopic: ${topic}\nCategory:`;
+
+  const requestBody = {
+    model: "claude-3-5-sonnet-20241022",
+    max_tokens: 10,
+    temperature: 0,
+    messages: [
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+  };
+
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": anthropicApiKey,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Anthropic API request failed: ${errorText}`);
+  }
+
+  const data = await response.json();
+  if (!data.content || !data.content[0] || !data.content[0].text) {
+    throw new Error("Invalid response structure from Anthropic API");
+  }
+  // Return the trimmed category string
+  return data.content[0].text.trim().toLowerCase();
+}
+
+/**
+ * Create client to supabase
+ */
+function connectClient() {
+  console.log("Creating Supabase client...");
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+
+  if (!supabaseUrl) {
+    throw new Error("SUPABASE_URL environment variable is not set");
+  }
+
+  if (!supabaseKey) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY environment variable is not set"
+    );
+  }
+
+  return createClient(supabaseUrl, supabaseKey);
 }
