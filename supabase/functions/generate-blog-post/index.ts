@@ -3,7 +3,6 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 //@ts-ignore
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-
 import {
   PROMPT_STYLES,
   TopicDetails,
@@ -12,27 +11,45 @@ import {
 import {
   NEWS_API_THUNDER_PACERS_DATA_06_16_25,
   SERP_API_THUNDER_PACERS_DATA_06_23_25,
+  generateMockAlphaVantageData,
 } from "./DATA.ts";
 import { formatPrompt } from "../shared/types/prompts.ts";
-import { ApiKeys, BlogGenerationRequest, PriorityLevel, AlphaVantageData } from "../shared/types/requests.ts";
-import { RESEARCH_STRATEGIES, PROMPT_STYLE_TEMPLATES, ALLOWED_CATEGORIES } from "../shared/utils/constants.ts";
+import {
+  ApiKeys,
+  BlogGenerationRequest,
+  PriorityLevel,
+  AlphaVantageData,
+} from "../shared/types/requests.ts";
+import {
+  RESEARCH_STRATEGIES,
+  PROMPT_STYLE_TEMPLATES,
+  ALLOWED_CATEGORIES,
+  API_RATE_LIMITS,
+  ERROR_MESSAGES,
+} from "../shared/utils/constants.ts";
 
 // Data source function mapping
 const DATA_SOURCE_FUNCTIONS = {
   news: fetchNewsApi,
   serp: fetchSerpAPIData,
   alpha_vantage: fetchAlphaVantageData,
-  sports_api: async () => { return { articles: [] }; }, // stub
-  tech_apis: async () => { return { articles: [] }; }, // stub
-  research_apis: async () => { return { articles: [] }; }, // stub
+  sports_api: async () => {
+    return { articles: [] };
+  }, // stub
+  tech_apis: async () => {
+    return { articles: [] };
+  }, // stub
+  research_apis: async () => {
+    return { articles: [] };
+  }, // stub
 };
 
 /**
  * Supabase serverless function to generate blog post
- * 
+ *
  * Steps:
- * 1. Connect to supabase 
- * 2. 
+ * 1. Connect to supabase
+ * 2.
  */
 serve(async (req) => {
   console.log("=== BLOG GENERATION START ===");
@@ -52,7 +69,7 @@ serve(async (req) => {
 
   try {
     let requestBody;
-    
+
     if (req.method !== "POST") {
       console.log("Invalid method:", req.method);
       throw new Error(
@@ -77,19 +94,23 @@ serve(async (req) => {
 
     // const supabase = createClient(supabaseUrl, supabaseKey);
 
-    const supabase = connectClient()
+    const supabase = connectClient();
 
     if (!supabase) {
       throw new Error("Failed to connect to supabase :(");
     }
-
 
     try {
       requestBody = await req.json();
       console.log("Request body parsed:", JSON.stringify(requestBody, null, 2));
     } catch (parseError) {
       console.error("Failed to parse request body:", parseError);
-      throw new Error("Invalid JSON in request body: " + parseError.message);
+      console.log("Request body parsed:", JSON.stringify(requestBody, null, 2));
+      throw new Error(
+        `Invalid JSON in request body\n Error:${
+          parseError.message
+        }\nRequest: ${JSON.stringify(requestBody, null, 2)}`
+      );
     }
 
     const {
@@ -107,7 +128,7 @@ serve(async (req) => {
     }
 
     // Create generation job
-    //TODO Create job manager to keep track of job progress instead of calling within functionality 
+    //TODO Create job manager to keep track of job progress instead of calling within functionality
     console.log("Creating generation job...");
     const jobId = crypto.randomUUID();
     const jobInsertData = {
@@ -145,11 +166,7 @@ serve(async (req) => {
     // Step 2: Research Topic
     console.log("=== STEP 2: Researching Topic ===");
     await updateJobProgress(supabase, jobId, 20, "research");
-    const researchData = await researchTopic(
-      supabase,
-      topicDetails,
-      priority
-    );
+    const researchData = await researchTopic(supabase, topicDetails, priority);
 
     if (!researchData) {
       console.error("Research failed: No data returned from researchTopic");
@@ -420,10 +437,13 @@ async function researchTopic(
     if (!keys) throw new Error("Failed to fetch API keys");
 
     // Get strategy for this category
-    const categoryKey = typeof topic.category === 'string' && RESEARCH_STRATEGIES[topic.category] ? topic.category : 'evergreen';
-    console.log(`Research Topic | categoryKey : ${categoryKey}`)
+    const categoryKey =
+      typeof topic.category === "string" && RESEARCH_STRATEGIES[topic.category]
+        ? topic.category
+        : "evergreen";
+    console.log(`Research Topic | categoryKey : ${categoryKey}`);
     const strategy = RESEARCH_STRATEGIES[categoryKey];
-    console.log(`Research Topic | strategy : ${strategy}`)
+    console.log(`Research Topic | strategy : ${strategy}`);
 
     const researchResult: any = {};
 
@@ -462,24 +482,47 @@ async function researchTopic(
         console.warn(`No fetch function for data source: ${source}`);
         continue;
       }
-      let result;
-      if (source === 'news') {
-        console.log(`Fetching news for ${topic.name}`)
-        result = await fetchFn(topic.name, keys.NEWS_API_KEY, priority);
-        researchResult.newsArticles = result;
-      } else if (source === 'serp') {
-        console.log(`Fetching serp for ${topic.name}`)
-        result = await fetchFn(topic.name, keys.SERP_API_KEY, priority);
-        researchResult.serpApiData = result;
-      } else if (source === 'alpha_vantage') {
-        //TODO apply a field in topic for ticker / grab ticker from topic name to better optimize ticker data fetching
-        console.log(`Fetching alpha vantage for ticker: ${topic.name}`)
-        result = await fetchFn(topic, keys.ALPHA_API_KEY, priority);
-        researchResult.alphaVantageData = result;
-      } else {
-        // For custom APIs, pass what is needed
-        result = await fetchFn(topic.name, keys, priority);
-        researchResult[source] = result;
+      
+      try {
+        let result;
+        if (source === "news") {
+          console.log(`Fetching news for ${topic.name}`);
+          result = await fetchFn(topic.name, keys.NEWS_API_KEY, priority);
+          researchResult.newsArticles = result;
+        } else if (source === "serp") {
+          console.log(`Fetching serp for ${topic.name} (category: ${topic.category})`);
+          result = await fetchFn(topic, keys.SERP_API_KEY, priority);
+          researchResult.serpApiData = result;
+        } else if (source === "alpha_vantage") {
+          //TODO apply a field in topic for ticker / grab ticker from topic name to better optimize ticker data fetching
+          console.log(`Fetching alpha vantage for ticker: ${topic.name}`);
+          result = await fetchFn(topic, keys.ALPHA_API_KEY, priority);
+          researchResult.alphaVantageData = result;
+        } else {
+          // For custom APIs, pass what is needed
+          result = await fetchFn(topic.name, keys, priority);
+          researchResult[source] = result;
+        }
+        
+        console.log(`Successfully fetched data from ${source}`);
+      } catch (error) {
+        console.error(`Failed to fetch data from ${source}:`, error);
+        // Continue with other data sources instead of failing completely
+        // Set empty defaults for failed sources
+        if (source === "news") {
+          researchResult.newsArticles = { articles: [], status: "error", error: error.message };
+        } else if (source === "serp") {
+          researchResult.serpApiData = { status: "error", error: error.message };
+        } else if (source === "alpha_vantage") {
+          researchResult.alphaVantageData = { 
+            companyOverview: null, 
+            recentNews: [], 
+            realTimeData: null, 
+            error: error.message 
+          };
+        } else {
+          researchResult[source] = { error: error.message };
+        }
       }
     }
 
@@ -619,9 +662,48 @@ async function fetchNewsApi(
 }
 
 /**
+ * Utility function to make API requests with timeout and error handling
+ */
+async function makeApiRequest(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = 10000
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error(ERROR_MESSAGES.REQUEST_TIMEOUT);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Check if Alpha Vantage response indicates rate limiting
+ */
+function isAlphaVantageRateLimited(response: any): boolean {
+  return response && 
+         response.Note && 
+         (response.Note.includes("rate limit") || 
+          response.Note.includes("API key") ||
+          response.Note.includes("premium"));
+}
+
+/**
  * Fetch data from Alpha Vantage (stocks) data
- * 
+ *
  * Returns structured stock data including company overview, news, and real-time pricing
+ * Implements rate limiting protection and efficient request strategy
  */
 async function fetchAlphaVantageData(
   topic: TopicDetails,
@@ -638,184 +720,146 @@ async function fetchAlphaVantageData(
       companyOverview: null,
       recentNews: [],
       realTimeData: null,
-      error: "API key not provided"
+      error: "API key not provided",
     };
   }
 
   if (priority == PriorityLevel.DEBUG) {
     //Return mocked data if debugging
-    console.log(
-      "Debugging enabled. Returning mock Alpha Vantage data..."
-    );
-    return {
-      companyOverview: {
-        Symbol: topic.name,
-        AssetType: "Common Stock",
-        Name: `MOCKED: ${topic.name} Corporation`,
-        Description: `A leading company in the ${topic.name} sector`,
-        CIK: "0001234567",
-        Exchange: "NASDAQ",
-        Currency: "USD",
-        Country: "USA",
-        Sector: "Technology",
-        Industry: "Software",
-        Address: "123 Main St, Tech City, USA",
-        FullTimeEmployees: "1000",
-        FiscalYearEnd: "12-31",
-        LatestQuarter: "2024-12-31",
-        MarketCapitalization: "1000000000",
-        EBITDA: "150000000",
-        PERatio: "25.5",
-        PEGRatio: "1.2",
-        BookValue: "45.00",
-        DividendPerShare: "2.10",
-        DividendYield: "2.1",
-        EPS: "4.50",
-        RevenuePerShareTTM: "85.00",
-        ProfitMargin: "0.15",
-        OperatingMarginTTM: "0.20",
-        ReturnOnAssetsTTM: "0.12",
-        ReturnOnEquityTTM: "0.18",
-        RevenueTTM: "850000000",
-        GrossProfitTTM: "600000000",
-        DilutedEPSTTM: "4.50",
-        QuarterlyEarningsGrowthYOY: "0.15",
-        QuarterlyRevenueGrowthYOY: "0.10",
-        AnalystTargetPrice: "140.00",
-        TrailingPE: "25.5",
-        ForwardPE: "22.0",
-        PriceToSalesRatioTTM: "3.2",
-        PriceToBookRatio: "2.8",
-        EVToRevenue: "2.5",
-        EVToEBITDA: "15.0",
-        Beta: "1.2",
-        "52WeekHigh": "150.00",
-        "52WeekLow": "75.00",
-        "50DayMovingAverage": "125.00",
-        "200DayMovingAverage": "110.00",
-        SharesOutstanding: "10000000",
-        DividendDate: "2024-12-15",
-        ExDividendDate: "2024-12-10"
-      },
-      recentNews: [
-        {
-          title: `${topic.name} Reports Strong Q4 Earnings`,
-          url: `https://example.com/news/${topic.name.toLowerCase()}-earnings`,
-          time_published: "20250115T143000",
-          authors: ["Financial Reporter"],
-          summary: `${topic} exceeded analyst expectations with strong quarterly results.`,
-          banner_image: null,
-          source: "Financial News",
-          category_within_source: "Earnings",
-          source_domain: "example.com",
-          topics: ["earnings", "financial"],
-          overall_sentiment_score: 0.8,
-          overall_sentiment_label: "positive"
-        }
-      ],
-      realTimeData: {
-        "Meta Data": {
-          "1. Information": "Daily Prices (open, high, low, close) and Volumes",
-          "2. Symbol": topic.name,
-          "3. Last Refreshed": "2025-01-15",
-          "4. Output Size": "Compact",
-          "5. Time Zone": "US/Eastern"
-        },
-        "Time Series (Daily)": {
-          "2025-01-15": {
-            "1. open": "125.50",
-            "2. high": "128.75",
-            "3. low": "124.20",
-            "4. close": "127.30",
-            "5. volume": "2500000"
-          }
-        }
-      },
-      error: null
-    };
+    console.log("Debugging enabled. Returning mock Alpha Vantage data...");
+    return generateMockAlphaVantageData(topic.name);
   }
 
-  try { 
+  try {
     // Extract ticker symbol (remove any additional text)
     const tickerSymbol = extractTickerSymbol(topic.name);
     const encodedTicker = encodeURIComponent(tickerSymbol);
 
     console.log(`Fetching Alpha Vantage data for ticker: ${tickerSymbol}`);
 
-    // Make parallel requests to Alpha Vantage APIs
-    const [companyDataResponse, companyNewsResponse, realTimeResponse] = await Promise.allSettled([
-      // Company Overview
-      fetch(`https://www.alphavantage.co/query?function=OVERVIEW&symbol=${encodedTicker}&apikey=${apiKey}`),
-      
-      // Recent News for the ticker
-      // TODO update date range
-      fetch(`https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers=${encodedTicker}&time_from=20250101T0000&time_to=20250131T2359&limit=10&sort=LATEST&apikey=${apiKey}`),
-      
-      // Real-time daily data
-      fetch(`https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodedTicker}&outputsize=compact&apikey=${apiKey}`)
-    ]);
-
-    // Process company overview data
+    // Sequential requests to minimize API usage and handle rate limits gracefully
+    // Start with the most important data first (company overview)
     let companyOverview = null;
-    if (companyDataResponse.status === 'fulfilled' && companyDataResponse.value.ok) {
-      const companyData = await companyDataResponse.value.json();
-      if (companyData && Object.keys(companyData).length > 0 && !companyData.Note) {
-        companyOverview = companyData;
-        console.log("Company overview data retrieved successfully");
-      } else {
-        console.warn("No company overview data available or API limit reached");
-      }
-    } else {
-      console.warn("Failed to fetch company overview data");
-    }
-
-    // Process news data
     let recentNews = [];
-    if (companyNewsResponse.status === 'fulfilled' && companyNewsResponse.value.ok) {
-      const newsData = await companyNewsResponse.value.json();
-      if (newsData && newsData.feed && Array.isArray(newsData.feed)) {
-        recentNews = newsData.feed;
-        console.log(`Retrieved ${recentNews.length} news articles`);
+    let realTimeData = null;
+    let rateLimitHit = false;
+
+    // 1. Company Overview (most important for financial analysis)
+    try {
+      console.log("Fetching company overview...");
+      const overviewResponse = await makeApiRequest(
+        `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${encodedTicker}&apikey=${apiKey}`,
+        {},
+        API_RATE_LIMITS.ALPHA_VANTAGE.REQUEST_TIMEOUT_MS
+      );
+
+      if (overviewResponse.ok) {
+        const overviewData = await overviewResponse.json();
+        
+        // Check for rate limit message
+        if (isAlphaVantageRateLimited(overviewData)) {
+          console.warn("Alpha Vantage rate limit detected in overview request");
+          rateLimitHit = true;
+        } else if (overviewData && Object.keys(overviewData).length > 0 && !overviewData.Note) {
+          companyOverview = overviewData;
+          console.log("Company overview data retrieved successfully");
+        } else {
+          console.warn("No company overview data available");
+        }
       } else {
-        console.warn("No news data available or API limit reached");
+        console.warn(`Company overview request failed with status: ${overviewResponse.status}`);
       }
-    } else {
-      console.warn("Failed to fetch news data");
+    } catch (error) {
+      console.warn("Company overview request failed:", error);
     }
 
-    // Process real-time data
-    let realTimeData = null;
-    if (realTimeResponse.status === 'fulfilled' && realTimeResponse.value.ok) {
-      const timeSeriesData = await realTimeResponse.value.json();
-      if (timeSeriesData && timeSeriesData["Meta Data"] && !timeSeriesData.Note) {
-        realTimeData = timeSeriesData;
-        console.log("Real-time data retrieved successfully");
-      } else {
-        console.warn("No real-time data available or API limit reached");
+    // 2. Recent News (if rate limit not hit)
+    if (!rateLimitHit) {
+      try {
+        console.log("Fetching recent news...");
+        const newsResponse = await makeApiRequest(
+          `https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers=${encodedTicker}&time_from=20250101T0000&time_to=20250131T2359&limit=5&sort=LATEST&apikey=${apiKey}`,
+          {},
+          API_RATE_LIMITS.ALPHA_VANTAGE.REQUEST_TIMEOUT_MS
+        );
+
+        if (newsResponse.ok) {
+          const newsData = await newsResponse.json();
+          
+          // Check for rate limit message
+          if (isAlphaVantageRateLimited(newsData)) {
+            console.warn("Alpha Vantage rate limit detected in news request");
+            rateLimitHit = true;
+          } else if (newsData && newsData.feed && Array.isArray(newsData.feed)) {
+            recentNews = newsData.feed;
+            console.log(`Retrieved ${recentNews.length} news articles`);
+          } else {
+            console.warn("No news data available");
+          }
+        } else {
+          console.warn(`News request failed with status: ${newsResponse.status}`);
+        }
+      } catch (error) {
+        console.warn("News request failed:", error);
       }
-    } else {
-      console.warn("Failed to fetch real-time data");
+    }
+
+    // 3. Real-time data (if rate limit not hit)
+    if (!rateLimitHit) {
+      try {
+        console.log("Fetching real-time data...");
+        const timeSeriesResponse = await makeApiRequest(
+          `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodedTicker}&outputsize=compact&apikey=${apiKey}`,
+          {},
+          API_RATE_LIMITS.ALPHA_VANTAGE.REQUEST_TIMEOUT_MS
+        );
+
+        if (timeSeriesResponse.ok) {
+          const timeSeriesData = await timeSeriesResponse.json();
+          
+          // Check for rate limit message
+          if (isAlphaVantageRateLimited(timeSeriesData)) {
+            console.warn("Alpha Vantage rate limit detected in time series request");
+            rateLimitHit = true;
+          } else if (timeSeriesData && timeSeriesData["Meta Data"] && !timeSeriesData.Note) {
+            realTimeData = timeSeriesData;
+            console.log("Real-time data retrieved successfully");
+          } else {
+            console.warn("No real-time data available");
+          }
+        } else {
+          console.warn(`Time series request failed with status: ${timeSeriesResponse.status}`);
+        }
+      } catch (error) {
+        console.warn("Time series request failed:", error);
+      }
     }
 
     const result = {
       companyOverview,
       recentNews,
       realTimeData,
-      error: null
+      error: rateLimitHit ? ERROR_MESSAGES.ALPHA_VANTAGE_RATE_LIMIT : null,
     };
 
-    console.log("=== FETCH ALPHA VANTAGE API SUCCESS ===");
+    if (rateLimitHit) {
+      console.warn("=== ALPHA VANTAGE RATE LIMIT WARNING ===");
+      console.warn("Some or all Alpha Vantage requests hit rate limit");
+      console.warn("Consider upgrading to premium plan or implementing request caching");
+    } else {
+      console.log("=== FETCH ALPHA VANTAGE API SUCCESS ===");
+    }
+    
     return result;
-
   } catch (error) {
     console.error("=== FETCH ALPHA VANTAGE API ERROR ===");
     console.error("Alpha Vantage API request failed:", error);
-    
+
     return {
       companyOverview: null,
       recentNews: [],
       realTimeData: null,
-      error: `Alpha Vantage API fetch failed: ${error.message}`
+      error: `Alpha Vantage API fetch failed: ${error.message}`,
     };
   }
 }
@@ -828,14 +872,18 @@ function extractTickerSymbol(topic: string): string {
   // Remove common words and extract just the ticker
   const cleanTopic = topic
     .toUpperCase()
-    .replace(/\s+/g, '') // Remove spaces
-    .replace(/[^A-Z0-9]/g, ''); // Keep only letters and numbers
-  
+    .replace(/\s+/g, "") // Remove spaces
+    .replace(/[^A-Z]/g, ""); // Keep only letters 
+
   // If it looks like a ticker (3-5 characters, mostly letters), return it
-  if (cleanTopic.length >= 2 && cleanTopic.length <= 5 && /^[A-Z]+[0-9]*$/.test(cleanTopic)) {
+  if (
+    cleanTopic.length >= 2 &&
+    cleanTopic.length <= 5 &&
+    /^[A-Z]+[0-9]*$/.test(cleanTopic)
+  ) {
     return cleanTopic;
   }
-  
+
   // Otherwise, try to extract a ticker pattern
   const tickerMatch = topic.match(/[A-Z]{2,5}/);
   return tickerMatch ? tickerMatch[0] : topic.toUpperCase();
@@ -845,7 +893,7 @@ function extractTickerSymbol(topic: string): string {
  * Fetch data from SerpAPI for search results
  */
 async function fetchSerpAPIData(
-  topic: string,
+  topic: TopicDetails,
   apiKey: string,
   priority?: PriorityLevel
 ) {
@@ -860,17 +908,13 @@ async function fetchSerpAPIData(
     );
     return SERP_API_THUNDER_PACERS_DATA_06_23_25;
   }
-  //TODO move data to its own json file and load dynamically as such
-  // export const loadSerpOcgnData = () => import('./data/serp-ocgn-data.json');
-
-  if (!apiKey) {
-    //TODO remove / fetchAPIKeys throws an error if the keys are not present
-    console.warn("SERP_API_KEY not found, skipping SerpAPI data");
-    return [];
-  }
 
   try {
-    const encodedTopic = encodeURIComponent(topic);
+      // Build category-aware query
+    const searchQuery = topic.category ? buildGoogleSearchQuery(topic) : topic.name;
+    console.log("Search query: ", searchQuery)
+  
+    const encodedTopic = encodeURIComponent(searchQuery);
     const url = `https://serpapi.com/search.json?q=${encodedTopic}&api_key=${apiKey}&engine=google&num=10`;
     console.log(
       "SERP API URL (without key):",
@@ -950,14 +994,22 @@ async function generateAIContent(
 
   try {
     // Use prompt style from strategy
-    const categoryKey = typeof topic.category === 'string' && RESEARCH_STRATEGIES[topic.category] ? topic.category : 'evergreen';
+    const categoryKey =
+      typeof topic.category === "string" && RESEARCH_STRATEGIES[topic.category]
+        ? topic.category
+        : "evergreen";
 
-    console.log("🚀 ~ categoryKey:", categoryKey)
+    console.log("🚀 ~ categoryKey:", categoryKey);
 
     const strategy = RESEARCH_STRATEGIES[categoryKey];
-    const promptStyleKey = typeof strategy.promptStyle === 'string' && PROMPT_STYLE_TEMPLATES[strategy.promptStyle] ? strategy.promptStyle : 'evergreen_content';
+    const promptStyleKey =
+      typeof strategy.promptStyle === "string" &&
+      PROMPT_STYLE_TEMPLATES[strategy.promptStyle]
+        ? strategy.promptStyle
+        : "evergreen_content";
     const promptTemplate = PROMPT_STYLE_TEMPLATES[promptStyleKey];
-    if (!promptTemplate) throw new Error(`No prompt template for style: ${promptStyleKey}`);
+    if (!promptTemplate)
+      throw new Error(`No prompt template for style: ${promptStyleKey}`);
     const prompt = promptTemplate(topic.name, researchData, targetLength);
 
     const requestBody = {
@@ -1047,9 +1099,13 @@ async function generateAIContent(
 /**
  * Parse AI response to extract title and clean content
  */
-function parseAIResponse(rawContent: string, topicName: string): { title: string; content: string } {
+function parseAIResponse(
+  rawContent: string,
+  topicName: string
+): { title: string; content: string } {
   console.log("=== PARSING AI RESPONSE ===");
-  
+  console.log("Raw Content:", rawContent)
+
   // Default fallback values
   let title = `Comprehensive Analysis: ${topicName}`;
   let content = rawContent;
@@ -1060,18 +1116,24 @@ function parseAIResponse(rawContent: string, topicName: string): { title: string
     if (titleMatch && titleMatch[1]) {
       title = titleMatch[1].trim();
       console.log("Extracted title:", title);
-      
+
       // Remove the title line from content
-      content = rawContent.replace(/TITLE:\s*.+?(?:\n|$)/i, '').trim();
+      content = rawContent.replace(/TITLE:\s*.+?(?:\n|$)/i, "").trim();
     } else {
       // If no TITLE: pattern found, try to extract first line as title
-      const lines = rawContent.split('\n').filter(line => line.trim().length > 0);
+      const lines = rawContent
+        .split("\n")
+        .filter((line) => line.trim().length > 0);
       if (lines.length > 0) {
         const firstLine = lines[0].trim();
         // Check if first line looks like a title (not too long, ends with punctuation)
-        if (firstLine.length < 100 && !firstLine.includes('Here\'s') && !firstLine.includes('Write')) {
+        if (
+          firstLine.length < 100 &&
+          !firstLine.includes("Here's") &&
+          !firstLine.includes("Write")
+        ) {
           title = firstLine;
-          content = lines.slice(1).join('\n').trim();
+          content = lines.slice(1).join("\n").trim();
           console.log("Extracted title from first line:", title);
         }
       }
@@ -1079,11 +1141,14 @@ function parseAIResponse(rawContent: string, topicName: string): { title: string
 
     // Clean up content by removing any remaining instruction text
     content = content
-      .replace(/^(Here's|Write|Create|Generate).*?:\n?/gi, '') // Remove instruction prefixes
-      .replace(/^(IMPORTANT INSTRUCTIONS|Research Data Available|Format your response).*?(?=\n\n|\n[A-Z]|$)/gis, '') // Remove instruction blocks
-      .replace(/^\d+\.\s*.*?(?=\n\n|\n[A-Z]|$)/gm, '') // Remove numbered instruction lines
-      .replace(/\[.*?\]/g, '') // Remove bracketed placeholders
-      .replace(/\n{3,}/g, '\n\n') // Normalize multiple newlines
+      .replace(/^(Here's|Write|Create|Generate).*?:\n?/gi, "") // Remove instruction prefixes
+      .replace(
+        /^(IMPORTANT INSTRUCTIONS|Research Data Available|Format your response).*?(?=\n\n|\n[A-Z]|$)/gis,
+        ""
+      ) // Remove instruction blocks
+      .replace(/^\d+\.\s*.*?(?=\n\n|\n[A-Z]|$)/gm, "") // Remove numbered instruction lines
+      .replace(/\[.*?\]/g, "") // Remove bracketed placeholders
+      .replace(/\n{3,}/g, "\n\n") // Normalize multiple newlines
       .trim();
 
     // If content is empty after cleaning, use original content
@@ -1095,7 +1160,7 @@ function parseAIResponse(rawContent: string, topicName: string): { title: string
     console.log("Final title length:", title.length);
     console.log("Final content length:", content.length);
     console.log("=== PARSING AI RESPONSE SUCCESS ===");
-    
+
     return { title, content };
   } catch (error) {
     console.error("Error parsing AI response:", error);
@@ -1177,7 +1242,6 @@ async function getOrCreateTopic(
     throw new Error("No topic information provided. Canceling request");
   }
 
-  
   if (providedTopicId) {
     const { data: existingTopic, error: topicError } = await supabase
       .from("topics")
@@ -1267,7 +1331,7 @@ async function getOrCreateTopic(
     }
   }
 
-  return topic
+  return topic;
 }
 
 /**
@@ -1296,7 +1360,8 @@ async function fetchCacheTopic(
         console.log("Searching cache by topic ID...");
         const { data, error } = await supabase
           .from("research_topic_cache")
-          .select(`
+          .select(
+            `
             *,
             topics:topic_id (
               id,
@@ -1305,7 +1370,8 @@ async function fetchCacheTopic(
               category,
               slug
             )
-          `)
+          `
+          )
           .eq("topic_id", topicIdentification)
           .gte(
             "research_date",
@@ -1321,7 +1387,8 @@ async function fetchCacheTopic(
         console.log("Searching cache by topic name...");
         const { data, error } = await supabase
           .from("research_topic_cache")
-          .select(`
+          .select(
+            `
             *,
             topics:topic_id (
               id,
@@ -1330,7 +1397,8 @@ async function fetchCacheTopic(
               category,
               slug
             )
-          `)
+          `
+          )
           .eq("topics.name", topic)
           .gte(
             "research_date",
@@ -1612,4 +1680,50 @@ function connectClient() {
   }
 
   return createClient(supabaseUrl, supabaseKey);
+}
+
+/**
+ * Builds a Google search query based on the topic and category.
+ *
+ * @param topic The topic being used
+ * @param category The category being used
+ * @returns The Google search query
+ */
+function buildGoogleSearchQuery(topic: TopicDetails): string {
+  const searchOperators = {
+    stocks: {
+      // Force financial context
+      query: `"${topic.name}" (stock OR ticker OR financial OR market)`,
+      // Exclude common non-financial meanings
+      // Example : exclude: '-"Space Launch System" -"NASA" -"rocket"'
+      exclude: ''
+    },
+    sports: {
+      query: `"${topic.name}" (sports OR game OR team OR player)`,
+      exclude: ''
+    },
+    news: {
+      query: `"${topic.name}" (news OR breaking OR latest)`,
+      exclude: ''
+    },
+    technology: {
+      query: `"${topic.name}" (technology OR tech OR software)`,
+      exclude: ''
+    }
+  } as const;
+
+  // Ensure topic.category is a valid key of searchOperators
+  type Category = keyof typeof searchOperators;
+
+  // Defensive: Validate category type and existence in searchOperators
+  const category = topic?.category as Category | undefined;
+  const config = category && category in searchOperators ? searchOperators[category] : undefined;
+
+  if (!config) {
+    // Fallback: return topic name if category is missing or invalid
+    return topic.name;
+  }
+
+  // Build and return the search query string
+  return `${config.query} ${config.exclude}`.trim();
 }

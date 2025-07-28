@@ -88,15 +88,15 @@ export const SERP_OCGN_DATA_06_16_25 = {
       title: "AI Overview",
       link: "https://www.google.com/search?safe=active&sca_esv=7f596aed715dcda1&gl=us&hl=en&q=OCU400+Phase+3+Trial&sa=X&ved=2ahUKEwj54Mq9yPmNAxUqqVYBHSz7HFwQxccNegUIpQEQAw",
       list: [
-        "OCU400 Phase 3 Trial: . Opens in new tabOcugen is progressing with its OCU400 Phase 3 clinical trial for retinitis pigmentosa, with potential BLA/MAA filings by mid-2026.  ",
-        "OCU410ST Phase 2/3 Trial: . Opens in new tabThe company also anticipates initiating a Phase 2/3 pivotal confirmatory clinical trial for Stargardt disease in mid-2025.  ",
-        "Analyst Price Targets: . Opens in new tabWhile some analysts are cautious, others have set high price targets for Ocugen, suggesting potential for significant stock price increases.  ",
-        "Gene Therapy Potential: . Opens in new tabThe market for ocular gene therapies is significant, and if OCU400 proves successful, it could generate substantial revenue.  ",
-        "Declining Revenue: Ocugen has experienced revenue declines, including a 45.78% decrease in the last 3 months of 2024.  ",
-        "Cash Burn: The company is burning through cash, and its cash runway is projected to last only into Q1 2026.  ",
-        "Past Setbacks: Ocugen faced disappointment with the FDA's decision not to grant Emergency Use Authorization for its COVID-19 vaccine in children.  ",
-        "Market Volatility: The stock is subject to market fluctuations and could be impacted by negative news or broader market downturns.  ",
-        "Competition: Ocugen faces competition in the biopharmaceutical space, particularly in the ocular gene therapy area.  ",
+        "OCU400 Phase 3 Trial: . Opens in new tabOcugen is progressing with its OCU400 Phase 3 clinical trial for retinitis pigmentosa, with potential BLA/MAA filings by mid-2026. ",
+        "OCU410ST Phase 2/3 Trial: . Opens in new tabThe company also anticipates initiating a Phase 2/3 pivotal confirmatory clinical trial for Stargardt disease in mid-2025. ",
+        "Analyst Price Targets: . Opens in new tabWhile some analysts are cautious, others have set high price targets for Ocugen, suggesting potential for significant stock price increases. ",
+        "Gene Therapy Potential: . Opens in new tabThe market for ocular gene therapies is significant, and if OCU400 proves successful, it could generate substantial revenue. ",
+        "Declining Revenue: Ocugen has experienced revenue declines, including a 45.78% decrease in the last 3 months of 2024. ",
+        "Cash Burn: The company is burning through cash, and its cash runway is projected to last only into Q1 2026. ",
+        "Past Setbacks: Ocugen faced disappointment with the FDA's decision not to grant Emergency Use Authorization for its COVID-19 vaccine in children. ",
+        "Market Volatility: The stock is subject to market fluctuations and could be impacted by negative news or broader market downturns. ",
+        "Competition: Ocugen faces competition in the biopharmaceutical space, particularly in the ocular gene therapy area. ",
       ],
       displayed_link: null,
       next_page_token:
@@ -416,7 +416,7 @@ export const SERP_OCGN_DATA_06_16_25 = {
     },
     {
       title:
-        "Stock futures slip ahead of the Federal Reserve’s rate decision: Live updates",
+        "Stock futures slip ahead of the Federal Reserve's rate decision: Live updates",
       link: "https://www.cnbc.com/2025/06/17/stock-market-today-live-updates.html",
       source: "CNBC",
       source_logo:
@@ -594,7 +594,7 @@ export const SERP_API_THUNDER_PACERS_DATA_06_23_25 = {
       stadium: "Paycom Center",
       stadium_kgmid: "/m/05p8g6",
       stage: "NBA Finals, Oklahoma City Thunder wins 4 to 3",
-      date: "yesterday, 8:00 PM",
+      date: "yesterday, 8:00 PM",
       status: "Final",
       video_highlight_carousel: [
         {
@@ -1265,7 +1265,7 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
       title:
         "NBA Finals Game 5 Preview, Desmond Bane traded to Magic, Ja Morant's future and Kevin Durant trade rumors",
       description:
-        "On this episode of Good Word with Goodwill, Vince and Jared Greenberg preview Monday’s huge Game 5 between the Oklahoma City Thunder and Indiana Pacers, react to Desmond Bane being traded to the Orlando Magic and decide if the Miami Heat are a good destinatio…",
+        "On this episode of Good Word with Goodwill, Vince and Jared Greenberg preview Monday's huge Game 5 between the Oklahoma City Thunder and Indiana Pacers, react to Desmond Bane being traded to the Orlando Magic and decide if the Miami Heat are a good destinatio…",
       url: "https://consent.yahoo.com/v2/collectConsent?sessionId=1_cc-session_16573429-942f-4a25-839e-011cd599ef15",
       urlToImage: null,
       publishedAt: "2025-06-16T19:44:09Z",
@@ -1523,7 +1523,7 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
         "https://sportshub.cbsistatic.com/i/r/2025/06/16/0028f25f-e814-47ef-894d-1bf9c73ee2e0/thumbnail/1200x675/cf7a18b0ea8fa0d1c7ff4819a87abae2/haliburton-holmgren-imagn.jpg",
       publishedAt: "2025-06-16T15:48:40Z",
       content:
-        "The Indiana Pacers will look to pull off another upset on the road when they take on the Oklahoma City Thunder in Game 5 of the 2025 NBA Finals on Monday. The Pacers were victorious in Game 1 but are… [+3732 chars]",
+        "The Indiana Pacers will look to pull off another upset on the road when they take on the Oklahoma City Thunder in Game 5 of the 2025 NBA Finals on Monday. The Pacers were victorious in Game 1 but are… [+3732 chars]",
     },
     {
       source: {
@@ -1550,13 +1550,13 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
       author: "Marin Fox",
       title: "Chet Holmgren: Rising Star in the NBA and Key Player for Thunder",
       description:
-        "Let’s talk about Chet Holmgren the 7'1″ sensation who’s not just making noise in the league, he’s shaking the floorboards. Drafted second overall by the Oklahoma City Thunder, this kid from Minneapolis, Minnesota, is doing exactly what he was born to do: domi…",
+        "Let's talk about Chet Holmgren the 7'1\" sensation who's not just making noise in the league, he's shaking the floorboards. Drafted second overall by the Oklahoma City Thunder, this kid from Minneapolis, Minnesota, is doing exactly what he was born to do: domi…",
       url: "https://www.dumblittleman.com/chet-holmgren-rising-star/",
       urlToImage:
         "https://www.dumblittleman.com/wp-content/uploads/2025/06/52_optimized_684a920e6c106.jpg",
       publishedAt: "2025-06-16T08:50:43Z",
       content:
-        "Lets talk about Chet Holmgren the 7'1″ sensation whos not just making noise in the league, hes shaking the floorboards. Drafted second overall by the Oklahoma City Thunder, this kid from Minneapolis,… [+6710 chars]",
+        "Lets talk about Chet Holmgren the 7'1\" sensation whos not just making noise in the league, hes shaking the floorboards. Drafted second overall by the Oklahoma City Thunder, this kid from Minneapolis,… [+6710 chars]",
     },
     {
       source: {
@@ -1758,9 +1758,8 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
       },
       author: "Kurt Helin",
       title:
-        "Pacers’ Rick Carlisle defends referee Scott Foster in wake of fan criticism",
-      description:
-        "“I think it's awful some of the things I've seen about the officiating, and Scott Foster in particular,” Carlisle said.",
+        "Pacers' Rick Carlisle defends referee Scott Foster in wake of fan criticism",
+      description: "I think it's awful some of the things I've seen about the officiating, and Scott Foster in particular', Carlisle said.",
       url: "https://www.nbcsports.com/nba/news/pacers-rick-carlisle-defends-referee-scott-foster-in-wake-of-fan-criticism",
       urlToImage:
         "https://nbcsports.brightspotcdn.com/dims4/default/1f2a374/2147483647/strip/true/crop/5231x2942+0+0/resize/1440x810!/quality/90/?url=https%3A%2F%2Fnbc-sports-production-nbc-sports.s3.us-east-1.amazonaws.com%2Fbrightspot%2F44%2Fc1%2F2a25077743bfa1044a310436d10a%2Fhttps-api-imagn.com%2Frest%2Fdownload%2FimageID%3D26118296",
@@ -1776,7 +1775,7 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
       author: "RYAN HANNABLE of BetMGM Sportsbook",
       title: "Sports betting roundup: NHL and NBA playoffs enter final week",
       description:
-        "In the NHL, the Florida Panthers lead the Edmonton Oilers 3-2 in a best-of-seven series, while the Oklahoma City Thunder and Indiana Pacers are knotted at 2-2 headed into Monday’s Game 5 in the NBA. Meanwhile, J.J. Spaun won his second career PGA Tour event a…",
+        "In the NHL, the Florida Panthers lead the Edmonton Oilers 3-2 in a best-of-seven series, while the Oklahoma City Thunder and Indiana Pacers are knotted at 2-2 headed into Monday's Game 5 in the NBA. Meanwhile, J.J. Spaun won his second career PGA Tour event a…",
       url: "https://sports.yahoo.com/article/sports-betting-roundup-nhl-nba-161747059.html",
       urlToImage:
         "https://s.yimg.com/ny/api/res/1.2/pe9yAPIsa4H0eXAVdM75RA--/YXBwaWQ9aGlnaGxhbmRlcjt3PTEyMDA7aD04MDY7Y2Y9d2VicA--/https://media.zenfs.com/en/ap.org/f9926ccd087696785ffc96154132b7be",
@@ -1859,7 +1858,7 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
       title:
         "BetMGM bonus code POSTBET for $1,500 in bonus bets for Game 5 of the NBA Finals",
       description:
-        "Use BetMGM bonus code POSTBET to get your first bet back in bonus bets if your first bet doesn’t win, up to $1,500.",
+        "Use BetMGM bonus code POSTBET to get your first bet back in bonus bets if your first bet doesn't win, up to $1,500.",
       url: "https://nypost.com/2025/06/16/betting/betmgm-bonus-code-postbet-for-1500-in-bonus-bets-for-game-5-of-the-nba-finals/",
       urlToImage:
         "https://nypost.com/wp-content/uploads/sites/2/2025/06/celebrates-second-half-game-4-106458370.jpg?quality=75&strip=all&w=1024",
@@ -1940,9 +1939,9 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
       },
       author: "Bruno Verscheure",
       title:
-        "Où regarder la 2e étape du Tour de Suisse en live ? Les directs sport à la télé ce lundi 16 juin en Belgique",
+        "Où regarder la 2e étape du Tour de Suisse en live ? Les directs sport à la télé ce lundi 16 juin en Belgique",
       description:
-        "À quelle heure et sur quelle chaîne voir en direct les événements sportifs aujourd’hui depuis la Belgique ? Les matchs de football en live, le cyclisme en direct à la TV, le tennis en direct, le basket-ball, le hockey… ...",
+        "À quelle heure et sur quelle chaîne voir en direct les événements sportifs aujourd'hui depuis la Belgique ? Les matchs de football en live, le cyclisme en direct à la TV, le tennis en direct, le basket-ball, le hockey… ...",
       url: "https://www.dhnet.be/sports/omnisports/2025/06/16/ou-regarder-la-2e-etape-du-tour-de-suisse-en-live-les-directs-sport-a-la-tele-ce-lundi-16-juin-en-belgique-JZI5P2FHANEF7MBXNNLCYJGYJE/",
       urlToImage:
         "https://www.dhnet.be/resizer/v2/DE724WPMENDPJBXLODG7GREG74.jpg?auth=3b71dd54dd2e5cf89f83a52c22d3b36fc247039ab301695b246236e63fc8bb50&width=1200&height=630&quality=85&focal=1500%2C1000&watermark=https%3A%2F%2Fcloudfront-eu-central-1.images.arcpublishing.com%2Fipmgroup%2F3WZLNJVGMFAQRHOXFC5ZVE3GU4.png%3A100%3A0%2C559",
@@ -1965,7 +1964,7 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
         "https://www.cnet.com/a/img/resize/28a1af4a1e6133048467d54e0cff491281e8ae9b/hub/2025/06/16/b1e0b4db-30b4-4f28-bdfb-da091a43c240/gettyimages-2116044200.jpg?auto=webp&fit=crop&height=675&width=1200",
       publishedAt: "2025-06-16T21:30:00Z",
       content:
-        "The 2025 NBA Finals are officially tied. \r\nThe Oklahoma City Thunder beat the Indiana Pacers in Game 4, 111-104, tying the series 2-2. The two teams will face off in Game 5 on Monday at 8:30 p.m. ET … [+2216 chars]",
+        "The 2025 NBA Finals are officially tied. \r\nThe Oklahoma City Thunder beat the Indiana Pacers in Game 4, 111-104, tying the series 2-2. The two teams will face off in Game 5 on Monday at 8:30 p.m. ET … [+2216 chars]",
     },
     {
       source: {
@@ -1982,7 +1981,7 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
         "https://i.cbc.ca/1.7560559.1749831991!/fileImage/httpImage/image.JPG_gen/derivatives/16x9_1180/pascal-and-cedric.JPG?im=Resize%3D620",
       publishedAt: "2025-06-16T09:00:00Z",
       content:
-        "Erick Mbianda wasn't planning to attend university this past year because his family in Cameroon couldn't afford to send him.\r\nThey had endured a decade of disruption due to the armed conflict that b… [+5087 chars]",
+        "Erick Mbianda wasn't planning to attend university this past year because his family in Cameroon couldn't afford to send him.\r\nThey had endured a decade of disruption due to the armed conflict that b… [+5087 chars]",
     },
     {
       source: {
@@ -2024,7 +2023,7 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
       },
       author: "Global Desk",
       title:
-        "NBA Finals Game 5: Indiana Pacers vs Oklahoma City Thunder game’s date, time, where to watch on TV or stream online, how to buy tickets and full NBA finals schedule",
+        "NBA Finals Game 5: Indiana Pacers vs Oklahoma City Thunder game's date, time, where to watch on TV or stream online, how to buy tickets and full NBA finals schedule",
       description:
         "The NBA Finals continues with Game 5 between the Indiana Pacers and Oklahoma City Thunder on Monday, June 16. The series is tied 2-2. The game will be played at Paycom Center and airs on ABC at 8:30 p.m. ET. Fans can also stream it via several online services.",
       url: "https://economictimes.indiatimes.com/news/international/us/nba-finals-game-5-indiana-pacers-vs-oklahoma-city-thunder-games-date-time-where-to-watch-on-tv-or-stream-online-how-to-buy-tickets-and-full-nba-finals-schedule/articleshow/121893883.cms",
@@ -2110,13 +2109,13 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
       author: "Phillip Barnett",
       title: "Tyrese Haliburton is the gleeful villain the NBA Finals needs",
       description:
-        "Pacers star Tyrese Haliburton used constant disrespect to fuel an anti-hero run that can’t be overrated.",
+        "Pacers star Tyrese Haliburton used constant disrespect to fuel an anti-hero run that can't be overrated.",
       url: "https://www.sbnation.com/nba/2025/6/16/24449496/tyrese-haliburton-2025-nba-finals-pacers-vs-thunder-villain-knicks",
       urlToImage:
         "https://cdn.vox-cdn.com/thumbor/NGvPIY9pAmVKFe-umqimvqCx59g=/0x0:5598x2931/fit-in/1200x630/cdn.vox-cdn.com/uploads/chorus_asset/file/26028325/usa_today_24732030.jpg",
       publishedAt: "2025-06-16T15:57:36Z",
       content:
-        "Trevor Ruszkowski-Imagn Images\r\n\n \n\n Pacers star Tyrese Haliburton used constant disrespect to fuel an anti-hero run that can’t be overrated. The ball touched his hands about 10 feet behind the half-… [+13267 chars]",
+        "Trevor Ruszkowski-Imagn Images\r\n\n \n\n Pacers star Tyrese Haliburton used constant disrespect to fuel an anti-hero run that can't be overrated. The ball touched his hands about 10 feet behind the half-… [+13267 chars]",
     },
     {
       source: {
@@ -2125,15 +2124,15 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
       },
       author: "Claire Franken",
       title:
-        "Steven Yeun and Kristen Stewart’s Sci-Fi Romance, NBA Finals Game 5 and More",
+        "Steven Yeun and Kristen Stewart's Sci-Fi Romance, NBA Finals Game 5 and More",
       description:
-        "To help you anticipate and navigate all that television has to offer across broadcast, cable and streaming, TVLine offers daily, weekly and monthly What to Watch digests, as well as an overview of every new TV show premiering in 2025. On TV this Monday: The N…",
+        "To help you anticipate and navigate all that television has to offer across broadcast, cable and streaming, TVLine offers daily, weekly and monthly What to Watch digests, as well as an overview of every new TV show premiering in 2025. On TV this Monday: The N…",
       url: "https://tvline.com/what-to-watch/love-me-movie-steven-yeun-kristen-stewart-paramount-plus/",
       urlToImage:
         "https://tvline.com/wp-content/uploads/2025/06/love-me-movie-w2w.jpg?w=650",
       publishedAt: "2025-06-16T11:00:00Z",
       content:
-        "To help you anticipate and navigate all that television has to offer across broadcast, cable and streaming, TVLine offers daily, weekly and monthly What to Watch digests, as well as an overview of ev… [+2243 chars]",
+        "To help you anticipate and navigate all that television has to offer across broadcast, cable and streaming, TVLine offers daily, weekly and monthly What to Watch digests, as well as an overview of ev… [+2243 chars]",
     },
     {
       source: {
@@ -2154,57 +2153,215 @@ export const NEWS_API_THUNDER_PACERS_DATA_06_16_25 = {
   ],
 };
 
-//TODO : ADD WITHOU TICKER
-// export const ALPHA_VANTAGE_MOCK_DATA = {
-//   companyOverview: {
-//     Symbol: topic,
-//     Name: `${topic} Corporation`,
-//     Description: `A leading company in the ${topic} sector`,
-//     Exchange: "NASDAQ",
-//     Currency: "USD",
-//     Country: "USA",
-//     Sector: "Technology",
-//     Industry: "Software",
-//     MarketCapitalization: "1000000000",
-//     PERatio: "25.5",
-//     DividendYield: "2.1",
-//     EPS: "4.50",
-//     "52WeekHigh": "150.00",
-//     "52WeekLow": "75.00",
-//   },
-//   recentNews: [
-//     {
-//       title: `${topic} Reports Strong Q4 Earnings`,
-//       url: `https://example.com/news/${topic.toLowerCase()}-earnings`,
-//       time_published: "20250115T143000",
-//       authors: ["Financial Reporter"],
-//       summary: `${topic} exceeded analyst expectations with strong quarterly results.`,
-//       banner_image: null,
-//       source: "Financial News",
-//       category_within_source: "Earnings",
-//       source_domain: "example.com",
-//       topics: ["earnings", "financial"],
-//       overall_sentiment_score: 0.8,
-//       overall_sentiment_label: "positive",
-//     },
-//   ],
-//   realTimeData: {
-//     "Meta Data": {
-//       "1. Information": "Daily Prices (open, high, low, close) and Volumes",
-//       "2. Symbol": topic,
-//       "3. Last Refreshed": "2025-01-15",
-//       "4. Output Size": "Compact",
-//       "5. Time Zone": "US/Eastern",
-//     },
-//     "Time Series (Daily)": {
-//       "2025-01-15": {
-//         "1. open": "125.50",
-//         "2. high": "128.75",
-//         "3. low": "124.20",
-//         "4. close": "127.30",
-//         "5. volume": "2500000",
-//       },
-//     },
-//   },
-//   error: null,
-// };
+/**
+ * Mock Alpha Vantage data for debugging purposes
+ * This provides realistic stock data structure for testing
+ */
+export const ALPHA_VANTAGE_MOCK_DATA = {
+  companyOverview: {
+    Symbol: "MOCK",
+    AssetType: "Common Stock",
+    Name: "MOCK Corporation",
+    Description: "A leading company in the technology sector specializing in innovative solutions",
+    CIK: "0001234567",
+    Exchange: "NASDAQ",
+    Currency: "USD",
+    Country: "USA",
+    Sector: "Technology",
+    Industry: "Software",
+    Address: "123 Main St, Tech City, USA",
+    FullTimeEmployees: "1000",
+    FiscalYearEnd: "12-31",
+    LatestQuarter: "2024-12-31",
+    MarketCapitalization: "1000000000",
+    EBITDA: "150000000",
+    PERatio: "25.5",
+    PEGRatio: "1.2",
+    BookValue: "45.00",
+    DividendPerShare: "2.10",
+    DividendYield: "2.1",
+    EPS: "4.50",
+    RevenuePerShareTTM: "85.00",
+    ProfitMargin: "0.15",
+    OperatingMarginTTM: "0.20",
+    ReturnOnAssetsTTM: "0.12",
+    ReturnOnEquityTTM: "0.18",
+    RevenueTTM: "850000000",
+    GrossProfitTTM: "600000000",
+    DilutedEPSTTM: "4.50",
+    QuarterlyEarningsGrowthYOY: "0.15",
+    QuarterlyRevenueGrowthYOY: "0.10",
+    AnalystTargetPrice: "140.00",
+    TrailingPE: "25.5",
+    ForwardPE: "22.0",
+    PriceToSalesRatioTTM: "3.2",
+    PriceToBookRatio: "2.8",
+    EVToRevenue: "2.5",
+    EVToEBITDA: "15.0",
+    Beta: "1.2",
+    "52WeekHigh": "150.00",
+    "52WeekLow": "75.00",
+    "50DayMovingAverage": "125.00",
+    "200DayMovingAverage": "110.00",
+    SharesOutstanding: "10000000",
+    DividendDate: "2024-12-15",
+    ExDividendDate: "2024-12-10",
+  },
+  recentNews: [
+    {
+      title: "MOCK Reports Strong Q4 Earnings",
+      url: "https://example.com/news/mock-earnings",
+      time_published: "20250115T143000",
+      authors: ["Financial Reporter"],
+      summary: "MOCK exceeded analyst expectations with strong quarterly results.",
+      banner_image: null,
+      source: "Financial News",
+      category_within_source: "Earnings",
+      source_domain: "example.com",
+      topics: ["earnings", "financial"],
+      overall_sentiment_score: 0.8,
+      overall_sentiment_label: "positive",
+    },
+    {
+      title: "MOCK Announces New Product Launch",
+      url: "https://example.com/news/mock-product-launch",
+      time_published: "20250114T100000",
+      authors: ["Tech Reporter"],
+      summary: "MOCK Corporation unveiled its latest innovation in software technology.",
+      banner_image: null,
+      source: "Tech News",
+      category_within_source: "Product Launch",
+      source_domain: "example.com",
+      topics: ["product", "technology"],
+      overall_sentiment_score: 0.9,
+      overall_sentiment_label: "positive",
+    },
+  ],
+  realTimeData: {
+    "Meta Data": {
+      "1. Information": "Daily Prices (open, high, low, close) and Volumes",
+      "2. Symbol": "MOCK",
+      "3. Last Refreshed": "2025-01-15",
+      "4. Output Size": "Compact",
+      "5. Time Zone": "US/Eastern",
+    },
+    "Time Series (Daily)": {
+      "2025-01-15": {
+        "1. open": "125.50",
+        "2. high": "128.75",
+        "3. low": "124.20",
+        "4. close": "127.30",
+        "5. volume": "2500000",
+      },
+      "2025-01-14": {
+        "1. open": "123.80",
+        "2. high": "126.40",
+        "3. low": "122.90",
+        "4. close": "125.50",
+        "5. volume": "2200000",
+      },
+      "2025-01-13": {
+        "1. open": "122.10",
+        "2. high": "124.60",
+        "3. low": "121.20",
+        "4. close": "123.80",
+        "5. volume": "2100000",
+      },
+    },
+  },
+  error: null,
+};
+
+/**
+ * Function to generate mock Alpha Vantage data for any ticker
+ * @param ticker The stock ticker symbol
+ * @returns Mock Alpha Vantage data structure
+ */
+export function generateMockAlphaVantageData(ticker: string) {
+  return {
+    companyOverview: {
+      Symbol: ticker,
+      AssetType: "Common Stock",
+      Name: `${ticker} Corporation`,
+      Description: `A leading company in the ${ticker} sector`,
+      CIK: "0001234567",
+      Exchange: "NASDAQ",
+      Currency: "USD",
+      Country: "USA",
+      Sector: "Technology",
+      Industry: "Software",
+      Address: "123 Main St, Tech City, USA",
+      FullTimeEmployees: "1000",
+      FiscalYearEnd: "12-31",
+      LatestQuarter: "2024-12-31",
+      MarketCapitalization: "1000000000",
+      EBITDA: "150000000",
+      PERatio: "25.5",
+      PEGRatio: "1.2",
+      BookValue: "45.00",
+      DividendPerShare: "2.10",
+      DividendYield: "2.1",
+      EPS: "4.50",
+      RevenuePerShareTTM: "85.00",
+      ProfitMargin: "0.15",
+      OperatingMarginTTM: "0.20",
+      ReturnOnAssetsTTM: "0.12",
+      ReturnOnEquityTTM: "0.18",
+      RevenueTTM: "850000000",
+      GrossProfitTTM: "600000000",
+      DilutedEPSTTM: "4.50",
+      QuarterlyEarningsGrowthYOY: "0.15",
+      QuarterlyRevenueGrowthYOY: "0.10",
+      AnalystTargetPrice: "140.00",
+      TrailingPE: "25.5",
+      ForwardPE: "22.0",
+      PriceToSalesRatioTTM: "3.2",
+      PriceToBookRatio: "2.8",
+      EVToRevenue: "2.5",
+      EVToEBITDA: "15.0",
+      Beta: "1.2",
+      "52WeekHigh": "150.00",
+      "52WeekLow": "75.00",
+      "50DayMovingAverage": "125.00",
+      "200DayMovingAverage": "110.00",
+      SharesOutstanding: "10000000",
+      DividendDate: "2024-12-15",
+      ExDividendDate: "2024-12-10",
+    },
+    recentNews: [
+      {
+        title: `${ticker} Reports Strong Q4 Earnings`,
+        url: `https://example.com/news/${ticker.toLowerCase()}-earnings`,
+        time_published: "20250115T143000",
+        authors: ["Financial Reporter"],
+        summary: `${ticker} exceeded analyst expectations with strong quarterly results.`,
+        banner_image: null,
+        source: "Financial News",
+        category_within_source: "Earnings",
+        source_domain: "example.com",
+        topics: ["earnings", "financial"],
+        overall_sentiment_score: 0.8,
+        overall_sentiment_label: "positive",
+      },
+    ],
+    realTimeData: {
+      "Meta Data": {
+        "1. Information": "Daily Prices (open, high, low, close) and Volumes",
+        "2. Symbol": ticker,
+        "3. Last Refreshed": "2025-01-15",
+        "4. Output Size": "Compact",
+        "5. Time Zone": "US/Eastern",
+      },
+      "Time Series (Daily)": {
+        "2025-01-15": {
+          "1. open": "125.50",
+          "2. high": "128.75",
+          "3. low": "124.20",
+          "4. close": "127.30",
+          "5. volume": "2500000",
+        },
+      },
+    },
+    error: null,
+  };
+}

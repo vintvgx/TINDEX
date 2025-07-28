@@ -38,6 +38,49 @@ export const ALLOWED_CATEGORIES = [
 ];
 
 /**
+ * API Rate Limiting Constants
+ */
+export const API_RATE_LIMITS = {
+  ALPHA_VANTAGE: {
+    FREE_TIER_DAILY_LIMIT: 25,
+    PREMIUM_TIER_DAILY_LIMIT: 500,
+    REQUEST_TIMEOUT_MS: 10000,
+    RETRY_DELAY_MS: 1000,
+  },
+  NEWS_API: {
+    FREE_TIER_DAILY_LIMIT: 100,
+    REQUEST_TIMEOUT_MS: 10000,
+    RETRY_DELAY_MS: 1000,
+  },
+  SERP_API: {
+    FREE_TIER_DAILY_LIMIT: 100,
+    REQUEST_TIMEOUT_MS: 15000,
+    RETRY_DELAY_MS: 2000,
+  },
+};
+
+/**
+ * Request Priority Levels
+ */
+export const REQUEST_PRIORITY = {
+  HIGH: "high",      // Premium tier or critical requests
+  MEDIUM: "medium",  // Standard requests
+  LOW: "low",        // Non-critical requests
+};
+
+/**
+ * Error Messages
+ */
+export const ERROR_MESSAGES = {
+  ALPHA_VANTAGE_RATE_LIMIT: "Alpha Vantage API rate limit exceeded. Please upgrade to premium plan or try again later.",
+  NEWS_API_RATE_LIMIT: "News API rate limit exceeded. Please upgrade plan or try again later.",
+  SERP_API_RATE_LIMIT: "SerpAPI rate limit exceeded. Please upgrade plan or try again later.",
+  API_KEY_MISSING: "API key not provided",
+  REQUEST_TIMEOUT: "Request timed out",
+  NETWORK_ERROR: "Network error occurred",
+};
+
+/**
  * Prompt style templates
  */
 export const PROMPT_STYLE_TEMPLATES = {
