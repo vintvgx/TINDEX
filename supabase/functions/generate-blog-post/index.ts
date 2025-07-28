@@ -387,6 +387,7 @@ async function researchTopic(
       try {
         const pendingData = {
           topic: topic,
+          topic_id: topic.id,
           research_status: "pending",
         };
         console.log(
@@ -473,7 +474,7 @@ async function researchTopic(
       } else if (source === 'alpha_vantage') {
         //TODO apply a field in topic for ticker / grab ticker from topic name to better optimize ticker data fetching
         console.log(`Fetching alpha vantage for ticker: ${topic.name}`)
-        result = await fetchFn(topic.name, keys.ALPHA_API_KEY, priority);
+        result = await fetchFn(topic, keys.ALPHA_API_KEY, priority);
         researchResult.alphaVantageData = result;
       } else {
         // For custom APIs, pass what is needed
