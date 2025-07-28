@@ -6,15 +6,6 @@ import { UseMutationResult } from "@tanstack/react-query";
 // - session: The active auth session (null if not authenticated)
 // - loading: Whether auth state is being initialized/updated
 // - isAuthenticated: Whether there is an active authenticated session
-export enum OnboardingStep {
-  NONE = "none",
-  ROLE = "role",
-  USERNAME = "username",
-  MOBILE = "mobile",
-  PROFILE = "profile",
-  ASSESSMENT = "assessment",
-  COMPLETED = "completed",
-}
 
 export type AuthContextType = {
   authState: AuthState;
@@ -28,3 +19,35 @@ export type AuthState = {
   isLoading: boolean;
   isAuthenticated: boolean;
 };
+
+export interface UserModel {
+  user: User;
+  firstName: string;
+  lastName: string;
+  username: string;
+  dob: Date | string;
+  isAnonymous: boolean; // Flag for anonymous users
+  profileCompletionPercentage: number; // Track completion
+  profile: ProfileModel;
+  createdAt: Date;
+  lastActiveAt: Date;
+}
+
+
+  /**
+   * Represents a user's profile preferences, interests, and experiences.
+   * * Note: Property names use snake_case to match the database schema
+   */
+  export type ProfileModel = {
+    /** Unique identifier for the profile */
+     id: string;
+     /** Reference to the user's ID in the auth system */
+     user_id: string;
+     first_name: string;
+     last_name: string;
+     username: string;
+     phone_number: string;
+     dob: string | null;
+     is_anon: boolean;
+     updated_at: string;
+   }

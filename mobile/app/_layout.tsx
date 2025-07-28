@@ -9,48 +9,45 @@ import {
   DefaultTheme,
   ThemeProvider,
 } from "@react-navigation/native";
-import {
-  QueryClient,
-  QueryClientProvider
-} from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useFonts } from "expo-font";
-import { Slot } from "expo-router";
+import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
-import { useColorScheme } from "react-native";
+import { useColorScheme, View, Text } from "react-native";
 import "react-native-reanimated";
 import "@/global.css";
 
+import LoadingScreen from "@/components/LoadingScreen";
+
 // import { GluestackUIProvider } from "../components/ui/gluestack-ui-provider";
 // import LoadingScreen from "./components/LoadingScreen";
-
+import { Slot } from "expo-router";
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
 
-export default function RootLayout() {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        staleTime: 300000, // 5 minutes
-      },
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 300000, // 5 minutes
     },
-  });
+  },
+});
 
-
+export default function RootLayout() {
   //TODO IMPLEMENT showToast + grab functionality from VENT proj
   // const showToast = useShowToast();
   // useEffect(() => {
   //   // Register the toast callback when component mounts
   //   ToastService.register(showToast);
-    
+
   //   // Clean up when component unmounts
   //   return () => {
   //     ToastService.unregister();
   //   };
   // }, [showToast]);
-
 
   const [fontsLoaded] = useFonts({
     SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
@@ -69,9 +66,9 @@ export default function RootLayout() {
   // Render the AuthProvider, once font is loaded
   return (
     <QueryClientProvider client={queryClient}>
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
     </QueryClientProvider>
   );
 }
@@ -82,19 +79,22 @@ function AppContent() {
   const colorScheme = useColorScheme();
 
   if (authState.isLoading) {
-    // TODO implement LoadingScreen
-    // return <LoadingScreen />;
+    return (
+      <View>
+        <Text>Loading...</Text>
+      </View>
+    );
+    // return <LoadingScreen message="Initializing Alethia..." />;
   }
 
   return (
     // <GluestackUIProvider mode={colorScheme === "dark" ? 'light' : 'light'}>
-      <ThemeProvider
-        value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-        {/* <ToastProvider> */}
-          <Stack />
-          <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
-        {/* </ToastProvider> */}
-      </ThemeProvider>
+    <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+      {/* <ToastProvider> */}
+      <Slot />
+      <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
+      {/* </ToastProvider> */}
+    </ThemeProvider>
     // </GluestackUIProvider>
   );
 }

@@ -4,7 +4,7 @@ import { logDebug } from "@/utils/strings/function";
 import { useQuery } from "@tanstack/react-query";
 
 
-export function useAssessment() {
+export function useFeedQuery() {
     //TODO ensure user is defined to view feed?
     const { authState: { user } } = useAuth();
 
@@ -12,11 +12,14 @@ export function useAssessment() {
         queryKey: ["feed"],
         queryFn: async () => {
           if (!user) return null; //TODO throw error to display Toast of user is not signed // 
+          console.log("User:", user.email)
     
           const { data, error } = await supabase
-            .from("feed")
-            .select("*")
-            // .eq("user_id", user.id)
+          .from("blog_posts")
+          .select("*")
+          .eq("status", "published")
+          .order("created_at", { ascending: false })
+          .limit(20);
 
           if (error) {
             // If no assessment exists yet, that's not an error
@@ -24,12 +27,11 @@ export function useAssessment() {
             throw error;
           }
     
-          logDebug("Assessment data fetched successfully.")
+          console.log(data)
+          logDebug("Feed data fetched successfully.")
         //   return data as AssessmentResponse[]; //TODO create FeedResponse[]
         return data
         },
-
-
         enabled: !!user,
       });
 }

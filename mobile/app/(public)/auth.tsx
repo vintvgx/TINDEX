@@ -3,10 +3,10 @@
 import { signInWithApple, signInWithGoogle } from "@/utils/auth/function"
 import { Ionicons } from "@expo/vector-icons"
 import { useTheme } from "@react-navigation/native"
-import { useEffect } from "react"
-import { Dimensions, View, useColorScheme, Text, TouchableOpacity, StatusBar, StyleSheet } from "react-native"
-import { SafeAreaView } from "react-native-safe-area-context"
 import { LinearGradient } from "expo-linear-gradient"
+import { useEffect } from "react"
+import { Dimensions, StatusBar, StyleSheet, Text, TouchableOpacity, View, useColorScheme } from "react-native"
+import { SafeAreaView } from "react-native-safe-area-context"
 
 const { height, width } = Dimensions.get("window")
 

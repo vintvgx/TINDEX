@@ -1,22 +1,19 @@
-// In AuthContext.tsx
 import { supabase } from "@/lib/supabase/supabase";
 import { AuthContextType, AuthState } from "@/types/user/authModel";
-// import { AuthContextType, AuthState, OnboardingStep } from "@/types/authModel";
 // import {
 //   checkAssessmentStatus,
 //   checkProfileStatus,
 //   checkRoleStatus,
 // } from "@/utils/auth/function";
 import { logDebug } from "@/utils/strings/function";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Session } from "@supabase/supabase-js";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+//@ts-ignore
 import { router } from "expo-router";
 import React, { createContext, useContext, useEffect, useState } from "react";
 
 // Create the context with default values
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const queryClient = useQueryClient();
@@ -104,6 +101,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.log(`Supabase auth event: ${event}`);
       await handleSessionChange(session);
 
+      if (session?.user?.id) {
+        // Fetch feed
+        queryClient.invalidateQueries({
+          queryKey: ["feed"],
+        });
+
+        // Fetch user profile information
+        queryClient.invalidateQueries({
+          queryKey: ["profile", session.user.id],
+        });
+      }
+
       // TODO Invalidate queries that depend on authentication state
       //   if (session?.user?.id) {
       //     queryClient.invalidateQueries({
@@ -138,16 +147,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (isInitialized) {
       // Not authenticated
-      // TODO Set up auth page in /(public)/auth
       if (!authState.session) {
+        console.log("Navigating to Auth");
         router.replace("/(public)/auth");
         return;
       }
 
-      // User is fully authenticated 
+      // User is fully authenticated
       if (authState.isAuthenticated && authState.session) {
+        console.log("Navigating to Home");
         // Navigate to Home
-        // TODO Set up home page in /(app)/home
         router.replace("/(app)/home");
       }
     }
@@ -245,18 +254,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isLoading: true,
       }));
 
-      // TODO Fetch user profile
-      //   if (session.user?.id) {
-      //     // This will trigger a refetch of the profile query
-      //     queryClient.invalidateQueries({
-      //       queryKey: ["profile", session.user.id],
-      //     });
+      // Fetch user profile and refresh feed
+      if (session.user?.id) {
+        queryClient.invalidateQueries({
+          queryKey: ["feed", session.user.id],
+        });
 
-      //     // Similarly for assessments if you have a query for that
-      //     queryClient.invalidateQueries({
-      //       queryKey: ["assessments", session.user.id],
-      //     });
-      //   }
+        queryClient.invalidateQueries({
+          queryKey: ["profile", session.user.id],
+        });
+      }
 
       // Update the state
       setAuthState((prev) => ({
