@@ -962,7 +962,7 @@ async function generateAIContent(
 
     const requestBody = {
       model: "claude-3-5-sonnet-20241022",
-      max_tokens: 1024,
+      max_tokens: 2048,
       temperature: 0.7,
       messages: [
         {
@@ -1006,15 +1006,18 @@ async function generateAIContent(
       throw new Error("Invalid response structure from Anthropic API");
     }
 
-    const content = data.content[0].text;
-    console.log("Generated content length:", content.length);
+    const rawContent = data.content[0].text;
+    console.log("Generated content length:", rawContent.length);
     console.log(
       "Generated content preview:",
-      content.substring(0, 200) + "..."
+      rawContent.substring(0, 200) + "..."
     );
 
+    // Parse the AI response to extract title and clean content
+    const { title, content } = parseAIResponse(rawContent, topic.name);
+
     const result = {
-      title: `Blog Post for ${topic.name} created`,
+      title: title,
       content: content,
       // keywords: [topic.toLowerCase()],
       // hashtags: [`#${topic.replace(/\s+/g, "")}`],
@@ -1038,6 +1041,65 @@ async function generateAIContent(
     console.error("=== GENERATE AI CONTENT ERROR ===");
     console.error("AI generation error:", error);
     throw new Error("Error generating blog post from Anthropic API");
+  }
+}
+
+/**
+ * Parse AI response to extract title and clean content
+ */
+function parseAIResponse(rawContent: string, topicName: string): { title: string; content: string } {
+  console.log("=== PARSING AI RESPONSE ===");
+  
+  // Default fallback values
+  let title = `Comprehensive Analysis: ${topicName}`;
+  let content = rawContent;
+
+  try {
+    // Look for TITLE: pattern in the response
+    const titleMatch = rawContent.match(/TITLE:\s*(.+?)(?:\n|$)/i);
+    if (titleMatch && titleMatch[1]) {
+      title = titleMatch[1].trim();
+      console.log("Extracted title:", title);
+      
+      // Remove the title line from content
+      content = rawContent.replace(/TITLE:\s*.+?(?:\n|$)/i, '').trim();
+    } else {
+      // If no TITLE: pattern found, try to extract first line as title
+      const lines = rawContent.split('\n').filter(line => line.trim().length > 0);
+      if (lines.length > 0) {
+        const firstLine = lines[0].trim();
+        // Check if first line looks like a title (not too long, ends with punctuation)
+        if (firstLine.length < 100 && !firstLine.includes('Here\'s') && !firstLine.includes('Write')) {
+          title = firstLine;
+          content = lines.slice(1).join('\n').trim();
+          console.log("Extracted title from first line:", title);
+        }
+      }
+    }
+
+    // Clean up content by removing any remaining instruction text
+    content = content
+      .replace(/^(Here's|Write|Create|Generate).*?:\n?/gi, '') // Remove instruction prefixes
+      .replace(/^(IMPORTANT INSTRUCTIONS|Research Data Available|Format your response).*?(?=\n\n|\n[A-Z]|$)/gis, '') // Remove instruction blocks
+      .replace(/^\d+\.\s*.*?(?=\n\n|\n[A-Z]|$)/gm, '') // Remove numbered instruction lines
+      .replace(/\[.*?\]/g, '') // Remove bracketed placeholders
+      .replace(/\n{3,}/g, '\n\n') // Normalize multiple newlines
+      .trim();
+
+    // If content is empty after cleaning, use original content
+    if (!content || content.length < 50) {
+      console.warn("Content too short after cleaning, using original");
+      content = rawContent;
+    }
+
+    console.log("Final title length:", title.length);
+    console.log("Final content length:", content.length);
+    console.log("=== PARSING AI RESPONSE SUCCESS ===");
+    
+    return { title, content };
+  } catch (error) {
+    console.error("Error parsing AI response:", error);
+    return { title, content: rawContent };
   }
 }
 
