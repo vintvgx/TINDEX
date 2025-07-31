@@ -1,7 +1,7 @@
 import { useFeedQuery } from "@/hooks/queries/blogs/useFeedQuery";
 import { prettyJSON } from "@/utils/strings/function";
 import { useQueryClient } from "@tanstack/react-query";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 
 const HomeScreen = () => {
   const queryClient = useQueryClient();
@@ -12,25 +12,25 @@ const HomeScreen = () => {
   
 
   return (
-    <View style={styles.container}>
+    <View className="flex-1 bg-gray-50">
       {feedLoading ? (
-        <View style={styles.loadingContainer}>
+        <View className="flex-1 justify-center items-center bg-gray-50">
           <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.loadingText}>Loading feed...</Text>
+          <Text className="mt-4 text-base text-gray-600 font-medium">Loading feed...</Text>
         </View>
       ) : feed && feed.length > 0 ? (
-        <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-          <View style={styles.feedContainer}>
+        <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+          <View className="p-4">
             {feed.map((post) => (
-              <View key={post.id} style={styles.postCard}>
-                <Text style={styles.postTitle}>{post.title}</Text>
+              <View key={post.id} className="bg-white rounded-xl p-4 mb-4 shadow-sm">
+                <Text className="text-lg font-semibold text-gray-900 mb-2 leading-6">{post.title}</Text>
                 {post.content && (
-                  <Text style={styles.postContent} numberOfLines={3}>
+                  <Text className="text-sm text-gray-600 leading-5 mb-3" numberOfLines={3}>
                     {post.content}
                   </Text>
                 )}
-                <View style={styles.postMeta}>
-                  <Text style={styles.postDate}>
+                <View className="flex-row justify-between items-center">
+                  <Text className="text-xs text-gray-400 font-medium">
                     {new Date(post.created_at || Date.now()).toLocaleDateString()}
                   </Text>
                 </View>
@@ -39,9 +39,9 @@ const HomeScreen = () => {
           </View>
         </ScrollView>
       ) : (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyTitle}>No Posts Available</Text>
-          <Text style={styles.emptySubtitle}>
+        <View className="flex-1 justify-center items-center px-8">
+          <Text className="text-xl font-semibold text-gray-700 mb-2 text-center">No Posts Available</Text>
+          <Text className="text-base text-gray-600 text-center leading-6">
             Check back later for new content
           </Text>
         </View>
@@ -49,86 +49,5 @@ const HomeScreen = () => {
     </View>
   );
 };
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F8F9FA',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#F8F9FA',
-  },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#6C757D',
-    fontWeight: '500',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  feedContainer: {
-    padding: 16,
-  },
-  postCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 3.84,
-    elevation: 5,
-  },
-  postTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#212529',
-    marginBottom: 8,
-    lineHeight: 24,
-  },
-  postContent: {
-    fontSize: 14,
-    color: '#6C757D',
-    lineHeight: 20,
-    marginBottom: 12,
-  },
-  postMeta: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  postDate: {
-    fontSize: 12,
-    color: '#ADB5BD',
-    fontWeight: '500',
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 32,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#495057',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  emptySubtitle: {
-    fontSize: 16,
-    color: '#6C757D',
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-});
 
 export default HomeScreen;
