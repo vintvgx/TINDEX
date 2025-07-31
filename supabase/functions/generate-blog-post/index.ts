@@ -106,11 +106,7 @@ serve(async (req) => {
     } catch (parseError) {
       console.error("Failed to parse request body:", parseError);
       console.log("Request body parsed:", JSON.stringify(requestBody, null, 2));
-      throw new Error(
-        `Invalid JSON in request body\n Error:${
-          parseError.message
-        }\nRequest: ${JSON.stringify(requestBody, null, 2)}`
-      );
+      throw new Error(`Invalid JSON in request body`);
     }
 
     const {
@@ -482,7 +478,7 @@ async function researchTopic(
         console.warn(`No fetch function for data source: ${source}`);
         continue;
       }
-      
+
       try {
         let result;
         if (source === "news") {
@@ -490,7 +486,9 @@ async function researchTopic(
           result = await fetchFn(topic.name, keys.NEWS_API_KEY, priority);
           researchResult.newsArticles = result;
         } else if (source === "serp") {
-          console.log(`Fetching serp for ${topic.name} (category: ${topic.category})`);
+          console.log(
+            `Fetching serp for ${topic.name} (category: ${topic.category})`
+          );
           result = await fetchFn(topic, keys.SERP_API_KEY, priority);
           researchResult.serpApiData = result;
         } else if (source === "alpha_vantage") {
@@ -503,25 +501,34 @@ async function researchTopic(
           result = await fetchFn(topic.name, keys, priority);
           researchResult[source] = result;
         }
-        
+
         console.log(`Successfully fetched data from ${source}`);
       } catch (error) {
-        console.error(`Failed to fetch data from ${source}:`, error);
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        console.error(`Failed to fetch data from ${source}:`, errorMessage);
         // Continue with other data sources instead of failing completely
         // Set empty defaults for failed sources
         if (source === "news") {
-          researchResult.newsArticles = { articles: [], status: "error", error: error.message };
+          researchResult.newsArticles = {
+            articles: [],
+            status: "error",
+            error: errorMessage,
+          };
         } else if (source === "serp") {
-          researchResult.serpApiData = { status: "error", error: error.message };
+          researchResult.serpApiData = {
+            status: "error",
+            error: errorMessage,
+          };
         } else if (source === "alpha_vantage") {
-          researchResult.alphaVantageData = { 
-            companyOverview: null, 
-            recentNews: [], 
-            realTimeData: null, 
-            error: error.message 
+          researchResult.alphaVantageData = {
+            companyOverview: null,
+            recentNews: [],
+            realTimeData: null,
+            error: errorMessage,
           };
         } else {
-          researchResult[source] = { error: error.message };
+          researchResult[source] = { error: errorMessage };
         }
       }
     }
@@ -681,7 +688,7 @@ async function makeApiRequest(
     return response;
   } catch (error) {
     clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
+    if (error.name === "AbortError") {
       throw new Error(ERROR_MESSAGES.REQUEST_TIMEOUT);
     }
     throw error;
@@ -692,11 +699,13 @@ async function makeApiRequest(
  * Check if Alpha Vantage response indicates rate limiting
  */
 function isAlphaVantageRateLimited(response: any): boolean {
-  return response && 
-         response.Note && 
-         (response.Note.includes("rate limit") || 
-          response.Note.includes("API key") ||
-          response.Note.includes("premium"));
+  return (
+    response &&
+    response.Note &&
+    (response.Note.includes("rate limit") ||
+      response.Note.includes("API key") ||
+      response.Note.includes("premium"))
+  );
 }
 
 /**
@@ -755,19 +764,25 @@ async function fetchAlphaVantageData(
 
       if (overviewResponse.ok) {
         const overviewData = await overviewResponse.json();
-        
+
         // Check for rate limit message
         if (isAlphaVantageRateLimited(overviewData)) {
           console.warn("Alpha Vantage rate limit detected in overview request");
           rateLimitHit = true;
-        } else if (overviewData && Object.keys(overviewData).length > 0 && !overviewData.Note) {
+        } else if (
+          overviewData &&
+          Object.keys(overviewData).length > 0 &&
+          !overviewData.Note
+        ) {
           companyOverview = overviewData;
           console.log("Company overview data retrieved successfully");
         } else {
           console.warn("No company overview data available");
         }
       } else {
-        console.warn(`Company overview request failed with status: ${overviewResponse.status}`);
+        console.warn(
+          `Company overview request failed with status: ${overviewResponse.status}`
+        );
       }
     } catch (error) {
       console.warn("Company overview request failed:", error);
@@ -785,19 +800,25 @@ async function fetchAlphaVantageData(
 
         if (newsResponse.ok) {
           const newsData = await newsResponse.json();
-          
+
           // Check for rate limit message
           if (isAlphaVantageRateLimited(newsData)) {
             console.warn("Alpha Vantage rate limit detected in news request");
             rateLimitHit = true;
-          } else if (newsData && newsData.feed && Array.isArray(newsData.feed)) {
+          } else if (
+            newsData &&
+            newsData.feed &&
+            Array.isArray(newsData.feed)
+          ) {
             recentNews = newsData.feed;
             console.log(`Retrieved ${recentNews.length} news articles`);
           } else {
             console.warn("No news data available");
           }
         } else {
-          console.warn(`News request failed with status: ${newsResponse.status}`);
+          console.warn(
+            `News request failed with status: ${newsResponse.status}`
+          );
         }
       } catch (error) {
         console.warn("News request failed:", error);
@@ -816,19 +837,27 @@ async function fetchAlphaVantageData(
 
         if (timeSeriesResponse.ok) {
           const timeSeriesData = await timeSeriesResponse.json();
-          
+
           // Check for rate limit message
           if (isAlphaVantageRateLimited(timeSeriesData)) {
-            console.warn("Alpha Vantage rate limit detected in time series request");
+            console.warn(
+              "Alpha Vantage rate limit detected in time series request"
+            );
             rateLimitHit = true;
-          } else if (timeSeriesData && timeSeriesData["Meta Data"] && !timeSeriesData.Note) {
+          } else if (
+            timeSeriesData &&
+            timeSeriesData["Meta Data"] &&
+            !timeSeriesData.Note
+          ) {
             realTimeData = timeSeriesData;
             console.log("Real-time data retrieved successfully");
           } else {
             console.warn("No real-time data available");
           }
         } else {
-          console.warn(`Time series request failed with status: ${timeSeriesResponse.status}`);
+          console.warn(
+            `Time series request failed with status: ${timeSeriesResponse.status}`
+          );
         }
       } catch (error) {
         console.warn("Time series request failed:", error);
@@ -845,11 +874,13 @@ async function fetchAlphaVantageData(
     if (rateLimitHit) {
       console.warn("=== ALPHA VANTAGE RATE LIMIT WARNING ===");
       console.warn("Some or all Alpha Vantage requests hit rate limit");
-      console.warn("Consider upgrading to premium plan or implementing request caching");
+      console.warn(
+        "Consider upgrading to premium plan or implementing request caching"
+      );
     } else {
       console.log("=== FETCH ALPHA VANTAGE API SUCCESS ===");
     }
-    
+
     return result;
   } catch (error) {
     console.error("=== FETCH ALPHA VANTAGE API ERROR ===");
@@ -873,7 +904,7 @@ function extractTickerSymbol(topic: string): string {
   const cleanTopic = topic
     .toUpperCase()
     .replace(/\s+/g, "") // Remove spaces
-    .replace(/[^A-Z]/g, ""); // Keep only letters 
+    .replace(/[^A-Z0-9]/g, ""); // Keep letters and numbers
 
   // If it looks like a ticker (3-5 characters, mostly letters), return it
   if (
@@ -886,7 +917,7 @@ function extractTickerSymbol(topic: string): string {
 
   // Otherwise, try to extract a ticker pattern
   const tickerMatch = topic.match(/[A-Z]{2,5}/);
-  return tickerMatch ? tickerMatch[0] : topic.toUpperCase();
+  return tickerMatch ? tickerMatch[0] : cleanTopic.slice(0, 5);
 }
 
 /**
@@ -910,10 +941,12 @@ async function fetchSerpAPIData(
   }
 
   try {
-      // Build category-aware query
-    const searchQuery = topic.category ? buildGoogleSearchQuery(topic) : topic.name;
-    console.log("Search query: ", searchQuery)
-  
+    // Build category-aware query
+    const searchQuery = topic.category
+      ? buildGoogleSearchQuery(topic)
+      : topic.name;
+    console.log("Search query: ", searchQuery);
+
     const encodedTopic = encodeURIComponent(searchQuery);
     const url = `https://serpapi.com/search.json?q=${encodedTopic}&api_key=${apiKey}&engine=google&num=10`;
     console.log(
@@ -1104,7 +1137,7 @@ function parseAIResponse(
   topicName: string
 ): { title: string; content: string } {
   console.log("=== PARSING AI RESPONSE ===");
-  console.log("Raw Content:", rawContent)
+  console.log("Raw Content:", rawContent);
 
   // Default fallback values
   let title = `Comprehensive Analysis: ${topicName}`;
@@ -1460,24 +1493,27 @@ async function fetchAPIKeys(): Promise<ApiKeys | undefined> {
     const alphaVantageKey = Deno.env.get("ALPHA_API_KEY");
 
     if (!newsApiKey) {
-      console.warn("NEWS_API_KEY not found");
+      console.error("NEWS_API_KEY not found");
       throw new Error(`News API key not found. Canceling request.`);
     }
     if (!serpApiKey) {
+      console.error("SERP_API_KEY not found");
       throw new Error(`Serp API key not found. Canceling request.`);
     }
     if (!alphaVantageKey) {
-      console.warn("ALPHA_API_KEY not found");
+      console.error("ALPHA_API_KEY not found");
       throw new Error(`Alpha Vantage API key not found. Canceling request.`);
     }
-    console.log("API Keys loaded.");
+
+    console.log("API Keys loaded successfully");
+
     return {
       NEWS_API_KEY: newsApiKey,
       SERP_API_KEY: serpApiKey,
       ALPHA_API_KEY: alphaVantageKey,
     };
   } catch (error) {
-    console.log(`Error fetching API keys: ${error}`);
+    console.error(`Error fetching API keys: ${error}`);
     return undefined;
   }
 }
@@ -1696,20 +1732,20 @@ function buildGoogleSearchQuery(topic: TopicDetails): string {
       query: `"${topic.name}" (stock OR ticker OR financial OR market)`,
       // Exclude common non-financial meanings
       // Example : exclude: '-"Space Launch System" -"NASA" -"rocket"'
-      exclude: ''
+      exclude: "",
     },
     sports: {
       query: `"${topic.name}" (sports OR game OR team OR player)`,
-      exclude: ''
+      exclude: "",
     },
     news: {
       query: `"${topic.name}" (news OR breaking OR latest)`,
-      exclude: ''
+      exclude: "",
     },
     technology: {
       query: `"${topic.name}" (technology OR tech OR software)`,
-      exclude: ''
-    }
+      exclude: "",
+    },
   } as const;
 
   // Ensure topic.category is a valid key of searchOperators
@@ -1717,7 +1753,10 @@ function buildGoogleSearchQuery(topic: TopicDetails): string {
 
   // Defensive: Validate category type and existence in searchOperators
   const category = topic?.category as Category | undefined;
-  const config = category && category in searchOperators ? searchOperators[category] : undefined;
+  const config =
+    category && category in searchOperators
+      ? searchOperators[category]
+      : undefined;
 
   if (!config) {
     // Fallback: return topic name if category is missing or invalid
