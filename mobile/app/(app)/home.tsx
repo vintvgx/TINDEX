@@ -2,6 +2,8 @@ import { useFeedQuery } from "@/hooks/queries/blogs/useFeedQuery";
 import { prettyJSON } from "@/utils/strings/function";
 import { useQueryClient } from "@tanstack/react-query";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
+import { BlogPostCard } from "@/components/BlogPostCard";
+import { BlogPost } from "@/types";
 
 const HomeScreen = () => {
   const queryClient = useQueryClient();
@@ -9,10 +11,14 @@ const HomeScreen = () => {
   const { data: feed, isLoading: feedLoading } = useFeedQuery();
 
   console.log("Loading feed: " + prettyJSON(feed))
-  
+
+  const handlePostPress = (post: BlogPost) => {
+    // TODO: Navigate to post detail screen
+    console.log('Post pressed:', post.title);
+  };
 
   return (
-    <View className="flex-1 bg-gray-50">
+    <View className="mt-20 flex-1 bg-gradient-to-b from-gray-50 to-gray-100">
       {feedLoading ? (
         <View className="flex-1 justify-center items-center bg-gray-50">
           <ActivityIndicator size="large" color="#007AFF" />
@@ -22,19 +28,11 @@ const HomeScreen = () => {
         <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
           <View className="p-4">
             {feed.map((post) => (
-              <View key={post.id} className="bg-white rounded-xl p-4 mb-4 shadow-sm">
-                <Text className="text-lg font-semibold text-gray-900 mb-2 leading-6">{post.title}</Text>
-                {post.content && (
-                  <Text className="text-sm text-gray-600 leading-5 mb-3" numberOfLines={3}>
-                    {post.content}
-                  </Text>
-                )}
-                <View className="flex-row justify-between items-center">
-                  <Text className="text-xs text-gray-400 font-medium">
-                    {new Date(post.created_at || Date.now()).toLocaleDateString()}
-                  </Text>
-                </View>
-              </View>
+              <BlogPostCard
+                key={post.id}
+                post={post}
+                onPress={handlePostPress}
+              />
             ))}
           </View>
         </ScrollView>
