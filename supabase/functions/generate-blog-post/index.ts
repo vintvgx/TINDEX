@@ -1746,6 +1746,10 @@ function buildGoogleSearchQuery(topic: TopicDetails): string {
       query: `"${topic.name}" (technology OR tech OR software)`,
       exclude: "",
     },
+    science: {
+      query: `"${topic.name}" (science)`,
+      exclude: "",
+    }
   } as const;
 
   // Ensure topic.category is a valid key of searchOperators
