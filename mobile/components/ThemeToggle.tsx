@@ -7,10 +7,10 @@ import { Sun } from '@/lib/icons/Sun'
 export function ThemeToggle() {
   const { isDarkColorScheme, setColorScheme } = useAppColorScheme();
 
-  function toggleColorScheme() {
+  async function toggleColorScheme() {
     const newTheme = isDarkColorScheme ? 'light' : 'dark';
     setColorScheme(newTheme);
-    setAndroidNavigationBar(newTheme);
+    await setAndroidNavigationBar(newTheme);
   }
 
   return (
