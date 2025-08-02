@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { View, Text, Image, Pressable } from 'react-native';
 import { Card, CardContent } from './ui/card';
-import { BlogPost } from '@/types';
+import { BlogPostType } from '@/types';
 
 interface BlogPostCardProps {
-  post: BlogPost;
-  onPress?: (post: BlogPost) => void;
+  post: BlogPostType;
+  onPress?: (post: BlogPostType) => void;
 }
 
 export const BlogPostCard: React.FC<BlogPostCardProps> = ({ post, onPress }) => {

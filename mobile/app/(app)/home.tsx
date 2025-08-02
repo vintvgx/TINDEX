@@ -3,7 +3,7 @@ import { prettyJSON } from "@/utils/strings/function";
 import { useQueryClient } from "@tanstack/react-query";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import { BlogPostCard } from "@/components/BlogPostCard";
-import { BlogPost } from "@/types";
+import { BlogPostType } from "@/types";
 
 const HomeScreen = () => {
   const queryClient = useQueryClient();
@@ -12,7 +12,7 @@ const HomeScreen = () => {
 
   console.log("Loading feed: " + prettyJSON(feed))
 
-  const handlePostPress = (post: BlogPost) => {
+  const handlePostPress = (post: BlogPostType) => {
     // TODO: Navigate to post detail screen
     console.log('Post pressed:', post.title);
   };

@@ -1,11 +1,11 @@
-export interface User {
+export interface UserType {
     id: string;
     email: string;
     full_name?: string;
     avatar_url?: string;
   }
   
-  export interface Topic {
+  export interface TopicType {
     id: string;
     name: string;
     description: string;
@@ -14,7 +14,7 @@ export interface User {
     created_at: string;
   }
   
-  export interface BlogPost {
+  export interface BlogPostType {
     id: string;
     topic_id: string;
     title: string;
@@ -32,7 +32,7 @@ export interface User {
     created_at: string;
     published_at?: string;
     user_id: string;
-    topics?: Topic;
+    topics?: TopicType;
   }
   
   export interface GenerationJob {
