@@ -190,39 +190,9 @@ serve(async (req) => {
 
     // Save blog post
     console.log("=== STEP 4: SAVING BLOG POST ===");
-    //MOCK POST
-    // const blogPostData = {
-    //   topic_id: "f7a8b9c0-1234-5678-9abc-def012345678",
-    //   user_id: "a1b2c3d4-5678-90ab-cdef-123456789012",
-    //   title: "Understanding Machine Learning: A Complete Guide",
-    //   content:
-    //     "Machine learning is transforming industries worldwide. This comprehensive guide covers the basics, applications, and future trends of ML technology.",
-    //   meta_description:
-    //     "Learn about machine learning basics, applications, and future trends in this comprehensive guide for beginners and professionals.",
-    //   keywords: ["machine learning", "AI", "technology", "automation"],
-    //   hashtags: ["#MachineLearning", "#AI", "#Tech"],
-    //   word_count: 150,
-    //   reading_time: 2,
-    //   status: "published",
-    //   generation_job_id: "job_789abc12-3456-7890-abcd-ef1234567890",
-    //   seo_data: {
-    //     metaDescription: "Learn ML basics",
-    //     keywords: ["AI"],
-    //     readabilityScore: 85,
-    //   },
-    //   multimedia_data: { images: [], videos: [], tables: [] },
-    //   research_data: {
-    //     newsArticles: [],
-    //     serpApiData: [],
-    //     trendingInfo: [],
-    //     statistics: [],
-    //     recentDevelopments: [],
-    //     keyFacts: [],
-    //   },
-    //   published_at: new Date().toISOString(),
-    // };
+    
     const blogPostData = {
-      topic_id: topicDetails.id,
+      topic: topicDetails,
       user_id: userId,
       title: blogContent.title,
       content: blogContent.content,
