@@ -1,6 +1,6 @@
 import { useAuth } from "@/context/auth/AuthContext";
 import { supabase } from "@/lib/supabase/supabase";
-import { Topic } from "@/types";
+import { TopicType } from "@/types";
 import { logDebug } from "@/utils/strings/function";
 import { useQuery } from "@tanstack/react-query";
 
@@ -12,7 +12,7 @@ export function useTopicsQuery() {
 
   return useQuery({
     queryKey: ["topics"],
-    queryFn: async (): Promise<Topic[] | null> => {
+    queryFn: async (): Promise<TopicType[] | null> => {
       if (!user) return null; //TODO throw error to display Toast of user is not signed //
 
       // TODO look up alg to return topics as the user searches for them /
@@ -26,7 +26,7 @@ export function useTopicsQuery() {
 
       logDebug("Assessment data fetched successfully.");
       //   return data as AssessmentResponse[]; //TODO create FeedResponse[]
-      return data as Topic[];
+      return data as TopicType[];
     },
 
     enabled: !!user,

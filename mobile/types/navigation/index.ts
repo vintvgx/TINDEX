@@ -1,4 +1,4 @@
-import { BlogPost } from "..";
+import { BlogPostType } from "..";
 
 // Navigation types
 export type RootStackParamList = {
@@ -20,6 +20,6 @@ export type RootStackParamList = {
   
   export type MainStackParamList = {
     MainTabs: undefined;
-    BlogDetail: { blogPost: BlogPost };
+    BlogDetail: { blogPost: BlogPostType };
     Generate: { topicId?: string };
   };

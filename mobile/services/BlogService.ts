@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { BlogPost, Topic, GenerationJob } from '@/types';
+import { BlogPostType, TopicType, GenerationJob } from '@/types';
 
 export class BlogService {
   static async generateBlogPost(topicId: string, targetLength = 800) {
@@ -23,7 +23,7 @@ export class BlogService {
     return data;
   }
 
-  static async getBlogPosts(limit = 10, offset = 0): Promise<BlogPost[]> {
+  static async getBlogPosts(limit = 10, offset = 0): Promise<BlogPostType[]> {
     const { data, error } = await supabase
       .from('blog_posts')
       .select(`
@@ -38,7 +38,7 @@ export class BlogService {
     return data || [];
   }
 
-  static async getBlogPost(id: string): Promise<BlogPost> {
+  static async getBlogPost(id: string): Promise<BlogPostType> {
     const { data, error } = await supabase
       .from('blog_posts')
       .select(`
@@ -52,7 +52,7 @@ export class BlogService {
     return data;
   }
 
-  static async getTopics(): Promise<Topic[]> {
+  static async getTopics(): Promise<TopicType[]> {
     const { data, error } = await supabase
       .from('topics')
       .select('*')
