@@ -47,9 +47,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 
   // Check if post has stock research data
   const hasStockData = (): boolean => {
-    console.log("Has stock data: ", (post.topic?.category === 'stocks' && post.research_data?.polygonData))
-    console.log("Post topics cat:", post.topic?.category)
-    // console.log("POst:", post)
+    console.log("Stock data observed within blog post: ", (post.topic?.category === 'stocks' && post.research_data?.polygonData))
     return post.topic?.category === 'stocks' && post.research_data?.polygonData;
   };
 

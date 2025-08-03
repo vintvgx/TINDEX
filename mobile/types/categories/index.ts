@@ -10,14 +10,6 @@ export interface BaseCategoryType {
   color?: string;
 }
 
-export interface BaseCategoryType {
-    id: string;
-    name: string;
-    description: string;
-    icon?: string;
-    color?: string;
-  }
-
 export interface StockCategoryType extends BaseCategoryType {
     keyFacts: StockKeyFact,
     statistics: StockStatistic,
