@@ -1,5 +1,5 @@
 // Category types for different blog post categories
-import { StockResearchData, StockDisplayData, StockKeyFact, StockStatistic, SerpApiMetadata, SerpApiData, NewsArticle, NewsArticlesData, TrendingInfo, AlphaVantageData } from './stocks/stock_types';
+import { StockResearchData, StockDisplayData, StockKeyFact, StockStatistic, SerpApiMetadata, SerpApiData, NewsArticle, NewsArticlesData, TrendingInfo, AlphaVantageData, PolygonData } from './stocks/stock_types';
 
 // Base category interface
 export interface BaseCategoryType {
@@ -24,5 +24,6 @@ export interface StockCategoryType extends BaseCategoryType {
     serpApiData: SerpApiData,
     newsArticle: NewsArticlesData,
     trendingInfo: TrendingInfo,
-    alphaVantageData: AlphaVantageData
+    alphaVantageData: AlphaVantageData,
+    polygonData: PolygonData
 }

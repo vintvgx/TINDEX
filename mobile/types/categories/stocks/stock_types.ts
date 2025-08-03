@@ -84,6 +84,95 @@ export interface TrendingInfo {
   changePercent?: string;
 }
 
+// Polygon.io Types
+export interface PolygonAddress {
+  address1: string;
+  city: string;
+  state: string;
+  postal_code: string;
+}
+
+export interface PolygonBranding {
+  logo_url: string;
+  icon_url: string;
+}
+
+export interface PolygonTickerDetails {
+  ticker: string;
+  name: string;
+  market: string;
+  locale: string;
+  primary_exchange: string;
+  type: string;
+  active: boolean;
+  currency_name: string;
+  cik: string;
+  composite_figi: string;
+  share_class_figi: string;
+  market_cap: number;
+  phone_number: string;
+  address: PolygonAddress;
+  description: string;
+  sic_code: string;
+  sic_description: string;
+  ticker_root: string;
+  homepage_url: string;
+  total_employees: number;
+  list_date: string;
+  branding: PolygonBranding;
+  share_class_shares_outstanding: number;
+  weighted_shares_outstanding: number;
+  round_lot: number;
+}
+
+export interface PolygonPublisher {
+  name: string;
+  homepage_url: string;
+  logo_url: string;
+  favicon_url: string;
+}
+
+export interface PolygonNewsInsight {
+  ticker: string;
+  sentiment: 'positive' | 'negative' | 'neutral';
+  sentiment_reasoning: string;
+}
+
+export interface PolygonNewsArticle {
+  id: string;
+  publisher: PolygonPublisher;
+  title: string;
+  author: string;
+  published_utc: string;
+  article_url: string;
+  tickers: string[];
+  image_url: string;
+  description: string;
+  keywords: string[];
+  insights: PolygonNewsInsight[];
+  amp_url?: string;
+}
+
+export interface PolygonDailyBar {
+  c: number; // Close price
+  h: number; // High price
+  l: number; // Low price
+  n: number; // Number of transactions
+  o: number; // Open price
+  t: number; // Timestamp
+  v: number; // Volume
+  vw: number; // Volume weighted average price
+}
+
+export interface PolygonData {
+  tickerDetails: PolygonTickerDetails;
+  recentNews: PolygonNewsArticle[];
+  dailyBars: PolygonDailyBar[];
+  previousClose: PolygonDailyBar | null;
+  error: string | null;
+}
+
+// AlphaVantage Types (existing)
 export interface AlphaVantageTopic {
   topic: string;
   relevance_score: string;
@@ -218,6 +307,7 @@ export interface StockResearchData {
   newsArticles: NewsArticlesData;
   trendingInfo: TrendingInfo[];
   alphaVantageData: AlphaVantageData;
+  polygonData: PolygonData;
   recentDevelopments: RecentDevelopment[];
 }
 

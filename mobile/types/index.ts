@@ -1,3 +1,5 @@
+
+
 export interface UserType {
     id: string;
     email: string;
@@ -17,6 +19,7 @@ export interface UserType {
   export interface BlogPostType {
     id: string;
     topic_id: string;
+    topic: TopicType;
     title: string;
     content: string;
     meta_description?: string;
@@ -32,7 +35,6 @@ export interface UserType {
     created_at: string;
     published_at?: string;
     user_id: string;
-    topics?: TopicType;
   }
   
   export interface GenerationJob {
