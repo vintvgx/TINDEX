@@ -27,7 +27,7 @@ export function useFeedQuery() {
             throw error;
           }
     
-          console.log(data)
+          // console.log(data)
           logDebug("Feed data fetched successfully.")
         //   return data as AssessmentResponse[]; //TODO create FeedResponse[]
         return data

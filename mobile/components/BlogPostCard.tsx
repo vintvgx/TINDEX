@@ -92,17 +92,6 @@ export const BlogPostCard: React.FC<BlogPostCardProps> = ({ post, onPress }) => 
               </Text>
             )}
           </View>
-
-          {/* Topics/Tags */}
-          {post.topics && (
-            <View className="flex-row flex-wrap mt-2">
-              <View className="bg-blue-100 px-2 py-1 rounded-full mr-2 mb-1">
-                <Text className="text-xs text-blue-700 font-medium">
-                  {post.topics.name}
-                </Text>
-              </View>
-            </View>
-          )}
         </CardContent>
       </Card>
     </Pressable>

@@ -4,17 +4,27 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import { BlogPostCard } from "@/components/BlogPostCard";
 import { BlogPostType } from "@/types";
+import { useState } from "react";
+import { PostDetailModal } from "@/components/PostDetailModal";
 
 const HomeScreen = () => {
   const queryClient = useQueryClient();
+  const [selectedPost, setSelectedPost] = useState<BlogPostType | null>(null);
+  const [modalVisible, setModalVisible] = useState(false);
 
   const { data: feed, isLoading: feedLoading } = useFeedQuery();
 
-  console.log("Loading feed: " + prettyJSON(feed))
-
   const handlePostPress = (post: BlogPostType) => {
-    // TODO: Navigate to post detail screen
     console.log('Post pressed:', post.title);
+
+    setSelectedPost(post);
+    setModalVisible(true);
+  };
+
+  const handleCloseModal = () => {
+    setModalVisible(false);
+    // Small delay to let animation complete before clearing post
+    setTimeout(() => setSelectedPost(null), 300);
   };
 
   return (
@@ -44,6 +54,13 @@ const HomeScreen = () => {
           </Text>
         </View>
       )}
+
+      {/* Modal for post details */}
+      <PostDetailModal
+        post={selectedPost}
+        visible={modalVisible}
+        onClose={handleCloseModal}
+      />
     </View>
   );
 };
