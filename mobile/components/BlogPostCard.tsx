@@ -37,7 +37,9 @@ export const BlogPostCard: React.FC<BlogPostCardProps> = ({ post, onPress }) => 
   };
 
   // Truncate content for preview
-  const truncateContent = (content: string, maxLength: number = 120) => {
+  const truncateContent = (content: string, maxLength: number = 200) => {
+    if (!content) return '';
+
     if (content.length <= maxLength) return content;
     return content.substring(0, maxLength).trim() + '...';
   };
@@ -52,12 +54,11 @@ export const BlogPostCard: React.FC<BlogPostCardProps> = ({ post, onPress }) => 
       className="mb-6"
       android_ripple={{ color: 'rgba(0,0,0,0.1)', borderless: false }}
     >
-      <Card className="overflow-hidden bg-white border-0 shadow-xl rounded-2xl">
-        {/* Image Container */}
-        <View className="relative">
+<Card className="overflow-hidden bg-white border-0 shadow-2xl rounded-2xl mx-4 shadow-black drop-shadow-xl elevation-xl ">      
+        <View className="relative p-4 mb-4">
           <Image
             source={{ uri: getImageUrl() }}
-            className="w-full h-48"
+            className="w-full h-80 rounded-lg"
             style={{ resizeMode: 'cover' }}
             onError={() => setImageError(true)}
           />
@@ -68,15 +69,15 @@ export const BlogPostCard: React.FC<BlogPostCardProps> = ({ post, onPress }) => 
         </View>
 
         {/* Content */}
-        <CardContent className="p-4">
+        <CardContent className="space-y-3">
           {/* Title */}
-          <Text className="text-xl font-bold text-gray-900 mb-2 leading-6" numberOfLines={2}>
+          <Text className="text-xl font-bold text-gray-900 mb-2 leading-6">
             {post.title}
           </Text>
 
           {/* Content Preview */}
           {post.content && (
-            <Text className="text-sm text-gray-600 leading-5 mb-3" numberOfLines={3}>
+            <Text className="text-sm text-gray-600 leading-5 mb-3" numberOfLines={4}>
               {truncateContent(post.content)}
             </Text>
           )}

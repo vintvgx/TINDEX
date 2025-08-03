@@ -234,7 +234,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
             <View className="mt-3">
               <Text className="text-sm text-gray-500 mb-1">Address</Text>
               <Text className="text-base font-semibold text-gray-900">
-                {tickerDetails.address.address1}, {tickerDetails.address.city}, {tickerDetails.address.state} {tickerDetails.address.postal_code}
+                {tickerDetails.address ? `${tickerDetails.address.address1}, ${tickerDetails.address.city}, ${tickerDetails.address.state} ${tickerDetails.address.postal_code}` : "No address information"}
               </Text>
             </View>
           </View>
