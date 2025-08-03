@@ -1849,8 +1849,7 @@ async function fetchPolygonData(
         throw new Error(`Ticker details request failed (${detailsResponse.status}): ${errorText}`);
       }
     } catch (error) {
-      console.error("Ticker details request error:", error);
-      throw error;
+      console.warn("Ticker details request error:", error);
     }
 
     // 2. Previous Close (most recent trading data) - previous day and a week before
@@ -1895,11 +1894,11 @@ async function fetchPolygonData(
         }
       } else {
         const errorText = await prevCloseResponse.text();
-        throw new Error(`Previous close request failed (${prevCloseResponse.status}): ${errorText}`);
+        console.warn(`Previous close request failed (${prevCloseResponse.status}): ${errorText}`);
+
       }
     } catch (error) {
-      console.error("Previous close request error:", error);
-      throw error;
+      console.warn("Previous close request error:", error);
     }
 
     // 3. Recent News
@@ -1919,11 +1918,11 @@ async function fetchPolygonData(
         }
       } else {
         const errorText = await newsResponse.text();
-        throw new Error(`News request failed (${newsResponse.status}): ${errorText}`);
+        console.warn(`News request failed (${newsResponse.status}): ${errorText}`);
+
       }
     } catch (error) {
-      console.error("News request error:", error);
-      throw error;
+      console.warn("News request error:", error);
     }
 
     // 4. Daily bars (historical data) - extended period for analysis
@@ -1946,11 +1945,10 @@ async function fetchPolygonData(
         }
       } else {
         const errorText = await barsResponse.text();
-        throw new Error(`Daily bars request failed (${barsResponse.status}): ${errorText}`);
+        console.warn(`Daily bars request failed (${barsResponse.status}): ${errorText}`);
       }
     } catch (error) {
-      console.error("Daily bars request error:", error);
-      throw error;
+      console.warn("Daily bars request error:", error);
     }
 
     const result: PolygonData = {
@@ -1965,8 +1963,8 @@ async function fetchPolygonData(
     return result;
 
   } catch (error) {
-    console.error("=== FETCH POLYGON.IO API ERROR ===");
-    console.error("Polygon.io API request failed:", error);
+    console.warn("=== FETCH POLYGON.IO API ERROR ===");
+    console.warn("Polygon.io API request failed:", error);
 
     return {
       tickerDetails: null,
