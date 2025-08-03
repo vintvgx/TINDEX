@@ -1478,7 +1478,7 @@ async function fetchAPIKeys(): Promise<ApiKeys | undefined> {
     const newsApiKey = Deno.env.get("NEWS_API_KEY");
     const serpApiKey = Deno.env.get("SERP_API_KEY");
     const alphaVantageKey = Deno.env.get("ALPHA_API_KEY");
-    const polygonIoKey = Deno.env.get("POLYGON_API_KEY")
+    const polygonIoKey = Deno.env.get("POLYGON_IO_API_KEY")
 
     if (!newsApiKey) {
       console.error("NEWS_API_KEY not found");
@@ -1493,7 +1493,7 @@ async function fetchAPIKeys(): Promise<ApiKeys | undefined> {
       throw new Error(`Alpha Vantage API key not found. Canceling request.`);
     }
     if (!polygonIoKey) {
-      console.error("ALPHA_API_KEY not found");
+      console.error("POLYGON_IO_API_KEY not found");
       throw new Error(`Alpha Vantage API key not found. Canceling request.`);
     }
 
