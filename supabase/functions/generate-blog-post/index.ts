@@ -19,6 +19,9 @@ import {
   BlogGenerationRequest,
   PriorityLevel,
   AlphaVantageData,
+  PolygonData,
+  PolygonNewsArticle,
+  PolygonDailyBar,
 } from "../shared/types/requests.ts";
 import {
   RESEARCH_STRATEGIES,
@@ -33,6 +36,7 @@ const DATA_SOURCE_FUNCTIONS = {
   news: fetchNewsApi,
   serp: fetchSerpAPIData,
   alpha_vantage: fetchAlphaVantageData,
+  polygon: fetchPolygonData,
   sports_api: async () => {
     return { articles: [] };
   }, // stub
@@ -190,39 +194,9 @@ serve(async (req) => {
 
     // Save blog post
     console.log("=== STEP 4: SAVING BLOG POST ===");
-    //MOCK POST
-    // const blogPostData = {
-    //   topic_id: "f7a8b9c0-1234-5678-9abc-def012345678",
-    //   user_id: "a1b2c3d4-5678-90ab-cdef-123456789012",
-    //   title: "Understanding Machine Learning: A Complete Guide",
-    //   content:
-    //     "Machine learning is transforming industries worldwide. This comprehensive guide covers the basics, applications, and future trends of ML technology.",
-    //   meta_description:
-    //     "Learn about machine learning basics, applications, and future trends in this comprehensive guide for beginners and professionals.",
-    //   keywords: ["machine learning", "AI", "technology", "automation"],
-    //   hashtags: ["#MachineLearning", "#AI", "#Tech"],
-    //   word_count: 150,
-    //   reading_time: 2,
-    //   status: "published",
-    //   generation_job_id: "job_789abc12-3456-7890-abcd-ef1234567890",
-    //   seo_data: {
-    //     metaDescription: "Learn ML basics",
-    //     keywords: ["AI"],
-    //     readabilityScore: 85,
-    //   },
-    //   multimedia_data: { images: [], videos: [], tables: [] },
-    //   research_data: {
-    //     newsArticles: [],
-    //     serpApiData: [],
-    //     trendingInfo: [],
-    //     statistics: [],
-    //     recentDevelopments: [],
-    //     keyFacts: [],
-    //   },
-    //   published_at: new Date().toISOString(),
-    // };
+
     const blogPostData = {
-      topic_id: topicDetails.id,
+      topic: topicDetails,
       user_id: userId,
       title: blogContent.title,
       content: blogContent.content,
@@ -496,6 +470,10 @@ async function researchTopic(
           console.log(`Fetching alpha vantage for ticker: ${topic.name}`);
           result = await fetchFn(topic, keys.ALPHA_API_KEY, priority);
           researchResult.alphaVantageData = result;
+        } else if (source === "polygon") {
+          console.log(`Fetching polygon data for ticker: ${topic.name}`);
+          result = await fetchFn(topic, keys.POLYGON_API_KEY, priority);
+          researchResult.polygonData = result;
         } else {
           // For custom APIs, pass what is needed
           result = await fetchFn(topic.name, keys, priority);
@@ -527,6 +505,14 @@ async function researchTopic(
             realTimeData: null,
             error: errorMessage,
           };
+        } else if (source === "polygon") {
+          researchResult.polygonData = {
+            tickerDetails: null,
+            recentNews: [],
+            dailyBars: [],
+            previousClose: null,
+            error: errorMessage,
+          };
         } else {
           researchResult[source] = { error: errorMessage };
         }
@@ -553,6 +539,7 @@ async function researchTopic(
           key_facts: researchResult.keyFacts,
           serp_api_data: researchResult.serpApiData,
           alpha_vantage_data: researchResult.alphaVantageData,
+          polygon_data: researchResult.polygonData,
           research_status: "completed",
         };
 
@@ -1491,6 +1478,7 @@ async function fetchAPIKeys(): Promise<ApiKeys | undefined> {
     const newsApiKey = Deno.env.get("NEWS_API_KEY");
     const serpApiKey = Deno.env.get("SERP_API_KEY");
     const alphaVantageKey = Deno.env.get("ALPHA_API_KEY");
+    const polygonIoKey = Deno.env.get("POLYGON_IO_API_KEY")
 
     if (!newsApiKey) {
       console.error("NEWS_API_KEY not found");
@@ -1504,6 +1492,10 @@ async function fetchAPIKeys(): Promise<ApiKeys | undefined> {
       console.error("ALPHA_API_KEY not found");
       throw new Error(`Alpha Vantage API key not found. Canceling request.`);
     }
+    if (!polygonIoKey) {
+      console.error("POLYGON_IO_API_KEY not found");
+      throw new Error(`Alpha Vantage API key not found. Canceling request.`);
+    }
 
     console.log("API Keys loaded successfully");
 
@@ -1511,6 +1503,8 @@ async function fetchAPIKeys(): Promise<ApiKeys | undefined> {
       NEWS_API_KEY: newsApiKey,
       SERP_API_KEY: serpApiKey,
       ALPHA_API_KEY: alphaVantageKey,
+      POLYGON_API_KEY: polygonIoKey
+
     };
   } catch (error) {
     console.error(`Error fetching API keys: ${error}`);
@@ -1770,3 +1764,440 @@ function buildGoogleSearchQuery(topic: TopicDetails): string {
   // Build and return the search query string
   return `${config.query} ${config.exclude}`.trim();
 }
+
+/**
+ * Make a request to Polygon.io API with proper error handling
+ */
+async function makePolygonRequest(url: string): Promise<Response> {
+  return makeApiRequest(url, {}, 10000);
+}
+
+/**
+ * Transform Polygon.io API response data to PolygonDailyBar format
+ */
+function transformPolygonBarData(apiData: any): PolygonDailyBar {
+  return {
+    volume: apiData.v,
+    volumeWeighted: apiData.vw,
+    open: apiData.o,
+    close: apiData.c,
+    high: apiData.h,
+    low: apiData.l,
+    timestamp: apiData.t,
+    transactions: apiData.n
+  };
+}
+
+/**
+ * Fetch stock data from Polygon.io
+ * 
+ * Returns structured stock data including ticker details, news, and price data
+ */
+async function fetchPolygonData(
+  topic: TopicDetails,
+  apiKey: string,
+  priority?: PriorityLevel
+): Promise<PolygonData> {
+  console.log("=== FETCH POLYGON.IO API START ===");
+  console.debug("Ticker:", topic.name);
+  console.debug("API Key exists:", !!apiKey);
+
+  if (!apiKey) {
+    console.warn("POLYGON_API_KEY not found, returning empty result");
+    return {
+      tickerDetails: null,
+      recentNews: [],
+      dailyBars: [],
+      previousClose: null,
+      error: "API key not provided"
+    };
+  }
+
+  // if (priority === PriorityLevel.DEBUG) {
+  //   console.log("Debugging enabled. Returning mock Polygon data...");
+  //   return generateMockPolygonData(topic.name);
+  // }
+
+  try {
+    const tickerSymbol = extractTickerSymbol(topic.name);
+    const encodedTicker = encodeURIComponent(tickerSymbol);
+    
+    console.log(`Fetching Polygon.io data for ticker: ${tickerSymbol}`);
+
+    let tickerDetails = null;
+    let recentNews: PolygonNewsArticle[] = [];
+    let dailyBars: PolygonDailyBar[] = [];
+    let previousClose: PolygonDailyBar | null = null;
+
+    // 1. Ticker Details (company info)
+    try {
+      console.log("Fetching ticker details...");
+      const detailsUrl = `https://api.polygon.io/v3/reference/tickers/${encodedTicker}?apiKey=${apiKey}`;
+      const detailsResponse = await fetch(detailsUrl);
+
+      if (detailsResponse.ok) {
+        const data = await detailsResponse.json();
+        
+        if (data.status === 'OK' && data.results) {
+          tickerDetails = data.results;
+          console.log("Ticker details retrieved successfully");
+        } else {
+          console.warn("No ticker details data available:", data);
+        }
+      } else {
+        const errorText = await detailsResponse.text();
+        throw new Error(`Ticker details request failed (${detailsResponse.status}): ${errorText}`);
+      }
+    } catch (error) {
+      console.warn("Ticker details request error:", error);
+    }
+
+    // 2. Previous Close (most recent trading data) - previous day and a week before
+    try {
+      console.log("Fetching previous close data...");
+      
+      // Calculate dates: previous day and a week before
+      const today = new Date();
+      const previousDay = new Date(today);
+      previousDay.setDate(today.getDate() - 1);
+      
+      const weekBefore = new Date(today);
+      weekBefore.setDate(today.getDate() - 7);
+      
+      // Format dates as YYYY-MM-DD
+      const endDate = previousDay.toISOString().split('T')[0];
+      const startDate = weekBefore.toISOString().split('T')[0];
+      
+      const prevCloseUrl = `https://api.polygon.io/v2/aggs/ticker/${encodedTicker}/range/1/day/${startDate}/${endDate}?adjusted=true&sort=desc&limit=7&apiKey=${apiKey}`;
+      const prevCloseResponse = await fetch(prevCloseUrl);
+
+      if (prevCloseResponse.ok) {
+        const data = await prevCloseResponse.json();
+        
+        if (data.status === 'OK' && data.results && data.results.length > 0) {
+          // Get the most recent data (first in the array since we sorted desc)
+          const result = data.results[0];
+          previousClose = {
+            volume: result.v,
+            volumeWeighted: result.vw,
+            open: result.o,
+            close: result.c,
+            high: result.h,
+            low: result.l,
+            timestamp: result.t,
+            transactions: result.n
+          };
+          console.log("Previous close data retrieved successfully");
+          console.log(`Retrieved ${data.results.length} days of data from ${startDate} to ${endDate}`);
+        } else {
+          console.warn("No previous close data available:", data);
+        }
+      } else {
+        const errorText = await prevCloseResponse.text();
+        console.warn(`Previous close request failed (${prevCloseResponse.status}): ${errorText}`);
+
+      }
+    } catch (error) {
+      console.warn("Previous close request error:", error);
+    }
+
+    // 3. Recent News
+    try {
+      console.log("Fetching recent news...");
+      const newsUrl = `https://api.polygon.io/v2/reference/news?ticker=${encodedTicker}&limit=5&sort=published_utc&order=desc&apiKey=${apiKey}`;
+      const newsResponse = await makePolygonRequest(newsUrl);
+
+      if (newsResponse.ok) {
+        const data = await newsResponse.json();
+        
+        if (data.status === 'OK' && data.results) {
+          recentNews = data.results;
+          console.log(`Retrieved ${recentNews.length} news articles`);
+        } else {
+          console.warn("No news data available:", data);
+        }
+      } else {
+        const errorText = await newsResponse.text();
+        console.warn(`News request failed (${newsResponse.status}): ${errorText}`);
+
+      }
+    } catch (error) {
+      console.warn("News request error:", error);
+    }
+
+    // 4. Daily bars (historical data) - extended period for analysis
+    try {
+      console.log("Fetching extended daily bars...");
+      const endDate = new Date().toISOString().split('T')[0];
+      const startDate = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // 60 days
+      
+      const barsUrl = `https://api.polygon.io/v2/aggs/ticker/${encodedTicker}/range/1/day/${startDate}/${endDate}?adjusted=true&sort=desc&limit=60&apiKey=${apiKey}`;
+      const barsResponse = await makePolygonRequest(barsUrl);
+
+      if (barsResponse.ok) {
+        const data = await barsResponse.json();
+        
+        if (data.status === 'OK' && data.results) {
+          dailyBars = data.results;
+          console.log(`Retrieved ${dailyBars.length} daily bars for extended analysis`);
+        } else {
+          console.warn("No daily bars data available:", data);
+        }
+      } else {
+        const errorText = await barsResponse.text();
+        console.warn(`Daily bars request failed (${barsResponse.status}): ${errorText}`);
+      }
+    } catch (error) {
+      console.warn("Daily bars request error:", error);
+    }
+
+    const result: PolygonData = {
+      tickerDetails,
+      recentNews,
+      dailyBars,
+      previousClose,
+      error: null
+    };
+
+    console.log("=== FETCH POLYGON.IO API SUCCESS ===");
+    return result;
+
+  } catch (error) {
+    console.warn("=== FETCH POLYGON.IO API ERROR ===");
+    console.warn("Polygon.io API request failed:", error);
+
+    return {
+      tickerDetails: null,
+      recentNews: [],
+      dailyBars: [],
+      previousClose: null,
+      error: `Polygon.io API fetch failed: ${error.message}`
+    };
+  }
+}
+
+// /**
+//  * Fetch stock data from Polygon.io
+//  * 
+//  * Returns structured stock data including ticker details, news, and price data
+//  * Implements rate limiting protection (5 requests/minute for basic tier)
+//  */
+// async function fetchPolygonData(
+//   topic: TopicDetails,
+//   apiKey: string,
+//   priority?: PriorityLevel
+// ): Promise<PolygonData> {
+//   console.log("=== FETCH POLYGON.IO API START ===");
+//   console.debug("Ticker:", topic.name);
+//   console.debug("API Key exists:", !!apiKey);
+  
+//   // Get current rate limit status
+//   const rateLimitInfo = {
+//     requestsUsed: polygonRateLimiter.getCurrentRequestCount(),
+//     requestsRemaining: Math.max(0, 5 - polygonRateLimiter.getCurrentRequestCount()),
+//     timeUntilReset: polygonRateLimiter.getTimeUntilNextSlot()
+//   };
+  
+//   console.log(`Rate limit status: ${rateLimitInfo.requestsUsed}/5 requests used`);
+//   if (rateLimitInfo.timeUntilReset > 0) {
+//     console.log(`Next slot available in ${Math.ceil(rateLimitInfo.timeUntilReset / 1000)}s`);
+//   }
+
+//   if (!apiKey) {
+//     console.warn("POLYGON_API_KEY not found, returning empty result");
+//     return {
+//       tickerDetails: null,
+//       recentNews: [],
+//       dailyBars: [],
+//       previousClose: null,
+//       error: "API key not provided",
+//       rateLimitInfo
+//     };
+//   }
+
+//   if (priority === PriorityLevel.DEBUG) {
+//     console.log("Debugging enabled. Returning mock Polygon data...");
+//     return generateMockPolygonData(topic.name);
+//   }
+
+//   try {
+//     const tickerSymbol = extractTickerSymbol(topic.name);
+//     const encodedTicker = encodeURIComponent(tickerSymbol);
+    
+//     console.log(`Fetching Polygon.io data for ticker: ${tickerSymbol}`);
+
+//     let tickerDetails = null;
+//     let recentNews: PolygonNewsArticle[] = [];
+//     let dailyBars: PolygonDailyBar[] = [];
+//     let previousClose = null;
+//     let rateLimitHit = false;
+//     let specificError = null;
+
+//     // 1. Ticker Details (company info)
+//     try {
+//       console.log("Fetching ticker details...");
+//       const detailsUrl = `https://api.polygon.io/v3/reference/tickers/${encodedTicker}?apiKey=${apiKey}`;
+//       const detailsResponse = await makePolygonRequest(detailsUrl);
+
+//       if (detailsResponse.ok) {
+//         const data = await detailsResponse.json();
+        
+//         if (isPolygonRateLimited(data)) {
+//           console.warn("Polygon.io rate limit hit on ticker details");
+//           rateLimitHit = true;
+//           specificError = "Rate limit exceeded (5 requests/minute)";
+//         } else if (data.status === 'OK' && data.results) {
+//           tickerDetails = data.results;
+//           console.log("Ticker details retrieved successfully");
+//         }
+//       } else if (detailsResponse.status === 429) {
+//         console.warn("HTTP 429 Rate Limit response");
+//         rateLimitHit = true;
+//         specificError = "Rate limit exceeded (5 requests/minute)";
+//       } else {
+//         console.warn(`Ticker details request failed: ${detailsResponse.status}`);
+//       }
+//     } catch (error) {
+//       console.warn("Ticker details request error:", error);
+//     }
+
+//     // 2. Previous Close (most recent trading data)
+//     if (!rateLimitHit) {
+//       try {
+//         console.log("Fetching previous close data...");
+//         const prevCloseUrl = `https://api.polygon.io/v2/aggs/ticker/${encodedTicker}/prev?adjusted=true&apiKey=${apiKey}`;
+//         const prevCloseResponse = await makePolygonRequest(prevCloseUrl);
+
+//         if (prevCloseResponse.ok) {
+//           const data = await prevCloseResponse.json();
+          
+//           if (isPolygonRateLimited(data)) {
+//             console.warn("Polygon.io rate limit hit on previous close");
+//             rateLimitHit = true;
+//             specificError = "Rate limit exceeded (5 requests/minute)";
+//           } else if (data.status === 'OK' && data.results && data.results.length > 0) {
+//             const result = data.results[0];
+//             previousClose = {
+//               symbol: data.ticker,
+//               close: result.c,
+//               high: result.h,
+//               low: result.l,
+//               open: result.o,
+//               volume: result.v,
+//               afterHours: data.afterHours,
+//               preMarket: data.preMarket
+//             };
+//             console.log("Previous close data retrieved successfully");
+//           }
+//         } else if (prevCloseResponse.status === 429) {
+//           console.warn("HTTP 429 Rate Limit response");
+//           rateLimitHit = true;
+//           specificError = "Rate limit exceeded (5 requests/minute)";
+//         }
+//       } catch (error) {
+//         console.warn("Previous close request error:", error);
+//       }
+//     }
+
+//     // 3. Recent News
+//     if (!rateLimitHit) {
+//       try {
+//         console.log("Fetching recent news...");
+//         const newsUrl = `https://api.polygon.io/v2/reference/news?ticker=${encodedTicker}&limit=5&sort=published_utc&order=desc&apiKey=${apiKey}`;
+//         const newsResponse = await makePolygonRequest(newsUrl);
+
+//         if (newsResponse.ok) {
+//           const data = await newsResponse.json();
+          
+//           if (isPolygonRateLimited(data)) {
+//             console.warn("Polygon.io rate limit hit on news");
+//             rateLimitHit = true;
+//             specificError = "Rate limit exceeded (5 requests/minute)";
+//           } else if (data.status === 'OK' && data.results) {
+//             recentNews = data.results;
+//             console.log(`Retrieved ${recentNews.length} news articles`);
+//           }
+//         } else if (newsResponse.status === 429) {
+//           console.warn("HTTP 429 Rate Limit response");
+//           rateLimitHit = true;
+//           specificError = "Rate limit exceeded (5 requests/minute)";
+//         }
+//       } catch (error) {
+//         console.warn("News request error:", error);
+//       }
+//     }
+
+//     // 4. Daily bars (historical data) - last 30 days
+//     if (!rateLimitHit) {
+//       try {
+//         console.log("Fetching daily bars...");
+//         const endDate = new Date().toISOString().split('T')[0];
+//         const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        
+//         const barsUrl = `https://api.polygon.io/v2/aggs/ticker/${encodedTicker}/range/1/day/${startDate}/${endDate}?adjusted=true&sort=desc&limit=30&apiKey=${apiKey}`;
+//         const barsResponse = await makePolygonRequest(barsUrl);
+
+//         if (barsResponse.ok) {
+//           const data = await barsResponse.json();
+          
+//           if (isPolygonRateLimited(data)) {
+//             console.warn("Polygon.io rate limit hit on daily bars");
+//             rateLimitHit = true;
+//             specificError = "Rate limit exceeded (5 requests/minute)";
+//           } else if (data.status === 'OK' && data.results) {
+//             dailyBars = data.results;
+//             console.log(`Retrieved ${dailyBars.length} daily bars`);
+//           }
+//         } else if (barsResponse.status === 429) {
+//           console.warn("HTTP 429 Rate Limit response");
+//           rateLimitHit = true;
+//           specificError = "Rate limit exceeded (5 requests/minute)";
+//         }
+//       } catch (error) {
+//         console.warn("Daily bars request error:", error);
+//       }
+//     }
+
+//     // Update rate limit info
+//     const finalRateLimitInfo = {
+//       requestsUsed: polygonRateLimiter.getCurrentRequestCount(),
+//       requestsRemaining: Math.max(0, 5 - polygonRateLimiter.getCurrentRequestCount()),
+//       timeUntilReset: polygonRateLimiter.getTimeUntilNextSlot()
+//     };
+
+//     const result: PolygonData = {
+//       tickerDetails,
+//       recentNews,
+//       dailyBars,
+//       previousClose,
+//       error: specificError || (rateLimitHit ? "Rate limit exceeded" : null),
+//       rateLimitInfo: finalRateLimitInfo
+//     };
+
+//     if (rateLimitHit) {
+//       console.warn("=== POLYGON.IO RATE LIMIT HIT ===");
+//       console.warn(`Requests used: ${finalRateLimitInfo.requestsUsed}/5`);
+//       console.warn(`Time until reset: ${Math.ceil(finalRateLimitInfo.timeUntilReset / 1000)}s`);
+//     } else {
+//       console.log("=== FETCH POLYGON.IO API SUCCESS ===");
+//     }
+
+//     return result;
+//   } catch (error) {
+//     console.error("=== FETCH POLYGON.IO API ERROR ===");
+//     console.error("Polygon.io API request failed:", error);
+
+//     return {
+//       tickerDetails: null,
+//       recentNews: [],
+//       dailyBars: [],
+//       previousClose: null,
+//       error: `Polygon.io API fetch failed: ${error.message}`,
+//       rateLimitInfo: {
+//         requestsUsed: polygonRateLimiter.getCurrentRequestCount(),
+//         requestsRemaining: Math.max(0, 5 - polygonRateLimiter.getCurrentRequestCount()),
+//         timeUntilReset: polygonRateLimiter.getTimeUntilNextSlot()
+//       }
+//     };
+//   }
+// }

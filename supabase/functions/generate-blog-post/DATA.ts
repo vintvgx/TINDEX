@@ -1,3 +1,4 @@
+
 export const SERP_OCGN_DATA_06_16_25 = {
   search_metadata: {
     id: "6851f4691dcfe255e93ea4f6",
@@ -2365,3 +2366,80 @@ export function generateMockAlphaVantageData(ticker: string) {
     error: null,
   };
 }
+
+/**
+ * Generate mock Polygon.io data for debugging
+ */
+// export function generateMockPolygonData(ticker: string): PolygonData {
+//   return {
+//     tickerDetails: {
+//       ticker: ticker,
+//       name: `${ticker} Corporation`,
+//       market: "stocks",
+//       locale: "us",
+//       primary_exchange: "XNAS",
+//       type: "CS",
+//       active: true,
+//       currency_name: "usd",
+//       market_cap: 2500000000000,
+//       phone_number: "+1 (555) 123-4567",
+//       address: {
+//         address1: "1 Infinite Loop",
+//         city: "Cupertino",
+//         state: "CA",
+//         postal_code: "95014"
+//       },
+//       description: "A leading technology company focused on consumer electronics and software.",
+//       sic_code: "3571",
+//       sic_description: "Electronic Computers",
+//       homepage_url: `https://www.${ticker.toLowerCase()}.com`,
+//       total_employees: 150000,
+//       list_date: "1980-12-12",
+//       branding: {
+//         logo_url: `https://api.polygon.io/v1/reference/company-branding/${ticker}/logo.png`,
+//         icon_url: `https://api.polygon.io/v1/reference/company-branding/${ticker}/icon.png`
+//       }
+//     },
+//     recentNews: [
+//       {
+//         id: "mock-news-1",
+//         publisher: {
+//           name: "Financial Times",
+//           homepage_url: "https://ft.com",
+//           logo_url: "https://ft.com/logo.png",
+//           favicon_url: "https://ft.com/favicon.ico"
+//         },
+//         title: `${ticker} Reports Record Q4 Earnings`,
+//         author: "Jane Doe",
+//         published_utc: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+//         article_url: "https://example.com/article1",
+//         tickers: [ticker],
+//         description: "Company exceeds analyst expectations with strong revenue growth.",
+//         keywords: ["earnings", "technology", "stocks"]
+//       }
+//     ],
+//     dailyBars: [
+//       {
+//         close: 150.25,
+//         high: 152.30,
+//         low: 149.50,
+//         open: 151.00,
+//         volume: 45000000,
+//         volumeWeighted: 150.75,
+//         timestamp: null,
+//         transactions: 125000
+//       }
+//     ],
+//     previousClose: {
+//       close: 150.25,
+//       high: 152.30,
+//       low: 149.50,
+//       open: 151.00,
+//       volume: 45000000,
+//       volumeWeighted: 150.75,
+//       timestamp: null,
+//       transactions: 125000
+//     },
+//     error: null
+//   };
+// }

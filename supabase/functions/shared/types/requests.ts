@@ -23,6 +23,7 @@ export interface BlogGenerationRequest {
     NEWS_API_KEY: string, // NewsApi Key
     SERP_API_KEY: string, // SerpAPI Key
     ALPHA_API_KEY: string // Alpha Vantage Key (Stocks)
+    POLYGON_API_KEY: string // Polygon.io Key (Stocks)
   }
 
   /**
@@ -143,3 +144,127 @@ export interface BlogGenerationRequest {
     error: string | null;
   }
   
+
+  // Rate limit tracker for Polygon.io
+class PolygonRateLimiter {
+  private requests: number[] = [];
+  private readonly maxRequests = 5;
+  private readonly windowMs = 60000; // 1 minute in milliseconds
+
+  // Check if we can make a request (but don't block it)
+  canMakeRequest(): boolean {
+    this.cleanOldRequests();
+    return this.requests.length < this.maxRequests;
+  }
+
+  // Record a new request
+  recordRequest(): void {
+    this.cleanOldRequests();
+    this.requests.push(Date.now());
+  }
+
+  // Get current request count in the window
+  getCurrentRequestCount(): number {
+    this.cleanOldRequests();
+    return this.requests.length;
+  }
+
+  // Time until next available request slot (in ms)
+  getTimeUntilNextSlot(): number {
+    this.cleanOldRequests();
+    if (this.requests.length < this.maxRequests) {
+      return 0;
+    }
+    // Calculate time until the oldest request expires
+    const oldestRequest = this.requests[0];
+    const timeUntilExpiry = (oldestRequest + this.windowMs) - Date.now();
+    return Math.max(0, timeUntilExpiry);
+  }
+
+  // Remove requests older than the time window
+  private cleanOldRequests(): void {
+    const now = Date.now();
+    this.requests = this.requests.filter(
+      timestamp => now - timestamp < this.windowMs
+    );
+  }
+}
+
+export interface PolygonData {
+  tickerDetails: PolygonTickerDetails | null;
+  recentNews: PolygonNewsArticle[];
+  dailyBars: PolygonDailyBar[];
+  previousClose: PolygonDailyBar | null;
+  error: string | null;
+  rateLimitInfo?: {
+    requestsUsed: number;
+    requestsRemaining: number;
+    timeUntilReset: number;
+  };
+}
+
+
+// Types for Polygon.io responses
+export interface PolygonTickerDetails {
+  ticker: string;
+  name: string;
+  market: string;
+  locale: string;
+  primary_exchange: string;
+  type: string;
+  active: boolean;
+  currency_name: string;
+  cik?: string;
+  composite_figi?: string;
+  share_class_figi?: string;
+  market_cap?: number;
+  phone_number?: string;
+  address?: {
+    address1?: string;
+    city?: string;
+    state?: string;
+    postal_code?: string;
+  };
+  description?: string;
+  sic_code?: string;
+  sic_description?: string;
+  ticker_root?: string;
+  homepage_url?: string;
+  total_employees?: number;
+  list_date?: string;
+  branding?: {
+    logo_url?: string;
+    icon_url?: string;
+  };
+}
+
+export interface PolygonDailyBar {
+  volume: number; // Volume
+  volumeWeighted: number; // Volume weighted average price
+  open: number; // Open price
+  close: number; // Close price
+  high: number; // High price
+  low: number; // Low price
+  timestamp: number | null; // Timestamp
+  transactions: number; // Number of transactions
+}
+
+export interface PolygonNewsArticle {
+  id: string;
+  publisher: {
+    name: string;
+    homepage_url: string;
+    logo_url: string;
+    favicon_url: string;
+  };
+  title: string;
+  author: string;
+  published_utc: string;
+  article_url: string;
+  tickers: string[];
+  image_url?: string;
+  description: string;
+  keywords?: string[];
+  amp_url?: string;
+}
+

@@ -3,7 +3,7 @@
  */
 export const RESEARCH_STRATEGIES = {
   stocks: {
-    dataSources: ["alpha_vantage", "news", "serp"],
+    dataSources: ["alpha_vantage", "polygon", "news", "serp"],
     promptStyle: "financial_analysis",
   },
   sports: {
