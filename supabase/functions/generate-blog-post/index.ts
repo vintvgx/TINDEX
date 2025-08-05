@@ -115,6 +115,7 @@ serve(async (req) => {
 
     const {
       topicId,
+      // TODO Replace with content to get more information from user 
       topicName,
       categoryName,
       userId,

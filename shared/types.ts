@@ -163,7 +163,7 @@ export interface BlogGenerationRequest {
   topicId: string;
   userId: string;
   targetLength?: number;
-  priority?: 'low' | 'normal' | 'high';
+  priority?: PRIORITY_TYPE;
 }
 
 export interface BlogGenerationResponse {
@@ -181,4 +181,11 @@ export interface JobStatusResponse {
   current_step: string;
   error_message?: string;
   result_data?: any;
+}
+
+export enum PRIORITY_TYPE {
+  LOW = "low",
+  NORMAL = "normal",
+  HIGH = "high",
+  DEBUG = "debug"
 }
