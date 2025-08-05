@@ -1,8 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase/supabase';
-import { CategoryType } from '@/lib/categories';
-import { TopicType, BlogPostType, GenerationJob } from '@/types';
-import {  GenerateBlogPostRequest, GenerateBlogPostResponse, GetOrCreateTopicResponse, PRIORITY_TYPE } from '@/types/blogPosts/create';
+import { BlogPostType } from '@/types';
+import {  GenerateBlogPostRequest, GenerateBlogPostResponse  } from '@/types/blogPosts/create';
 import { BlogGenerationException, validateBlogGenerationRequest } from '@/utils/posts/functions';
 
 

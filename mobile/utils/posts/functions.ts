@@ -9,12 +9,12 @@ import {
 export class BlogGenerationException extends Error {
   constructor(
     message: string,
-    public type: BlogGenerationError,
+    public code: BlogGenerationError,
     public originalError?: any
   ) {
     super(message);
     console.error("Error occurred during generation of blog post:", message);
-    this.name = "TopicCreationException";
+    this.name = "BlogGenerationException";
   }
 }
 

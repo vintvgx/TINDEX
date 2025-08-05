@@ -109,7 +109,7 @@ export const AddPostModal: React.FC<AddPostModalProps> = ({
           "Please check your internet connection and try again."
         );
       } else {
-        Alert.alert("Error", `Error: ${blogPostError}\nAn unexpected error occurred. Please try again.`);
+        Alert.alert("Error", "An unexpected error occurred. Please try again.");
       }
     } finally {
       setIsSubmitting(false);

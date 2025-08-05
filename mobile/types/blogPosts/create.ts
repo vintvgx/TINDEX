@@ -1,4 +1,3 @@
-import { CategoryType } from "@/lib/categories";
 import { TopicType } from "..";
 
 /**

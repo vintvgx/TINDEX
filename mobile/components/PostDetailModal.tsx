@@ -1,4 +1,4 @@
-import React from 'react';
+import React from "react";
 import {
   Modal,
   View,
@@ -8,10 +8,13 @@ import {
   Image,
   StatusBar,
   Dimensions,
-} from 'react-native';
-import { BlogPostType } from '@/types';
-import { StockResearchData, PolygonData } from '@/types/categories/stocks/stock_types';
-import { Ionicons } from '@expo/vector-icons'; // or your preferred icon library
+} from "react-native";
+import { BlogPostType } from "@/types";
+import {
+  StockResearchData,
+  PolygonData,
+} from "@/types/categories/stocks/stock_types";
+import { Ionicons } from "@expo/vector-icons"; // or your preferred icon library
 
 interface PostDetailModalProps {
   post: BlogPostType | null;
@@ -28,10 +31,10 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
+    return date.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
     });
   };
 
@@ -42,13 +45,16 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
     if (post.multimedia_data?.featured_image) {
       return post.multimedia_data.featured_image;
     }
-    return 'https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=800&h=400&fit=crop';
+    return "https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=800&h=400&fit=crop";
   };
 
   // Check if post has stock research data
   const hasStockData = (): boolean => {
-    console.log("Stock data observed within blog post: ", (post.topic?.category === 'stocks' && post.research_data?.polygonData))
-    return post.topic?.category === 'stocks' && post.research_data?.polygonData;
+    console.log(
+      "Stock data observed within blog post: ",
+      post.topic?.category === "stocks" && post.research_data?.polygonData
+    );
+    return post.topic?.category === "stocks" && post.research_data?.polygonData;
   };
 
   // Get stock data from research_data
@@ -64,22 +70,30 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
   };
 
   // Format stock price with proper styling
-  const formatStockPrice = (price: number, change: number, changePercent: number) => {
+  const formatStockPrice = (
+    price: number,
+    change: number,
+    changePercent: number
+  ) => {
     const isPositive = change >= 0;
-    const changeColor = isPositive ? 'text-green-600' : 'text-red-600';
-    const changeIcon = isPositive ? 'trending-up' : 'trending-down';
-    
+    const changeColor = isPositive ? "text-green-600" : "text-red-600";
+    const changeIcon = isPositive ? "trending-up" : "trending-down";
+
     return (
       <View className="flex-row items-center">
-        <Text className="text-2xl font-bold text-gray-900">${price.toFixed(2)}</Text>
+        <Text className="text-2xl font-bold text-gray-900">
+          ${price.toFixed(2)}
+        </Text>
         <View className="flex-row items-center ml-3">
-          <Ionicons 
-            name={changeIcon as any} 
-            size={20} 
-            color={isPositive ? '#059669' : '#dc2626'} 
+          <Ionicons
+            name={changeIcon as any}
+            size={20}
+            color={isPositive ? "#059669" : "#dc2626"}
           />
           <Text className={`text-lg font-semibold ml-1 ${changeColor}`}>
-            {change >= 0 ? '+' : ''}{change.toFixed(2)} ({changePercent >= 0 ? '+' : ''}{changePercent.toFixed(2)}%)
+            {change >= 0 ? "+" : ""}
+            {change.toFixed(2)} ({changePercent >= 0 ? "+" : ""}
+            {changePercent.toFixed(2)}%)
           </Text>
         </View>
       </View>
@@ -136,9 +150,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
               </Text>
             </View>
             <View className="bg-blue-100 px-3 py-2 rounded-full">
-              <Text className="text-sm text-blue-700 font-semibold">
-                STOCK
-              </Text>
+              <Text className="text-sm text-blue-700 font-semibold">STOCK</Text>
             </View>
           </View>
 
@@ -152,7 +164,9 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 
         {/* Key Metrics Grid */}
         <View className="mb-6">
-          <Text className="text-xl font-bold text-gray-900 mb-4">Key Metrics</Text>
+          <Text className="text-xl font-bold text-gray-900 mb-4">
+            Key Metrics
+          </Text>
           <View className="bg-gray-50 rounded-xl p-4">
             <View className="flex-row flex-wrap">
               <View className="w-1/2 mb-4">
@@ -197,15 +211,19 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 
         {/* Company Information */}
         <View className="mb-6">
-          <Text className="text-xl font-bold text-gray-900 mb-4">Company Overview</Text>
+          <Text className="text-xl font-bold text-gray-900 mb-4">
+            Company Overview
+          </Text>
           <View className="bg-gray-50 rounded-xl p-4">
             <Text className="text-base text-gray-800 leading-6 mb-3">
               {tickerDetails.description}
             </Text>
-            
+
             <View className="flex-row flex-wrap">
               <View className="w-1/2 mb-3">
-                <Text className="text-sm text-gray-500 mb-1">SIC Description</Text>
+                <Text className="text-sm text-gray-500 mb-1">
+                  SIC Description
+                </Text>
                 <Text className="text-base font-semibold text-gray-900">
                   {tickerDetails.sic_description}
                 </Text>
@@ -234,7 +252,11 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
             <View className="mt-3">
               <Text className="text-sm text-gray-500 mb-1">Address</Text>
               <Text className="text-base font-semibold text-gray-900">
-                {tickerDetails.address ? `${tickerDetails.address.address1}, ${tickerDetails.address.city}, ${tickerDetails.address.state} ${tickerDetails.address.postal_code}` : "No address information"}
+                {tickerDetails.address && tickerDetails.address.address1
+                  ? `${tickerDetails.address.address1 || ""}, ${tickerDetails.address.city || ""}, ${tickerDetails.address.state || ""} ${tickerDetails.address.postal_code || ""}`
+                      .replace(/,\s*,/g, ",")
+                      .replace(/^\s*,|,\s*$/g, "")
+                  : "No address information"}
               </Text>
             </View>
           </View>
@@ -243,51 +265,64 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
         {/* Recent News */}
         {recentNews.length > 0 && (
           <View className="mb-6">
-            <Text className="text-xl font-bold text-gray-900 mb-4">Recent News</Text>
+            <Text className="text-xl font-bold text-gray-900 mb-4">
+              Recent News
+            </Text>
             <View className="space-y-3">
               {recentNews.slice(0, 3).map((item, index) => (
                 <View key={index} className="bg-gray-50 rounded-xl p-4">
                   <View className="flex-row items-center mb-2">
                     {item.publisher.logo_url && (
-                      <Image 
-                        source={{ uri: item.publisher.logo_url }} 
+                      <Image
+                        source={{ uri: item.publisher.logo_url }}
                         className="w-6 h-6 mr-2 rounded"
-                        style={{ resizeMode: 'contain' }}
+                        style={{ resizeMode: "contain" }}
                       />
                     )}
                     <Text className="text-xs text-gray-500">
                       {item.publisher.name}
                     </Text>
                   </View>
-                  <Text className="text-base font-semibold text-gray-900 mb-2" numberOfLines={2}>
+                  <Text
+                    className="text-base font-semibold text-gray-900 mb-2"
+                    numberOfLines={2}>
                     {item.title}
                   </Text>
-                  <Text className="text-sm text-gray-600 mb-2" numberOfLines={3}>
+                  <Text
+                    className="text-sm text-gray-600 mb-2"
+                    numberOfLines={3}>
                     {item.description}
                   </Text>
                   <View className="flex-row justify-between items-center">
                     <Text className="text-xs text-gray-500">
                       {new Date(item.published_utc).toLocaleDateString()}
                     </Text>
-                    <Text className="text-xs text-gray-500">
-                      {item.author}
-                    </Text>
+                    <Text className="text-xs text-gray-500">{item.author}</Text>
                   </View>
-                  
+
                   {/* Sentiment insights if available */}
                   {item.insights && item.insights.length > 0 && (
                     <View className="mt-2 pt-2 border-t border-gray-200">
-                      {item.insights.filter(insight => insight.ticker === tickerDetails.ticker).map((insight, idx) => (
-                        <View key={idx} className="flex-row items-center">
-                          <View className={`w-2 h-2 rounded-full mr-2 ${
-                            insight.sentiment === 'positive' ? 'bg-green-500' : 
-                            insight.sentiment === 'negative' ? 'bg-red-500' : 'bg-gray-500'
-                          }`} />
-                          <Text className="text-xs text-gray-600">
-                            {insight.sentiment_reasoning}
-                          </Text>
-                        </View>
-                      ))}
+                      {item.insights
+                        .filter(
+                          (insight) => insight.ticker === tickerDetails.ticker
+                        )
+                        .map((insight, idx) => (
+                          <View key={idx} className="flex-row items-center">
+                            <View
+                              className={`w-2 h-2 rounded-full mr-2 ${
+                                insight.sentiment === "positive"
+                                  ? "bg-green-500"
+                                  : insight.sentiment === "negative"
+                                    ? "bg-red-500"
+                                    : "bg-gray-500"
+                              }`}
+                            />
+                            <Text className="text-xs text-gray-600">
+                              {insight.sentiment_reasoning}
+                            </Text>
+                          </View>
+                        ))}
                     </View>
                   )}
                 </View>
@@ -304,34 +339,31 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
       visible={visible}
       animationType="slide"
       presentationStyle="pageSheet" // iOS only - gives native modal feel
-      onRequestClose={onClose}
-    >
+      onRequestClose={onClose}>
       <StatusBar barStyle="light-content" backgroundColor="rgba(0,0,0,0.8)" />
-      
+
       {/* Header with close button */}
       <View className="absolute top-0 left-0 right-0 z-10 bg-transparent pt-12 pb-4 px-4">
         <View className="flex-row justify-between items-center">
           <View />
           <Pressable
             onPress={onClose}
-            className="bg-black/50 rounded-full p-2 backdrop-blur-sm"
-          >
+            className="bg-black/50 rounded-full p-2 backdrop-blur-sm">
             <Ionicons name="close" size={24} color="white" />
           </Pressable>
         </View>
       </View>
 
-      <ScrollView 
+      <ScrollView
         className="flex-1 bg-white"
         showsVerticalScrollIndicator={false}
-        bounces={false}
-      >
+        bounces={false}>
         {/* Hero Image */}
         <View className="relative">
           <Image
             source={{ uri: getImageUrl() }}
             className="w-full h-80"
-            style={{ resizeMode: 'cover' }}
+            style={{ resizeMode: "cover" }}
           />
           <View className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-black/20" />
         </View>
@@ -377,7 +409,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
           </View>
 
           {/* Additional content sections can go here */}
-          
+
           {/* Bottom spacing for safe scrolling */}
           <View className="h-20" />
         </View>

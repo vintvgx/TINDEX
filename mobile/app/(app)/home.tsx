@@ -8,7 +8,6 @@ import { BlogPostType } from "@/types";
 import { useState } from "react";
 import { PostDetailModal } from "@/components/PostDetailModal";
 import { AddPostModal } from "@/components/AddPostModal";
-import { CategoryType } from "@/lib/categories";
 
 const HomeScreen = () => {
   const queryClient = useQueryClient();
