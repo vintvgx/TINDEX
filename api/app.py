@@ -17,7 +17,7 @@ def get_trending_stocks():
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=60)
         soup = BeautifulSoup(response.content, 'html.parser')
         
         # Parse the data (you'll need to inspect FINVIZ structure)
@@ -53,13 +53,13 @@ def get_trending_stocks():
 @app.route('/stock/<ticker>')
 def get_stock_data(ticker):
     try:
-        url = f"https://finviz.com/quote.ashx?t={ticker.upper()}"
+        url = f"https://finviz.com/quote.ashx?t={ticker.upper()}&p=d"
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=60)
         soup = BeautifulSoup(response.content, 'html.parser')
         
         # Extract stock data from the page
