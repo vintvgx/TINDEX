@@ -10,7 +10,7 @@ export function useTopicsQuery() {
     authState: { user },
   } = useAuth();
 
-  return useQuery({
+  return ({
     queryKey: ["topics"],
     queryFn: async (): Promise<TopicType[] | null> => {
       if (!user) return null; //TODO throw error to display Toast of user is not signed //
