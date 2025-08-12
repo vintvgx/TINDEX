@@ -7,6 +7,30 @@ from urllib.parse import urlencode
 
 app = Flask(__name__)
 
+@app.route('/test') 
+def print_hello_world():
+    """
+    Simple test endpoint that returns a "Hello World!" message.
+    
+    This function serves as a basic health check and testing endpoint for the API.
+    It returns a JSON response with a success status and a simple greeting message.
+    
+    Returns:
+        flask.Response: A JSON response containing:
+            - success (bool): Always True, indicating successful execution
+            - data (str): The string "Hello World!"
+            
+    Notes:
+        - This endpoint is primarily used for testing API connectivity
+        - No authentication or authorization required
+        - No input parameters needed
+        - Always returns a successful response
+    """
+    return jsonify({
+        'success': True,
+        'data': 'Hello World!'
+    })
+
 @app.route('/trending-stocks')
 def get_trending_stocks():
     try:
