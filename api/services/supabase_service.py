@@ -85,7 +85,10 @@ class SupabaseService:
             schema='public',
             headers={
                 'X-Client-Info': 'alethia-api/1.0.0'
-            }
+            },
+            # Connection pooling
+            auto_refresh_token=True,
+            persist_session=True
         )
         
         self.client: Client = create_client(
@@ -93,6 +96,9 @@ class SupabaseService:
             self.supabase_key, 
             options=client_options
         )
+
+        self.max_retries=3
+        self.retry_delay=1 #seconds
         
         logger.info("Supabase client initialized successfully")
 
