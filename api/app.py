@@ -138,6 +138,12 @@ def perform_yfinance_research(topic: str, include_sentiment: bool = False) -> di
         # Get historical data
         hist = ticker.history(period="1mo")
         
+        # Get news
+        news = ticker.news
+        
+         # Analyst recommendations
+        recommendations = stock.recommendations
+        
         # Get current price and change
         current_price = info.get('currentPrice', 0)
         previous_close = info.get('previousClose', current_price)
@@ -178,6 +184,8 @@ def perform_yfinance_research(topic: str, include_sentiment: bool = False) -> di
             'profit_margins': info.get('profitMargins'),
             'revenue_growth': info.get('revenueGrowth'),
             'earnings_growth': info.get('earningsGrowth'),
+            'news': news,
+            'recommendations': recommendations,
             'historical_data': {
                 'dates': hist.index.strftime('%Y-%m-%d').tolist() if not hist.empty else [],
                 'prices': hist['Close'].tolist() if not hist.empty else [],
