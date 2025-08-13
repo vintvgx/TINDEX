@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 from urllib.parse import urlencode
+import re
 import supabase
 import random
 
@@ -37,23 +38,40 @@ def research_topic():
         data = request.get_json()
         
         # TODO update to verify user id
-        if not data or 'topic' not in data:
+        if not data or 'topic' not in data: 
             return jsonify({
                 'success': False,
                 'error': 'Topic is required in request body'
             }), 400
         
         topic = data['topic'].strip().upper()
+        userId = data['userId']
         save_to_db = data.get('save_to_db', True)
         
         # Validate topic
-        # TODO validate user id
+        if not re.match(r'^[A-Z0-9]{1,5}$', topic):
+            logger.warning(f"Topic '{topic}' may not be a valid ticker symbol")
+            return jsonify({
+                'success': False,
+                'error': 'iNVALID TICKER SYMBOL!'
+            }), 400
         if not topic or len(topic) < 1:
             return jsonify({
                 'success': False,
                 'error': 'Topic must be a non-empty string'
             }), 400
-        
+  
+        # TODO validate user id / verify user id is in supabase
+        if not userId:
+            logger.warning(f"User id '{userId}' can not be null")
+            return jsonify({
+                'success': False,
+                'error': 'User ID must be a non-empty string'
+            }), 400
+        else: 
+            # Verify the user exists / throw error if user id is not found
+            supabase_service.verify_user(user_id=userId)
+
         # Research using yFinance
         research_results = perform_yfinance_research(topic)
         

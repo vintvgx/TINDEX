@@ -95,6 +95,39 @@ class SupabaseService:
         )
         
         logger.info("Supabase client initialized successfully")
+
+    def verify_user(self, user_id: str) -> bool:
+        """
+        Verifies the user id is an authneticated user within supabase.
+
+        Args:
+            user_id: the id of the user
+
+        Returns:
+            True if user exists, otherwise False.
+        """
+        try:
+            result = self.client.table('profiles')\
+                .select('*')\
+                .eq('id', user_id)\
+                .single()
+
+            if result.data:
+                logger.info(f"User verified successfully: {result.data.id}")
+                return {
+                    'success': True,
+                    'data': result.data[0],
+                    'message': 'User verified'
+                }
+            else:
+                raise Exception("User does not exists within DB")
+
+        except Exception as e:
+            return {
+            'success': False,
+            'error': f"User id '{user_id}' not found within DB",
+            'timestamp': datetime.now().isoformat()
+            }
     
     def _handle_database_error(self, error: Exception, operation: str) -> Dict[str, Any]:
         """
