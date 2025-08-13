@@ -94,8 +94,8 @@ def research_topic():
         
         # Save to database if requested
         db_result = None
-        # if save_to_db:
-        #     db_result = save_research_to_database(topic, research_results['data'])
+        if save_to_db:
+            db_result = save_research_to_database(topic, research_results['data'])
         
         # Prepare response
         response = {
