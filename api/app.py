@@ -7,7 +7,11 @@ from urllib.parse import urlencode
 import supabase
 import random
 import yfinance as yf
+import logging
 from supabase_service import supabase_service, ResearchTopic, StockData
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -117,6 +121,29 @@ def research_topic():
             'error': f'Research failed: {str(e)}'
         }), 500
 
+def convert_dataframe_to_json(df):
+    """
+    Convert pandas DataFrame to JSON-serializable format.
+    
+    Args:
+        df: pandas DataFrame or None
+        
+    Returns:
+        List of dictionaries or empty list if DataFrame is None/empty
+    """
+    if df is None or df.empty:
+        return []
+    
+    try:
+        # Convert DataFrame to list of dictionaries
+        return df.to_dict('records')
+    except Exception:
+        # Fallback: convert to list of lists with column names
+        try:
+            return df.values.tolist()
+        except Exception:
+            return []
+
 def perform_yfinance_research(topic: str, include_sentiment: bool = False) -> dict:
     """
     Perform comprehensive research using yFinance.
@@ -133,16 +160,34 @@ def perform_yfinance_research(topic: str, include_sentiment: bool = False) -> di
         ticker = yf.Ticker(topic)
         
         # Get basic info
-        info = ticker.info
+        try:
+            info = ticker.info
+        except Exception as e:
+            logger.warning(f"Failed to get basic info for {topic}: {str(e)}")
+            info = {}
         
         # Get historical data
-        hist = ticker.history(period="1mo")
+        try:
+            hist = ticker.history(period="1mo")
+        except Exception as e:
+            logger.warning(f"Failed to get historical data for {topic}: {str(e)}")
+            hist = pd.DataFrame()  # Empty DataFrame as fallback
         
-        # Get news
-        news = ticker.news
+        # Get news and convert to JSON-serializable format
+        try:
+            news = ticker.news
+            news_list = convert_dataframe_to_json(news)
+        except Exception as e:
+            logger.warning(f"Failed to get news for {topic}: {str(e)}")
+            news_list = []
         
-         # Analyst recommendations
-        recommendations = ticker.recommendations
+        # Get analyst recommendations and convert to JSON-serializable format
+        try:
+            recommendations = ticker.recommendations
+            recommendations_list = convert_dataframe_to_json(recommendations)
+        except Exception as e:
+            logger.warning(f"Failed to get recommendations for {topic}: {str(e)}")
+            recommendations_list = []
         
         # Get current price and change
         current_price = info.get('currentPrice', 0)
@@ -184,12 +229,12 @@ def perform_yfinance_research(topic: str, include_sentiment: bool = False) -> di
             'profit_margins': info.get('profitMargins'),
             'revenue_growth': info.get('revenueGrowth'),
             'earnings_growth': info.get('earningsGrowth'),
-            'news': news,
-            'recommendations': recommendations,
+            'news': news_list,
+            'recommendations': recommendations_list,
             'historical_data': {
-                'dates': hist.index.strftime('%Y-%m-%d').tolist() if not hist.empty else [],
-                'prices': hist['Close'].tolist() if not hist.empty else [],
-                'volumes': hist['Volume'].tolist() if not hist.empty else []
+                'dates': hist.index.strftime('%Y-%m-%d').tolist() if not hist.empty and hasattr(hist.index, 'strftime') else [],
+                'prices': hist['Close'].tolist() if not hist.empty and 'Close' in hist.columns else [],
+                'volumes': hist['Volume'].tolist() if not hist.empty and 'Volume' in hist.columns else []
             }
         }
         
