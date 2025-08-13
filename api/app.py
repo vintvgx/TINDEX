@@ -142,7 +142,7 @@ def perform_yfinance_research(topic: str, include_sentiment: bool = False) -> di
         news = ticker.news
         
          # Analyst recommendations
-        recommendations = stock.recommendations
+        recommendations = ticker.recommendations
         
         # Get current price and change
         current_price = info.get('currentPrice', 0)
