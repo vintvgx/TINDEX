@@ -58,7 +58,7 @@ def research_topic():
             }), 400
         
         topic = data['topic'].strip().upper()
-        userId = data.get['userId']
+        userId = data.get('userId')
         save_to_db = data.get('save_to_db', True)
         
         # Validate topic
