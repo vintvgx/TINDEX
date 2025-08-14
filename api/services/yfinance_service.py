@@ -4,13 +4,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def convert_dataframe_to_json(df):
-    """
-    Convert a pandas DataFrame to a JSON-serializable format.
-    """
-    if isinstance(df, pd.DataFrame):
-        return df.to_dict('records')
-    return df
 
 def perform_yfinance_research(topic: str) -> dict:
     """
@@ -118,6 +111,14 @@ def perform_yfinance_research(topic: str) -> dict:
             'success': False,
             'error': f'yFinance research failed: {str(e)}'
         }
+        
+def convert_dataframe_to_json(df):
+    """
+    Convert a pandas DataFrame to a JSON-serializable format.
+    """
+    if isinstance(df, pd.DataFrame):
+        return df.to_dict('records')
+    return df
 
 def analyze_sentiment(research_data: dict) -> dict:
     """

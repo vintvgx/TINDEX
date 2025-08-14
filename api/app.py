@@ -9,7 +9,7 @@ import supabase
 import random
 
 import logging
-from services.supabase_service import supabase_service, ResearchTopic, StockData
+from services.supabase_service import ResearchTopic, StockData
 from services.yfinance_service import perform_yfinance_research
 
 # Configure logging
@@ -17,6 +17,19 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+def get_supabase_service():
+    """
+    Lazy loading function for supabase service.
+    Returns the supabase service instance when needed.
+    Raises exception if Supabase cannot be initialized.
+    """
+    try:
+        from services.supabase_service import supabase_service
+        return supabase_service
+    except Exception as e:
+        logger.error(f"Failed to initialize Supabase service: {str(e)}", exc_info=True)
+        raise Exception(f"Supabase service initialization failed: {str(e)}") from e
+    
 @app.route('/research_yfinance', methods=['POST'])
 def research_topic():
     """
@@ -61,6 +74,8 @@ def research_topic():
                 'error': 'iNVALID TICKER SYMBOL!'
             }), 400
     
+        # Get supabase service instance
+        service = get_supabase_service()
   
         # TODO include after api testing
         # if not userId:
@@ -71,7 +86,7 @@ def research_topic():
         #     }), 400
         # else: 
         #     # Verify the user exists / throw error if user id is not found
-        #     supabase_service.verify_user(user_id=userId)
+        #     service.verify_user(user_id=userId)
 
         # Research using yFinance
         research_results = perform_yfinance_research(topic)
@@ -117,6 +132,9 @@ def save_research_to_database(topic: str, research_data: dict) -> dict:
         Dict containing save operation result
     """
     try:
+        # Get supabase service instance
+        service = get_supabase_service()
+        
         # Create ResearchTopic object
         research_topic = ResearchTopic(
             topic=topic,
@@ -135,8 +153,8 @@ def save_research_to_database(topic: str, research_data: dict) -> dict:
             industry=research_data.get('industry')
         )
         
-        # Save to database
-        result = supabase_service.save_research_topic(research_topic)
+        # Save to database using the service instance
+        result = service.save_research_topic(research_topic)
         
         return result
         
@@ -323,4 +341,3 @@ def print_hello_world():
 
 if __name__ == '__main__':
     app.run(debug=True)
-
