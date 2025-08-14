@@ -49,28 +49,29 @@ def research_topic():
         save_to_db = data.get('save_to_db', True)
         
         # Validate topic
+        if not topic or len(topic) < 1:
+            return jsonify({
+                'success': False,
+                'error': 'Topic must be a non-empty string'
+            }), 400
         if not re.match(r'^[A-Z0-9]{1,5}$', topic):
             logger.warning(f"Topic '{topic}' may not be a valid ticker symbol")
             return jsonify({
                 'success': False,
                 'error': 'iNVALID TICKER SYMBOL!'
             }), 400
-        if not topic or len(topic) < 1:
-            return jsonify({
-                'success': False,
-                'error': 'Topic must be a non-empty string'
-            }), 400
+    
   
-        # TODO validate user id / verify user id is in supabase
-        if not userId:
-            logger.warning(f"User id '{userId}' can not be null")
-            return jsonify({
-                'success': False,
-                'error': 'User ID must be a non-empty string'
-            }), 400
-        else: 
-            # Verify the user exists / throw error if user id is not found
-            supabase_service.verify_user(user_id=userId)
+        # TODO include after api testing
+        # if not userId:
+        #     logger.warning(f"User id '{userId}' can not be null")
+        #     return jsonify({
+        #         'success': False,
+        #         'error': 'User ID must be a non-empty string'
+        #     }), 400
+        # else: 
+        #     # Verify the user exists / throw error if user id is not found
+        #     supabase_service.verify_user(user_id=userId)
 
         # Research using yFinance
         research_results = perform_yfinance_research(topic)
@@ -79,7 +80,7 @@ def research_topic():
             return jsonify(research_results), 500
         
         # Save to database if requested
-        # TODO update to save to databsae accordingly
+        # TODO update to save to database accordingly
         db_result = None
         if save_to_db:
             db_result = save_research_to_database(topic, research_results['data'])
