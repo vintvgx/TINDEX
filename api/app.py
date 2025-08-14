@@ -90,7 +90,7 @@ def research_topic():
             'success': True,
             'topic': topic,
             'research_data': research_results['data'],
-            'database_saved': save_to_db,
+            'saved_to_DB': bool(save_to_db and db_result and db_result.get('success') is True), # Return True if successfully saved, otherwise False
             'timestamp': time.time()
         }
         
@@ -104,31 +104,6 @@ def research_topic():
             'success': False,
             'error': f'Research failed: {str(e)}'
         }), 500
-
-def convert_dataframe_to_json(df):
-    """
-    Convert pandas DataFrame to JSON-serializable format.
-    
-    Args:
-        df: pandas DataFrame or None
-        
-    Returns:
-        List of dictionaries or empty list if DataFrame is None/empty
-    """
-    if df is None or df.empty:
-        return []
-    
-    try:
-        # Convert DataFrame to list of dictionaries
-        return df.to_dict('records')
-    except Exception:
-        # Fallback: convert to list of lists with column names
-        try:
-            return df.values.tolist()
-        except Exception:
-            return []
-
-
 
 def save_research_to_database(topic: str, research_data: dict) -> dict:
     """

@@ -18,10 +18,9 @@ from datetime import datetime, timedelta
 import json
 from dataclasses import dataclass, asdict
 from supabase import create_client, Client
-from postgrest import APIError
+from supabase.lib.client_options import ClientOptions
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -61,16 +60,6 @@ class StockData:
     industry: Optional[str] = None
     last_updated: Optional[datetime] = None
 
-@dataclass
-class UserProfile:
-    """Data class for user profile data structure"""
-    id: str
-    email: Optional[str] = None
-    full_name: Optional[str] = None
-    avatar_url: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-
 class SupabaseService:
     """
     Service class for managing all Supabase database operations.
@@ -91,15 +80,15 @@ class SupabaseService:
             raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY must be set in environment variables")
         
         # Initialize Supabase client with retry options
-        client_options = {
-            'schema': 'public',
-            'headers': {
+        client_options = ClientOptions(
+            schema='public',
+            headers={
                 'X-Client-Info': 'alethia-api/1.0.0'
             },
             # Connection pooling
-            'auto_refresh_token': True,
-            'persist_session': True
-        }
+            auto_refresh_token=True,
+            persist_session=True
+        )
         
         self.client: Client = create_client(
             self.supabase_url, 
@@ -112,193 +101,38 @@ class SupabaseService:
         
         logger.info("Supabase client initialized successfully")
 
-    def _validate_user_id(self, user_id: str) -> bool:
+    def verify_user(self, user_id: str) -> bool:
         """
-        Validate user_id format and content.
-        
-        Args:
-            user_id: The user ID to validate
-            
-        Returns:
-            True if valid, False otherwise
-        """
-        if not user_id or not isinstance(user_id, str):
-            return False
-        
-        # Trim whitespace
-        user_id = user_id.strip()
-        
-        # Check if empty after trimming
-        if not user_id:
-            return False
-        
-        # UUID format validation (Supabase uses UUID for user IDs)
-        import re
-        uuid_pattern = re.compile(
-            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-            re.IGNORECASE
-        )
-        
-        return bool(uuid_pattern.match(user_id))
+        Verifies the user id is an authneticated user within supabase.
 
-    def verify_user(self, user_id: str) -> Dict[str, Any]:
-        """
-        Verifies that the user ID corresponds to a registered user in Supabase.
-        
-        This method provides a robust way to verify user existence with:
-        - Input validation
-        - Efficient database querying
-        - Comprehensive error handling
-        - Consistent return format
-        
         Args:
-            user_id: The user ID to verify
-            
-        Returns:
-            Dict containing:
-                - success: Boolean indicating operation success
-                - data: User profile data if found (None otherwise)
-                - message: Human-readable message
-                - error: Error details if operation failed
-                - timestamp: ISO timestamp of operation
-        """
-        # Input validation
-        if not self._validate_user_id(user_id):
-            return {
-                'success': False,
-                'data': None,
-                'error': f"Invalid user ID format: {user_id}",
-                'message': 'Invalid user ID provided',
-                'timestamp': datetime.now().isoformat()
-            }
-        
-        try:
-            # Use efficient query - only select necessary fields
-            result = self.client.table('profiles')\
-                .select('id, email, full_name, avatar_url, created_at, updated_at')\
-                .eq('id', user_id)\
-                .single()\
-                .execute()
-            
-            if result.data:
-                logger.info(f"User verified successfully: {user_id}")
-                return {
-                    'success': True,
-                    'data': result.data,
-                    'message': 'User verified successfully',
-                    'timestamp': datetime.now().isoformat()
-                }
-            else:
-                # This should not happen with .single(), but handle gracefully
-                return {
-                    'success': False,
-                    'data': None,
-                    'error': f'User not found: {user_id}',
-                    'message': 'User not found in database',
-                    'timestamp': datetime.now().isoformat()
-                }
-                
-        except Exception as e:
-            # Check if it's a "not found" error (PostgrestError with code 406)
-            if isinstance(e, APIError) and e.code == 406:
-                return {
-                    'success': False,
-                    'data': None,
-                    'error': f'User not found: {user_id}',
-                    'message': 'User not found in database',
-                    'timestamp': datetime.now().isoformat()
-                }
-            
-            # Use centralized error handling for other errors
-            return self._handle_database_error(e, f"verify_user for {user_id}")
+            user_id: the id of the user
 
-    def get_user_profile(self, user_id: str) -> Dict[str, Any]:
-        """
-        Retrieve complete user profile data.
-        
-        This method is similar to verify_user but returns full profile data
-        and is intended for when you need the complete user information.
-        
-        Args:
-            user_id: The user ID to retrieve
-            
         Returns:
-            Dict containing success status and user profile data or error information
+            True if user exists, otherwise False.
         """
-        # Input validation
-        if not self._validate_user_id(user_id):
-            return {
-                'success': False,
-                'data': None,
-                'error': f"Invalid user ID format: {user_id}",
-                'message': 'Invalid user ID provided',
-                'timestamp': datetime.now().isoformat()
-            }
-        
         try:
             result = self.client.table('profiles')\
                 .select('*')\
                 .eq('id', user_id)\
-                .single()\
-                .execute()
-            
+                .single()
+
             if result.data:
-                logger.info(f"User profile retrieved successfully: {user_id}")
+                logger.info(f"User verified successfully: {result.data.id}")
                 return {
                     'success': True,
-                    'data': result.data,
-                    'message': 'User profile retrieved successfully',
-                    'timestamp': datetime.now().isoformat()
+                    'data': result.data[0],
+                    'message': 'User verified'
                 }
             else:
-                return {
-                    'success': False,
-                    'data': None,
-                    'error': f'User profile not found: {user_id}',
-                    'message': 'User profile not found in database',
-                    'timestamp': datetime.now().isoformat()
-                }
-                
-        except Exception as e:
-            if isinstance(e, APIError) and e.code == 406:
-                return {
-                    'success': False,
-                    'data': None,
-                    'error': f'User profile not found: {user_id}',
-                    'message': 'User profile not found in database',
-                    'timestamp': datetime.now().isoformat()
-                }
-            
-            return self._handle_database_error(e, f"get_user_profile for {user_id}")
+                raise Exception("User does not exists within DB")
 
-    def user_exists(self, user_id: str) -> bool:
-        """
-        Simple boolean check for user existence.
-        
-        This is the most efficient method when you only need to know
-        if a user exists, without retrieving any data.
-        
-        Args:
-            user_id: The user ID to check
-            
-        Returns:
-            True if user exists, False otherwise
-        """
-        if not self._validate_user_id(user_id):
-            return False
-        
-        try:
-            result = self.client.table('profiles')\
-                .select('id')\
-                .eq('id', user_id)\
-                .limit(1)\
-                .execute()
-            
-            return len(result.data) > 0
-            
         except Exception as e:
-            logger.error(f"Error checking user existence for {user_id}: {str(e)}")
-            return False
+            return {
+            'success': False,
+            'error': f"{e} | User id '{user_id}' not found within DB",
+            'timestamp': datetime.now().isoformat()
+            }
     
     def _handle_database_error(self, error: Exception, operation: str) -> Dict[str, Any]:
         """
@@ -504,6 +338,7 @@ class SupabaseService:
             Dict containing success status and search results or error information
         """
         try:
+            #TODO look up explaination for code
             result = self.client.table('research_topics')\
                 .select('*')\
                 .or_(f'topic.ilike.%{search_term}%,description.ilike.%{search_term}%')\
