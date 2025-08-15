@@ -129,7 +129,7 @@ def research_topic():
         response = {
             'success': True,
             # 'topic': topic,
-            'data': jsonify(blog_content),
+            'data': blog_content,
             # 'research_data': research_results['data'],
             'saved_to_DB': bool(save_to_db and db_result and db_result.get('success') is True), # Return True if successfully saved, otherwise False
             'timestamp': time.time()
