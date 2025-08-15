@@ -89,13 +89,14 @@ def perform_yfinance_research(topic: str) -> dict:
             'profit_margins': info.get('profitMargins'),
             'revenue_growth': info.get('revenueGrowth'),
             'earnings_growth': info.get('earningsGrowth'),
-            'news': news_list,
             'recommendations': recommendations_list,
             'historical_data': {
                 'dates': hist.index.strftime('%Y-%m-%d').tolist() if not hist.empty and hasattr(hist.index, 'strftime') else [],
                 'prices': hist['Close'].tolist() if not hist.empty and 'Close' in hist.columns else [],
                 'volumes': hist['Volume'].tolist() if not hist.empty and 'Volume' in hist.columns else []
-            }
+            },
+            'news': news_list,
+
         }
 
         sentiment = analyze_sentiment(research_data)

@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response, stream_template
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -7,10 +7,13 @@ from urllib.parse import urlencode
 import re
 import supabase
 import random
+import asyncio
+import json
 
 import logging
 from services.supabase_service import ResearchTopic, StockData
 from services.yfinance_service import perform_yfinance_research
+from services.anthropic_service import anthropic_service
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -29,7 +32,7 @@ def get_supabase_service():
     except Exception as e:
         logger.error(f"Failed to initialize Supabase service: {str(e)}", exc_info=True)
         raise Exception(f"Supabase service initialization failed: {str(e)}") from e
-    
+
 @app.route('/research_yfinance', methods=['POST'])
 def research_topic():
     """
@@ -90,9 +93,17 @@ def research_topic():
 
         # Research using yFinance
         research_results = perform_yfinance_research(topic)
-        
+                
         if not research_results['success']:
             return jsonify(research_results), 500
+        
+        if not research_results['data']:
+            return jsonify({
+                'success': False,
+                'error': 'Research results does not include data object'
+            }), 400
+            
+        blog_content = generate_blog_post(topic, research_results)
         
         # Save to database if requested
         # TODO update to save to database accordingly
@@ -103,8 +114,9 @@ def research_topic():
         # Prepare response
         response = {
             'success': True,
-            'topic': topic,
-            'research_data': research_results['data'],
+            # 'topic': topic,
+            'data': blog_content,
+            # 'research_data': research_results['data'],
             'saved_to_DB': bool(save_to_db and db_result and db_result.get('success') is True), # Return True if successfully saved, otherwise False
             'timestamp': time.time()
         }
@@ -163,6 +175,178 @@ def save_research_to_database(topic: str, research_data: dict) -> dict:
             'success': False,
             'error': f'Failed to save to database: {str(e)}'
         }
+
+@app.route('/generate_blog_post_stream', methods=['POST'])
+def generate_blog_post_stream():
+    """
+    Generate a blog post with streaming response using ticker information.
+    
+    This endpoint generates blog content in real-time as it becomes available,
+    providing a better user experience for long-form content generation.
+    
+    Request Body:
+        topic (str): The topic to generate content about
+        research_data (dict): Research data to inform the content
+        target_length (int, optional): Target word count (default: 800)
+        ticker (str, optional): Stock ticker symbol for financial analysis
+    
+    Returns:
+        Streaming response with generated content chunks
+    """
+    try:
+        # Get request data
+        data = request.get_json()
+        
+        if not data or 'topic' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Topic is required in request body'
+            }), 400
+        
+        topic = data['topic'].strip()
+        research_data = data.get('research_data', {})
+        target_length = data.get('target_length', 800)
+        ticker = data.get('ticker')
+        
+        # Validate inputs
+        if not topic or len(topic) < 1:
+            return jsonify({
+                'success': False,
+                'error': 'Topic must be a non-empty string'
+            }), 400
+        
+        if not isinstance(research_data, dict):
+            return jsonify({
+                'success': False,
+                'error': 'Research data must be a dictionary'
+            }), 400
+        
+        # Create async generator function for streaming
+        async def generate_content():
+            try:
+                async for chunk in anthropic_service.generate_blog_post_stream(
+                    topic=topic,
+                    research_data=research_data,
+                    target_length=target_length,
+                    ticker=ticker
+                ):
+                    yield f"data: {json.dumps({'chunk': chunk, 'success': True})}\n\n"
+                
+                # Send completion signal
+                yield f"data: {json.dumps({'complete': True, 'success': True})}\n\n"
+                
+            except Exception as e:
+                error_msg = f"Error generating content: {str(e)}"
+                yield f"data: {json.dumps({'error': error_msg, 'success': False})}\n\n"
+        
+        # Convert async generator to sync generator for Flask
+        def sync_generator():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                async_gen = generate_content()
+                while True:
+                    try:
+                        chunk = loop.run_until_complete(async_gen.__anext__())
+                        yield chunk
+                    except StopAsyncIteration:
+                        break
+            finally:
+                loop.close()
+        
+        return Response(
+            sync_generator(),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Content-Type',
+            }
+        )
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Blog generation failed: {str(e)}'
+        }), 500
+
+@app.route('/generate_blog_post', methods=['POST'])
+def generate_blog_post(topic: str, research_data: dict, target_length: int = 800):
+    """
+    Generate a complete blog post without streaming.
+    
+    This endpoint generates the full blog post content and returns it in a single response.
+    Useful for shorter content or when streaming is not needed.
+    
+    Request Body:
+        topic (str): The topic to generate content about
+        research_data (dict): Research data to inform the content
+        target_length (int, optional): Target word count (default: 800)
+        ticker (str, optional): Stock ticker symbol for financial analysis
+    
+    Returns:
+        JSON response containing the complete blog post
+    """
+    try:
+        ticker = topic.trim()
+        
+        if not isinstance(research_data, dict):
+            return jsonify({
+                'success': False,
+                'error': 'Research data must be a dictionary'
+            }), 400
+        
+        # Run async function in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(
+                anthropic_service.generate_blog_post(
+                    topic=topic,
+                    research_data=research_data,
+                    target_length=target_length,
+                    ticker=ticker
+                )
+            )
+        finally:
+            loop.close()
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Blog generation failed: {str(e)}'
+        }), 500
+
+@app.route('/test_anthropic', methods=['GET'])
+def test_anthropic_connection():
+    """
+    Test the Anthropic API connection.
+    
+    This endpoint verifies that the Anthropic service is properly configured
+    and can communicate with the API.
+    
+    Returns:
+        JSON response with connection test result
+    """
+    try:
+        # Run async function in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(anthropic_service.test_connection())
+        finally:
+            loop.close()
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Connection test failed: {str(e)}'
+        }), 500
 
 @app.route('/test')
 def print_hello_world():
