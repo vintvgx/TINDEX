@@ -103,7 +103,21 @@ def research_topic():
                 'error': 'Research results does not include data object'
             }), 400
             
-        blog_content = generate_blog_post(topic, research_results)
+        # Run async function in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            blog_content = loop.run_until_complete(
+                anthropic_service.generate_blog_post(
+                    topic=topic,
+                    research_data=research_results['data'],
+                    ticker=topic
+                )
+            )
+        finally:
+            loop.close()
+        
+        # return jsonify(result)
         
         # Save to database if requested
         # TODO update to save to database accordingly
@@ -115,7 +129,7 @@ def research_topic():
         response = {
             'success': True,
             # 'topic': topic,
-            'data': blog_content,
+            'data': jsonify(blog_content),
             # 'research_data': research_results['data'],
             'saved_to_DB': bool(save_to_db and db_result and db_result.get('success') is True), # Return True if successfully saved, otherwise False
             'timestamp': time.time()
