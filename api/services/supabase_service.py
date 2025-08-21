@@ -128,7 +128,7 @@ class SupabaseService:
 
         # Initialize Supabase client with retry options
         client_options = ClientOptions(
-            schema="data",
+            schema="public",
             headers={"X-Client-Info": "alethia-api/1.0.0"},
             # Connection pooling
             auto_refresh_token=True,
