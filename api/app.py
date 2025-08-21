@@ -14,7 +14,7 @@ from dataclasses import dataclass, asdict
 
 
 import logging
-from services.supabase_service import ResearchTopic, StockData
+from services.supabase_service import StockResearch, BlogPost
 from services.yfinance_service import perform_yfinance_research
 from services.anthropic_service import anthropic_service
 
