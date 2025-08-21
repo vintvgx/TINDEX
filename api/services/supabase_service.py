@@ -26,44 +26,83 @@ logger.addHandler(logging.NullHandler())
 
 
 @dataclass
-class ResearchTopic:
-    """Data class for research topic data structure"""
+class StockResearch:
+    """Data class for comprehensive stock research data"""
 
-    topic: str
-    ticker: Optional[str] = None
+    # Company Details
+    ticker: str
+    company_name: Optional[str] = None
     description: Optional[str] = None
-    sentiment: Optional[str] = None
-    confidence_score: Optional[float] = None
-    market_cap: Optional[float] = None
+
+    # Market Data
     current_price: Optional[float] = None
     price_change: Optional[float] = None
+    price_change_percent: Optional[float] = None
     volume: Optional[int] = None
+    day_high: Optional[float] = None
+    day_low: Optional[float] = None
+    year_high: Optional[float] = None
+    year_low: Optional[float] = None
+    average_volume: Optional[int] = None
+
+    # Financial Metrics
+    market_cap: Optional[int] = None
+    market_state: Optional[str] = None
+    regular_market_price: Optional[float] = None
+    regular_market_volume: Optional[float] = None
     pe_ratio: Optional[float] = None
+    price_to_book: Optional[float] = None
     dividend_yield: Optional[float] = None
     beta: Optional[float] = None
+    return_on_equity: Optional[float] = None
+    revenue_growth: Optional[float] = None
+    profit_margins: Optional[float] = None
+    debt_to_equity: Optional[float] = None
+    earnings_growth: Optional[float] = None
+
+    # Company Info
     sector: Optional[str] = None
     industry: Optional[str] = None
-    research_date: Optional[datetime] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    country: Optional[str] = None
+    currency: Optional[str] = None
+    exchange: Optional[str] = None
+    employees: Optional[int] = None
+    website: Optional[str] = None
+
+    # Additional data (stored as JSON)
+    recommendations: Optional[Dict] = None
+    historical_data: Optional[Dict] = None
+    news_data: Optional[List] = None
+
+    # Sentiment Analysis
+    sentiment: Optional[str] = None
+    sentiment_score: Optional[int] = None
+    sentiment_confidence: Optional[float] = None
+
+    # Timestamps
+    timestamp: Optional[datetime] = None
 
 
 @dataclass
-class StockData:
-    """Data class for stock data structure"""
+class BlogPost:
+    """Data class for blog post data"""
 
     ticker: str
-    current_price: float
-    price_change: float
-    price_change_percent: float
-    volume: int
-    market_cap: Optional[float] = None
-    pe_ratio: Optional[float] = None
-    dividend_yield: Optional[float] = None
-    beta: Optional[float] = None
-    sector: Optional[str] = None
-    industry: Optional[str] = None
-    last_updated: Optional[datetime] = None
+    title: str
+    content: str
+    word_count: Optional[int] = None
+    reading_time: Optional[int] = None
+    stock_research_id: Optional[str] = None
+    research_data: Optional[Dict] = None
+    model_used: Optional[str] = "claude-3-5-sonnet-20241022"
+    target_length: Optional[int] = 800
+    generation_prompt: Optional[str] = None
+    tags: Optional[List[str]] = None
+    category: Optional[str] = None
+    excerpt: Optional[str] = None
+    status: Optional[str] = "draft"
+    published_at: Optional[datetime] = None
+    user_id: Optional[str] = None
 
 
 class SupabaseService:
@@ -89,7 +128,7 @@ class SupabaseService:
 
         # Initialize Supabase client with retry options
         client_options = ClientOptions(
-            schema="public",
+            schema="data",
             headers={"X-Client-Info": "alethia-api/1.0.0"},
             # Connection pooling
             auto_refresh_token=True,
@@ -160,12 +199,12 @@ class SupabaseService:
             "timestamp": datetime.now().isoformat(),
         }
 
-    def save_research_topic(self, research_data: ResearchTopic) -> Dict[str, Any]:
+    def save_stock_research(self, research_data: StockResearch) -> Dict[str, Any]:
         """
-        Save research topic data to the database.
+        Save comprehensive stock research data to the database.
 
         Args:
-            research_data: ResearchTopic object containing the data to save
+            research_data: StockResearch object containing the data to save
 
         Returns:
             Dict containing success status and saved data or error information
@@ -174,212 +213,303 @@ class SupabaseService:
             # Prepare data for insertion
             data_dict = asdict(research_data)
 
-            # Set timestamps
-            now = datetime.now()
-            # data_dict['created_at'] = now.isoformat() automatically created when uploaded
-            # data_dict['updated_at'] = now.isoformat() automatically updated when accessed
-            data_dict["research_date"] = now.isoformat()
+            # Set research date if not provided
+            if not data_dict.get("research_date"):
+                data_dict["research_date"] = datetime.now().isoformat()
 
             # Remove None values to avoid database issues
             data_dict = {k: v for k, v in data_dict.items() if v is not None}
 
             # Insert into database
-            result = self.client.table("research_topics").insert(data_dict).execute()
+            result = self.client.table("stock_research").insert(data_dict).execute()
 
             if result.data:
-                logger.info(f"Research topic saved successfully: {research_data.topic}")
+                logger.info(
+                    f"Stock research saved successfully: {research_data.ticker}"
+                )
                 return {
                     "success": True,
                     "data": result.data[0],
-                    "message": "Research topic saved successfully",
+                    "message": "Stock research saved successfully",
                 }
             else:
                 raise Exception("No data returned from insert operation")
 
         except Exception as e:
             return self._handle_database_error(
-                e, f"save_research_topic for {research_data.topic}"
+                e, f"save_stock_research for {research_data.ticker}"
             )
 
-    def get_research_topic(self, topic: str) -> Dict[str, Any]:
+    def get_stock_research(
+        self, ticker: str, max_age_hours: int = 24
+    ) -> Dict[str, Any]:
         """
-        Retrieve research topic data by topic name.
+        Retrieve recent stock research data by ticker.
 
         Args:
-            topic: The topic name to search for
+            ticker: The stock ticker to search for
+            max_age_hours: Maximum age of data to consider recent (default: 24 hours)
 
         Returns:
             Dict containing success status and research data or error information
         """
         try:
+            # Calculate cutoff time for recent data
+            cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
+
             result = (
-                self.client.table("research_topics")
+                self.client.table("stock_research")
                 .select("*")
-                .eq("topic", topic)
-                .order("created_at", desc=True)
+                .eq("ticker", ticker.upper())
+                .gte("research_date", cutoff_time.isoformat())
+                .order("research_date", desc=True)
                 .limit(1)
                 .execute()
             )
 
             if result.data:
-                logger.info(f"Research topic retrieved successfully: {topic}")
+                logger.info(f"Stock research retrieved successfully: {ticker}")
                 return {
                     "success": True,
                     "data": result.data[0],
-                    "message": "Research topic found",
+                    "message": "Stock research found",
                 }
             else:
                 return {
                     "success": False,
-                    "error": f"Research topic not found: {topic}",
+                    "error": f"No recent stock research found: {ticker}",
                     "data": None,
                 }
 
         except Exception as e:
-            return self._handle_database_error(e, f"get_research_topic for {topic}")
+            return self._handle_database_error(e, f"get_stock_research for {ticker}")
 
-    def update_research_topic(
-        self, topic: str, update_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def save_blog_post(self, blog_data: BlogPost) -> Dict[str, Any]:
         """
-        Update existing research topic data.
+        Save blog post data to the database.
 
         Args:
-            topic: The topic name to update
-            update_data: Dictionary containing fields to update
-
-        Returns:
-            Dict containing success status and updated data or error information
-        """
-        try:
-            # Add updated timestamp
-            update_data["updated_at"] = datetime.now().isoformat()
-
-            # Remove None values
-            update_data = {k: v for k, v in update_data.items() if v is not None}
-
-            result = (
-                self.client.table("research_topics")
-                .update(update_data)
-                .eq("topic", topic)
-                .execute()
-            )
-
-            if result.data:
-                logger.info(f"Research topic updated successfully: {topic}")
-                return {
-                    "success": True,
-                    "data": result.data[0],
-                    "message": "Research topic updated successfully",
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": f"Research topic not found for update: {topic}",
-                    "data": None,
-                }
-
-        except Exception as e:
-            return self._handle_database_error(e, f"update_research_topic for {topic}")
-
-    def save_stock_data(self, stock_data: StockData) -> Dict[str, Any]:
-        """
-        Save stock data to the database.
-
-        Args:
-            stock_data: StockData object containing the stock information
+            blog_data: BlogPost object containing the blog data
 
         Returns:
             Dict containing success status and saved data or error information
         """
         try:
-            data_dict = asdict(stock_data)
-            data_dict["last_updated"] = datetime.now().isoformat()
+            data_dict = asdict(blog_data)
+
+            # Convert tags list to array format for PostgreSQL
+            if data_dict.get("tags") and isinstance(data_dict["tags"], list):
+                # PostgreSQL array format
+                pass  # Supabase handles list conversion automatically
+
+            # Remove None values
             data_dict = {k: v for k, v in data_dict.items() if v is not None}
 
-            result = self.client.table("stock_data").insert(data_dict).execute()
+            # Insert into database
+            result = self.client.table("blog_posts").insert(data_dict).execute()
 
             if result.data:
-                logger.info(f"Stock data saved successfully: {stock_data.ticker}")
+                logger.info(f"Blog post saved successfully: {blog_data.title}")
                 return {
                     "success": True,
                     "data": result.data[0],
-                    "message": "Stock data saved successfully",
+                    "message": "Blog post saved successfully",
                 }
             else:
                 raise Exception("No data returned from insert operation")
 
         except Exception as e:
             return self._handle_database_error(
-                e, f"save_stock_data for {stock_data.ticker}"
+                e, f"save_blog_post for {blog_data.ticker}"
             )
 
-    def get_recent_research_topics(self, limit: int = 10) -> Dict[str, Any]:
+    def get_blog_posts_by_ticker(
+        self, ticker: str, limit: int = 10, index: int = 0
+    ) -> Dict[str, Any]:
         """
-        Retrieve recent research topics.
+        Retrieve blog posts for a specific ticker.
+        TODO implement index
 
         Args:
-            limit: Maximum number of topics to retrieve
+            ticker: The stock ticker
+            limit: Maximum number of posts to retrieve
+            index: Index of where to start retrieving the post (assist in lazy loading in number of blog post)
 
         Returns:
-            Dict containing success status and list of research topics or error information
+            Dict containing success status and blog posts or error information
         """
         try:
             result = (
-                self.client.table("research_topics")
+                self.client.table("blog_posts")
                 .select("*")
+                .eq("ticker", ticker.upper())
                 .order("created_at", desc=True)
                 .limit(limit)
                 .execute()
             )
 
-            logger.info(f"Retrieved {len(result.data)} recent research topics")
+            logger.info(f"Retrieved {len(result.data)} blog posts for {ticker}")
             return {
                 "success": True,
-                "data": result.data or [],
-                "message": f"Retrieved {len(result.data)} recent research topics",
+                "data": result.data,
+                "message": f"Retrieved {len(result.data)} blog posts for {ticker}",
             }
 
         except Exception as e:
-            return self._handle_database_error(e, "get_recent_research_topics")
+            return self._handle_database_error(
+                e, f"get_blog_posts_by_ticker for {ticker}"
+            )
 
-    def search_research_topics(
-        self, search_term: str, limit: int = 10
+    def save_to_cache(
+        self, ticker: str, cache_key: str, data: Dict, expires_hours: int = 24
     ) -> Dict[str, Any]:
         """
-        Search research topics by keyword.
+        Save data to the research cache.
 
         Args:
-            search_term: The search term to look for
-            limit: Maximum number of results to return
+            ticker: The stock ticker
+            cache_key: Unique key for this cache entry
+            data: Data to cache
+            expires_hours: Cache expiration time in hours
 
         Returns:
-            Dict containing success status and search results or error information
+            Dict containing success status
         """
         try:
-            # TODO look up explaination for code
+            expires_at = datetime.now() + timedelta(hours=expires_hours)
+
+            cache_data = {
+                "ticker": ticker.upper(),
+                "cache_key": cache_key,
+                "cached_data": data,
+                "expires_at": expires_at.isoformat(),
+            }
+
+            # Use upsert to handle duplicates
             result = (
-                self.client.table("research_topics")
+                self.client.table("research_cache")
+                # upsert:
+                # - If the record doesn't exist: It performs an INSERT operation
+                # - If the record already exists: It performs an UPDATE operation
+                .upsert(cache_data, on_conflict="ticker,cache_key").execute()
+            )
+
+            if result.data:
+                logger.info(f"Data cached successfully: {ticker} - {cache_key}")
+                return {
+                    "success": True,
+                    "data": result.data[0],
+                    "message": "Data cached successfully",
+                }
+            else:
+                raise Exception("No data returned from cache operation")
+
+        except Exception as e:
+            return self._handle_database_error(e, f"save_to_cache for {ticker}")
+
+    def get_from_cache(self, ticker: str, cache_key: str) -> Dict[str, Any]:
+        """
+        Retrieve data from cache if not expired.
+
+        Args:
+            ticker: The stock ticker
+            cache_key: Cache key to retrieve
+
+        Returns:
+            Dict containing cached data or None if expired/not found
+        """
+        try:
+            result = (
+                self.client.table("research_cache")
                 .select("*")
-                .or_(f"topic.ilike.%{search_term}%,description.ilike.%{search_term}%")
-                .order("created_at", desc=True)
+                .eq("ticker", ticker.upper())
+                .eq("cache_key", cache_key)
+                .gt("expires_at", datetime.now().isoformat())
+                .execute()
+            )
+
+            if result.data:
+                # Update hit count and last accessed
+                cache_id = result.data[0]["id"]
+                self.client.table("research_cache").update(
+                    {
+                        "hit_count": result.data[0]["hit_count"] + 1,
+                        "last_accessed": datetime.now().isoformat(),
+                    }
+                ).eq("id", cache_id).execute()
+
+                logger.info(f"Cache hit: {ticker} - {cache_key}")
+                return {
+                    "success": True,
+                    "data": result.data[0]["cached_data"],
+                    "message": "Cache hit",
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "Cache miss or expired",
+                    "data": None,
+                }
+
+        except Exception as e:
+            return self._handle_database_error(e, f"get_from_cache for {ticker}")
+
+    def get_recent_research_with_blogs(self, limit: int = 10) -> Dict[str, Any]:
+        """
+        Get recent research data with associated blog posts using the view.
+
+        Args:
+            limit: Maximum number of results
+
+        Returns:
+            Dict containing recent research with blog data
+        """
+        try:
+            result = (
+                self.client.table("recent_research_with_blogs")
+                .select("*")
                 .limit(limit)
                 .execute()
             )
 
             logger.info(
-                f"Search completed for '{search_term}': {len(result.data)} results"
+                f"Retrieved {len(result.data)} recent research entries with blogs"
             )
             return {
                 "success": True,
                 "data": result.data,
-                "message": f'Found {len(result.data)} results for "{search_term}"',
+                "message": f"Retrieved {len(result.data)} recent research entries",
             }
 
         except Exception as e:
-            return self._handle_database_error(
-                e, f"search_research_topics for '{search_term}'"
+            return self._handle_database_error(e, "get_recent_research_with_blogs")
+
+    def cleanup_expired_cache(self) -> Dict[str, Any]:
+        """
+        Clean up expired cache entries.
+
+        Returns:
+            Dict containing cleanup results
+        """
+        try:
+            result = (
+                self.client.table("research_cache")
+                .delete()
+                .lt("expires_at", datetime.now().isoformat())
+                .execute()
             )
+
+            deleted_count = len(result.data) if result.data else 0
+            logger.info(f"Cleaned up {deleted_count} expired cache entries")
+
+            return {
+                "success": True,
+                "deleted_count": deleted_count,
+                "message": f"Cleaned up {deleted_count} expired cache entries",
+            }
+
+        except Exception as e:
+            return self._handle_database_error(e, "cleanup_expired_cache")
 
 
 # Global instance for use across the application
