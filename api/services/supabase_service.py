@@ -199,19 +199,26 @@ class SupabaseService:
             "timestamp": datetime.now().isoformat(),
         }
 
-    def save_stock_research(self, research_data: StockResearch) -> Dict[str, Any]:
+    def save_stock_research(self, research_data: Union[StockResearch, Dict]) -> Dict[str, Any]:
         """
         Save comprehensive stock research data to the database.
 
         Args:
-            research_data: StockResearch object containing the data to save
+            research_data: StockResearch object or dictionary containing the data to save
 
         Returns:
             Dict containing success status and saved data or error information
         """
         try:
-            # Prepare data for insertion
-            data_dict = asdict(research_data)
+            # Handle both StockResearch objects and dictionaries
+            if isinstance(research_data, StockResearch):
+                data_dict = asdict(research_data)
+                ticker = research_data.ticker
+            elif isinstance(research_data, dict):
+                data_dict = research_data.copy()
+                ticker = research_data.get("ticker", "unknown")
+            else:
+                raise ValueError("research_data must be either StockResearch object or dictionary")
 
             # Set research date if not provided
             if not data_dict.get("research_date"):
@@ -225,7 +232,7 @@ class SupabaseService:
 
             if result.data:
                 logger.info(
-                    f"Stock research saved successfully: {research_data.ticker}"
+                    f"Stock research saved successfully: {ticker}"
                 )
                 return {
                     "success": True,
@@ -236,8 +243,9 @@ class SupabaseService:
                 raise Exception("No data returned from insert operation")
 
         except Exception as e:
+            ticker_name = ticker if 'ticker' in locals() else "unknown"
             return self._handle_database_error(
-                e, f"save_stock_research for {research_data.ticker}"
+                e, f"save_stock_research for {ticker_name}"
             )
 
     def get_stock_research(
@@ -284,18 +292,32 @@ class SupabaseService:
         except Exception as e:
             return self._handle_database_error(e, f"get_stock_research for {ticker}")
 
-    def save_blog_post(self, blog_data: BlogPost) -> Dict[str, Any]:
+    def save_blog_post(self, blog_data: Union[BlogPost, Dict]) -> Dict[str, Any]:
         """
         Save blog post data to the database.
 
         Args:
-            blog_data: BlogPost object containing the blog data
+            blog_data: BlogPost object or dictionary containing the blog data
 
         Returns:
             Dict containing success status and saved data or error information
         """
         try:
-            data_dict = asdict(blog_data)
+            # Initialize variables
+            title = "unknown"
+            ticker = "unknown"
+            
+            # Handle both BlogPost objects and dictionaries
+            if isinstance(blog_data, BlogPost):
+                data_dict = asdict(blog_data)
+                title = blog_data.title
+                ticker = blog_data.ticker
+            elif isinstance(blog_data, dict):
+                data_dict = blog_data.copy()
+                title = blog_data.get("title", "unknown")
+                ticker = blog_data.get("ticker", "unknown")
+            else:
+                raise ValueError("blog_data must be either BlogPost object or dictionary")
 
             # Convert tags list to array format for PostgreSQL
             if data_dict.get("tags") and isinstance(data_dict["tags"], list):
@@ -309,7 +331,7 @@ class SupabaseService:
             result = self.client.table("blog_posts").insert(data_dict).execute()
 
             if result.data:
-                logger.info(f"Blog post saved successfully: {blog_data.title}")
+                logger.info(f"Blog post saved successfully: {title}")
                 return {
                     "success": True,
                     "data": result.data[0],
@@ -320,7 +342,7 @@ class SupabaseService:
 
         except Exception as e:
             return self._handle_database_error(
-                e, f"save_blog_post for {blog_data.ticker}"
+                e, f"save_blog_post for {ticker}"
             )
 
     def get_blog_posts_by_ticker(
