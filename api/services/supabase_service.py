@@ -22,7 +22,7 @@ from supabase.lib.client_options import ClientOptions
 
 # Configure logging
 logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
+# Remove NullHandler to allow logs to propagate to Railway
 
 
 @dataclass

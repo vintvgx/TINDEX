@@ -11,17 +11,35 @@ import asyncio
 import json
 from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, asdict
-
-
 import logging
+import sys
 from services.supabase_service import StockResearch, BlogPost
 from services.yfinance_service import perform_yfinance_research
 from services.anthropic_service import anthropic_service
 
-# Configure logging
+# Configure logging for Railway deployment
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),  # Output to stdout for Railway
+        logging.StreamHandler(sys.stderr)   # Output to stderr for errors
+    ]
+)
+
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# Add request logging middleware
+@app.before_request
+def log_request_info():
+    logger.info(f"Request: {request.method} {request.path} - User-Agent: {request.headers.get('User-Agent', 'Unknown')}")
+
+@app.after_request
+def log_response_info(response):
+    logger.info(f"Response: {response.status_code} for {request.method} {request.path}")
+    return response
 
 
 @dataclass
@@ -181,15 +199,24 @@ def research_topic():
         stock_research_id = None
 
         if save_to_db and blog_content.get("success"):
+            logger.info(f"Attempting to save data to database for ticker: {topic}")
+            
             # Save stock research data
             stock_research = research_results["data"]
+            logger.info(f"Saving stock research data for {topic}")
             research_db_result = service.save_stock_research(stock_research)
+            
+            logger.info(f"Stock research save result: {research_db_result}")
 
             if research_db_result.get("success"):
                 stock_research_id = research_db_result["data"]["id"]
+                logger.info(f"Stock research saved successfully with ID: {stock_research_id}")
                 
                 blog_content["stock_research_id"] = stock_research_id
+                logger.info(f"Saving blog post for {topic}")
                 blog_db_result = service.save_blog_post(blog_content)
+                
+                logger.info(f"Blog post save result: {blog_db_result}")
 
                 db_result = {
                     "research_saved": research_db_result.get("success", False),
@@ -202,7 +229,10 @@ def research_topic():
                     ),
                 }
             else:
+                logger.error(f"Failed to save stock research: {research_db_result}")
                 db_result = research_db_result
+        else:
+            logger.info(f"Skipping database save - save_to_db: {save_to_db}, blog_content success: {blog_content.get('success')}")
 
         # Prepare response
         response = {
@@ -221,6 +251,7 @@ def research_topic():
         return jsonify(response)
 
     except Exception as e:
+        logger.error(f"Research failed for topic '{topic}': {str(e)}", exc_info=True)
         return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
 
 
