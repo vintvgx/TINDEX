@@ -21,7 +21,9 @@ from supabase import create_client, Client
 from supabase.lib.client_options import ClientOptions
 
 # Configure logging
-logger = logging.getLogger(__name__)
+#TODO move logging to its own file to be used throughout project (improves modularity)
+#! Deprecated (use logger in app.py)
+# logger = logging.getLogger(__name__)
 # Remove NullHandler to allow logs to propagate to Railway
 
 
@@ -119,11 +121,11 @@ class SupabaseService:
     def __init__(self):
         """Initialize Supabase client with environment variables"""
         self.supabase_url = os.getenv("SUPABASE_URL")
-        self.supabase_key = os.getenv("SUPABASE_ANON_KEY")
+        self.supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
         if not self.supabase_url or not self.supabase_key:
             raise ValueError(
-                "SUPABASE_URL and SUPABASE_ANON_KEY must be set in environment variables"
+                "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in environment variables"
             )
 
         # Initialize Supabase client with retry options

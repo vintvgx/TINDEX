@@ -17,13 +17,14 @@ from services.supabase_service import StockResearch, BlogPost
 from services.yfinance_service import perform_yfinance_research
 from services.anthropic_service import anthropic_service
 
+#TODO move logging to its own file to be used throughout project (improves modularity)
 # Configure logging for Railway deployment
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),  # Output to stdout for Railway
-        logging.StreamHandler(sys.stderr)   # Output to stderr for errors
+        # logging.StreamHandler(sys.stderr) 
     ]
 )
 
