@@ -105,6 +105,7 @@ def save_research_to_database(service, topic, research_results, blog_content):
         # Extract the research ID if save was successful
         if research_db_result and research_db_result.get("data", {}).get("id"):
             stock_research_id = research_db_result["data"]["id"]
+            
             logger.info("Stock research saved successfully with ID: %s", stock_research_id)
         else:
             logger.warning("Stock research save returned no ID for %s", topic)
@@ -115,7 +116,8 @@ def save_research_to_database(service, topic, research_results, blog_content):
     # Save blog post 
     try:
         # Set stock_research_id in blog_content (will be None if research save failed)
-        blog_content["stock_research_id"] = stock_research_id
+        # blog_content["stock_research_id"] = stock_research_id
+        logger.info("BLOG CONTENT: %s", blog_content)
         
         logger.info("Saving blog post for %s with stock_research_id: %s", topic, stock_research_id)
         blog_db_result = service.save_blog_post(blog_content)
@@ -138,7 +140,6 @@ def save_research_to_database(service, topic, research_results, blog_content):
             else None
         ),
     }
-    
     return db_result
 
 
