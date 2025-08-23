@@ -23,7 +23,7 @@ from supabase.lib.client_options import ClientOptions
 # Configure logging
 #TODO move logging to its own file to be used throughout project (improves modularity)
 #! Deprecated (use logger in app.py)
-# logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 # Remove NullHandler to allow logs to propagate to Railway
 
 
