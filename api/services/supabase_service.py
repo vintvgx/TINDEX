@@ -163,7 +163,7 @@ class SupabaseService:
                 self.client.table("profiles").select("*").eq("id", user_id).single()
             )
 
-            if result.data:
+            if result:
                 logger.info(f"User verified successfully: {user_id}")
                 return {
                     "success": True,

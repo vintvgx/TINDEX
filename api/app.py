@@ -78,6 +78,70 @@ def get_supabase_service():
         raise Exception(f"Supabase service initialization failed: {str(e)}") from e
 
 
+def save_research_to_database(service, topic, research_results, blog_content):
+    """
+    Save research data and blog post to database.
+    
+    Args:
+        service: Supabase service instance
+        topic: Stock ticker
+        research_results: Research data from yFinance
+        blog_content: Generated blog content
+        
+    Returns:
+        Dict containing save results and IDs
+    """
+    db_result = None
+    stock_research_id = None
+    research_db_result = None
+    blog_db_result = None
+    
+    # Attempt to save stock research data
+    try:
+        stock_research = research_results["data"]
+        logger.info("Saving stock research data for %s", topic)
+        research_db_result = service.save_stock_research(stock_research)
+        
+        # Extract the research ID if save was successful
+        if research_db_result and research_db_result.get("data", {}).get("id"):
+            stock_research_id = research_db_result["data"]["id"]
+            logger.info("Stock research saved successfully with ID: %s", stock_research_id)
+        else:
+            logger.warning("Stock research save returned no ID for %s", topic)
+            
+    except Exception as e:
+        logger.error("Failed to save stock research data for %s: %s", topic, str(e))
+    
+    # Save blog post 
+    try:
+        # Set stock_research_id in blog_content (will be None if research save failed)
+        blog_content["stock_research_id"] = stock_research_id
+        
+        logger.info("Saving blog post for %s with stock_research_id: %s", topic, stock_research_id)
+        blog_db_result = service.save_blog_post(blog_content)
+        
+        if blog_db_result and blog_db_result.get("success"):
+            logger.info("Blog post saved successfully for %s", topic)
+        else:
+            logger.warning("Blog post save returned unexpected result for %s", topic)
+            
+    except Exception as e:
+        logger.error("Failed to save blog post for %s: %s", topic, str(e))
+
+    db_result = {
+        "research_saved": research_db_result.get("success", False) if research_db_result else False,
+        "blog_saved": blog_db_result.get("success", False) if blog_db_result else False,
+        "research_id": stock_research_id,
+        "blog_id": (
+            blog_db_result.get("data", {}).get("id")
+            if blog_db_result and blog_db_result.get("success")
+            else None
+        ),
+    }
+    
+    return db_result
+
+
 @app.route("/research_yfinance", methods=["POST"])
 def research_topic():
     """
@@ -208,50 +272,9 @@ def research_topic():
         # return jsonify(result)
 
         # Save to database if requested
-        db_result = None
-        stock_research_id = None
-        research_db_result = None
-        blog_db_result = None
-
         if save_to_db and blog_content.get("success"):
             logger.info("Attempting to save data to database for ticker: %s", topic)
-
-            try:
-                # Save stock research data
-                stock_research = research_results["data"]
-                logger.info("Saving stock research data for %s", topic)
-                research_db_result = service.save_stock_research(stock_research)
-            except Exception as e:
-                logger.error(
-                    "Stock research failed to store to database: %s\nResponse: %s",
-                    e,
-                    research_db_result,
-                )
-
-            try:
-                # Retrieve stock research id and assign to blog content
-                stock_research_id = research_db_result["data"]["id"]
-                blog_content["stock_research_id"] = stock_research_id
-
-                # Save blog post
-                blog_db_result = service.save_blog_post(blog_content)
-            except Exception as e:
-                logger.error(
-                    "Blog post failed to store to database: %s\nResponse: %s",
-                    e,
-                    blog_db_result,
-                )
-
-            db_result = {
-                "research_saved": research_db_result.get("success", False),
-                "blog_saved": blog_db_result.get("success", False),
-                "research_id": stock_research_id,
-                "blog_id": (
-                    blog_db_result.get("data", {}).get("id")
-                    if blog_db_result.get("success")
-                    else None
-                ),
-            }
+            db_result = save_research_to_database(service, topic, research_results, blog_content)
         else:
             logger.info(
                 "Skipping database save - save_to_db: %s, blog_content success: %s",
@@ -263,10 +286,10 @@ def research_topic():
         response = {
             "success": True,
             "data": blog_content,
-            "research_data_saved": bool(db_result.get("research_saved")),
-            "blog_post_saved": bool(db_result.get("blog_saved")),
+            "research_data_saved": bool(db_result.get("research_saved")) if 'db_result' in locals() and db_result else False,
+            "blog_post_saved": bool(db_result.get("blog_saved")) if 'db_result' in locals() and db_result else False,
             "use_cached": cached_research is not None,
-            "newly_cached_data": newly_cached_data is not None,
+            "newly_cached_data": newly_cached_data is not None if 'newly_cached_data' in locals() else False,
             "timestamp": time.time(),
         }
 
