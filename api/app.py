@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, Response, stream_template
+from flask import Flask, jsonify, request, Response
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -17,28 +17,37 @@ from services.supabase_service import StockResearch, BlogPost
 from services.yfinance_service import perform_yfinance_research
 from services.anthropic_service import anthropic_service
 
-#TODO move logging to its own file to be used throughout project (improves modularity)
+# TODO move logging to its own file to be used throughout project (improves modularity)
 # Configure logging for Railway deployment
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),  # Output to stdout for Railway
-        # logging.StreamHandler(sys.stderr) 
-    ]
+    ],
 )
 
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+
 # Add request logging middleware
 @app.before_request
 def log_request_info():
-    logger.info(f"Request: {request.method} {request.path} - User-Agent: {request.headers.get('User-Agent', 'Unknown')}")
+    '''
+    Log request
+    '''
+    logger.info(
+        f"Request: {request.method} {request.path} - User-Agent: {request.headers.get('User-Agent', 'Unknown')}"
+    )
+
 
 @app.after_request
 def log_response_info(response):
+    '''
+    Log response
+    '''
     logger.info(f"Response: {response.status_code} for {request.method} {request.path}")
     return response
 
@@ -80,7 +89,8 @@ def research_topic():
     Request Body:
         userId (str): The id of the user requesting the data
         topic (str): The topic or stock ticker to research
-        TODO? : save_to_db (bool, optional): Whether to save results to database (default: True)
+        save_to_db (bool, optional): Whether to save results to database (default: True)
+        use_cache (bool, optional): Whether to use cached data 
 
     Returns:
         JSON response containing research results and database save status
@@ -88,6 +98,9 @@ def research_topic():
     try:
         # Get request data
         data = request.get_json()
+        
+         # Get supabase service instance
+        service = get_supabase_service()
 
         # TODO update to verify user id
         if not data or "topic" not in data:
@@ -104,6 +117,7 @@ def research_topic():
         use_cache = data.get("use_cache", True)
 
         # Validate topic
+        # TODO verify that ticker exists
         if not topic or len(topic) < 1:
             return (
                 jsonify(
@@ -112,22 +126,18 @@ def research_topic():
                 400,
             )
         if not re.match(r"^[A-Z0-9]{1,5}$", topic):
-            logger.warning(f"Topic '{topic}' may not be a valid ticker symbol")
+            logger.warning("Topic '%s' may not be a valid ticker symbol", topic)
             return jsonify({"success": False, "error": "iNVALID TICKER SYMBOL!"}), 400
 
-        # TODO include after api testing
-        # if not userId:
-        #     logger.warning(f"User id '{userId}' can not be null")
-        #     return jsonify({
-        #         'success': False,
-        #         'error': 'User ID must be a non-empty string'
-        #     }), 400
-        # else:
-        #     # Verify the user exists / throw error if user id is not found
-        #     service.verify_user(user_id=userId)
-
-        # Get supabase service instance
-        service = get_supabase_service()
+        if not userId:
+            logger.warning("User id '%e' can not be null", userId)
+            return jsonify({
+                'success': False,
+                'error': 'User ID must be a non-empty string'
+            }), 400
+        else:
+            # Verify the user exists / throw error if user id is not found
+            service.verify_user(user_id=userId)
 
         # Check cache first if enabled
         cached_research = None
@@ -137,7 +147,7 @@ def research_topic():
             cache_result = service.get_from_cache(topic, "research_data")
             if cache_result.get("success"):
                 cached_research = cache_result.get("data")
-                logger.info(f"Using cached research data for {topic}")
+                logger.info("Using cached research data for %s", topic)
 
         # Use cached data or perform new research
         if cached_research:
@@ -162,7 +172,9 @@ def research_topic():
 
             # Cache the research data
             if use_cache:
-                newly_cached_data = service.save_to_cache(topic, "research_data", research_results["data"])
+                newly_cached_data = service.save_to_cache(
+                    topic, "research_data", research_results["data"]
+                )
 
         if not research_results["success"]:
             return jsonify(research_results), 500
@@ -198,42 +210,54 @@ def research_topic():
         # Save to database if requested
         db_result = None
         stock_research_id = None
+        research_db_result = None
+        blog_db_result = None
 
         if save_to_db and blog_content.get("success"):
-            logger.info(f"Attempting to save data to database for ticker: {topic}")
-            
-            # Save stock research data
-            stock_research = research_results["data"]
-            logger.info(f"Saving stock research data for {topic}")
-            research_db_result = service.save_stock_research(stock_research)
-            
-            logger.info(f"Stock research save result: {research_db_result}")
+            logger.info("Attempting to save data to database for ticker: %s", topic)
 
-            if research_db_result.get("success"):
+            try:
+                # Save stock research data
+                stock_research = research_results["data"]
+                logger.info("Saving stock research data for %s", topic)
+                research_db_result = service.save_stock_research(stock_research)
+            except Exception as e:
+                logger.error(
+                    "Stock research failed to store to database: %s\nResponse: %s",
+                    e,
+                    research_db_result,
+                )
+
+            try:
+                # Retrieve stock research id and assign to blog content
                 stock_research_id = research_db_result["data"]["id"]
-                logger.info(f"Stock research saved successfully with ID: {stock_research_id}")
-                
                 blog_content["stock_research_id"] = stock_research_id
-                logger.info(f"Saving blog post for {topic}")
-                blog_db_result = service.save_blog_post(blog_content)
-                
-                logger.info(f"Blog post save result: {blog_db_result}")
 
-                db_result = {
-                    "research_saved": research_db_result.get("success", False),
-                    "blog_saved": blog_db_result.get("success", False),
-                    "research_id": stock_research_id,
-                    "blog_id": (
-                        blog_db_result.get("data", {}).get("id")
-                        if blog_db_result.get("success")
-                        else None
-                    ),
-                }
-            else:
-                logger.error(f"Failed to save stock research: {research_db_result}")
-                db_result = research_db_result
+                # Save blog post
+                blog_db_result = service.save_blog_post(blog_content)
+            except Exception as e:
+                logger.error(
+                    "Blog post failed to store to database: %s\nResponse: %s",
+                    e,
+                    blog_db_result,
+                )
+
+            db_result = {
+                "research_saved": research_db_result.get("success", False),
+                "blog_saved": blog_db_result.get("success", False),
+                "research_id": stock_research_id,
+                "blog_id": (
+                    blog_db_result.get("data", {}).get("id")
+                    if blog_db_result.get("success")
+                    else None
+                ),
+            }
         else:
-            logger.info(f"Skipping database save - save_to_db: {save_to_db}, blog_content success: {blog_content.get('success')}")
+            logger.info(
+                "Skipping database save - save_to_db: %s, blog_content success: %s",
+                save_to_db,
+                blog_content.get("success"),
+            )
 
         # Prepare response
         response = {
@@ -250,9 +274,9 @@ def research_topic():
             response["database_result"] = db_result
 
         return jsonify(response)
-
+    
     except Exception as e:
-        logger.error(f"Research failed for topic '{topic}': {str(e)}", exc_info=True)
+        logger.error("Research failed for topic '%s': %s", topic, e, exc_info=True)
         return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
 
 

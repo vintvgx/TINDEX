@@ -50,8 +50,8 @@ class StockResearch:
     # Financial Metrics
     market_cap: Optional[int] = None
     market_state: Optional[str] = None
-    regular_market_price: Optional[float] = None
-    regular_market_volume: Optional[float] = None
+    # regular_market_price: Optional[float] = None
+    # regular_market_volume: Optional[float] = None
     pe_ratio: Optional[float] = None
     price_to_book: Optional[float] = None
     dividend_yield: Optional[float] = None
@@ -82,7 +82,7 @@ class StockResearch:
     sentiment_confidence: Optional[float] = None
 
     # Timestamps
-    timestamp: Optional[datetime] = None
+    # timestamp: Optional[datetime] = None
 
 
 @dataclass
@@ -148,7 +148,7 @@ class SupabaseService:
 
     def verify_user(self, user_id: str) -> bool:
         """
-        Verifies the user id is an authneticated user within supabase.
+        Verifies the user id is an authenticated user within supabase.
 
         Args:
             user_id: the id of the user
