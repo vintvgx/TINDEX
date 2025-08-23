@@ -76,8 +76,8 @@ def perform_yfinance_research(topic: str) -> dict:
             # Financial Metrics
             "market_cap": info.get("marketCap"),
             "market_state": info.get("marketState"),
-            "regular_market_price": info.get("regularMarketPrice"),
-            "regular_market_volume": info.get("regularMarketVolume"),
+            # "regular_market_price": info.get("regularMarketPrice"),
+            # "regular_market_volume": info.get("regularMarketVolume"),
             "pe_ratio": info.get("trailingPE"),
             "price_to_book": info.get("priceToBook"),
             "dividend_yield": info.get("dividendYield"),
@@ -114,7 +114,7 @@ def perform_yfinance_research(topic: str) -> dict:
                     else []
                 ),
             },
-            "news": news_list,
+            "news_data": news_list,
         }
 
         sentiment = analyze_sentiment(research_data)

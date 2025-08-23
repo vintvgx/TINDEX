@@ -184,7 +184,7 @@ def research_topic():
                 jsonify(
                     {
                         "success": False,
-                        "error": "Research results does not include data object",
+                        "error": "Research results does not include data object"
                     }
                 ),
                 400,
