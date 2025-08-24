@@ -166,6 +166,9 @@ def research_topic():
         
          # Get supabase service instance
         service = get_supabase_service()
+        
+        # Initialize db_result to None at the beginning
+        db_result = None
 
         # TODO update to verify user id
         if not data or "topic" not in data:
@@ -206,7 +209,6 @@ def research_topic():
 
         # Check cache first if enabled
         cached_research = None
-        newly_cached_data = None
 
         if use_cache:
             cache_result = service.get_from_cache(topic, "research_data")
@@ -274,7 +276,7 @@ def research_topic():
             "blog_post_saved": bool(db_result.get("blog_saved")) if 'db_result' in locals() and db_result is not None else False,
             "use_cached": cached_research is not None,
             "newly_cached_data": bool(locals().get("newly_cached_data")) if "newly_cached_data" in locals() else False,
-            "timestamp": time.time(),
+            "timestamp": time.time()
         }
 
         if db_result:

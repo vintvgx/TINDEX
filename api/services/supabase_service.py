@@ -157,25 +157,29 @@ class SupabaseService:
             True if user exists, otherwise False.
         """
         try:
-            logger.info(f"Starting verify_user operation for user_id: {user_id}")
+            logger.info("Starting verify_user operation for user_id: %s", user_id)
             
+            # Execute the query to get the actual result
             result = (
-                self.client.table("profiles").select("*").eq("id", user_id).single()
+                self.client.table("profiles")
+                .select("*")
+                .eq("id", user_id)
+                .single()
+                .execute()  # Add .execute() to get the actual response
             )
 
-            if result:
-                logger.info(f"User verified successfully: {user_id}")
+            if result.data:
+                logger.info("User verified successfully: %s", user_id)
                 return {
                     "success": True,
-                    "data": result.data[0],
+                    "data": result.data,  # result.data is already a single object from .single()
                     "message": "User verified",
                 }
             else:
-                logger.warning(f"User not found in database: {user_id}")
-                raise Exception("User does not exists within DB")
-
+                logger.warning("User not found in database: %s", user_id)
+                raise Exception("User does not exist within DB")
         except Exception as e:
-            logger.error(f"Failed to verify user {user_id}: {str(e)}", exc_info=True)
+            logger.error("Failed to verify user %s : %s", user_id, e, exc_info=True)
             return {
                 "success": False,
                 "error": f"{e} | User id '{user_id}' not found within DB",
