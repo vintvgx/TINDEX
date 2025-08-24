@@ -258,7 +258,7 @@ def research_topic():
         # return jsonify(result)
 
         # Save to database if requested
-        if save_to_db and blog_content.get("success"):
+        if save_to_db and blog_content:
             logger.info("Attempting to save data to database for ticker: %s", topic)
             db_result = save_research_to_database(service, topic, research_results, blog_content)
         else:
