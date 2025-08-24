@@ -116,7 +116,7 @@ class AnthropicService:
                 parsed_content = self._parse_ai_response(raw_content, topic)
 
                 return {
-                    "success": True,
+                    # "success": True,
                     "title": parsed_content["title"],
                     "content": parsed_content["content"],
                     "word_count": len(parsed_content["content"].split()),
