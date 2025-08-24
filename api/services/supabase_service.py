@@ -50,7 +50,7 @@ class StockResearch:
     # Financial Metrics
     market_cap: Optional[int] = None
     market_state: Optional[str] = None
-    # regular_market_price: Optional[float] = None
+    regular_market_price: Optional[float] = None
     # regular_market_volume: Optional[float] = None
     pe_ratio: Optional[float] = None
     price_to_book: Optional[float] = None
@@ -214,8 +214,6 @@ class SupabaseService:
         """
         try:
             logger.info("Starting save_stock_research operation")
-            logger.info("Research data: %s", research_data)
-
             
             # Handle both StockResearch objects and dictionaries
             if isinstance(research_data, StockResearch):
