@@ -270,10 +270,10 @@ def research_topic():
         response = {
             "success": True,
             "data": blog_content,
-            "research_data_saved": bool(db_result.get("research_saved")) if 'db_result' in locals() and db_result else False,
-            "blog_post_saved": bool(db_result.get("blog_saved")) if 'db_result' in locals() and db_result else False,
+            "research_data_saved": bool(db_result.get("research_saved")) if 'db_result' in locals() and db_result is not None else False,
+            "blog_post_saved": bool(db_result.get("blog_saved")) if 'db_result' in locals() and db_result is not None else False,
             "use_cached": cached_research is not None,
-            "newly_cached_data": newly_cached_data is not None if 'newly_cached_data' in locals() else False,
+            "newly_cached_data": bool(locals().get("newly_cached_data")) if "newly_cached_data" in locals() else False,
             "timestamp": time.time(),
         }
 
