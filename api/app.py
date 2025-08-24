@@ -221,9 +221,6 @@ def research_topic():
             # Research using yFinance
             research_results = perform_yfinance_research(topic)
 
-            if not research_results["success"]:
-                return jsonify(research_results), 500
-
             if not research_results["data"]:
                 return (
                     jsonify(
@@ -240,20 +237,6 @@ def research_topic():
                 newly_cached_data = service.save_to_cache(
                     topic, "research_data", research_results["data"]
                 )
-
-        if not research_results["success"]:
-            return jsonify(research_results), 500
-
-        if not research_results["data"]:
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        "error": "Research results does not include data object"
-                    }
-                ),
-                400,
-            )
 
         # Run async function in sync context
         # creates an async event within a sync func / blocks thread until event is complete

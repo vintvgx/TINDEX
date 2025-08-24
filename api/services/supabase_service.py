@@ -217,6 +217,8 @@ class SupabaseService:
         """
         try:
             logger.info("Starting save_stock_research operation")
+            logger.info("Research data: %s", research_data)
+
             
             # Handle both StockResearch objects and dictionaries
             if isinstance(research_data, StockResearch):
@@ -229,8 +231,8 @@ class SupabaseService:
                 raise ValueError("research_data must be either StockResearch object or dictionary")
 
             # Set research date if not provided
-            if not data_dict.get("research_date"):
-                data_dict["research_date"] = datetime.now().isoformat()
+            # if not data_dict.get("research_date"):
+            #     data_dict["research_date"] = datetime.now().isoformat()
 
             # Remove None values to avoid database issues
             data_dict = {k: v for k, v in data_dict.items() if v is not None}

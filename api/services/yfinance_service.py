@@ -120,7 +120,7 @@ def perform_yfinance_research(topic: str) -> dict:
         sentiment = analyze_sentiment(research_data)
         research_data["sentiment"] = sentiment
 
-        return {"success": True, "data": research_data}
+        return {"data": research_data}
 
     except Exception as e:
         return {"success": False, "error": f"yFinance research failed: {str(e)}"}
