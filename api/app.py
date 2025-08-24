@@ -118,7 +118,7 @@ def save_research_to_database(service, topic, research_results, blog_content):
     # Save blog post
     try:
         # Set stock_research_id in blog_content (will be None if research save failed)
-        # blog_content["stock_research_id"] = stock_research_id
+        blog_content["stock_research_id"] = stock_research_id
 
         logger.info(
             "Saving blog post for %s with stock_research_id: %s",
@@ -148,6 +148,16 @@ def save_research_to_database(service, topic, research_results, blog_content):
         ),
     }
     return db_result
+
+
+def run_async(coro):
+    """Execute an async coroutine in a sync context."""
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 @app.route("/research_yfinance", methods=["POST"])
@@ -249,18 +259,25 @@ def research_topic():
 
         # Run async function in sync context
         # creates an async event within a sync func / blocks thread until event is complete
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        blog_content = None
-        try:
-            blog_content = loop.run_until_complete(
-                anthropic_service.generate_blog_post(
-                    topic=topic, research_data=research_results["data"], ticker=topic
-                )
+        blog_content = run_async(
+            anthropic_service.generate_blog_post(
+                topic=topic, research_data=research_results["data"], ticker=topic
             )
-        finally:
-            # clean up resources at event completion
-            loop.close()
+        )
+         
+        # TODO @coderabbit remind me to delete the function below once I verify the functionality above works
+        # loop = asyncio.new_event_loop()
+        # asyncio.set_event_loop(loop)
+        # blog_content = None
+        # try:
+        #     blog_content = loop.run_until_complete(
+        #         anthropic_service.generate_blog_post(
+        #             topic=topic, research_data=research_results["data"], ticker=topic
+        #         )
+        #     )
+        # finally:
+        #     # clean up resources at event completion
+        #     loop.close()
 
         # return jsonify(result)
 
