@@ -11,23 +11,14 @@ import asyncio
 import json
 from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, asdict
-import logging
 import sys
 from services.supabase_service import StockResearch, BlogPost
 from services.yfinance_service import perform_yfinance_research
 from services.anthropic_service import anthropic_service
 
-# TODO move logging to its own file to be used throughout project (improves modularity)
-# Configure logging for Railway deployment
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),  # Output to stdout for Railway
-    ],
-)
+from api.log.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 app = Flask(__name__)
 
@@ -54,13 +45,41 @@ def log_response_info(response):
 
 @dataclass
 class RequestData:
-    """Data class for request to api"""
+    """
+    Data class for request to api.
+
+    This class provides a structured way to handle request data across all endpoints.
+    It includes validation and type safety for request parameters.
+
+    Example usage:
+        # Client-side request
+        request_data = {
+            "topic": "AAPL",
+            "userId": "user123",
+            "save_to_db": True,
+            "use_cache": True,
+            "research_data": {...},
+            "target_length": 800,
+            "ticker": "AAPL"
+        }
+
+        # Server-side validation
+        request_data, error = validate_and_create_request_data(request_data)
+        if error:
+            return jsonify(error), 400
+
+        # Use the validated data
+        topic = request_data.topic
+        user_id = request_data.userId
+    """
 
     topic: str
-    # ticker: str
     userId: Optional[str]
     save_to_db: Optional[bool] = True
     use_cache: Optional[bool] = True
+    research_data: Optional[dict] = None
+    target_length: Optional[int] = 800
+    ticker: Optional[str] = None
 
 
 def get_supabase_service():
@@ -160,6 +179,82 @@ def run_async(coro):
         loop.close()
 
 
+def validate_and_create_request_data(
+    data: dict, require_user_id: bool = True, validate_ticker: bool = True
+) -> tuple[RequestData, dict]:
+    """
+    Validate request data and create a RequestData instance.
+
+    Args:
+        data: Raw request data from Flask request
+        require_user_id: Whether userId is required (default: True)
+        validate_ticker: Whether to validate topic as ticker format (default: True)
+
+    Returns:
+        Tuple of (RequestData instance, error_response_dict)
+        If validation fails, RequestData will be None and error_response will contain the error
+    """
+    if not data or "topic" not in data:
+        return None, {"success": False, "error": "Topic is required in request body"}
+
+    try:
+        request_data = RequestData(
+            topic=data["topic"].strip().upper(),
+            userId=data.get("userId"),
+            save_to_db=data.get("save_to_db", True),
+            use_cache=data.get("use_cache", True),
+            research_data=data.get("research_data", {}),
+            target_length=data.get("target_length", 800),
+            ticker=data.get("ticker"),
+        )
+
+        # Additional validation
+        if not request_data.topic or len(request_data.topic) < 1:
+            return None, {"success": False, "error": "Topic must be a non-empty string"}
+
+        if validate_ticker and not re.match(r"^[A-Z0-9]{1,5}$", request_data.topic):
+            return None, {"success": False, "error": "Invalid ticker symbol format"}
+
+        if require_user_id and not request_data.userId:
+            return None, {
+                "success": False,
+                "error": "User ID must be a non-empty string",
+            }
+
+        return request_data, None
+
+    except Exception as e:
+        return None, {"success": False, "error": f"Invalid request data: {str(e)}"}
+
+
+def request_data_to_dict(request_data: RequestData) -> dict:
+    """
+    Convert RequestData instance to dictionary for logging or serialization.
+
+    Args:
+        request_data: RequestData instance
+
+    Returns:
+        Dictionary representation of RequestData
+    """
+    return asdict(request_data)
+
+
+def log_request_data(request_data: RequestData, endpoint: str):
+    """
+    Log RequestData information for debugging and monitoring.
+
+    Args:
+        request_data: RequestData instance
+        endpoint: The endpoint being called
+    """
+    logger.info(
+        f"Request to {endpoint}: topic={request_data.topic}, "
+        f"userId={request_data.userId}, save_to_db={request_data.save_to_db}, "
+        f"use_cache={request_data.use_cache}"
+    )
+
+
 @app.route("/research_yfinance", methods=["POST"])
 def research_topic():
     """
@@ -187,44 +282,22 @@ def research_topic():
         # Initialize db_result to None at the beginning
         db_result = None
 
-        # TODO update to verify user id
-        if not data or "topic" not in data:
-            return (
-                jsonify(
-                    {"success": False, "error": "Topic is required in request body"}
-                ),
-                400,
-            )
+        # Validate and create RequestData instance
+        request_data, error_response = validate_and_create_request_data(data)
+        if error_response:
+            return jsonify(error_response), 400
 
-        topic = data["topic"].strip().upper()
-        userId = data.get("userId")
-        save_to_db = data.get("save_to_db", True)
-        use_cache = data.get("use_cache", True)
+        # Log the request data
+        log_request_data(request_data, "research_yfinance")
 
-        # Validate topic
-        # TODO verify that ticker exists
-        if not topic or len(topic) < 1:
-            return (
-                jsonify(
-                    {"success": False, "error": "Topic must be a non-empty string"}
-                ),
-                400,
-            )
-        if not re.match(r"^[A-Z0-9]{1,5}$", topic):
-            logger.warning("Topic '%s' may not be a valid ticker symbol", topic)
-            return jsonify({"success": False, "error": "iNVALID TICKER SYMBOL!"}), 400
+        # Extract values from RequestData for backward compatibility
+        topic = request_data.topic
+        userId = request_data.userId
+        save_to_db = request_data.save_to_db
+        use_cache = request_data.use_cache
 
-        if not userId:
-            logger.warning("User id '%e' can not be null", userId)
-            return (
-                jsonify(
-                    {"success": False, "error": "User ID must be a non-empty string"}
-                ),
-                400,
-            )
-        else:
-            # Verify the user exists / throw error if user id is not found
-            service.verify_user(user_id=userId)
+        # Verify the user exists / throw error if user id is not found
+        service.verify_user(user_id=userId)
 
         # Check cache first if enabled
         cached_research = None
@@ -264,7 +337,7 @@ def research_topic():
                 topic=topic, research_data=research_results["data"], ticker=topic
             )
         )
-         
+
         # TODO @coderabbit remind me to delete the function below once I verify the functionality above works
         # loop = asyncio.new_event_loop()
         # asyncio.set_event_loop(loop)
@@ -348,28 +421,20 @@ def generate_blog_post_stream():
         # Get request data
         data = request.get_json()
 
-        if not data or "topic" not in data:
-            return (
-                jsonify(
-                    {"success": False, "error": "Topic is required in request body"}
-                ),
-                400,
-            )
+        # Validate and create RequestData instance (no user_id required for this endpoint)
+        request_data, error_response = validate_and_create_request_data(
+            data, require_user_id=False, validate_ticker=False
+        )
+        if error_response:
+            return jsonify(error_response), 400
 
-        topic = data["topic"].strip()
-        research_data = data.get("research_data", {})
-        target_length = data.get("target_length", 800)
-        ticker = data.get("ticker")
+        # Extract values from RequestData
+        topic = request_data.topic
+        research_data = request_data.research_data or {}
+        target_length = request_data.target_length
+        ticker = request_data.ticker
 
-        # Validate inputs
-        if not topic or len(topic) < 1:
-            return (
-                jsonify(
-                    {"success": False, "error": "Topic must be a non-empty string"}
-                ),
-                400,
-            )
-
+        # Additional validation for research_data
         if not isinstance(research_data, dict):
             return (
                 jsonify(

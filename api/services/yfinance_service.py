@@ -1,8 +1,8 @@
 import yfinance as yf
 import pandas as pd
-import logging
+from api.log.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def perform_yfinance_research(topic: str) -> dict:

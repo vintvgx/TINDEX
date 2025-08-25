@@ -12,19 +12,14 @@ Architecture:
 """
 
 import os
-import logging
 from typing import Dict, List, Optional, Any, Union
-from datetime import datetime, timedelta
-import json
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, asdict
 from supabase import create_client, Client
 from supabase.lib.client_options import ClientOptions
+from api.log.logging_config import get_logger
 
-# Configure logging
-#TODO move logging to its own file to be used throughout project (improves modularity)
-#! Deprecated (use logger in app.py)
-logger = logging.getLogger(__name__)
-# Remove NullHandler to allow logs to propagate to Railway
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -423,7 +418,7 @@ class SupabaseService:
                 "ticker": ticker.upper(),
                 "cache_key": cache_key,
                 "cached_data": data,
-                "expires_at": expires_at.isoformat(),
+                "expires_at": datetime.now(timezone.utc) + timedelta(hours=expires_hours)
             }
 
             logger.info(f"Prepared cache data for {ticker} with {len(cache_data)} fields")
