@@ -17,7 +17,8 @@ from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, asdict
 from supabase import create_client, Client
 from supabase.lib.client_options import ClientOptions
-from api.log.logging_config import get_logger
+from log.logging_config import get_logger
+from utils.exceptions import UserNotFoundError
 
 logger = get_logger(__name__)
 
@@ -72,7 +73,7 @@ class StockResearch:
     news_data: Optional[List] = None
 
     # Sentiment Analysis
-    sentiment: Optional[str] = None
+    sentiment: Optional[Dict[str, Any]] = None
     sentiment_score: Optional[int] = None
     sentiment_confidence: Optional[float] = None
 
@@ -153,26 +154,28 @@ class SupabaseService:
         """
         try:
             logger.info("Starting verify_user operation for user_id: %s", user_id)
-            
+
             result = self.client.auth.admin.get_user_by_id(user_id)
-            
-            if result.user.id == user_id:
-                logger.info("User verified successfully: %s", user_id)
-                return {
-                    "success": True,
-                    "data": result.user, 
-                    "message": "User verified",
-                }
-            else:
-                logger.warning("User not found in database: %s", user_id)
-                raise Exception("User does not exist within DB")
+            if getattr(result, "error", None):
+                logger.error(
+                    "Supabase error retrieving user %s: %s", user_id, result.error
+                )
+                raise RuntimeError(f"Error retrieving user: {result.error}")
+
+            user = getattr(result, "user", None)
+            if not user or user.id != user_id:
+                logger.warning("User not found: %s", user_id)
+                raise UserNotFoundError(f"User id '{user_id}' does not exist")
+
+            logger.info("User verified successfully: %s", user_id)
+            return True
+
+        except UserNotFoundError:
+            # Let callers decide how to handle missing users
+            raise
         except Exception as e:
-            logger.error("Failed to verify user %s : %s", user_id, e, exc_info=True)
-            return {
-                "success": False,
-                "error": f"{e} | User id '{user_id}' not found within DB",
-                "timestamp": datetime.now().isoformat(),
-            }
+            logger.error("Failed to verify user %s: %s", user_id, e, exc_info=True)
+            raise
 
     def _handle_database_error(
         self, error: Exception, operation: str
@@ -197,7 +200,9 @@ class SupabaseService:
             "timestamp": datetime.now().isoformat(),
         }
 
-    def save_stock_research(self, research_data: Union[StockResearch, Dict]) -> Dict[str, Any]:
+    def save_stock_research(
+        self, research_data: Union[StockResearch, Dict]
+    ) -> Dict[str, Any]:
         """
         Save comprehensive stock research data to the database.
 
@@ -209,7 +214,7 @@ class SupabaseService:
         """
         try:
             logger.info("Starting save_stock_research operation")
-            
+
             # Handle both StockResearch objects and dictionaries
             if isinstance(research_data, StockResearch):
                 data_dict = asdict(research_data)
@@ -218,7 +223,9 @@ class SupabaseService:
                 data_dict = research_data.copy()
                 ticker = research_data.get("ticker", "unknown")
             else:
-                raise ValueError("research_data must be either StockResearch object or dictionary")
+                raise ValueError(
+                    "research_data must be either StockResearch object or dictionary"
+                )
 
             # Set research date if not provided
             # if not data_dict.get("research_date"):
@@ -231,7 +238,9 @@ class SupabaseService:
             result = self.client.table("stock_research").insert(data_dict).execute()
 
             if result.data:
-                logger.info(f"Stock research saved successfully for {ticker}. Record ID: {result.data[0].get('id', 'unknown')}")
+                logger.info(
+                    f"Stock research saved successfully for {ticker}. Record ID: {result.data[0].get('id', 'unknown')}"
+                )
                 return {
                     "success": True,
                     "data": result.data[0],
@@ -242,8 +251,11 @@ class SupabaseService:
                 raise Exception("No data returned from insert operation")
 
         except Exception as e:
-            ticker_name = ticker if 'ticker' in locals() else "unknown"
-            logger.error(f"Failed to save stock research for {ticker_name}: {str(e)}", exc_info=True)
+            ticker_name = ticker if "ticker" in locals() else "unknown"
+            logger.error(
+                f"Failed to save stock research for {ticker_name}: {str(e)}",
+                exc_info=True,
+            )
             return self._handle_database_error(
                 e, f"save_stock_research for {ticker_name}"
             )
@@ -262,8 +274,10 @@ class SupabaseService:
             Dict containing success status and research data or error information
         """
         try:
-            logger.info(f"Starting get_stock_research operation for ticker: {ticker}, max_age_hours: {max_age_hours}")
-            
+            logger.info(
+                f"Starting get_stock_research operation for ticker: {ticker}, max_age_hours: {max_age_hours}"
+            )
+
             # Calculate cutoff time for recent data
             cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
 
@@ -278,14 +292,18 @@ class SupabaseService:
             )
 
             if result.data:
-                logger.info(f"Stock research retrieved successfully for {ticker}. Found {len(result.data)} records")
+                logger.info(
+                    f"Stock research retrieved successfully for {ticker}. Found {len(result.data)} records"
+                )
                 return {
                     "success": True,
                     "data": result.data[0],
                     "message": "Stock research found",
                 }
             else:
-                logger.info(f"No recent stock research found for {ticker} within {max_age_hours} hours")
+                logger.info(
+                    f"No recent stock research found for {ticker} within {max_age_hours} hours"
+                )
                 return {
                     "success": False,
                     "error": f"No recent stock research found: {ticker}",
@@ -293,7 +311,9 @@ class SupabaseService:
                 }
 
         except Exception as e:
-            logger.error(f"Failed to get stock research for {ticker}: {str(e)}", exc_info=True)
+            logger.error(
+                f"Failed to get stock research for {ticker}: {str(e)}", exc_info=True
+            )
             return self._handle_database_error(e, f"get_stock_research for {ticker}")
 
     def save_blog_post(self, blog_data: Union[BlogPost, Dict]) -> Dict[str, Any]:
@@ -308,11 +328,11 @@ class SupabaseService:
         """
         try:
             logger.info("Starting save_blog_post operation")
-            
+
             # Initialize variables
             title = "unknown"
             ticker = "unknown"
-            
+
             # Handle both BlogPost objects and dictionaries
             if isinstance(blog_data, BlogPost):
                 data_dict = asdict(blog_data)
@@ -323,7 +343,9 @@ class SupabaseService:
                 title = blog_data.get("title", "unknown")
                 ticker = blog_data.get("ticker", "unknown")
             else:
-                raise ValueError("blog_data must be either BlogPost object or dictionary")
+                raise ValueError(
+                    "blog_data must be either BlogPost object or dictionary"
+                )
 
             # Convert tags list to array format for PostgreSQL
             if data_dict.get("tags") and isinstance(data_dict["tags"], list):
@@ -337,21 +359,25 @@ class SupabaseService:
             result = self.client.table("blog_posts").insert(data_dict).execute()
 
             if result.data:
-                logger.info(f"Blog post saved successfully for {ticker}. Title: {title}. Record ID: {result.data[0].get('id', 'unknown')}")
+                logger.info(
+                    f"Blog post saved successfully for {ticker}. Title: {title}. Record ID: {result.data[0].get('id', 'unknown')}"
+                )
                 return {
                     "success": True,
                     "data": result.data[0],
                     "message": "Blog post saved successfully",
                 }
             else:
-                logger.error(f"No data returned from blog post insert operation for {ticker}")
+                logger.error(
+                    f"No data returned from blog post insert operation for {ticker}"
+                )
                 raise Exception("No data returned from insert operation")
 
         except Exception as e:
-            logger.error(f"Failed to save blog post for {ticker}: {str(e)}", exc_info=True)
-            return self._handle_database_error(
-                e, f"save_blog_post for {ticker}"
+            logger.error(
+                f"Failed to save blog post for {ticker}: {str(e)}", exc_info=True
             )
+            return self._handle_database_error(e, f"save_blog_post for {ticker}")
 
     def get_blog_posts_by_ticker(
         self, ticker: str, limit: int = 10, index: int = 0
@@ -369,8 +395,10 @@ class SupabaseService:
             Dict containing success status and blog posts or error information
         """
         try:
-            logger.info(f"Starting get_blog_posts_by_ticker operation for ticker: {ticker}, limit: {limit}, index: {index}")
-            
+            logger.info(
+                f"Starting get_blog_posts_by_ticker operation for ticker: {ticker}, limit: {limit}, index: {index}"
+            )
+
             result = (
                 self.client.table("blog_posts")
                 .select("*")
@@ -388,7 +416,9 @@ class SupabaseService:
             }
 
         except Exception as e:
-            logger.error(f"Failed to get blog posts for {ticker}: {str(e)}", exc_info=True)
+            logger.error(
+                f"Failed to get blog posts for {ticker}: {str(e)}", exc_info=True
+            )
             return self._handle_database_error(
                 e, f"get_blog_posts_by_ticker for {ticker}"
             )
@@ -409,8 +439,10 @@ class SupabaseService:
             Dict containing success status
         """
         try:
-            logger.info(f"Starting save_to_cache operation for ticker: {ticker}, cache_key: {cache_key}, expires_hours: {expires_hours}")
-            
+            logger.info(
+                f"Starting save_to_cache operation for ticker: {ticker}, cache_key: {cache_key}, expires_hours: {expires_hours}"
+            )
+
             expires_at = datetime.now() + timedelta(hours=expires_hours)
             logger.info(f"Cache will expire at: {expires_at.isoformat()}")
 
@@ -418,10 +450,13 @@ class SupabaseService:
                 "ticker": ticker.upper(),
                 "cache_key": cache_key,
                 "cached_data": data,
-                "expires_at": datetime.now(timezone.utc) + timedelta(hours=expires_hours)
+                "expires_at": datetime.now(timezone.utc)
+                + timedelta(hours=expires_hours),
             }
 
-            logger.info(f"Prepared cache data for {ticker} with {len(cache_data)} fields")
+            logger.info(
+                f"Prepared cache data for {ticker} with {len(cache_data)} fields"
+            )
 
             # Use upsert to handle duplicates
             result = (
@@ -433,18 +468,25 @@ class SupabaseService:
             )
 
             if result.data:
-                logger.info(f"Data cached successfully for {ticker} - {cache_key}. Record ID: {result.data[0].get('id', 'unknown')}")
+                logger.info(
+                    f"Data cached successfully for {ticker} - {cache_key}. Record ID: {result.data[0].get('id', 'unknown')}"
+                )
                 return {
                     "success": True,
                     "data": result.data[0],
                     "message": "Data cached successfully",
                 }
             else:
-                logger.error(f"No data returned from cache operation for {ticker} - {cache_key}")
+                logger.error(
+                    f"No data returned from cache operation for {ticker} - {cache_key}"
+                )
                 raise Exception("No data returned from cache operation")
 
         except Exception as e:
-            logger.error(f"Failed to save cache for {ticker} - {cache_key}: {str(e)}", exc_info=True)
+            logger.error(
+                f"Failed to save cache for {ticker} - {cache_key}: {str(e)}",
+                exc_info=True,
+            )
             return self._handle_database_error(e, f"save_to_cache for {ticker}")
 
     def get_from_cache(self, ticker: str, cache_key: str) -> Dict[str, Any]:
@@ -459,8 +501,10 @@ class SupabaseService:
             Dict containing cached data or None if expired/not found
         """
         try:
-            logger.info(f"Starting get_from_cache operation for ticker: {ticker}, cache_key: {cache_key}")
-            
+            logger.info(
+                f"Starting get_from_cache operation for ticker: {ticker}, cache_key: {cache_key}"
+            )
+
             result = (
                 self.client.table("research_cache")
                 .select("*")
@@ -471,8 +515,10 @@ class SupabaseService:
             )
 
             if result.data:
-                logger.info(f"Cache hit for {ticker} - {cache_key}. Updating hit count and last accessed")
-                
+                logger.info(
+                    f"Cache hit for {ticker} - {cache_key}. Updating hit count and last accessed"
+                )
+
                 # Update hit count and last accessed
                 cache_id = result.data[0]["id"]
                 self.client.table("research_cache").update(
@@ -497,7 +543,10 @@ class SupabaseService:
                 }
 
         except Exception as e:
-            logger.error(f"Failed to get from cache for {ticker} - {cache_key}: {str(e)}", exc_info=True)
+            logger.error(
+                f"Failed to get from cache for {ticker} - {cache_key}: {str(e)}",
+                exc_info=True,
+            )
             return self._handle_database_error(e, f"get_from_cache for {ticker}")
 
     def get_recent_research_with_blogs(self, limit: int = 10) -> Dict[str, Any]:
@@ -511,8 +560,10 @@ class SupabaseService:
             Dict containing recent research with blog data
         """
         try:
-            logger.info(f"Starting get_recent_research_with_blogs operation with limit: {limit}")
-            
+            logger.info(
+                f"Starting get_recent_research_with_blogs operation with limit: {limit}"
+            )
+
             result = (
                 self.client.table("recent_research_with_blogs")
                 .select("*")
@@ -530,7 +581,9 @@ class SupabaseService:
             }
 
         except Exception as e:
-            logger.error(f"Failed to get recent research with blogs: {str(e)}", exc_info=True)
+            logger.error(
+                f"Failed to get recent research with blogs: {str(e)}", exc_info=True
+            )
             return self._handle_database_error(e, "get_recent_research_with_blogs")
 
     def cleanup_expired_cache(self) -> Dict[str, Any]:
@@ -542,7 +595,7 @@ class SupabaseService:
         """
         try:
             logger.info("Starting cleanup_expired_cache operation")
-            
+
             result = (
                 self.client.table("research_cache")
                 .delete()

@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-from api.log.logging_config import get_logger
+from log.logging_config import get_logger
 
 logger = get_logger(__name__)
 

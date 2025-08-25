@@ -1,22 +1,13 @@
 from flask import Flask, jsonify, request, Response
-import requests
-from bs4 import BeautifulSoup
-import pandas as pd
 import time
-from urllib.parse import urlencode
 import re
-import supabase
-import random
 import asyncio
 import json
-from typing import Dict, List, Optional, Any, Union
+from typing import Optional
 from dataclasses import dataclass, asdict
-import sys
-from services.supabase_service import StockResearch, BlogPost
 from services.yfinance_service import perform_yfinance_research
 from services.anthropic_service import anthropic_service
-
-from api.log.logging_config import get_logger
+from log.logging_config import get_logger
 
 logger = get_logger(__name__)
 
@@ -136,21 +127,31 @@ def save_research_to_database(service, topic, research_results, blog_content):
 
     # Save blog post
     try:
-        # Set stock_research_id in blog_content (will be None if research save failed)
-        blog_content["stock_research_id"] = stock_research_id
-
-        logger.info(
-            "Saving blog post for %s with stock_research_id: %s",
-            topic,
-            stock_research_id,
+        # verify blog post contains the expected fields
+        can_save_blog = (
+            isinstance(blog_content, dict)
+            and bool(blog_content.get("title"))
+            and bool(blog_content.get("content"))
         )
-        blog_db_result = service.save_blog_post(blog_content)
-
-        if blog_db_result and blog_db_result.get("success"):
-            logger.info("Blog post saved successfully for %s", topic)
+        
+        if not can_save_blog:
+            logger.warning("Skipping blog save: missing title/content for %s", topic)
+            blog_db_result = {"success": False, "error": "Missing title/content"}
         else:
-            logger.warning("Blog post save returned unexpected result for %s", topic)
+            # Set stock_research_id in blog_content (will be None if research save failed)
+            blog_content["stock_research_id"] = stock_research_id
 
+            logger.info(
+                "Saving blog post for %s with stock_research_id: %s",
+                topic,
+                stock_research_id,
+            )
+            blog_db_result = service.save_blog_post(blog_content)
+
+            if blog_db_result and blog_db_result.get("success"):
+                logger.info("Blog post saved successfully for %s", topic)
+            else:
+                logger.warning("Blog post save returned unexpected result for %s", topic)
     except Exception as e:
         logger.error("Failed to save blog post for %s: %s", topic, str(e))
 
