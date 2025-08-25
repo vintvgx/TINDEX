@@ -19,6 +19,7 @@ class AnthropicService:
     def __init__(self):
         """Initialize Anthropic client with environment variables"""
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+        self.anthropic_model = "claude-3-5-sonnet-20241022"
 
         if not self.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY not defined")
@@ -56,7 +57,7 @@ class AnthropicService:
             async with self.client.messages.stream(
                 max_tokens=2048,
                 temperature=0.7,
-                model="claude-3-5-sonnet-20241022",
+                model=self.anthropic_model,
                 messages=[
                     {
                         "role": "user",
@@ -101,7 +102,7 @@ class AnthropicService:
                 max_tokens=2048,
                 temperature=0.7,
                 model="claude-3-5-sonnet-20241022",
-                messages=[
+                messages=[  
                     {
                         "role": "user",
                         "content": prompt,
@@ -115,7 +116,7 @@ class AnthropicService:
                 parsed_content = self._parse_ai_response(raw_content, topic)
 
                 return {
-                    "success": True,
+                    # "success": True,
                     "title": parsed_content["title"],
                     "content": parsed_content["content"],
                     "word_count": len(parsed_content["content"].split()),
@@ -124,6 +125,8 @@ class AnthropicService:
                     ),
                     "ticker": ticker,
                     "research_data": research_data,
+                    "model_used": self.anthropic_model,
+                    "target_length": target_length,
                 }
             else:
                 raise Exception("No content generated from AI response")
