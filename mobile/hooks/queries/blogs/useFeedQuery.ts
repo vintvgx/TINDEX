@@ -11,23 +11,24 @@ export function useFeedQuery() {
     return useQuery({
         queryKey: ["feed"],
         queryFn: async () => {
+          logDebug("Fetching feed")
+
           if (!user) return null; //TODO throw error to display Toast of user is not signed // 
-          console.log("User:", user.email)
     
           const { data, error } = await supabase
           .from("blog_posts")
           .select("*")
-          .eq("status", "published")
+          // .eq("status", "published")
           .order("created_at", { ascending: false })
           .limit(20);
-
+          console.log("test")
           if (error) {
             // If no assessment exists yet, that's not an error
             if (error.code === "PGRST116") return null;
+            console.error("Error retrieving the blog posts:", error)
             throw error;
           }
     
-          // console.log(data)
           logDebug("Feed data fetched successfully.")
         //   return data as AssessmentResponse[]; //TODO create FeedResponse[]
         return data

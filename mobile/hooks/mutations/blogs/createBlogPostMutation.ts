@@ -28,7 +28,7 @@ const generateBlogPost = async (request: GenerateBlogPostRequest): Promise<Gener
 
     // Make the API call to the Edge Function
     const response = await fetch(
-      'https://djpgoofhctzmbgcuxdqr.supabase.co/functions/v1/generate-blog-post',
+      'https://alethia-production.up.railway.app/research_yfinance',
       {
         method: 'POST',
         headers: {
@@ -37,8 +37,7 @@ const generateBlogPost = async (request: GenerateBlogPostRequest): Promise<Gener
         },
         body: JSON.stringify({
           userId: request.userId,
-          topicName: request.topicName,
-          categoryName: request.categoryName,
+          topic: request.topicName,
           targetLength: request.targetLength,
         }),
       }
