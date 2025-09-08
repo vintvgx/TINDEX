@@ -8,24 +8,32 @@ import {
   Image,
   StatusBar,
   Dimensions,
+  Alert
 } from "react-native";
 import { BlogPostType } from "@/types";
-import { Ionicons } from "@expo/vector-icons"; // or your preferred icon library
+import { Ionicons } from "@expo/vector-icons";
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { StockResearchModal } from "./StockResearchModal";
+import { User } from "@supabase/supabase-js";
+import { DeleteBlogPostRequest, useDeleteBlogPostMutation } from "@/hooks/mutations/blogs/deleteBlogPostMutation";
 
 interface PostDetailModalProps {
+  user: User | null;
   post: BlogPostType | null;
   visible: boolean;
   onClose: () => void;
 }
 
 export const PostDetailModal: React.FC<PostDetailModalProps> = ({
+  user,
   post,
   visible,
   onClose,
 }) => {
   const [showResearchModal, setShowResearchModal] = useState(false);
-  
+
+  const { mutateAsync: deleteBlogPost, isPending: deletionPending, isError: deleteBlogPostError } = useDeleteBlogPostMutation()
+
   if (!post) return null;
 
   const formatDate = (dateString: string) => {
@@ -47,8 +55,30 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
     return "https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=800&h=400&fit=crop";
   };
 
+  const handleDeleteBlogPost = async () => {
+    try {
+      const request: DeleteBlogPostRequest = {
+        id: post.id,
+        user: user
+      }
+      const result = await deleteBlogPost(request)
 
+      if (result.success) {
+        Alert.alert(
+          "Success",
+          `Blog post deleted successfully!`
+        );
 
+        onClose()
+      }
+    } catch (error: any) {
+      Alert.alert(
+        "Error",
+        `Failed to  delete blog post!`
+      );
+    }
+  }
+ 
   return (
     <Modal
       visible={visible}
@@ -101,18 +131,30 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
             {post.title}
           </Text>
 
-          {/* Stock Ticker */}
-          {post.research_data?.ticker && (
-            <Pressable
-              onPress={() => setShowResearchModal(true)}
-              className="mb-4">
-              <View className="bg-blue-100 px-4 py-2 rounded-full self-start">
-                <Text className="text-blue-700 font-bold text-lg">
-                  {post.research_data.ticker}
-                </Text>
-              </View>
-            </Pressable>
-          )}
+          {/* Row for displaying Ticker and Delete button */}
+          <View className="flex-row justify-between items-center pt-2 border-t border-gray-100">
+            {/* Stock Ticker */}
+            {post.research_data?.ticker && (
+              <Pressable
+                onPress={() => setShowResearchModal(true)}
+                className="mb-4">
+                <View className="bg-blue-100 px-4 py-2 rounded-full self-start">
+                  <Text className="text-blue-700 font-bold text-lg">
+                    {post.research_data.ticker}
+                  </Text>
+                </View>
+              </Pressable>
+            )}
+            {/* Delete button (only display if user is a superuser) */}
+            {user?.role && (
+              <Pressable
+                onPress={handleDeleteBlogPost}
+                className="mb-4"
+              >
+                <MaterialIcons name="delete" size={24} color="black" />
+              </Pressable>
+            )}
+          </View>
 
           {/* Meta Information */}
           <View className="flex-row justify-between items-center mb-6 pb-6 border-b border-gray-200">

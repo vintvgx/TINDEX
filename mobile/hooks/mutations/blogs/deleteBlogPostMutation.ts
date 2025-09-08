@@ -9,7 +9,7 @@ import {
 } from "@tanstack/react-query";
 
 // TODO replace in blogPosts/delete.ts
-interface DeleteBlogPostRequest {
+export interface DeleteBlogPostRequest {
   id: string;
   user: User;
 }

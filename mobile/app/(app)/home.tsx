@@ -8,6 +8,7 @@ import { BlogPostType } from "@/types";
 import { useState } from "react";
 import { PostDetailModal } from "@/components/PostDetailModal";
 import { AddPostModal } from "@/components/AddPostModal";
+import { useAuth } from "@/context/auth/AuthContext";
 
 const HomeScreen = () => {
   const queryClient = useQueryClient();
@@ -16,6 +17,8 @@ const HomeScreen = () => {
   const [addModalVisible, setAddModalVisible] = useState(false);
 
   const { data: feed, isLoading: feedLoading } = useFeedQuery();
+  const { authState: { user } } = useAuth();
+
 
   const handlePostPress = (post: BlogPostType) => {
     console.log('Post pressed:', post.title);
@@ -87,6 +90,7 @@ const HomeScreen = () => {
 
       {/* Modal for post details */}
       <PostDetailModal
+        user={user}
         post={selectedPost}
         visible={modalVisible}
         onClose={handleCloseModal}
