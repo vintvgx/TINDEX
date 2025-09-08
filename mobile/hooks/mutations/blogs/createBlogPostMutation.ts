@@ -7,7 +7,10 @@ import { BlogGenerationException, validateBlogGenerationRequest } from '@/utils/
 
 
 /**
- * Generates a blog post using the Supabase Edge Function
+ * Generates a blog post using an api endpoint (research_yfinance)
+ *  - generates research data
+ *  - generates blog post 
+ * 
  * @param request - The blog post generation request
  * @returns Promise<GenerateBlogPostResponse>
  */

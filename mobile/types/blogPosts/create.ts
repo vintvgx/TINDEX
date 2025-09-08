@@ -55,7 +55,7 @@ export interface GenerateBlogPostResponse {
 /**
  * Error types for topic creation and blog generation
  */
-export type BlogGenerationError =
+export type BlogException =
   | "INVALID_INPUT"
   | "UNAUTHORIZED"
   | "NETWORK_ERROR"
