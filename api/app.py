@@ -3,6 +3,7 @@ import time
 import re
 import asyncio
 import json
+import requests
 
 from bs4 import BeautifulSoup
 from typing import Optional
@@ -646,7 +647,7 @@ def get_trending_stocks():
                             'sector': cells[3].text.strip(),
                             'industry': cells[4].text.strip(),
                             'market_cap': cells[6].text.strip(),
-                            'pe': cells[7].text.strip(),  # Fixed: was .string()
+                            'pe': cells[7].text.strip(), 
                             'price': cells[8].text.strip(),
                             'change': cells[9].text.strip(),
                             'volume': cells[10].text.strip()
