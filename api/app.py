@@ -88,7 +88,7 @@ def get_supabase_service():
         raise Exception(f"Supabase service initialization failed: {str(e)}") from e
 
 
-def save_research_to_database(service, topic, research_results, blog_content):
+def save_data(service, topic, research_results, blog_content):
     """
     Save research data and blog post to database.
 
@@ -140,6 +140,7 @@ def save_research_to_database(service, topic, research_results, blog_content):
         else:
             # Set stock_research_id in blog_content (will be None if research save failed)
             blog_content["stock_research_id"] = stock_research_id
+            blog_content["status"] = "published"
 
             logger.info(
                 "Saving blog post for %s with stock_research_id: %s",
@@ -358,7 +359,7 @@ def research_topic():
         # Save to database if requested
         if save_to_db and blog_content:
             logger.info("Attempting to save data to database for ticker: %s", topic)
-            db_result = save_research_to_database(
+            db_result = save_data(
                 service, topic, research_results, blog_content
             )
         else:

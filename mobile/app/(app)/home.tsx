@@ -1,13 +1,22 @@
 import { useFeedQuery } from "@/hooks/queries/blogs/useFeedQuery";
 import { prettyJSON } from "@/utils/strings/function";
 import { useQueryClient } from "@tanstack/react-query";
-import { ActivityIndicator, SafeAreaView, ScrollView, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  Text,
+  View,
+} from "react-native";
 import { BlogPostCard } from "@/components/BlogPostCard";
 import { Header } from "@/components/FEED/Header";
 import { BlogPostType } from "@/types";
 import { useState } from "react";
 import { PostDetailModal } from "@/components/PostDetailModal";
 import { AddPostModal } from "@/components/AddPostModal";
+import { useAuth } from "@/context/auth/AuthContext";
+import { signOut } from "@/utils/auth/function";
 
 const HomeScreen = () => {
   const queryClient = useQueryClient();
@@ -16,9 +25,12 @@ const HomeScreen = () => {
   const [addModalVisible, setAddModalVisible] = useState(false);
 
   const { data: feed, isLoading: feedLoading } = useFeedQuery();
+  const {
+    authState: { user },
+  } = useAuth();
 
   const handlePostPress = (post: BlogPostType) => {
-    console.log('Post pressed:', post.title);
+    console.log("Post pressed:", post.title);
     setSelectedPost(post);
     setModalVisible(true);
   };
@@ -30,7 +42,7 @@ const HomeScreen = () => {
   };
 
   const handleAddPress = () => {
-    console.log('Add button pressed');
+    console.log("Add button pressed");
     setAddModalVisible(true);
   };
 
@@ -39,9 +51,9 @@ const HomeScreen = () => {
   };
 
   const handleBlogPostSuccess = async () => {
-    console.log('Post submitted successfully:');
+    console.log("Post submitted successfully:");
     // Invalidate the feed query to refresh the list
-    await queryClient.invalidateQueries({ queryKey: ['feed'] });
+    await queryClient.invalidateQueries({ queryKey: ["feed"] });
   };
 
   return (
@@ -55,14 +67,15 @@ const HomeScreen = () => {
       {feedLoading ? (
         <View className="flex-1 justify-center items-center">
           <ActivityIndicator size="large" color="#007AFF" />
-          <Text className="mt-4 text-base text-gray-600 font-medium">Loading feed...</Text>
+          <Text className="mt-4 text-base text-gray-600 font-medium">
+            Loading feed...
+          </Text>
         </View>
       ) : feed && feed.length > 0 ? (
-        <ScrollView 
-          className="flex-1" 
+        <ScrollView
+          className="flex-1"
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 20 }}
-        >
+          contentContainerStyle={{ paddingBottom: 20 }}>
           <View className="pt-4">
             {/* Single Column Layout for Full-Width Cards */}
             {feed.map((post) => (
@@ -87,10 +100,13 @@ const HomeScreen = () => {
 
       {/* Modal for post details */}
       <PostDetailModal
+        user={user}
         post={selectedPost}
         visible={modalVisible}
         onClose={handleCloseModal}
       />
+
+
 
       {/* Modal for adding new posts */}
       <AddPostModal

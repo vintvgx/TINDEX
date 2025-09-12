@@ -1,6 +1,6 @@
 import {
   GenerateBlogPostRequest,
-  BlogGenerationError,
+  BlogException,
 } from "@/types/blogPosts/create";
 
 /**
@@ -9,12 +9,27 @@ import {
 export class BlogGenerationException extends Error {
   constructor(
     message: string,
-    public code: BlogGenerationError,
+    public code: BlogException,
     public originalError?: any
   ) {
     super(message);
     console.error("Error occurred during generation of blog post:", message);
     this.name = "BlogGenerationException";
+  }
+}
+
+/**
+ * Custom error class for topic creation errors
+ */
+export class BlogDeletionException extends Error {
+  constructor(
+    message: string,
+    public code: BlogException,
+    public originalError?: any
+  ) {
+    super(message);
+    console.error("Error deleting blog post:", message);
+    this.name = "BlogDeletionException";
   }
 }
 

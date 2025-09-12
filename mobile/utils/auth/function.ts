@@ -8,6 +8,7 @@ import {
   statusCodes,
 } from "@react-native-google-signin/google-signin";
 import * as AppleAuthentication from "expo-apple-authentication";
+import { prettyJSON } from '../strings/function';
 
 // GoogleSignin.configure({
 //   scopes: ["https://www.googleapis.com/auth/drive.readonly"],
@@ -109,7 +110,7 @@ export const signInWithApple = async () => {
         token: credential.identityToken,
       });
 
-      console.log("Apple authentication successful:", data);
+      console.log("Apple authentication successful:", prettyJSON(data));
 
       if (error) {
         console.log("Apple authentication error:", error);
@@ -307,21 +308,21 @@ export const signInWithApple = async () => {
 //  * Signs out the current user
 //  * @returns Success status and any error
 //  */
-// export const signOut = async () => {
-//   try {
-//     const { error } = await supabase.auth.signOut();
+export const signOut = async () => {
+  try {
+    const { error } = await supabase.auth.signOut();
 
-//     if (error) {
-//       console.error("Sign Out Error:", error);
-//       return { success: false, error };
-//     }
+    if (error) {
+      console.error("Sign Out Error:", error);
+      return { success: false, error };
+    }
 
-//     return { success: true };
-//   } catch (error) {
-//     console.error("Sign Out Error:", error);
-//     return { success: false, message: "An unexpected error occurred" };
-//   }
-// };
+    return { success: true };
+  } catch (error) {
+    console.error("Sign Out Error:", error);
+    return { success: false, message: "An unexpected error occurred" };
+  }
+};
 
 // /**
 //  * Checks if the user has completed the role selection
