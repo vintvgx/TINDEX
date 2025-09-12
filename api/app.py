@@ -599,48 +599,52 @@ def print_hello_world():
     return jsonify({"success": True, "data": "Hello World!"})
 
 
-# @app.route('/trending-stocks')
-# def get_trending_stocks():
-#     try:
-#         # FINVIZ trending stocks URL
-#         url = "https://finviz.com/screener.ashx?v=111&o=-volume"
+@app.route('/trending-stocks')
+def get_trending_stocks():
+    try:
+        # FINVIZ trending stocks URL
+        url = "https://finviz.com/screener.ashx?v=111&o=-volume"
 
-#         headers = {
-#             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-#         }
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
 
-#         response = requests.get(url, headers=headers, timeout=60)
-#         soup = BeautifulSoup(response.content, 'html.parser')
+        response = requests.get(url, headers=headers, timeout=60)
+        soup = BeautifulSoup(response.content, 'html.parser')
 
-#         # Parse the data (you'll need to inspect FINVIZ structure)
-#         stocks = []
-#         table = soup.find('table', {'class': 'screener_table'})
+        # Parse the data (you'll need to inspect FINVIZ structure)
+        stocks = []
+        table = soup.find('table', {'class': 'screener_table'})
 
-#         if table:
-#             rows = table.find_all('tr')[1:]  # Skip header
-#             for row in rows[:20]:  # Top 20 stocks
-#                 cells = row.find_all('td')
-#                 if len(cells) > 1:
-#                     stock_data = {
-#                         'ticker': cells[1].text.strip(),
-#                         'company': cells[2].text.strip(),
-#                         'price': cells[8].text.strip(),
-#                         'change': cells[9].text.strip(),
-#                         'volume': cells[10].text.strip()
-#                     }
-#                     stocks.append(stock_data)
+        if table:
+            rows = table.find_all('tr')[1:]  # Skip header
+            for row in rows[:20]:  # Top 20 stocks
+                cells = row.find_all('td')
+                if len(cells) > 1:
+                    stock_data = {
+                        'ticker': cells[1].text.strip(),
+                        'company': cells[2].text.strip(),
+                        'sector': cells[3].text.strip(),
+                        'industry': cells[4].text.strip(),
+                        'market_cap': cells[6].text.strip(),
+                        'pe': cells[7].text.string(),
+                        'price': cells[8].text.strip(),
+                        'change': cells[9].text.strip(),
+                        'volume': cells[10].text.strip()
+                    }
+                    stocks.append(stock_data)
 
-#         return jsonify({
-#             'success': True,
-#             'data': stocks,
-#             'timestamp': time.time()
-#         })
+        return jsonify({
+            'success': True,
+            'data': stocks,
+            'timestamp': time.time()
+        })
 
-#     except Exception as e:
-#         return jsonify({
-#             'success': False,
-#             'error': str(e)
-#         }), 500
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 # @app.route('/api/trending-stocks-allowed')
