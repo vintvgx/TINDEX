@@ -599,7 +599,7 @@ def print_hello_world():
     return jsonify({"success": True, "data": "Hello World!"})
 
 
-@app.route('/trending-stocks')
+@app.route('/trending-stocks', methods=["POST"])
 def get_trending_stocks():
     try:
         # FINVIZ trending stocks URL
