@@ -1,3 +1,4 @@
+import { signOut } from '@/utils/auth/function';
 import React from 'react';
 import { View, Text, Pressable } from 'react-native';
 
@@ -14,6 +15,14 @@ export const Header: React.FC<HeaderProps> = ({ onAddPress }) => {
       </Text>
       
       {/* Add Button */}
+      <View className="flex-row justify-between items-center">
+        <Pressable
+          className='mr-4'
+          onPress={async () => {
+            signOut();
+          }}>
+          <Text>Sign Out</Text>
+        </Pressable> 
       <Pressable
         onPress={onAddPress}
         className="w-10 h-10 bg-gray-200 rounded-full flex items-center justify-center"
@@ -21,6 +30,7 @@ export const Header: React.FC<HeaderProps> = ({ onAddPress }) => {
       >
         <Text className="text-xl font-semibold text-gray-700">+</Text>
       </Pressable>
+      </View>
     </View>
   );
 };

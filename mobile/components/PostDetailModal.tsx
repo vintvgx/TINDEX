@@ -15,7 +15,8 @@ import { Ionicons } from "@expo/vector-icons";
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { StockResearchModal } from "./StockResearchModal";
 import { User } from "@supabase/supabase-js";
-import { DeleteBlogPostRequest, useDeleteBlogPostMutation } from "@/hooks/mutations/blogs/deleteBlogPostMutation";
+import { useDeleteBlogPostMutation } from "@/hooks/mutations/blogs/deleteBlogPostMutation";
+import { DeleteBlogPostRequest } from "@/types/blogPosts/delete";
 
 interface PostDetailModalProps {
   user: User | null;

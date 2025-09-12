@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase/supabase";
+import { DeleteBlogPostRequest, DeleteBlogPostResponse } from "@/types/blogPosts/delete";
 import {
     BlogDeletionException
 } from "@/utils/posts/functions";
@@ -8,17 +9,6 @@ import {
     useQueryClient
 } from "@tanstack/react-query";
 
-// TODO replace in blogPosts/delete.ts
-export interface DeleteBlogPostRequest {
-  id: string;
-  user: User;
-}
-
-// TODO replace in blogPosts/delete.ts
-interface DeleteBlogPostResponse {
-  success: boolean;
-  data: string | any;
-}
 
 /**
  * Deletes a blog post directly making a call to supabase.
@@ -37,7 +27,7 @@ const deleteBlogPost = async (
       data: { session },
     } = await supabase.auth.getSession();
 
-    if (!session || request.user.role != "superuser") {
+    if (!session || request?.user?.role != "authenticated") {
       throw new BlogDeletionException("User not authenticated", "UNAUTHORIZED");
     }
 
