@@ -681,39 +681,58 @@ def get_trending_stocks():
             'error': f"An unexpected error occurred: {str(e)}"
         }), 500
 
-@app.route('/trending-stocks-sort', methods=["GET"])
+@app.route('/trending-stocks-sort', methods=["GET", "POST"])
 def get_trending_stocks_by_param():
     """
-    Retrieve trending stocks from FINVIZ screener.
+    Retrieve trending stocks from FINVIZ screener sorted by specified parameter.
     
-    This endpoint fetches the top 20 stocks by volume from FINVIZ
-    without requiring any request parameters.
+    This endpoint fetches the top 20 stocks from FINVIZ sorted by the specified parameter.
     
-    KEY:
-        'volume': '-volume',  
-        'change': '-change',     
-        'pe': 'pe',              
-        'marketcap': '-marketcap' 
+    Request Parameters:
+        sort_by (str): Parameter to sort by. Valid options:
+            - 'volume': Sort by volume (descending)
+            - 'change': Sort by price change (descending) 
+            - 'pe': Sort by P/E ratio (ascending)
+            - 'marketcap': Sort by market cap (descending)
+    
+    For GET requests, pass sort_by as query parameter: ?sort_by=volume
+    For POST requests, pass sort_by in JSON body: {"sort_by": "volume"}
     
     Returns:
         JSON response containing trending stocks data with:
         - success (bool): Whether the request was successful
+        - sorted_by (str): The parameter used for sorting
         - data (list): Array of stock objects with ticker, company, sector, etc.
+        - count (int): Number of stocks returned
         - timestamp (float): Unix timestamp of when data was fetched
     """
     try:
-        # Get request data
-        data = request.get_json()
+        # Get sort_by parameter from either query params (GET) or JSON body (POST)
+        if request.method == "GET":
+            sort_by = request.args.get('sort_by')
+        else:  # POST
+            data = request.get_json() or {}
+            sort_by = data.get('sort_by')
         
-        # retrieve param to sort by
-        sort_by = data.sort_by
+        # Validate sort_by parameter
+        if not sort_by:
+            return jsonify({
+                'success': False,
+                'error': 'sort_by parameter is required'
+            }), 400
+        
+        # Validate sort_by value
+        valid_sort_params = ['volume', 'change', 'pe', 'marketcap']
+        if sort_by not in valid_sort_params:
+            return jsonify({
+                'success': False,
+                'error': f'Invalid sort_by parameter. Must be one of: {", ".join(valid_sort_params)}'
+            }), 400
         
         logger.info(f"Fetching trending stocks from FINVIZ, sorted by: {sort_by}")
         
         # FINVIZ trending stocks URL - sorted by param (descending)
-        # url = "https://finviz.com/screener.ashx?v=111&o=-volume" TODO delete 
         url = f"https://finviz.com/screener.ashx?v=111&o=-{sort_by}"
-
 
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
