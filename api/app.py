@@ -681,13 +681,19 @@ def get_trending_stocks():
             'error': f"An unexpected error occurred: {str(e)}"
         }), 500
 
-@app.route('/trending-stocks-topic', methods=["GET"])
+@app.route('/trending-stocks-sort', methods=["GET"])
 def get_trending_stocks_by_param():
     """
     Retrieve trending stocks from FINVIZ screener.
     
     This endpoint fetches the top 20 stocks by volume from FINVIZ
     without requiring any request parameters.
+    
+    KEY:
+        'volume': '-volume',  
+        'change': '-change',     
+        'pe': 'pe',              
+        'marketcap': '-marketcap' 
     
     Returns:
         JSON response containing trending stocks data with:
