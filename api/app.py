@@ -706,7 +706,7 @@ def get_trending_stocks_by_param():
         data = request.get_json()
         
         # retrieve param to sort by
-        sort_by = data.sort_param
+        sort_by = data.sort_by
         
         logger.info(f"Fetching trending stocks from FINVIZ, sorted by: {sort_by}")
         
