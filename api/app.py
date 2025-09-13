@@ -681,6 +681,94 @@ def get_trending_stocks():
             'error': f"An unexpected error occurred: {str(e)}"
         }), 500
 
+@app.route('/trending-stocks-topic', methods=["GET"])
+def get_trending_stocks_by_param():
+    """
+    Retrieve trending stocks from FINVIZ screener.
+    
+    This endpoint fetches the top 20 stocks by volume from FINVIZ
+    without requiring any request parameters.
+    
+    Returns:
+        JSON response containing trending stocks data with:
+        - success (bool): Whether the request was successful
+        - data (list): Array of stock objects with ticker, company, sector, etc.
+        - timestamp (float): Unix timestamp of when data was fetched
+    """
+    try:
+        # Get request data
+        data = request.get_json()
+        
+        # retrieve param to sort by
+        sort_by = data.sort_param
+        
+        logger.info(f"Fetching trending stocks from FINVIZ, sorted by: {sort_by}")
+        
+        # FINVIZ trending stocks URL - sorted by param (descending)
+        # url = "https://finviz.com/screener.ashx?v=111&o=-volume" TODO delete 
+        url = f"https://finviz.com/screener.ashx?v=111&o=-{sort_by}"
+
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+
+        response = requests.get(url, headers=headers, timeout=60)
+        response.raise_for_status()  # Raise exception for bad status codes
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # Parse the FINVIZ screener table
+        stocks = []
+        table = soup.find('table', {'class': 'screener_table'})
+
+        if table:
+            rows = table.find_all('tr')[1:]  # Skip header row
+            for row in rows[:20]:  # Top 20 stocks
+                cells = row.find_all('td')
+                if len(cells) >= 11:  # Ensure we have enough columns
+                    try:
+                        stock_data = {
+                            'ticker': cells[1].text.strip(),
+                            'company': cells[2].text.strip(),
+                            'sector': cells[3].text.strip(),
+                            'industry': cells[4].text.strip(),
+                            'market_cap': cells[6].text.strip(),
+                            'pe': cells[7].text.strip(), 
+                            'price': cells[8].text.strip(),
+                            'change': cells[9].text.strip(),
+                            'volume': cells[10].text.strip()
+                        }
+                        stocks.append(stock_data)
+                    except (IndexError, AttributeError) as e:
+                        logger.warning(f"Error parsing stock row: {e}")
+                        continue
+        else:
+            logger.warning("Could not find screener table in FINVIZ response")
+
+        logger.info(f"Successfully fetched {len(stocks)} trending stocks")
+        
+        return jsonify({
+            'success': True,
+            'sorted_by': sort_by,
+            'data': stocks,
+            'count': len(stocks),
+            'timestamp': time.time()
+        })
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed when fetching trending stocks: {e}")
+        return jsonify({
+            'success': False,
+            'error': f"Failed to fetch data by {sort_by}, from FINVIZ: {str(e)}"
+        }), 503
+    except Exception as e:
+        logger.error(f"Unexpected error fetching trending stocks: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f"An unexpected error occurred: {str(e)}"
+        }), 500
+
 # @app.route('/api/trending-stocks-allowed')
 # def get_trending_stocks_delay_allowed():
 #     try:
