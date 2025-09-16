@@ -136,7 +136,7 @@ def save_data(service, topic, research_results, blog_content):
             and bool(blog_content.get("title"))
             and bool(blog_content.get("content"))
         )
-        
+
         if not can_save_blog:
             logger.warning("Skipping blog save: missing title/content for %s", topic)
             blog_db_result = {"success": False, "error": "Missing title/content"}
@@ -155,7 +155,9 @@ def save_data(service, topic, research_results, blog_content):
             if blog_db_result and blog_db_result.get("success"):
                 logger.info("Blog post saved successfully for %s", topic)
             else:
-                logger.warning("Blog post save returned unexpected result for %s", topic)
+                logger.warning(
+                    "Blog post save returned unexpected result for %s", topic
+                )
     except Exception as e:
         logger.error("Failed to save blog post for %s: %s", topic, str(e))
 
@@ -362,9 +364,7 @@ def research_topic():
         # Save to database if requested
         if save_to_db and blog_content:
             logger.info("Attempting to save data to database for ticker: %s", topic)
-            db_result = save_data(
-                service, topic, research_results, blog_content
-            )
+            db_result = save_data(service, topic, research_results, blog_content)
         else:
             logger.info(
                 "Skipping database save - save_to_db: %s, blog_content success: %s",
@@ -602,23 +602,31 @@ def print_hello_world():
     return jsonify({"success": True, "data": "Hello World!"})
 
 
-@app.route('/trending-stocks-sort', methods=["GET", "POST"])
+"""TODO Change to allowed url scrape instead of using v=111 (continue to use for testing purposes)
+Confirmed: finviz.com/robots.txt disallows /screener.ashx?* and does NOT allow v=111; 
+it explicitly Allows only these screener presets — 
+v=340: ta_topgainers, ta_newhigh, n_upgrades, n_earningsbefore, it_latestbuys, ta_toplosers, ta_newlow, n_downgrades, n_earningsafter, 
+it_latestsales; v=320: ta_mostvolatile, ta_mostactive, ta_unusualvolume, n_majornews.
+"""
+
+
+@app.route("/trending-stocks-sort", methods=["GET", "POST"])
 def get_trending_stocks_by_param():
     """
     Retrieve trending stocks from FINVIZ screener sorted by specified parameter.
-    
+
     This endpoint fetches the top 20 stocks from FINVIZ sorted by the specified parameter.
-    
+
     Request Parameters:
         sort_by (str): Parameter to sort by. Valid options:
             - 'volume': Sort by volume (descending)
-            - 'change': Sort by price change (descending) 
+            - 'change': Sort by price change (descending)
             - 'pe': Sort by P/E ratio (ascending)
             - 'marketcap': Sort by market cap (descending)
-    
+
     For GET requests, pass sort_by as query parameter: ?sort_by=volume
     For POST requests, pass sort_by in JSON body: {"sort_by": "volume"}
-    
+
     Returns:
         JSON response containing trending stocks data with:
         - success (bool): Whether the request was successful
@@ -630,60 +638,65 @@ def get_trending_stocks_by_param():
     try:
         # Get sort_by parameter from either query params (GET) or JSON body (POST)
         if request.method == "GET":
-            sort_by = request.args.get('sort_by')
+            sort_by = request.args.get("sort_by")
         else:  # POST
             data = request.get_json() or {}
-            sort_by = data.get('sort_by')
-        
+            sort_by = data.get("sort_by")
+
         # Validate sort_by parameter
         if not sort_by:
-            return jsonify({
-                'success': False,
-                'error': 'sort_by parameter is required'
-            }), 400
-        
+            return (
+                jsonify({"success": False, "error": "sort_by parameter is required"}),
+                400,
+            )
+
         # Validate sort_by value
-        valid_sort_params = ['volume', 'change', 'pe', 'marketcap']
+        valid_sort_params = ["volume", "change", "pe", "marketcap"]
         if sort_by not in valid_sort_params:
-            return jsonify({
-                'success': False,
-                'error': f'Invalid sort_by parameter. Must be one of: {", ".join(valid_sort_params)}'
-            }), 400
-        
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": f'Invalid sort_by parameter. Must be one of: {", ".join(valid_sort_params)}',
+                    }
+                ),
+                400,
+            )
+
         logger.info(f"Fetching trending stocks from FINVIZ, sorted by: {sort_by}")
-        
+
         # FINVIZ trending stocks URL - sorted by param (descending)
         url = f"https://finviz.com/screener.ashx?v=111&o=-{sort_by}"
 
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
 
         response = requests.get(url, headers=headers, timeout=60)
         response.raise_for_status()  # Raise exception for bad status codes
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
+
+        soup = BeautifulSoup(response.content, "html.parser")
 
         # Parse the FINVIZ screener table
         stocks = []
-        table = soup.find('table', {'class': 'screener_table'})
+        table = soup.find("table", {"class": "screener_table"})
 
         if table:
-            rows = table.find_all('tr')[1:]  # Skip header row
+            rows = table.find_all("tr")[1:]  # Skip header row
             for row in rows[:20]:  # Top 20 stocks
-                cells = row.find_all('td')
+                cells = row.find_all("td")
                 if len(cells) >= 11:  # Ensure we have enough columns
                     try:
                         stock_data = {
-                            'ticker': cells[1].text.strip(),
-                            'company': cells[2].text.strip(),
-                            'sector': cells[3].text.strip(),
-                            'industry': cells[4].text.strip(),
-                            'market_cap': cells[6].text.strip(),
-                            'pe': cells[7].text.strip(), 
-                            'price': cells[8].text.strip(),
-                            'change': cells[9].text.strip(),
-                            'volume': cells[10].text.strip()
+                            "ticker": cells[1].text.strip(),
+                            "company": cells[2].text.strip(),
+                            "sector": cells[3].text.strip(),
+                            "industry": cells[4].text.strip(),
+                            "market_cap": cells[6].text.strip(),
+                            "pe": cells[7].text.strip(),
+                            "price": cells[8].text.strip(),
+                            "change": cells[9].text.strip(),
+                            "volume": cells[10].text.strip(),
                         }
                         stocks.append(stock_data)
                     except (IndexError, AttributeError) as e:
@@ -693,27 +706,42 @@ def get_trending_stocks_by_param():
             logger.warning("Could not find screener table in FINVIZ response")
 
         logger.info(f"Successfully fetched {len(stocks)} trending stocks")
-        
-        return jsonify({
-            'success': True,
-            'sorted_by': sort_by,
-            'data': stocks,
-            'count': len(stocks),
-            'timestamp': time.time()
-        })
+
+        return jsonify(
+            {
+                "success": True,
+                "sorted_by": sort_by,
+                "data": stocks,
+                "count": len(stocks),
+                "source": "finviz",
+                "timestamp": time.time(),
+            }
+        )
 
     except requests.RequestException as e:
         logger.error(f"Request failed when fetching trending stocks: {e}")
-        return jsonify({
-            'success': False,
-            'error': f"Failed to fetch data by {sort_by}, from FINVIZ: {str(e)}"
-        }), 503
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": f"Failed to fetch data by {sort_by}, from FINVIZ: {str(e)}",
+                }
+            ),
+            503,
+        )
     except Exception as e:
-        logger.error(f"Unexpected error fetching trending stocks: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': f"An unexpected error occurred: {str(e)}"
-        }), 500
+        logger.error("Trending stocks failed: %s", e, exc_info=True)
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "code": "UPSTREAM_FETCH_FAILED",
+                    "error": "Unable to fetch trending stocks at this time",
+                }
+            ),
+            500,
+        )
+
 
 if __name__ == "__main__":
     app.run(debug=True)
