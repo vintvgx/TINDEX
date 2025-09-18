@@ -11,10 +11,17 @@ from dataclasses import dataclass, asdict
 from services.yfinance_service import perform_yfinance_research
 from services.anthropic_service import anthropic_service
 from log.logging_config import get_logger
+from utils.cache import TrendingStocksCache
 
+# Logger for the backend service
 logger = get_logger(__name__)
 
+# Creates a flask application 
 app = Flask(__name__)
+
+# Initialize the cache instance
+trending_cache = TrendingStocksCache()
+TRENDING_STOCKS_CACHE_TTL = 90 #90 seconds
 
 
 # Add request logging middleware
@@ -550,66 +557,6 @@ def generate_blog_post(topic: str, research_data: dict, target_length: int = 800
             500,
         )
 
-
-@app.route("/test_anthropic", methods=["GET"])
-def test_anthropic_connection():
-    """
-    Test the Anthropic API connection.
-
-    This endpoint verifies that the Anthropic service is properly configured
-    and can communicate with the API.
-
-    Returns:
-        JSON response with connection test result
-    """
-    try:
-        # Run async function in sync context
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(anthropic_service.test_connection())
-        finally:
-            loop.close()
-
-        return jsonify(result)
-
-    except Exception as e:
-        return (
-            jsonify({"success": False, "error": f"Connection test failed: {str(e)}"}),
-            500,
-        )
-
-
-@app.route("/test")
-def print_hello_world():
-    """
-    Simple test endpoint that returns a "Hello World!" message.
-
-    This function serves as a basic health check and testing endpoint for the API.
-    It returns a JSON response with a success status and a simple greeting message.
-
-    Returns:
-        flask.Response: A JSON response containing:
-            - success (bool): Always True, indicating successful execution
-            - data (str): The string "Hello World!"
-
-    Notes:
-        - This endpoint is primarily used for testing API connectivity
-        - No authentication or authorization required
-        - No input parameters needed
-        - Always returns a successful response
-    """
-    return jsonify({"success": True, "data": "Hello World!"})
-
-
-"""TODO Change to allowed url scrape instead of using v=111 (continue to use for testing purposes)
-Confirmed: finviz.com/robots.txt disallows /screener.ashx?* and does NOT allow v=111; 
-it explicitly Allows only these screener presets — 
-v=340: ta_topgainers, ta_newhigh, n_upgrades, n_earningsbefore, it_latestbuys, ta_toplosers, ta_newlow, n_downgrades, n_earningsafter, 
-it_latestsales; v=320: ta_mostvolatile, ta_mostactive, ta_unusualvolume, n_majornews.
-"""
-
-
 @app.route("/trending-stocks-sort", methods=["GET", "POST"])
 def get_trending_stocks_by_param():
     """
@@ -662,6 +609,17 @@ def get_trending_stocks_by_param():
                 ),
                 400,
             )
+            
+        # Check cache first
+        cache_key = f"trending_stocks_{sort_by}"
+        cached_data = trending_cache.get(cache_key)
+        
+        if cached_data:
+            logger.info(f"Returning cached trending stocks data for sort_by: {sort_by}")
+            # Add cache indicator to response
+            cached_data["from_cache"] = Tru
+            return jsonify(cached_data)
+
 
         logger.info(f"Fetching trending stocks from FINVIZ, sorted by: {sort_by}")
 

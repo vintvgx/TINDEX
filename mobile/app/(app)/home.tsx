@@ -1,5 +1,3 @@
-"use client"
-
 import { useFeedQuery } from "@/hooks/queries/blogs/useFeedQuery"
 import { useTrendingStocks } from "@/hooks/queries/trending/useTrendingStocks"
 import { useQueryClient } from "@tanstack/react-query"
@@ -13,6 +11,7 @@ import { useQueryClientReady } from "@/hooks/queries/useQueryClientReady"
 import { PostDetailModal } from "@/components/FEED/modals/PostDetailModal"
 import { BlogPostCard } from "@/components/FEED/cards/BlogPostCard"
 import { TrendingStocksCard } from "@/components/FEED/cards/TrendingStocksCard"
+import { SortBy } from "@/types/blogPosts/create"
 
 const HomeScreen = () => {
   const queryClient = useQueryClient()
@@ -21,7 +20,7 @@ const HomeScreen = () => {
   const [selectedPost, setSelectedPost] = useState<BlogPostType | null>(null)
   const [modalVisible, setModalVisible] = useState(false)
   const [addModalVisible, setAddModalVisible] = useState(false)
-  const [selectedSortBy, setSelectedSortBy] = useState<"volume" | "change" | "pe" | "marketcap">("volume")
+  const [selectedSortBy, setSelectedSortBy] = useState<SortBy>(SortBy.VOLUME)
 
   const { data: feed, isLoading: feedLoading } = useFeedQuery()
   const { data: trendingStocks, isLoading: trendingLoading, error: trendingError } = useTrendingStocks(selectedSortBy)
@@ -54,7 +53,7 @@ const HomeScreen = () => {
     await queryClient.invalidateQueries({ queryKey: ["feed"] })
   }
 
-  const handleSortChange = (sortBy: "volume" | "change" | "pe" | "marketcap") => {
+  const handleSortChange = (sortBy: SortBy) => {
     setSelectedSortBy(sortBy)
   }
 
