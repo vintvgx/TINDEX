@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Icon } from "@/components/ui/icon"
 import { ChevronDown } from "lucide-react-native"
+import { SortBy } from "@/types/blogPosts/create"
 
 interface Stock {
   ticker: string
@@ -25,7 +26,7 @@ interface TrendingStocksCardProps {
   isLoading: boolean
   error: any
   selectedSortBy: "volume" | "change" | "pe" | "marketcap"
-  onSortChange: (sortBy: "volume" | "change" | "pe" | "marketcap") => void
+  onSortChange: (sortBy: SortBy) => void
   isQueryClientReady: boolean
 }
 

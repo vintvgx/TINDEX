@@ -1,3 +1,4 @@
+import { SortBy } from "@/types/blogPosts/create";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
@@ -22,7 +23,7 @@ interface TrendingStockResponse {
     source?: string;
 }
 
-type SortBy = 'volume' | 'change' | 'pe' | 'marketcap';
+// type SortBy = 'volume' | 'change' | 'pe' | 'marketcap';
 
 /**
  * Custom hook to fetch trending stocks from the API
@@ -31,7 +32,7 @@ type SortBy = 'volume' | 'change' | 'pe' | 'marketcap';
  * @returns React Query result with trending stocks data
  */
 // In your useTrendingStocks hook
-export function useTrendingStocks(sortBy: SortBy = 'volume') {
+export function useTrendingStocks(sortBy: SortBy = SortBy.VOLUME) {
     // const [delayComplete, setDelayComplete] = useState(false);
     
     // // Add a delay before enabling the query
