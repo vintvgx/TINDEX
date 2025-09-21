@@ -142,7 +142,7 @@ class SupabaseService:
 
         logger.info("Supabase client initialized successfully")
 
-    def verify_user(self, user_id: str) -> bool:
+    def verify_user(self, user_id: str | None) -> bool:
         """
         Verifies the user id is an authenticated user within supabase.
 

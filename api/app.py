@@ -1,27 +1,30 @@
-from flask import Flask, jsonify, request, Response
 import time
 import re
 import asyncio
 import json
-import requests
-
-from bs4 import BeautifulSoup
 from typing import Optional
 from dataclasses import dataclass, asdict
+
+from bs4 import BeautifulSoup
+
+from flask import Flask, jsonify, request, Response # pylint: disable=import-error # type: ignore
+
+import requests
 from services.yfinance_service import perform_yfinance_research
 from services.anthropic_service import anthropic_service
 from log.logging_config import get_logger
-from utils.cache import TrendingStocksCache
+from api.utils.cache import TrendingStocksCache
+
 
 # Logger for the backend service
 logger = get_logger(__name__)
 
-# Creates a flask application 
+# Creates a flask application
 app = Flask(__name__)
 
 # Initialize the cache instance
 trending_cache = TrendingStocksCache()
-TRENDING_STOCKS_CACHE_TTL = 90 #90 seconds
+TRENDING_STOCKS_CACHE_TTL = 90  # 90 seconds
 
 
 # Add request logging middleware
@@ -31,7 +34,10 @@ def log_request_info():
     Log request
     """
     logger.info(
-        f"Request: {request.method} {request.path} - User-Agent: {request.headers.get('User-Agent', 'Unknown')}"
+        "Request: %s %s - User-Agent: %s",
+        request.method,
+        request.path,
+        request.headers.get('User-Agent', 'Unknown')
     )
 
 
@@ -40,7 +46,7 @@ def log_response_info(response):
     """
     Log response
     """
-    logger.info(f"Response: {response.status_code} for {request.method} {request.path}")
+    logger.info("Response: %s for %s %s", response.status_code, request.method, request.path)
     return response
 
 
@@ -81,6 +87,16 @@ class RequestData:
     research_data: Optional[dict] = None
     target_length: Optional[int] = 800
     ticker: Optional[str] = None
+    
+    
+@dataclass
+class RequestDataError:
+    """
+    Data class for error within request to api.
+    """
+    success: bool
+    error: str
+    
 
 
 def get_supabase_service():
@@ -195,7 +211,7 @@ def run_async(coro):
 
 def validate_and_create_request_data(
     data: dict, require_user_id: bool = True, validate_ticker: bool = True
-) -> tuple[RequestData, dict]:
+) -> tuple[RequestData | None, RequestDataError | None]:
     """
     Validate request data and create a RequestData instance.
 
@@ -209,7 +225,10 @@ def validate_and_create_request_data(
         If validation fails, RequestData will be None and error_response will contain the error
     """
     if not data or "topic" not in data:
-        return None, {"success": False, "error": "Topic is required in request body"}
+        return None, RequestDataError(
+            success = False,
+            error="Topic is required in request body"
+        )
 
     try:
         request_data = RequestData(
@@ -224,22 +243,30 @@ def validate_and_create_request_data(
 
         # Additional validation
         if not request_data.topic or len(request_data.topic) < 1:
-            return None, {"success": False, "error": "Topic must be a non-empty string"}
+            return None, RequestDataError(
+                success = False,
+                error="Topic must be a non-empty string"
+                )
 
         if validate_ticker and not re.match(r"^[A-Z0-9]{1,5}$", request_data.topic):
-            return None, {"success": False, "error": "Invalid ticker symbol format"}
+            return None, RequestDataError(
+                success = False,
+                error="Invalid ticker symbol format"
+                )
 
         if require_user_id and not request_data.userId:
-            return None, {
-                "success": False,
-                "error": "User ID must be a non-empty string",
-            }
+            return None, RequestDataError(
+                success = False,
+                error="User ID must be a non-empty string"
+                )
 
         return request_data, None
 
     except Exception as e:
-        return None, {"success": False, "error": f"Invalid request data: {str(e)}"}
-
+              return None, RequestDataError(
+                success = False,
+                error=f"Invalid request data: {str(e)}"
+                )
 
 def request_data_to_dict(request_data: RequestData) -> dict:
     """
@@ -254,7 +281,7 @@ def request_data_to_dict(request_data: RequestData) -> dict:
     return asdict(request_data)
 
 
-def log_request_data(request_data: RequestData, endpoint: str):
+def log_request_data(request_data: RequestData | None, endpoint: str):
     """
     Log RequestData information for debugging and monitoring.
 
@@ -262,12 +289,19 @@ def log_request_data(request_data: RequestData, endpoint: str):
         request_data: RequestData instance
         endpoint: The endpoint being called
     """
-    logger.info(
-        f"Request to {endpoint}: topic={request_data.topic}, "
-        f"userId={request_data.userId}, save_to_db={request_data.save_to_db}, "
-        f"use_cache={request_data.use_cache}"
+    if (request_data == None):
+        logger.info("Nothing contained in Request")
+    else:
+        logger.info(
+        "Request to %s: topic=%s, "
+        "userId=%s, save_to_db=%s, "
+        "use_cache=%s",
+        endpoint,
+        request_data.topic,
+        request_data.userId,
+        request_data.save_to_db,
+        request_data.use_cache
     )
-
 
 @app.route("/research_yfinance", methods=["POST"])
 def research_topic():
@@ -304,53 +338,54 @@ def research_topic():
         # Log the request data
         log_request_data(request_data, "research_yfinance")
 
-        # Extract values from RequestData for backward compatibility
-        topic = request_data.topic
-        userId = request_data.userId
-        save_to_db = request_data.save_to_db
-        use_cache = request_data.use_cache
+        if request_data != None:
+            # Extract values from RequestData for backward compatibility
+            topic = request_data.topic
+            user_id = request_data.userId
+            save_to_db = request_data.save_to_db
+            use_cache = request_data.use_cache
 
-        # Verify the user exists / throw error if user id is not found
-        service.verify_user(user_id=userId)
+            # Verify the user exists / throw error if user id is not found
+            service.verify_user(user_id=user_id)
 
-        # Check cache first if enabled
-        cached_research = None
+            # Check cache first if enabled
+            cached_research = None
 
-        if use_cache:
-            cache_result = service.get_from_cache(topic, "research_data")
-            if cache_result.get("success"):
-                cached_research = cache_result.get("data")
-                logger.info("Using cached research data for %s", topic)
-
-        # Use cached data or perform new research
-        if cached_research:
-            research_results = {"success": True, "data": cached_research}
-        else:
-            # Research using yFinance
-            research_results = perform_yfinance_research(topic)
-
-            if not research_results["data"]:
-                return (
-                    jsonify(
-                        {
-                            "success": False,
-                            "error": "Research results does not include data object",
-                        }
-                    ),
-                    400,
-                )
-
-            # Cache the research data
             if use_cache:
-                service.save_to_cache(topic, "research_data", research_results["data"])
+                cache_result = service.get_from_cache(topic, "research_data")
+                if cache_result.get("success"):
+                    cached_research = cache_result.get("data")
+                    logger.info("Using cached research data for %s", topic)
 
-        # Run async function in sync context
-        # creates an async event within a sync func / blocks thread until event is complete
-        blog_content = run_async(
-            anthropic_service.generate_blog_post(
-                topic=topic, research_data=research_results["data"], ticker=topic
+            # Use cached data or perform new research
+            if cached_research:
+                research_results = {"success": True, "data": cached_research}
+            else:
+                # Research using yFinance
+                research_results = perform_yfinance_research(topic)
+
+                if not research_results["data"]:
+                    return (
+                        jsonify(
+                            {
+                                "success": False,
+                                "error": "Research results does not include data object",
+                            }
+                        ),
+                        400,
+                    )
+
+                # Cache the research data
+                if use_cache:
+                    service.save_to_cache(topic, "research_data", research_results["data"])
+
+            # Run async function in sync context
+            # creates an async event within a sync func / blocks thread until event is complete
+            blog_content = run_async(
+                anthropic_service.generate_blog_post(
+                    topic=topic, research_data=research_results["data"], ticker=topic
+                )
             )
-        )
 
         # TODO @coderabbit remind me to delete the function below once I verify the functionality above works
         # loop = asyncio.new_event_loop()
@@ -368,142 +403,142 @@ def research_topic():
 
         # return jsonify(result)
 
-        # Save to database if requested
-        if save_to_db and blog_content:
-            logger.info("Attempting to save data to database for ticker: %s", topic)
-            db_result = save_data(service, topic, research_results, blog_content)
-        else:
-            logger.info(
-                "Skipping database save - save_to_db: %s, blog_content success: %s",
-                save_to_db,
-                blog_content.get("success"),
-            )
+            # Save to database if requested
+            if save_to_db and blog_content:
+                logger.info("Attempting to save data to database for ticker: %s", topic)
+                db_result = save_data(service, topic, research_results, blog_content)
+            else:
+                logger.info(
+                    "Skipping database save - save_to_db: %s, blog_content success: %s",
+                    save_to_db,
+                    blog_content.get("success"),
+                )
 
-        # Prepare response
-        response = {
-            "success": True,
-            "data": blog_content,
-            "research_data_saved": (
-                bool(db_result.get("research_saved"))
-                if "db_result" in locals() and db_result is not None
-                else False
-            ),
-            "blog_post_saved": (
-                bool(db_result.get("blog_saved"))
-                if "db_result" in locals() and db_result is not None
-                else False
-            ),
-            "use_cached": cached_research is not None,
-            "newly_cached_data": (
-                bool(locals().get("newly_cached_data"))
-                if "newly_cached_data" in locals()
-                else False
-            ),
-            "timestamp": time.time(),
-        }
+            # Prepare response
+            response = {
+                "success": True,
+                "data": blog_content,
+                "research_data_saved": (
+                    bool(db_result.get("research_saved"))
+                    if "db_result" in locals() and db_result is not None
+                    else False
+                ),
+                "blog_post_saved": (
+                    bool(db_result.get("blog_saved"))
+                    if "db_result" in locals() and db_result is not None
+                    else False
+                ),
+                "use_cached": cached_research is not None,
+                "newly_cached_data": (
+                    bool(locals().get("newly_cached_data"))
+                    if "newly_cached_data" in locals()
+                    else False
+                ),
+                "timestamp": time.time(),
+            }
 
-        if db_result:
-            response["database_result"] = db_result
+            if db_result:
+                response["database_result"] = db_result
 
-        return jsonify(response)
+            return jsonify(response)
 
     except Exception as e:
         logger.error("Research failed for topic '%s': %s", topic, e, exc_info=True)
         return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
 
+#TODO include once MVP app is complete and real time data is being used within UI
+# @app.route("/generate_blog_post_stream", methods=["POST"])
+# def generate_blog_post_stream():
+#     """
+#     Generate a blog post with streaming response using ticker information.
 
-@app.route("/generate_blog_post_stream", methods=["POST"])
-def generate_blog_post_stream():
-    """
-    Generate a blog post with streaming response using ticker information.
+#     This endpoint generates blog content in real-time as it becomes available,
+#     providing a better user experience for long-form content generation.
 
-    This endpoint generates blog content in real-time as it becomes available,
-    providing a better user experience for long-form content generation.
+#     Request Body:
+#         topic (str): The topic to generate content about
+#         research_data (dict): Research data to inform the content
+#         target_length (int, optional): Target word count (default: 800)
+#         ticker (str, optional): Stock ticker symbol for financial analysis
 
-    Request Body:
-        topic (str): The topic to generate content about
-        research_data (dict): Research data to inform the content
-        target_length (int, optional): Target word count (default: 800)
-        ticker (str, optional): Stock ticker symbol for financial analysis
+#     Returns:
+#         Streaming response with generated content chunks
+#     """
+#     try:
+#         # Get request data
+#         data = request.get_json()
 
-    Returns:
-        Streaming response with generated content chunks
-    """
-    try:
-        # Get request data
-        data = request.get_json()
+#         # Validate and create RequestData instance (no user_id required for this endpoint)
+#         request_data, error_response = validate_and_create_request_data(
+#             data, require_user_id=False, validate_ticker=False
+#         )
+#         if error_response:
+#             return jsonify(error_response), 400
 
-        # Validate and create RequestData instance (no user_id required for this endpoint)
-        request_data, error_response = validate_and_create_request_data(
-            data, require_user_id=False, validate_ticker=False
-        )
-        if error_response:
-            return jsonify(error_response), 400
+#         # Extract values from RequestData
+#         topic = request_data.topic
+#         research_data = request_data.research_data or {}
+#         target_length = request_data.target_length
+#         ticker = request_data.ticker
 
-        # Extract values from RequestData
-        topic = request_data.topic
-        research_data = request_data.research_data or {}
-        target_length = request_data.target_length
-        ticker = request_data.ticker
+#         # Additional validation for research_data
+#         if not isinstance(research_data, dict):
+#             return (
+#                 jsonify(
+#                     {"success": False, "error": "Research data must be a dictionary"}
+#                 ),
+#                 400,
+#             )
 
-        # Additional validation for research_data
-        if not isinstance(research_data, dict):
-            return (
-                jsonify(
-                    {"success": False, "error": "Research data must be a dictionary"}
-                ),
-                400,
-            )
+#         # Create async generator function for streaming
+#         async def generate_content():
+#             try:
+#                 async for chunk in anthropic_service.generate_blog_post_stream(
+#                     topic=topic,
+#                     research_data=research_data,
+#                     target_length=target_length,
+#                     ticker=ticker,
+#                 ):
+#                     yield f"data: {json.dumps({'chunk': chunk, 'success': True})}\n\n"
 
-        # Create async generator function for streaming
-        async def generate_content():
-            try:
-                async for chunk in anthropic_service.generate_blog_post_stream(
-                    topic=topic,
-                    research_data=research_data,
-                    target_length=target_length,
-                    ticker=ticker,
-                ):
-                    yield f"data: {json.dumps({'chunk': chunk, 'success': True})}\n\n"
+#                 # Send completion signal
+#                 yield f"data: {json.dumps({'complete': True, 'success': True})}\n\n"
 
-                # Send completion signal
-                yield f"data: {json.dumps({'complete': True, 'success': True})}\n\n"
+#             except Exception as e:
+#                 error_msg = f"Error generating content: {str(e)}"
+#                 yield f"data: {json.dumps({'error': error_msg, 'success': False})}\n\n"
 
-            except Exception as e:
-                error_msg = f"Error generating content: {str(e)}"
-                yield f"data: {json.dumps({'error': error_msg, 'success': False})}\n\n"
+#         # Convert async generator to sync generator for Flask
+#         def sync_generator():
+#             loop = asyncio.new_event_loop()
+#             asyncio.set_event_loop(loop)
+#             try:
+#                 async_gen = generate_content()
+#                 while True:
+#                     try:
+#                         chunk = loop.run_until_complete(async_gen.__anext__())
+#                         yield chunk
+#                     except StopAsyncIteration:
+#                         break
+#             finally:
+#                 loop.close()
 
-        # Convert async generator to sync generator for Flask
-        def sync_generator():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                async_gen = generate_content()
-                while True:
-                    try:
-                        chunk = loop.run_until_complete(async_gen.__anext__())
-                        yield chunk
-                    except StopAsyncIteration:
-                        break
-            finally:
-                loop.close()
+#         return Response(
+#             sync_generator(),
+#             mimetype="text/event-stream",
+#             headers={
+#                 "Cache-Control": "no-cache",
+#                 "Connection": "keep-alive",
+#                 "Access-Control-Allow-Origin": "*",
+#                 "Access-Control-Allow-Headers": "Content-Type",
+#             },
+#         )
 
-        return Response(
-            sync_generator(),
-            mimetype="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Content-Type",
-            },
-        )
-
-    except Exception as e:
-        return (
-            jsonify({"success": False, "error": f"Blog generation failed: {str(e)}"}),
-            500,
-        )
+#     except Exception as e:
+#         return (
+#             jsonify({"success": False, "error": f"Blog generation failed: {str(e)}"}),
+#             500,
+#         )
 
 
 @app.route("/generate_blog_post", methods=["POST"])
@@ -524,7 +559,7 @@ def generate_blog_post(topic: str, research_data: dict, target_length: int = 800
         JSON response containing the complete blog post
     """
     try:
-        ticker = topic.trim()
+        ticker = topic.strip()
 
         if not isinstance(research_data, dict):
             return (
@@ -556,6 +591,7 @@ def generate_blog_post(topic: str, research_data: dict, target_length: int = 800
             jsonify({"success": False, "error": f"Blog generation failed: {str(e)}"}),
             500,
         )
+
 
 @app.route("/trending-stocks-sort", methods=["GET", "POST"])
 def get_trending_stocks_by_param():
@@ -609,25 +645,22 @@ def get_trending_stocks_by_param():
                 ),
                 400,
             )
-            
+
         # Check cache first
         cache_key = f"trending_stocks_{sort_by}"
         cached_data = trending_cache.get(cache_key)
-        
+
         if cached_data:
-            logger.info(f"Returning cached trending stocks data for sort_by: {sort_by}")
-            # Add cache indicator to response
-            cached_data["from_cache"] = Tru
-            return jsonify(cached_data)
+            logger.info("Returning cached trending stocks data for sort_by: %s", sort_by)
+            return jsonify({**cached_data, "from_cache": True})
 
-
-        logger.info(f"Fetching trending stocks from FINVIZ, sorted by: {sort_by}")
+        logger.info("Fetching trending stocks from FINVIZ, sorted by: %s", sort_by)
 
         # FINVIZ trending stocks URL - sorted by param (descending)
         url = f"https://finviz.com/screener.ashx?v=111&o=-{sort_by}"
 
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (HTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
 
         response = requests.get(url, headers=headers, timeout=60)
@@ -640,7 +673,7 @@ def get_trending_stocks_by_param():
         table = soup.find("table", {"class": "screener_table"})
 
         if table:
-            rows = table.find_all("tr")[1:]  # Skip header row
+            rows = table.find_all("tr")[1:]   # pylint: disable=import-error # type: ignore
             for row in rows[:20]:  # Top 20 stocks
                 cells = row.find_all("td")
                 if len(cells) >= 11:  # Ensure we have enough columns
@@ -658,12 +691,12 @@ def get_trending_stocks_by_param():
                         }
                         stocks.append(stock_data)
                     except (IndexError, AttributeError) as e:
-                        logger.warning(f"Error parsing stock row: {e}")
+                        logger.warning("Error parsing stock row: %s", e)
                         continue
         else:
             logger.warning("Could not find screener table in FINVIZ response")
 
-        logger.info(f"Successfully fetched {len(stocks)} trending stocks")
+        logger.info("Successfully fetched %s trending stocks", len(stocks))
 
         return jsonify(
             {
@@ -671,13 +704,13 @@ def get_trending_stocks_by_param():
                 "sorted_by": sort_by,
                 "data": stocks,
                 "count": len(stocks),
-                "source": "finviz",
+                "source": "FINVIZ",
                 "timestamp": time.time(),
             }
         )
 
     except requests.RequestException as e:
-        logger.error(f"Request failed when fetching trending stocks: {e}")
+        logger.error("Request failed when fetching trending stocks: %s", e)
         return (
             jsonify(
                 {
