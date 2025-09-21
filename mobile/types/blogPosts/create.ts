@@ -23,6 +23,13 @@ export interface GenerateBlogPostRequest {
   priority?: PRIORITY_TYPE;
 }
 
+export enum SortBy {
+  VOLUME = "volume",
+  CHANGE = "change",
+  PE = "pe", 
+  MARKET_CAP = "marketcap"
+}
+
 export enum PRIORITY_TYPE {
   LOW = "low",
   NORMAL = "normal",

@@ -3,15 +3,25 @@ import time
 import re
 import asyncio
 import json
+import requests
+
+from bs4 import BeautifulSoup
 from typing import Optional
 from dataclasses import dataclass, asdict
 from services.yfinance_service import perform_yfinance_research
 from services.anthropic_service import anthropic_service
 from log.logging_config import get_logger
+from utils.cache import TrendingStocksCache
 
+# Logger for the backend service
 logger = get_logger(__name__)
 
+# Creates a flask application 
 app = Flask(__name__)
+
+# Initialize the cache instance
+trending_cache = TrendingStocksCache()
+TRENDING_STOCKS_CACHE_TTL = 90 #90 seconds
 
 
 # Add request logging middleware
@@ -133,7 +143,7 @@ def save_data(service, topic, research_results, blog_content):
             and bool(blog_content.get("title"))
             and bool(blog_content.get("content"))
         )
-        
+
         if not can_save_blog:
             logger.warning("Skipping blog save: missing title/content for %s", topic)
             blog_db_result = {"success": False, "error": "Missing title/content"}
@@ -152,7 +162,9 @@ def save_data(service, topic, research_results, blog_content):
             if blog_db_result and blog_db_result.get("success"):
                 logger.info("Blog post saved successfully for %s", topic)
             else:
-                logger.warning("Blog post save returned unexpected result for %s", topic)
+                logger.warning(
+                    "Blog post save returned unexpected result for %s", topic
+                )
     except Exception as e:
         logger.error("Failed to save blog post for %s: %s", topic, str(e))
 
@@ -359,9 +371,7 @@ def research_topic():
         # Save to database if requested
         if save_to_db and blog_content:
             logger.info("Attempting to save data to database for ticker: %s", topic)
-            db_result = save_data(
-                service, topic, research_results, blog_content
-            )
+            db_result = save_data(service, topic, research_results, blog_content)
         else:
             logger.info(
                 "Skipping database save - save_to_db: %s, blog_content success: %s",
@@ -547,207 +557,149 @@ def generate_blog_post(topic: str, research_data: dict, target_length: int = 800
             500,
         )
 
-
-@app.route("/test_anthropic", methods=["GET"])
-def test_anthropic_connection():
+@app.route("/trending-stocks-sort", methods=["GET", "POST"])
+def get_trending_stocks_by_param():
     """
-    Test the Anthropic API connection.
+    Retrieve trending stocks from FINVIZ screener sorted by specified parameter.
 
-    This endpoint verifies that the Anthropic service is properly configured
-    and can communicate with the API.
+    This endpoint fetches the top 20 stocks from FINVIZ sorted by the specified parameter.
+
+    Request Parameters:
+        sort_by (str): Parameter to sort by. Valid options:
+            - 'volume': Sort by volume (descending)
+            - 'change': Sort by price change (descending)
+            - 'pe': Sort by P/E ratio (ascending)
+            - 'marketcap': Sort by market cap (descending)
+
+    For GET requests, pass sort_by as query parameter: ?sort_by=volume
+    For POST requests, pass sort_by in JSON body: {"sort_by": "volume"}
 
     Returns:
-        JSON response with connection test result
+        JSON response containing trending stocks data with:
+        - success (bool): Whether the request was successful
+        - sorted_by (str): The parameter used for sorting
+        - data (list): Array of stock objects with ticker, company, sector, etc.
+        - count (int): Number of stocks returned
+        - timestamp (float): Unix timestamp of when data was fetched
     """
     try:
-        # Run async function in sync context
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(anthropic_service.test_connection())
-        finally:
-            loop.close()
+        # Get sort_by parameter from either query params (GET) or JSON body (POST)
+        if request.method == "GET":
+            sort_by = request.args.get("sort_by")
+        else:  # POST
+            data = request.get_json() or {}
+            sort_by = data.get("sort_by")
 
-        return jsonify(result)
+        # Validate sort_by parameter
+        if not sort_by:
+            return (
+                jsonify({"success": False, "error": "sort_by parameter is required"}),
+                400,
+            )
 
-    except Exception as e:
+        # Validate sort_by value
+        valid_sort_params = ["volume", "change", "pe", "marketcap"]
+        if sort_by not in valid_sort_params:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": f'Invalid sort_by parameter. Must be one of: {", ".join(valid_sort_params)}',
+                    }
+                ),
+                400,
+            )
+            
+        # Check cache first
+        cache_key = f"trending_stocks_{sort_by}"
+        cached_data = trending_cache.get(cache_key)
+        
+        if cached_data:
+            logger.info(f"Returning cached trending stocks data for sort_by: {sort_by}")
+            # Add cache indicator to response
+            cached_data["from_cache"] = Tru
+            return jsonify(cached_data)
+
+
+        logger.info(f"Fetching trending stocks from FINVIZ, sorted by: {sort_by}")
+
+        # FINVIZ trending stocks URL - sorted by param (descending)
+        url = f"https://finviz.com/screener.ashx?v=111&o=-{sort_by}"
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+
+        response = requests.get(url, headers=headers, timeout=60)
+        response.raise_for_status()  # Raise exception for bad status codes
+
+        soup = BeautifulSoup(response.content, "html.parser")
+
+        # Parse the FINVIZ screener table
+        stocks = []
+        table = soup.find("table", {"class": "screener_table"})
+
+        if table:
+            rows = table.find_all("tr")[1:]  # Skip header row
+            for row in rows[:20]:  # Top 20 stocks
+                cells = row.find_all("td")
+                if len(cells) >= 11:  # Ensure we have enough columns
+                    try:
+                        stock_data = {
+                            "ticker": cells[1].text.strip(),
+                            "company": cells[2].text.strip(),
+                            "sector": cells[3].text.strip(),
+                            "industry": cells[4].text.strip(),
+                            "market_cap": cells[6].text.strip(),
+                            "pe": cells[7].text.strip(),
+                            "price": cells[8].text.strip(),
+                            "change": cells[9].text.strip(),
+                            "volume": cells[10].text.strip(),
+                        }
+                        stocks.append(stock_data)
+                    except (IndexError, AttributeError) as e:
+                        logger.warning(f"Error parsing stock row: {e}")
+                        continue
+        else:
+            logger.warning("Could not find screener table in FINVIZ response")
+
+        logger.info(f"Successfully fetched {len(stocks)} trending stocks")
+
+        return jsonify(
+            {
+                "success": True,
+                "sorted_by": sort_by,
+                "data": stocks,
+                "count": len(stocks),
+                "source": "finviz",
+                "timestamp": time.time(),
+            }
+        )
+
+    except requests.RequestException as e:
+        logger.error(f"Request failed when fetching trending stocks: {e}")
         return (
-            jsonify({"success": False, "error": f"Connection test failed: {str(e)}"}),
+            jsonify(
+                {
+                    "success": False,
+                    "error": f"Failed to fetch data by {sort_by}, from FINVIZ: {str(e)}",
+                }
+            ),
+            503,
+        )
+    except Exception as e:
+        logger.error("Trending stocks failed: %s", e, exc_info=True)
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "code": "UPSTREAM_FETCH_FAILED",
+                    "error": "Unable to fetch trending stocks at this time",
+                }
+            ),
             500,
         )
 
-
-@app.route("/test")
-def print_hello_world():
-    """
-    Simple test endpoint that returns a "Hello World!" message.
-
-    This function serves as a basic health check and testing endpoint for the API.
-    It returns a JSON response with a success status and a simple greeting message.
-
-    Returns:
-        flask.Response: A JSON response containing:
-            - success (bool): Always True, indicating successful execution
-            - data (str): The string "Hello World!"
-
-    Notes:
-        - This endpoint is primarily used for testing API connectivity
-        - No authentication or authorization required
-        - No input parameters needed
-        - Always returns a successful response
-    """
-    return jsonify({"success": True, "data": "Hello World!"})
-
-
-# @app.route('/trending-stocks')
-# def get_trending_stocks():
-#     try:
-#         # FINVIZ trending stocks URL
-#         url = "https://finviz.com/screener.ashx?v=111&o=-volume"
-
-#         headers = {
-#             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-#         }
-
-#         response = requests.get(url, headers=headers, timeout=60)
-#         soup = BeautifulSoup(response.content, 'html.parser')
-
-#         # Parse the data (you'll need to inspect FINVIZ structure)
-#         stocks = []
-#         table = soup.find('table', {'class': 'screener_table'})
-
-#         if table:
-#             rows = table.find_all('tr')[1:]  # Skip header
-#             for row in rows[:20]:  # Top 20 stocks
-#                 cells = row.find_all('td')
-#                 if len(cells) > 1:
-#                     stock_data = {
-#                         'ticker': cells[1].text.strip(),
-#                         'company': cells[2].text.strip(),
-#                         'price': cells[8].text.strip(),
-#                         'change': cells[9].text.strip(),
-#                         'volume': cells[10].text.strip()
-#                     }
-#                     stocks.append(stock_data)
-
-#         return jsonify({
-#             'success': True,
-#             'data': stocks,
-#             'timestamp': time.time()
-#         })
-
-#     except Exception as e:
-#         return jsonify({
-#             'success': False,
-#             'error': str(e)
-#         }), 500
-
-
-# @app.route('/api/trending-stocks-allowed')
-# def get_trending_stocks_delay_allowed():
-#     try:
-#         # Use allowed endpoints only
-#         allowed_endpoints = {
-#             'most_active': 'https://finviz.com/screener.ashx?v=320&s=ta_mostactive',
-#             'top_gainers': 'https://finviz.com/screener.ashx?v=340&s=ta_topgainers',
-#             'unusual_volume': 'https://finviz.com/screener.ashx?v=320&s=ta_unusualvolume'
-#         }
-
-#         headers = {
-#             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-#         }
-
-#         all_data = {}
-
-#         for category, url in allowed_endpoints.items():
-#             time.sleep(random.uniform(2, 4))  # Be respectful with delays
-#             response = requests.get(url, headers=headers)
-#             all_data[category] = parse_finviz_data(response)
-
-#         return jsonify({
-#             'success': True,
-#             'data': all_data
-#         })
-
-#     except Exception as e:
-#         return jsonify({
-#             'success': False,
-#             'error': str(e)
-#         }), 500
-
-# @app.route('/stock/<ticker>')
-# def get_stock_data(ticker):
-#     try:
-#         url = f"https://finviz.com/quote.ashx?t={ticker.upper()}&p=d" #This url is ALLOWED
-
-#         headers = {
-#             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-#         }
-
-#         response = requests.get(url, headers=headers, timeout=60)
-#         soup = BeautifulSoup(response.content, 'html.parser')
-
-#         # Extract stock data from the page
-#         stock_data = {
-#             'ticker': ticker.upper(),
-#             'price': None,
-#             'change': None,
-#             'market_cap': None
-#         }
-
-#         # Parse specific elements (inspect FINVIZ for exact selectors)
-#         price_element = soup.find('td', {'class': 'snapshot-td2'})
-#         if price_element:
-#             stock_data['price'] = price_element.text.strip()
-
-#         return jsonify({
-#             'success': True,
-#             'data': stock_data
-#         })
-
-#     except Exception as e:
-#         return jsonify({
-#             'success': False,
-#             'error': str(e)
-#         }), 500
-
-#! Deprecated
-# """
-# Allowed urls for FINVIZ
-# NOTE: If url is not listed than url is not allowed for web scraping and could result in IP Addr being blocked
-# """
-# allowed_urls = {
-#     'top_gainers': 'https://finviz.com/screener.ashx?v=340&s=ta_topgainers',
-#     'most_active': 'https://finviz.com/screener.ashx?v=320&s=ta_mostactive',
-#     'unusual_volume': 'https://finviz.com/screener.ashx?v=320&s=ta_unusualvolume',
-#     'top_losers': 'https://finviz.com/screener.ashx?v=340&s=ta_toplosers',
-#     'new_highs': 'https://finviz.com/screener.ashx?v=340&s=ta_newhigh',
-#     'new_lows': 'https://finviz.com/screener.ashx?v=340&s=ta_newlow'
-# }
-
-# def parse_finviz_data(response):
-#     """Parse FINVIZ data from response"""
-#     try:
-#         soup = BeautifulSoup(response.content, 'html.parser')
-#         stocks = []
-#         table = soup.find('table', {'class': 'screener_table'})
-
-#         if table:
-#             rows = table.find_all('tr')[1:]  # Skip header
-#             for row in rows[:10]:  # Top 10 stocks
-#                 cells = row.find_all('td')
-#                 if len(cells) > 1:
-#                     stock_data = {
-#                         'ticker': cells[1].text.strip(),
-#                         'company': cells[2].text.strip(),
-#                         'price': cells[8].text.strip(),
-#                         'change': cells[9].text.strip(),
-#                         'volume': cells[10].text.strip()
-#                     }
-#                     stocks.append(stock_data)
-#         return stocks
-#     except Exception as e:
-#         return {'error': str(e)}
 
 if __name__ == "__main__":
     app.run(debug=True)

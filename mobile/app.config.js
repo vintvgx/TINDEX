@@ -2,7 +2,7 @@ export default {
   expo: {
     name: "alethia",
     slug: "alethia",
-    version: "0.0.8",
+    version: "0.0.10",
     orientation: "portrait",
     icon: "./assets/images/icon.png",
     scheme: "mobile",
@@ -10,6 +10,9 @@ export default {
     newArchEnabled: true,
     ios: {
       supportsTablet: true,
+      // preview
+      // bundleIdentifier: "com.communite.tindex",
+      // dev
       bundleIdentifier: "com.communite.alethia",
       usesAppleSignIn: true,
       simulator: true,

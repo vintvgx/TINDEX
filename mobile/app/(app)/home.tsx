@@ -1,121 +1,123 @@
-import { useFeedQuery } from "@/hooks/queries/blogs/useFeedQuery";
-import { prettyJSON } from "@/utils/strings/function";
-import { useQueryClient } from "@tanstack/react-query";
-import {
-  ActivityIndicator,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  Text,
-  View,
-} from "react-native";
-import { BlogPostCard } from "@/components/BlogPostCard";
-import { Header } from "@/components/FEED/Header";
-import { BlogPostType } from "@/types";
-import { useState } from "react";
-import { PostDetailModal } from "@/components/PostDetailModal";
-import { AddPostModal } from "@/components/AddPostModal";
-import { useAuth } from "@/context/auth/AuthContext";
-import { signOut } from "@/utils/auth/function";
+import { useFeedQuery } from "@/hooks/queries/blogs/useFeedQuery"
+import { useTrendingStocks } from "@/hooks/queries/trending/useTrendingStocks"
+import { useQueryClient } from "@tanstack/react-query"
+import { ActivityIndicator, SafeAreaView, ScrollView, Text, View } from "react-native"
+import { Header } from "@/components/FEED/Header"
+import type { BlogPostType } from "@/types"
+import { useState } from "react"
+import { AddPostModal } from "@/components/FEED/modals/AddPostModal"
+import { useAuth } from "@/context/auth/AuthContext"
+import { useQueryClientReady } from "@/hooks/queries/useQueryClientReady"
+import { PostDetailModal } from "@/components/FEED/modals/PostDetailModal"
+import { BlogPostCard } from "@/components/FEED/cards/BlogPostCard"
+import { TrendingStocksCard } from "@/components/FEED/cards/TrendingStocksCard"
+import { SortBy } from "@/types/blogPosts/create"
 
 const HomeScreen = () => {
-  const queryClient = useQueryClient();
-  const [selectedPost, setSelectedPost] = useState<BlogPostType | null>(null);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [addModalVisible, setAddModalVisible] = useState(false);
+  const queryClient = useQueryClient()
+  const isQueryClientReady = useQueryClientReady()
 
-  const { data: feed, isLoading: feedLoading } = useFeedQuery();
+  const [selectedPost, setSelectedPost] = useState<BlogPostType | null>(null)
+  const [modalVisible, setModalVisible] = useState(false)
+  const [addModalVisible, setAddModalVisible] = useState(false)
+  const [selectedSortBy, setSelectedSortBy] = useState<SortBy>(SortBy.VOLUME)
+
+  const { data: feed, isLoading: feedLoading } = useFeedQuery()
+  const { data: trendingStocks, isLoading: trendingLoading, error: trendingError } = useTrendingStocks(selectedSortBy)
   const {
     authState: { user },
-  } = useAuth();
+  } = useAuth()
 
   const handlePostPress = (post: BlogPostType) => {
-    console.log("Post pressed:", post.title);
-    setSelectedPost(post);
-    setModalVisible(true);
-  };
+    console.log("Post pressed:", post.title)
+    setSelectedPost(post)
+    setModalVisible(true)
+  }
 
   const handleCloseModal = () => {
-    setModalVisible(false);
-    // Small delay to let animation complete before clearing post
-    setTimeout(() => setSelectedPost(null), 300);
-  };
+    setModalVisible(false)
+    setTimeout(() => setSelectedPost(null), 300)
+  }
 
   const handleAddPress = () => {
-    console.log("Add button pressed");
-    setAddModalVisible(true);
-  };
+    console.log("Add button pressed")
+    setAddModalVisible(true)
+  }
 
   const handleAddModalClose = () => {
-    setAddModalVisible(false);
-  };
+    setAddModalVisible(false)
+  }
 
   const handleBlogPostSuccess = async () => {
-    console.log("Post submitted successfully:");
-    // Invalidate the feed query to refresh the list
-    await queryClient.invalidateQueries({ queryKey: ["feed"] });
-  };
+    console.log("Post submitted successfully:")
+    await queryClient.invalidateQueries({ queryKey: ["feed"] })
+  }
+
+  const handleSortChange = (sortBy: SortBy) => {
+    setSelectedSortBy(sortBy)
+  }
 
   return (
-    <SafeAreaView className="flex-1 bg-gray-100">
+    <SafeAreaView className="flex-1 bg-black">
       {/* Header Component */}
-      <View className="">
-        <Header onAddPress={handleAddPress} />
-      </View>
+      <Header onAddPress={handleAddPress} />
+
+      <TrendingStocksCard
+            stocks={trendingStocks}
+            isLoading={trendingLoading}
+            error={trendingError}
+            selectedSortBy={selectedSortBy}
+            onSortChange={handleSortChange}
+            isQueryClientReady={isQueryClientReady}
+          />
 
       {/* Main Content */}
       {feedLoading ? (
         <View className="flex-1 justify-center items-center">
           <ActivityIndicator size="large" color="#007AFF" />
-          <Text className="mt-4 text-base text-gray-600 font-medium">
-            Loading feed...
-          </Text>
+          <Text className="mt-4 text-base text-gray-400 font-medium">Loading feed...</Text>
         </View>
-      ) : feed && feed.length > 0 ? (
+      ) : (
         <ScrollView
           className="flex-1"
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 20 }}>
-          <View className="pt-4">
-            {/* Single Column Layout for Full-Width Cards */}
-            {feed.map((post) => (
-              <BlogPostCard
-                key={post.id}
-                post={post}
-                onPress={handlePostPress}
-              />
-            ))}
-          </View>
+          contentContainerStyle={{ paddingBottom: 20, paddingTop: 20 }}
+        >
+          {/* Trending Stocks Card */}
+          {/* <TrendingStocksCard
+            stocks={trendingStocks}
+            isLoading={trendingLoading}
+            error={trendingError}
+            selectedSortBy={selectedSortBy}
+            onSortChange={handleSortChange}
+            isQueryClientReady={isQueryClientReady}
+          /> */}
+              {/* <View className="absolute top-0 left-0 right-0 z-50 mx-4 mb-6"> */}
+
+
+          {/* Blog Posts */}
+          {feed && feed.length > 0 ? (
+            <>
+              {feed.map((post) => (
+                <BlogPostCard key={post.id} post={post} onPress={handlePostPress} />
+              ))}
+            </>
+          ) : (
+            <View className="flex-1 justify-center items-center px-8 py-20">
+              <Text className="text-xl font-semibold text-white mb-2 text-center">No Posts Available</Text>
+              <Text className="text-base text-gray-400 text-center leading-6">Check back later for new content</Text>
+            </View>
+          )}
         </ScrollView>
-      ) : (
-        <View className="flex-1 justify-center items-center px-8">
-          <Text className="text-xl font-semibold text-gray-700 mb-2 text-center">
-            No Posts Available
-          </Text>
-          <Text className="text-base text-gray-600 text-center leading-6">
-            Check back later for new content
-          </Text>
-        </View>
       )}
 
       {/* Modal for post details */}
-      <PostDetailModal
-        user={user}
-        post={selectedPost}
-        visible={modalVisible}
-        onClose={handleCloseModal}
-      />
-
-
+      <PostDetailModal user={user} post={selectedPost} visible={modalVisible} onClose={handleCloseModal} />
 
       {/* Modal for adding new posts */}
-      <AddPostModal
-        visible={addModalVisible}
-        onClose={handleAddModalClose}
-        onSubmit={handleBlogPostSuccess}
-      />
+      <AddPostModal visible={addModalVisible} onClose={handleAddModalClose} onSubmit={handleBlogPostSuccess} />
     </SafeAreaView>
-  );
-};
+  )
+}
 
-export default HomeScreen;
+export default HomeScreen
