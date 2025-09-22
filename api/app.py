@@ -14,7 +14,7 @@ import requests
 from services.yfinance_service import perform_yfinance_research
 from services.anthropic_service import anthropic_service
 from log.logging_config import get_logger
-from api.utils.cache import TrendingStocksCache
+from utils.cache import TrendingStocksCache
 
 
 # Logger for the backend service
