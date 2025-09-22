@@ -13,7 +13,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { SafeAreaView, View } from "react-native";
 
-const HomeScreen = () => {
+const FeedScreen = () => {
   const queryClient = useQueryClient();
   const isQueryClientReady = useQueryClientReady();
 
@@ -109,4 +109,4 @@ const HomeScreen = () => {
   );
 };
 
-export default HomeScreen;
+export default FeedScreen;

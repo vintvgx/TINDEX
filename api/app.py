@@ -4,6 +4,7 @@ import asyncio
 import json
 from typing import Optional
 from dataclasses import dataclass, asdict
+import datetime
 
 from bs4 import BeautifulSoup
 
@@ -699,6 +700,9 @@ def get_trending_stocks_by_param():
             logger.warning("Could not find screener table in FINVIZ response")
 
         logger.info("Successfully fetched %s trending stocks", len(stocks))
+        
+        # Use epoch milliseconds to align with mobile (JS Date expects ms)
+        current_time_ms = int(time.time() * 1000)
 
         # Create the response payload
         response_data = {
@@ -707,7 +711,7 @@ def get_trending_stocks_by_param():
             "data": stocks,
             "count": len(stocks),
             "source": "FINVIZ",
-            "timestamp": time.time(),
+            "timestamp": current_time_ms,
         }
         
         # Cache the response data for future requests

@@ -155,9 +155,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // User is fully authenticated
       if (authState.isAuthenticated && authState.session) {
-        console.log("Navigating to Home");
+        console.log("Navigating to Feed");
         // Navigate to Home
-        router.replace("/(app)/home");
+        router.replace("/(app)/feed");
       }
     }
   }, [authState, isInitialized]);
@@ -220,6 +220,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (data?.session) {
       console.log("Refreshing session", data.session);
       await handleSessionChange(data.session);
+      console.log("Session refreshed.");
     } else {
       console.log("No session data");
       setAuthState((prev) => ({
