@@ -25,11 +25,11 @@ export interface MinimizedTrendingStocksProps {
 
 // New unified component interface
 export interface UnifiedTrendingStocksProps {
-  stocks?: { data: Stock[] };
+  stocks?: { data: Stock[], timestamp: number };
   isLoading: boolean;
   error: any;
   selectedSortBy: "volume" | "change" | "pe" | "marketcap";
   onSortChange: (sortBy: SortBy) => void;
   isQueryClientReady: boolean;
-  scrollY: number; // Add scroll position prop
+  scrollY: number; 
 }

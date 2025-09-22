@@ -7,7 +7,13 @@ import { UnifiedTrendingStocksProps } from "@/types/trending";
 import { TrendingUp } from "lucide-react-native";
 import type React from "react";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, ScrollView, Text, View, Dimensions } from "react-native";
+import {
+  ActivityIndicator,
+  ScrollView,
+  Text,
+  View,
+  Dimensions,
+} from "react-native";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -20,11 +26,11 @@ import Animated, {
 } from "react-native-reanimated";
 
 configureReanimatedLogger({
-    level: ReanimatedLogLevel.warn,
-    strict: false, // disable strict mode to silence warning 
-    // [Reanimated] Reading from `value` during component render. Please ensure that you don't access the `value` property nor use `get` method of a 
-    // shared value while React is rendering a component.
-  });
+  level: ReanimatedLogLevel.warn,
+  strict: false, // disable strict mode to silence warning
+  // [Reanimated] Reading from `value` during component render. Please ensure that you don't access the `value` property nor use `get` method of a
+  // shared value while React is rendering a component.
+});
 
 const SCROLL_THRESHOLD = 50;
 const MINIMIZED_HEIGHT = 80;
@@ -42,7 +48,9 @@ const sortOptions = [
   { value: "marketcap", label: "Market Cap" },
 ];
 
-export const UnifiedTrendingStocksCard: React.FC<UnifiedTrendingStocksProps> = ({
+export const UnifiedTrendingStocksCard: React.FC<
+  UnifiedTrendingStocksProps
+> = ({
   stocks,
   isLoading,
   error,
@@ -59,7 +67,13 @@ export const UnifiedTrendingStocksCard: React.FC<UnifiedTrendingStocksProps> = (
   const [isUserScrolling, setIsUserScrolling] = useState(false);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
 
-  const userInteractionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const userInteractionTimeoutRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+
+  const date = stocks?.timestamp
+    ? new Date(stocks.timestamp).toLocaleString()
+    : "";
 
   // Format volume helper
   const formatVolume = (volume: string) => {
@@ -81,27 +95,40 @@ export const UnifiedTrendingStocksCard: React.FC<UnifiedTrendingStocksProps> = (
 
   // Auto-scroll animation for minimized view
   useEffect(() => {
-    if (stocks?.data && stocks.data.length > 0 && isMinimized.value && autoScrollEnabled && !isUserScrolling) {
+    if (
+      stocks?.data &&
+      stocks.data.length > 0 &&
+      isMinimized.value &&
+      autoScrollEnabled &&
+      !isUserScrolling
+    ) {
       const totalWidth = stocks.data.length * STOCK_ITEM_WIDTH;
-      
+
       // Start auto-scroll animation - scroll from left to right
       autoScrollX.value = withRepeat(
-        withTiming(-totalWidth, { duration: AUTO_SCROLL_DURATION * stocks.data.length }),
+        withTiming(-totalWidth, {
+          duration: AUTO_SCROLL_DURATION * stocks.data.length,
+        }),
         -1, // Infinite repeat
         false // Don't reverse
       );
-      console.log('AUTO SCROLL VAL:', autoScrollX.value)
     } else {
       // Stop auto-scroll when conditions aren't met
       autoScrollX.value = withTiming(autoScrollX.value, { duration: 0 });
     }
-  }, [stocks?.data, isMinimized.value, autoScrollEnabled, isUserScrolling, autoScrollX]);
+  }, [
+    stocks?.data,
+    isMinimized.value,
+    autoScrollEnabled,
+    isUserScrolling,
+    autoScrollX,
+  ]);
 
   // Handle user scroll interaction
   const handleScrollBeginDrag = () => {
     setIsUserScrolling(true);
     setAutoScrollEnabled(false);
-    
+
     // Clear any existing timeout
     if (userInteractionTimeoutRef.current) {
       clearTimeout(userInteractionTimeoutRef.current);
@@ -272,13 +299,17 @@ export const UnifiedTrendingStocksCard: React.FC<UnifiedTrendingStocksProps> = (
 
   return (
     <View className="mx-5 mb-4">
-      <Animated.View style={containerAnimatedStyle} className="relative overflow-hidden">
+      <Animated.View
+        style={containerAnimatedStyle}
+        className="relative overflow-hidden">
         {/* Full Content */}
         <Animated.View
-          style={[fullContentAnimatedStyle, { position: "absolute", width: "100%", height: "100%" }]}
-        >
+          style={[
+            fullContentAnimatedStyle,
+            { position: "absolute", width: "100%", height: "100%" },
+          ]}>
           <AppStoreCard variant="featured">
-            <View className="p-7">
+            <View className="p-4">
               {/* Header with title */}
               <View className="flex-row justify-between items-center mb-8">
                 <View className="flex-row items-center">
@@ -298,13 +329,11 @@ export const UnifiedTrendingStocksCard: React.FC<UnifiedTrendingStocksProps> = (
                 horizontal
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={{ paddingRight: 28 }}
-                decelerationRate="fast"
-              >
+                decelerationRate="fast">
                 {stocks.data.slice(0, 5).map((stock) => (
                   <View
                     key={stock.ticker}
-                    className="bg-gradient-to-br from-gray-800/60 to-gray-800/40 p-5 rounded-2xl mr-5 min-w-[170px] border border-gray-700/30 backdrop-blur-sm"
-                  >
+                    className="bg-gradient-to-br from-gray-800/60 to-gray-800/40 p-5 rounded-2xl mr-5 min-w-[170px] border border-gray-700/30 backdrop-blur-sm">
                     <View className="flex-row justify-between items-start mb-3">
                       <Text className="font-black text-white text-lg tracking-tight">
                         {stock.ticker}
@@ -314,8 +343,7 @@ export const UnifiedTrendingStocksCard: React.FC<UnifiedTrendingStocksProps> = (
 
                     <Text
                       className="text-xs text-gray-400 mb-4 leading-5 font-medium"
-                      numberOfLines={2}
-                    >
+                      numberOfLines={2}>
                       {stock.company}
                     </Text>
 
@@ -325,11 +353,11 @@ export const UnifiedTrendingStocksCard: React.FC<UnifiedTrendingStocksProps> = (
                       </Text>
                       <Text
                         className={`text-sm font-bold ${
-                          stock.change.startsWith("+") || !stock.change.startsWith("-")
+                          stock.change.startsWith("+") ||
+                          !stock.change.startsWith("-")
                             ? "text-green-400"
                             : "text-red-400"
-                        }`}
-                      >
+                        }`}>
                         {stock.change}
                       </Text>
                       <Text className="text-xs text-gray-500 mt-3 font-medium">
@@ -339,47 +367,55 @@ export const UnifiedTrendingStocksCard: React.FC<UnifiedTrendingStocksProps> = (
                   </View>
                 ))}
               </ScrollView>
+              <Text className="text-gray-400 text-sm font-medium mt-1">
+                Retrieved: {date}
+              </Text>
             </View>
           </AppStoreCard>
         </Animated.View>
 
         {/* Minimized Content */}
         <Animated.View
-          style={[minimizedContentAnimatedStyle, { position: "absolute", width: "100%", height: "100%" }]}
-        >
+          style={[
+            minimizedContentAnimatedStyle,
+            { position: "absolute", width: "100%", height: "100%" },
+          ]}>
           <View className="bg-gray-800/60 rounded-2xl px-4 py-3 border border-gray-700/30 h-full justify-center">
             <View className="flex-row items-center justify-between mb-3">
-              <Text className="text-white text-sm font-bold">Trending Stocks</Text>
+              <Text className="text-white text-sm font-bold">
+                Trending Stocks
+              </Text>
               <View className="flex-row items-center space-x-1">
-                <View className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />
-                <Text className="text-blue-400 text-xs font-medium">Live</Text>
+                {/* //TODO replace with Live animation when real time data is implemented */}
+                {/* <View className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse mr-0.5" />
+                <Text className="text-blue-400 text-xs font-medium">Live</Text> */}
+                <Text className="text-gray-400 text-sm font-medium mt-1">
+                Retrieved: {date}
+              </Text>
               </View>
             </View>
-            
-            <ScrollView 
+
+            <ScrollView
               ref={scrollViewRef}
-              horizontal 
+              horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={{ paddingRight: 16 }}
               decelerationRate="fast"
               style={{ flex: 1 }}
               onScrollBeginDrag={handleScrollBeginDrag}
               onScrollEndDrag={handleScrollEndDrag}
-              scrollEventThrottle={16}
-            >
-              <Animated.View 
+              scrollEventThrottle={16}>
+              <Animated.View
                 style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  transform: [{ translateX: autoScrollX }]
-                }}
-              >
+                  flexDirection: "row",
+                  alignItems: "center",
+                  transform: [{ translateX: autoScrollX }],
+                }}>
                 {duplicatedStocks.map((stock, index) => (
-                  <View 
-                    key={`${stock.ticker}-${index}`} 
+                  <View
+                    key={`${stock.ticker}-${index}`}
                     className="flex-row items-center bg-gray-700/40 rounded-xl px-4 py-2 mr-4 border border-gray-600/30"
-                    style={{ minWidth: STOCK_ITEM_WIDTH }}
-                  >
+                    style={{ minWidth: STOCK_ITEM_WIDTH }}>
                     {/* Stock Ticker */}
                     <View className="flex-row items-center mr-4">
                       <View className="w-2 h-2 bg-blue-400 rounded-full mr-2" />
@@ -387,25 +423,25 @@ export const UnifiedTrendingStocksCard: React.FC<UnifiedTrendingStocksProps> = (
                         {stock.ticker}
                       </Text>
                     </View>
-                    
+
                     {/* Price */}
                     <Text className="text-white font-semibold text-sm mr-3">
                       ${stock.price}
                     </Text>
-                    
+
                     {/* Change */}
                     <View className="flex-row items-center mr-3">
                       <Text
                         className={`font-bold text-xs ${
-                          stock.change.startsWith("+") || !stock.change.startsWith("-")
+                          stock.change.startsWith("+") ||
+                          !stock.change.startsWith("-")
                             ? "text-green-400"
                             : "text-red-400"
-                        }`}
-                      >
+                        }`}>
                         {stock.change}
                       </Text>
                     </View>
-                    
+
                     {/* Volume */}
                     <Text className="text-gray-400 text-xs font-medium">
                       {formatVolume(stock.volume)}
