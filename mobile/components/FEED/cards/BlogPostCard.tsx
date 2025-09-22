@@ -5,6 +5,8 @@ import { useState } from "react"
 import { View, Text, Image, Pressable } from "react-native"
 import type { BlogPostType } from "@/types"
 import { AppStoreCard } from "@/components/ui/AppStoreCard"
+import { Icon } from "@/components/ui/icon"
+import { Clock, Calendar } from "lucide-react-native"
 
 interface BlogPostCardProps {
   post: BlogPostType
@@ -52,40 +54,49 @@ export const BlogPostCard: React.FC<BlogPostCardProps> = ({ post, onPress }) => 
   }
 
   return (
-    <View className="mx-4 mb-6">
-      <Pressable onPress={handlePress} android_ripple={{ color: "rgba(255,255,255,0.1)", borderless: false }}>
+    <View className="mx-5 mb-8">
+      <Pressable 
+        onPress={handlePress} 
+        android_ripple={{ color: "rgba(255,255,255,0.1)", borderless: false }}
+        className="active:scale-[0.98] transition-transform duration-150"
+      >
         <AppStoreCard variant="featured">
           {/* Hero Image */}
           <View className="relative">
             <Image
               source={{ uri: getImageUrl() }}
-              className="w-full h-64"
+              className="w-full h-72"
               style={{ resizeMode: "cover" }}
               onError={() => setImageError(true)}
             />
-            {/* Gradient overlay for better text readability */}
-            <View className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
+            {/* Enhanced gradient overlay */}
+            <View className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+            {/* Subtle top border for depth */}
+            <View className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
           </View>
 
           {/* Content */}
-          <View className="p-6">
+          <View className="p-7">
             {/* Title */}
-            <Text className="text-white text-xl font-bold mb-3 leading-7">{post.title}</Text>
+            <Text className="text-white text-2xl font-black mb-4 leading-8 tracking-tight">{post.title}</Text>
 
             {/* Content Preview */}
             {post.content && (
-              <Text className="text-gray-300 text-sm leading-6 mb-4" numberOfLines={3}>
+              <Text className="text-gray-300 text-base leading-7 mb-6 font-medium" numberOfLines={3}>
                 {truncateContent(post.content)}
               </Text>
             )}
 
-            {/* Footer with date and reading time */}
-            <View className="flex-row justify-between items-center pt-4 border-t border-gray-700">
-              <Text className="text-gray-400 text-xs font-medium">{formatDate(post.created_at)}</Text>
+            {/* Enhanced Footer */}
+            <View className="flex-row justify-between items-center pt-5 border-t border-gray-700/50">
+              <View className="flex-row items-center">
+             
+                <Text className="text-gray-400 text-sm font-semibold tracking-wide">{formatDate(post.created_at)}</Text>
+              </View>
+              
               {post.reading_time && (
                 <View className="flex-row items-center">
-                  <View className="w-1 h-1 bg-gray-600 rounded-full mr-2" />
-                  <Text className="text-gray-400 text-xs font-medium">{post.reading_time} min read</Text>
+                  <Text className="text-gray-400 text-sm font-semibold tracking-wide">{post.reading_time} min read</Text>
                 </View>
               )}
             </View>

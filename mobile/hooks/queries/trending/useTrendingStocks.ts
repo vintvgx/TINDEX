@@ -21,6 +21,7 @@ interface TrendingStockResponse {
     success: boolean;
     timestamp: number;
     source?: string;
+    error?: string; 
 }
 
 // type SortBy = 'volume' | 'change' | 'pe' | 'marketcap';

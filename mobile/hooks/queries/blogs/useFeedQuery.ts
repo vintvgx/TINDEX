@@ -1,6 +1,7 @@
 import { useAuth } from "@/context/auth/AuthContext";
 import { supabase } from "@/lib/supabase/supabase";
-import { logDebug } from "@/utils/strings/function";
+import { BlogPostType, FeedType } from "@/types";
+import { logDebug, prettyJSON } from "@/utils/strings/function";
 import { useQuery } from "@tanstack/react-query";
 
 
@@ -10,7 +11,7 @@ export function useFeedQuery() {
 
     return useQuery({
         queryKey: ["feed"],
-        queryFn: async () => {
+        queryFn: async (): Promise<FeedType | null> => {
           logDebug("Fetching feed")
 
           if (!user) return null; //TODO throw error to display Toast of user is not signed // 
@@ -31,8 +32,8 @@ export function useFeedQuery() {
     
           logDebug("Feed data fetched successfully.")
         //   return data as AssessmentResponse[]; //TODO create FeedResponse[]
-        return data
-        },
+        return { posts: data as BlogPostType[] };
+      },
         enabled: !!user,
       });
 }

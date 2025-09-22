@@ -36,6 +36,10 @@ export interface UserType {
     published_at?: string;
     user_id: string;
   }
+
+  export interface FeedType {
+    posts: BlogPostType[];
+  }
   
   export interface GenerationJob {
     id: string;
