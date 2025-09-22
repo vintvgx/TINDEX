@@ -443,7 +443,9 @@ def research_topic():
             return jsonify(response)
 
     except Exception as e:
-        logger.error("Research failed for topic '%s': %s", topic, e, exc_info=True)
+        # retrieves topic or falls back to unknown
+        _topic = locals().get("topic") or (locals().get("data") or {}).get("topic") or "<unknown>"
+        logger.error("Research failed for topic '%s': %s", _topic, e, exc_info=True)
         return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
 
 #TODO include once MVP app is complete and real time data is being used within UI
@@ -698,16 +700,21 @@ def get_trending_stocks_by_param():
 
         logger.info("Successfully fetched %s trending stocks", len(stocks))
 
-        return jsonify(
-            {
-                "success": True,
-                "sorted_by": sort_by,
-                "data": stocks,
-                "count": len(stocks),
-                "source": "FINVIZ",
-                "timestamp": time.time(),
-            }
-        )
+        # Create the response payload
+        response_data = {
+            "success": True,
+            "sorted_by": sort_by,
+            "data": stocks,
+            "count": len(stocks),
+            "source": "FINVIZ",
+            "timestamp": time.time(),
+        }
+        
+        # Cache the response data for future requests
+        trending_cache.set(cache_key, response_data, TRENDING_STOCKS_CACHE_TTL)
+        logger.info("Cached trending stocks data for sort_by: %s (TTL: %s seconds)", sort_by, TRENDING_STOCKS_CACHE_TTL)
+
+        return jsonify({**response_data, "from_cache": False})
 
     except requests.RequestException as e:
         logger.error("Request failed when fetching trending stocks: %s", e)
