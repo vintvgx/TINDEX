@@ -701,7 +701,8 @@ def get_trending_stocks_by_param():
 
         logger.info("Successfully fetched %s trending stocks", len(stocks))
         
-        current_time = datetime.datetime.now()
+        # Use epoch milliseconds to align with mobile (JS Date expects ms)
+        current_time_ms = int(time.time() * 1000)
 
         # Create the response payload
         response_data = {
@@ -710,7 +711,7 @@ def get_trending_stocks_by_param():
             "data": stocks,
             "count": len(stocks),
             "source": "FINVIZ",
-            "timestamp": current_time,
+            "timestamp": current_time_ms,
         }
         
         # Cache the response data for future requests
