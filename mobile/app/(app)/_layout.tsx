@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 export default function AppLayout() {
   return (
     <Tabs
+     initialRouteName="feed"
       screenOptions={{
         headerShown: false,
         tabBarStyle: {

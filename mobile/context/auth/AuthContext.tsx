@@ -220,6 +220,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (data?.session) {
       console.log("Refreshing session", data.session);
       await handleSessionChange(data.session);
+      console.log("Session refreshed.");
     } else {
       console.log("No session data");
       setAuthState((prev) => ({
