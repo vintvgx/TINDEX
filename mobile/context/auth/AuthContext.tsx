@@ -155,9 +155,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // User is fully authenticated
       if (authState.isAuthenticated && authState.session) {
-        console.log("Navigating to Home");
+        console.log("Navigating to Feed");
         // Navigate to Home
-        router.replace("/(app)/home");
+        router.replace("/(app)/feed");
       }
     }
   }, [authState, isInitialized]);
