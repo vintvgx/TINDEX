@@ -6,13 +6,14 @@ import { SortBy } from "@/types/blogPosts/create";
 import { UnifiedTrendingStocksProps } from "@/types/trending";
 import { TrendingUp } from "lucide-react-native";
 import type React from "react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   ScrollView,
   Text,
   View,
   Dimensions,
+  Pressable,
 } from "react-native";
 import Animated, {
   useSharedValue,
@@ -24,6 +25,7 @@ import Animated, {
   configureReanimatedLogger,
   ReanimatedLogLevel,
 } from "react-native-reanimated";
+import { router } from 'expo-router';
 
 configureReanimatedLogger({
   level: ReanimatedLogLevel.warn,
@@ -151,6 +153,13 @@ export const UnifiedTrendingStocksCard: React.FC<
       }
     };
   }, []);
+
+  // Navigation handler
+  const handleNavigation = useCallback((ticker: string) => {
+    console.log("Navigating to [ticker]:", ticker)
+
+    router.push(`/ticker/${ticker}`);
+  }, [])
 
   // Animated styles for the container - Progressive height reduction
   const containerAnimatedStyle = useAnimatedStyle(() => {
@@ -331,40 +340,44 @@ export const UnifiedTrendingStocksCard: React.FC<
                 contentContainerStyle={{ paddingRight: 28 }}
                 decelerationRate="fast">
                 {stocks.data.slice(0, 5).map((stock) => (
-                  <View
+                  <Pressable
                     key={stock.ticker}
-                    className="bg-gradient-to-br from-gray-800/60 to-gray-800/40 p-5 rounded-2xl mr-5 min-w-[170px] border border-gray-700/30 backdrop-blur-sm">
-                    <View className="flex-row justify-between items-start mb-3">
-                      <Text className="font-black text-white text-lg tracking-tight">
-                        {stock.ticker}
-                      </Text>
-                      <View className="w-2.5 h-2.5 bg-blue-500 rounded-full shadow-sm shadow-blue-500/50" />
-                    </View>
+                    onPress={() => handleNavigation(stock.ticker)}
+                  >
+                    <View
+                      className="bg-gradient-to-br from-gray-800/60 to-gray-800/40 p-5 rounded-2xl mr-5 min-w-[170px] border border-gray-700/30 backdrop-blur-sm">
+                      <View className="flex-row justify-between items-start mb-3">
+                        <Text className="font-black text-white text-lg tracking-tight">
+                          {stock.ticker}
+                        </Text>
+                        <View className="w-2.5 h-2.5 bg-blue-500 rounded-full shadow-sm shadow-blue-500/50" />
+                      </View>
 
-                    <Text
-                      className="text-xs text-gray-400 mb-4 leading-5 font-medium"
-                      numberOfLines={2}>
-                      {stock.company}
-                    </Text>
-
-                    <View className="space-y-2">
-                      <Text className="text-2xl font-black text-white tracking-tight">
-                        ${stock.price}
-                      </Text>
                       <Text
-                        className={`text-sm font-bold ${
-                          stock.change.startsWith("+") ||
-                          !stock.change.startsWith("-")
-                            ? "text-green-400"
-                            : "text-red-400"
-                        }`}>
-                        {stock.change}
+                        className="text-xs text-gray-400 mb-4 leading-5 font-medium"
+                        numberOfLines={2}>
+                        {stock.company}
                       </Text>
-                      <Text className="text-xs text-gray-500 mt-3 font-medium">
-                        Vol: {stock.volume}
-                      </Text>
+
+                      <View className="space-y-2">
+                        <Text className="text-2xl font-black text-white tracking-tight">
+                          ${stock.price}
+                        </Text>
+                        <Text
+                          className={`text-sm font-bold ${
+                            stock.change.startsWith("+") ||
+                            !stock.change.startsWith("-")
+                              ? "text-green-400"
+                              : "text-red-400"
+                          }`}>
+                          {stock.change}
+                        </Text>
+                        <Text className="text-xs text-gray-500 mt-3 font-medium">
+                          Vol: {stock.volume}
+                        </Text>
+                      </View>
                     </View>
-                  </View>
+                  </Pressable>
                 ))}
               </ScrollView>
               <Text className="text-gray-400 text-sm font-medium mt-1">
@@ -412,10 +425,13 @@ export const UnifiedTrendingStocksCard: React.FC<
                   transform: [{ translateX: autoScrollX }],
                 }}>
                 {duplicatedStocks.map((stock, index) => (
-                  <View
+                  <Pressable
                     key={`${stock.ticker}-${index}`}
-                    className="flex-row items-center bg-gray-700/40 rounded-xl px-4 py-2 mr-4 border border-gray-600/30"
-                    style={{ minWidth: STOCK_ITEM_WIDTH }}>
+                    onPress={() => handleNavigation(stock.ticker)}
+                  >
+                    <View
+                      className="flex-row items-center bg-gray-700/40 rounded-xl px-4 py-2 mr-4 border border-gray-600/30"
+                      style={{ minWidth: STOCK_ITEM_WIDTH }}>
                     {/* Stock Ticker */}
                     <View className="flex-row items-center mr-4">
                       <View className="w-2 h-2 bg-blue-400 rounded-full mr-2" />
@@ -447,6 +463,7 @@ export const UnifiedTrendingStocksCard: React.FC<
                       {formatVolume(stock.volume)}
                     </Text>
                   </View>
+                </Pressable>
                 ))}
               </Animated.View>
             </ScrollView>

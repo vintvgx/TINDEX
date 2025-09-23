@@ -1,5 +1,5 @@
-import { View, Text, SafeAreaView } from "react-native";
 import { useAuth } from "@/context/auth/AuthContext";
+import { SafeAreaView, Text, View } from "react-native";
 
 const ProfileScreen = () => {
   const { authState: { user } } = useAuth();

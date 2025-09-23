@@ -7,7 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 export default function AppLayout() {
   return (
     <Tabs
-     initialRouteName="feed"
+      initialRouteName="feed"
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
@@ -20,10 +20,7 @@ export default function AppLayout() {
           justifyContent: 'center',
           borderRadius: 30,
           alignSelf: 'center',
-          // position: 'absolute',
           bottom: 20,
-          // left: '15%',
-          // right: '5%',
           shadowColor: '#000',
           shadowOffset: {
             width: 0,
@@ -42,6 +39,9 @@ export default function AppLayout() {
         tabBarIconStyle: {
           marginBottom: 4,
         },
+        // Add navigation animations
+        // animation: 'slide_from_right',
+        // animationDuration: 300,
       }}
     >
       <Tabs.Screen 
@@ -62,7 +62,7 @@ export default function AppLayout() {
           ),
         }}
       />
-       <Tabs.Screen 
+      <Tabs.Screen 
         name="watchlists" 
         options={{
           title: 'Watchlists',
@@ -87,6 +87,15 @@ export default function AppLayout() {
           tabBarIcon: ({ color }) => (
             <Ionicons name="person" size={20} color={color} />
           ),
+        }}
+      />
+      {/* Ticker screen - hidden from tab bar */}
+      <Tabs.Screen 
+        name="ticker" 
+        options={{
+          href: null, // This hides it from the tab bar
+          tabBarStyle: { display: 'none' }, // Hide tab bar for this screen
+          animation: 'shift'
         }}
       />
     </Tabs>
