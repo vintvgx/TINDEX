@@ -15,11 +15,11 @@ import { Ionicons } from "@expo/vector-icons";
 import { CATEGORIES } from "@/lib/categories";
 import { CategoryType } from "@/lib/categories";
 import { useGenerateBlogPostMutation } from "@/hooks/mutations/blogs/createBlogPostMutation";
-import { useAuth } from "@/context/auth/AuthContext";
+import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import {
   GenerateBlogPostRequest,
   PRIORITY_TYPE,
-} from "@/types/blogPosts/create";
+} from "@/common/types/blogPosts/create";
 
 interface AddPostModalProps {
   visible: boolean;

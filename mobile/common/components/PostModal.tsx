@@ -25,8 +25,8 @@ import {
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { usePostModal } from '@/context/PostModalContext';
-import { BlogPostType } from '@/types';
+import { usePostModal } from '@/common/utils/context/PostModalContext';
+import { BlogPostType } from '@/common/types';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 const SPRING_CONFIG = { damping: 20, stiffness: 300 };

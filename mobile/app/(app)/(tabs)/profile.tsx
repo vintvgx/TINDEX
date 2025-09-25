@@ -1,4 +1,4 @@
-import { useAuth } from "@/context/auth/AuthContext";
+import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { SafeAreaView, Text, View } from "react-native";
 
 const ProfileScreen = () => {

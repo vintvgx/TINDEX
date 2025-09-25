@@ -1,7 +1,7 @@
-import { useAuth } from "@/context/auth/AuthContext";
+import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { supabase } from "@/lib/supabase/supabase";
-import { BlogPostType, FeedType } from "@/types";
-import { logDebug, prettyJSON } from "@/utils/strings/function";
+import { BlogPostType, FeedType } from "@/common/types";
+import { logDebug, prettyJSON } from "@/common/utils/strings/function";
 import { useQuery } from "@tanstack/react-query";
 
 

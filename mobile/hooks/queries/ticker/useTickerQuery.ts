@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { TickerResponse, TickerData } from "@/types/blogPosts/ticker";
+import { TickerResponse, TickerData } from "@/common/types/blogPosts/ticker";
 
 /**
  * Mock data generator for ticker information

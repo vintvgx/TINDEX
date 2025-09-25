@@ -1,4 +1,4 @@
-import { signOut } from "@/utils/auth/function"
+import { signOut } from "@/common/utils/auth/function"
 import type React from "react"
 import { View, Text, Pressable, Alert } from "react-native"
 

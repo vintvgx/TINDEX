@@ -1,11 +1,11 @@
 import { supabase } from "@/lib/supabase/supabase";
-import { AuthContextType, AuthState } from "@/types/user/authModel";
+import { AuthContextType, AuthState } from "@/common/types/user/authModel";
 // import {
 //   checkAssessmentStatus,
 //   checkProfileStatus,
 //   checkRoleStatus,
 // } from "@/utils/auth/function";
-import { logDebug } from "@/utils/strings/function";
+import { logDebug } from "@/common/utils/strings/function";
 import { Session } from "@supabase/supabase-js";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 //@ts-ignore

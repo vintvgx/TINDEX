@@ -1,7 +1,7 @@
 import {
   GenerateBlogPostRequest,
   BlogException,
-} from "@/types/blogPosts/create";
+} from "@/common/types/blogPosts/create";
 
 /**
  * Custom error class for topic creation errors

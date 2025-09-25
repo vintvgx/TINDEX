@@ -10,13 +10,13 @@ import {
   Dimensions,
   Alert
 } from "react-native";
-import { BlogPostType } from "@/types";
+import { BlogPostType } from "@/common/types";
 import { Ionicons } from "@expo/vector-icons";
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { User } from "@supabase/supabase-js";
 import { useDeleteBlogPostMutation } from "@/hooks/mutations/blogs/deleteBlogPostMutation";
-import { DeleteBlogPostRequest } from "@/types/blogPosts/delete";
-import { StockResearchModal } from "@/components/StockResearchModal";
+import { DeleteBlogPostRequest } from "@/common/types/blogPosts/delete";
+import { StockResearchModal } from "@/common/components/StockResearchModal";
 
 interface PostDetailModalProps {
   user: User | null;

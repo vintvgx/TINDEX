@@ -1,4 +1,4 @@
-import { MinimizedTrendingStocksProps } from "@/types/trending"
+import { MinimizedTrendingStocksProps } from "@/common/types/trending"
 import type React from "react"
 import { ScrollView, Text, View } from "react-native"
 

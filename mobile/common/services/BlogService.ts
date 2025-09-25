@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { BlogPostType, TopicType, GenerationJob } from '@/types';
+import { BlogPostType, TopicType, GenerationJob } from '@/common/types';
 
 export class BlogService {
   static async generateBlogPost(topicId: string, targetLength = 800) {

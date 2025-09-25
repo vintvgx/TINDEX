@@ -1,4 +1,4 @@
-import { SortBy } from "@/types/blogPosts/create";
+import { SortBy } from "@/common/types/blogPosts/create";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 

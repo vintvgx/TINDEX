@@ -1,4 +1,4 @@
-import { BlogPostType, FeedType } from "@/types";
+import { BlogPostType, FeedType } from "@/common/types";
 import React from "react";
 import {
   ActivityIndicator,

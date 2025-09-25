@@ -3,9 +3,9 @@
 import type React from "react"
 import { useState } from "react"
 import { View, Text, Image, Pressable } from "react-native"
-import type { BlogPostType } from "@/types"
-import { AppStoreCard } from "@/components/ui/AppStoreCard"
-import { Icon } from "@/components/ui/icon"
+import type { BlogPostType } from "@/common/types"
+import { AppStoreCard } from "@/common/components/ui/AppStoreCard"
+import { Icon } from "@/common/components/ui/icon"
 import { Clock, Calendar } from "lucide-react-native"
 
 interface BlogPostCardProps {

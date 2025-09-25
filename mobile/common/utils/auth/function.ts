@@ -14,7 +14,7 @@ import { prettyJSON } from '../strings/function';
 //   scopes: ["https://www.googleapis.com/auth/drive.readonly"],
 //   // iosClientId:
 //   //   "1064184478567-3n1pm51cp4bm56nmruhvt5tpi0fulkqv.apps.googleusercontent.com",
-//   // webClientId:
+//   // webClientId:b
 //   //   "1064184478567-832gl286kq3l3t1o14ue4rqb38fnjg2t.apps.googleusercontent.com",
 //   // profileImageSize: 150,
 //   iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,

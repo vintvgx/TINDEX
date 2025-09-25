@@ -1,6 +1,6 @@
 "use client"
 
-import { signInWithApple, signInWithGoogle } from "@/utils/auth/function"
+import { signInWithApple, signInWithGoogle } from "@/common/utils/auth/function"
 import { Ionicons } from "@expo/vector-icons"
 import { useTheme } from "@react-navigation/native"
 import { LinearGradient } from "expo-linear-gradient"

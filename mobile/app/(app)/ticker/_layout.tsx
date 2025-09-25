@@ -17,7 +17,8 @@ export default function TickerLayout() {
         options={{
           title: 'Ticker Details',
           // Ensure full screen without tab bar
-          presentation: 'card',
+        //   presentation: 'fullScreenModal',
+          animation: 'slide_from_right',
         }}
       />
     </Stack>

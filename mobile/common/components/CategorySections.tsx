@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text } from 'react-native';
-import { BlogPostType } from '@/types';
-import { StockResearchData } from '@/types/categories/stocks/stock_types';
+import { BlogPostType } from '@/common/types';
+import { StockResearchData } from '@/common/types/categories/stocks/stock_types';
 import { Ionicons } from '@expo/vector-icons';
 
 interface CategorySectionsProps {

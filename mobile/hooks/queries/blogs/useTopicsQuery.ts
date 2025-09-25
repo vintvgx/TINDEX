@@ -1,7 +1,7 @@
-import { useAuth } from "@/context/auth/AuthContext";
+import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { supabase } from "@/lib/supabase/supabase";
-import { TopicType } from "@/types";
-import { logDebug } from "@/utils/strings/function";
+import { TopicType } from "@/common/types";
+import { logDebug } from "@/common/utils/strings/function";
 import { useQuery } from "@tanstack/react-query";
 
 export function useTopicsQuery() {

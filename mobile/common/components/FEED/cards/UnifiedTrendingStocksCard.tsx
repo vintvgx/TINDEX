@@ -1,9 +1,9 @@
 "use client";
 
-import { AppStoreCard } from "@/components/ui/AppStoreCard";
-import { Icon } from "@/components/ui/icon";
-import { SortBy } from "@/types/blogPosts/create";
-import { UnifiedTrendingStocksProps } from "@/types/trending";
+import { AppStoreCard } from "@/common/components/ui/AppStoreCard";
+import { Icon } from "@/common/components/ui/icon";
+import { SortBy } from "@/common/types/blogPosts/create";
+import { UnifiedTrendingStocksProps } from "@/common/types/trending";
 import { TrendingUp } from "lucide-react-native";
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";

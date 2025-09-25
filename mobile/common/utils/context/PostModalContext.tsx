@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
-import { BlogPostType } from '@/types';
+import { BlogPostType } from '@/common/types';
 
 interface PostModalContextType {
   expandedPost: BlogPostType | null;
