@@ -15,6 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { LineChart } from "react-native-chart-kit";
 import { useLocalSearchParams, router } from "expo-router";
 import { useTickerQuery } from "@/hooks/queries/ticker/useTickerQuery";
+import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
 
 const { width } = Dimensions.get("window");
 
@@ -36,9 +37,10 @@ export default function TickerScreen() {
 
   const stockData = tickerResponse?.data;
 
+  const { navigateBack } = useBaseNavigation();
+
   const handleBack = () => {
-    console.log("Back button pressed [ticker]");
-    router.back();
+    navigateBack();
   };
 
   // Loading state

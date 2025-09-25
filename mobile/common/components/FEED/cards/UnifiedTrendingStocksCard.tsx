@@ -26,6 +26,7 @@ import Animated, {
   ReanimatedLogLevel,
 } from "react-native-reanimated";
 import { router } from 'expo-router';
+import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
 
 configureReanimatedLogger({
   level: ReanimatedLogLevel.warn,
@@ -68,6 +69,8 @@ export const UnifiedTrendingStocksCard: React.FC<
 
   const [isUserScrolling, setIsUserScrolling] = useState(false);
   const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+
+  const { toTicker } = useBaseNavigation();
 
   const userInteractionTimeoutRef = useRef<ReturnType<
     typeof setTimeout
@@ -154,12 +157,11 @@ export const UnifiedTrendingStocksCard: React.FC<
     };
   }, []);
 
-  // Navigation handler
+  // Navigation handler using the navigation service
   const handleNavigation = useCallback((ticker: string) => {
-    console.log("Navigating to [ticker]:", ticker)
-
-    router.push(`/ticker/${ticker}`);
-  }, [])
+    console.log("Navigating to [ticker]:", ticker);
+    toTicker(ticker);
+  }, [toTicker]);
 
   // Animated styles for the container - Progressive height reduction
   const containerAnimatedStyle = useAnimatedStyle(() => {
