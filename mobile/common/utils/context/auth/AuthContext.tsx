@@ -157,7 +157,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (authState.isAuthenticated && authState.session) {
         console.log("Navigating to Feed");
         // Navigate to Home
-        router.replace("/(app)/feed");
+        router.replace("/(app)/(tabs)/feed");
       }
     }
   }, [authState, isInitialized]);

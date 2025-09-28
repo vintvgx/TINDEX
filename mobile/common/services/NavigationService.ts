@@ -90,7 +90,7 @@ class NavigationService {
             router.push('/(app)/(tabs)/profile');
           }
         } catch (error) {
-          console.error('NavigationService.toProfile: Navigation failed', error);
+          console.error('NavigationService.toUserProfile: Navigation failed', error);
         }
       }
     
@@ -139,7 +139,7 @@ class NavigationService {
         //TODO 
         //   router.push(`/(app)/(tabs)/notifications/${id}`);
         } catch (error) {
-          console.error('NavigationService.toNotifications: Navigation failed', error);
+          console.error('NavigationService.toNotificationID: Navigation failed', error);
         }
       }
 

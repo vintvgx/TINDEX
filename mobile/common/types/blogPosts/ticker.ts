@@ -50,12 +50,21 @@ export interface TickerData {
   };
 }
 
-export interface TickerResponse {
-  success: boolean;
-  data: TickerData;
-  timestamp: number;
-  error?: string;
-}
+// export interface TickerResponse {
+//   success: boolean;
+//   data: TickerData;
+//   timestamp: number;
+//   error?: string;
+// }
+
+/**
+ * Ticker Response defined as a union
+ *  - success: true = returns TickerData
+ *  - success: false = returns error string and potential data
+ */
+export type TickerResponse =
+  | { success: true; data: TickerData; timestamp: number }
+  | { success: false; error: string; timestamp: number; data?: undefined };
 
 export interface TickerViewProps {
   ticker: string;

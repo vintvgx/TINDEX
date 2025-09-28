@@ -46,8 +46,8 @@ export const useBaseNavigation = () => {
    * Navigates back to the previous screen in the navigation stack
    * 
    * This method handles back navigation with intelligent fallback:
-   * - If there's navigation history, it goes back
-   * - If no history exists, it navigates to the root screen
+   * - If there's navigation history, it goes back 
+   * - If no history exists, it navigates to the root (feed) screen
    * 
    * @example
    * navigateBack() // Goes back or to root if no history
@@ -57,9 +57,9 @@ export const useBaseNavigation = () => {
     if (router.canGoBack()) {
       router.back();
     } else {
-      router.replace('/');
+      navigationService.toFeed();
     }
-  }, [pathname]);
+  }, [pathname, navigationService]);
 
   /**
    * Replaces the current screen with a new screen (no back navigation)
@@ -159,7 +159,7 @@ export const useBaseNavigation = () => {
    * Navigate back to previous screen with fallback
    */
   const back = useCallback(() => {
-    console.log(`Back button pressed from ${navigationService.getCurrentRoute}`);
+    console.log(`Back button pressed from ${navigationService.getCurrentRoute()}`);
 
     navigationService.back();
   }, [navigationService]);
