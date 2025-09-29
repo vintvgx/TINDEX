@@ -46,7 +46,7 @@ export default function TickerScreen() {
   };
 
   // Loading state
-  if (isLoading || !stockData) {
+  if (isLoading) {
     return (
       <SafeAreaView className="flex-1 bg-black">
         <View className="absolute inset-0 bg-gradient-to-b from-gray-900/20 via-transparent to-gray-900/10" />
@@ -65,8 +65,8 @@ export default function TickerScreen() {
     );
   }
 
-  // Error state
-  if (error) {
+  // Error state or if there is no data to be displayed 
+  if (error || !stockData) {
     return (
       <SafeAreaView className="flex-1 bg-black">
         <View className="absolute inset-0 bg-gradient-to-b from-gray-900/20 via-transparent to-gray-900/10" />

@@ -339,7 +339,7 @@ def research_topic():
         # Log the request data
         log_request_data(request_data, "research_yfinance")
 
-        if request_data != None:
+        if request_data is not None:
             # Extract values from RequestData for backward compatibility
             topic = request_data.topic
             user_id = request_data.userId
