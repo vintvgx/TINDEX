@@ -1,6 +1,6 @@
 // import { useShowToast } from "@/components/ui/toast/useToast";
 
-import { AuthProvider, useAuth } from "@/context/auth/AuthContext";
+import { AuthProvider, useAuth } from "@/common/utils/context/auth/AuthContext";
 // import "./global.css"
 
 // import { ToastService } from "@/services/ToastService";
@@ -20,7 +20,7 @@ import { useColorScheme, View, Text } from "react-native";
 import "react-native-reanimated";
 import "@/global.css";
 
-import LoadingScreen from "@/components/LoadingScreen";
+import LoadingScreen from "@/common/components/LoadingScreen";
 
 // import { GluestackUIProvider } from "../components/ui/gluestack-ui-provider";
 // import LoadingScreen from "./components/LoadingScreen";

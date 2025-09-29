@@ -1,8 +1,8 @@
 import { supabase } from "@/lib/supabase/supabase";
-import { DeleteBlogPostRequest, DeleteBlogPostResponse } from "@/types/blogPosts/delete";
+import { DeleteBlogPostRequest, DeleteBlogPostResponse } from "@/common/types/blogPosts/delete";
 import {
     BlogDeletionException
-} from "@/utils/posts/functions";
+} from "@/common/utils/posts/functions";
 import { User } from "@supabase/supabase-js";
 import {
     useMutation,
