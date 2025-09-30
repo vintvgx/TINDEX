@@ -172,15 +172,15 @@ def get_data():
                 return jsonify(research_result), 400
 
         # Prepare response
-        response = {
-            "success": True,
-            "data": research_result["data"],
-            "research_id": research_result.get("research_id"),
-            "cached": research_result.get("cached", False),
-            "timestamp": time.time(),
-        }
+        # response = {
+        #     "success": True,
+        #     "data": research_result["data"],
+        #     "research_id": research_result.get("research_id"),
+        #     "cached": research_result.get("cached", False),
+        #     "timestamp": time.time(),
+        # }
 
-        return jsonify(response)
+        return jsonify(research_result)
 
     except Exception as e:
         # retrieves topic or falls back to unknown
