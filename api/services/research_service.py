@@ -240,7 +240,7 @@ def get_research_service():
     global stock_research_service
     if stock_research_service is None:
         try:
-            from api.services.supabase_service import supabase_service
+            from services.supabase_service import supabase_service
             stock_research_service = StockResearchService(supabase_service)
         except Exception as e:
             logger.warning(f"Could not initialize research service with Supabase: {e}")
