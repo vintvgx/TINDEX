@@ -81,7 +81,8 @@ class StockResearchService:
             Dict containing:
                 - success (bool): Whether the operation succeeded
                 - data (dict): Research data if successful
-                - cached (bool): Whether data came from cache
+                - data_source (str): Source of the data 
+                - cached (bool): Whether data came from cache or was successfully saved
                 - research_id (str, optional): Database ID if saved
                 - error (str, optional): Error message if failed
                 
@@ -95,8 +96,9 @@ class StockResearchService:
                     "price_change_percent": 1.27,
                     ...
                 },
-                "cached": False,
-                "research_id": "uuid-here"
+                "data_source": "yfinance"
+                "cached": True,
+                "research_id": null
             }
         """
         try:
@@ -105,6 +107,8 @@ class StockResearchService:
             
             cached_research = None
             research_id = None
+            is_cached = False
+            data_source = "yFinance"  # Default to fresh data
             
             # Step 1: Check cache if enabled
             if use_cache and self.supabase_service:
@@ -114,7 +118,14 @@ class StockResearchService:
                     return {
                         "success": True,
                         "data": cached_research,
-                        "cached": True
+                        "data_source": data_source,
+                        "cached": True,
+                        "research_id": None,
+                        "cache_info": {
+                            "from_cache": True,
+                            "cache_age": "recent",  # Could be enhanced to show actual age
+                            "cache_type": "database_cache"
+                        }
                     }
             
             # Step 2: Fetch fresh research data from yFinance
@@ -125,6 +136,7 @@ class StockResearchService:
                 return {
                     "success": False,
                     "error": "Research results does not include data object",
+                    "data_source": "none",
                     "cached": False
                 }
             
@@ -133,16 +145,29 @@ class StockResearchService:
             # Step 3: Save to database if requested
             if save_to_db and self.supabase_service:
                 research_id = self._save_research(research_data)
+                # If save was successful, mark as cached since it's now in the database
+                if research_id:
+                    is_cached = True
+                    logger.info(f"Data for {ticker} is now cached in database (ID: {research_id})")
             
             # Step 4: Cache the research data if caching enabled
             if use_cache and self.supabase_service:
                 self._cache_research(ticker, research_data)
+                # If caching was successful, mark as cached
+                if not is_cached:  # Only set to True if not already set by DB save
+                    is_cached = True
             
             return {
                 "success": True,
                 "data": research_data,
-                "cached": False,
-                "research_id": research_id
+                "data_source": data_source,
+                "cached": is_cached,
+                "research_id": research_id,
+                "cache_info": {
+                    "from_cache": False,
+                    "saved_to_database": bool(research_id),
+                    "cached_for_future": is_cached
+                }
             }
             
         except Exception as e:
@@ -150,6 +175,7 @@ class StockResearchService:
             return {
                 "success": False,
                 "error": f"Research failed: {str(e)}",
+                "data_source": "none",
                 "cached": False
             }
     
