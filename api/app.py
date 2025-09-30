@@ -98,7 +98,223 @@ class RequestDataError:
     success: bool
     error: str
     
+    
+@app.route("/get_data", methods=["POST"])
+def get_data():
+    """
+    Retrieves stock ticker data.
 
+    This endpoint performs comprehensive research on a given stock ticker,
+    gathering financial data, market information, and sentiment analysis.
+    
+    IMPORTANT: This endpoint ONLY performs research. It does not generate blog posts.
+    Use /generate_post endpoint to generate blog content from research data.
+
+    Request Body:
+        userId (str): The id of the user requesting the data
+        topic (str): The topic or stock ticker to research
+        save_to_db (bool, optional): Whether to save results to database (default: True)
+        use_cache (bool, optional): Whether to use cached data (default: True)
+
+    Returns:
+        JSON response containing research results and database save status
+        
+    Example Response:
+        {
+            "success": True,
+            "data": {
+                "ticker": "AAPL",
+                "company_name": "Apple Inc.",
+                "current_price": 175.50,
+                ...
+            },
+            "research_id": "uuid-here",
+            "cached": False,
+            "timestamp": 1234567890
+        }
+    """
+    try:
+        # Get request data
+        data = request.get_json()
+
+        # Get supabase service instance
+        service = get_supabase_service()
+        
+        # Get research service instance
+        from services.research_service import get_research_service
+        research_service = get_research_service()
+
+        # Validate and create RequestData instance
+        request_data, error_response = validate_and_create_request_data(data)
+        if error_response:
+            return jsonify(asdict(error_response)), 400
+
+        # Log the request data
+        log_request_data(request_data, "research_yfinance")
+        if request_data is not None:
+            # Extract values from RequestData
+            topic = request_data.topic
+            user_id = request_data.userId
+            save_to_db = request_data.save_to_db
+            use_cache = request_data.use_cache
+
+            # Verify the user exists / throw error if user id is not found
+            service.verify_user(user_id=user_id)
+
+            # Get research data using the service layer
+            research_result = research_service.get_research_data(
+                ticker=topic,
+                use_cache=use_cache,
+                save_to_db=save_to_db
+            )
+
+            if not research_result["success"]:
+                return jsonify(research_result), 400
+
+        # Prepare response
+        response = {
+            "success": True,
+            "data": research_result["data"],
+            "research_id": research_result.get("research_id"),
+            "cached": research_result.get("cached", False),
+            "timestamp": time.time(),
+        }
+
+        return jsonify(response)
+
+    except Exception as e:
+        # retrieves topic or falls back to unknown
+        _topic = locals().get("topic") or (locals().get("data") or {}).get("topic") or "<unknown>"
+        logger.error("Research failed for topic '%s': %s", _topic, e, exc_info=True)
+        return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
+    
+@app.route("/generate_post", methods=["POST"])
+def generate_post():
+    """
+    Generates a blog post based on research data for a stock ticker.
+    
+    This endpoint generates a blog post using either:
+    1. Cached research data (if available and recent)
+    2. Fresh research data from yFinance
+    3. Provided research data (if included in request)
+    
+    The endpoint separates concerns:
+    - Research data acquisition (uses research service)
+    - Blog content generation (uses blog generation service)
+    
+    Request Body:
+        userId (str): The id of the user requesting the data
+        topic (str): The stock ticker to generate blog post about
+        research_data (dict, optional): Pre-fetched research data to use
+        use_cache (bool, optional): Whether to use cached research data (default: True)
+        save_to_db (bool, optional): Whether to save blog post to database (default: True)
+        target_length (int, optional): Target word count for blog post (default: 800)
+
+    Returns:
+        JSON response containing blog post content and metadata
+        
+    Example Response:
+        {
+            "success": True,
+            "data": {
+                "title": "Apple Inc.: Market Analysis",
+                "content": "...",
+                "ticker": "AAPL",
+                "stock_research_id": "research-uuid"
+            },
+            "blog_id": "blog-uuid",
+            "research_cached": False,
+            "timestamp": 1234567890
+        }
+    """
+    try:
+        # Get request data
+        data = request.get_json()
+
+        # Get supabase service instance
+        service = get_supabase_service()
+        
+        # Get service instances
+        from services.research_service import get_research_service
+        from services.blog_generation_service import get_blog_service
+        research_service = get_research_service()
+        blog_service = get_blog_service()
+
+        # Validate and create RequestData instance
+        request_data, error_response = validate_and_create_request_data(data)
+        if error_response:
+            return jsonify(asdict(error_response)), 400
+
+        # Log the request data
+        log_request_data(request_data, "generate_post")
+
+        # Extract values from RequestData
+        assert request_data is not None 
+        topic = request_data.topic
+        user_id = request_data.userId
+        save_to_db = request_data.save_to_db
+        use_cache = request_data.use_cache
+        target_length = request_data.target_length or 800
+        provided_research_data = request_data.research_data
+
+        # Verify the user exists
+        service.verify_user(user_id=user_id)
+
+        # Step 1: Get research data (use provided data, cache, or fetch fresh)
+        research_result = None
+        research_data = None
+        research_id = None
+        used_cache = False
+        
+        if provided_research_data:
+            # Use provided research data
+            research_data = provided_research_data
+            logger.info("Using provided research data for %s", topic)
+        else:
+            # Get research data using the service layer
+            research_result = research_service.get_research_data(
+                ticker=topic,
+                use_cache=use_cache,
+                save_to_db=save_to_db  # Save research if generating blog
+            )
+            
+            if not research_result["success"]:
+                return jsonify(research_result), 400
+            
+            research_data = research_result["data"]
+            research_id = research_result.get("research_id")
+            used_cache = research_result.get("cached", False)
+
+        # Step 2: Generate blog post using the blog service
+        blog_result = blog_service.generate_blog_post(
+            ticker=topic,
+            research_data=research_data,
+            save_to_db=save_to_db,
+            research_id=research_id,
+            target_length=target_length
+        )
+
+        if not blog_result["success"]:
+            return jsonify(blog_result), 400
+
+        # Prepare response
+        response = {
+            "success": True,
+            "data": blog_result["data"],
+            "blog_id": blog_result.get("blog_id"),
+            "research_id": research_id,
+            "research_cached": used_cache,
+            "blog_saved": blog_result.get("saved", False),
+            "timestamp": time.time(),
+        }
+
+        return jsonify(response)
+
+    except Exception as e:
+        # retrieves topic or falls back to unknown
+        _topic = locals().get("topic") or (locals().get("data") or {}).get("topic") or "<unknown>"
+        logger.error("Blog generation failed for topic '%s': %s", _topic, e, exc_info=True)
+        return jsonify({"success": False, "error": f"Blog generation failed: {str(e)}"}), 500
 
 def get_supabase_service():
     """
@@ -303,224 +519,6 @@ def log_request_data(request_data: RequestData | None, endpoint: str):
         request_data.save_to_db,
         request_data.use_cache
     )
-
-@app.route("/generate_post", methods=["POST"])
-def generate_post():
-    """
-    Generates a blog post based on research data for a stock ticker.
-    
-    This endpoint generates a blog post using either:
-    1. Cached research data (if available and recent)
-    2. Fresh research data from yFinance
-    3. Provided research data (if included in request)
-    
-    The endpoint separates concerns:
-    - Research data acquisition (uses research service)
-    - Blog content generation (uses blog generation service)
-    
-    Request Body:
-        userId (str): The id of the user requesting the data
-        topic (str): The stock ticker to generate blog post about
-        research_data (dict, optional): Pre-fetched research data to use
-        use_cache (bool, optional): Whether to use cached research data (default: True)
-        save_to_db (bool, optional): Whether to save blog post to database (default: True)
-        target_length (int, optional): Target word count for blog post (default: 800)
-
-    Returns:
-        JSON response containing blog post content and metadata
-        
-    Example Response:
-        {
-            "success": True,
-            "data": {
-                "title": "Apple Inc.: Market Analysis",
-                "content": "...",
-                "ticker": "AAPL",
-                "stock_research_id": "research-uuid"
-            },
-            "blog_id": "blog-uuid",
-            "research_cached": False,
-            "timestamp": 1234567890
-        }
-    """
-    try:
-        # Get request data
-        data = request.get_json()
-
-        # Get supabase service instance
-        service = get_supabase_service()
-        
-        # Get service instances
-        from services.research_service import get_research_service
-        from services.blog_generation_service import get_blog_service
-        research_service = get_research_service()
-        blog_service = get_blog_service()
-
-        # Validate and create RequestData instance
-        request_data, error_response = validate_and_create_request_data(data)
-        if error_response:
-            return jsonify(asdict(error_response)), 400
-
-        # Log the request data
-        log_request_data(request_data, "generate_post")
-
-        # Extract values from RequestData
-        assert request_data is not None 
-        topic = request_data.topic
-        user_id = request_data.userId
-        save_to_db = request_data.save_to_db
-        use_cache = request_data.use_cache
-        target_length = request_data.target_length or 800
-        provided_research_data = request_data.research_data
-
-        # Verify the user exists
-        service.verify_user(user_id=user_id)
-
-        # Step 1: Get research data (use provided data, cache, or fetch fresh)
-        research_result = None
-        research_data = None
-        research_id = None
-        used_cache = False
-        
-        if provided_research_data:
-            # Use provided research data
-            research_data = provided_research_data
-            logger.info("Using provided research data for %s", topic)
-        else:
-            # Get research data using the service layer
-            research_result = research_service.get_research_data(
-                ticker=topic,
-                use_cache=use_cache,
-                save_to_db=save_to_db  # Save research if generating blog
-            )
-            
-            if not research_result["success"]:
-                return jsonify(research_result), 400
-            
-            research_data = research_result["data"]
-            research_id = research_result.get("research_id")
-            used_cache = research_result.get("cached", False)
-
-        # Step 2: Generate blog post using the blog service
-        blog_result = blog_service.generate_blog_post(
-            ticker=topic,
-            research_data=research_data,
-            save_to_db=save_to_db,
-            research_id=research_id,
-            target_length=target_length
-        )
-
-        if not blog_result["success"]:
-            return jsonify(blog_result), 400
-
-        # Prepare response
-        response = {
-            "success": True,
-            "data": blog_result["data"],
-            "blog_id": blog_result.get("blog_id"),
-            "research_id": research_id,
-            "research_cached": used_cache,
-            "blog_saved": blog_result.get("saved", False),
-            "timestamp": time.time(),
-        }
-
-        return jsonify(response)
-
-    except Exception as e:
-        # retrieves topic or falls back to unknown
-        _topic = locals().get("topic") or (locals().get("data") or {}).get("topic") or "<unknown>"
-        logger.error("Blog generation failed for topic '%s': %s", _topic, e, exc_info=True)
-        return jsonify({"success": False, "error": f"Blog generation failed: {str(e)}"}), 500
-
-#TODO change name to /get_data since this endpoint is returning data of the given ticker
-@app.route("/research_yfinance", methods=["POST"])
-def research_topic():
-    """
-    Researches a stock ticker using yFinance.
-
-    This endpoint performs comprehensive research on a given stock ticker,
-    gathering financial data, market information, and sentiment analysis.
-    
-    IMPORTANT: This endpoint ONLY performs research. It does not generate blog posts.
-    Use /generate_post endpoint to generate blog content from research data.
-
-    Request Body:
-        userId (str): The id of the user requesting the data
-        topic (str): The topic or stock ticker to research
-        save_to_db (bool, optional): Whether to save results to database (default: True)
-        use_cache (bool, optional): Whether to use cached data (default: True)
-
-    Returns:
-        JSON response containing research results and database save status
-        
-    Example Response:
-        {
-            "success": True,
-            "data": {
-                "ticker": "AAPL",
-                "company_name": "Apple Inc.",
-                "current_price": 175.50,
-                ...
-            },
-            "research_id": "uuid-here",
-            "cached": False,
-            "timestamp": 1234567890
-        }
-    """
-    try:
-        # Get request data
-        data = request.get_json()
-
-        # Get supabase service instance
-        service = get_supabase_service()
-        
-        # Get research service instance
-        from services.research_service import get_research_service
-        research_service = get_research_service()
-
-        # Validate and create RequestData instance
-        request_data, error_response = validate_and_create_request_data(data)
-        if error_response:
-            return jsonify(asdict(error_response)), 400
-
-        # Log the request data
-        log_request_data(request_data, "research_yfinance")
-        if request_data is not None:
-            # Extract values from RequestData
-            topic = request_data.topic
-            user_id = request_data.userId
-            save_to_db = request_data.save_to_db
-            use_cache = request_data.use_cache
-
-            # Verify the user exists / throw error if user id is not found
-            service.verify_user(user_id=user_id)
-
-            # Get research data using the service layer
-            research_result = research_service.get_research_data(
-                ticker=topic,
-                use_cache=use_cache,
-                save_to_db=save_to_db
-            )
-
-            if not research_result["success"]:
-                return jsonify(research_result), 400
-
-        # Prepare response
-        response = {
-            "success": True,
-            "data": research_result["data"],
-            "research_id": research_result.get("research_id"),
-            "cached": research_result.get("cached", False),
-            "timestamp": time.time(),
-        }
-
-        return jsonify(response)
-
-    except Exception as e:
-        # retrieves topic or falls back to unknown
-        _topic = locals().get("topic") or (locals().get("data") or {}).get("topic") or "<unknown>"
-        logger.error("Research failed for topic '%s': %s", _topic, e, exc_info=True)
-        return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
 
 #TODO include once MVP app is complete and real time data is being used within UI
 # @app.route("/generate_blog_post_stream", methods=["POST"])

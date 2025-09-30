@@ -2,15 +2,19 @@ import yfinance as yf
 import pandas as pd
 from log.logging_config import get_logger
 
+from datetime import datetime, timedelta, timezone
+
+
 logger = get_logger(__name__)
 
 
-def perform_yfinance_research(topic: str) -> dict:
+def perform_yfinance_research(topic: str,  expires_seconds: int = 60) -> dict:
     """
     Perform comprehensive research using yFinance.
 
     Args:
         topic: The topic or ticker to research
+        expires_second: The seconds that the cache will expire 
 
     Returns:
         Dict containing research results
@@ -56,6 +60,8 @@ def perform_yfinance_research(topic: str) -> dict:
         price_change_percent = (
             (price_change / previous_close * 100) if previous_close else 0
         )
+        
+        expires_at = datetime.now() + timedelta(seconds=expires_seconds)
 
         # Prepare research data
         research_data = {
@@ -115,6 +121,7 @@ def perform_yfinance_research(topic: str) -> dict:
                 ),
             },
             "news_data": news_list,
+            "expires_at":expires_at
         }
 
         sentiment = analyze_sentiment(research_data)

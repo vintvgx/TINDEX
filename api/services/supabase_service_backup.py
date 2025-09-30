@@ -76,9 +76,9 @@ class StockResearch:
     sentiment: Optional[Dict[str, Any]] = None
     sentiment_score: Optional[int] = None
     sentiment_confidence: Optional[float] = None
-    
-    # Cache expiration
-    expires_at: Optional[datetime] = None
+
+    # Timestamps
+    # timestamp: Optional[datetime] = None
 
 
 @dataclass
@@ -204,8 +204,7 @@ class SupabaseService:
         self, research_data: Union[StockResearch, Dict]
     ) -> Dict[str, Any]:
         """
-        Saves stock data to the database.
-            - Data used to display TickerView information
+        Caches stock research data to the database.
 
         Args:
             research_data: StockResearch object or dictionary containing the data to save
@@ -227,64 +226,29 @@ class SupabaseService:
                 raise ValueError(
                     "research_data must be either StockResearch object or dictionary"
                 )
-        
-            ticker = ticker.upper()
-            logger.info(f"Processing stock research for ticker: {ticker}")
+
+            # Set research date if not provided
+            # if not data_dict.get("research_date"):
+            #     data_dict["research_date"] = datetime.now().isoformat()
 
             # Remove None values to avoid database issues
             data_dict = {k: v for k, v in data_dict.items() if v is not None}
-            
-             # Check if record exists for this ticker
-            existing = (
-                self.client.table("stock_research")
-                .select("id, ticker, research_date")
-                .eq("ticker", ticker)
-                .execute()
-            )
-            
-            is_update = len(existing.data) > 0
-            if is_update:
-                # Update existing record
-                record_id = existing.data[0]["id"]
-                logger.info(
-                    f"Updating existing stock research for {ticker} (ID: {record_id})"
-                )
-                
-                result = (
-                    self.client.table("stock_research")
-                    .update(data_dict)
-                    .eq("ticker", ticker)
-                    .execute()
-                )
-                
-                operation_type = "updated"
-            else:
-                # Insert new record
-                logger.info(f"Inserting new stock research for {ticker}")
-                
-                result = (
-                    self.client.table("stock_research")
-                    .insert(data_dict)
-                    .execute()
-                )
-                
-                operation_type = "created"
+
+            # Insert into database
+            result = self.client.table("stock_research").insert(data_dict).execute()
 
             if result.data:
-                record_id = result.data[0].get("id", "unknown")
                 logger.info(
-                    f"Stock research {operation_type} successfully for {ticker}. "
+                    f"Stock research saved successfully for {ticker}. Record ID: {result.data[0].get('id', 'unknown')}"
                 )
-                
                 return {
                     "success": True,
                     "data": result.data[0],
-                    "is_update": is_update,
-                    "message": f"Stock research {operation_type} successfully",
+                    "message": "Stock research saved successfully",
                 }
             else:
-                logger.error(f"No data returned from {operation_type} operation for {ticker}")
-                raise Exception(f"No data returned from {operation_type} operation")
+                logger.error(f"No data returned from insert operation for {ticker}")
+                raise Exception("No data returned from insert operation")
 
         except Exception as e:
             ticker_name = ticker if "ticker" in locals() else "unknown"
