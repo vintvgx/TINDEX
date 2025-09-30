@@ -76,7 +76,7 @@ class AnthropicService:
         self,
         topic: str,
         research_data: Dict[str, Any],
-        target_length: int = 800,
+        target_length: int | None = 800,
         ticker: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
