@@ -18,8 +18,8 @@ Key Responsibilities:
 """
 
 from typing import Dict, Any, Optional
-from api.log.logging_config import get_logger
-from api.services.yfinance_service import perform_yfinance_research
+from log.logging_config import get_logger
+from services.yfinance_service import perform_yfinance_research
 
 logger = get_logger(__name__)
 
