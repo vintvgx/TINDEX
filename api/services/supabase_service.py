@@ -525,53 +525,39 @@ class SupabaseService:
             )
             return self._handle_database_error(e, f"save_to_cache for {ticker}")
 
-    def get_from_cache(self, ticker: str, cache_key: str) -> Dict[str, Any]:
+    def get_from_cache(self, ticker: str) -> Dict[str, Any]:
         """
-        Retrieve data from cache if not expired.
+        Retrieve complete stock research data from cache if not expired.
+        Automatically updates updated_at timestamp via database function.
 
         Args:
             ticker: The stock ticker
-            cache_key: Cache key to retrieve
 
         Returns:
-            Dict containing cached data or None if expired/not found
+            Dict containing all stock research data or None if expired/not found
         """
         try:
             logger.info(
-                f"Starting get_from_cache operation for ticker: {ticker}, cache_key: {cache_key}"
+                f"Starting get_from_cache operation for ticker: {ticker}"
             )
 
-            result = (
-                self.client.table("research_cache")
-                .select("*")
-                .eq("ticker", ticker.upper())
-                .eq("cache_key", cache_key)
-                .gt("expires_at", datetime.now().isoformat())
-                .execute()
-            )
+            # Call the PostgreSQL function - single database round trip
+            # Returns all fields from stock_research table
+            # updates hit_count & last_accessed within supabase
+            result = self.client.rpc(
+                'get_and_update_cache',
+                {'p_ticker': ticker.upper()}
+            ).execute()
 
-            if result.data:
-                logger.info(
-                    f"Cache hit for {ticker} - {cache_key}. Updating hit count and last accessed"
-                )
-
-                # Update hit count and last accessed
-                cache_id = result.data[0]["id"]
-                self.client.table("research_cache").update(
-                    {
-                        "hit_count": result.data[0]["hit_count"] + 1,
-                        "last_accessed": datetime.now().isoformat(),
-                    }
-                ).eq("id", cache_id).execute()
-
-                logger.info(f"Cache hit: {ticker} - {cache_key}")
+            if result.data and len(result.data) > 0:
+                logger.info(f"Cache hit: {ticker} - returning complete stock research object")
                 return {
                     "success": True,
-                    "data": result.data[0]["cached_data"],
+                    "data": result.data[0],  # Complete stock_research row as object
                     "message": "Cache hit",
                 }
             else:
-                logger.info(f"Cache miss or expired for {ticker} - {cache_key}")
+                logger.info(f"Cache miss or expired for {ticker}")
                 return {
                     "success": False,
                     "error": "Cache miss or expired",
@@ -580,7 +566,7 @@ class SupabaseService:
 
         except Exception as e:
             logger.error(
-                f"Failed to get from cache for {ticker} - {cache_key}: {str(e)}",
+                f"Failed to get from cache for {ticker}: {str(e)}",
                 exc_info=True,
             )
             return self._handle_database_error(e, f"get_from_cache for {ticker}")
