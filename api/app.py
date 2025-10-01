@@ -4,7 +4,6 @@ import asyncio
 import json
 from typing import Optional
 from dataclasses import dataclass, asdict
-import datetime
 
 from bs4 import BeautifulSoup
 
@@ -170,15 +169,6 @@ def get_data():
 
             if not research_result["success"]:
                 return jsonify(research_result), 400
-
-        # Prepare response
-        # response = {
-        #     "success": True,
-        #     "data": research_result["data"],
-        #     "research_id": research_result.get("research_id"),
-        #     "cached": research_result.get("cached", False),
-        #     "timestamp": time.time(),
-        # }
 
         return jsonify(research_result)
 
