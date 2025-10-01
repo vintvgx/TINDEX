@@ -204,18 +204,20 @@ class SupabaseService:
         self, research_data: Union[StockResearch, Dict]
     ) -> Dict[str, Any]:
         """
-        Saves stock data to the database.
-            - Data used to display TickerView information
-
+        Saves stock data to the database using database-level upsert logic.
+        - Preserves created_at on updates
+        - Automatically updates updated_at via trigger
+        - Single database operation (no separate SELECT)
+        
         Args:
             research_data: StockResearch object or dictionary containing the data to save
-
+        
         Returns:
             Dict containing success status and saved data or error information
         """
         try:
             logger.info("Starting save_stock_research operation")
-
+            
             # Handle both StockResearch objects and dictionaries
             if isinstance(research_data, StockResearch):
                 data_dict = asdict(research_data)
@@ -227,65 +229,42 @@ class SupabaseService:
                 raise ValueError(
                     "research_data must be either StockResearch object or dictionary"
                 )
-        
+            
             ticker = ticker.upper()
             logger.info(f"Processing stock research for ticker: {ticker}")
-
+            
             # Remove None values to avoid database issues
             data_dict = {k: v for k, v in data_dict.items() if v is not None}
             
-             # Check if record exists for this ticker
-            existing = (
-                self.client.table("stock_research")
-                .select("id, ticker, research_date")
-                .eq("ticker", ticker)
-                .execute()
-            )
+            # Convert dict to JSON for PostgreSQL function
+            import json
+            data_json = json.dumps(data_dict)
             
-            is_update = len(existing.data) > 0
-            if is_update:
-                # Update existing record
-                record_id = existing.data[0]["id"]
+            # Call the PostgreSQL function - single database operation
+            result = self.client.rpc(
+                'upsert_stock_research',
+                {'p_data': data_json}
+            ).execute()
+            
+            if result.data and len(result.data) > 0:
+                record = result.data[0]
+                is_update = record.pop('is_update', False)
+                operation_type = "updated" if is_update else "created"
+                
                 logger.info(
-                    f"Updating existing stock research for {ticker} (ID: {record_id})"
-                )
-                
-                result = (
-                    self.client.table("stock_research")
-                    .update(data_dict)
-                    .eq("ticker", ticker)
-                    .execute()
-                )
-                
-                operation_type = "updated"
-            else:
-                # Insert new record
-                logger.info(f"Inserting new stock research for {ticker}")
-                
-                result = (
-                    self.client.table("stock_research")
-                    .insert(data_dict)
-                    .execute()
-                )
-                
-                operation_type = "created"
-
-            if result.data:
-                record_id = result.data[0].get("id", "unknown")
-                logger.info(
-                    f"Stock research {operation_type} successfully for {ticker}. "
+                    f"Stock research {operation_type} successfully for {ticker} (ID: {record.get('id', 'unknown')})"
                 )
                 
                 return {
                     "success": True,
-                    "data": result.data[0],
+                    "data": record,
                     "is_update": is_update,
                     "message": f"Stock research {operation_type} successfully",
                 }
             else:
-                logger.error(f"No data returned from {operation_type} operation for {ticker}")
-                raise Exception(f"No data returned from {operation_type} operation")
-
+                logger.error(f"No data returned from upsert operation for {ticker}")
+                raise Exception("No data returned from upsert operation")
+        
         except Exception as e:
             ticker_name = ticker if "ticker" in locals() else "unknown"
             logger.error(
