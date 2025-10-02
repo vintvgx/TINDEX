@@ -211,7 +211,7 @@ class StockResearchService:
             if not self.supabase_service:
                 return None
 
-            cache_result = self.supabase_service.get_from_cache(ticker, "research_data")
+            cache_result = self.supabase_service.get_from_cache(ticker)
             if cache_result.get("success"):
                 return cache_result.get("data")
             return None
