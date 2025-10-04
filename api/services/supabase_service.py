@@ -243,8 +243,8 @@ class SupabaseService:
             
             # Call the PostgreSQL function - single database operation
             result = self.client.rpc(
-                'upsert_stock_research',
-                {'p_data': data_json}
+                'upsert_stock_research', 
+                {'stock_data': data_json}
             ).execute()
             
             if result.data and len(result.data) > 0:
@@ -275,62 +275,6 @@ class SupabaseService:
             return self._handle_database_error(
                 e, f"save_stock_research for {ticker_name}"
             )
-
-    def get_stock_research(
-        self, ticker: str, max_age_hours: int = 24
-    ) -> Dict[str, Any]:
-        """
-        Retrieve recent stock research data by ticker.
-
-        Args:
-            ticker: The stock ticker to search for
-            max_age_hours: Maximum age of data to consider recent (default: 24 hours)
-
-        Returns:
-            Dict containing success status and research data or error information
-        """
-        try:
-            logger.info(
-                f"Starting get_stock_research operation for ticker: {ticker}, max_age_hours: {max_age_hours}"
-            )
-
-            # Calculate cutoff time for recent data
-            cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
-
-            result = (
-                self.client.table("stock_research")
-                .select("*")
-                .eq("ticker", ticker.upper())
-                .gte("research_date", cutoff_time.isoformat())
-                .order("research_date", desc=True)
-                .limit(1)
-                .execute()
-            )
-
-            if result.data:
-                logger.info(
-                    f"Stock research retrieved successfully for {ticker}. Found {len(result.data)} records"
-                )
-                return {
-                    "success": True,
-                    "data": result.data[0],
-                    "message": "Stock research found",
-                }
-            else:
-                logger.info(
-                    f"No recent stock research found for {ticker} within {max_age_hours} hours"
-                )
-                return {
-                    "success": False,
-                    "error": f"No recent stock research found: {ticker}",
-                    "data": None,
-                }
-
-        except Exception as e:
-            logger.error(
-                f"Failed to get stock research for {ticker}: {str(e)}", exc_info=True
-            )
-            return self._handle_database_error(e, f"get_stock_research for {ticker}")
 
     def save_blog_post(self, blog_data: Union[BlogPost, Dict]) -> Dict[str, Any]:
         """
@@ -438,72 +382,6 @@ class SupabaseService:
             return self._handle_database_error(
                 e, f"get_blog_posts_by_ticker for {ticker}"
             )
-
-    def save_to_cache(
-        self, ticker: str, cache_key: str, data: Dict, expires_hours: int = 24
-    ) -> Dict[str, Any]:
-        """
-        Save data to the research cache.
-
-        Args:
-            ticker: The stock ticker
-            cache_key: Unique key for this cache entry
-            data: Data to cache
-            expires_hours: Cache expiration time in hours
-
-        Returns:
-            Dict containing success status
-        """
-        try:
-            logger.info(
-                f"Starting save_to_cache operation for ticker: {ticker}, cache_key: {cache_key}, expires_hours: {expires_hours}"
-            )
-
-            expires_at = datetime.now() + timedelta(hours=expires_hours)
-            logger.info(f"Cache will expire at: {expires_at.isoformat()}")
-
-            cache_data = {
-                "ticker": ticker.upper(),
-                "cache_key": cache_key,
-                "cached_data": data,
-                "expires_at": datetime.now(timezone.utc)
-                + timedelta(hours=expires_hours),
-            }
-
-            logger.info(
-                f"Prepared cache data for {ticker} with {len(cache_data)} fields"
-            )
-
-            # Use upsert to handle duplicates
-            result = (
-                self.client.table("research_cache")
-                # upsert:
-                # - If the record doesn't exist: It performs an INSERT operation
-                # - If the record already exists: It performs an UPDATE operation
-                .upsert(cache_data, on_conflict="ticker,cache_key").execute()
-            )
-
-            if result.data:
-                logger.info(
-                    f"Data cached successfully for {ticker} - {cache_key}. Record ID: {result.data[0].get('id', 'unknown')}"
-                )
-                return {
-                    "success": True,
-                    "data": result.data[0],
-                    "message": "Data cached successfully",
-                }
-            else:
-                logger.error(
-                    f"No data returned from cache operation for {ticker} - {cache_key}"
-                )
-                raise Exception("No data returned from cache operation")
-
-        except Exception as e:
-            logger.error(
-                f"Failed to save cache for {ticker} - {cache_key}: {str(e)}",
-                exc_info=True,
-            )
-            return self._handle_database_error(e, f"save_to_cache for {ticker}")
 
     def get_from_cache(self, ticker: str) -> Dict[str, Any]:
         """
