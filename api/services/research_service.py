@@ -130,8 +130,8 @@ class StockResearchService:
                         "success": True,
                         "data": cached_research,
                         "data_source": data_source,
-                        "cached": True,
                         "research_id": None,
+                        "from_cache": True, #TODO apply to metadata
                         "cache_info": {
                             "from_cache": True,
                             "cache_age": "recent",
@@ -165,13 +165,6 @@ class StockResearchService:
                     logger.info(
                         f"Data for {ticker} is now cached in database (ID: {research_id})"
                     )
-
-            # Step 4: Cache the research data if caching enabled
-            if use_cache and self.supabase_service:
-                self._cache_research(ticker, research_data)
-                # If caching was successful, mark as cached
-                if not is_cached:  # Only set to True if not already set by DB save
-                    is_cached = True
 
             return {
                 "success": True,
@@ -219,29 +212,6 @@ class StockResearchService:
         except Exception as e:
             logger.warning(f"Cache retrieval failed for {ticker}: {str(e)}")
             return None
-
-    def _cache_research(self, ticker: str, research_data: Dict[str, Any]) -> bool:
-        """
-        Cache research data in database.
-
-        Args:
-            ticker: Stock ticker symbol
-            research_data: Research data to cache
-
-        Returns:
-            True if caching succeeded, False otherwise
-        """
-        try:
-            if not self.supabase_service:
-                return False
-
-            self.supabase_service.save_to_cache(ticker, "research_data", research_data)
-            logger.info(f"Cached research data for {ticker}")
-            return True
-
-        except Exception as e:
-            logger.warning(f"Cache save failed for {ticker}: {str(e)}")
-            return False
 
     def _save_research(self, research_data: Dict[str, Any]) -> Optional[str]:
         """
