@@ -236,9 +236,6 @@ class SupabaseService:
             # Remove None values to avoid database issues
             data_dict = {k: v for k, v in data_dict.items() if v is not None}
             
-            # Log the data being sent (for debugging)
-            logger.info(f"Research data: {data_dict}")
-            
             # Call the PostgreSQL function - pass dict directly, not JSON string
             result = self.client.rpc(
                 'upsert_stock_research', 
