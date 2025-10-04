@@ -232,19 +232,14 @@ class SupabaseService:
             
             ticker = ticker.upper()
             logger.info(f"Processing stock research for ticker: {ticker}")
-            logger.info("Research data: %s", research_data)
             
             # Remove None values to avoid database issues
             data_dict = {k: v for k, v in data_dict.items() if v is not None}
             
-            # Convert dict to JSON for PostgreSQL function
-            import json
-            data_json = json.dumps(data_dict)
-            
             # Call the PostgreSQL function - single database operation
             result = self.client.rpc(
                 'upsert_stock_research', 
-                {'p_data': data_json}
+                {'p_data': data_dict}
             ).execute()
             
             if result.data and len(result.data) > 0:
