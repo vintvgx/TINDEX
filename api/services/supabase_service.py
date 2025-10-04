@@ -236,10 +236,13 @@ class SupabaseService:
             # Remove None values to avoid database issues
             data_dict = {k: v for k, v in data_dict.items() if v is not None}
             
-            # Call the PostgreSQL function - single database operation
+            # Log the data being sent (for debugging)
+            logger.info(f"Research data: {data_dict}")
+            
+            # Call the PostgreSQL function - pass dict directly, not JSON string
             result = self.client.rpc(
                 'upsert_stock_research', 
-                {'p_data': data_dict}
+                {'p_data': data_dict}  # ✅ Pass dict directly
             ).execute()
             
             if result.data and len(result.data) > 0:
@@ -264,7 +267,7 @@ class SupabaseService:
         except Exception as e:
             ticker_name = ticker if "ticker" in locals() else "unknown"
             logger.error(
-                f"Failed to save stock research for {ticker_name}: {str(e)}. \n\nContext: {data_json}",
+                f"Failed to save stock research for {ticker_name}: {str(e)}",  # ✅ Removed data_json reference
                 exc_info=True,
             )
             return self._handle_database_error(
