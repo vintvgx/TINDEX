@@ -98,20 +98,27 @@ class RequestDataError:
     error: str
     
     
-@app.route("/get_data", methods=["POST"])
-def get_data():
+@app.route("/ticker/<ticker>", methods=["POST"])
+def get_ticker_data(ticker: str):
     """
-    Retrieves stock ticker data.
+    Retrieves stock ticker data using ticker from URL path.
 
     This endpoint performs comprehensive research on a given stock ticker,
     gathering financial data, market information, and sentiment analysis.
     
+    TODO remove when additional functionalities are added 
     IMPORTANT: This endpoint ONLY performs research. It does not generate blog posts.
     Use /generate_post endpoint to generate blog content from research data.
 
+    URL Parameters:
+        ticker (str): The stock ticker symbol (e.g., 'AAPL', 'TSLA')
+        
+    NOTE: Syntax for using multiple parameters.
+        @app.route("/v1/ticker/<ticker>/data/<date>")
+        def get_ticker_data(ticker: str, date: str):
+
     Request Body:
         userId (str): The id of the user requesting the data
-        topic (str): The topic or stock ticker to research
         save_to_db (bool, optional): Whether to save results to database (default: True)
         use_cache (bool, optional): Whether to use cached data (default: True)
 
@@ -129,10 +136,18 @@ def get_data():
             },
             "research_id": "uuid-here",
             "cached": False,
-            "timestamp": 1234567890
-        }
+            
     """
     try:
+        # Validate ticker from URL path
+        ticker = ticker.strip().upper()
+        
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({
+                "success": False,
+                "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."
+            }), 400
+            
         # Get request data
         data = request.get_json()
 
@@ -151,8 +166,7 @@ def get_data():
         # Log the request data
         log_request_data(request_data, "research_yfinance")
         if request_data is not None:
-            # Extract values from RequestData
-            topic = request_data.topic
+             # Extract values from RequestData
             user_id = request_data.userId
             save_to_db = request_data.save_to_db
             use_cache = request_data.use_cache
@@ -162,7 +176,7 @@ def get_data():
 
             # Get research data using the service layer
             research_result = research_service.get_research_data(
-                ticker=topic,
+                ticker=ticker,
                 use_cache=use_cache,
                 save_to_db=save_to_db
             )
@@ -173,10 +187,9 @@ def get_data():
         return jsonify(research_result)
 
     except Exception as e:
-        # retrieves topic or falls back to unknown
-        _topic = locals().get("topic") or (locals().get("data") or {}).get("topic") or "<unknown>"
-        logger.error("Research failed for topic '%s': %s", _topic, e, exc_info=True)
+        logger.error("Ticker research failed for ticker '%s': %s", ticker, e, exc_info=True)
         return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
+
     
 @app.route("/generate_post", methods=["POST"])
 def generate_post():
@@ -416,64 +429,47 @@ def run_async(coro):
         loop.close()
 
 
-def validate_and_create_request_data(
-    data: dict, require_user_id: bool = True, validate_ticker: bool = True
+def validate_and_create_ticker_request_data(
+    data: dict, ticker: str, require_user_id: bool = True
 ) -> tuple[RequestData | None, RequestDataError | None]:
     """
-    Validate request data and create a RequestData instance.
+    Validate request data and create a RequestData instance for ticker endpoint.
 
     Args:
         data: Raw request data from Flask request
+        ticker: Ticker symbol from URL path
         require_user_id: Whether userId is required (default: True)
-        validate_ticker: Whether to validate topic as ticker format (default: True)
 
     Returns:
         Tuple of (RequestData instance, error_response_dict)
         If validation fails, RequestData will be None and error_response will contain the error
     """
-    if not data or "topic" not in data:
-        return None, RequestDataError(
-            success = False,
-            error="Topic is required in request body"
-        )
-
     try:
         request_data = RequestData(
-            topic=data["topic"].strip().upper(),
+            topic=ticker,  # Use ticker from URL as topic
             userId=data.get("userId"),
             save_to_db=data.get("save_to_db", True),
             use_cache=data.get("use_cache", True),
             research_data=data.get("research_data", {}),
             target_length=data.get("target_length", 800),
-            ticker=data.get("ticker"),
+            ticker=ticker,
         )
 
-        # Additional validation
-        if not request_data.topic or len(request_data.topic) < 1:
-            return None, RequestDataError(
-                success = False,
-                error="Topic must be a non-empty string"
-                )
-
-        if validate_ticker and not re.match(r"^[A-Z0-9]{1,5}$", request_data.topic):
-            return None, RequestDataError(
-                success = False,
-                error="Invalid ticker symbol format"
-                )
-
+        # Validate required fields
         if require_user_id and not request_data.userId:
             return None, RequestDataError(
-                success = False,
+                success=False,
                 error="User ID must be a non-empty string"
-                )
+            )
 
         return request_data, None
 
     except Exception as e:
-              return None, RequestDataError(
-                success = False,
-                error=f"Invalid request data: {str(e)}"
-                )
+        return None, RequestDataError(
+            success=False,
+            error=f"Invalid request data: {str(e)}"
+        )
+
 
 def request_data_to_dict(request_data: RequestData) -> dict:
     """
