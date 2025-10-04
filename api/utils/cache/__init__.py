@@ -1,5 +1,5 @@
 """
-Utility modules for the application.
+Cache modules for the application.
 """
 
 from .cache import TrendingStocksCache, GenericTTLCache

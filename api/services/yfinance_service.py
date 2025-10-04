@@ -2,15 +2,19 @@ import yfinance as yf
 import pandas as pd
 from log.logging_config import get_logger
 
+from datetime import datetime, timedelta, timezone
+
+
 logger = get_logger(__name__)
 
 
-def perform_yfinance_research(topic: str) -> dict:
+def perform_yfinance_research(topic: str, expires_seconds: int = 60) -> dict:
     """
     Perform comprehensive research using yFinance.
 
     Args:
         topic: The topic or ticker to research
+        expires_seconds: The seconds that the cache will expire
 
     Returns:
         Dict containing research results
@@ -56,6 +60,8 @@ def perform_yfinance_research(topic: str) -> dict:
         price_change_percent = (
             (price_change / previous_close * 100) if previous_close else 0
         )
+
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_seconds)
 
         # Prepare research data
         research_data = {
@@ -115,6 +121,7 @@ def perform_yfinance_research(topic: str) -> dict:
                 ),
             },
             "news_data": news_list,
+            "expires_at": expires_at.isoformat(),
         }
 
         sentiment = analyze_sentiment(research_data)
@@ -153,39 +160,39 @@ def analyze_sentiment(research_data: dict) -> dict:
                                    # - Price movement: +2 (>5% gain), +1 (0-5% gain), -1 (0-5% loss), -2 (>5% loss)
                                    # - PE ratio: +1 (<15, undervalued), -1 (>25, overvalued)
                                    # - Beta: +1 (<1.0, low volatility), -1 (>1.5, high volatility)
-            
+
             "sentiment": str,       # Overall sentiment category based on score:
                                    # - "bullish" (score >= 2): Positive outlook, good investment signal
                                    # - "neutral" (score 0-1): Mixed signals, hold or cautious approach
                                    # - "bearish" (score < 0): Negative outlook, potential sell signal
-            
+
             "confidence": float,    # Confidence level (0-100%) in the sentiment assessment
                                    # Calculated as: min(abs(score) / 4 * 100, 100)
                                    # Higher absolute scores = higher confidence
-            
+
             "factors": {
                 "price_movement": float,    # Recent price change percentage
                                            # Positive = stock price increased, Negative = decreased
                                            # Key indicator of recent market performance
-                
+
                 "pe_ratio": float,         # Price-to-Earnings ratio
                                           # Lower values (typically <15) suggest undervalued stock
                                           # Higher values (>25) may indicate overvaluation
                                           # Industry context matters for interpretation
-                
+
                 "beta": float             # Stock volatility relative to market (S&P 500 = 1.0)
                                          # <1.0 = Less volatile than market (more stable)
                                          # >1.0 = More volatile than market (higher risk/reward)
                                          # >1.5 = Significantly more volatile (high risk)
             }
         }
-        
+
     AAPL Example Analysis:
         {"score": 0, "sentiment": "neutral", "confidence": 0.0, "factors": {"price_movement": 1.27, "pe_ratio": 34.613983, "beta": 1.165}}
-        
+
         Interpretation:
         - price_movement (1.27%): Slight positive movement, adds +1 to score
-        - pe_ratio (34.61): High valuation, subtracts -1 from score  
+        - pe_ratio (34.61): High valuation, subtracts -1 from score
         - beta (1.165): Moderate volatility, no score impact
         - Final score: 0 (neutral sentiment)
         - This suggests AAPL is fairly valued with mixed signals - recent gains offset by high valuation

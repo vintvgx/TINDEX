@@ -76,7 +76,7 @@ class AnthropicService:
         self,
         topic: str,
         research_data: Dict[str, Any],
-        target_length: int = 800,
+        target_length: int | None = 800,
         ticker: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -91,6 +91,7 @@ class AnthropicService:
         Returns:
             Dict containing the generated blog post data
         """
+        target_length = target_length or 800
         try:
             # Build the prompt with ticker information
             prompt = self._build_blog_prompt(
