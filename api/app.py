@@ -159,12 +159,12 @@ def get_ticker_data(ticker: str):
         research_service = get_research_service()
 
         # Validate and create RequestData instance
-        request_data, error_response = validate_and_create_request_data(data)
+        request_data, error_response = validate_and_create_ticker_request_data(data, ticker)
         if error_response:
             return jsonify(asdict(error_response)), 400
 
         # Log the request data
-        log_request_data(request_data, "research_yfinance")
+        log_request_data(request_data, "get_ticker_data")
         if request_data is not None:
              # Extract values from RequestData
             user_id = request_data.userId
@@ -191,8 +191,8 @@ def get_ticker_data(ticker: str):
         return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
 
     
-@app.route("/generate_post", methods=["POST"])
-def generate_post():
+@app.route("/generate_post/<ticker>", methods=["POST"])
+def generate_post(ticker: str):
     """
     Generates a blog post based on research data for a stock ticker.
     
@@ -231,6 +231,15 @@ def generate_post():
         }
     """
     try:
+        # Validate ticker from URL path
+        ticker = ticker.strip().upper()
+        
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({
+                "success": False,
+                "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."
+            }), 400
+            
         # Get request data
         data = request.get_json()
 
@@ -244,7 +253,7 @@ def generate_post():
         blog_service = get_blog_service()
 
         # Validate and create RequestData instance
-        request_data, error_response = validate_and_create_request_data(data)
+        request_data, error_response = validate_and_create_ticker_request_data(data, ticker)
         if error_response:
             return jsonify(asdict(error_response)), 400
 
@@ -253,7 +262,7 @@ def generate_post():
 
         # Extract values from RequestData
         assert request_data is not None 
-        topic = request_data.topic
+        # topic = request_data.topic TODO remove
         user_id = request_data.userId
         save_to_db = request_data.save_to_db
         use_cache = request_data.use_cache
@@ -272,11 +281,11 @@ def generate_post():
         if provided_research_data:
             # Use provided research data
             research_data = provided_research_data
-            logger.info("Using provided research data for %s", topic)
+            logger.info("Using provided research data for %s", ticker)
         else:
             # Get research data using the service layer
             research_result = research_service.get_research_data(
-                ticker=topic,
+                ticker=ticker,
                 use_cache=use_cache,
                 save_to_db=save_to_db  # Save research if generating blog
             )
@@ -290,7 +299,7 @@ def generate_post():
 
         # Step 2: Generate blog post using the blog service
         blog_result = blog_service.generate_blog_post(
-            ticker=topic,
+            ticker=ticker,
             research_data=research_data,
             save_to_db=save_to_db,
             research_id=research_id,
