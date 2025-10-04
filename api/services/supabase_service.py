@@ -244,7 +244,7 @@ class SupabaseService:
             # Call the PostgreSQL function - single database operation
             result = self.client.rpc(
                 'upsert_stock_research', 
-                {'stock_data': data_json}
+                {'p_data': data_json}
             ).execute()
             
             if result.data and len(result.data) > 0:
