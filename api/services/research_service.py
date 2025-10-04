@@ -128,8 +128,9 @@ class StockResearchService:
                         "success": True,
                         "data": cached_research,
                         "data_source": data_source,
-                        "research_id": None,
-                        "from_cache": True, #TODO apply to metadata
+                        "from_cache": True, #TODO apply to metadata,
+                        "cached": True,
+                        "research_id": cached_research.get("id"),
                         "cache_info": {
                             "from_cache": True,
                             "cache_age": "recent",
