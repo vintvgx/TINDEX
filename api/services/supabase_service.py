@@ -232,6 +232,7 @@ class SupabaseService:
             
             ticker = ticker.upper()
             logger.info(f"Processing stock research for ticker: {ticker}")
+            logger.info("Research data: %s", research_data)
             
             # Remove None values to avoid database issues
             data_dict = {k: v for k, v in data_dict.items() if v is not None}
@@ -268,7 +269,7 @@ class SupabaseService:
         except Exception as e:
             ticker_name = ticker if "ticker" in locals() else "unknown"
             logger.error(
-                f"Failed to save stock research for {ticker_name}: {str(e)}",
+                f"Failed to save stock research for {ticker_name}: {str(e)}. \n\nContext: {data_json}",
                 exc_info=True,
             )
             return self._handle_database_error(
