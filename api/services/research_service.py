@@ -105,10 +105,8 @@ class StockResearchService:
                 "research_id": null
             }
         """
-        # Generate timestamp ONCE at the start
-        # timestamp = datetime.utcnow().isoformat() + 'Z'
-        current_datetime = datetime.now()
-        formatted_datetime = current_datetime.strftime("%Y-%m-%d %H:%M:%S")
+        # Time stamp with proper timezone support
+        timestamp = datetime.now(timezone.utc).isoformat()
         
         try:
             ticker = ticker.strip().upper()
@@ -137,7 +135,7 @@ class StockResearchService:
                             "cache_age": "recent",
                             "cache_type": "database_cache",
                         },
-                        "timestamp":formatted_datetime
+                        "timestamp":timestamp
                     }
 
             # Step 2: Fetch fresh research data from yFinance
@@ -150,7 +148,7 @@ class StockResearchService:
                     "error": "Research results does not include data object",
                     "data_source": "none",
                     "cached": False,
-                    "timestamp":formatted_datetime
+                    "timestamp":timestamp
 
                 }
 
@@ -177,7 +175,7 @@ class StockResearchService:
                     "saved_to_database": bool(research_id),
                     "cached_for_future": is_cached,
                 },
-                "timestamp":formatted_datetime
+                "timestamp":timestamp
             }
 
         except Exception as e:
@@ -187,7 +185,7 @@ class StockResearchService:
                 "error": f"Research failed: {str(e)}",
                 "data_source": "none",
                 "cached": False,
-                "timestamp":formatted_datetime
+                "timestamp":timestamp
             }
 
     def _get_cached_research(self, ticker: str) -> Optional[Dict[str, Any]]:

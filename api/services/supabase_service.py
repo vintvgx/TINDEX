@@ -231,6 +231,7 @@ class SupabaseService:
                 )
             
             ticker = ticker.upper()
+            data_dict["ticker"] = ticker # upsert capitalized ticker (deduplication)
             logger.info(f"Processing stock research for ticker: {ticker}")
             
             # Remove None values to avoid database issues

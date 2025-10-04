@@ -14,7 +14,7 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60) -> dict:
 
     Args:
         topic: The topic or ticker to research
-        expires_second: The seconds that the cache will expire
+        expires_seconds: The seconds that the cache will expire
 
     Returns:
         Dict containing research results
@@ -61,7 +61,7 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60) -> dict:
             (price_change / previous_close * 100) if previous_close else 0
         )
 
-        expires_at = datetime.now() + timedelta(seconds=expires_seconds)
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_seconds)
 
         # Prepare research data
         research_data = {

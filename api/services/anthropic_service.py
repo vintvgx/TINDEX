@@ -91,6 +91,7 @@ class AnthropicService:
         Returns:
             Dict containing the generated blog post data
         """
+        target_length = target_length or 800
         try:
             # Build the prompt with ticker information
             prompt = self._build_blog_prompt(

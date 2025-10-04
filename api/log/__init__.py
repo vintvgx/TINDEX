@@ -1,5 +1,5 @@
 """
-Cache modules for the application.
+Logging modules for the application.
 """
 
 from .logging_config import get_logger

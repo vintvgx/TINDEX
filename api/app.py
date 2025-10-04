@@ -159,7 +159,9 @@ def get_ticker_data(ticker: str):
         research_service = get_research_service()
 
         # Validate and create RequestData instance
-        request_data, error_response = validate_and_create_ticker_request_data(data, ticker)
+        request_data, error_response = validate_and_create_ticker_request_data(
+            data or {}, ticker=ticker
+        )
         if error_response:
             return jsonify(asdict(error_response)), 400
 
@@ -252,8 +254,10 @@ def generate_post(ticker: str):
         research_service = get_research_service()
         blog_service = get_blog_service()
 
-        # Validate and create RequestData instance
-        request_data, error_response = validate_and_create_ticker_request_data(data, ticker)
+         # Validate and create RequestData instance
+        request_data, error_response = validate_and_create_ticker_request_data(
+            data or {}, ticker=ticker
+        )
         if error_response:
             return jsonify(asdict(error_response)), 400
 
