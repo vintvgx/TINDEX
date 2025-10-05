@@ -35,7 +35,7 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
         </Text>
         <View className="flex-row flex-wrap justify-between">
           {/* Market Cap */}
-          {stockData.market_cap && (
+          {stockData.market_cap != null && (
             <View className="w-[48%] mb-4">
               <AppStoreCard variant="compact">
                 <View className="p-4">
@@ -51,7 +51,7 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
           )}
 
           {/* P/E Ratio */}
-          {stockData.pe_ratio && (
+          {stockData.pe_ratio != null && (
             <View className="w-[48%] mb-4">
               <AppStoreCard variant="compact">
                 <View className="p-4">
@@ -67,7 +67,7 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
           )}
 
           {/* Price to Book */}
-          {stockData.price_to_book && (
+          {stockData.price_to_book != null && (
             <View className="w-[48%] mb-4">
               <AppStoreCard variant="compact">
                 <View className="p-4">
@@ -83,7 +83,7 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
           )}
 
           {/* Dividend Yield */}
-          {stockData.dividend_yield && (
+          {stockData.dividend_yield != null && (
             <View className="w-[48%] mb-4">
               <AppStoreCard variant="compact">
                 <View className="p-4">

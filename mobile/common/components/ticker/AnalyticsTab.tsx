@@ -13,10 +13,16 @@ interface AnalyticsTabProps {
 }
 
 export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ stockData }) => {
+  // Hoist sentiment data to safely handle undefined cases
+  const sentiment = stockData.sentiment;
+  const sentimentValue = sentiment?.sentiment;
+  const sentimentFactors = sentiment?.factors;
+  const beta = stockData.beta;
+  
   return (
     <>
       {/* Sentiment Analysis */}
-      {stockData.sentiment.sentiment && (
+      {sentimentValue && (
         <View className="mb-8">
           <AppStoreCard variant="featured">
             <View className="p-6">
@@ -32,31 +38,31 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ stockData }) => {
                   </Text>
                   <Text
                     className={`text-2xl font-bold ${
-                      stockData.sentiment.sentiment === "bullish"
+                      sentimentValue === "bullish"
                         ? "text-green-400"
-                        : stockData.sentiment.sentiment === "bearish"
+                        : sentimentValue === "bearish"
                           ? "text-red-400"
                           : "text-gray-400"
                     }`}>
-                    {stockData.sentiment.sentiment.toUpperCase()}
+                    {sentimentValue.toUpperCase()}
                   </Text>
                   <Text className="text-gray-400 text-sm">
-                    Score: {stockData.sentiment_score} | Confidence:{" "}
-                    {stockData.sentiment_confidence}%
+                    Score: {sentiment?.score || stockData.sentiment_score || "N/A"} | Confidence:{" "}
+                    {sentiment?.confidence || stockData.sentiment_confidence || "N/A"}%
                   </Text>
                 </View>
                 
                 {/* Beta */}
-                {stockData.beta && (
+                {beta != null && (
                   <View className="items-end">
                     <Text className="text-gray-400 text-sm font-medium mb-2">
                       Beta
                     </Text>
                     <Text className="text-white text-2xl font-bold">
-                      {stockData.beta.toFixed(2)}
+                      {beta.toFixed(2)}
                     </Text>
                     <Text className="text-gray-400 text-sm">
-                      {stockData.beta > 1
+                      {beta > 1
                         ? "More volatile than market"
                         : "Less volatile than market"}
                     </Text>
@@ -65,20 +71,20 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ stockData }) => {
               </View>
 
               {/* Sentiment Factors */}
-              {stockData.sentiment.factors && (
+              {sentimentFactors && (
                 <View className="mt-4 p-4 bg-gray-800/30 rounded-xl">
                   <Text className="text-gray-300 text-sm font-medium mb-2">
                     Key Factors
                   </Text>
                   <View className="flex-row justify-between">
                     <Text className="text-gray-400 text-xs">
-                      Price Movement: {stockData.sentiment.factors.price_movement}%
+                      Price Movement: {sentimentFactors.price_movement}%
                     </Text>
                     <Text className="text-gray-400 text-xs">
-                      Beta: {stockData.sentiment.factors.beta}
+                      Beta: {sentimentFactors.beta}
                     </Text>
                     <Text className="text-gray-400 text-xs">
-                      P/E: {stockData.sentiment.factors.pe_ratio || "N/A"}
+                      P/E: {sentimentFactors.pe_ratio || "N/A"}
                     </Text>
                   </View>
                 </View>

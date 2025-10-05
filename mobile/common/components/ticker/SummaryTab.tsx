@@ -126,7 +126,7 @@ export const SummaryTab: React.FC<SummaryTabProps> = ({
             </Text>
             <View className="flex-row flex-wrap justify-between">
               {/* Day High */}
-              {stockData.day_high && (
+              {stockData.day_high != null && (
                 <View className="w-[48%] mb-4">
                   <Text className="text-gray-400 text-sm font-medium">
                     Day High
@@ -138,7 +138,7 @@ export const SummaryTab: React.FC<SummaryTabProps> = ({
               )}
 
               {/* Day Low */}
-              {stockData.day_low && (
+              {stockData.day_low != null && (
                 <View className="w-[48%] mb-4">
                   <Text className="text-gray-400 text-sm font-medium">
                     Day Low
@@ -150,7 +150,7 @@ export const SummaryTab: React.FC<SummaryTabProps> = ({
               )}
 
               {/* 52W High */}
-              {stockData.year_high && (
+              {stockData.year_high != null && (
                 <View className="w-[48%] mb-4">
                   <Text className="text-gray-400 text-sm font-medium">
                     52W High
@@ -162,7 +162,7 @@ export const SummaryTab: React.FC<SummaryTabProps> = ({
               )}
 
               {/* 52W Low */}
-              {stockData.year_low && (
+              {stockData.year_low != null && (
                 <View className="w-[48%] mb-4">
                   <Text className="text-gray-400 text-sm font-medium">
                     52W Low
@@ -174,7 +174,7 @@ export const SummaryTab: React.FC<SummaryTabProps> = ({
               )}
 
               {/* Volume */}
-              {stockData.volume && (
+              {stockData.volume != null && (
                 <View className="w-[48%] mb-4">
                   <Text className="text-gray-400 text-sm font-medium">
                     Volume
@@ -186,7 +186,7 @@ export const SummaryTab: React.FC<SummaryTabProps> = ({
               )}
 
               {/* Average Volume */}
-              {stockData.average_volume && (
+              {stockData.average_volume != null && (
                 <View className="w-[48%] mb-4">
                   <Text className="text-gray-400 text-sm font-medium">
                     Avg Volume

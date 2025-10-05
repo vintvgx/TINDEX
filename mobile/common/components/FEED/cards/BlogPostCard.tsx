@@ -4,7 +4,7 @@ import { AppStoreCard } from "@/common/components/ui/AppStoreCard";
 import type { BlogPostType } from "@/common/types";
 import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
 import type React from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Image, Pressable, Text, View } from "react-native";
 
 interface BlogPostCardProps {
@@ -83,6 +83,10 @@ export const BlogPostCard: React.FC<BlogPostCardProps> = ({
   };
 
   const logoUrl = getLogoUrl();
+
+  useEffect(() => {
+    setLogoError(false);
+  }, [logoUrl]);
 
   return (
     <View className="mx-5 mb-8">
