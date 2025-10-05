@@ -2,31 +2,28 @@
 
 import { AppStoreCard } from "@/common/components/ui/AppStoreCard";
 import { Icon } from "@/common/components/ui/icon";
-import { SortBy } from "@/common/types/blogPosts/create";
 import { UnifiedTrendingStocksProps } from "@/common/types/trending";
+import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
 import { TrendingUp } from "lucide-react-native";
 import type React from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Pressable,
   ScrollView,
   Text,
-  View,
-  Dimensions,
-  Pressable,
+  View
 } from "react-native";
 import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  withRepeat,
-  interpolate,
-  Extrapolation,
   configureReanimatedLogger,
+  Extrapolation,
+  interpolate,
   ReanimatedLogLevel,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
 } from "react-native-reanimated";
-import { router } from 'expo-router';
-import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
 
 configureReanimatedLogger({
   level: ReanimatedLogLevel.warn,
@@ -158,10 +155,10 @@ export const UnifiedTrendingStocksCard: React.FC<
   }, []);
 
   // Navigation handler using the navigation service
-  const handleNavigation = useCallback((ticker: string) => {
+  const handleNavigation = (ticker: string) => {
     console.log("Navigating to [ticker]:", ticker);
     toTicker(ticker);
-  }, [toTicker]);
+  };
 
   // Animated styles for the container - Progressive height reduction
   const containerAnimatedStyle = useAnimatedStyle(() => {
@@ -344,10 +341,8 @@ export const UnifiedTrendingStocksCard: React.FC<
                 {stocks.data.slice(0, 5).map((stock) => (
                   <Pressable
                     key={stock.ticker}
-                    onPress={() => handleNavigation(stock.ticker)}
-                  >
-                    <View
-                      className="bg-gradient-to-br from-gray-800/60 to-gray-800/40 p-5 rounded-2xl mr-5 min-w-[170px] border border-gray-700/30 backdrop-blur-sm">
+                    onPress={() => handleNavigation(stock.ticker)}>
+                    <View className="bg-gradient-to-br from-gray-800/60 to-gray-800/40 p-5 rounded-2xl mr-5 min-w-[170px] border border-gray-700/30 backdrop-blur-sm">
                       <View className="flex-row justify-between items-start mb-3">
                         <Text className="font-black text-white text-lg tracking-tight">
                           {stock.ticker}
@@ -405,8 +400,8 @@ export const UnifiedTrendingStocksCard: React.FC<
                 {/* <View className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse mr-0.5" />
                 <Text className="text-blue-400 text-xs font-medium">Live</Text> */}
                 <Text className="text-gray-400 text-sm font-medium mt-1">
-                Retrieved: {date}
-              </Text>
+                  Retrieved: {date}
+                </Text>
               </View>
             </View>
 
@@ -429,43 +424,42 @@ export const UnifiedTrendingStocksCard: React.FC<
                 {duplicatedStocks.map((stock, index) => (
                   <Pressable
                     key={`${stock.ticker}-${index}`}
-                    onPress={() => handleNavigation(stock.ticker)}
-                  >
+                    onPress={() => handleNavigation(stock.ticker)}>
                     <View
                       className="flex-row items-center bg-gray-700/40 rounded-xl px-4 py-2 mr-4 border border-gray-600/30"
                       style={{ minWidth: STOCK_ITEM_WIDTH }}>
-                    {/* Stock Ticker */}
-                    <View className="flex-row items-center mr-4">
-                      <View className="w-2 h-2 bg-blue-400 rounded-full mr-2" />
-                      <Text className="text-white font-bold text-sm tracking-wide">
-                        {stock.ticker}
+                      {/* Stock Ticker */}
+                      <View className="flex-row items-center mr-4">
+                        <View className="w-2 h-2 bg-blue-400 rounded-full mr-2" />
+                        <Text className="text-white font-bold text-sm tracking-wide">
+                          {stock.ticker}
+                        </Text>
+                      </View>
+
+                      {/* Price */}
+                      <Text className="text-white font-semibold text-sm mr-3">
+                        ${stock.price}
+                      </Text>
+
+                      {/* Change */}
+                      <View className="flex-row items-center mr-3">
+                        <Text
+                          className={`font-bold text-xs ${
+                            stock.change.startsWith("+") ||
+                            !stock.change.startsWith("-")
+                              ? "text-green-400"
+                              : "text-red-400"
+                          }`}>
+                          {stock.change}
+                        </Text>
+                      </View>
+
+                      {/* Volume */}
+                      <Text className="text-gray-400 text-xs font-medium">
+                        {formatVolume(stock.volume)}
                       </Text>
                     </View>
-
-                    {/* Price */}
-                    <Text className="text-white font-semibold text-sm mr-3">
-                      ${stock.price}
-                    </Text>
-
-                    {/* Change */}
-                    <View className="flex-row items-center mr-3">
-                      <Text
-                        className={`font-bold text-xs ${
-                          stock.change.startsWith("+") ||
-                          !stock.change.startsWith("-")
-                            ? "text-green-400"
-                            : "text-red-400"
-                        }`}>
-                        {stock.change}
-                      </Text>
-                    </View>
-
-                    {/* Volume */}
-                    <Text className="text-gray-400 text-xs font-medium">
-                      {formatVolume(stock.volume)}
-                    </Text>
-                  </View>
-                </Pressable>
+                  </Pressable>
                 ))}
               </Animated.View>
             </ScrollView>

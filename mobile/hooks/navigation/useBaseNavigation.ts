@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import NavigationService from '@/common/services/NavigationService';
 import { router, usePathname } from 'expo-router';
 
@@ -14,7 +14,11 @@ import { router, usePathname } from 'expo-router';
  * - Type-safe navigation methods
  * - Consistent API across components
  * - Easy to test and mock
+ * - Built-in debounce protection against rapid navigation calls
  */
+
+const NAVIGATION_DEBOUNCE_MS = 500; // 500ms debounce for navigation actions
+
 export const useBaseNavigation = () => {
   // Get the singleton instance
   const navigationService = NavigationService.getInstance();
@@ -22,35 +26,56 @@ export const useBaseNavigation = () => {
   // Get the current pathname
   const pathname = usePathname();
 
+  // Debounce tracking
+  const lastNavigationTime = useRef<number>(0);
+  const pendingNavigation = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /**
+   * Generic debounce wrapper for navigation actions
+   * Prevents rapid successive navigation calls that could cause issues
+   */
+  const debounceNavigation = useCallback((navigationFn: () => void, immediate: boolean = false) => {
+    const now = Date.now();
+    const timeSinceLastNav = now - lastNavigationTime.current;
+
+    // If there's a pending navigation, ignore this call (true debounce behavior)
+    if (pendingNavigation.current) {
+      console.log('[Navigation] Debounced - ignoring rapid click');
+      return;
+    }
+
+    // If not enough time has passed since last navigation, ignore
+    if (!immediate && timeSinceLastNav < NAVIGATION_DEBOUNCE_MS) {
+      console.log('[Navigation] Debounced - too soon after last navigation');
+      return;
+    }
+
+    // Execute navigation and set cooldown
+    lastNavigationTime.current = now;
+    navigationFn();
+
+    // Set a cooldown period where new navigations are blocked
+    pendingNavigation.current = setTimeout(() => {
+      pendingNavigation.current = null;
+    }, NAVIGATION_DEBOUNCE_MS);
+  }, []);
+
   // ==================== BASE NAVIGATION METHODS ====================
 
   /**
    * Navigates directly to a specific path with optional parameters
-   * 
-   * This is a low-level navigation method that allows direct path navigation.
-   * Use this when you need to navigate to routes not covered by specific methods.
-   * 
-   * @param path - The target route path (e.g., '/profile/123', '/settings')
-   * @param params - Optional parameters to pass to the target screen
-   * 
-   * @example
-   * navigateTo('/profile/123', { userId: '123' })
-   * navigateTo('/settings')
+   * Now includes debounce protection to prevent rapid navigation calls
    */
   const navigateTo = useCallback((path: any, params?: any) => {
-    console.log(`[Navigation] From: ${pathname} To: ${path}`, params);
-    router.push({ pathname: path, params });
-  }, [pathname]);
+    debounceNavigation(() => {
+      console.log(`[Navigation] From: ${pathname} To: ${path}`, params);
+      router.push({ pathname: path, params });
+    });
+  }, [pathname, debounceNavigation]);
 
   /**
    * Navigates back to the previous screen in the navigation stack
-   * 
-   * This method handles back navigation with intelligent fallback:
-   * - If there's navigation history, it goes back 
-   * - If no history exists, it navigates to the root (feed) screen
-   * 
-   * @example
-   * navigateBack() // Goes back or to root if no history
+   * Back navigation is immediate (not debounced) as it's typically safe
    */
   const navigateBack = useCallback(() => {
     console.log(`[Navigation] Going back from: ${pathname}`);
@@ -63,37 +88,18 @@ export const useBaseNavigation = () => {
 
   /**
    * Replaces the current screen with a new screen (no back navigation)
-   * 
-   * This method replaces the current route instead of pushing a new one.
-   * Useful for redirects, authentication flows, or when you don't want
-   * users to navigate back to the current screen.
-   * 
-   * @param path - The target route path to replace current screen
-   * @param params - Optional parameters to pass to the target screen
-   * 
-   * @example
-   * replaceTo('/auth') // Replaces current screen with auth
-   * replaceTo('/profile/123', { userId: '123' })
+   * Includes debounce protection
    */
   const replaceTo = useCallback((path: any, params?: any) => {
-    console.log(`[Navigation] Replacing: ${pathname} with: ${path}`);
-    router.replace({ pathname: path, params });
-  }, [pathname]);
+    debounceNavigation(() => {
+      console.log(`[Navigation] Replacing: ${pathname} with: ${path}`);
+      router.replace({ pathname: path, params });
+    });
+  }, [pathname, debounceNavigation]);
 
   /**
    * Resets the entire navigation stack to a specific route
-   * 
-   * This method clears all navigation history and sets the specified route
-   * as the new root. Useful for major navigation resets like:
-   * - After successful authentication
-   * - When switching between major app sections
-   * - Deep link handling
-   * 
-   * @param path - The target route path to reset to
-   * 
-   * @example
-   * resetTo('/feed') // Clears all history and goes to feed
-   * resetTo('/auth') // Resets to authentication screen
+   * Immediate execution (no debounce) as resets are typically intentional
    */
   const resetTo = useCallback((path: any) => {
     console.log(`[Navigation] Resetting to: ${path}`);
@@ -103,51 +109,68 @@ export const useBaseNavigation = () => {
 
   /**
    * Navigate to ticker detail screen
-   * @param ticker - Stock ticker symbol
+   * Debounced to prevent accidental double-taps
    */
   const toTicker = useCallback((ticker: string) => {
-    console.log("Navigating to [ticker]:", ticker);
-    navigationService.toTicker(ticker);
-  }, [navigationService]);
+    debounceNavigation(() => {
+      console.log("Navigating to [ticker]:", ticker);
+      navigationService.toTicker(ticker);
+    });
+  }, [navigationService, debounceNavigation]);
 
   /**
    * Navigate to feed screen (main tab)
+   * Debounced to prevent rapid tab switching
    */
   const toFeed = useCallback(() => {
-    navigationService.toFeed();
-  }, [navigationService]);
+    debounceNavigation(() => {
+      navigationService.toFeed();
+    });
+  }, [navigationService, debounceNavigation]);
 
   /**
    * Navigate to profile screen
-   * @param userId - Optional user ID for specific user profile
+   * Debounced to prevent accidental double-taps
    */
   const toProfile = useCallback((userId?: string) => {
-    navigationService.toProfile(userId);
-  }, [navigationService]);
+    debounceNavigation(() => {
+      navigationService.toProfile(userId);
+    });
+  }, [navigationService, debounceNavigation]);
 
   /**
    * Navigate to search screen
+   * Debounced to prevent rapid navigation
    */
   const toSearch = useCallback(() => {
-    navigationService.toSearch();
-  }, [navigationService]);
+    debounceNavigation(() => {
+      navigationService.toSearch();
+    });
+  }, [navigationService, debounceNavigation]);
 
   /**
    * Navigate to watchlists screen
+   * Debounced to prevent rapid navigation
    */
   const toWatchlists = useCallback(() => {
-    navigationService.toWatchlists();
-  }, [navigationService]);
+    debounceNavigation(() => {
+      navigationService.toWatchlists();
+    });
+  }, [navigationService, debounceNavigation]);
 
   /**
    * Navigate to notifications screen
+   * Debounced to prevent rapid navigation
    */
   const toNotifications = useCallback(() => {
-    navigationService.toNotifications();
-  }, [navigationService]);
+    debounceNavigation(() => {
+      navigationService.toNotifications();
+    });
+  }, [navigationService, debounceNavigation]);
 
   /**
    * Navigate to authentication screen
+   * Immediate execution as auth flows should be responsive
    */
   const toAuth = useCallback(() => {
     navigationService.toAuth();
@@ -157,16 +180,15 @@ export const useBaseNavigation = () => {
 
   /**
    * Navigate back to previous screen with fallback
+   * Immediate execution for responsive back navigation
    */
   const back = useCallback(() => {
     console.log(`Back button pressed from ${navigationService.getCurrentRoute()}`);
-
     navigationService.back();
   }, [navigationService]);
 
   /**
    * Check if navigation can go back
-   * @returns boolean indicating if back navigation is possible
    */
   const canGoBack = useCallback(() => {
     return navigationService.canGoBack();
@@ -176,15 +198,17 @@ export const useBaseNavigation = () => {
 
   /**
    * Open a modal screen
-   * @param modalName - Name of the modal screen
-   * @param params - Optional parameters to pass to the modal
+   * Debounced to prevent multiple modal opens
    */
   const openModal = useCallback((modalName: string, params?: Record<string, any>) => {
-    navigationService.openModal(modalName, params);
-  }, [navigationService]);
+    debounceNavigation(() => {
+      navigationService.openModal(modalName, params);
+    });
+  }, [navigationService, debounceNavigation]);
 
   /**
    * Close current modal
+   * Immediate execution for responsive modal closing
    */
   const closeModal = useCallback(() => {
     navigationService.closeModal();
@@ -194,17 +218,17 @@ export const useBaseNavigation = () => {
 
   /**
    * Navigate to a specific route with parameters
-   * @param pathname - Route path
-   * @param params - Optional parameters
-   * @param replace - Whether to replace current route instead of pushing
+   * Debounced by default, can be made immediate with flag
    */
   const navigate = useCallback((pathname: string, params?: Record<string, any>, replace: boolean = false) => {
-    navigationService.navigate(pathname, params, replace);
-  }, [navigationService]);
+    debounceNavigation(() => {
+      navigationService.navigate(pathname, params, replace);
+    });
+  }, [navigationService, debounceNavigation]);
 
   /**
    * Reset navigation stack to a specific route
-   * @param pathname - Route to reset to
+   * Immediate execution as resets are typically intentional
    */
   const reset = useCallback((pathname: string) => {
     navigationService.reset(pathname);
@@ -212,7 +236,6 @@ export const useBaseNavigation = () => {
 
   /**
    * Get current route information
-   * @returns Current route path or null if unavailable
    */
   const getCurrentRoute = useCallback(() => {
     return navigationService.getCurrentRoute();
@@ -222,31 +245,30 @@ export const useBaseNavigation = () => {
 
   return {
     // Base navigation methods (low-level)
-    navigateTo,      // Direct path navigation
-    navigateBack,    // Smart back navigation
-    replaceTo,       // Replace current screen
-    resetTo,         // Reset navigation stack
+    navigateTo,      // Direct path navigation (debounced)
+    navigateBack,    // Smart back navigation (immediate)
+    replaceTo,       // Replace current screen (debounced)
+    resetTo,         // Reset navigation stack (immediate)
 
-    // Screen navigation
-    toTicker,
-    toFeed,
-    toProfile,
-    toSearch,
-    toWatchlists,
-    toNotifications,
-    toAuth,
+    // Screen navigation (debounced where appropriate)
+    toTicker,        // Debounced
+    toFeed,          // Debounced
+    toProfile,       // Debounced
+    toSearch,        // Debounced
+    toWatchlists,    // Debounced
+    toNotifications, // Debounced
+    toAuth,          // Immediate
     
     // Navigation control
-    // back, TODO remove ( use navigateBack )
     canGoBack,
     
     // Modal navigation
-    openModal,
-    closeModal,
+    openModal,       // Debounced
+    closeModal,      // Immediate
     
     // Utility methods
-    navigate,
-    reset,
+    navigate,        // Debounced
+    reset,           // Immediate
     getCurrentRoute,
     
     // Direct access to service instance (for advanced use cases)
