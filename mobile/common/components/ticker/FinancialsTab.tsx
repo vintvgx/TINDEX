@@ -1,4 +1,3 @@
-"use client";
 /**
  * Financials tab displayed within [ticker].tsx
  */

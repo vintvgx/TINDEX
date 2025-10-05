@@ -1,4 +1,3 @@
-"use client";
 /**
  * The info header section displayed within [ticker].tsx
  */

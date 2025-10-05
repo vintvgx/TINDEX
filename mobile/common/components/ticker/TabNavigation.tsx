@@ -1,4 +1,3 @@
-"use client";
 /**
  * Handler used to switch between tabs within [ticker].tsx
  */

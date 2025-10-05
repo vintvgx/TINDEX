@@ -1,5 +1,3 @@
-"use client";
-
 import { AppStoreCard } from "@/common/components/ui/AppStoreCard";
 import type { BlogPostType } from "@/common/types";
 import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
@@ -39,7 +37,7 @@ export const BlogPostCard: React.FC<BlogPostCardProps> = ({
 
     if (ticker) {
       // Use Clearbit logo service as fallback
-      return `https://logo.clearbit.com/${ticker.toLowerCase()}.com`;
+      return `https://logo.clearbit.com/${post.research_data?.website?.toLowerCase()}`;
     }
 
     return null;

@@ -1,4 +1,3 @@
-"use client";
 /**
  * Analytics tab displayed within [ticker].tsx
  */
@@ -78,10 +77,10 @@ export const AnalyticsTab: React.FC<AnalyticsTabProps> = ({ stockData }) => {
                   </Text>
                   <View className="flex-row justify-between">
                     <Text className="text-gray-400 text-xs">
-                      Price Movement: {sentimentFactors.price_movement}%
+                    Price Movement: {sentimentFactors.price_movement ?? "N/A"}%
                     </Text>
                     <Text className="text-gray-400 text-xs">
-                      Beta: {sentimentFactors.beta}
+                    Beta: {sentimentFactors.beta ?? "N/A"}
                     </Text>
                     <Text className="text-gray-400 text-xs">
                       P/E: {sentimentFactors.pe_ratio || "N/A"}

@@ -1,5 +1,3 @@
-"use client"
-
 import { signInWithApple, signInWithGoogle } from "@/common/utils/auth/function"
 import { Ionicons } from "@expo/vector-icons"
 import { useTheme } from "@react-navigation/native"

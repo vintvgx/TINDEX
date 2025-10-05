@@ -1,5 +1,3 @@
-"use client";
-
 import { AppStoreCard } from "@/common/components/ui/AppStoreCard";
 import { Icon } from "@/common/components/ui/icon";
 import { UnifiedTrendingStocksProps } from "@/common/types/trending";
