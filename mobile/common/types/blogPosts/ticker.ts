@@ -24,6 +24,7 @@ export interface TickerData {
     volumes: number[];
   };
   industry: string;
+  logo_url?: string;
   market_cap: number;
   market_state: string;
   news_data: {

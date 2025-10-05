@@ -11,6 +11,7 @@ import {
   Dimensions,
   ActivityIndicator,
   SafeAreaView,
+  Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LineChart } from "react-native-chart-kit";
@@ -544,9 +545,20 @@ export default function TickerScreen() {
         {/* Stock Info */}
         <View className="flex-row items-center mb-6">
           <View className="flex-1">
-            <Text className="text-gray-400 text-sm font-medium">
-              {stockData.company_name}
-            </Text>
+            <View className="flex-row items-center mb-2">
+              {stockData.logo_url && (
+                <View className="w-8 h-8 rounded-lg bg-gray-800/50 mr-3 border border-gray-700/30 overflow-hidden">
+                  <Image
+                    source={{ uri: stockData.logo_url }}
+                    className="w-full h-full"
+                    resizeMode="contain"
+                  />
+                </View>
+              )}
+              <Text className="text-gray-400 text-sm font-medium">
+                {stockData.company_name}
+              </Text>
+            </View>
             <Text className="text-white text-3xl font-black tracking-tight mt-1">
               {stockData.ticker}
             </Text>
