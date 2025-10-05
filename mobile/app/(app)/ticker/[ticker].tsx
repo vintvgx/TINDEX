@@ -14,9 +14,9 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LineChart } from "react-native-chart-kit";
-import { useLocalSearchParams, router } from "expo-router";
+import { useLocalSearchParams } from "expo-router";
 import { useTickerQuery } from "@/hooks/queries/ticker/useTickerQuery";
-import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
+import { useBaseNavigation } from "@/hooks/navigation/useBaseNavigation";
 import { AppStoreCard } from "@/common/components/ui/AppStoreCard";
 
 const { width } = Dimensions.get("window");
@@ -90,34 +90,21 @@ export default function TickerScreen() {
     );
   }
 
-  // Chart data from API or fallback
-  const chartData = stockData.chartData
+  // Chart data from API
+  const chartData = stockData.historical_data
     ? {
-        labels: stockData.chartData.labels,
+        labels: stockData.historical_data.dates.map(date => 
+          new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        ),
         datasets: [
           {
-            data: stockData.chartData.prices,
+            data: stockData.historical_data.prices,
             color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
             strokeWidth: 2,
           },
         ],
       }
-    : {
-        labels: ["Sep 19", "Sep 20", "Sep 21", "Sep 22", "Sep 23"],
-        datasets: [
-          {
-            data: [
-              stockData.price * 0.98,
-              stockData.price * 1.02,
-              stockData.price * 0.99,
-              stockData.price * 1.01,
-              stockData.price,
-            ],
-            color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
-            strokeWidth: 2,
-          },
-        ],
-      };
+    : null; // No fallback data - will show "No chart data available" message
 
   const renderTabButton = (tab: "Summary" | "Analytics" | "Financials") => (
     <Pressable
@@ -143,30 +130,42 @@ export default function TickerScreen() {
             <Text className="text-white text-xl font-bold tracking-tight mb-6">
               Price Chart
             </Text>
-            <LineChart
-              data={chartData}
-              width={width - 70}
-              height={200}
-              chartConfig={{
-                backgroundColor: "transparent",
-                backgroundGradientFrom: "#1f2937",
-                backgroundGradientTo: "#111827",
-                decimalPlaces: 2,
-                color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
-                labelColor: (opacity = 1) => `rgba(156, 163, 175, ${opacity})`,
-                style: {
+            {chartData ? (
+              <LineChart
+                data={chartData}
+                width={width - 70}
+                height={200}
+                chartConfig={{
+                  backgroundColor: "transparent",
+                  backgroundGradientFrom: "#1f2937",
+                  backgroundGradientTo: "#111827",
+                  decimalPlaces: 2,
+                  color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
+                  labelColor: (opacity = 1) => `rgba(156, 163, 175, ${opacity})`,
+                  style: {
+                    borderRadius: 16,
+                  },
+                  propsForDots: {
+                    r: "0",
+                  },
+                }}
+                bezier
+                style={{
+                  marginVertical: 8,
                   borderRadius: 16,
-                },
-                propsForDots: {
-                  r: "0",
-                },
-              }}
-              bezier
-              style={{
-                marginVertical: 8,
-                borderRadius: 16,
-              }}
-            />
+                }}
+              />
+            ) : (
+              <View className="h-[200px] bg-gray-800/30 rounded-2xl flex items-center justify-center border border-gray-700/30">
+                <Ionicons name="bar-chart-outline" size={48} color="#6B7280" />
+                <Text className="text-gray-400 text-lg font-medium mt-4 text-center">
+                  No Chart Data Available
+                </Text>
+                <Text className="text-gray-500 text-sm text-center mt-2">
+                  Historical price data could not be loaded
+                </Text>
+              </View>
+            )}
 
             {/* Period Buttons */}
             <View className="flex-row justify-between mt-6">
@@ -203,37 +202,37 @@ export default function TickerScreen() {
               <View className="w-[48%] mb-4">
                 <Text className="text-gray-400 text-sm font-medium">Day High</Text>
                 <Text className="text-white text-lg font-bold tracking-tight mt-1">
-                  ${stockData.dayHigh?.toFixed(2)}
+                  ${stockData.day_high.toFixed(2)}
                 </Text>
               </View>
               <View className="w-[48%] mb-4">
                 <Text className="text-gray-400 text-sm font-medium">Day Low</Text>
                 <Text className="text-white text-lg font-bold tracking-tight mt-1">
-                  ${stockData.dayLow?.toFixed(2)}
+                  ${stockData.day_low.toFixed(2)}
                 </Text>
               </View>
               <View className="w-[48%] mb-4">
                 <Text className="text-gray-400 text-sm font-medium">52W High</Text>
                 <Text className="text-white text-lg font-bold tracking-tight mt-1">
-                  ${stockData.yearHigh?.toFixed(2)}
+                  ${stockData.year_high.toFixed(2)}
                 </Text>
               </View>
               <View className="w-[48%] mb-4">
                 <Text className="text-gray-400 text-sm font-medium">52W Low</Text>
                 <Text className="text-white text-lg font-bold tracking-tight mt-1">
-                  ${stockData.yearLow?.toFixed(2)}
+                  ${stockData.year_low.toFixed(2)}
                 </Text>
               </View>
               <View className="w-[48%] mb-4">
                 <Text className="text-gray-400 text-sm font-medium">Volume</Text>
                 <Text className="text-white text-lg font-bold tracking-tight mt-1">
-                  {stockData.volume}
+                  {stockData.volume.toLocaleString()}
                 </Text>
               </View>
               <View className="w-[48%] mb-4">
                 <Text className="text-gray-400 text-sm font-medium">Avg Volume</Text>
                 <Text className="text-white text-lg font-bold tracking-tight mt-1">
-                  {stockData.avgVolume}
+                  {stockData.average_volume.toLocaleString()}
                 </Text>
               </View>
             </View>
@@ -294,83 +293,80 @@ export default function TickerScreen() {
       showsVerticalScrollIndicator={false}
       contentContainerStyle={{ paddingBottom: 20, paddingTop: 20 }}
     >
-      {/* Price Target Alert */}
-      <View className="mb-8">
-        <AppStoreCard variant="compact">
-          <View className="p-6">
-            <View className="flex-row items-center">
-              <View className="bg-blue-500 rounded-full p-2 mr-4">
-                <Ionicons name="information" size={16} color="#fff" />
-              </View>
-              <Text className="text-gray-300 flex-1 font-medium leading-6">
-                Average price target is{" "}
-                {(
-                  ((stockData.priceTarget?.average || stockData.price) /
-                    stockData.price) *
-                    100 -
-                  100
-                ).toFixed(1)}
-                % from the last close price, within the monthly volatility of{" "}
-                {stockData.priceTarget?.volatility?.toFixed(1)}%.
-              </Text>
-            </View>
-          </View>
-        </AppStoreCard>
-      </View>
-
-      {/* Analyst Recommendations */}
+      {/* Sentiment Analysis */}
       <View className="mb-8">
         <AppStoreCard variant="featured">
           <View className="p-6">
             <Text className="text-white text-xl font-bold tracking-tight mb-6">
-              Analyst Recommendations
+              Sentiment Analysis
             </Text>
 
-            {/* Recommendations Chart */}
-            <View className="flex-row justify-between items-end h-32 mb-4">
-              {Object.entries(stockData.analystRecommendations || {}).map(
-                ([category, count], index) => {
-                  const maxCount = Math.max(
-                    ...Object.values(stockData.analystRecommendations || {})
-                  );
-                  const height = (count / maxCount) * 100;
+            {/* Sentiment Display */}
+            <View className="flex-row items-center justify-between mb-4">
+              <View className="flex-1">
+                <Text className="text-gray-400 text-sm font-medium mb-2">Sentiment</Text>
+                <Text className={`text-2xl font-bold ${
+                  stockData.sentiment.sentiment === 'bullish' ? 'text-green-400' :
+                  stockData.sentiment.sentiment === 'bearish' ? 'text-red-400' : 
+                  'text-gray-400'
+                }`}>
+                  {stockData.sentiment.sentiment.toUpperCase()}
+                </Text>
+                <Text className="text-gray-400 text-sm">
+                  Score: {stockData.sentiment_score} | Confidence: {stockData.sentiment_confidence}%
+                </Text>
+              </View>
+              <View className="items-end">
+                <Text className="text-gray-400 text-sm font-medium mb-2">Beta</Text>
+                <Text className="text-white text-2xl font-bold">
+                  {stockData.beta.toFixed(2)}
+                </Text>
+                <Text className="text-gray-400 text-sm">
+                  {stockData.beta > 1 ? "More volatile than market" : "Less volatile than market"}
+                </Text>
+              </View>
+            </View>
 
-                  return (
-                    <View key={category} className="flex-1 items-center mx-1">
-                      <View className="w-full flex-col justify-end h-full">
-                        <View
-                          className="bg-gradient-to-t from-blue-500 to-blue-400 w-full rounded-t-lg mb-1 shadow-lg"
-                          style={{ height: `${height}%` }}
-                        />
-                      </View>
-                      <Text className="text-xs text-gray-400 text-center mt-2 font-medium">
-                        {category.replace(/([A-Z])/g, " $1").trim()}
-                      </Text>
-                      <Text className="text-xs text-white font-bold">
-                        {count}
-                      </Text>
-                    </View>
-                  );
-                }
-              )}
+            {/* Sentiment Factors */}
+            <View className="mt-4 p-4 bg-gray-800/30 rounded-xl">
+              <Text className="text-gray-300 text-sm font-medium mb-2">Key Factors</Text>
+              <View className="flex-row justify-between">
+                <Text className="text-gray-400 text-xs">Price Movement: {stockData.sentiment.factors.price_movement}%</Text>
+                <Text className="text-gray-400 text-xs">Beta: {stockData.sentiment.factors.beta}</Text>
+                <Text className="text-gray-400 text-xs">P/E: {stockData.sentiment.factors.pe_ratio || 'N/A'}</Text>
+              </View>
             </View>
           </View>
         </AppStoreCard>
       </View>
 
-      {/* Beta */}
+      {/* Market State & Exchange */}
       <View className="mb-8">
         <AppStoreCard variant="featured">
           <View className="p-6">
-            <Text className="text-white text-xl font-bold tracking-tight mb-4">Beta</Text>
-            <Text className="text-white text-3xl font-black tracking-tight mb-2">
-              {stockData.beta?.toFixed(2)}
-            </Text>
-            <Text className="text-gray-400 font-medium">
-              {(stockData.beta || 0) > 1
-                ? "More volatile than market"
-                : "Less volatile than market"}
-            </Text>
+            <View className="flex-row justify-between items-center mb-4">
+              <Text className="text-white text-xl font-bold tracking-tight">Market Info</Text>
+              <View className={`px-3 py-1 rounded-full border ${
+                stockData.market_state === 'OPEN' ? 'bg-green-500/20 border-green-400/30' :
+                'bg-red-500/20 border-red-400/30'
+              }`}>
+                <Text className={`text-sm font-medium ${
+                  stockData.market_state === 'OPEN' ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  {stockData.market_state}
+                </Text>
+              </View>
+            </View>
+            <View className="flex-row justify-between">
+              <View>
+                <Text className="text-gray-400 text-sm font-medium">Exchange</Text>
+                <Text className="text-white text-lg font-bold">{stockData.exchange}</Text>
+              </View>
+              <View>
+                <Text className="text-gray-400 text-sm font-medium">Country</Text>
+                <Text className="text-white text-lg font-bold">{stockData.country}</Text>
+              </View>
+            </View>
           </View>
         </AppStoreCard>
       </View>
@@ -394,17 +390,7 @@ export default function TickerScreen() {
               <View className="p-4">
                 <Text className="text-gray-400 text-sm font-medium mb-1">Market Cap</Text>
                 <Text className="text-white text-lg font-bold tracking-tight">
-                  {stockData.marketCap}
-                </Text>
-              </View>
-            </AppStoreCard>
-          </View>
-          <View className="w-[48%] mb-4">
-            <AppStoreCard variant="compact">
-              <View className="p-4">
-                <Text className="text-gray-400 text-sm font-medium mb-1">Enterprise Value</Text>
-                <Text className="text-white text-lg font-bold tracking-tight">
-                  {stockData.enterpriseValue}
+                  ${(stockData.market_cap / 1000000).toFixed(1)}M
                 </Text>
               </View>
             </AppStoreCard>
@@ -414,7 +400,7 @@ export default function TickerScreen() {
               <View className="p-4">
                 <Text className="text-gray-400 text-sm font-medium mb-1">P/E Ratio</Text>
                 <Text className="text-white text-lg font-bold tracking-tight">
-                  {stockData.peRatio}
+                  {stockData.pe_ratio ? stockData.pe_ratio.toFixed(2) : 'N/A'}
                 </Text>
               </View>
             </AppStoreCard>
@@ -422,9 +408,9 @@ export default function TickerScreen() {
           <View className="w-[48%] mb-4">
             <AppStoreCard variant="compact">
               <View className="p-4">
-                <Text className="text-gray-400 text-sm font-medium mb-1">EV / EBITDA</Text>
+                <Text className="text-gray-400 text-sm font-medium mb-1">Price to Book</Text>
                 <Text className="text-white text-lg font-bold tracking-tight">
-                  {stockData.evEbitda}
+                  {stockData.price_to_book.toFixed(2)}
                 </Text>
               </View>
             </AppStoreCard>
@@ -434,7 +420,7 @@ export default function TickerScreen() {
               <View className="p-4">
                 <Text className="text-gray-400 text-sm font-medium mb-1">Dividend Yield</Text>
                 <Text className="text-white text-lg font-bold tracking-tight">
-                  {stockData.dividendYield}
+                  {stockData.dividend_yield ? `${(stockData.dividend_yield * 100).toFixed(2)}%` : 'N/A'}
                 </Text>
               </View>
             </AppStoreCard>
@@ -442,9 +428,19 @@ export default function TickerScreen() {
           <View className="w-[48%] mb-4">
             <AppStoreCard variant="compact">
               <View className="p-4">
-                <Text className="text-gray-400 text-sm font-medium mb-1">EPS (TTM)</Text>
+                <Text className="text-gray-400 text-sm font-medium mb-1">Profit Margins</Text>
                 <Text className="text-white text-lg font-bold tracking-tight">
-                  {stockData.eps}
+                  {(stockData.profit_margins * 100).toFixed(2)}%
+                </Text>
+              </View>
+            </AppStoreCard>
+          </View>
+          <View className="w-[48%] mb-4">
+            <AppStoreCard variant="compact">
+              <View className="p-4">
+                <Text className="text-gray-400 text-sm font-medium mb-1">Employees</Text>
+                <Text className="text-white text-lg font-bold tracking-tight">
+                  {stockData.employees.toLocaleString()}
                 </Text>
               </View>
             </AppStoreCard>
@@ -452,43 +448,67 @@ export default function TickerScreen() {
         </View>
       </View>
 
-      {/* Events */}
+      {/* News Data */}
       <View className="mb-8">
         <Text className="text-white text-xl font-bold tracking-tight mb-6 px-2">
-          Upcoming Events
+          Latest News
         </Text>
         <AppStoreCard variant="featured">
           <View className="p-0">
-            {(stockData.events || []).map((event, index) => (
+            {stockData.news_data.slice(0, 3).map((news, index) => (
               <View
-                key={index}
-                className={`p-6 flex-row justify-between items-center ${
-                  index > 0 ? "border-t border-gray-700/50" : ""
-                }`}>
-                <Text className="text-white font-bold tracking-wide">{event.date}</Text>
-                <Text className="text-gray-300 flex-1 ml-4 font-medium">{event.event}</Text>
+                key={news.id}
+                className={`p-6 ${index > 0 ? "border-t border-gray-700/50" : ""}`}>
+                <Text className="text-white font-bold tracking-wide mb-2">
+                  {news.content.title}
+                </Text>
+                <Text className="text-gray-300 text-sm font-medium mb-2">
+                  {news.content.summary}
+                </Text>
+                <View className="flex-row justify-between items-center">
+                  <Text className="text-gray-400 text-xs">
+                    {news.content.provider.displayName}
+                  </Text>
+                  <Text className="text-gray-400 text-xs">
+                    {new Date(news.content.pubDate).toLocaleDateString()}
+                  </Text>
+                </View>
               </View>
             ))}
           </View>
         </AppStoreCard>
       </View>
 
-      {/* Earnings */}
+      {/* Financial Growth */}
       <View className="mb-8">
         <AppStoreCard variant="featured">
           <View className="p-6">
             <View className="flex-row justify-between items-center mb-4">
-              <Text className="text-white text-xl font-bold tracking-tight">Earnings</Text>
+              <Text className="text-white text-xl font-bold tracking-tight">Growth Metrics</Text>
               <View className="bg-purple-500/20 px-3 py-1 rounded-full border border-purple-400/30">
-                <Text className="text-purple-400 text-sm font-medium">Summary</Text>
+                <Text className="text-purple-400 text-sm font-medium">Financials</Text>
               </View>
             </View>
-            <Text className="text-gray-400 text-sm font-medium mb-2">
-              {stockData.earnings?.quarter}
-            </Text>
-            <Text className="text-gray-300 leading-7 font-medium">
-              {stockData.earnings?.summary}
-            </Text>
+            <View className="flex-row justify-between">
+              <View className="flex-1 mr-4">
+                <Text className="text-gray-400 text-sm font-medium mb-1">Earnings Growth</Text>
+                <Text className="text-white text-lg font-bold">
+                  {stockData.earnings_growth ? `${(stockData.earnings_growth * 100).toFixed(2)}%` : 'N/A'}
+                </Text>
+              </View>
+              <View className="flex-1">
+                <Text className="text-gray-400 text-sm font-medium mb-1">Revenue Growth</Text>
+                <Text className="text-white text-lg font-bold">
+                  {stockData.revenue_growth ? `${(stockData.revenue_growth * 100).toFixed(2)}%` : 'N/A'}
+                </Text>
+              </View>
+            </View>
+            <View className="mt-4">
+              <Text className="text-gray-400 text-sm font-medium mb-1">Return on Equity</Text>
+              <Text className="text-white text-lg font-bold">
+                {stockData.return_on_equity ? `${(stockData.return_on_equity * 100).toFixed(2)}%` : 'N/A'}
+              </Text>
+            </View>
           </View>
         </AppStoreCard>
       </View>
@@ -525,7 +545,7 @@ export default function TickerScreen() {
         <View className="flex-row items-center mb-6">
           <View className="flex-1">
             <Text className="text-gray-400 text-sm font-medium">
-              {stockData.companyName}
+              {stockData.company_name}
             </Text>
             <Text className="text-white text-3xl font-black tracking-tight mt-1">
               {stockData.ticker}
@@ -534,26 +554,26 @@ export default function TickerScreen() {
           </View>
           <View className="items-end">
             <Text className="text-white text-3xl font-black tracking-tight">
-              ${stockData.price.toFixed(2)}
+              ${stockData.current_price.toFixed(2)} {stockData.currency}
             </Text>
             <View className="flex-row items-center mt-1">
               <Ionicons
-                name={stockData.change >= 0 ? "triangle" : "triangle"}
+                name={stockData.price_change >= 0 ? "triangle" : "triangle"}
                 size={12}
-                color={stockData.change >= 0 ? "#22C55E" : "#EF4444"}
+                color={stockData.price_change >= 0 ? "#22C55E" : "#EF4444"}
                 style={{
                   transform: [
-                    { rotate: stockData.change >= 0 ? "0deg" : "180deg" },
+                    { rotate: stockData.price_change >= 0 ? "0deg" : "180deg" },
                   ],
                 }}
               />
               <Text
                 className={`ml-2 font-bold tracking-wide ${
-                  stockData.change >= 0 ? "text-green-400" : "text-red-400"
+                  stockData.price_change >= 0 ? "text-green-400" : "text-red-400"
                 }`}>
-                {stockData.change >= 0 ? "+" : ""}
-                {stockData.change.toFixed(2)} (
-                {stockData.changePercent.toFixed(2)}%)
+                {stockData.price_change >= 0 ? "+" : ""}
+                {stockData.price_change.toFixed(2)} (
+                {stockData.price_change_percent.toFixed(2)}%)
               </Text>
             </View>
           </View>
