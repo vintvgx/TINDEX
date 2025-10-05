@@ -2,7 +2,7 @@ export default {
   expo: {
     name: "alethia",
     slug: "alethia",
-    version: "0.0.10",
+    version: "0.0.12",
     orientation: "portrait",
     icon: "./assets/images/icon.png",
     scheme: "mobile",
@@ -26,6 +26,9 @@ export default {
         ],
         ITSAppUsesNonExemptEncryption: false
       }
+    },
+   notification: {
+      iosDisplayInForeground: true
     },
     android: {
       adaptiveIcon: {
@@ -75,6 +78,18 @@ export default {
         "@react-native-google-signin/google-signin",
         {
           iosUrlScheme: "com.googleusercontent.apps.49402666160-hrdp0lalkae29cjs5biltjbv9cbc2tsb"
+        }
+      ],
+      [
+      "expo-notifications",
+        {
+          "icon": "./local/assets/icons/notification_icon.png",
+          "color": "#ffffff",
+          "defaultChannel": "default",
+          "sounds": [
+            "./local/assets/sounds/notification_sound.wav"
+          ],
+          "enableBackgroundRemoteNotifications": false
         }
       ]
     ],

@@ -11,6 +11,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 //@ts-ignore
 import { router } from "expo-router";
 import React, { createContext, useContext, useEffect, useState } from "react";
+import { NotificationService } from "@/common/services/NotificationService";
+import { SecureStorageService } from "@/common/services/SecureStorageService";
 
 // Create the context with default values
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -112,23 +114,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           queryKey: ["profile", session.user.id],
         });
       }
-
-      // TODO Invalidate queries that depend on authentication state
-      //   if (session?.user?.id) {
-      //     queryClient.invalidateQueries({
-      //       queryKey: ["profile", session.user.id],
-      //     });
-      //     queryClient.invalidateQueries({
-      //       queryKey: ["assessments", session.user.id],
-      //     });
-      //   } else {
-      //     queryClient.invalidateQueries({
-      //       queryKey: ["profile", session?.user?.id],
-      //     });
-      //     queryClient.invalidateQueries({
-      //       queryKey: ["assessments", session?.user?.id],
-      //     });
-      //   }
     });
 
     // Start the initialization process
@@ -169,6 +154,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOutMutation = useMutation({
     mutationFn: async () => {
       console.log("Signing out");
+
+       // Clear notification token before signing out
+       if (authState.user?.id) {
+        try {
+          await NotificationService.removeExpoPushToken(authState.user.id);
+          await SecureStorageService.removeExpoPushToken();
+          console.log("Notification token cleared on logout");
+        } catch (error) {
+          console.error("Error clearing notification token:", error);
+          // Continue with logout even if token cleanup fails
+        }
+      }
+
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
     },
