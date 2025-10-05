@@ -4,6 +4,7 @@ from log.logging_config import get_logger
 
 from datetime import datetime, timedelta, timezone
 
+from urllib.parse import urlparse
 
 logger = get_logger(__name__)
 
@@ -84,6 +85,7 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60) -> dict:
             "market_state": info.get("marketState"),
             # "regular_market_price": info.get("regularMarketPrice"),
             # "regular_market_volume": info.get("regularMarketVolume"),
+            "logo_url": get_company_logo(info, topic),
             "pe_ratio": info.get("trailingPE"),
             "price_to_book": info.get("priceToBook"),
             "dividend_yield": info.get("dividendYield"),
@@ -249,3 +251,21 @@ def analyze_sentiment(research_data: dict) -> dict:
 
     except Exception as e:
         return {"score": 0, "sentiment": "neutral", "confidence": 0, "error": str(e)}
+
+
+def get_company_logo(info: dict, ticker: str) -> str:
+    """Get company logo URL with fallbacks."""
+    
+    # Try yFinance logo_url first
+    logo_url = info.get("logo_url")
+    if logo_url:
+        return logo_url
+    
+    # Try Clearbit with company website
+    website = info.get("website")
+    if website:
+        domain = urlparse(website).netloc or website
+        return f"https://logo.clearbit.com/{domain}"
+    
+    # Fallback to a default or placeholder
+    return "https://craftsnippets.com/articles_images/placeholder/placeholder.jpg" 
