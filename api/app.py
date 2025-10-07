@@ -816,7 +816,7 @@ def get_trending_stocks_by_param():
             500,
         )
         
-@app.route("/biggest-gainers", method=["GET"])
+@app.route("/biggest-gainers", methods=["GET"])
 def get_biggest_gainers():
     """ Retrieve the biggest gaining stocks .
 
