@@ -26,8 +26,7 @@ export const signInWithGoogle = async () => {
     if (isSuccessResponse(response)) {
       const { idToken, user } = response.data;
 
-      console.log("Response: ", response);
-
+      console.log("Google sign-in succeeded");
       const { data, error } = await supabase.auth.signInWithIdToken({
         provider: "google",
         token: idToken!,
