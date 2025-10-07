@@ -18,7 +18,6 @@ class WatchlistService:
 
     def __init__(self):
         # Financial Modeling Prep API key
-        # https://financialmodelingprep.com/stable/biggest-gainers?apikey=YTjrOXjoHUQVz7QcyfVN8RYXeEB3u4fK
         self.fmp_api_key = os.getenv("FMP_API_KEY")
         self.fmp_base_url = "https://financialmodelingprep.com/stable/"
         # self.fmp_base_url_v4 = "https://financialmodelingprep.com/api/v4"
