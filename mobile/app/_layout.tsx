@@ -17,6 +17,7 @@ import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { useColorScheme, View, Text } from "react-native";
+import * as Notifications from "expo-notifications";
 import "react-native-reanimated";
 import "@/global.css";
 
@@ -25,9 +26,20 @@ import LoadingScreen from "@/common/components/LoadingScreen";
 // import { GluestackUIProvider } from "../components/ui/gluestack-ui-provider";
 // import LoadingScreen from "./components/LoadingScreen";
 import { Slot } from "expo-router";
+import { useNotifications } from "@/hooks/notifications/useNotifications";
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
+
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -78,6 +90,18 @@ export default function RootLayout() {
 function AppContent() {
   const { authState } = useAuth();
   const colorScheme = useColorScheme();
+
+  // Initialize notifications hook - it will automatically register
+  // when user is authenticated (handled inside the hook)
+  const { expoPushToken, isRegistering } = useNotifications();
+
+  // Log token for debugging
+  useEffect(() => {
+    console.log("Expo Push Token Registering: ", isRegistering)
+    if (expoPushToken) {
+      console.log('App has expo push token:', expoPushToken);
+    }
+  }, [expoPushToken, isRegistering]);
 
   if (authState.isLoading) {
     return (
