@@ -83,11 +83,11 @@ export default {
       [
       "expo-notifications",
         {
-          "icon": "./local/assets/icons/notification_icon.png",
+          "icon": "./assets/icons/notification_icon.png",
           "color": "#ffffff",
           "defaultChannel": "default",
           "sounds": [
-            "./local/assets/sounds/notification_sound.wav"
+            "./assets/sounds/notification_sound.wav"
           ],
           "enableBackgroundRemoteNotifications": false
         }
