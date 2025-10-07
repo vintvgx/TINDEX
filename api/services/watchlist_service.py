@@ -22,6 +22,12 @@ class WatchlistService:
         self.fmp_api_key = os.getenv("FMP_API_KEY")
         self.fmp_base_url = "https://financialmodelingprep.com/stable/"
         # self.fmp_base_url_v4 = "https://financialmodelingprep.com/api/v4"
+        
+        # Debug logging for API key status
+        if self.fmp_api_key:
+            logger.info(f"FMP API key loaded successfully (length: {len(self.fmp_api_key)})")
+        else:
+            logger.error("FMP_API_KEY environment variable is not set!")
 
     def get_biggest_gainers(self, limit: int = 20) -> Dict:
         """
@@ -34,7 +40,15 @@ class WatchlistService:
         Dict with success status and list of gaining stocks
         """
         try:
-            url = f"{self.fmp_base_url}/biggest-gainers/"
+            # Validate API key before making request
+            if not self.fmp_api_key:
+                logger.error("FMP API key is not configured")
+                return {
+                    "success": False,
+                    "error": "FMP API key is not configured. Please set FMP_API_KEY environment variable."
+                }
+            
+            url = f"{self.fmp_base_url}biggest-gainers"
             params = {
                 "apikey": self.fmp_api_key,
                 "limit": limit 
