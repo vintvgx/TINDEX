@@ -836,7 +836,7 @@ def get_biggest_gainers():
     # trending_cache.set(cache_key, result, TRENDING_STOCKS_CACHE_TTL)
     # logger.info("Cached watchlist data for type: %s", )
         
-    return jsonify({**result, "from_cache": False})
+    return jsonify(result)
 
 @app.route("/watchlists/<watchlist_type>", methods=["GET"])
 def get_watchlist(watchlist_type: str):
