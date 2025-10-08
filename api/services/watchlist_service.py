@@ -115,191 +115,108 @@ class WatchlistService:
     #         logger.error(f"Failed to fetch trending stocks: {str(e)}")
     #         return {"success": False, "error": str(e)}
 
-    # def get_insider_buying(self, limit: int = 20) -> Dict:
-    #     """
-    #     Get stocks with recent insider buying activity.
+    def get_insider_buying(self, limit: int = 50) -> Dict:
+        """
+        Get stocks with recent insider buying activity.
 
-    #     Args:
-    #         limit: Number of stocks to return
+        Args:
+            limit: Number of stocks to return
 
-    #     Returns:
-    #         Dict with success status and list of insider buying transactions
-    #     """
-    #     try:
-    #         # FMP insider trading endpoint
-    #         url = f"{self.fmp_base_url_v4}/insider-trading"
-    #         params = {
-    #             "apikey": self.fmp_api_key,
-    #             "transactionType": "P-Purchase",  # Only purchases
-    #             "limit": limit * 2,  # Get more to filter
-    #         }
+        Returns:
+            Dict with success status and list of insider buying transactions
+        """
+        try:
+            # https://financialmodelingprep.com/stable/insider-trading/latest?page=0&limit=100&apikey=
+            # FMP insider trading endpoint
+            url = f"{self.fmp_base_url_v4}/insider-trading/latest?page=0"
+            params = {
+                "apikey": self.fmp_api_key,
+                "limit": limit,  
+            }
 
-    #         response = requests.get(url, params=params, timeout=30)
-    #         response.raise_for_status()
-    #         data = response.json()
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
 
-    #         # Group by ticker and aggregate
-    #         ticker_map = {}
-    #         for transaction in data:
-    #             ticker = transaction.get("symbol")
-    #             if ticker not in ticker_map:
-    #                 ticker_map[ticker] = {
-    #                     "ticker": ticker,
-    #                     "company": transaction.get("companyName"),
-    #                     "total_shares": 0,
-    #                     "total_value": 0,
-    #                     "transaction_count": 0,
-    #                     "latest_date": transaction.get("transactionDate"),
-    #                     "insiders": [],
-    #                 }
+            # Group by ticker and aggregate
+            ticker_map = {}
+            # for transaction in data:
+            #     ticker = transaction.get("symbol")
+            #     if ticker not in ticker_map:
+            #         ticker_map[ticker] = {
+            #             "ticker": ticker,
+            #             "company": transaction.get("companyName"),
+            #             "total_shares": 0,
+            #             "total_value": 0,
+            #             "transaction_count": 0,
+            #             "latest_date": transaction.get("transactionDate"),
+            #             "insiders": [],
+            #         }
 
-    #             ticker_map[ticker]["total_shares"] += transaction.get(
-    #                 "securitiesTransacted", 0
-    #             )
-    #             ticker_map[ticker]["total_value"] += transaction.get(
-    #                 "securitiesTransacted", 0
-    #             ) * transaction.get("price", 0)
-    #             ticker_map[ticker]["transaction_count"] += 1
-    #             ticker_map[ticker]["insiders"].append(
-    #                 {
-    #                     "name": transaction.get("reportingName"),
-    #                     "title": transaction.get("typeOfOwner"),
-    #                     "shares": transaction.get("securitiesTransacted"),
-    #                     "date": transaction.get("transactionDate"),
-    #                 }
-    #             )
+            #     ticker_map[ticker]["total_shares"] += transaction.get(
+            #         "securitiesTransacted", 0
+            #     )
+            #     ticker_map[ticker]["total_value"] += transaction.get(
+            #         "securitiesTransacted", 0
+            #     ) * transaction.get("price", 0)
+            #     ticker_map[ticker]["transaction_count"] += 1
+            #     ticker_map[ticker]["insiders"].append(
+            #         {
+            #             "name": transaction.get("reportingName"),
+            #             "title": transaction.get("typeOfOwner"),
+            #             "shares": transaction.get("securitiesTransacted"),
+            #             "date": transaction.get("transactionDate"),
+            #         }
+            #     )
 
-    #         # Convert to list and sort by total value
-    #         stocks = sorted(
-    #             ticker_map.values(), key=lambda x: x["total_value"], reverse=True
-    #         )[:limit]
+            # Convert to list and sort by total value
+            stocks = sorted(
+                data.values(), key=lambda x: x["securitiesTransacted"], reverse=True
+            )[:limit]
 
-    #         return {
-    #             "success": True,
-    #             "watchlist_type": "insider_buying",
-    #             "data": stocks,
-    #             "count": len(stocks),
-    #             "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-    #         }
+            return {
+                "success": True,
+                "watchlist_type": "insider_buying",
+                "data": stocks,
+                "count": len(stocks),
+                "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+            }
 
-    #     except Exception as e:
-    #         logger.error(f"Failed to fetch insider buying: {str(e)}")
-    #         return {"success": False, "error": str(e)}
+        except Exception as e:
+            logger.error(f"Failed to fetch insider buying: {str(e)}")
+            return {"success": False, "error": str(e)}
 
-    # def get_congress_trading(self, limit: int = 20) -> Dict:
-    #     """
-    #     Get recent congressional stock trading activity.
+    def get_congress_trading(self, limit: int = 20) -> Dict:
+        """
+        Get recent congressional stock trading activity.
 
-    #     Args:
-    #         limit: Number of transactions to return
+        Args:
+            limit: Number of transactions to return
 
-    #     Returns:
-    #         Dict with success status and list of congressional trades
-    #     """
-    #     try:
-    #         # FMP senate trading endpoint
-    #         url = f"{self.fmp_base_url_v4}/senate-trading"
-    #         params = {"apikey": self.fmp_api_key, "limit": limit}
+        Returns:
+            Dict with success status and list of congressional trades
+        """
+        try:
+            # FMP senate trading endpoint
+            # https://financialmodelingprep.com/stable/senate-latest?page=0&limit=100&apikey=
+            url = f"{self.fmp_base_url_v4}/senate-latest?page"
+            params = {"apikey": self.fmp_api_key, "limit": limit}
 
-    #         response = requests.get(url, params=params, timeout=30)
-    #         response.raise_for_status()
-    #         data = response.json()
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
 
-    #         trades = []
-    #         for trade in data:
-    #             trades.append(
-    #                 {
-    #                     "ticker": trade.get("symbol"),
-    #                     "politician": trade.get("firstName")
-    #                     + " "
-    #                     + trade.get("lastName"),
-    #                     "transaction_type": trade.get("type"),
-    #                     "transaction_date": trade.get("transactionDate"),
-    #                     "amount_range": trade.get("amount"),
-    #                     "disclosure_date": trade.get("disclosureDate"),
-    #                     "asset_description": trade.get("assetDescription"),
-    #                 }
-    #             )
+            return {
+                "success": True,
+                "watchlist_type": "congress_trading",
+                "data": data,
+                "count": len(data),
+                "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+            }
 
-    #         return {
-    #             "success": True,
-    #             "watchlist_type": "congress_trading",
-    #             "data": trades,
-    #             "count": len(trades),
-    #             "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-    #         }
-
-    #     except Exception as e:
-    #         logger.error(f"Failed to fetch congress trading: {str(e)}")
-    #         return {"success": False, "error": str(e)}
-
-    # def get_top_gainers(self, limit: int = 20) -> Dict:
-    #     """Get top gaining stocks today."""
-    #     try:
-    #         url = f"{self.fmp_base_url}/stock_market/gainers"
-    #         params = {"apikey": self.fmp_api_key}
-
-    #         response = requests.get(url, params=params, timeout=30)
-    #         response.raise_for_status()
-    #         data = response.json()
-
-    #         stocks = []
-    #         for stock in data[:limit]:
-    #             stocks.append(
-    #                 {
-    #                     "ticker": stock.get("symbol"),
-    #                     "company": stock.get("name"),
-    #                     "price": stock.get("price"),
-    #                     "change": stock.get("change"),
-    #                     "change_percent": stock.get("changesPercentage"),
-    #                 }
-    #             )
-
-    #         return {
-    #             "success": True,
-    #             "watchlist_type": "top_gainers",
-    #             "data": stocks,
-    #             "count": len(stocks),
-    #             "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-    #         }
-
-    #     except Exception as e:
-    #         logger.error(f"Failed to fetch top gainers: {str(e)}")
-    #         return {"success": False, "error": str(e)}
-
-    # def get_top_losers(self, limit: int = 20) -> Dict:
-    #     """Get top losing stocks today."""
-    #     try:
-    #         url = f"{self.fmp_base_url}/stock_market/losers"
-    #         params = {"apikey": self.fmp_api_key}
-
-    #         response = requests.get(url, params=params, timeout=30)
-    #         response.raise_for_status()
-    #         data = response.json()
-
-    #         stocks = []
-    #         for stock in data[:limit]:
-    #             stocks.append(
-    #                 {
-    #                     "ticker": stock.get("symbol"),
-    #                     "company": stock.get("name"),
-    #                     "price": stock.get("price"),
-    #                     "change": stock.get("change"),
-    #                     "change_percent": stock.get("changesPercentage"),
-    #                 }
-    #             )
-
-    #         return {
-    #             "success": True,
-    #             "watchlist_type": "top_losers",
-    #             "data": stocks,
-    #             "count": len(stocks),
-    #             "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-    #         }
-
-    #     except Exception as e:
-    #         logger.error(f"Failed to fetch top losers: {str(e)}")
-    #         return {"success": False, "error": str(e)}
+        except Exception as e:
+            logger.error(f"Failed to fetch congress trading: {str(e)}")
+            return {"success": False, "error": str(e)}
 
 
 # Singleton instance

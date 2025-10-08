@@ -854,6 +854,7 @@ def get_watchlist(watchlist_type: str):
     Query Parameters:
         limit (int, optional): Number of results to return (default: 20, max: 50)
         use_cache (bool, optional): Whether to use cached data (default: true)
+        force_fetch (bool, optional): Whether to ignore cache and force refetch
     
     Returns:
         JSON response with watchlist data
@@ -865,7 +866,7 @@ def get_watchlist(watchlist_type: str):
         from services.watchlist_service import get_watchlist_service
         
         # Validate watchlist type
-        valid_types = ['trending', 'insider_buying', 'congress_trading', 'top_gainers', 'top_losers']
+        valid_types = ['trending', 'insider_buying', 'congress_trading', 'top_gainers', 'biggest' 'top_losers']
         if watchlist_type not in valid_types:
             return jsonify({
                 "success": False,
@@ -903,15 +904,17 @@ def get_watchlist(watchlist_type: str):
             result = service.get_congress_trading(limit=limit)
         elif watchlist_type == 'top_gainers':
             result = service.get_top_gainers(limit=limit)
+        elif watchlist_type == 'biggest-gainers':
+            result = service.get_biggest_gainers(limit=limit)
         elif watchlist_type == 'top_losers':
             result = service.get_top_losers(limit=limit)
         
         if not result.get("success"):
             return jsonify(result), 500
         
-        # Cache the result
-        trending_cache.set(cache_key, result, TRENDING_STOCKS_CACHE_TTL)
-        logger.info("Cached watchlist data for type: %s", watchlist_type)
+        # TODO update Caching logic
+        # trending_cache.set(cache_key, result, TRENDING_STOCKS_CACHE_TTL)
+        # logger.info("Cached watchlist data for type: %s", watchlist_type)
         
         return jsonify({**result, "from_cache": False})
         
@@ -949,7 +952,7 @@ def get_all_watchlists():
         use_cache = request.args.get('use_cache', default='true').lower() == 'true'
         
         # Validate types
-        valid_types = ['trending', 'insider_buying', 'congress_trading', 'top_gainers', 'top_losers']
+        valid_types = ['trending', 'insider_buying', 'congress_trading', 'top_gainers', 'biggest_gainers', 'top_losers']
         invalid_types = [t for t in requested_types if t not in valid_types]
         if invalid_types:
             return jsonify({
