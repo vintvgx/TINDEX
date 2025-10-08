@@ -926,100 +926,100 @@ def get_watchlist(watchlist_type: str):
         }), 500
 
 
-@app.route("/watchlists", methods=["GET"])
-def get_all_watchlists():
-    """
-    Get multiple watchlists in a single request.
+# @app.route("/watchlists", methods=["GET"])
+# def get_all_watchlists():
+#     """
+#     Get multiple watchlists in a single request.
     
-    Query Parameters:
-        types (str): Comma-separated list of watchlist types
-        limit (int, optional): Number of results per watchlist (default: 10)
-        use_cache (bool, optional): Whether to use cached data (default: true)
+#     Query Parameters:
+#         types (str): Comma-separated list of watchlist types
+#         limit (int, optional): Number of results per watchlist (default: 10)
+#         use_cache (bool, optional): Whether to use cached data (default: true)
     
-    Returns:
-        JSON response with all requested watchlists
+#     Returns:
+#         JSON response with all requested watchlists
         
-    Example:
-        GET /watchlists?types=trending,insider_buying,congress_trading&limit=10
-    """
-    try:
-        from services.watchlist_service import get_watchlist_service
+#     Example:
+#         GET /watchlists?types=trending,insider_buying,congress_trading&limit=10
+#     """
+#     try:
+#         from services.watchlist_service import get_watchlist_service
         
-        # Get query parameters
-        types_param = request.args.get('types', default='trending,top_gainers,top_losers')
-        requested_types = [t.strip() for t in types_param.split(',')]
-        limit = request.args.get('limit', default=10, type=int)
-        use_cache = request.args.get('use_cache', default='true').lower() == 'true'
+#         # Get query parameters
+#         types_param = request.args.get('types', default='trending,top_gainers,top_losers')
+#         requested_types = [t.strip() for t in types_param.split(',')]
+#         limit = request.args.get('limit', default=10, type=int)
+#         use_cache = request.args.get('use_cache', default='true').lower() == 'true'
         
-        # Validate types
-        valid_types = ['trending', 'insider_buying', 'congress_trading', 'top_gainers', 'biggest_gainers', 'top_losers']
-        invalid_types = [t for t in requested_types if t not in valid_types]
-        if invalid_types:
-            return jsonify({
-                "success": False,
-                "error": f"Invalid watchlist types: {', '.join(invalid_types)}"
-            }), 400
+#         # Validate types
+#         valid_types = ['trending', 'insider_buying', 'congress_trading', 'top_gainers', 'biggest_gainers', 'top_losers']
+#         invalid_types = [t for t in requested_types if t not in valid_types]
+#         if invalid_types:
+#             return jsonify({
+#                 "success": False,
+#                 "error": f"Invalid watchlist types: {', '.join(invalid_types)}"
+#             }), 400
         
-        # Validate limit
-        if limit < 1 or limit > 50:
-            return jsonify({
-                "success": False,
-                "error": "Limit must be between 1 and 50"
-            }), 400
+#         # Validate limit
+#         if limit < 1 or limit > 50:
+#             return jsonify({
+#                 "success": False,
+#                 "error": "Limit must be between 1 and 50"
+#             }), 400
         
-        # Get service
-        service = get_watchlist_service()
+#         # Get service
+#         service = get_watchlist_service()
         
-        # Fetch all requested watchlists
-        results = {}
-        for watchlist_type in requested_types:
-            # Check cache
-            cache_key = f"watchlist_{watchlist_type}_{limit}"
-            if use_cache:
-                cached_data = trending_cache.get(cache_key)
-                if cached_data:
-                    results[watchlist_type] = {**cached_data, "from_cache": True}
-                    continue
+#         # Fetch all requested watchlists
+#         results = {}
+#         for watchlist_type in requested_types:
+#             # Check cache
+#             cache_key = f"watchlist_{watchlist_type}_{limit}"
+#             if use_cache:
+#                 cached_data = trending_cache.get(cache_key)
+#                 if cached_data:
+#                     results[watchlist_type] = {**cached_data, "from_cache": True}
+#                     continue
             
-            # Fetch fresh data
-            try:
-                if watchlist_type == 'trending':
-                    result = service.get_trending_stocks(limit=limit)
-                elif watchlist_type == 'insider_buying':
-                    result = service.get_insider_buying(limit=limit)
-                elif watchlist_type == 'congress_trading':
-                    result = service.get_congress_trading(limit=limit)
-                elif watchlist_type == 'top_gainers':
-                    result = service.get_top_gainers(limit=limit)
-                elif watchlist_type == 'top_losers':
-                    result = service.get_top_losers(limit=limit)
+#             # Fetch fresh data
+#             try:
+#                 if watchlist_type == 'trending':
+#                     result = service.get_trending_stocks(limit=limit)
+#                 elif watchlist_type == 'insider_buying':
+#                     result = service.get_insider_buying(limit=limit)
+#                 elif watchlist_type == 'congress_trading':
+#                     result = service.get_congress_trading(limit=limit)
+#                 elif watchlist_type == 'top_gainers':
+#                     result = service.get_top_gainers(limit=limit)
+#                 elif watchlist_type == 'top_losers':
+#                     result = service.get_top_losers(limit=limit)
                 
-                if result.get("success"):
-                    # Cache the result
-                    trending_cache.set(cache_key, result, TRENDING_STOCKS_CACHE_TTL)
-                    results[watchlist_type] = {**result, "from_cache": False}
-                else:
-                    results[watchlist_type] = result
+#                 if result.get("success"):
+#                     # Cache the result
+#                     trending_cache.set(cache_key, result, TRENDING_STOCKS_CACHE_TTL)
+#                     results[watchlist_type] = {**result, "from_cache": False}
+#                 else:
+#                     results[watchlist_type] = result
                     
-            except Exception as e:
-                logger.error("Failed to fetch %s watchlist: %s", watchlist_type, e)
-                results[watchlist_type] = {
-                    "success": False,
-                    "error": str(e)
-                }
+#             except Exception as e:
+#                 logger.error("Failed to fetch %s watchlist: %s", watchlist_type, e)
+#                 results[watchlist_type] = {
+#                     "success": False,
+#                     "error": str(e)
+#                 }
         
-        return jsonify({
-            "success": True,
-            "watchlists": results,
-            "timestamp": int(time.time() * 1000)
-        })
+#         return jsonify({
+#             "success": True,
+#             "watchlists": results,
+#             "timestamp": int(time.time() * 1000)
+#         })
         
-    except Exception as e:
-        logger.error("Failed to fetch watchlists: %s", e, exc_info=True)
-        return jsonify({
-            "success": False,
-            "error": f"Failed to fetch watchlists: {str(e)}"
-        }), 500
+#     except Exception as e:
+#         logger.error("Failed to fetch watchlists: %s", e, exc_info=True)
+#         return jsonify({
+#             "success": False,
+#             "error": f"Failed to fetch watchlists: {str(e)}"
+#         }), 500
 
 
 if __name__ == "__main__":
