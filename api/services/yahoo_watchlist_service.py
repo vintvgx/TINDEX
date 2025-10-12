@@ -298,9 +298,95 @@ class YahooWatchlistService:
         return None
 
     
+    # def _parse_stock_table(self, soup: BeautifulSoup, limit: int = 25) -> List[Dict]:
+    #     """
+    #     Parse the stock table from Yahoo Finance page.
+        
+    #     Args:
+    #         soup: BeautifulSoup object of the page
+    #         limit: Maximum number of stocks to return
+            
+    #     Returns:
+    #         List of stock dictionaries
+    #     """
+    #     stocks = []
+        
+    #     try:
+    #         # Find the main list container
+    #         stock_list = soup.find('ul', class_='dock')
+            
+    #         if not stock_list:
+    #             logger.warning("No stock list found on page")
+    #             return []
+            
+    #         # Find all list items (stocks)
+    #         rows = stock_list.find_all('li', class_='dock-item')
+            
+    #         if not rows:
+    #             logger.warning("No stock rows found")
+    #             return []
+            
+    #         logger.info(f"Found {len(rows)} stock rows")
+            
+    #         for row in rows[:limit]:
+    #             try:
+    #                 # Extract ticker symbol
+    #                 ticker_elem = row.find('span', class_='symbol')
+    #                 ticker = ticker_elem.get_text(strip=True) if ticker_elem else None
+                    
+    #                 if not ticker or ticker.lower() in ['symbol', 'ticker', '']:
+    #                     continue
+                    
+    #                 # Extract company name
+    #                 company_elem = row.find('span', class_='longName')
+    #                 company = company_elem.get_text(strip=True) if company_elem else ""
+                    
+    #                 # Extract price from fin-streamer with data-field="regularMarketPrice"
+    #                 price_elem = row.find('fin-streamer', {'data-field': 'regularMarketPrice'})
+    #                 price = self._parse_price(price_elem.get_text(strip=True)) if price_elem else None
+                    
+    #                 # Extract change from fin-streamer with data-field="regularMarketChange"
+    #                 change_elem = row.find('fin-streamer', {'data-field': 'regularMarketChange'})
+    #                 change_text = change_elem.get_text(strip=True) if change_elem else None
+    #                 change = self._parse_change(change_text) if change_text else None
+                    
+    #                 # Extract change percent from fin-streamer with data-field="regularMarketChangePercent"
+    #                 change_pct_elem = row.find('fin-streamer', {'data-field': 'regularMarketChangePercent'})
+    #                 change_pct_text = change_pct_elem.get_text(strip=True) if change_pct_elem else None
+    #                 change_percent = self._parse_percent(change_pct_text) if change_pct_text else None
+                    
+    #                 # Create stock data dictionary
+    #                 stock_data = {
+    #                     "ticker": ticker,
+    #                     "company": company,
+    #                     "price": price,
+    #                     "change": change,
+    #                     "change_percent": change_percent,
+    #                     "volume": None,  # Not present in this view
+    #                     "avg_volume": None,
+    #                     "market_cap": None,
+    #                     "pe_ratio": None,
+    #                     "week_range": None,
+    #                     "week_change": None
+    #                 }
+                    
+    #                 stocks.append(stock_data)
+    #                 logger.debug(f"Parsed stock: {ticker} - Price: {price}, Change: {change_percent}%")
+                    
+    #             except Exception as e:
+    #                 logger.debug(f"Error parsing row: {str(e)}")
+    #                 continue
+            
+    #         logger.info(f"Successfully parsed {len(stocks)} stocks")
+            
+    #     except Exception as e:
+    #         logger.error(f"Error parsing stock table: {str(e)}")
+        
+    #     return stocks
+    
     def _parse_stock_table(self, soup: BeautifulSoup, limit: int = 25) -> List[Dict]:
         """
-        Parse the stock table from Yahoo Finance page.
+        Parse the stock table from Yahoo Finance full table view.
         
         Args:
             soup: BeautifulSoup object of the page
@@ -312,57 +398,40 @@ class YahooWatchlistService:
         stocks = []
         
         try:
-            # Find the main list container
-            stock_list = soup.find('ul', class_='dock')
+            # Find the tbody element containing the table data
+            tbody = soup.find('tbody')
             
-            if not stock_list:
-                logger.warning("No stock list found on page")
+            if not tbody:
+                logger.warning("No tbody found on page")
                 return []
             
-            # Find all list items (stocks)
-            rows = stock_list.find_all('li', class_='dock-item')
+            # Find all rows with the data table identifier
+            rows = tbody.find_all('tr', {'data-testid': 'data-table-v2-row'})
             
             if not rows:
-                logger.warning("No stock rows found")
-                return []
-            
-            logger.info(f"Found {len(rows)} stock rows")
+                # Fallback: try to find any tr elements
+                rows = tbody.find_all('tr')
+                logger.info(f"Fallback: Found {len(rows)} rows without data-testid")
+            else:
+                logger.info(f"Found {len(rows)} rows with data-testid")
             
             for row in rows[:limit]:
                 try:
-                    # Extract ticker symbol
-                    ticker_elem = row.find('span', class_='symbol')
-                    ticker = ticker_elem.get_text(strip=True) if ticker_elem else None
+                    # Find all cells in the row
+                    cells = row.find_all('td')
                     
-                    if not ticker or ticker.lower() in ['symbol', 'ticker', '']:
+                    if len(cells) < 3:
+                        logger.debug(f"Skipping row with only {len(cells)} cells")
                         continue
                     
-                    # Extract company name
-                    company_elem = row.find('span', class_='longName')
-                    company = company_elem.get_text(strip=True) if company_elem else ""
-                    
-                    # Extract price from fin-streamer with data-field="regularMarketPrice"
-                    price_elem = row.find('fin-streamer', {'data-field': 'regularMarketPrice'})
-                    price = self._parse_price(price_elem.get_text(strip=True)) if price_elem else None
-                    
-                    # Extract change from fin-streamer with data-field="regularMarketChange"
-                    change_elem = row.find('fin-streamer', {'data-field': 'regularMarketChange'})
-                    change_text = change_elem.get_text(strip=True) if change_elem else None
-                    change = self._parse_change(change_text) if change_text else None
-                    
-                    # Extract change percent from fin-streamer with data-field="regularMarketChangePercent"
-                    change_pct_elem = row.find('fin-streamer', {'data-field': 'regularMarketChangePercent'})
-                    change_pct_text = change_pct_elem.get_text(strip=True) if change_pct_elem else None
-                    change_percent = self._parse_percent(change_pct_text) if change_pct_text else None
-                    
-                    # Create stock data dictionary
+                    # Initialize stock data
                     stock_data = {
-                        "ticker": ticker,
-                        "company": company,
-                        "price": price,
-                        "change": change,
-                        "change_percent": change_percent,
-                        "volume": None,  # Not present in this view
+                        "ticker": None,
+                        "company": None,
+                        "price": None,
+                        "change": None,
+                        "change_percent": None,
+                        "volume": None,
                         "avg_volume": None,
                         "market_cap": None,
                         "pe_ratio": None,
@@ -370,17 +439,116 @@ class YahooWatchlistService:
                         "week_change": None
                     }
                     
+                    # Process each cell using data-testid-cell attribute
+                    for cell in cells:
+                        # Get the data-testid-cell to identify the column
+                        cell_id = cell.get('data-testid-cell', '')
+                        
+                        # Extract ticker
+                        if cell_id == 'ticker':
+                            ticker_link = cell.find('a', {'data-testid': 'table-cell-ticker'})
+                            if ticker_link:
+                                symbol_span = ticker_link.find('span', class_='symbol')
+                                if symbol_span:
+                                    stock_data["ticker"] = symbol_span.get_text(strip=True)
+                        
+                        # Extract company name
+                        elif cell_id == 'companyshortname.raw':
+                            company_div = cell.find('div', class_='leftAlignHeader companyName')
+                            if company_div:
+                                stock_data["company"] = company_div.get_text(strip=True)
+                        
+                        # Extract price
+                        elif cell_id == 'intradayprice':
+                            price_streamer = cell.find('fin-streamer', {'data-field': 'regularMarketPrice'})
+                            if price_streamer:
+                                price_text = price_streamer.get_text(strip=True)
+                                stock_data["price"] = self._parse_price(price_text)
+                        
+                        # Extract change
+                        elif cell_id == 'intradaypricechange':
+                            change_streamer = cell.find('fin-streamer', {'data-field': 'regularMarketChange'})
+                            if change_streamer:
+                                change_span = change_streamer.find('span')
+                                if change_span:
+                                    change_text = change_span.get_text(strip=True)
+                                    stock_data["change"] = self._parse_change(change_text)
+                        
+                        # Extract percent change
+                        elif cell_id == 'percentchange':
+                            pct_streamer = cell.find('fin-streamer', {'data-field': 'regularMarketChangePercent'})
+                            if pct_streamer:
+                                pct_span = pct_streamer.find('span')
+                                if pct_span:
+                                    pct_text = pct_span.get_text(strip=True)
+                                    stock_data["change_percent"] = self._parse_percent(pct_text)
+                        
+                        # Extract volume
+                        elif cell_id == 'dayvolume':
+                            volume_streamer = cell.find('fin-streamer', {'data-field': 'regularMarketVolume'})
+                            if volume_streamer:
+                                volume_text = volume_streamer.get_text(strip=True)
+                                stock_data["volume"] = self._parse_volume(volume_text)
+                        
+                        # Extract average volume
+                        elif cell_id == 'avgdailyvol3m':
+                            avg_vol_text = cell.get_text(strip=True)
+                            stock_data["avg_volume"] = self._parse_volume(avg_vol_text)
+                        
+                        # Extract market cap
+                        elif cell_id == 'intradaymarketcap':
+                            cap_streamer = cell.find('fin-streamer', {'data-field': 'marketCap'})
+                            if cap_streamer:
+                                cap_text = cap_streamer.get_text(strip=True)
+                                stock_data["market_cap"] = self._parse_market_cap(cap_text)
+                        
+                        # Extract P/E ratio
+                        elif cell_id == 'peratio.lasttwelvemonths':
+                            pe_text = cell.get_text(strip=True)
+                            if pe_text and pe_text not in ['--', 'N/A', '']:
+                                try:
+                                    stock_data["pe_ratio"] = float(pe_text.replace(',', ''))
+                                except ValueError:
+                                    pass
+                        
+                        # Extract 52-week change percent
+                        elif cell_id == 'fiftytwowkpercentchange':
+                            week_change_streamer = cell.find('fin-streamer', {'data-field': 'fiftyTwoWeekChangePercent'})
+                            if week_change_streamer:
+                                week_span = week_change_streamer.find('span')
+                                if week_span:
+                                    week_text = week_span.get_text(strip=True)
+                                    stock_data["week_change"] = self._parse_percent(week_text)
+                        
+                        # Extract 52-week range
+                        elif cell_id == 'fiftyTwoWeekRange':
+                            range_div = cell.find('div', class_='labels')
+                            if range_div:
+                                spans = range_div.find_all('span')
+                                if len(spans) >= 2:
+                                    low = spans[0].get_text(strip=True)
+                                    high = spans[1].get_text(strip=True)
+                                    stock_data["week_range"] = f"{low} - {high}"
+                    
+                    # Skip if no ticker found
+                    if not stock_data["ticker"] or stock_data["ticker"].lower() in ['symbol', 'ticker', '']:
+                        continue
+                    
                     stocks.append(stock_data)
-                    logger.debug(f"Parsed stock: {ticker} - Price: {price}, Change: {change_percent}%")
+                    logger.debug(f"Parsed stock: {stock_data['ticker']} - Price: {stock_data['price']}, Change: {stock_data['change_percent']}%")
                     
                 except Exception as e:
                     logger.debug(f"Error parsing row: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
                     continue
             
             logger.info(f"Successfully parsed {len(stocks)} stocks")
             
         except Exception as e:
             logger.error(f"Error parsing stock table: {str(e)}")
+            import traceback
+            traceback.print_exc()
         
         return stocks
 
