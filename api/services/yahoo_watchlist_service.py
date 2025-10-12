@@ -454,11 +454,17 @@ class YahooWatchlistService:
                         
                         # Extract company name
                         elif cell_id == 'companyshortname.raw':
-                            # company_div = cell.find('div', class_='leftAlignHeader companyName')
-                            company_streamer = cell.find('fin-streamer', {'data-field': 'companyName'})
-
-                            if company_streamer:
-                                stock_data["company"] = company_streamer.get_text(strip=True)
+                            # Try multiple selectors
+                            company_div = cell.find('div', class_='leftAlignHeader companyName yf-362rys enableMaxWidth')
+                            if not company_div:
+                                company_div = cell.find('div', class_='leftAlignHeader companyName')
+                            if company_div:
+                                stock_data["company"] = company_div.get_text(strip=True)
+                            else:
+                                # Fallback: get direct text
+                                company_text = cell.get_text(strip=True)
+                                if company_text:
+                                    stock_data["company"] = company_text
                         
                         # Extract price
                         elif cell_id == 'intradayprice':
@@ -504,14 +510,15 @@ class YahooWatchlistService:
                                 cap_text = cap_streamer.get_text(strip=True)
                                 stock_data["market_cap"] = self._parse_market_cap(cap_text)
                         
-                        # Extract P/E ratio
                         elif cell_id == 'peratio.lasttwelvemonths':
                             pe_text = cell.get_text(strip=True)
-                            if pe_text and pe_text not in ['--', 'N/A', '']:
+                            if pe_text and pe_text not in ['--', 'N/A', '', ' ']:
                                 try:
-                                    stock_data["pe_ratio"] = float(pe_text.replace(',', ''))
-                                except ValueError:
-                                    pass
+                                    # Remove any whitespace and commas
+                                    pe_clean = pe_text.replace(',', '').strip()
+                                    stock_data["pe_ratio"] = float(pe_clean)
+                                except (ValueError, AttributeError):
+                                    stock_data["pe_ratio"] = None
                         
                         # Extract 52-week change percent
                         elif cell_id == 'fiftytwowkpercentchange':
