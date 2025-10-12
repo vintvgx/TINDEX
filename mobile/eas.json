@@ -17,7 +17,7 @@
     "preview": {
       "distribution": "internal",
       "env": {
-        "APP_VARIANT": "production"
+        "APP_VARIANT": "preview"
       },
       "ios": {
         "bundleIdentifier": "com.communite.tindex"

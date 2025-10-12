@@ -16,7 +16,10 @@ export default ({ config }) => {
         // preview
         // bundleIdentifier: "com.communite.tindex",
         // dev
-        bundleIdentifier: "com.communite.alethia",
+        // bundleIdentifier: "com.communite.alethia",
+        bundleIdentifier: isDevelopment 
+          ? "com.communite.alethia" 
+          : "com.communite.tindex",
         usesAppleSignIn: true,
         simulator: true,
         infoPlist: {

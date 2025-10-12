@@ -23,19 +23,19 @@ export type WatchlistType =
     /** Company name */
     company: string;
     /** Current stock price */
-    price: number;
+    price: number | null;
     /** Price change amount */
-    change: number;
+    change: number | null;
     /** Price change percentage */
-    change_percent: number;
+    change_percent: number | null;
     /** Market capitalization in billions */
-    market_cap: number;
+    market_cap: number | null;
     /** Price-to-earnings ratio (null if not available) */
     pe_ratio: number | null;
     /** Trading volume */
-    volume: number;
+    volume: number | null;
     /** Average trading volume */
-    avg_volume: number;
+    avg_volume: number | null;
     /** Week price change percentage */
     week_change: number | null;
     /** 52-week price range */

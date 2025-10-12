@@ -325,9 +325,9 @@ class YahooWatchlistService:
             if not rows:
                 # Fallback: try to find any tr elements
                 rows = tbody.find_all('tr') # type: ignore
-                logger.info("Fallback: Found %s rows without data-testid", {len(rows)})
+                logger.info("Fallback: Found %s rows without data-testid", len(rows))
             else:
-                logger.info("Found %s rows with data-testid", {len(rows)})
+                logger.info("Found %s rows with data-testid", len(rows))
             
             for row in rows[:limit]:
                 try:
@@ -335,7 +335,7 @@ class YahooWatchlistService:
                     cells = row.find_all('td')
                     
                     if len(cells) < 3:
-                        logger.debug("Skipping row with only %s cells", {len(cells)})
+                        logger.debug("Skipping row with only %s cells", len(cells))
                         continue
                     
                     # Initialize stock data

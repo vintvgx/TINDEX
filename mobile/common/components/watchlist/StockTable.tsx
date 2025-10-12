@@ -107,11 +107,14 @@ export const StockTable: React.FC<StockTableProps> = ({ stocks, isLoading }) => 
           className="flex-1"
         >
           {stocks.map((stock, index) => {
-            // Safely determine if change is positive, handling null/undefined
-            const changePercent = stock.change_percent ?? 0;
-            const isPositive = changePercent >= 0;
+            // Derive color from actual change amount, not percentage
+            // This ensures visual feedback matches the true change value
+            const changeAmount = stock.change ?? 0;
+            const isPositive = changeAmount >= 0;
             const changeColor = isPositive ? 'text-green-500' : 'text-red-500';
-            const hasValidData = stock.change_percent !== null && stock.change_percent !== undefined;
+            
+            // Separately check if percentage data exists for display
+            const hasValidPercent = stock.change_percent !== null && stock.change_percent !== undefined;
 
             return (
               <View
@@ -143,7 +146,7 @@ export const StockTable: React.FC<StockTableProps> = ({ stocks, isLoading }) => 
                 </View>
                 <View style={{ width: COLUMN_WIDTHS.percentage }} className="justify-center items-end">
                   <View className="flex-row items-center">
-                    {hasValidData ? (
+                    {hasValidPercent ? (
                       <Text className={`${changeColor} text-sm font-bold`}>
                         {isPositive ? '↑' : '↓'} {formatPercentage(stock.change_percent)}
                       </Text>
