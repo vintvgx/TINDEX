@@ -454,9 +454,11 @@ class YahooWatchlistService:
                         
                         # Extract company name
                         elif cell_id == 'companyshortname.raw':
-                            company_div = cell.find('div', class_='leftAlignHeader companyName')
-                            if company_div:
-                                stock_data["company"] = company_div.get_text(strip=True)
+                            # company_div = cell.find('div', class_='leftAlignHeader companyName')
+                            company_streamer = cell.find('fin-streamer', {'data-field': 'companyName'})
+
+                            if company_streamer:
+                                stock_data["company"] = company_streamer.get_text(strip=True)
                         
                         # Extract price
                         elif cell_id == 'intradayprice':
