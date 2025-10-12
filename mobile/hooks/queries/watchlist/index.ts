@@ -12,10 +12,10 @@
 
 // Core hooks
 export { useWatchlist, fetchWatchlist } from './useWatchlist';
-export { useBiggestGainers } from './useBiggestGainers';
+export { useBiggestGainers } from './useWatchlist';
 
 // Types
-export type { BiggestGainerStock } from './useBiggestGainers';
+export type { BiggestGainerStock } from './useWatchlist';
 export type {
   WatchlistType,
   WatchlistStock,

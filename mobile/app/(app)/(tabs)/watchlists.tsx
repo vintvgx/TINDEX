@@ -1,7 +1,7 @@
 import { View, Text, SafeAreaView } from "react-native";
 import { useState } from "react";
 import { WatchlistType } from "@/common/types";
-import { useBiggestGainersVersionOne } from "@/hooks/queries/watchlist/useBiggestGainers";
+import { useWatchlists } from "@/hooks/queries/watchlist/useWatchlist";
 import { WatchlistSelector } from "@/common/components/watchlist/WatchlistSelector";
 import { StockTable } from "@/common/components/watchlist/StockTable";
 import { WATCHLIST_LABELS } from "@/common/types/watchlist";
@@ -9,19 +9,36 @@ import { WATCHLIST_LABELS } from "@/common/types/watchlist";
 const WatchlistsScreen = () => {
   const [selectedWatchlist, setSelectedWatchlist] = useState<WatchlistType>('biggest-gainers');
   
-  // Fetch data based on selected watchlist
-  const { data: biggestGainersData, isLoading: biggestGainersLoading } = useBiggestGainersVersionOne();
+  // Fetch all watchlists in a single API call
+  const { data: watchlistsData, isLoading: watchlistsLoading } = useWatchlists();
   
   // Determine which data to show based on selected watchlist
   const getWatchlistData = () => {
+    // If still loading or no data, return loading state
+    if (watchlistsLoading || !watchlistsData?.watchlists) {
+      return {
+        stocks: [],
+        isLoading: watchlistsLoading,
+      };
+    }
+
     switch (selectedWatchlist) {
       case 'biggest-gainers':
         return {
-          stocks: biggestGainersData?.data || [],
-          isLoading: biggestGainersLoading,
+          stocks: watchlistsData.watchlists.gainers?.data || [],
+          isLoading: false,
         };
-      // Add other cases as you implement them
       case 'trending':
+        return {
+          stocks: watchlistsData.watchlists.trending?.data || [],
+          isLoading: false,
+        };
+      case 'most-active':
+        return {
+          stocks: watchlistsData.watchlists.most_active?.data || [],
+          isLoading: false,
+        };
+      // These watchlist types are not yet implemented in the API
       case 'insider_buying':
       case 'congress_trading':
       case 'top_gainers':
@@ -58,7 +75,8 @@ const WatchlistsScreen = () => {
 
       {/* Stock Table */}
       <View className="flex-1">
-        {selectedWatchlist === 'biggest-gainers' ? (
+        {/* Show table for implemented watchlist types */}
+        {['biggest-gainers', 'trending', 'most-active'].includes(selectedWatchlist) ? (
           <StockTable stocks={stocks} isLoading={isLoading} />
         ) : (
           <View className="flex-1 justify-center items-center px-6">

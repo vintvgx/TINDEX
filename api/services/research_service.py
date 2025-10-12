@@ -245,7 +245,6 @@ class StockResearchService:
 # Note: This will be initialized with supabase_service when first used
 stock_research_service = None
 
-
 def get_research_service():
     """
     Factory function to get research service instance.

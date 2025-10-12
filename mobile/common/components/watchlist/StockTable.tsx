@@ -1,11 +1,10 @@
-import { BiggestGainerStock, WatchlistStock } from '@/common/types';
+import { WatchlistStock } from '@/common/types';
 import React from 'react';
 import {
   View,
   Text,
   ScrollView,
   ActivityIndicator,
-  Dimensions,
 } from 'react-native';
 
 interface StockTableProps {
@@ -13,7 +12,6 @@ interface StockTableProps {
   isLoading: boolean;
 }
 
-const { width } = Dimensions.get('window');
 const COLUMN_WIDTHS = {
   rank: 50,
   symbol: 80,
@@ -24,16 +22,34 @@ const COLUMN_WIDTHS = {
 };
 
 export const StockTable: React.FC<StockTableProps> = ({ stocks, isLoading }) => {
-  const formatPrice = (price: number) => {
+  /**
+   * Safely formats price with null/undefined handling
+   */
+  const formatPrice = (price: number | null | undefined): string => {
+    if (price === null || price === undefined || isNaN(price)) {
+      return 'N/A';
+    }
     return `$${price.toFixed(2)}`;
   };
 
-  const formatChange = (change: number) => {
+  /**
+   * Safely formats change amount with null/undefined handling
+   */
+  const formatChange = (change: number | null | undefined): string => {
+    if (change === null || change === undefined || isNaN(change)) {
+      return 'N/A';
+    }
     const sign = change >= 0 ? '+' : '';
     return `${sign}${change.toFixed(2)}`;
   };
 
-  const formatPercentage = (percentage: number) => {
+  /**
+   * Safely formats percentage with null/undefined handling
+   */
+  const formatPercentage = (percentage: number | null | undefined): string => {
+    if (percentage === null || percentage === undefined || isNaN(percentage)) {
+      return 'N/A';
+    }
     const sign = percentage >= 0 ? '+' : '';
     return `${sign}${percentage.toFixed(2)}%`;
   };
@@ -62,7 +78,7 @@ export const StockTable: React.FC<StockTableProps> = ({ stocks, isLoading }) => 
       className="flex-1"
       contentContainerStyle={{ paddingHorizontal: 16 }}
     >
-      <View className="flex-1">
+      <View className="flex-1 mt-4">
         {/* Table Header */}
         <View className="flex-row border-b border-gray-800 pb-3 mb-2">
           <View style={{ width: COLUMN_WIDTHS.rank }} className="justify-center">
@@ -91,12 +107,15 @@ export const StockTable: React.FC<StockTableProps> = ({ stocks, isLoading }) => 
           className="flex-1"
         >
           {stocks.map((stock, index) => {
-            const isPositive = stock.changesPercentage ? stock?.changesPercentage >= 0 : 0;
+            // Safely determine if change is positive, handling null/undefined
+            const changePercent = stock.change_percent ?? 0;
+            const isPositive = changePercent >= 0;
             const changeColor = isPositive ? 'text-green-500' : 'text-red-500';
+            const hasValidData = stock.change_percent !== null && stock.change_percent !== undefined;
 
             return (
               <View
-                key={`${stock.symbol}-${index}`}
+                key={`${stock.ticker}-${index}`}
                 className="flex-row py-4 border-b border-gray-900/50"
               >
                 <View style={{ width: COLUMN_WIDTHS.rank }} className="justify-center">
@@ -104,12 +123,12 @@ export const StockTable: React.FC<StockTableProps> = ({ stocks, isLoading }) => 
                 </View>
                 <View style={{ width: COLUMN_WIDTHS.symbol }} className="justify-center">
                   <Text className="text-white text-sm font-semibold">
-                    {stock.symbol}
+                    {stock.ticker}
                   </Text>
                 </View>
                 <View style={{ width: COLUMN_WIDTHS.name }} className="justify-center">
                   <Text className="text-gray-300 text-sm" numberOfLines={2}>
-                    {stock.name}
+                    {stock.company}
                   </Text>
                 </View>
                 <View style={{ width: COLUMN_WIDTHS.price }} className="justify-center items-end">
@@ -124,9 +143,13 @@ export const StockTable: React.FC<StockTableProps> = ({ stocks, isLoading }) => 
                 </View>
                 <View style={{ width: COLUMN_WIDTHS.percentage }} className="justify-center items-end">
                   <View className="flex-row items-center">
-                    <Text className={`${changeColor} text-sm font-bold`}>
-                      {isPositive ? '↑' : '↓'} {formatPercentage(stock.changesPercentage)}
-                    </Text>
+                    {hasValidData ? (
+                      <Text className={`${changeColor} text-sm font-bold`}>
+                        {isPositive ? '↑' : '↓'} {formatPercentage(stock.change_percent)}
+                      </Text>
+                    ) : (
+                      <Text className="text-gray-500 text-sm">N/A</Text>
+                    )}
                   </View>
                 </View>
               </View>

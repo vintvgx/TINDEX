@@ -11,10 +11,11 @@ interface WatchlistSelectorProps {
 const WATCHLIST_OPTIONS: WatchlistType[] = [
   'biggest-gainers',
   'trending',
-  'insider_buying',
-  'congress_trading',
-  'top_gainers',
-  'top_losers',
+  'most-active',
+  // 'insider_buying',
+  // 'congress_trading',
+  // 'top_gainers',
+  // 'top_losers',
 ];
 
 export const WatchlistSelector: React.FC<WatchlistSelectorProps> = ({

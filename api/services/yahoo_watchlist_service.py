@@ -20,6 +20,7 @@ Security Considerations:
 
 import requests
 import time
+import traceback
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -144,7 +145,7 @@ class YahooWatchlistService:
                 # Cache the result
                 self.cache[cache_key] = (soup, time.time())
                 
-                logger.info(f"Successfully fetched {url}")
+                logger.info("Successfully fetched %s", url)
                 return soup
                 
             except requests.exceptions.Timeout:
@@ -296,93 +297,6 @@ class YahooWatchlistService:
             logger.debug(f"Failed to parse market cap '{market_cap_str}': {str(e)}")
         
         return None
-
-    
-    # def _parse_stock_table(self, soup: BeautifulSoup, limit: int = 25) -> List[Dict]:
-    #     """
-    #     Parse the stock table from Yahoo Finance page.
-        
-    #     Args:
-    #         soup: BeautifulSoup object of the page
-    #         limit: Maximum number of stocks to return
-            
-    #     Returns:
-    #         List of stock dictionaries
-    #     """
-    #     stocks = []
-        
-    #     try:
-    #         # Find the main list container
-    #         stock_list = soup.find('ul', class_='dock')
-            
-    #         if not stock_list:
-    #             logger.warning("No stock list found on page")
-    #             return []
-            
-    #         # Find all list items (stocks)
-    #         rows = stock_list.find_all('li', class_='dock-item')
-            
-    #         if not rows:
-    #             logger.warning("No stock rows found")
-    #             return []
-            
-    #         logger.info(f"Found {len(rows)} stock rows")
-            
-    #         for row in rows[:limit]:
-    #             try:
-    #                 # Extract ticker symbol
-    #                 ticker_elem = row.find('span', class_='symbol')
-    #                 ticker = ticker_elem.get_text(strip=True) if ticker_elem else None
-                    
-    #                 if not ticker or ticker.lower() in ['symbol', 'ticker', '']:
-    #                     continue
-                    
-    #                 # Extract company name
-    #                 company_elem = row.find('span', class_='longName')
-    #                 company = company_elem.get_text(strip=True) if company_elem else ""
-                    
-    #                 # Extract price from fin-streamer with data-field="regularMarketPrice"
-    #                 price_elem = row.find('fin-streamer', {'data-field': 'regularMarketPrice'})
-    #                 price = self._parse_price(price_elem.get_text(strip=True)) if price_elem else None
-                    
-    #                 # Extract change from fin-streamer with data-field="regularMarketChange"
-    #                 change_elem = row.find('fin-streamer', {'data-field': 'regularMarketChange'})
-    #                 change_text = change_elem.get_text(strip=True) if change_elem else None
-    #                 change = self._parse_change(change_text) if change_text else None
-                    
-    #                 # Extract change percent from fin-streamer with data-field="regularMarketChangePercent"
-    #                 change_pct_elem = row.find('fin-streamer', {'data-field': 'regularMarketChangePercent'})
-    #                 change_pct_text = change_pct_elem.get_text(strip=True) if change_pct_elem else None
-    #                 change_percent = self._parse_percent(change_pct_text) if change_pct_text else None
-                    
-    #                 # Create stock data dictionary
-    #                 stock_data = {
-    #                     "ticker": ticker,
-    #                     "company": company,
-    #                     "price": price,
-    #                     "change": change,
-    #                     "change_percent": change_percent,
-    #                     "volume": None,  # Not present in this view
-    #                     "avg_volume": None,
-    #                     "market_cap": None,
-    #                     "pe_ratio": None,
-    #                     "week_range": None,
-    #                     "week_change": None
-    #                 }
-                    
-    #                 stocks.append(stock_data)
-    #                 logger.debug(f"Parsed stock: {ticker} - Price: {price}, Change: {change_percent}%")
-                    
-    #             except Exception as e:
-    #                 logger.debug(f"Error parsing row: {str(e)}")
-    #                 continue
-            
-    #         logger.info(f"Successfully parsed {len(stocks)} stocks")
-            
-    #     except Exception as e:
-    #         logger.error(f"Error parsing stock table: {str(e)}")
-        
-    #     return stocks
     
     def _parse_stock_table(self, soup: BeautifulSoup, limit: int = 25) -> List[Dict]:
         """
@@ -406,14 +320,14 @@ class YahooWatchlistService:
                 return []
             
             # Find all rows with the data table identifier
-            rows = tbody.find_all('tr', {'data-testid': 'data-table-v2-row'})
+            rows = tbody.find_all('tr', {'data-testid': 'data-table-v2-row'}) # type: ignore
             
             if not rows:
                 # Fallback: try to find any tr elements
-                rows = tbody.find_all('tr')
-                logger.info(f"Fallback: Found {len(rows)} rows without data-testid")
+                rows = tbody.find_all('tr') # type: ignore
+                logger.info("Fallback: Found %s rows without data-testid", {len(rows)})
             else:
-                logger.info(f"Found {len(rows)} rows with data-testid")
+                logger.info("Found %s rows with data-testid", {len(rows)})
             
             for row in rows[:limit]:
                 try:
@@ -421,11 +335,11 @@ class YahooWatchlistService:
                     cells = row.find_all('td')
                     
                     if len(cells) < 3:
-                        logger.debug(f"Skipping row with only {len(cells)} cells")
+                        logger.debug("Skipping row with only %s cells", {len(cells)})
                         continue
                     
                     # Initialize stock data
-                    stock_data = {
+                    stock_data: Dict[str, Optional[str | float | int]] = {
                         "ticker": None,
                         "company": None,
                         "price": None,
@@ -471,7 +385,7 @@ class YahooWatchlistService:
                             price_streamer = cell.find('fin-streamer', {'data-field': 'regularMarketPrice'})
                             if price_streamer:
                                 price_text = price_streamer.get_text(strip=True)
-                                stock_data["price"] = self._parse_price(price_text)
+                                stock_data["price"] = self._parse_price(price_text) 
                         
                         # Extract change
                         elif cell_id == 'intradaypricechange':
@@ -538,25 +452,26 @@ class YahooWatchlistService:
                                     low = spans[0].get_text(strip=True)
                                     high = spans[1].get_text(strip=True)
                                     stock_data["week_range"] = f"{low} - {high}"
-                    
                     # Skip if no ticker found
-                    if not stock_data["ticker"] or stock_data["ticker"].lower() in ['symbol', 'ticker', '']:
+                    ticker = stock_data.get("ticker")
+                    if not isinstance(ticker, str) or ticker.strip().lower() in ['symbol', 'ticker', '']:
                         continue
-                    
+
                     stocks.append(stock_data)
-                    logger.debug(f"Parsed stock: {stock_data['ticker']} - Price: {stock_data['price']}, Change: {stock_data['change_percent']}%")
+                    logger.debug(
+                        "Parsed stock: %s - Price: %s, Change: %s%%",
+                        stock_data['ticker'], stock_data['price'], stock_data['change_percent']
+                    )
                     
                 except Exception as e:
-                    logger.debug(f"Error parsing row: {str(e)}")
-                    import traceback
+                    logger.debug("Error parsing row: %s", str(e))
                     traceback.print_exc()
                     continue
             
-            logger.info(f"Successfully parsed {len(stocks)} stocks")
+            logger.info("Successfully parsed %s stocks", len(stocks))
             
         except Exception as e:
-            logger.error(f"Error parsing stock table: {str(e)}")
-            import traceback
+            logger.error("Error parsing stock table: %s", str(e))
             traceback.print_exc()
         
         return stocks
@@ -599,12 +514,10 @@ class YahooWatchlistService:
                 }
             
             stocks = self._parse_stock_table(soup, limit)
-            
-            print(stocks)
-            
+                        
             return {
                 "success": True,
-                "watchlist_type": "gainers",
+                "watchlist_type": "biggest-gainers",
                 "data": stocks,
                 "count": len(stocks),
                 "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -678,7 +591,7 @@ class YahooWatchlistService:
             
             return {
                 "success": True,
-                "watchlist_type": "most_active",
+                "watchlist_type": "most-active",
                 "data": stocks,
                 "count": len(stocks),
                 "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -693,6 +606,7 @@ class YahooWatchlistService:
 
     def get_undervalued_growth(self, limit: int = 25) -> Dict:
         """
+        TODO DEPRECATED : Not allowed url
         Get undervalued growth stocks from Yahoo Finance screener.
         
         Args:
@@ -753,7 +667,6 @@ class YahooWatchlistService:
                 "gainers": self.get_gainers(limit),
                 "trending": self.get_trending(limit),
                 "most_active": self.get_most_active(limit),
-                # "undervalued_growth": self.get_undervalued_growth(limit)
             },
             "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)
         }
@@ -840,7 +753,6 @@ def test_watchlist(name: str, method_func, limit: int = 10):
             
     except Exception as e:
         print(f"❌ EXCEPTION - {str(e)}")
-        import traceback
         traceback.print_exc()
 
 
@@ -905,7 +817,6 @@ def main():
             
     except Exception as e:
         print(f"❌ EXCEPTION - {str(e)}")
-        import traceback
         traceback.print_exc()
     
     # Summary

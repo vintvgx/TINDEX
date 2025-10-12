@@ -690,5 +690,26 @@ class SupabaseService:
     
 
 
-# Global instance for use across the application
-supabase_service = SupabaseService()
+_supabase_service = None
+
+def get_supabase_service() -> SupabaseService:
+    """
+    Get or create the singleton SupabaseService instance.
+    
+    Returns:
+        SupabaseService instance
+        
+    Raises:
+        Exception: If service initialization fails
+    """
+    global _supabase_service
+    
+    if _supabase_service is None:
+        try:
+            _supabase_service = SupabaseService()
+            logger.info("SupabaseService singleton created")
+        except Exception as e:
+            logger.error(f"Failed to initialize SupabaseService: {str(e)}", exc_info=True)
+            raise Exception(f"Supabase service initialization failed: {str(e)}") from e
+    
+    return _supabase_service
