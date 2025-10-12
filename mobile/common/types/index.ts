@@ -64,3 +64,13 @@ export interface UserType {
     notification_enabled: boolean;
     api_usage_limit: number;
   }
+
+  // Re-export watchlist types
+  export type {
+    WatchlistType,
+    WatchlistStock,
+    WatchlistResponse,
+    WatchlistQueryParams,
+    UseWatchlistOptions,
+    BiggestGainerStock,
+  } from './watchlist';

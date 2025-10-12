@@ -101,6 +101,16 @@ class BlogPost:
     status: Optional[str] = "draft"
     published_at: Optional[datetime] = None
     user_id: Optional[str] = None
+    
+    
+@dataclass
+class WatchlistData:
+    """Data class for watchlist cache"""
+    
+    watchlist_type: str  # 'biggest-gainers', 'trending', etc.
+    data: List[Dict[str, Any]]  # The actual watchlist data
+    symbol_count: Optional[int] = None
+    expires_at: Optional[datetime] = None
 
 
 class SupabaseService:
@@ -491,7 +501,215 @@ class SupabaseService:
         except Exception as e:
             logger.error(f"Failed to cleanup expired cache: {str(e)}", exc_info=True)
             return self._handle_database_error(e, "cleanup_expired_cache")
+        
+        
+    def save_watchlist_cache(
+        self, 
+        watchlist_type: str, 
+        data: List[Dict[str, Any]],
+        ttl_hours: int = 24
+    ) -> Dict[str, Any]:
+        """
+        Save or update watchlist data with automatic expiration.
+        Uses database-level upsert logic similar to stock_research.
+        
+        Args:
+            watchlist_type: Type of watchlist (e.g., 'biggest-gainers')
+            data: List of stock data from the API
+            ttl_hours: Time-to-live in hours (default 24)
+        
+        Returns:
+            Dict containing success status and saved data
+        """
+        try:
+            logger.info(f"Saving watchlist cache for type: {watchlist_type}")
+            
+            # Calculate expiration
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+            
+            cache_data = {
+                "watchlist_type": watchlist_type,
+                "data": data,
+                "symbol_count": len(data),
+                "expires_at": expires_at.isoformat()
+            }
+            
+            # Call PostgreSQL function for upsert
+            result = self.client.rpc(
+                'upsert_watchlist_cache',
+                {'p_data': cache_data}
+            ).execute()
+            
+            if result.data and len(result.data) > 0:
+                record = result.data[0]
+                is_update = record.pop('is_update', False)
+                operation = "updated" if is_update else "created"
+                
+                logger.info(
+                    f"Watchlist cache {operation} for {watchlist_type} "
+                    f"with {len(data)} symbols (expires: {expires_at})"
+                )
+                
+                return {
+                    "success": True,
+                    "data": record,
+                    "is_update": is_update,
+                    "message": f"Watchlist cache {operation} successfully"
+                }
+            else:
+                raise Exception("No data returned from upsert operation")
+                
+        except Exception as e:
+            logger.error(
+                f"Failed to save watchlist cache for {watchlist_type}: {str(e)}",
+                exc_info=True
+            )
+            return self._handle_database_error(
+                e, f"save_watchlist_cache for {watchlist_type}"
+            )
+    
+    def get_watchlist_cache(
+        self, 
+        watchlist_type: str,
+        force_refresh: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Retrieve watchlist data from cache if not expired.
+        Automatically updates access tracking via database function.
+        
+        Args:
+            watchlist_type: Type of watchlist to retrieve
+            force_refresh: If True, returns cache miss to force API call
+        
+        Returns:
+            Dict with cache data or cache miss status
+        """
+        try:
+            logger.info(
+                f"Retrieving watchlist cache for type: {watchlist_type} "
+                f"(force_refresh: {force_refresh})"
+            )
+            
+            # If force refresh, skip cache check
+            if force_refresh:
+                logger.info(f"Force refresh requested for {watchlist_type}")
+                return {
+                    "success": False,
+                    "error": "Force refresh requested",
+                    "data": None,
+                    "cache_miss": True
+                }
+            
+            # Call PostgreSQL function - updates hit_count & last_accessed
+            result = self.client.rpc(
+                'get_and_update_watchlist_cache',
+                {'p_watchlist_type': watchlist_type}
+            ).execute()
+            
+            if result.data and len(result.data) > 0:
+                cache_entry = result.data[0]
+                logger.info(
+                    f"Cache HIT for {watchlist_type} - "
+                    f"{cache_entry.get('symbol_count', 0)} symbols"
+                )
+                return {
+                    "success": True,
+                    "data": cache_entry.get('data', []),
+                    "cached_at": cache_entry.get('cached_at'),
+                    "expires_at": cache_entry.get('expires_at'),
+                    "cache_hit": True
+                }
+            else:
+                logger.info(f"Cache MISS or expired for {watchlist_type}")
+                return {
+                    "success": False,
+                    "error": "Cache miss or expired",
+                    "data": None,
+                    "cache_miss": True
+                }
+                
+        except Exception as e:
+            logger.error(
+                f"Failed to get watchlist cache for {watchlist_type}: {str(e)}",
+                exc_info=True
+            )
+            return self._handle_database_error(
+                e, f"get_watchlist_cache for {watchlist_type}"
+            )
+    
+    def get_all_watchlist_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics for all cached watchlists.
+        Useful for monitoring and debugging.
+        
+        Returns:
+            Dict containing cache statistics
+        """
+        try:
+            logger.info("Retrieving watchlist cache statistics")
+            
+            result = (
+                self.client.table("watchlist_cache")
+                .select("watchlist_type, symbol_count, cached_at, expires_at, hit_count, last_accessed")
+                .order("cached_at", desc=True)
+                .execute()
+            )
+            
+            stats = []
+            now = datetime.now(timezone.utc)
+            
+            for row in result.data:
+                expires_at = datetime.fromisoformat(row['expires_at'].replace('Z', '+00:00'))
+                is_expired = expires_at < now
+                time_until_expiry = expires_at - now if not is_expired else timedelta(0)
+                
+                stats.append({
+                    "watchlist_type": row['watchlist_type'],
+                    "symbol_count": row['symbol_count'],
+                    "cached_at": row['cached_at'],
+                    "expires_at": row['expires_at'],
+                    "is_expired": is_expired,
+                    "hours_until_expiry": time_until_expiry.total_seconds() / 3600,
+                    "hit_count": row['hit_count'],
+                    "last_accessed": row['last_accessed']
+                })
+            
+            logger.info(f"Retrieved stats for {len(stats)} watchlist caches")
+            return {
+                "success": True,
+                "data": stats,
+                "message": f"Retrieved stats for {len(stats)} watchlist types"
+            }
+            
+        except Exception as e:
+            logger.error(
+                f"Failed to get watchlist stats: {str(e)}",
+                exc_info=True
+            )
+            return self._handle_database_error(e, "get_all_watchlist_stats")
+    
 
 
-# Global instance for use across the application
-supabase_service = SupabaseService()
+_supabase_service = None
+
+def get_supabase_service() -> SupabaseService:
+    """
+    Get or create the singleton SupabaseService instance.
+    
+    Returns:
+        SupabaseService instance
+        
+    Raises:
+        Exception: If service initialization fails
+    """
+    global _supabase_service
+    
+    if _supabase_service is None:
+        try:
+            _supabase_service = SupabaseService()
+            logger.info("SupabaseService singleton created")
+        except Exception as e:
+            logger.error(f"Failed to initialize SupabaseService: {str(e)}", exc_info=True)
+            raise Exception(f"Supabase service initialization failed: {str(e)}") from e
+    
+    return _supabase_service
