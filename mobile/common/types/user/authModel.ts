@@ -2,6 +2,7 @@ import { Session, User } from "@supabase/supabase-js";
 import { UseMutationResult } from "@tanstack/react-query";
 import { NotificationPreferences } from "../notifications/notificationModel";
 import { DeviceInfo, SearchHistoryItem } from "../util";
+import { WatchlistType } from "../watchlist";
 
 // This state tracks:
 // - user: The currently authenticated user (null if not logged in)
@@ -52,6 +53,7 @@ export interface UserProfile {
 
   // Push Notifications
   expo_push_token?: string | null;
+  watchlist_subscriptions: WatchlistType[]; //  ["biggest-gainers", "trending", "most-active"]
   notification_preferences: NotificationPreferences;
 
   // User Preferences & Settings

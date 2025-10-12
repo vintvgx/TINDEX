@@ -10,8 +10,11 @@ import { useQueryClientReady } from "@/hooks/queries/useQueryClientReady";
 import type { BlogPostType } from "@/common/types";
 import { SortBy } from "@/common/types/blogPosts/create";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SafeAreaView, View } from "react-native";
+import * as Notifications from "expo-notifications";
+import { router } from 'expo-router';
+
 
 const FeedScreen = () => {
   const queryClient = useQueryClient();

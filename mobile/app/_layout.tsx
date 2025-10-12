@@ -12,12 +12,13 @@ import {
 } from "@react-navigation/native";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useFonts } from "expo-font";
-import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { useColorScheme, View, Text } from "react-native";
 import * as Notifications from "expo-notifications";
+import { router } from 'expo-router';
+
 import "react-native-reanimated";
 import "@/global.css";
 
@@ -27,6 +28,8 @@ import LoadingScreen from "@/common/components/LoadingScreen";
 // import LoadingScreen from "./components/LoadingScreen";
 import { Slot } from "expo-router";
 import { useNotifications } from "@/hooks/notifications/useNotifications";
+import { useRef } from "react";
+import { isValidWatchlistType } from "@/common/types/watchlist";
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -90,10 +93,38 @@ export default function RootLayout() {
 function AppContent() {
   const { authState } = useAuth();
   const colorScheme = useColorScheme();
-
-  // Initialize notifications hook - it will automatically register
-  // when user is authenticated (handled inside the hook)
   const { expoPushToken, isRegistering } = useNotifications();
+
+  // Add ref for notification subscription
+  const notificationResponseListener = useRef<Notifications.EventSubscription | null>(null);
+
+  // Initialize notification response handler
+  useEffect(() => {
+    // Set up the listener
+    notificationResponseListener.current = 
+      Notifications.addNotificationResponseReceivedListener(response => {
+        const data = response.notification.request.content.data;
+        
+        // Handle different screen types
+        if (data.screen === 'watchlists' && isValidWatchlistType(data.watchlistType)) {
+          router.push({
+            pathname: '/(app)/(tabs)/watchlists',
+            params: {
+              selectedWatchlist: data.watchlistType, // ✅ Now type-safe
+            },
+          });
+        }
+        // Add more handlers as needed
+        // else if (data.screen === 'ticker') { ... }
+      });
+
+    // Cleanup function
+    return () => {
+      if (notificationResponseListener.current) {
+        notificationResponseListener.current.remove()
+      }
+    };
+  }, []); // Empty deps - only run once
 
   // Log token for debugging
   useEffect(() => {
