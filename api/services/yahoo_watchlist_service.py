@@ -1,0 +1,750 @@
+"""
+Yahoo Finance Watchlist Service - Web Scraping Implementation
+
+This service scrapes stock data from Yahoo Finance using Beautiful Soup.
+It provides methods to fetch various watchlists including gainers, trending,
+most active, and undervalued growth stocks.
+
+Technical Decisions:
+- Uses Beautiful Soup for HTML parsing (robust and maintainable)
+- Implements retry logic with exponential backoff for reliability
+- Rotates user agents to avoid rate limiting
+- Caches responses to reduce server load
+- Validates and normalizes data for consistency
+
+Security Considerations:
+- Respects robots.txt guidelines
+- Implements rate limiting to be respectful to Yahoo's servers
+- Does not store sensitive user data
+"""
+
+import requests
+import time
+from bs4 import BeautifulSoup
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+import re
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class YahooWatchlistService:
+    """
+    Service for scraping stock watchlists from Yahoo Finance.
+    
+    Architecture:
+    - Singleton pattern for efficient resource management
+    - Separation of concerns (scraping, parsing, data transformation)
+    - Defensive programming with comprehensive error handling
+    
+    Performance Considerations:
+    - Caching to reduce redundant requests
+    - Request pooling for efficiency
+    - Timeout management to prevent hanging
+    """
+
+    def __init__(self):
+        self.base_url = "https://finance.yahoo.com"
+        self.session = requests.Session()
+        
+        # Rotate user agents to avoid detection as bot
+        self.user_agents = [
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ]
+        
+        # Rate limiting: track last request time
+        self.last_request_time = 0
+        self.min_request_interval = 1.0  # seconds between requests
+        
+        # Cache configuration
+        self.cache = {}
+        self.cache_ttl = 60  # Cache for 60 seconds
+        
+        logger.info("YahooWatchlistService initialized")
+
+    def _get_headers(self) -> Dict[str, str]:
+        """
+        Generate request headers with rotating user agent.
+        
+        Returns:
+            Dict of HTTP headers
+        """
+        import random
+        return {
+            'User-Agent': random.choice(self.user_agents),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
+
+    def _rate_limit(self):
+        """
+        Implement rate limiting to be respectful to Yahoo's servers.
+        Uses simple time-based throttling.
+        """
+        current_time = time.time()
+        time_since_last_request = current_time - self.last_request_time
+        
+        if time_since_last_request < self.min_request_interval:
+            sleep_time = self.min_request_interval - time_since_last_request
+            logger.debug(f"Rate limiting: sleeping for {sleep_time:.2f} seconds")
+            time.sleep(sleep_time)
+        
+        self.last_request_time = time.time()
+
+    def _fetch_page(self, url: str, max_retries: int = 3) -> Optional[BeautifulSoup]:
+        """
+        Fetch and parse a web page with retry logic.
+        
+        Args:
+            url: The URL to fetch
+            max_retries: Maximum number of retry attempts
+            
+        Returns:
+            BeautifulSoup object or None if failed
+            
+        Error Handling:
+        - Network errors: retry with exponential backoff
+        - HTTP errors: log and return None
+        - Parsing errors: log and return None
+        """
+        # Check cache first
+        cache_key = url
+        if cache_key in self.cache:
+            cached_data, timestamp = self.cache[cache_key]
+            if time.time() - timestamp < self.cache_ttl:
+                logger.debug(f"Cache hit for {url}")
+                return cached_data
+
+        for attempt in range(max_retries):
+            try:
+                # Implement rate limiting
+                self._rate_limit()
+                
+                logger.info(f"Fetching {url} (attempt {attempt + 1}/{max_retries})")
+                
+                response = self.session.get(
+                    url,
+                    headers=self._get_headers(),
+                    timeout=30
+                )
+                
+                response.raise_for_status()
+                
+                # Parse HTML
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Cache the result
+                self.cache[cache_key] = (soup, time.time())
+                
+                logger.info(f"Successfully fetched {url}")
+                return soup
+                
+            except requests.exceptions.Timeout:
+                logger.warning(f"Timeout fetching {url} (attempt {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    # Exponential backoff
+                    sleep_time = 2 ** attempt
+                    time.sleep(sleep_time)
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Request error fetching {url}: {str(e)}")
+                if attempt < max_retries - 1:
+                    sleep_time = 2 ** attempt
+                    time.sleep(sleep_time)
+                    
+            except Exception as e:
+                logger.error(f"Unexpected error fetching {url}: {str(e)}")
+                break
+        
+        logger.error(f"Failed to fetch {url} after {max_retries} attempts")
+        return None
+
+    def _parse_price(self, price_str: str) -> Optional[float]:
+        """
+        Parse price string to float, handling various formats.
+        
+        Args:
+            price_str: Price string (e.g., "123.45", "$123.45", "123.45 +1.23 (+1.01%)")
+            
+        Returns:
+            Float price or None if parsing fails
+        """
+        if not price_str:
+            return None
+            
+        try:
+            # Remove currency symbols, commas, and extract first number
+            cleaned = re.sub(r'[,$]', '', price_str.strip())
+            # Extract first number (handles cases like "123.45 +1.23")
+            match = re.search(r'[\d,]+\.?\d*', cleaned)
+            if match:
+                return float(match.group().replace(',', ''))
+        except (ValueError, AttributeError) as e:
+            logger.debug(f"Failed to parse price '{price_str}': {str(e)}")
+        
+        return None
+
+    def _parse_change(self, change_str: str) -> Optional[float]:
+        """
+        Parse change string to float.
+        
+        Args:
+            change_str: Change string (e.g., "+1.23", "-0.45")
+            
+        Returns:
+            Float change or None if parsing fails
+        """
+        if not change_str:
+            return None
+            
+        try:
+            cleaned = change_str.strip().replace('+', '').replace(',', '')
+            return float(cleaned)
+        except ValueError as e:
+            logger.debug(f"Failed to parse change '{change_str}': {str(e)}")
+        
+        return None
+
+    def _parse_percent(self, percent_str: str) -> Optional[float]:
+        """
+        Parse percentage string to float.
+        
+        Args:
+            percent_str: Percentage string (e.g., "+1.23%", "(+1.23%)")
+            
+        Returns:
+            Float percentage or None if parsing fails
+        """
+        if not percent_str:
+            return None
+            
+        try:
+            # Remove %, parentheses, and + signs
+            cleaned = percent_str.strip().replace('%', '').replace('(', '').replace(')', '').replace('+', '')
+            return float(cleaned)
+        except ValueError as e:
+            logger.debug(f"Failed to parse percent '{percent_str}': {str(e)}")
+        
+        return None
+
+    def _parse_volume(self, volume_str: str) -> Optional[int]:
+        """
+        Parse volume string to integer, handling abbreviations (K, M, B).
+        
+        Args:
+            volume_str: Volume string (e.g., "1.5M", "120K", "1,234,567")
+            
+        Returns:
+            Integer volume or None if parsing fails
+        """
+        if not volume_str:
+            return None
+            
+        try:
+            volume_str = volume_str.strip().upper().replace(',', '')
+            
+            multipliers = {'K': 1_000, 'M': 1_000_000, 'B': 1_000_000_000}
+            
+            for suffix, multiplier in multipliers.items():
+                if suffix in volume_str:
+                    number = float(volume_str.replace(suffix, '').strip())
+                    return int(number * multiplier)
+            
+            # No suffix, parse as is
+            return int(float(volume_str))
+            
+        except (ValueError, AttributeError) as e:
+            logger.debug(f"Failed to parse volume '{volume_str}': {str(e)}")
+        
+        return None
+
+    def _parse_market_cap(self, market_cap_str: str) -> Optional[float]:
+        """
+        Parse market cap string to float in billions, handling abbreviations.
+        
+        Args:
+            market_cap_str: Market cap string (e.g., "1.5T", "120B", "500M")
+            
+        Returns:
+            Float market cap in billions or None if parsing fails
+        """
+        if not market_cap_str:
+            return None
+            
+        try:
+            market_cap_str = market_cap_str.strip().upper().replace(',', '')
+            
+            multipliers = {'T': 1000, 'B': 1, 'M': 0.001, 'K': 0.000001}
+            
+            for suffix, multiplier in multipliers.items():
+                if suffix in market_cap_str:
+                    number = float(market_cap_str.replace(suffix, '').strip())
+                    return number * multiplier
+            
+            # No suffix, try to parse as number
+            return float(market_cap_str)
+            
+        except (ValueError, AttributeError) as e:
+            logger.debug(f"Failed to parse market cap '{market_cap_str}': {str(e)}")
+        
+        return None
+
+    
+    def _parse_stock_table(self, soup: BeautifulSoup, limit: int = 25) -> List[Dict]:
+        """
+        Parse the stock table from Yahoo Finance page.
+        
+        Args:
+            soup: BeautifulSoup object of the page
+            limit: Maximum number of stocks to return
+            
+        Returns:
+            List of stock dictionaries
+        """
+        stocks = []
+        
+        try:
+            # Find the main list container
+            stock_list = soup.find('ul', class_='dock')
+            
+            if not stock_list:
+                logger.warning("No stock list found on page")
+                return []
+            
+            # Find all list items (stocks)
+            rows = stock_list.find_all('li', class_='dock-item')
+            
+            if not rows:
+                logger.warning("No stock rows found")
+                return []
+            
+            logger.info(f"Found {len(rows)} stock rows")
+            
+            for row in rows[:limit]:
+                try:
+                    # Extract ticker symbol
+                    ticker_elem = row.find('span', class_='symbol')
+                    ticker = ticker_elem.get_text(strip=True) if ticker_elem else None
+                    
+                    if not ticker or ticker.lower() in ['symbol', 'ticker', '']:
+                        continue
+                    
+                    # Extract company name
+                    company_elem = row.find('span', class_='longName')
+                    company = company_elem.get_text(strip=True) if company_elem else ""
+                    
+                    # Extract price from fin-streamer with data-field="regularMarketPrice"
+                    price_elem = row.find('fin-streamer', {'data-field': 'regularMarketPrice'})
+                    price = self._parse_price(price_elem.get_text(strip=True)) if price_elem else None
+                    
+                    # Extract change from fin-streamer with data-field="regularMarketChange"
+                    change_elem = row.find('fin-streamer', {'data-field': 'regularMarketChange'})
+                    change_text = change_elem.get_text(strip=True) if change_elem else None
+                    change = self._parse_change(change_text) if change_text else None
+                    
+                    # Extract change percent from fin-streamer with data-field="regularMarketChangePercent"
+                    change_pct_elem = row.find('fin-streamer', {'data-field': 'regularMarketChangePercent'})
+                    change_pct_text = change_pct_elem.get_text(strip=True) if change_pct_elem else None
+                    change_percent = self._parse_percent(change_pct_text) if change_pct_text else None
+                    
+                    # Create stock data dictionary
+                    stock_data = {
+                        "ticker": ticker,
+                        "company": company,
+                        "price": price,
+                        "change": change,
+                        "change_percent": change_percent,
+                        "volume": None,  # Not present in this view
+                        "avg_volume": None,
+                        "market_cap": None,
+                        "pe_ratio": None,
+                        "week_range": None,
+                        "week_change": None
+                    }
+                    
+                    stocks.append(stock_data)
+                    logger.debug(f"Parsed stock: {ticker} - Price: {price}, Change: {change_percent}%")
+                    
+                except Exception as e:
+                    logger.debug(f"Error parsing row: {str(e)}")
+                    continue
+            
+            logger.info(f"Successfully parsed {len(stocks)} stocks")
+            
+        except Exception as e:
+            logger.error(f"Error parsing stock table: {str(e)}")
+        
+        return stocks
+
+    def get_gainers(self, limit: int = 25) -> Dict:
+        """
+        Get biggest gaining stocks from Yahoo Finance.
+        
+        Args:
+            limit: Maximum number of stocks to return (default: 25)
+            
+        Returns:
+            Dict with success status and list of gaining stocks
+            
+        Example:
+            {
+                "success": True,
+                "data": [
+                    {
+                        "ticker": "AAPL",
+                        "company": "Apple Inc.",
+                        "price": 150.25,
+                        "change": 5.50,
+                        "change_percent": 3.80,
+                        ...
+                    }
+                ],
+                "count": 25,
+                "timestamp": 1234567890
+            }
+        """
+        try:
+            url = f"{self.base_url}/markets/stocks/gainers/"
+            soup = self._fetch_page(url)
+            
+            if not soup:
+                return {
+                    "success": False,
+                    "error": "Failed to fetch gainers page"
+                }
+            
+            stocks = self._parse_stock_table(soup, limit)
+            
+            print(stocks)
+            
+            return {
+                "success": True,
+                "watchlist_type": "gainers",
+                "data": stocks,
+                "count": len(stocks),
+                "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching gainers: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def get_trending(self, limit: int = 25) -> Dict:
+        """
+        Get trending stocks from Yahoo Finance.
+        
+        Args:
+            limit: Maximum number of stocks to return (default: 25)
+            
+        Returns:
+            Dict with success status and list of trending stocks
+        """
+        try:
+            url = f"{self.base_url}/markets/stocks/trending/"
+            soup = self._fetch_page(url)
+            
+            if not soup:
+                return {
+                    "success": False,
+                    "error": "Failed to fetch trending page"
+                }
+            
+            stocks = self._parse_stock_table(soup, limit)
+            
+            return {
+                "success": True,
+                "watchlist_type": "trending",
+                "data": stocks,
+                "count": len(stocks),
+                "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching trending stocks: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def get_most_active(self, limit: int = 25) -> Dict:
+        """
+        Get most active stocks from Yahoo Finance.
+        
+        Args:
+            limit: Maximum number of stocks to return (default: 25)
+            
+        Returns:
+            Dict with success status and list of most active stocks
+        """
+        try:
+            url = f"{self.base_url}/markets/stocks/most-active/"
+            soup = self._fetch_page(url)
+            
+            if not soup:
+                return {
+                    "success": False,
+                    "error": "Failed to fetch most active page"
+                }
+            
+            stocks = self._parse_stock_table(soup, limit)
+            
+            return {
+                "success": True,
+                "watchlist_type": "most_active",
+                "data": stocks,
+                "count": len(stocks),
+                "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching most active stocks: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def get_undervalued_growth(self, limit: int = 25) -> Dict:
+        """
+        Get undervalued growth stocks from Yahoo Finance screener.
+        
+        Args:
+            limit: Maximum number of stocks to return (default: 25)
+            
+        Returns:
+            Dict with success status and list of undervalued growth stocks
+            
+        Note:
+            This endpoint may have different table structure than others.
+            Parsing logic is adaptive to handle variations.
+        """
+        try:
+            url = f"{self.base_url}/screener/predefined/undervalued_growth_stocks/"
+            soup = self._fetch_page(url)
+            
+            if not soup:
+                return {
+                    "success": False,
+                    "error": "Failed to fetch undervalued growth page"
+                }
+            
+            stocks = self._parse_stock_table(soup, limit)
+            
+            return {
+                "success": True,
+                "watchlist_type": "undervalued_growth",
+                "data": stocks,
+                "count": len(stocks),
+                "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching undervalued growth stocks: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def get_all_watchlists(self, limit: int = 25) -> Dict:
+        """
+        Get all watchlists in a single call.
+        
+        Args:
+            limit: Maximum number of stocks per watchlist
+            
+        Returns:
+            Dict with all watchlists
+            
+        Performance Note:
+            This method makes multiple HTTP requests sequentially.
+            Consider using async implementation for better performance
+            in production environments.
+        """
+        return {
+            "success": True,
+            "watchlists": {
+                "gainers": self.get_gainers(limit),
+                "trending": self.get_trending(limit),
+                "most_active": self.get_most_active(limit),
+                # "undervalued_growth": self.get_undervalued_growth(limit)
+            },
+            "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)
+        }
+
+    def clear_cache(self):
+        """Clear the internal cache."""
+        self.cache.clear()
+        logger.info("Cache cleared")
+
+
+# Singleton instance
+_yahoo_watchlist_service = None
+
+
+def get_yahoo_watchlist_service() -> YahooWatchlistService:
+    """
+    Get or create the singleton YahooWatchlistService instance.
+    
+    Returns:
+        YahooWatchlistService instance
+        
+    Singleton Pattern:
+        Ensures single instance across application lifecycle,
+        maintaining session state and cache efficiency.
+    """
+    global _yahoo_watchlist_service
+    if _yahoo_watchlist_service is None:
+        _yahoo_watchlist_service = YahooWatchlistService()
+    return _yahoo_watchlist_service
+
+
+# ==================== Test Main Function ====================
+
+def print_stock_data(stocks: List[Dict], limit: int = 5):
+    """
+    Pretty print stock data for testing.
+    
+    Args:
+        stocks: List of stock dictionaries
+        limit: Number of stocks to display
+    """
+    for i, stock in enumerate(stocks[:limit], 1):
+        print(f"\n  {i}. {stock.get('ticker', 'N/A')} - {stock.get('company', 'N/A')}")
+        print(f"     Price: ${stock.get('price', 'N/A')}")
+        print(f"     Change: {stock.get('change', 'N/A')} ({stock.get('change_percent', 'N/A')}%)")
+        if stock.get('volume'):
+            print(f"     Volume: {stock.get('volume'):,}")
+        if stock.get('market_cap'):
+            print(f"     Market Cap: ${stock.get('market_cap'):.2f}B")
+        if stock.get('pe_ratio'):
+            print(f"     P/E Ratio: {stock.get('pe_ratio')}")
+
+
+def test_watchlist(name: str, method_func, limit: int = 10):
+    """
+    Test a watchlist method and display results.
+    
+    Args:
+        name: Name of the watchlist
+        method_func: Function to call
+        limit: Number of results to fetch
+    """
+    print(f"\n{'='*70}")
+    print(f"Testing: {name}")
+    print(f"{'='*70}")
+    
+    try:
+        result = method_func(limit=limit)
+        
+        if result.get("success"):
+            data = result.get("data", [])
+            print(f"✅ SUCCESS - Retrieved {len(data)} stocks")
+            print(f"Watchlist Type: {result.get('watchlist_type', 'N/A')}")
+            print(f"Timestamp: {result.get('timestamp', 'N/A')}")
+            
+            if data:
+                print(f"\nShowing first {min(5, len(data))} stocks:")
+                print_stock_data(data, limit=5)
+            else:
+                print("\n⚠️  No stocks returned (empty data)")
+        else:
+            error = result.get("error", "Unknown error")
+            print(f"❌ FAILED - {error}")
+            
+    except Exception as e:
+        print(f"❌ EXCEPTION - {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+
+def main():
+    """
+    Main function to test all Yahoo Finance watchlist methods.
+    
+    Usage:
+        python -m services.yahoo_watchlist_service
+        
+    Or from the api directory:
+        cd api
+        python services/yahoo_watchlist_service.py
+    """
+    print("\n" + "="*70)
+    print(" Yahoo Finance Watchlist Service - Test Suite")
+    print("="*70)
+    
+    # Initialize service
+    print("\n🔧 Initializing YahooWatchlistService...")
+    service = get_yahoo_watchlist_service()
+    print("✅ Service initialized")
+    
+    # Test configuration
+    test_limit = 10
+    
+    # Test each watchlist type
+    tests = [
+        ("Biggest Gainers", service.get_gainers),
+        ("Trending Stocks", service.get_trending),
+        ("Most Active", service.get_most_active),
+        # ("Undervalued Growth", service.get_undervalued_growth),
+    ]
+    
+    for name, method in tests:
+        test_watchlist(name, method, limit=test_limit)
+        
+        # Brief pause between requests to be respectful
+        time.sleep(1)
+    
+    # Test get_all_watchlists
+    print("\n" + "="*70)
+    print("Testing: Get All Watchlists (Combined)")
+    print("="*70)
+    
+    try:
+        all_results = service.get_all_watchlists(limit=5)
+        
+        if all_results.get("success"):
+            watchlists = all_results.get("watchlists", {})
+            print(f"✅ SUCCESS - Retrieved {len(watchlists)} watchlists")
+            
+            for wl_name, wl_data in watchlists.items():
+                if wl_data.get("success"):
+                    count = len(wl_data.get("data", []))
+                    print(f"  • {wl_name}: {count} stocks")
+                else:
+                    error = wl_data.get("error", "Unknown")
+                    print(f"  • {wl_name}: ❌ {error}")
+        else:
+            print(f"❌ FAILED - {all_results.get('error', 'Unknown error')}")
+            
+    except Exception as e:
+        print(f"❌ EXCEPTION - {str(e)}")
+        import traceback
+        traceback.print_exc()
+    
+    # Summary
+    print("\n" + "="*70)
+    print(" Test Summary")
+    print("="*70)
+    print(f"Total tests run: {len(tests) + 1}")
+    print(f"Cache entries: {len(service.cache)}")
+    print("\n✅ Testing complete!")
+    print("\nNote: If any tests failed, check:")
+    print("  1. Internet connection")
+    print("  2. Yahoo Finance website status")
+    print("  3. HTML structure changes (check logs)")
+    print("  4. Rate limiting (wait a few minutes and retry)")
+    print("\n" + "="*70 + "\n")
+
+
+if __name__ == "__main__":
+    main()

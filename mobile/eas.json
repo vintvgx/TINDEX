@@ -6,13 +6,28 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "env": {
+        "APP_VARIANT": "development"
+      },
+      "distribution": "internal",
+      "ios": {
+        "bundleIdentifier": "com.communite.alethia"
+      }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "APP_VARIANT": "production"
+      },
+      "ios": {
+        "bundleIdentifier": "com.communite.tindex"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "ios": {
+        "bundleIdentifier": "com.communite.tindex"
+      }
     }
   },
   "submit": {

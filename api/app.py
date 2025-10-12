@@ -15,6 +15,7 @@ from services.anthropic_service import anthropic_service
 from log.logging_config import get_logger
 from utils.cache import TrendingStocksCache
 from services.watchlist_service import get_watchlist_service
+from services.yahoo_watchlist_service import get_yahoo_watchlist_service
 
 
 
@@ -1013,6 +1014,266 @@ def get_all_watchlists():
         
     except Exception as e:
         logger.error("Failed to fetch watchlists: %s", e, exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"Failed to fetch watchlists: {str(e)}"
+        }), 500
+
+
+# ==================== Yahoo Finance Scraping Endpoints ====================
+
+@app.route("/yahoo/gainers", methods=["GET"])
+def get_yahoo_gainers():
+    """
+    Get biggest gaining stocks from Yahoo Finance (web scraping).
+    
+    Query Parameters:
+        limit (int, optional): Number of stocks to return (default: 25)
+        use_cache (bool, optional): Whether to use cached data (default: true)
+    
+    Returns:
+        JSON response with gaining stocks data scraped from Yahoo Finance
+        
+    Example:
+        GET /yahoo/gainers?limit=20
+    """
+    try:
+        limit = request.args.get('limit', default=25, type=int)
+        use_cache = request.args.get('use_cache', default='true').lower() == 'true'
+        
+        # Validate limit
+        if limit < 1 or limit > 100:
+            return jsonify({
+                "success": False,
+                "error": "Limit must be between 1 and 100"
+            }), 400
+        
+        # Check cache
+        cache_key = f"yahoo_gainers_{limit}"
+        if use_cache:
+            cached_data = trending_cache.get(cache_key)
+            if cached_data:
+                logger.info("Returning cached Yahoo gainers data")
+                return jsonify({**cached_data, "from_cache": True})
+        
+        # Fetch fresh data
+        service = get_yahoo_watchlist_service()
+        result = service.get_gainers(limit=limit)
+        
+        if not result.get("success"):
+            return jsonify(result), 500
+        
+        # Cache the result
+        trending_cache.set(cache_key, result, TRENDING_STOCKS_CACHE_TTL)
+        logger.info("Cached Yahoo gainers data")
+        
+        return jsonify({**result, "from_cache": False})
+        
+    except Exception as e:
+        logger.error("Failed to fetch Yahoo gainers: %s", e, exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"Failed to fetch gainers: {str(e)}"
+        }), 500
+
+
+@app.route("/yahoo/trending", methods=["GET"])
+def get_yahoo_trending():
+    """
+    Get trending stocks from Yahoo Finance (web scraping).
+    
+    Query Parameters:
+        limit (int, optional): Number of stocks to return (default: 25)
+        use_cache (bool, optional): Whether to use cached data (default: true)
+    
+    Returns:
+        JSON response with trending stocks data scraped from Yahoo Finance
+        
+    Example:
+        GET /yahoo/trending?limit=20
+    """
+    try:
+        limit = request.args.get('limit', default=25, type=int)
+        use_cache = request.args.get('use_cache', default='true').lower() == 'true'
+        
+        # Validate limit
+        if limit < 1 or limit > 100:
+            return jsonify({
+                "success": False,
+                "error": "Limit must be between 1 and 100"
+            }), 400
+        
+        # Check cache
+        cache_key = f"yahoo_trending_{limit}"
+        if use_cache:
+            cached_data = trending_cache.get(cache_key)
+            if cached_data:
+                logger.info("Returning cached Yahoo trending data")
+                return jsonify({**cached_data, "from_cache": True})
+        
+        # Fetch fresh data
+        service = get_yahoo_watchlist_service()
+        result = service.get_trending(limit=limit)
+        
+        if not result.get("success"):
+            return jsonify(result), 500
+        
+        # Cache the result
+        trending_cache.set(cache_key, result, TRENDING_STOCKS_CACHE_TTL)
+        logger.info("Cached Yahoo trending data")
+        
+        return jsonify({**result, "from_cache": False})
+        
+    except Exception as e:
+        logger.error("Failed to fetch Yahoo trending: %s", e, exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"Failed to fetch trending stocks: {str(e)}"
+        }), 500
+
+
+@app.route("/yahoo/most-active", methods=["GET"])
+def get_yahoo_most_active():
+    """
+    Get most active stocks from Yahoo Finance (web scraping).
+    
+    Query Parameters:
+        limit (int, optional): Number of stocks to return (default: 25)
+        use_cache (bool, optional): Whether to use cached data (default: true)
+    
+    Returns:
+        JSON response with most active stocks data scraped from Yahoo Finance
+        
+    Example:
+        GET /yahoo/most-active?limit=20
+    """
+    try:
+        limit = request.args.get('limit', default=25, type=int)
+        use_cache = request.args.get('use_cache', default='true').lower() == 'true'
+        
+        # Validate limit
+        if limit < 1 or limit > 100:
+            return jsonify({
+                "success": False,
+                "error": "Limit must be between 1 and 100"
+            }), 400
+        
+        # Check cache
+        cache_key = f"yahoo_most_active_{limit}"
+        if use_cache:
+            cached_data = trending_cache.get(cache_key)
+            if cached_data:
+                logger.info("Returning cached Yahoo most active data")
+                return jsonify({**cached_data, "from_cache": True})
+        
+        # Fetch fresh data
+        service = get_yahoo_watchlist_service()
+        result = service.get_most_active(limit=limit)
+        
+        if not result.get("success"):
+            return jsonify(result), 500
+        
+        # Cache the result
+        trending_cache.set(cache_key, result, TRENDING_STOCKS_CACHE_TTL)
+        logger.info("Cached Yahoo most active data")
+        
+        return jsonify({**result, "from_cache": False})
+        
+    except Exception as e:
+        logger.error("Failed to fetch Yahoo most active: %s", e, exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"Failed to fetch most active stocks: {str(e)}"
+        }), 500
+
+
+@app.route("/yahoo/undervalued-growth", methods=["GET"])
+def get_yahoo_undervalued_growth():
+    """
+    Get undervalued growth stocks from Yahoo Finance screener (web scraping).
+    
+    Query Parameters:
+        limit (int, optional): Number of stocks to return (default: 25)
+        use_cache (bool, optional): Whether to use cached data (default: true)
+    
+    Returns:
+        JSON response with undervalued growth stocks data scraped from Yahoo Finance
+        
+    Example:
+        GET /yahoo/undervalued-growth?limit=20
+    """
+    try:
+        limit = request.args.get('limit', default=25, type=int)
+        use_cache = request.args.get('use_cache', default='true').lower() == 'true'
+        
+        # Validate limit
+        if limit < 1 or limit > 100:
+            return jsonify({
+                "success": False,
+                "error": "Limit must be between 1 and 100"
+            }), 400
+        
+        # Check cache
+        cache_key = f"yahoo_undervalued_growth_{limit}"
+        if use_cache:
+            cached_data = trending_cache.get(cache_key)
+            if cached_data:
+                logger.info("Returning cached Yahoo undervalued growth data")
+                return jsonify({**cached_data, "from_cache": True})
+        
+        # Fetch fresh data
+        service = get_yahoo_watchlist_service()
+        result = service.get_undervalued_growth(limit=limit)
+        
+        if not result.get("success"):
+            return jsonify(result), 500
+        
+        # Cache the result
+        trending_cache.set(cache_key, result, TRENDING_STOCKS_CACHE_TTL)
+        logger.info("Cached Yahoo undervalued growth data")
+        
+        return jsonify({**result, "from_cache": False})
+        
+    except Exception as e:
+        logger.error("Failed to fetch Yahoo undervalued growth: %s", e, exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"Failed to fetch undervalued growth stocks: {str(e)}"
+        }), 500
+
+
+@app.route("/watchlist/all", methods=["GET"])
+def get_all_yahoo_watchlists():
+    """
+    Get all Yahoo Finance watchlists in a single request (web scraping).
+    
+    Query Parameters:
+        limit (int, optional): Number of stocks per watchlist (default: 25)
+    
+    Returns:
+        JSON response with all watchlists scraped from Yahoo Finance
+        
+    Example:
+        GET /yahoo/all?limit=20
+    """
+    try:
+        limit = request.args.get('limit', default=25, type=int)
+        
+        # Validate limit
+        if limit < 1 or limit > 100:
+            return jsonify({
+                "success": False,
+                "error": "Limit must be between 1 and 100"
+            }), 400
+        
+        # Fetch all watchlists
+        service = get_yahoo_watchlist_service()
+        result = service.get_all_watchlists(limit=limit)
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error("Failed to fetch all Yahoo watchlists: %s", e, exc_info=True)
         return jsonify({
             "success": False,
             "error": f"Failed to fetch watchlists: {str(e)}"

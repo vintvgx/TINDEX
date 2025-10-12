@@ -20,7 +20,6 @@ class WatchlistService:
         # Financial Modeling Prep API key
         self.fmp_api_key = os.getenv("FMP_API_KEY")
         self.fmp_base_url = "https://financialmodelingprep.com/stable/"
-        # self.fmp_base_url_v4 = "https://financialmodelingprep.com/api/v4"
         
         # Debug logging for API key status
         if self.fmp_api_key:

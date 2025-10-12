@@ -32,18 +32,7 @@ interface TrendingStockResponse {
  * @param sortBy - The parameter to sort by ('volume', 'change', 'pe', 'marketcap')
  * @returns React Query result with trending stocks data
  */
-// In your useTrendingStocks hook
 export function useTrendingStocks(sortBy: SortBy = SortBy.VOLUME) {
-    // const [delayComplete, setDelayComplete] = useState(false);
-    
-    // // Add a delay before enabling the query
-    // useEffect(() => {
-    //     const timer = setTimeout(() => {
-    //         setDelayComplete(true);
-    //     }, 500); // 500ms delay - adjust as needed
-        
-    //     return () => clearTimeout(timer);
-    // }, []);
 
     return useQuery({
         queryKey: ['trending-stocks', sortBy],
@@ -65,8 +54,7 @@ export function useTrendingStocks(sortBy: SortBy = SortBy.VOLUME) {
             console.log("Trending stocks fetching successfully")
             return data;
         },
-        enabled: true, //TODO Verify this works before deleting delay ref
-        // enabled: delayComplete, // Only enable after delay
+        enabled: true, 
         staleTime: 5 * 60 * 1000,
         retry: 2,
         retryDelay: 1000,
