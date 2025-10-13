@@ -1,23 +1,56 @@
 /**
- * Watchlist Types
+ * Watchlist Types with Enum
  * 
- * Type definitions for watchlist data fetched from the backend API.
- * Supports multiple watchlist types including gainers, losers, trending, etc.
+ * Type definitions for watchlist data with enhanced type safety.
+ * Uses enums for compile-time checking and runtime validation.
  */
 
 /**
- * Valid watchlist types supported by the API
+ * Enum for all supported watchlist types
+ * Provides both type safety and runtime value checking
  */
-export type WatchlistType = 
-  | 'biggest-gainers'
-  | 'trending' 
-  | 'most-active'
-  | 'insider_buying' 
-  | 'congress_trading' 
-  | 'top_gainers' 
-  | 'top_losers';
+export enum WatchlistTypeEnum {
+  BIGGEST_GAINERS = 'biggest-gainers',
+  TRENDING = 'trending',
+  MOST_ACTIVE = 'most-active',
+  INSIDER_BUYING = 'insider_buying',
+  CONGRESS_TRADING = 'congress_trading',
+  TOP_GAINERS = 'top_gainers',
+  TOP_LOSERS = 'top_losers',
+}
 
-  export interface WatchlistStock {
+/**
+ * Type alias for backwards compatibility and convenience
+ */
+export type WatchlistType = `${WatchlistTypeEnum}`;
+
+/**
+ * Array of all valid watchlist types for iteration/validation
+ */
+export const WATCHLIST_TYPES = Object.values(WatchlistTypeEnum) as WatchlistType[];
+
+/**
+ * Type guard to check if a string is a valid watchlist type
+ * @param value - String to validate
+ * @returns True if value is a valid WatchlistType
+ */
+export function isValidWatchlistType(value: unknown): value is WatchlistType {
+  return typeof value === 'string' && WATCHLIST_TYPES.includes(value as WatchlistType);
+}
+
+/**
+ * Validates and returns watchlist type or default
+ * @param value - Value to validate
+ * @param defaultValue - Fallback if invalid
+ */
+export function validateWatchlistType(
+  value: unknown,
+  defaultValue: WatchlistType = WatchlistTypeEnum.BIGGEST_GAINERS
+): WatchlistType {
+  return isValidWatchlistType(value) ? value : defaultValue;
+}
+
+export interface WatchlistStock {
     /** Stock ticker symbol */
     ticker: string;
     /** Company name */
@@ -68,15 +101,25 @@ export type WatchlistType =
     };
   }
 
-export const WATCHLIST_LABELS: Record<WatchlistType, string> = {
-  'biggest-gainers': 'Biggest Gainers',
-  'trending': 'Trending',
-  'most-active': 'Most Active',
-  'insider_buying': 'Insider Buying',
-  'congress_trading': 'Congress Trading',
-  'top_gainers': 'Top Gainers',
-  'top_losers': 'Top Losers',
+/**
+ * Update labels to use enum
+ */
+export const WATCHLIST_LABELS: Record<WatchlistTypeEnum, string> = {
+  [WatchlistTypeEnum.BIGGEST_GAINERS]: 'Biggest Gainers',
+  [WatchlistTypeEnum.TRENDING]: 'Trending',
+  [WatchlistTypeEnum.MOST_ACTIVE]: 'Most Active',
+  [WatchlistTypeEnum.INSIDER_BUYING]: 'Insider Buying',
+  [WatchlistTypeEnum.CONGRESS_TRADING]: 'Congress Trading',
+  [WatchlistTypeEnum.TOP_GAINERS]: 'Top Gainers',
+  [WatchlistTypeEnum.TOP_LOSERS]: 'Top Losers',
 };
+
+/**
+ * Helper to get label from watchlist type
+ */
+export function getWatchlistLabel(type: WatchlistType): string {
+  return WATCHLIST_LABELS[type as WatchlistTypeEnum] || type;
+}
 
 /**
  * Query parameters for watchlist API requests
