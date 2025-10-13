@@ -17,7 +17,7 @@ export interface GenerateBlogPostRequest {
   userId: string;
   //TODO update code to use content instead of topicName
   // content: string;
-  topicName: string;
+  ticker: string;
   categoryName: string;
   targetLength: number;
   priority?: PRIORITY_TYPE;

@@ -49,7 +49,7 @@ export const validateBlogGenerationRequest = (
       );
     }
   
-    if (!request.topicName || request.topicName.trim().length === 0) {
+    if (!request.ticker || request.ticker.trim().length === 0) {
       throw new BlogGenerationException(
         "Topic name is required for blog generation",
         "INVALID_INPUT"

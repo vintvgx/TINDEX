@@ -607,9 +607,10 @@ def log_request_data(request_data: RequestData | None, endpoint: str):
 #         )
 
 
-@app.route("/generate_blog_post", methods=["POST"])
-def generate_blog_post(topic: str, research_data: dict, target_length: int = 800):
+@app.route("/generate_blog_post/<ticker>", methods=["POST"])
+def generate_blog_post(ticker: str, target_length: int = 800):
     """
+    TODO add request validation to function (validate user id)
     Generate a complete blog post without streaming.
 
     This endpoint generates the full blog post content and returns it in a single response.
@@ -625,15 +626,24 @@ def generate_blog_post(topic: str, research_data: dict, target_length: int = 800
         JSON response containing the complete blog post
     """
     try:
-        ticker = topic.strip()
-
-        if not isinstance(research_data, dict):
-            return (
-                jsonify(
-                    {"success": False, "error": "Research data must be a dictionary"}
-                ),
-                400,
-            )
+        # Validate ticker from URL path
+        ticker = ticker.strip().upper()
+        
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({
+                "success": False,
+                "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."
+            }), 400
+            
+        # Get research service instance
+        research_service = get_research_service()
+        
+        # Get research data using the service layer
+        research_data = research_service.get_research_data(
+            ticker=ticker,
+            use_cache=True,
+            save_to_db=True
+        )
 
         # Run async function in sync context
         loop = asyncio.new_event_loop()
@@ -641,7 +651,7 @@ def generate_blog_post(topic: str, research_data: dict, target_length: int = 800
         try:
             result = loop.run_until_complete(
                 anthropic_service.generate_blog_post(
-                    topic=topic,
+                    topic=ticker,
                     research_data=research_data,
                     target_length=target_length,
                     ticker=ticker,
@@ -806,6 +816,7 @@ def get_trending_stocks_by_param():
             ),
             500,
         )
+
 
 @app.route("/yahoo/gainers", methods=["GET"])
 def get_yahoo_gainers():
