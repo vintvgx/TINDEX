@@ -31,7 +31,7 @@ const generateBlogPost = async (request: GenerateBlogPostRequest): Promise<Gener
 
     // Make the API call to the Edge Function
     const response = await fetch(
-      'https://alethia-production.up.railway.app/research_yfinance',
+      `https://alethia-production.up.railway.app/generate_blog_post/${request.ticker}`,
       {
         method: 'POST',
         headers: {
@@ -40,7 +40,7 @@ const generateBlogPost = async (request: GenerateBlogPostRequest): Promise<Gener
         },
         body: JSON.stringify({
           userId: request.userId,
-          topic: request.topicName,
+          ticker: request.ticker,
           targetLength: request.targetLength,
         }),
       }
