@@ -136,8 +136,6 @@ class BlogGenerationService:
             if save_to_db and self.supabase_service:
                 blog_id = self._save_blog_post(blog_content)
                 
-            logger.info("Data: %s", blog_content)
-            
             return {
                 "success": True,
                 "data": blog_content,
