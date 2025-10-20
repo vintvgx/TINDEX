@@ -35,7 +35,7 @@ const TICKER_REGEX = /^[A-Z]{1,5}$/
 export const AddPostModal: React.FC<AddPostModalProps> = ({ visible, onClose, onSubmit }) => {
   const [tickerName, setTickerName] = useState("")
   const [selectedCategory, setSelectedCategory] = useState<CategoryType | "">("")
-  const [showCategoryDropdown, setShowCategoryDropdown] = useState(false)
+  // const [showCategoryDropdown, setShowCategoryDropdown] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [tickerError, setTickerError] = useState("")
 
@@ -77,11 +77,6 @@ export const AddPostModal: React.FC<AddPostModalProps> = ({ visible, onClose, on
 
   const handleSubmit = async () => {
     if (!validateTicker(tickerName)) {
-      return
-    }
-
-    if (!selectedCategory) {
-      Alert.alert("Error", "Please select a category.")
       return
     }
 
@@ -138,15 +133,9 @@ export const AddPostModal: React.FC<AddPostModalProps> = ({ visible, onClose, on
   const handleClose = () => {
     setTickerName("")
     setSelectedCategory("")
-    setShowCategoryDropdown(false)
     setIsSubmitting(false)
     setTickerError("")
     onClose()
-  }
-
-  const handleCategorySelect = (category: CategoryType) => {
-    setSelectedCategory(category)
-    setShowCategoryDropdown(false)
   }
 
   return (
@@ -199,9 +188,9 @@ export const AddPostModal: React.FC<AddPostModalProps> = ({ visible, onClose, on
 
                 <TouchableOpacity
                   onPress={handleSubmit}
-                  disabled={isSubmitting || blogPostPending || !tickerName.trim() || !selectedCategory || !!tickerError}
+                  disabled={isSubmitting || blogPostPending || !tickerName.trim() || !!tickerError}
                   className={`rounded-lg p-4 flex-row justify-center items-center ${
-                    isSubmitting || blogPostPending || !tickerName.trim() || !selectedCategory || !!tickerError
+                    isSubmitting || blogPostPending || !tickerName.trim() || !!tickerError
                       ? "bg-gray-700"
                       : "bg-blue-500"
                   }`}

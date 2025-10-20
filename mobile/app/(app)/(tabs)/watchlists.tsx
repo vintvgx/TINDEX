@@ -24,16 +24,21 @@ const WatchlistsScreen = () => {
 
     switch (selectedWatchlist) {
       case 'biggest-gainers':
+        console.log("Biggest gainers len", watchlistsData.watchlists.gainers.count)
         return {
           stocks: watchlistsData.watchlists.gainers?.data || [],
           isLoading: false,
         };
       case 'trending':
+        console.log("Trending len", watchlistsData.watchlists.trending.count)
+
         return {
           stocks: watchlistsData.watchlists.trending?.data || [],
           isLoading: false,
         };
       case 'most-active':
+        console.log("Most Act len", watchlistsData.watchlists.most_active.count)
+
         return {
           stocks: watchlistsData.watchlists.most_active?.data || [],
           isLoading: false,

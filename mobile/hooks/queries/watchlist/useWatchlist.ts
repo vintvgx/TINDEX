@@ -1,6 +1,7 @@
 import {
   WatchlistResponse
 } from '@/common/types/watchlist';
+import { prettyJSON } from '@/common/utils/strings/function';
 import { useQuery } from '@tanstack/react-query';
 
 
@@ -15,7 +16,7 @@ export function useWatchlists()  {
   return useQuery({
     queryKey: ['watchlist'],
     queryFn: async(): Promise<WatchlistResponse> => {
-      const response = await fetch(`https://alethia-test-eng.up.railway.app/watchlist/all`)
+      const response = await fetch(`https://alethia-production.up.railway.app/watchlist/all`)
 
       if (!response.ok) {
         throw new Error(`Failed to fetch watchlists: ${response.statusText}`);
@@ -27,7 +28,8 @@ export function useWatchlists()  {
           throw new Error(data.error || 'Failed to fetch biggest-gainers watchlists');
       }
       
-      console.log("Biggest-gainers watchlists fetching successfully")
+      console.log("All watchlists fetching successfully")
+      console.log(prettyJSON(data))
       return data;
     },
     enabled: true, 

@@ -452,7 +452,7 @@ def validate_and_create_ticker_request_data(
     """
     try:
         request_data = RequestData(
-            topic=ticker,  # Use ticker from URL as topic
+            topic=ticker, 
             userId=data.get("userId"),
             save_to_db=data.get("save_to_db", True),
             use_cache=data.get("use_cache", True),
