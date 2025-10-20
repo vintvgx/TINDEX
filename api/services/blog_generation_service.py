@@ -135,6 +135,8 @@ class BlogGenerationService:
             blog_id = None
             if save_to_db and self.supabase_service:
                 blog_id = self._save_blog_post(blog_content)
+                
+            logger.info("Data: %s", blog_content)
             
             return {
                 "success": True,
@@ -199,6 +201,7 @@ class BlogGenerationService:
             Database ID of saved blog post, or None if failed
         """
         try:
+            logger.info("Beginning process of saving blog post to Supabase DB...")
             if not self.supabase_service:
                 return None
             
