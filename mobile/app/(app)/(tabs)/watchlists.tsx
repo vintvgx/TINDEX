@@ -4,13 +4,17 @@ import { WatchlistType } from "@/common/types";
 import { useWatchlists } from "@/hooks/queries/watchlist/useWatchlist";
 import { WatchlistSelector } from "@/common/components/watchlist/WatchlistSelector";
 import { StockTable } from "@/common/components/watchlist/StockTable";
-import { WATCHLIST_LABELS } from "@/common/types/watchlist";
+import { WATCHLIST_LABELS, WatchlistStock } from "@/common/types/watchlist";
+import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
 
 const WatchlistsScreen = () => {
   const [selectedWatchlist, setSelectedWatchlist] = useState<WatchlistType>('biggest-gainers');
   
   // Fetch all watchlists in a single API call
   const { data: watchlistsData, isLoading: watchlistsLoading } = useWatchlists();
+
+  // Navigates to selected ticker
+  const { toTicker } = useBaseNavigation();
   
   // Determine which data to show based on selected watchlist
   const getWatchlistData = () => {
@@ -60,6 +64,11 @@ const WatchlistsScreen = () => {
     }
   };
 
+  // Navigation handler using the navigation service`
+  const handleNavigation = (ticker: string) => {
+    toTicker(ticker);
+  };
+
   const { stocks, isLoading } = getWatchlistData();
 
   return (
@@ -82,7 +91,7 @@ const WatchlistsScreen = () => {
       <View className="flex-1">
         {/* Show table for implemented watchlist types */}
         {['biggest-gainers', 'trending', 'most-active'].includes(selectedWatchlist) ? (
-          <StockTable stocks={stocks} isLoading={isLoading} />
+          <StockTable stocks={stocks} isLoading={isLoading} onPress={handleNavigation} />
         ) : (
           <View className="flex-1 justify-center items-center px-6">
             <Text className="text-gray-400 text-center">

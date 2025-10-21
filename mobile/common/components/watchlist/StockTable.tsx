@@ -5,11 +5,13 @@ import {
   Text,
   ScrollView,
   ActivityIndicator,
+  TouchableOpacity,
 } from 'react-native';
 
 interface StockTableProps {
   stocks: WatchlistStock[];
   isLoading: boolean;
+  onPress: (ticker: string) => void
 }
 
 const COLUMN_WIDTHS = {
@@ -21,7 +23,7 @@ const COLUMN_WIDTHS = {
   percentage: 120,
 };
 
-export const StockTable: React.FC<StockTableProps> = ({ stocks, isLoading }) => {
+export const StockTable: React.FC<StockTableProps> = ({ stocks, isLoading, onPress }) => {
   /**
    * Safely formats price with null/undefined handling
    */
@@ -117,8 +119,9 @@ export const StockTable: React.FC<StockTableProps> = ({ stocks, isLoading }) => 
             const hasValidPercent = stock.change_percent !== null && stock.change_percent !== undefined;
 
             return (
-              <View
+              <TouchableOpacity
                 key={`${stock.ticker}-${index}`}
+                onPress={() => onPress(stock.ticker)}
                 className="flex-row py-4 border-b border-gray-900/50"
               >
                 <View style={{ width: COLUMN_WIDTHS.rank }} className="justify-center">
@@ -155,7 +158,7 @@ export const StockTable: React.FC<StockTableProps> = ({ stocks, isLoading }) => 
                     )}
                   </View>
                 </View>
-              </View>
+              </TouchableOpacity>
             );
           })}
         </ScrollView>

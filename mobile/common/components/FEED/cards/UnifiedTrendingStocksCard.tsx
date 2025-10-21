@@ -152,7 +152,7 @@ export const UnifiedTrendingStocksCard: React.FC<
     };
   }, []);
 
-  // Navigation handler using the navigation service
+  // Navigation handler using the navigation service`
   const handleNavigation = (ticker: string) => {
     console.log("Navigating to [ticker]:", ticker);
     toTicker(ticker);
