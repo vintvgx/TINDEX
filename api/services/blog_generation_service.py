@@ -135,7 +135,7 @@ class BlogGenerationService:
             blog_id = None
             if save_to_db and self.supabase_service:
                 blog_id = self._save_blog_post(blog_content)
-            
+                
             return {
                 "success": True,
                 "data": blog_content,
@@ -199,6 +199,7 @@ class BlogGenerationService:
             Database ID of saved blog post, or None if failed
         """
         try:
+            logger.info("Beginning process of saving blog post to Supabase DB...")
             if not self.supabase_service:
                 return None
             
@@ -243,8 +244,8 @@ def get_blog_service():
     global blog_generation_service
     if blog_generation_service is None:
         try:
-            from services.supabase_service import supabase_service
-            blog_generation_service = BlogGenerationService(supabase_service)
+            from services.supabase_service import get_supabase_service
+            blog_generation_service = BlogGenerationService(get_supabase_service())
         except Exception as e:
             logger.warning(f"Could not initialize blog service with Supabase: {e}")
             blog_generation_service = BlogGenerationService(None)

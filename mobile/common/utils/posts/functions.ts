@@ -56,13 +56,6 @@ export const validateBlogGenerationRequest = (
       );
     }
   
-    if (!request.categoryName || request.categoryName.trim().length === 0) {
-      throw new BlogGenerationException(
-        "Category name is required for blog generation",
-        "INVALID_INPUT"
-      );
-    }
-  
     if (
       !request.targetLength ||
       request.targetLength < 100 ||
