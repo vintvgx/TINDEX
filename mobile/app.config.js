@@ -42,15 +42,6 @@ export default {
     },
     plugins: [
       "expo-router",
-      [
-        "expo-splash-screen",
-        {
-          image: "./assets/images/splash-icon.png",
-          imageWidth: 200,
-          resizeMode: "contain",
-          backgroundColor: "#ffffff"
-        }
-      ],
       "expo-web-browser",
       [
         "expo-splash-screen",

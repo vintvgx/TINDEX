@@ -34,8 +34,6 @@ const WatchlistsScreen = () => {
           isLoading: false,
         };
       case 'trending':
-        console.log("Trending len", watchlistsData.watchlists.trending.count)
-
         return {
           stocks: watchlistsData.watchlists.trending?.data || [],
           isLoading: false,
@@ -64,7 +62,7 @@ const WatchlistsScreen = () => {
     }
   };
 
-  // Navigation handler using the navigation service`
+  // Navigation handler using the navigation service
   const handleNavigation = (ticker: string) => {
     toTicker(ticker);
   };
