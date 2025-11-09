@@ -18,6 +18,7 @@ import { AnalyticsTab } from "@/common/components/ticker/AnalyticsTab";
 import { FinancialsTab } from "@/common/components/ticker/FinancialsTab";
 import { StockInfoHeader } from "@/common/components/ticker/StockInfoHeader";
 import { TabNavigation } from "@/common/components/ticker/TabNavigation";
+import { OptionsCard } from "@/common/components/ticker/OptionsTab";
 
 export default function TickerScreen() {
   const { ticker } = useLocalSearchParams<{ ticker: string }>();
@@ -140,6 +141,17 @@ export default function TickerScreen() {
         </View>
       );
     }
+
+    return (
+      <ScrollView
+        className="flex-1 px-5"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 20, paddingTop: 20 }}>
+        {optionsData.opportunities.map((option, index) => (
+          <OptionsCard key={option.contractSymbol || index} option={option} />
+        ))}
+      </ScrollView>
+    );
   };
 
   return (

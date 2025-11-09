@@ -108,6 +108,13 @@ class OptionsAnalyzer:
                 options['intrinsicValue'] = 0
                 options['extrinsicValue'] = options['mark']
                 options['momentum_factor'] = 0
+
+            # Adjust spreadPct calculation to handle invalid quotes
+            options['spreadPct'] = np.where(
+                (options['bid'] > 0) & (options['ask'] > 0) & (options['mark'] > 0),
+                (options['spread'] / options['mark']) * 100,
+                np.nan  # or use a very large value like 1e6 to represent worst liquidity
+            )
             
             self.options_df = options
             return options
@@ -284,9 +291,11 @@ class OptionsAnalyzer:
         scores = pd.Series(0, index=df.index)
         
         # Tight spreads are better
-        scores += np.where(df['spreadPct'] < 5, 10, 0)
-        scores += np.where(df['spreadPct'] < 3, 5, 0)
-        scores += np.where(df['spreadPct'] < 2, 5, 0)
+        spread_pct = df['spreadPct'].fillna(100)
+        scores += np.where(spread_pct < 5, 10, 0)
+        scores += np.where(spread_pct < 3, 5, 0)
+        scores += np.where(spread_pct < 2, 5, 0)
+        scores -= np.where(spread_pct > 10, 5, 0)
         
         # Penalize wide spreads
         scores -= np.where(df['spreadPct'] > 10, 5, 0)
