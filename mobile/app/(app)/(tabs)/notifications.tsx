@@ -1,12 +1,12 @@
-import React, { useCallback } from "react";
-import { 
-  View, 
-  Text, 
-  SafeAreaView, 
-  FlatList, 
+import React, { useCallback, useState } from "react";
+import {
+  View,
+  Text,
+  SafeAreaView,
+  FlatList,
   TouchableOpacity,
   ActivityIndicator,
-  RefreshControl
+  RefreshControl,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
@@ -17,15 +17,26 @@ import { formatDistanceToNow } from "date-fns";
 const NotificationsScreen = () => {
   const { toTicker } = useBaseNavigation();
 
-  const { 
-    notifications, 
-    isLoading, 
-    error, 
-    refetch, 
+  const {
+    notifications,
+    isLoading,
+    error,
+    refetch,
     markAsRead,
     markAllAsRead,
-    unreadCount 
+    unreadCount,
   } = useNotificationHistory();
+
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refetch();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refetch]);
 
   // Extract ticker from notification body or watchlist data
   const extractTicker = (notification: NotificationRecord): string | null => {
@@ -33,34 +44,37 @@ const NotificationsScreen = () => {
     if (notification.data?.ticker) {
       return notification.data.ticker;
     }
-    
+
     // Try to extract ticker from body using regex (e.g., "$AAPL" or "AAPL")
     const tickerMatch = notification.body.match(/\$?([A-Z]{1,5})\b/);
     return tickerMatch ? tickerMatch[1] : null;
   };
 
   // Handle notification press
-  const handleNotificationPress = useCallback((notification: NotificationRecord) => {
-    // Mark as read if not already
-    if (!notification.is_read) {
-      markAsRead(notification.id);
-    }
+  const handleNotificationPress = useCallback(
+    (notification: NotificationRecord) => {
+      // Mark as read if not already
+      if (!notification.is_read) {
+        markAsRead(notification.id);
+      }
 
-    // Extract ticker and navigate if found
-    const ticker = extractTicker(notification);
-    if (ticker) {
-      toTicker(ticker);
-    } else {
-      // Navigate to watchlist screen if no specific ticker
-      // You might need to adjust this based on your navigation structure
-      console.log("Navigate to watchlist:", notification.data?.watchlistType);
-    }
-  }, [markAsRead, toTicker]);
+      // Extract ticker and navigate if found
+      const ticker = extractTicker(notification);
+      if (ticker) {
+        toTicker(ticker);
+      } else {
+        // Navigate to watchlist screen if no specific ticker
+        // You might need to adjust this based on your navigation structure
+        console.log("Navigate to watchlist:", notification.data?.watchlistType);
+      }
+    },
+    [markAsRead, toTicker]
+  );
 
   // Render individual notification item
   const renderNotification = ({ item }: { item: NotificationRecord }) => {
-    const timeAgo = formatDistanceToNow(new Date(item.created_at), { 
-      addSuffix: true 
+    const timeAgo = formatDistanceToNow(new Date(item.created_at), {
+      addSuffix: true,
     });
 
     return (
@@ -69,14 +83,13 @@ const NotificationsScreen = () => {
         className={`px-4 py-4 border-b border-gray-800 ${
           !item.is_read ? "bg-gray-900/50" : ""
         }`}
-        activeOpacity={0.7}
-      >
+        activeOpacity={0.7}>
         <View className="flex-row items-start">
           {/* Unread indicator */}
           {!item.is_read && (
             <View className="w-2 h-2 bg-blue-500 rounded-full mt-2 mr-3" />
           )}
-          
+
           {/* Notification content */}
           <View className="flex-1">
             <View className="flex-row items-center justify-between mb-1">
@@ -85,34 +98,32 @@ const NotificationsScreen = () => {
               </Text>
               <Text className="text-gray-500 text-xs">{timeAgo}</Text>
             </View>
-            
-            <Text className="text-gray-400 text-sm leading-5">
-              {item.body}
-            </Text>
-            
+
+            <Text className="text-gray-400 text-sm leading-5">{item.body}</Text>
+
             {/* Watchlist badges */}
-            {item.data?.subscribedWatchlists && item.data.subscribedWatchlists.length > 0 && (
-              <View className="flex-row flex-wrap mt-2">
-                {item.data.subscribedWatchlists.map((watchlist, index) => (
-                  <View 
-                    key={index} 
-                    className="bg-gray-800 rounded-full px-2 py-1 mr-2 mb-1"
-                  >
-                    <Text className="text-gray-300 text-xs">
-                      {watchlist.replace(/-/g, ' ').replace(/_/g, ' ')}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            )}
+            {item.data?.subscribedWatchlists &&
+              item.data.subscribedWatchlists.length > 0 && (
+                <View className="flex-row flex-wrap mt-2">
+                  {item.data.subscribedWatchlists.map((watchlist, index) => (
+                    <View
+                      key={index}
+                      className="bg-gray-800 rounded-full px-2 py-1 mr-2 mb-1">
+                      <Text className="text-gray-300 text-xs">
+                        {watchlist.replace(/-/g, " ").replace(/_/g, " ")}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
           </View>
 
           {/* Chevron icon */}
-          <Ionicons 
-            name="chevron-forward" 
-            size={16} 
-            color="#6B7280" 
-            style={{ marginLeft: 8, marginTop: 2 }} 
+          <Ionicons
+            name="chevron-forward"
+            size={16}
+            color="#6B7280"
+            style={{ marginLeft: 8, marginTop: 2 }}
           />
         </View>
       </TouchableOpacity>
@@ -155,8 +166,7 @@ const NotificationsScreen = () => {
           </Text>
           <TouchableOpacity
             onPress={() => refetch()}
-            className="mt-4 bg-blue-600 px-4 py-2 rounded-lg"
-          >
+            className="mt-4 bg-blue-600 px-4 py-2 rounded-lg">
             <Text className="text-white font-semibold">Retry</Text>
           </TouchableOpacity>
         </View>
@@ -172,8 +182,7 @@ const NotificationsScreen = () => {
         {unreadCount > 0 && (
           <TouchableOpacity
             onPress={() => markAllAsRead()}
-            className="px-3 py-1"
-          >
+            className="px-3 py-1">
             <Text className="text-blue-500 text-sm font-medium">
               Mark all as read
             </Text>
@@ -189,10 +198,10 @@ const NotificationsScreen = () => {
         ListEmptyComponent={EmptyState}
         refreshControl={
           <RefreshControl
-            refreshing={false}
-            onRefresh={refetch}
             tintColor="#3B82F6"
             colors={["#3B82F6"]}
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
           />
         }
         contentContainerStyle={{
