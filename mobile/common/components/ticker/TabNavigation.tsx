@@ -5,7 +5,7 @@
 import type React from "react";
 import { View, Text, Pressable } from "react-native";
 
-type TabType = "Summary" | "Analytics" | "Financials";
+type TabType = "Summary" | "Analytics" | "Financials" | "Options";
 
 interface TabNavigationProps {
   activeTab: TabType;
@@ -16,7 +16,7 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
   activeTab,
   onTabChange,
 }) => {
-  const tabs: TabType[] = ["Summary", "Analytics", "Financials"];
+  const tabs: TabType[] = ["Summary", "Analytics", "Financials", "Options"];
 
   const renderTabButton = (tab: TabType) => (
     <Pressable

@@ -18,6 +18,7 @@ import { AnalyticsTab } from "@/common/components/ticker/AnalyticsTab";
 import { FinancialsTab } from "@/common/components/ticker/FinancialsTab";
 import { StockInfoHeader } from "@/common/components/ticker/StockInfoHeader";
 import { TabNavigation } from "@/common/components/ticker/TabNavigation";
+import { OptionsCard } from "@/common/components/ticker/OptionsTab";
 
 export default function TickerScreen() {
   const { ticker } = useLocalSearchParams<{ ticker: string }>();
@@ -29,7 +30,7 @@ export default function TickerScreen() {
   } = useTickerQuery(ticker || "");
 
   const [activeTab, setActiveTab] = useState<
-    "Summary" | "Analytics" | "Financials"
+    "Summary" | "Analytics" | "Financials" | "Options"
   >("Summary");
   const [selectedPeriod, setSelectedPeriod] = useState("1D");
 
@@ -117,6 +118,42 @@ export default function TickerScreen() {
     </ScrollView>
   );
 
+  const renderOptionsTab = () => {
+    const optionsData = stockData?.options_analysis;
+
+    if (
+      !optionsData?.has_opportunities ||
+      !optionsData?.opportunities?.length
+    ) {
+      return (
+        <View className="flex-1 justify-center items-center px-8">
+          <View className="bg-gray-900/50 rounded-3xl p-8 border border-gray-800/30">
+            <Ionicons name="analytics-outline" size={48} color="#6B7280" />
+            <Text className="mt-6 text-xl font-bold text-white text-center">
+              No Options Available
+            </Text>
+            <Text className="mt-2 text-sm text-gray-400 text-center leading-6">
+              {stockData?.has_options === false
+                ? "This ticker does not have options trading available."
+                : "No options opportunities found at this time."}
+            </Text>
+          </View>
+        </View>
+      );
+    }
+
+    return (
+      <ScrollView
+        className="flex-1 px-5"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 20, paddingTop: 20 }}>
+        {optionsData.opportunities.map((option, index) => (
+          <OptionsCard key={option.contractSymbol || index} option={option} />
+        ))}
+      </ScrollView>
+    );
+  };
+
   return (
     <SafeAreaView className="flex-1 bg-black">
       <StatusBar barStyle="light-content" backgroundColor="#000000" />
@@ -154,6 +191,7 @@ export default function TickerScreen() {
         {activeTab === "Summary" && renderSummaryTab()}
         {activeTab === "Analytics" && renderAnalyticsTab()}
         {activeTab === "Financials" && renderFinancialsTab()}
+        {activeTab === "Options" && renderOptionsTab()}
       </View>
     </SafeAreaView>
   );

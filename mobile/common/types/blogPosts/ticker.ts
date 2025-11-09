@@ -18,6 +18,7 @@ export interface TickerData {
   employees: number;
   exchange: string;
   expires_at: string;
+  has_options?: boolean;
   historical_data: {
     dates: string[];
     prices: number[];
@@ -69,12 +70,41 @@ export interface TickerData {
     };
     id: string;
   }[];
+  options_analysis?: {
+    has_opportunities: boolean;
+    market_context: {
+      beta: number;
+      current_price: number;
+      price_change_pct: number;
+      sentiment: {
+        confidence: number;
+        factors: {
+          beta: number;
+          pe_ratio: number | null;
+          price_movement: number;
+        };
+        score: number;
+        sentiment: string;
+      };
+      sentiment_score: number;
+      volume_ratio: number;
+    };
+    opportunities: OptionsOpportunity[];
+    summary: {
+      avg_spread_pct: number;
+      avg_volume: number;
+      avoid_signals: number;
+      buy_signals: number;
+      consider_signals: number;
+      total_analyzed: number;
+    };
+  };
   pe_ratio: number | null;
   price_change: number;
   price_change_percent: number;
   price_to_book: number;
   profit_margins: number;
-  recommendations: any[]; // Not defined in response
+  recommendations: any[];
   return_on_equity: number | null;
   revenue_growth: number | null;
   sector: string;
@@ -91,10 +121,46 @@ export interface TickerData {
   sentiment_confidence: number;
   sentiment_score: number;
   ticker: string;
+  top_option_score?: number;
+  top_option_signal?: string;
   volume: number;
   website: string;
   year_high: number;
   year_low: number;
+}
+
+export interface OptionsOpportunity {
+  ask: number;
+  bid: number;
+  contractSymbol: string;
+  delta: number | null;
+  dte: number;
+  expirationDate: string;
+  extrinsicValue: number;
+  gamma: number | null;
+  impliedVolatility: number;
+  intrinsicValue: number;
+  mark: number;
+  moneyness: number;
+  openInterest: number;
+  optionType: "CALL" | "PUT";
+  reasons: string;
+  score_breakdown?: {
+    greeks: number;
+    liquidity: number;
+    momentum: number;
+    sentiment: number;
+    value: number;
+    volume: number;
+  };
+  signal: "BUY" | "CONSIDER" | "AVOID";
+  signal_color?: "GREEN" | "YELLOW" | "RED";
+  spreadPct: number;
+  strike: number;
+  theta: number | null;
+  total_score: number;
+  vega: number | null;
+  volume: number;
 }
 
 // export interface TickerResponse {
@@ -116,4 +182,3 @@ export type TickerResponse =
 export interface TickerViewProps {
   ticker: string;
 }
-

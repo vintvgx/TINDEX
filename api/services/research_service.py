@@ -65,6 +65,7 @@ class StockResearchService:
         ticker: str,
         use_cache: bool | None = True,
         save_to_db: bool | None = True,
+        include_options: bool | None = True
     ) -> Dict[str, Any]:
         """
         Get comprehensive research data for a stock ticker.
@@ -140,7 +141,7 @@ class StockResearchService:
                     }
 
             # Step 2: Fetch fresh research data from yFinance
-            research_results = perform_yfinance_research(ticker)
+            research_results = perform_yfinance_research(ticker, 60, include_options)
 
             if not research_results.get("data"):
                 logger.error(f"Research for {ticker} returned no data")
