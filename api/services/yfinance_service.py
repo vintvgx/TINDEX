@@ -1,4 +1,4 @@
-from api.services.options_analyzer import OptionsAnalyzer
+from services.options_analyzer import OptionsAnalyzer
 import yfinance as yf
 import pandas as pd
 from log.logging_config import get_logger
