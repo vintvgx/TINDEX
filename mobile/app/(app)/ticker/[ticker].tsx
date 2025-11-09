@@ -29,7 +29,7 @@ export default function TickerScreen() {
   } = useTickerQuery(ticker || "");
 
   const [activeTab, setActiveTab] = useState<
-    "Summary" | "Analytics" | "Financials"
+    "Summary" | "Analytics" | "Financials" | "Options"
   >("Summary");
   const [selectedPeriod, setSelectedPeriod] = useState("1D");
 
@@ -117,6 +117,31 @@ export default function TickerScreen() {
     </ScrollView>
   );
 
+  const renderOptionsTab = () => {
+    const optionsData = stockData?.options_analysis;
+
+    if (
+      !optionsData?.has_opportunities ||
+      !optionsData?.opportunities?.length
+    ) {
+      return (
+        <View className="flex-1 justify-center items-center px-8">
+          <View className="bg-gray-900/50 rounded-3xl p-8 border border-gray-800/30">
+            <Ionicons name="analytics-outline" size={48} color="#6B7280" />
+            <Text className="mt-6 text-xl font-bold text-white text-center">
+              No Options Available
+            </Text>
+            <Text className="mt-2 text-sm text-gray-400 text-center leading-6">
+              {stockData?.has_options === false
+                ? "This ticker does not have options trading available."
+                : "No options opportunities found at this time."}
+            </Text>
+          </View>
+        </View>
+      );
+    }
+  };
+
   return (
     <SafeAreaView className="flex-1 bg-black">
       <StatusBar barStyle="light-content" backgroundColor="#000000" />
@@ -154,6 +179,7 @@ export default function TickerScreen() {
         {activeTab === "Summary" && renderSummaryTab()}
         {activeTab === "Analytics" && renderAnalyticsTab()}
         {activeTab === "Financials" && renderFinancialsTab()}
+        {activeTab === "Options" && renderOptionsTab()}
       </View>
     </SafeAreaView>
   );
