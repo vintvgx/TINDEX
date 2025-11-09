@@ -1,4 +1,22 @@
-
+export interface Notification {
+  id: string;
+  user_id: string;
+  title: string;
+  body: string;
+  type: string;
+  data: {
+    screen: string;
+    watchlistType: string;
+    subscribedWatchlists: string[];
+    sentAt: string;
+    ticker?: string;
+  };
+  is_read: boolean;
+  read_at: string | null;
+  created_at: string;
+  expires_at: string | null;
+}
+export type NotificationRecord = Notification;
 export interface NotificationPreferences {
   enabled: boolean;
   sound: boolean;
@@ -25,3 +43,5 @@ export interface ScheduledNotificationOptions extends NotificationData {
   seconds?: number;
   repeats?: boolean;
 }
+
+

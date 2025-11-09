@@ -19,10 +19,9 @@ export function useFeedQuery() {
           const { data, error } = await supabase
           .from("blog_posts")
           .select("*")
-          // .eq("status", "published")
           .order("created_at", { ascending: false })
           .limit(20);
-          console.log("test")
+
           if (error) {
             // If no assessment exists yet, that's not an error
             if (error.code === "PGRST116") return null;

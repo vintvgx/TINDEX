@@ -3,8 +3,11 @@
  */
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useNotificationHistory } from '@/hooks/queries/notifications/useNotificationHistory';
 
 export default function Layout() {
+  const { unreadCount } = useNotificationHistory();
+
   return (
     <Tabs
       initialRouteName="feed"
@@ -75,6 +78,7 @@ export default function Layout() {
         name="notifications" 
         options={{
           title: 'Notifications',
+          tabBarBadge: unreadCount > 0 ? unreadCount : undefined,
           tabBarIcon: ({ color }) => (
             <Ionicons name="notifications-outline" size={20} color={color} />
           ),

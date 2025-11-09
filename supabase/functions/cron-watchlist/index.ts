@@ -62,6 +62,13 @@ interface UserProfile {
   watchlist_subscriptions: WatchlistType[]; // ✨ Now strongly typed
 }
 
+interface SaveNotificationResponse {
+  id: string;
+  success: boolean;
+  error?: string;
+  userId?: string;
+}
+
 // Add enum to match mobile types
 enum WatchlistTypeEnum {
   BIGGEST_GAINERS = 'biggest-gainers',
@@ -191,7 +198,10 @@ async function getEligibleUsers(supabaseClient: any): Promise<UserProfile[]> {
  */
 function generateNotificationMessage(subscribedWatchlists: string[]): { title: string; body: string } {
   if (subscribedWatchlists.length === 0) {
-    return { title: "Watchlist Update", body: "Check out the latest market data" };
+    return { 
+      title: "Watchlist Update", 
+      body: "Check out the latest market data",
+    };
   }
   
   if (subscribedWatchlists.length === 1) {
@@ -213,8 +223,10 @@ function generateNotificationMessage(subscribedWatchlists: string[]): { title: s
  * @param user - User profile with push token
  * @returns Success status and any error messages
  */
-async function sendPushNotification(user: UserProfile): Promise<{ success: boolean; error?: string }> {
-  if (!user.expo_push_token || !user.watchlist_subscriptions || user.watchlist_subscriptions.length === 0) {
+async function sendPushNotification(
+  user: UserProfile,
+  supabaseClient: any
+): Promise<{ success: boolean; error?: string }> {  if (!user.expo_push_token || !user.watchlist_subscriptions || user.watchlist_subscriptions.length === 0) {
     return { success: false, error: "Invalid user data" };
   }
   
@@ -263,6 +275,9 @@ async function sendPushNotification(user: UserProfile): Promise<{ success: boole
       console.error(`Expo returned error for user ${user.id}:`, receipt.error);
       return { success: false, error: receipt.error };
     }
+
+    // Save notification to database after successful send
+    await saveNotification(message, user, supabaseClient);
     
     console.log(`Successfully sent notification to user ${user.id}`);
     return { success: true };
@@ -274,10 +289,65 @@ async function sendPushNotification(user: UserProfile): Promise<{ success: boole
 }
 
 /**
+ * Saves the notification to the database for UI display
+ * @param message - The Expo push message sent
+ * @param user - The user profile
+ * @param supabaseClient - Initialized Supabase client
+ */
+async function saveNotification(
+  message: ExpoPushMessage, 
+  user: UserProfile,
+  supabaseClient: any
+): Promise<SaveNotificationResponse> {
+  try {
+    const { data, error } = await supabaseClient
+      .from("notifications")
+      .insert({
+        user_id: user.id,
+        title: message.title,
+        body: message.body,
+        type: 'watchlist',
+        data: {
+          screen: message.data.screen,
+          watchlistType: message.data.watchlistType,
+          subscribedWatchlists: message.data.subscribedWatchlists,
+          sentAt: new Date().toISOString(),
+        },
+        // Optional: Set expiration (e.g., 30 days)
+        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      })
+      .select()
+      .single();
+    
+    if (error) {
+      console.error(`Failed to save notification for user ${user.id}:`, error);
+      return { 
+        id: '', 
+        success: false, 
+        error: error.message 
+      };
+    }
+    
+    return { 
+      id: data.id, 
+      success: true, 
+      userId: user.id 
+    };
+  } catch (error) {
+    console.error(`Exception saving notification for user ${user.id}:`, error);
+    return { 
+      id: '', 
+      success: false, 
+      error: String(error) 
+    };
+  }
+}
+ 
+/**
  * Sends notifications to all eligible users in batches
  * @param users - Array of eligible users
  */
-async function sendBatchNotifications(users: UserProfile[]): Promise<{
+async function sendBatchNotifications(users: UserProfile[], supabaseClient: any): Promise<{
   total: number;
   successful: number;
   failed: number;
@@ -300,7 +370,7 @@ async function sendBatchNotifications(users: UserProfile[]): Promise<{
     
     // Send notifications in parallel for each batch
     const batchResults = await Promise.allSettled(
-      batch.map(user => sendPushNotification(user))
+      batch.map(user => sendPushNotification(user, supabaseClient))
     );
     
     // Process results
@@ -374,7 +444,7 @@ serve(async (req) => {
     }
     
     // Step 3: Send notifications
-    const notificationResults = await sendBatchNotifications(eligibleUsers);
+    const notificationResults = await sendBatchNotifications(eligibleUsers, supabaseClient);
     
     // Step 4: Return summary
     const duration = Date.now() - startTime;
