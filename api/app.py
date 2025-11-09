@@ -97,6 +97,7 @@ class RequestData:
     research_data: Optional[dict] = None
     target_length: Optional[int] = 800
     ticker: Optional[str] = None
+    include_options: Optional[bool] = True
     
     
 @dataclass
@@ -181,6 +182,8 @@ def get_ticker_data(ticker: str):
             user_id = request_data.userId
             save_to_db = request_data.save_to_db
             use_cache = request_data.use_cache
+            include_options = request_data.include_options
+
 
             # Verify the user exists / throw error if user id is not found
             service.verify_user(user_id=user_id)
@@ -189,7 +192,8 @@ def get_ticker_data(ticker: str):
             research_result = research_service.get_research_data(
                 ticker=ticker,
                 use_cache=use_cache,
-                save_to_db=save_to_db
+                save_to_db=save_to_db,
+                include_options=include_options
             )
 
             if not research_result["success"]:

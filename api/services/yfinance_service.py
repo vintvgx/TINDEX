@@ -1,3 +1,4 @@
+from api.services.options_analyzer import OptionsAnalyzer
 import yfinance as yf
 import pandas as pd
 from log.logging_config import get_logger
@@ -9,16 +10,17 @@ from urllib.parse import urlparse
 logger = get_logger(__name__)
 
 
-def perform_yfinance_research(topic: str, expires_seconds: int = 60) -> dict:
+def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_options_analysis: bool | None = True) -> dict:
     """
-    Perform comprehensive research using yFinance.
+    Perform comprehensive research using yFinance including options analysis.
 
     Args:
         topic: The topic or ticker to research
         expires_seconds: The seconds that the cache will expire
+        include_options_analysis: Whether to include options analysis
 
     Returns:
-        Dict containing research results
+        Dict containing research results with integrated options analysis
     """
     try:
         # Try to get stock info
@@ -36,7 +38,7 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60) -> dict:
             hist = ticker.history(period="1mo")
         except Exception as e:
             logger.warning(f"Failed to get historical data for {topic}: {str(e)}")
-            hist = pd.DataFrame()  # Empty DataFrame as fallback
+            hist = pd.DataFrame()
 
         # Get news and convert to JSON-serializable format
         try:
@@ -46,7 +48,7 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60) -> dict:
             logger.warning(f"Failed to get news for {topic}: {str(e)}")
             news_list = []
 
-        # Get analyst recommendations and convert to JSON-serializable format
+        # Get analyst recommendations
         try:
             recommendations = ticker.recommendations
             recommendations_list = convert_dataframe_to_json(recommendations)
@@ -64,7 +66,7 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60) -> dict:
 
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_seconds)
 
-        # Prepare research data
+        # Prepare research data FIRST (before options analysis)
         research_data = {
             # Company Details
             "ticker": topic,
@@ -83,8 +85,6 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60) -> dict:
             # Financial Metrics
             "market_cap": info.get("marketCap"),
             "market_state": info.get("marketState"),
-            # "regular_market_price": info.get("regularMarketPrice"),
-            # "regular_market_volume": info.get("regularMarketVolume"),
             "logo_url": get_company_logo(info, topic),
             "pe_ratio": info.get("trailingPE"),
             "price_to_book": info.get("priceToBook"),
@@ -126,13 +126,53 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60) -> dict:
             "expires_at": expires_at.isoformat(),
         }
 
+        # Calculate sentiment BEFORE options analysis
         sentiment = analyze_sentiment(research_data)
         research_data["sentiment"] = sentiment
-        # Safely extract sentiment score and confidence, defaulting to None if not present
         research_data["sentiment_score"] = sentiment.get("score")
         research_data["sentiment_confidence"] = sentiment.get("confidence")
+        
+        # NOW perform options analysis using the research data
+        if include_options_analysis:
+            try:
+                logger.info(f"Analyzing options for {topic} using research data")
+                
+                # Pass research_data and the existing ticker to avoid duplicate API calls
+                analyzer = OptionsAnalyzer(research_data, ticker)
+                
+                # Fetch and analyze options
+                analyzer.fetch_options_chain(max_expirations=5)
+                analyzer.calculate_scores()
+                
+                # Get top opportunities
+                options_analysis = analyzer.get_top_opportunities(n=10)
+                
+                # Add options analysis to research data
+                research_data["options_analysis"] = options_analysis
+                research_data["has_options"] = options_analysis.get('has_opportunities', False)
+                
+                # Extract top signal if available
+                if options_analysis.get('opportunities'):
+                    research_data["top_option_signal"] = options_analysis['opportunities'][0]['signal']
+                    research_data["top_option_score"] = options_analysis['opportunities'][0]['total_score']
+                else:
+                    research_data["top_option_signal"] = None
+                    research_data["top_option_score"] = None
+                    
+                logger.info(f"Found {len(options_analysis.get('opportunities', []))} option opportunities for {topic}")
+                
+            except Exception as e:
+                logger.warning(f"Options analysis failed for {topic}: {str(e)}")
+                research_data["options_analysis"] = {
+                    'has_opportunities': False,
+                    'opportunities': [],
+                    'summary': {'error': str(e)}
+                }
+                research_data["has_options"] = False
+                research_data["top_option_signal"] = None
+                research_data["top_option_score"] = None
 
-        return {"data": research_data}
+        return {"data": research_data, "success": True}
 
     except Exception as e:
         return {"success": False, "error": f"yFinance research failed: {str(e)}"}

@@ -31,6 +31,7 @@ class StockResearch:
     ticker: str
     company_name: Optional[str] = None
     description: Optional[str] = None
+    logo_url: Optional[str] = None  # Added
 
     # Market Data
     current_price: Optional[float] = None
@@ -47,7 +48,7 @@ class StockResearch:
     market_cap: Optional[int] = None
     market_state: Optional[str] = None
     regular_market_price: Optional[float] = None
-    # regular_market_volume: Optional[float] = None
+    regular_market_volume: Optional[float] = None  # Uncommented
     pe_ratio: Optional[float] = None
     price_to_book: Optional[float] = None
     dividend_yield: Optional[float] = None
@@ -67,18 +68,45 @@ class StockResearch:
     employees: Optional[int] = None
     website: Optional[str] = None
 
-    # Additional data (stored as JSON)
-    recommendations: Optional[Dict] = None
-    historical_data: Optional[Dict] = None
-    news_data: Optional[List] = None
+    # Additional data (stored as JSON/JSONB)
+    recommendations: Optional[List[Dict]] = None  
+    historical_data: Optional[Dict[str, List]] = None  
+    news_data: Optional[List[Dict]] = None  
 
     # Sentiment Analysis
     sentiment: Optional[Dict[str, Any]] = None
     sentiment_score: Optional[int] = None
     sentiment_confidence: Optional[float] = None
+
+    # Options Analysis - NEW FIELDS
+    options_analysis: Optional[Dict[str, Any]] = None
+    has_options: bool = False
+    top_option_signal: Optional[str] = None  # 'BUY', 'CONSIDER', or 'AVOID'
+    top_option_score: Optional[float] = None
     
-    # Cache expiration
+    # Detailed Options Data 
+    options_opportunities: Optional[List[Dict[str, Any]]] = None
+    options_summary: Optional[Dict[str, Any]] = None
+    options_market_context: Optional[Dict[str, Any]] = None
+    
+    # Options Metadata 
+    total_options_analyzed: Optional[int] = None
+    buy_signal_count: Optional[int] = None
+    consider_signal_count: Optional[int] = None
+    avoid_signal_count: Optional[int] = None
+    avg_option_spread_pct: Optional[float] = None
+    avg_option_volume: Optional[float] = None
+    
+    # Cache and metadata
     expires_at: Optional[datetime] = None
+    research_date: Optional[datetime] = None  
+    created_at: Optional[datetime] = None  
+    updated_at: Optional[datetime] = None  
+    hit_count: Optional[int] = 0  
+    last_accessed: Optional[datetime] = None 
+    
+    # Raw data storage (for complete data preservation)
+    raw_research_data: Optional[Dict[str, Any]] = None  # Adde
 
 
 @dataclass
