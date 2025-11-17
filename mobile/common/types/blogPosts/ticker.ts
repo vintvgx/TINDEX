@@ -187,11 +187,21 @@ export interface TickerSearchResponse {
     current_price: number;
     price_change: number;
     price_change_percent: number;
-    logo_url: string;
-    industry: string;
+    logo_url?: string;
+    industry?: string;
   };
   timestamp: number;
   error?: string;
+}
+
+export interface SearchHistoryItem {
+  ticker: string;
+  company_name: string;
+  current_price: number;
+  price_change_percent: number;
+  logo_url: string;
+  industry: string;
+  timestamp: number;
 }
 
 export interface TickerViewProps {

@@ -27,7 +27,8 @@ export default function TickerScreen() {
     data: tickerResponse,
     isLoading,
     error,
-    refetch
+    refetch,
+    isRefetching
   } = useTickerQuery(ticker || "");
 
   const [activeTab, setActiveTab] = useState<
@@ -48,7 +49,7 @@ export default function TickerScreen() {
   }
 
   // Loading state
-  if (isLoading) {
+  if (isLoading || isRefetching) {
     return (
       <SafeAreaView className="flex-1 bg-black">
         <View className="absolute inset-0 bg-gradient-to-b from-gray-900/20 via-transparent to-gray-900/10" />
