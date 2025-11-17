@@ -204,6 +204,32 @@ def get_ticker_data(ticker: str):
     except Exception as e:
         logger.error("Ticker research failed for ticker '%s': %s", ticker, e, exc_info=True)
         return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
+    
+@app.route("/search/<ticker>", method=["POST"])
+def search_for_ticker(ticker: str):
+    """
+    Retrieves a ticker and returns basic information (name, current price, logo etc) to be displayed within search bar.
+    
+    Request Body: 
+        ticker: userId (str): The id of the user requesting the data
+
+    Returns:
+        JSON response containing research results  
+    """
+    try:
+        ticker = ticker.strip().upper()
+        
+        # Get research service instance
+        research_service = get_research_service()
+        
+        search_result = research_service.get_ticker_search(ticker)
+        
+        return jsonify(search_result)
+
+    except Exception as e:
+        logger.error("Ticker research failed for ticker '%s': %s", ticker, e, exc_info=True)
+        return jsonify({"success": False, "error": f"Ticker not found: {str(e)}"}), 404
+        
 
     
 @app.route("/generate_post/<ticker>", methods=["POST"])

@@ -6,13 +6,14 @@ import { TickerResponse, TickerData } from "@/common/types/blogPosts/ticker";
  * Custom hook to fetch detailed ticker information
  * 
  * @param ticker - The stock ticker symbol (e.g., 'AAPL', 'TSLA')
+ * @param useCache - Whether to use cached data (default: true)
  * @returns React Query result with ticker data
  */
-export function useTickerQuery(ticker: string) {
+export function useTickerQuery(ticker: string, useCache: boolean = true) {
   const { authState: { user, isLoading: authLoading } } = useAuth();
 
   return useQuery({
-    queryKey: ['ticker', ticker, user?.id],
+    queryKey: ['ticker', ticker, user?.id, useCache],
     queryFn: async (): Promise<TickerResponse> => {
       if (!user?.id) {
         throw new Error('User must be authenticated to fetch ticker data');
@@ -24,7 +25,7 @@ export function useTickerQuery(ticker: string) {
         const requestBody = {
           userId: user.id,
           save_to_db: true,
-          use_cache: true,
+          use_cache: useCache,
         };
         
         const response = await fetch(apiUrl, {

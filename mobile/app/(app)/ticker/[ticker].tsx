@@ -1,5 +1,5 @@
 import type React from "react";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -23,11 +23,26 @@ import { OptionsCard } from "@/common/components/ticker/OptionsTab";
 export default function TickerScreen() {
   const { ticker } = useLocalSearchParams<{ ticker: string }>();
   console.log("[ticker] TICKER", ticker);
+  
+  // State to control cache usage - when false, forces fresh data fetch
+  const [useCache, setUseCache] = useState(true);
+  // Track if we're in a refresh cycle to properly reset useCache after completion
+  const isRefreshingRef = useRef(false);
+  
   const {
     data: tickerResponse,
     isLoading,
     error,
-  } = useTickerQuery(ticker || "");
+  } = useTickerQuery(ticker || "", useCache);
+
+  // Reset useCache to true after refresh completes (when loading finishes)
+  useEffect(() => {
+    if (!isLoading && isRefreshingRef.current && !useCache) {
+      // Query completed, reset cache flag for future queries
+      setUseCache(true);
+      isRefreshingRef.current = false;
+    }
+  }, [isLoading, useCache]);
 
   const [activeTab, setActiveTab] = useState<
     "Summary" | "Analytics" | "Financials" | "Options"
@@ -40,6 +55,21 @@ export default function TickerScreen() {
 
   const handleBack = () => {
     navigateBack();
+  };
+
+  /**
+   * Handles refresh action by bypassing cache and refetching ticker data.
+   * Sets useCache to false, which triggers a new query with fresh data from backend.
+   * React Query automatically refetches when the queryKey changes (useCache is part of it).
+   * The useEffect hook will reset useCache to true after the query completes.
+   */
+  const handleRefetch = () => {
+    if (isLoading) return; // Prevent multiple simultaneous refreshes
+    
+    // Mark that we're refreshing and set useCache to false
+    isRefreshingRef.current = true;
+    setUseCache(false);
+    // React Query will automatically refetch when useCache changes (new queryKey)
   };
 
   // Loading state
@@ -170,6 +200,17 @@ export default function TickerScreen() {
             <Ionicons name="arrow-back" size={20} color="#fff" />
           </Pressable>
           <View className="flex-row items-center">
+          <Pressable 
+            className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30"
+            onPress={handleRefetch}
+            disabled={isLoading}
+          >
+              <Ionicons 
+                name={isLoading ? "hourglass-outline" : "refresh-circle-outline"} 
+                size={20} 
+                color={isLoading ? "#6B7280" : "#44efef"} 
+              />
+            </Pressable>
             <Pressable className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30">
               <Ionicons name="heart-outline" size={20} color="#EF4444" />
             </Pressable>
