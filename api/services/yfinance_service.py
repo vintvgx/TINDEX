@@ -132,7 +132,7 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_opt
         research_data["sentiment_score"] = sentiment.get("score")
         research_data["sentiment_confidence"] = sentiment.get("confidence")
         
-        # NOW perform options analysis using the research data
+        # retrieve options analysis using the research data
         if include_options_analysis:
             try:
                 logger.info(f"Analyzing options for {topic} using research data")
@@ -177,6 +177,49 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_opt
     except Exception as e:
         return {"success": False, "error": f"yFinance research failed: {str(e)}"}
 
+def perform_yfinance_search(ticker: str) -> dict:
+    """
+    Search for ticker and return basic information if found.
+
+    Args:
+        ticker: The ticker being searched
+
+    Returns:
+        Dict containing basic information of the ticker
+    """
+    try:
+        ticker_data = yf.Ticker(ticker)
+
+        # Get basic info
+        try:
+            info = ticker_data.info
+        except Exception as e:
+            logger.warning(f"Failed to get basic info for {ticker}: {str(e)}")
+            info = {}
+
+        # Get current price and change
+        current_price = info.get("currentPrice", 0)
+        previous_close = info.get("previousClose", current_price)
+        price_change = current_price - previous_close
+        price_change_percent = (
+            (price_change / previous_close * 100) if previous_close else 0
+        )
+
+        
+        search_data = {
+            "ticker": ticker,
+            "company_name": info.get("longName", info.get("shortName", ticker)),
+            # Market Data
+            "current_price": current_price,
+            "price_change": round(price_change, 2),
+            "price_change_percent": round(price_change_percent, 2),
+            "logo_url": get_company_logo(info, ticker),
+            "industry": info.get("industry"),
+        }
+        
+        return {"data": search_data, "success": True}
+    except Exception as e:
+        return {"success": False, "error": f"No ticker found:  {str(e)}"}
 
 def convert_dataframe_to_json(df):
     """

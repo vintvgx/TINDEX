@@ -19,7 +19,7 @@ Key Responsibilities:
 
 from typing import Dict, Any, Optional
 from log.logging_config import get_logger
-from services.yfinance_service import perform_yfinance_research
+from services.yfinance_service import perform_yfinance_research, perform_yfinance_search
 
 from datetime import datetime, timedelta, timezone
 
@@ -110,7 +110,6 @@ class StockResearchService:
         timestamp = datetime.now(timezone.utc).isoformat()
         
         try:
-            ticker = ticker.strip().upper()
             logger.info(
                 f"Getting research data for {ticker} (cache={use_cache}, save={save_to_db})"
             )
@@ -189,6 +188,42 @@ class StockResearchService:
                 "cached": False,
                 "timestamp":timestamp
             }
+            
+    def get_ticker_search(
+        self,
+        ticker: str
+    ) -> Dict[str, Any]:
+        """
+        Search for ticker and return data if found.
+
+        Args:
+            ticker (str): Stock ticker symbol to search for
+
+        Returns:
+           Dict[str, Any]: Dictionary with success status and ticker data:
+                - success (bool): Whether the search succeeded
+                - data (dict): Ticker information if found
+                - error (str, optional): Error message if failed
+        """
+        try:
+            logger.info(
+                f"Searching for ticker: {ticker}"
+            )
+            
+            search_results = perform_yfinance_search(ticker)
+            search_data = search_results["data"]
+            
+            return {
+                "success": True,
+                "data": search_data
+            }
+        except Exception as e:
+            logger.error(f"No ticker found for {ticker}: {str(e)}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"No ticker found: {str(e)}"
+            }
+
 
     def _get_cached_research(self, ticker: str) -> Optional[Dict[str, Any]]:
         """

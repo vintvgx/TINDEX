@@ -27,6 +27,7 @@ export default function TickerScreen() {
     data: tickerResponse,
     isLoading,
     error,
+    refetch
   } = useTickerQuery(ticker || "");
 
   const [activeTab, setActiveTab] = useState<
@@ -41,6 +42,10 @@ export default function TickerScreen() {
   const handleBack = () => {
     navigateBack();
   };
+
+  const handleRefetch = () => {
+    refetch()
+  }
 
   // Loading state
   if (isLoading) {
@@ -170,6 +175,17 @@ export default function TickerScreen() {
             <Ionicons name="arrow-back" size={20} color="#fff" />
           </Pressable>
           <View className="flex-row items-center">
+          <Pressable 
+            className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30"
+            onPress={handleRefetch}
+            disabled={isLoading}
+          >
+              <Ionicons 
+                name={isLoading ? "hourglass-outline" : "refresh-circle-outline"} 
+                size={20} 
+                color={isLoading ? "#6B7280" : "#44efef"} 
+              />
+            </Pressable>
             <Pressable className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30">
               <Ionicons name="heart-outline" size={20} color="#EF4444" />
             </Pressable>

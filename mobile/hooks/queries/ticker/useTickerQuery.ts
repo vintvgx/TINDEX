@@ -1,15 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { TickerResponse, TickerData } from "@/common/types/blogPosts/ticker";
+import { useState } from "react";
 
 /**
  * Custom hook to fetch detailed ticker information
  * 
  * @param ticker - The stock ticker symbol (e.g., 'AAPL', 'TSLA')
+ * @param useCache - Whether to use cached data (default: true)
  * @returns React Query result with ticker data
  */
 export function useTickerQuery(ticker: string) {
   const { authState: { user, isLoading: authLoading } } = useAuth();
+  const [bypassCache, setBypassCache] = useState(false);
 
   return useQuery({
     queryKey: ['ticker', ticker, user?.id],
@@ -24,8 +27,11 @@ export function useTickerQuery(ticker: string) {
         const requestBody = {
           userId: user.id,
           save_to_db: true,
-          use_cache: true,
+          use_cache: !bypassCache,
         };
+
+        // Reset bypass flag after use
+        if (bypassCache) setBypassCache(false);
         
         const response = await fetch(apiUrl, {
           method: 'POST',
