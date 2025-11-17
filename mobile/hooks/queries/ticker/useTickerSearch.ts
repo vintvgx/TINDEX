@@ -1,4 +1,4 @@
-import { useAuth } from "@/common/utils/context/auth/AuthContext";
+import { TickerSearchResponse } from "@/common/types/blogPosts/ticker";
 import { useQuery } from "@tanstack/react-query";
 
 /**
@@ -11,7 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 export function useTickerSearch(ticker: string) {
   return useQuery({
     queryKey: ["search", ticker],
-    queryFn: async (): Promise<any> => {
+    queryFn: async (): Promise<TickerSearchResponse> => {
       try {
         const apiUrl = `https://alethia-production.up.railway.app/search/${ticker}`;
 
@@ -40,7 +40,9 @@ export function useTickerSearch(ticker: string) {
         console.warn(`API call failed for ${ticker}`, error);
         return {
           success: false,
+          data: undefined,
           timestamp: Date.now(),
+          error: error instanceof Error ? error.message : "Unknown error",
         };
       }
     },

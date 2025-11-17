@@ -217,8 +217,7 @@ def perform_yfinance_search(ticker: str) -> dict:
             "industry": info.get("industry"),
         }
         
-        return search_data
-
+        return {"data": search_data, "success": True}
     except Exception as e:
         return {"success": False, "error": f"No ticker found:  {str(e)}"}
 

@@ -211,10 +211,11 @@ class StockResearchService:
             )
             
             search_results = perform_yfinance_search(ticker)
+            search_data = search_results["data"]
             
             return {
                 "success": True,
-                "data": search_results
+                "data": search_data
             }
         except Exception as e:
             logger.error(f"No ticker found for {ticker}: {str(e)}", exc_info=True)
