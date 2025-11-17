@@ -1,5 +1,5 @@
 import type React from "react";
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import {
   View,
   Text,
@@ -23,26 +23,12 @@ import { OptionsCard } from "@/common/components/ticker/OptionsTab";
 export default function TickerScreen() {
   const { ticker } = useLocalSearchParams<{ ticker: string }>();
   console.log("[ticker] TICKER", ticker);
-  
-  // State to control cache usage - when false, forces fresh data fetch
-  const [useCache, setUseCache] = useState(true);
-  // Track if we're in a refresh cycle to properly reset useCache after completion
-  const isRefreshingRef = useRef(false);
-  
   const {
     data: tickerResponse,
     isLoading,
     error,
-  } = useTickerQuery(ticker || "", useCache);
-
-  // Reset useCache to true after refresh completes (when loading finishes)
-  useEffect(() => {
-    if (!isLoading && isRefreshingRef.current && !useCache) {
-      // Query completed, reset cache flag for future queries
-      setUseCache(true);
-      isRefreshingRef.current = false;
-    }
-  }, [isLoading, useCache]);
+    refetch
+  } = useTickerQuery(ticker || "");
 
   const [activeTab, setActiveTab] = useState<
     "Summary" | "Analytics" | "Financials" | "Options"
@@ -57,20 +43,9 @@ export default function TickerScreen() {
     navigateBack();
   };
 
-  /**
-   * Handles refresh action by bypassing cache and refetching ticker data.
-   * Sets useCache to false, which triggers a new query with fresh data from backend.
-   * React Query automatically refetches when the queryKey changes (useCache is part of it).
-   * The useEffect hook will reset useCache to true after the query completes.
-   */
   const handleRefetch = () => {
-    if (isLoading) return; // Prevent multiple simultaneous refreshes
-    
-    // Mark that we're refreshing and set useCache to false
-    isRefreshingRef.current = true;
-    setUseCache(false);
-    // React Query will automatically refetch when useCache changes (new queryKey)
-  };
+    refetch()
+  }
 
   // Loading state
   if (isLoading) {

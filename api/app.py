@@ -205,19 +205,23 @@ def get_ticker_data(ticker: str):
         logger.error("Ticker research failed for ticker '%s': %s", ticker, e, exc_info=True)
         return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
     
-@app.route("/search/<ticker>", method=["POST"])
+@app.route("/search/<ticker>", methods=["POST"])
 def search_for_ticker(ticker: str):
     """
     Retrieves a ticker and returns basic information (name, current price, logo etc) to be displayed within search bar.
     
-    Request Body: 
-        ticker: userId (str): The id of the user requesting the data
+    URL Parameters:
++        ticker (str): The stock ticker symbol to search for
 
     Returns:
-        JSON response containing research results  
+        JSON response containing search results  
     """
     try:
+        # Validate ticker and process ticker only if it follows the format
         ticker = ticker.strip().upper()
+        
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({"success": False, "error": "Ticker does not match format"}), 404
         
         # Get research service instance
         research_service = get_research_service()

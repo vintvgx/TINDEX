@@ -197,10 +197,13 @@ class StockResearchService:
         Search for ticker and return data if found.
 
         Args:
-            ticker (str): _description_
+            ticker (str): Stock ticker symbol to search for
 
         Returns:
-            Dict[str, any]: _description_
+           Dict[str, Any]: Dictionary with success status and ticker data:
+                - success (bool): Whether the search succeeded
+                - data (dict): Ticker information if found
+                - error (str, optional): Error message if failed
         """
         try:
             logger.info(
@@ -217,7 +220,7 @@ class StockResearchService:
             logger.error(f"No ticker found for {ticker}: {str(e)}", exc_info=True)
             return {
                 "success": False,
-                "data": "No ticker found"
+                "error": f"No ticker found: {str(e)}"
             }
 
 

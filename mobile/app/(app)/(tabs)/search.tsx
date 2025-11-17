@@ -1,5 +1,3 @@
-"use client";
-
 import { View, Text, SafeAreaView, TextInput } from "react-native";
 import { useState } from "react";
 import { TouchableOpacity } from "react-native";
@@ -9,12 +7,11 @@ const SearchScreen = () => {
   const [searchText, setSearchText] = useState("");
   const { toTicker } = useBaseNavigation();
 
-  const isValidSearch = searchText.length >= 2 && searchText.length <= 5;
+  const isValidSearch = searchText.length >= 1 && searchText.length <= 5;
 
   return (
     <SafeAreaView className="flex-1 bg-black">
       <View className="flex-1 justify-center items-center px-6">
-        {/* <Text className="text-white text-2xl font-bold mb-8">Search</Text> */}
         <View className="flex-row items-center w-full max-w-md">
           <TextInput
             className="flex-1 text-white px-4 py-3 rounded-lg text-5xl"
@@ -23,7 +20,12 @@ const SearchScreen = () => {
             value={searchText}
             onChangeText={setSearchText}
             autoCapitalize="characters"
+            keyboardType="ascii-capable"
             autoCorrect={false}
+            maxLength={5}
+            returnKeyType="search"
+            onSubmitEditing={() => isValidSearch && toTicker(searchText)}
+            accessibilityLabel="Ticker search input"
           />
           {isValidSearch && (
             <TouchableOpacity
