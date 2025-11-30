@@ -2,7 +2,7 @@ export default {
   expo: {
     name: "alethia",
     slug: "alethia",
-    version: "0.0.18",
+    version: "0.0.20",
     orientation: "portrait",
     icon: "./assets/images/icon.png",
     scheme: "mobile",

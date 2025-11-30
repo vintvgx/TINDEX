@@ -1,51 +1,51 @@
+import { MinimizedWatchlistComponent } from "@/common/components/FEED/cards/MinimizedWatchlistComponent";
 import { Header } from "@/common/components/FEED/Header";
 import MainContent from "@/common/components/FEED/MainContent";
 import { AddPostModal } from "@/common/components/FEED/modals/AddPostModal";
 import { PostDetailModal } from "@/common/components/FEED/modals/PostDetailModal";
-import { UnifiedTrendingStocksCard } from "@/common/components/FEED/cards/UnifiedTrendingStocksCard";
-import { useAuth } from "@/common/utils/context/auth/AuthContext";
-import { useFeedQuery } from "@/hooks/queries/blogs/useFeedQuery";
-import { useTrendingStocks } from "@/hooks/queries/trending/useTrendingStocks";
-import { useQueryClientReady } from "@/hooks/queries/useQueryClientReady";
+import { SetMinimizedWatchlistModal } from "@/common/components/FEED/modals/SetMinimizedWatchlistModal";
 import type { BlogPostType } from "@/common/types";
-import { SortBy } from "@/common/types/blogPosts/create";
+import { useAuth } from "@/common/utils/context/auth/AuthContext";
+import { logDebug } from "@/common/utils/strings/function";
+import { useFeedQuery } from "@/hooks/queries/blogs/useFeedQuery";
+import { useQueryClientReady } from "@/hooks/queries/useQueryClientReady";
+import { useWatchlists } from "@/hooks/queries/watchlist/useWatchlist";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { SafeAreaView, View } from "react-native";
-import * as Notifications from "expo-notifications";
-import { router } from 'expo-router';
-
 
 const FeedScreen = () => {
   const queryClient = useQueryClient();
   const isQueryClientReady = useQueryClientReady();
 
   const [selectedPost, setSelectedPost] = useState<BlogPostType | null>(null);
-  const [modalVisible, setModalVisible] = useState(false);
+  const [hasErrorOrNoData, setHasErrorOrNoData] = useState(false);
+
+  //Modals
+  const [blogPostModalVisible, setBlogPostModalVisible] = useState(false);
   const [addModalVisible, setAddModalVisible] = useState(false);
-  const [selectedSortBy, setSelectedSortBy] = useState<SortBy>(SortBy.VOLUME);
-  const [scrollY, setScrollY] = useState(0);
+  const [watchlistModalVisible, setWatchlistModalVisible] = useState(false);
 
+  // Feed data 
   const { data: feed, isLoading: feedLoading } = useFeedQuery();
-  const {
-    data: trendingStocks,
-    isLoading: trendingLoading,
-    error: trendingError,
-  } = useTrendingStocks(selectedSortBy);
+
+  // Watchlists
+  const { data: watchlistsData, isLoading: watchlistsLoading, error: watchlistError, refetch: refetchWatchlists } = useWatchlists();
 
   const {
-    authState: { user },
+    authState: { user, profile },
   } = useAuth();
 
   const handlePostPress = (post: BlogPostType) => {
-    console.log("Post pressed:", post.title);
+    logDebug("Post pressed:", post.title);
     setSelectedPost(post);
-    setModalVisible(true);
+    setBlogPostModalVisible(true);
   };
 
+
   const handleCloseModal = () => {
-    setModalVisible(false);
-    setTimeout(() => setSelectedPost(null), 300);
+      setBlogPostModalVisible(false);
+      setTimeout(() => setSelectedPost(null), 300);
   };
 
   const handleAddPress = () => {
@@ -56,17 +56,33 @@ const FeedScreen = () => {
     setAddModalVisible(false);
   };
 
+  const handleWatchlistModalClose = () => {
+    setWatchlistModalVisible(false)
+  }
+
+  const handleSetWatchlistModalPress = () => {
+    setWatchlistModalVisible(true)
+  }
+
+  const handleWatchlistRefresh = async () => {
+    try {
+      await refetchWatchlists();
+    } catch (error) {
+      console.error("Failed to refresh watchlists:", error);
+    }
+  }
+
+  const handleErrorOrNoDataChange = (hasErrorOrNoData: boolean) => {
+    setHasErrorOrNoData(hasErrorOrNoData);
+  };
+
   const handleBlogPostSuccess = async () => {
-    console.log("Post submitted successfully:");
+    console.log("Post submitted successfully");
     await queryClient.invalidateQueries({ queryKey: ["feed"] });
   };
 
-  const handleSortChange = (sortBy: SortBy) => {
-    setSelectedSortBy(sortBy);
-  };
-
-  const handleScroll = (newScrollY: number) => {
-    setScrollY(newScrollY);
+  const handleScroll = (_newScrollY: number) => {
+    // Scroll handling can be implemented here if needed
   };
 
   return (
@@ -78,14 +94,14 @@ const FeedScreen = () => {
       <Header onAddPress={handleAddPress} />
 
       {/* Unified Trending Stocks Component */}
-      <UnifiedTrendingStocksCard
-        stocks={trendingStocks}
-        isLoading={trendingLoading}
-        error={trendingError}
-        selectedSortBy={selectedSortBy}
-        onSortChange={handleSortChange}
+      <MinimizedWatchlistComponent
+        watchlists={watchlistsData}
+        isLoading={watchlistsLoading}
+        error={watchlistError}
         isQueryClientReady={isQueryClientReady}
-        scrollY={scrollY}
+        openSetWatchlistModal={handleSetWatchlistModalPress}
+        profile={profile}
+        onErrorOrNoDataChange={handleErrorOrNoDataChange}
       />
 
       {/* Main Content */}
@@ -100,13 +116,19 @@ const FeedScreen = () => {
       <PostDetailModal
         user={user}
         post={selectedPost}
-        visible={modalVisible}
+        visible={blogPostModalVisible}
         onClose={handleCloseModal}
       />
       <AddPostModal
         visible={addModalVisible}
         onClose={handleAddModalClose}
         onSubmit={handleBlogPostSuccess}
+      />
+      <SetMinimizedWatchlistModal
+        visible={watchlistModalVisible}
+        onClose={handleWatchlistModalClose}
+        hasErrorOrNoData={hasErrorOrNoData}
+        onRefresh={handleWatchlistRefresh}
       />
     </SafeAreaView>
   );

@@ -10,11 +10,11 @@
  * Provides both type safety and runtime value checking
  */
 export enum WatchlistTypeEnum {
-  BIGGEST_GAINERS = 'biggest-gainers',
+  BIGGEST_GAINERS = 'gainers',
   TRENDING = 'trending',
-  MOST_ACTIVE = 'most-active',
-  INSIDER_BUYING = 'insider_buying',
-  CONGRESS_TRADING = 'congress_trading',
+  MOST_ACTIVE = 'most_active',
+  INSIDER_BUYING = 'insider',
+  CONGRESS_TRADING = 'congress',
   TOP_GAINERS = 'top_gainers',
   TOP_LOSERS = 'top_losers',
 }

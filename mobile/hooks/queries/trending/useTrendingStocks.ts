@@ -1,6 +1,6 @@
 import { SortBy } from "@/common/types/blogPosts/create";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { logDebug } from "@/common/utils/strings/function";
+import { useQuery } from "@tanstack/react-query";
 
 interface TrendingStock {
     ticker: string;
@@ -51,7 +51,7 @@ export function useTrendingStocks(sortBy: SortBy = SortBy.VOLUME) {
                 throw new Error(data.error || 'Failed to fetch trending stocks');
             }
             
-            console.log("Trending stocks fetching successfully")
+            logDebug("Trending stocks fetched")
             return data;
         },
         enabled: true, 

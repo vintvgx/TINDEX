@@ -8,9 +8,9 @@ import { WATCHLIST_LABELS, WatchlistStock } from "@/common/types/watchlist";
 import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
 
 const WatchlistsScreen = () => {
-  const [selectedWatchlist, setSelectedWatchlist] = useState<WatchlistType>('biggest-gainers');
+  const [selectedWatchlist, setSelectedWatchlist] = useState<WatchlistType>('gainers');
   
-  // Fetch all watchlists in a single API call
+  // Fetch all watchlists 
   const { data: watchlistsData, isLoading: watchlistsLoading } = useWatchlists();
 
   // Navigates to selected ticker
@@ -27,8 +27,7 @@ const WatchlistsScreen = () => {
     }
 
     switch (selectedWatchlist) {
-      case 'biggest-gainers':
-        console.log("Biggest gainers len", watchlistsData.watchlists.gainers.count)
+      case 'gainers':
         return {
           stocks: watchlistsData.watchlists.gainers?.data || [],
           isLoading: false,
@@ -38,16 +37,14 @@ const WatchlistsScreen = () => {
           stocks: watchlistsData.watchlists.trending?.data || [],
           isLoading: false,
         };
-      case 'most-active':
-        console.log("Most Act len", watchlistsData.watchlists.most_active.count)
-
+      case 'most_active':
         return {
           stocks: watchlistsData.watchlists.most_active?.data || [],
           isLoading: false,
         };
       // These watchlist types are not yet implemented in the API
-      case 'insider_buying':
-      case 'congress_trading':
+      case 'insider':
+      case 'congress':
       case 'top_gainers':
       case 'top_losers':
         return {

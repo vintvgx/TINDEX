@@ -29,7 +29,7 @@ export function useFeedQuery() {
             throw error;
           }
     
-          logDebug("Feed data fetched successfully.")
+          logDebug("Feed data fetched")
         //   return data as AssessmentResponse[]; //TODO create FeedResponse[]
         return { posts: data as BlogPostType[] };
       },

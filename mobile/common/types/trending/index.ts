@@ -1,4 +1,6 @@
 import { SortBy } from "../blogPosts/create";
+import { UserProfile } from "../user/authModel";
+import { WatchlistResponse, WatchlistType } from "../watchlist";
 
 export interface Stock {
   ticker: string;
@@ -26,10 +28,11 @@ export interface MinimizedTrendingStocksProps {
 // New unified component interface
 export interface UnifiedTrendingStocksProps {
   stocks?: { data: Stock[], timestamp: number };
+  watchlists?: WatchlistResponse;
   isLoading: boolean;
   error: any;
-  selectedSortBy: "volume" | "change" | "pe" | "marketcap";
-  onSortChange: (sortBy: SortBy) => void;
   isQueryClientReady: boolean;
-  scrollY: number; 
+  openSetWatchlistModal: () => void
+  profile: UserProfile | null;
+  onErrorOrNoDataChange?: (hasErrorOrNoData: boolean) => void;
 }
