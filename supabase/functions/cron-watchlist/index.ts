@@ -71,9 +71,9 @@ interface SaveNotificationResponse {
 
 // Add enum to match mobile types
 enum WatchlistTypeEnum {
-  BIGGEST_GAINERS = 'biggest-gainers',
+  BIGGEST_GAINERS = 'gainers',
   TRENDING = 'trending',
-  MOST_ACTIVE = 'most-active',
+  MOST_ACTIVE = 'most_active',
   INSIDER_BUYING = 'insider_buying',
   CONGRESS_TRADING = 'congress_trading',
   TOP_GAINERS = 'top_gainers',

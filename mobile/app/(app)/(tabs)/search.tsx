@@ -44,25 +44,26 @@ const SearchScreen = () => {
     }
   };
 
-  const saveToHistory = async (tickerData: SearchHistoryItem) => {
-    try {
-      // Remove duplicates and add new item at the beginning
-      const updatedHistory = [
-        tickerData,
-        ...searchHistory.filter(item => item.ticker !== tickerData.ticker)
-      ].slice(0, MAX_HISTORY_ITEMS);
-
-      await SecureStore.setItemAsync(HISTORY_KEY, JSON.stringify(updatedHistory));
-      setSearchHistory(updatedHistory);
-    } catch (error) {
-      console.error("Error saving to history:", error);
-    }
-  };
-
-  const handleTickerPress = useCallback((tickerData: SearchHistoryItem) => {
-    saveToHistory(tickerData);
-    toTicker(tickerData.ticker);
-  }, [toTicker, searchHistory]);
+  /**
+   * Saves the ticker to search history and navigates to ticker view.
+   * 
+   * @param tickerData the data of the ticker (used to set the ticker name when navigating to ticker name)
+   */
+  const handleTickerPress = useCallback(async (tickerData: SearchHistoryItem) => {
+        // Remove duplicates and add new item at the beginning
+        const updatedHistory = [
+          tickerData,
+          ...searchHistory.filter(item => item.ticker !== tickerData.ticker)
+        ].slice(0, MAX_HISTORY_ITEMS);
+    
+        try {
+          await SecureStore.setItemAsync(HISTORY_KEY, JSON.stringify(updatedHistory));
+          setSearchHistory(updatedHistory);
+        } catch (error) {
+          console.error("Error saving to history:", error);
+        }
+         toTicker(tickerData.ticker);
+       }, [toTicker, searchHistory]);
 
   const renderTickerCard = ({ item }: { item: SearchHistoryItem }) => {
     const isPositive = item.price_change_percent >= 0;
@@ -104,7 +105,7 @@ const SearchScreen = () => {
         {/* Price Info */}
         <View className="items-end">
           <Text className="text-black text-xl font-bold mb-1">
-            ${item.current_price.toFixed(2)}
+          ${(item.current_price ?? 0).toFixed(2)}
           </Text>
           <View
             className={`px-3 py-1 rounded-full ${

@@ -55,7 +55,7 @@ export interface UserProfile {
 
   // Push Notifications
   expo_push_token?: string | null;
-  watchlist_subscriptions: WatchlistType[]; //  ["biggest-gainers", "trending", "most-active"]
+  watchlist_subscriptions: WatchlistType[]; //  ["gainers", "trending", "most_active", "favorites"]
   notification_preferences: NotificationPreferences;
 
   // User Preferences & Settings

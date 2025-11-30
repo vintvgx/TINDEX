@@ -591,7 +591,7 @@ class YahooWatchlistService:
             
             return {
                 "success": True,
-                "watchlist_type": "most-active",
+                "watchlist_type": "most_active",
                 "data": stocks,
                 "count": len(stocks),
                 "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)

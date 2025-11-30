@@ -17,6 +17,7 @@ export enum WatchlistTypeEnum {
   CONGRESS_TRADING = 'congress',
   TOP_GAINERS = 'top_gainers',
   TOP_LOSERS = 'top_losers',
+  FAVORITES = 'favorites'
 }
 
 /**
@@ -112,6 +113,7 @@ export const WATCHLIST_LABELS: Record<WatchlistTypeEnum, string> = {
   [WatchlistTypeEnum.CONGRESS_TRADING]: 'Congress Trading',
   [WatchlistTypeEnum.TOP_GAINERS]: 'Top Gainers',
   [WatchlistTypeEnum.TOP_LOSERS]: 'Top Losers',
+  [WatchlistTypeEnum.FAVORITES]: 'Favorites'
 };
 
 /**

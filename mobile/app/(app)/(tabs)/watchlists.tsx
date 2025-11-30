@@ -47,6 +47,7 @@ const WatchlistsScreen = () => {
       case 'congress':
       case 'top_gainers':
       case 'top_losers':
+      case 'favorites':
         return {
           stocks: [],
           isLoading: false,
@@ -85,7 +86,7 @@ const WatchlistsScreen = () => {
       {/* Stock Table */}
       <View className="flex-1">
         {/* Show table for implemented watchlist types */}
-        {['biggest-gainers', 'trending', 'most-active'].includes(selectedWatchlist) ? (
+        {['gainers', 'trending', 'most_active', 'favorites'].includes(selectedWatchlist) ? (
           <StockTable stocks={stocks} isLoading={isLoading} onPress={handleNavigation} />
         ) : (
           <View className="flex-1 justify-center items-center px-6">
