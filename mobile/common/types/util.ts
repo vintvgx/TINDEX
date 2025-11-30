@@ -1,7 +1,4 @@
-export interface SearchHistoryItem {
-  term: string;
-  timestamp: string;
-}
+
 
 export interface DeviceInfo {
   device_type?: string;

@@ -232,7 +232,7 @@ def search_for_ticker(ticker: str):
 
     except Exception as e:
         logger.error("Ticker research failed for ticker '%s': %s", ticker, e, exc_info=True)
-        return jsonify({"success": False, "error": f"Ticker not found: {str(e)}"}), 404
+        return jsonify({"success": False, "data" : None, "error": f"Ticker not found: {str(e)}"}), 404
         
 
     

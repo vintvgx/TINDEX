@@ -1,6 +1,6 @@
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { supabase } from "@/lib/supabase/supabase";
-import { ProfileModel } from "@/common/types/user/authModel";
+import { UserProfile } from "@/common/types/user/authModel";
 import { logDebug } from "@/common/utils/strings/function";
 import { useQuery } from "@tanstack/react-query";
 
@@ -13,15 +13,15 @@ export function useProfile() {
       if (!user) return null;
       
       const { data, error } = await supabase
-        .from("profiles")
+        .from("user_profiles")
         .select("*")
         .eq("id", user.id)
         .single();
         
       if (error) throw error;
 
-      logDebug("Profile data fetched successfully.")
-      return data as ProfileModel;
+      logDebug("Profile data fetched.")
+      return data as UserProfile;
     },
     enabled: !!user,
   });

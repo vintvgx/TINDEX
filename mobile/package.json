@@ -1,7 +1,7 @@
 {
   "name": "mobile",
   "main": "expo-router/entry",
-  "version": "0.0.18",
+  "version": "0.0.20",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
@@ -24,6 +24,7 @@
     "@rn-primitives/avatar": "^1.2.0",
     "@rn-primitives/dropdown-menu": "^1.2.0",
     "@rn-primitives/progress": "^1.2.0",
+    "@rn-primitives/radio-group": "^1.2.0",
     "@rn-primitives/slot": "^1.2.0",
     "@rn-primitives/tooltip": "^1.2.0",
     "@supabase/supabase-js": "^2.50.0",

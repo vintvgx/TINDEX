@@ -10,13 +10,14 @@
  * Provides both type safety and runtime value checking
  */
 export enum WatchlistTypeEnum {
-  BIGGEST_GAINERS = 'biggest-gainers',
+  BIGGEST_GAINERS = 'gainers',
   TRENDING = 'trending',
-  MOST_ACTIVE = 'most-active',
-  INSIDER_BUYING = 'insider_buying',
-  CONGRESS_TRADING = 'congress_trading',
+  MOST_ACTIVE = 'most_active',
+  INSIDER_BUYING = 'insider',
+  CONGRESS_TRADING = 'congress',
   TOP_GAINERS = 'top_gainers',
   TOP_LOSERS = 'top_losers',
+  FAVORITES = 'favorites'
 }
 
 /**
@@ -112,6 +113,7 @@ export const WATCHLIST_LABELS: Record<WatchlistTypeEnum, string> = {
   [WatchlistTypeEnum.CONGRESS_TRADING]: 'Congress Trading',
   [WatchlistTypeEnum.TOP_GAINERS]: 'Top Gainers',
   [WatchlistTypeEnum.TOP_LOSERS]: 'Top Losers',
+  [WatchlistTypeEnum.FAVORITES]: 'Favorites'
 };
 
 /**

@@ -1,8 +1,9 @@
 import { Session, User } from "@supabase/supabase-js";
 import { UseMutationResult } from "@tanstack/react-query";
 import { NotificationPreferences } from "../notifications/notificationModel";
-import { DeviceInfo, SearchHistoryItem } from "../util";
+import { DeviceInfo } from "../util";
 import { WatchlistType } from "../watchlist";
+import { SearchHistoryItem } from "../blogPosts/ticker";
 
 // This state tracks:
 // - user: The currently authenticated user (null if not logged in)
@@ -19,6 +20,7 @@ export type AuthContextType = {
 export type AuthState = {
   session: Session | null;
   user: User | null;
+  profile: UserProfile | null;
   isLoading: boolean;
   isAuthenticated: boolean;
 };
@@ -31,7 +33,7 @@ export interface UserModel {
   dob: Date | string;
   isAnonymous: boolean; // Flag for anonymous users
   profileCompletionPercentage: number; // Track completion
-  profile: ProfileModel;
+  profile: UserProfile;
   createdAt: Date;
   lastActiveAt: Date;
 }
@@ -53,7 +55,7 @@ export interface UserProfile {
 
   // Push Notifications
   expo_push_token?: string | null;
-  watchlist_subscriptions: WatchlistType[]; //  ["biggest-gainers", "trending", "most-active"]
+  watchlist_subscriptions: WatchlistType[]; //  ["gainers", "trending", "most_active", "favorites"]
   notification_preferences: NotificationPreferences;
 
   // User Preferences & Settings
@@ -71,6 +73,7 @@ export interface UserProfile {
     | "loss"
     | "volume"
     | null;
+  minimized_watchlist?: "trending" | "gainers" | "most_active" | "favorites" | null;
 
   // Algorithm Improvement Data
   user_interests?: string[] | null; // Array of stock sectors/industries
@@ -126,21 +129,3 @@ export type UserProfileUpdate = Partial<Omit<UserProfile, 'id' | 'created_at'>> 
 // NOTE: removes id, created_at and updated_at from being included fields (should not be used when creating a profile =)
 export type UserProfileCreate = Pick<UserProfile, 'id'> & 
   Partial<Omit<UserProfile, 'id' | 'created_at' | 'updated_at'>>;
-
-/**
- * Represents a user's profile preferences, interests, and experiences.
- * * Note: Property names use snake_case to match the database schema
- */
-export type ProfileModel = {
-  /** Unique identifier for the profile */
-  id: string;
-  /** Reference to the user's ID in the auth system */
-  user_id: string;
-  first_name: string;
-  last_name: string;
-  username: string;
-  phone_number: string;
-  dob: string | null;
-  is_anon: boolean;
-  updated_at: string;
-};

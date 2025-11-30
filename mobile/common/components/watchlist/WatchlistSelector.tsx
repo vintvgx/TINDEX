@@ -9,9 +9,10 @@ interface WatchlistSelectorProps {
 }
 
 const WATCHLIST_OPTIONS: WatchlistType[] = [
-  'biggest-gainers',
+  'gainers',
   'trending',
-  'most-active',
+  'most_active',
+  'favorites',
   // 'insider_buying',
   // 'congress_trading',
   // 'top_gainers',

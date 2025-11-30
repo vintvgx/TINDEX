@@ -27,7 +27,7 @@ export function useTickerQuery(ticker: string) {
         const requestBody = {
           userId: user.id,
           save_to_db: true,
-          use_cache: !bypassCache,
+          use_cache: false,
         };
 
         // Reset bypass flag after use

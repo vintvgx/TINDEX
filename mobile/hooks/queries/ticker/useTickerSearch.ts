@@ -48,7 +48,7 @@ export function useTickerSearch(ticker: string) {
     },
     enabled: !!ticker,
     staleTime: 2 * 60 * 1000, // 2 minutes
-    retry: 1, // Reduced retries since we have mock data fallback
+    retry: 1,
     retryDelay: 1000,
   });
 }
