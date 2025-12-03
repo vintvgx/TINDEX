@@ -2,7 +2,7 @@ import os
 import asyncio
 import json
 from typing import Dict, Any, Optional, AsyncGenerator, List
-
+from anthropic import AsyncAnthropic
 
 class AnthropicService:
     """
