@@ -2,7 +2,6 @@ import os
 import asyncio
 import json
 from typing import Dict, Any, Optional, AsyncGenerator, List
-from anthropic import AsyncAnthropic
 
 
 class AnthropicService:
@@ -19,7 +18,9 @@ class AnthropicService:
     def __init__(self):
         """Initialize Anthropic client with environment variables"""
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-        self.anthropic_model = "claude-3-5-sonnet-20241022"
+        # Use the latest stable Claude 3.5 Sonnet model
+        # If 20241022 doesn't work, try: claude-3-5-sonnet-20240620
+        self.anthropic_model = "claude-haiku-4-5"
 
         if not self.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY not defined")
@@ -102,7 +103,7 @@ class AnthropicService:
             response = await self.client.messages.create(
                 max_tokens=2048,
                 temperature=0.7,
-                model="claude-3-5-sonnet-20241022",
+                model=self.anthropic_model,
                 messages=[  
                     {
                         "role": "user",
@@ -339,11 +340,12 @@ class AnthropicService:
                 }
             else:
                 raise Exception("No content generated from AI response")
-
         except Exception as e:
+            # Handle any other unexpected errors
             return {
                 "success": False,
                 "error": f"Failed to generate ticker update: {str(e)}",
+                "error_type": "unknown_error",
                 "ticker": ticker,
             }
 
@@ -571,7 +573,7 @@ TAGS: [comma-separated list of applicable tags from the list above, e.g., "Volat
         try:
             response = await self.client.messages.create(
                 max_tokens=10,
-                model="claude-3-5-sonnet-20241022",
+                model=self.anthropic_model,
                 messages=[
                     {
                         "role": "user",

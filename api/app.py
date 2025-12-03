@@ -780,7 +780,34 @@ def generate_ticker_update(ticker: str):
         finally:
             loop.close()
 
-        return jsonify(result)
+        # Check if the result indicates failure
+        if not result.get("success", True):
+            # Determine appropriate HTTP status code based on error type
+            error_details = result.get("error_details", {})
+            error_type = error_details.get("type", "unknown_error")
+            status_code = error_details.get("status_code", 500)
+            
+            # Map error types to HTTP status codes
+            if error_type == "not_found_error" or status_code == 404:
+                http_status = 404
+            elif error_type == "connection_error" or error_type == "timeout_error":
+                http_status = 503  # Service Unavailable
+            elif status_code in [400, 401, 403, 429]:
+                http_status = status_code
+            else:
+                http_status = 500
+            
+            logger.error(
+                "Ticker update generation failed for %s: %s (HTTP %s)",
+                ticker,
+                result.get("error", "Unknown error"),
+                http_status,
+            )
+            
+            return jsonify(result), http_status
+
+        # Success case
+        return jsonify(result), 200
 
     except Exception as e:
         logger.error(f"Ticker update generation failed for {ticker}: {str(e)}", exc_info=True)
