@@ -2,7 +2,7 @@ import time
 import re
 import asyncio
 import json
-from typing import Optional
+from typing import Optional, Dict, Any
 from dataclasses import dataclass, asdict
 
 from bs4 import BeautifulSoup
@@ -676,7 +676,7 @@ def generate_blog_post(ticker: str, target_length: int = 800):
         research_data = research_service.get_research_data(
             ticker=ticker,
             use_cache=True,
-            save_to_db=True
+            save_to_db=True 
         )
 
         # Run async function in sync context
@@ -701,6 +701,125 @@ def generate_blog_post(ticker: str, target_length: int = 800):
             jsonify({"success": False, "error": f"Blog generation failed: {str(e)}"}),
             500,
         )
+        
+@app.route("/generate_ticker_update/<ticker>", methods=["POST"])
+def generate_ticker_update(ticker: str):
+    """
+    Generates a ticker update (tweet-like content) with market analysis tags.
+
+    This endpoint generates a concise, engaging update about a stock ticker based on
+    research data. The update is similar to a tweet (270 characters max by default) and
+    includes relevant market tags such as "Good for Puts", "Stock to buy", "Volatile", etc.
+
+    Args:
+        ticker (str): Stock ticker symbol from URL path
+
+    Request Body (JSON, optional):
+        - target_length (int): Maximum character length for the update (default: 270)
+
+    Returns:
+        JSON response containing:
+            - success (bool): Whether generation succeeded
+            - content (str): The generated ticker update text
+            - tags (list[str]): List of relevant market tags
+            - character_count (int): Actual character count of content
+            - ticker (str): The ticker symbol
+            - error (str, optional): Error message if failed
+    """
+    try:
+        # Validate ticker from URL path
+        ticker = ticker.strip().upper()
+
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({
+                "success": False,
+                "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."
+            }), 400
+
+        # Get target_length from request body if provided
+        request_data = request.get_json() or {}
+        target_length = request_data.get("target_length", 270)
+
+        # Validate target_length
+        if not isinstance(target_length, int) or target_length < 50 or target_length > 500:
+            target_length = 270  # Default to 270 if invalid
+
+        # Get research service instance
+        research_service = get_research_service()
+
+        # Get research data using the service layer
+        research_result = research_service.get_research_data(
+            ticker=ticker,
+            use_cache=True,
+            save_to_db=True
+        )
+
+        # Check if research data retrieval was successful
+        if not research_result.get("success"):
+            return jsonify({
+                "success": False,
+                "error": research_result.get("error", "Failed to retrieve research data"),
+                "ticker": ticker,
+            }), 500
+
+        # Extract research data (may be nested in "data" key)
+        research_data = research_result
+        # research_data = research_result["data"]
+
+        # Run async function in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(
+                anthropic_service.generate_ticker_update(
+                    research_data=research_data,
+                    target_length=target_length,
+                    ticker=ticker,
+                )
+            )
+        finally:
+            loop.close()
+
+        # Check if the result indicates failure
+        if not result.get("success", True):
+            # Determine appropriate HTTP status code based on error type
+            error_details = result.get("error_details", {})
+            error_type = error_details.get("type", "unknown_error")
+            status_code = error_details.get("status_code", 500)
+            
+            # Map error types to HTTP status codes
+            if error_type == "not_found_error" or status_code == 404:
+                http_status = 404
+            elif error_type == "connection_error" or error_type == "timeout_error":
+                http_status = 503  # Service Unavailable
+            elif status_code in [400, 401, 403, 429]:
+                http_status = status_code
+            else:
+                http_status = 500
+            
+            logger.error(
+                "Ticker update generation failed for %s: %s (HTTP %s)",
+                ticker,
+                result.get("error", "Unknown error"),
+                http_status,
+            )
+            
+            return jsonify(result), http_status
+
+        # Success case
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error(f"Ticker update generation failed for {ticker}: {str(e)}", exc_info=True)
+        return (
+            jsonify({
+                "success": False,
+                "error": f"Ticker update generation failed: {str(e)}",
+                "ticker": ticker,
+            }),
+            500,
+        )
+
 
 
 @app.route("/trending-stocks-sort", methods=["GET", "POST"])
