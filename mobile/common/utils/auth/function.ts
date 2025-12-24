@@ -103,8 +103,6 @@ export const signInWithApple = async () => {
         token: credential.identityToken,
       });
 
-      console.log("Apple authentication successful:", prettyJSON(data));
-
       if (error) {
         console.log("Apple authentication error:", error);
         throw error;
