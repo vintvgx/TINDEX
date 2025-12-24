@@ -1,5 +1,9 @@
 import { supabase } from "@/lib/supabase/supabase";
-import { AuthContextType, AuthState, UserProfile } from "@/common/types/user/authModel";
+import {
+  AuthContextType,
+  AuthState,
+  UserProfile,
+} from "@/common/types/user/authModel";
 // import {
 //   checkAssessmentStatus,
 //   checkProfileStatus,
@@ -10,7 +14,13 @@ import { Session } from "@supabase/supabase-js";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 //@ts-ignore
 import { router } from "expo-router";
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+} from "react";
 import { NotificationService } from "@/common/services/NotificationService";
 import { SecureStorageService } from "@/common/services/SecureStorageService";
 
@@ -30,120 +40,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // state to track initial navigation
   const [isInitialized, setIsInitialized] = useState(false);
-
-  /**
-   * Handles session state changes in the authentication flow.
-   *
-   * This function updates the authentication state based on the current session.
-   * It follows a two-step approach to prevent premature navigation:
-   * Updates user and session data while keeping the loading state active and sets isLoading to false when complete
-   *
-   *
-   * @param session - The current Supabase session or null if no active session
-   */
-  const handleSessionChange = useCallback(async (session: Session | null) => {
-    logDebug("Handling session change");
-    if (session) {
-      setAuthState((prev) => ({
-        ...prev,
-        user: session.user,
-        session,
-        isAuthenticated: true,
-        // Keep isLoading true until we check onboarding???
-        isLoading: true,
-      }));
-
-      // Fetch user profile and refresh feed
-      if (session.user?.id) {
-        queryClient.invalidateQueries({
-          queryKey: ["feed", session.user.id],
-        });
-
-        queryClient.invalidateQueries({
-          queryKey: ["profile", session.user.id],
-        });
-
-        // Check if profile data is already in cache and set it immediately
-        const cachedProfile = queryClient.getQueryData<UserProfile>([
-          "profile",
-          session.user.id,
-        ]);
-
-        if (cachedProfile) {
-          setAuthState((prev) => ({
-            ...prev,
-            profile: cachedProfile,
-          }));
-        }
-      }
-
-      // Update the state
-      setAuthState((prev) => ({
-        ...prev,
-        isLoading: false,
-      }));
-    } else {
-      setAuthState({
-        session: null,
-        user: null,
-        profile: null,
-        isLoading: false,
-        isAuthenticated: false,
-      });
-      // Clear all queries from the cache on signout
-      queryClient.clear();
-    }
-  }, [queryClient]);
-
-  // Subscribe to profile query data and update authState when it changes
-  useEffect(() => {
-    const userId = authState.user?.id;
-    
-    if (!userId) {
-      // Clear profile if no user
-      setAuthState((prev) => ({
-        ...prev,
-        profile: null,
-      }));
-      return;
-    }
-
-    // Subscribe to profile query data
-    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
-      if (event?.query?.queryKey?.[0] === "profile" && event?.query?.queryKey?.[1] === userId) {
-        const profileData = queryClient.getQueryData<UserProfile>([
-          "profile",
-          userId,
-        ]);
-
-        if (profileData) {
-          logDebug("Profile data updated in authState");
-          setAuthState((prev) => ({
-            ...prev,
-            profile: profileData,
-          }));
-        }
-      }
-    });
-
-    // Also check if profile data already exists in cache
-    const cachedProfile = queryClient.getQueryData<UserProfile>([
-      "profile",
-      userId,
-    ]);
-
-    if (cachedProfile) {
-      logDebug("Using cached profile data")
-      setAuthState((prev) => ({
-        ...prev,
-        profile: cachedProfile,
-      }));
-    }
-
-    return () => {
-      unsubscribe();
-    };
-  }, [authState.user?.id, queryClient]);
 
   // Initialize session data and set up auth listeners
   useEffect(() => {
@@ -184,7 +80,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           sessionData = session;
         }
 
-        // Success
+        // Successfully retrieved session or exhausted retries
         if (sessionData) {
           // Process the session and update state
           await handleSessionChange(sessionData);
@@ -238,7 +134,127 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       subscription.unsubscribe();
     };
-  }, [queryClient, handleSessionChange]);
+  }, [queryClient]);
+
+  /**
+   * Handles session state changes in the authentication flow.
+   *
+   * This function updates the authentication state based on the current session.
+   * It follows a two-step approach to prevent premature navigation:
+   * Updates user and session data while keeping the loading state active and sets isLoading to false when complete
+   *
+   *
+   * @param session - The current Supabase session or null if no active session
+   */
+  const handleSessionChange = useCallback(
+    async (session: Session | null) => {
+      logDebug("Handling session change");
+      if (session) {
+        setAuthState((prev) => ({
+          ...prev,
+          user: session.user,
+          session,
+          isAuthenticated: true,
+          // Keep isLoading true until we check onboarding???
+          isLoading: true,
+        }));
+
+        // Fetch user profile and refresh feed
+        if (session.user?.id) {
+          queryClient.invalidateQueries({
+            queryKey: ["feed", session.user.id],
+          });
+
+          queryClient.invalidateQueries({
+            queryKey: ["profile", session.user.id],
+          });
+
+          // Check if profile data is already in cache and set it immediately
+          const cachedProfile = queryClient.getQueryData<UserProfile>([
+            "profile",
+            session.user.id,
+          ]);
+
+          if (cachedProfile) {
+            setAuthState((prev) => ({
+              ...prev,
+              profile: cachedProfile,
+            }));
+          }
+        }
+
+        // Update the state
+        setAuthState((prev) => ({
+          ...prev,
+          isLoading: false,
+        }));
+      } else {
+        setAuthState({
+          session: null,
+          user: null,
+          profile: null,
+          isLoading: false,
+          isAuthenticated: false,
+        });
+        // Clear all queries from the cache on signout
+        queryClient.clear();
+      }
+    },
+    [queryClient]
+  );
+
+  // Subscribe to profile query data and update authState when it changes
+  useEffect(() => {
+    const userId = authState.user?.id;
+
+    if (!userId) {
+      // Clear profile if no user
+      setAuthState((prev) => ({
+        ...prev,
+        profile: null,
+      }));
+      return;
+    }
+
+    // Subscribe to profile query data
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (
+        event?.query?.queryKey?.[0] === "profile" &&
+        event?.query?.queryKey?.[1] === userId
+      ) {
+        const profileData = queryClient.getQueryData<UserProfile>([
+          "profile",
+          userId,
+        ]);
+
+        if (profileData) {
+          logDebug("Profile data updated in authState");
+          setAuthState((prev) => ({
+            ...prev,
+            profile: profileData,
+          }));
+        }
+      }
+    });
+
+    // Also check if profile data already exists in cache
+    const cachedProfile = queryClient.getQueryData<UserProfile>([
+      "profile",
+      userId,
+    ]);
+
+    if (cachedProfile) {
+      logDebug("Using cached profile data");
+      setAuthState((prev) => ({
+        ...prev,
+        profile: cachedProfile,
+      }));
+    }
+
+    return () => {
+      unsubscribe();
+    };
+  }, [authState.user?.id, queryClient]);
 
   // Handle navigation based on auth and onboarding state
   useEffect(() => {
@@ -270,8 +286,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     mutationFn: async () => {
       console.log("Signing out");
 
-       // Clear notification token before signing out
-       if (authState.user?.id) {
+      // Clear notification token before signing out
+      if (authState.user?.id) {
         try {
           await NotificationService.removeExpoPushToken(authState.user.id);
           await SecureStorageService.removeExpoPushToken();

@@ -40,7 +40,7 @@ export interface UserModel {
 
 /**
  * Represents a user's profile basic info, preferences, data and notification settings.
- * 
+ *
  * TODO ProfileModel is used below, replace useProfileQuery with UserProfile type
  */
 export interface UserProfile {
@@ -73,7 +73,12 @@ export interface UserProfile {
     | "loss"
     | "volume"
     | null;
-  minimized_watchlist?: "trending" | "gainers" | "most_active" | "favorites" | null;
+  minimized_watchlist?:
+    | "trending"
+    | "gainers"
+    | "most_active"
+    | "favorites"
+    | null;
 
   // Algorithm Improvement Data
   user_interests?: string[] | null; // Array of stock sectors/industries
@@ -121,11 +126,13 @@ export interface UserProfile {
 }
 
 // Helper type for updating user profile (all fields optional except id)
-export type UserProfileUpdate = Partial<Omit<UserProfile, 'id' | 'created_at'>> & {
+export type UserProfileUpdate = Partial<
+  Omit<UserProfile, "id" | "created_at">
+> & {
   id: string;
 };
 
 // Helper type for creating initial user profile
 // NOTE: removes id, created_at and updated_at from being included fields (should not be used when creating a profile =)
-export type UserProfileCreate = Pick<UserProfile, 'id'> & 
-  Partial<Omit<UserProfile, 'id' | 'created_at' | 'updated_at'>>;
+export type UserProfileCreate = Pick<UserProfile, "id"> &
+  Partial<Omit<UserProfile, "id" | "created_at" | "updated_at">>;

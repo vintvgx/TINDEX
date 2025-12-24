@@ -91,17 +91,22 @@ export function useNotifications() {
    */
   const initializeNotifications = useCallback(async (): Promise<void> => {
     try {
+      console.log("Initializing notifications")
       setIsRegistering(true);
 
       // Check if there is a cached token for faster initialization
       const cachedToken = await SecureStorageService.getExpoPushToken();
 
+      // NOTE: Sets cached token immediately
       if (cachedToken) {
         console.log("Using cached expo push token");
         setExpoPushToken(cachedToken);
+      } else {
+        console.log("No cached token found. Registering for token.")
       }
 
       // Register for push notifications and get new token
+      // NOTE: Validates token by confirming the token with Expo's service 
       const token = await registerForPushNotificationsAsync();
 
       if (token && authState.user?.id) {
@@ -154,8 +159,10 @@ export function useNotifications() {
     if (authState.isAuthenticated && authState.user?.id) {
       initializeNotifications();
     } else {
+      console.log("User currently not authenticated. No push token retrieved/saved.")
       // Clear token on logout to prevent unauthorized notifications
       setExpoPushToken(undefined);
+
     }
 
     /**
@@ -374,7 +381,7 @@ async function registerForPushNotificationsAsync(): Promise<string | undefined> 
     if (existingStatus !== "granted") {
       const { status } = await Notifications.requestPermissionsAsync();
       finalStatus = status;
-    }
+    } 
 
     // Exit early if permissions are denied
     if (finalStatus !== "granted") {

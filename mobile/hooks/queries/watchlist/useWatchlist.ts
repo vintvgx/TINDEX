@@ -28,8 +28,6 @@ export function useWatchlists()  {
           throw new Error(data.error || 'Failed to fetch biggest-gainers watchlists');
       }
       
-      console.log("All watchlists fetching successfully")
-      console.log(prettyJSON(data))
       return data;
     },
     enabled: true, 
