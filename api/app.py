@@ -1008,11 +1008,6 @@ def stop_orb_monitoring():
     """Stop ORB monitoring - called by Supabase cron at 5:00 PM"""
     global orb_service
     
-    # Verify internal API key
-    auth_header = request.headers.get('Authorization')
-    if auth_header != f"Bearer {os.getenv('INTERNAL_API_KEY')}":
-        return jsonify({"error": "Unauthorized"}), 401
-    
     try:
         if orb_service and orb_service.is_running:
             asyncio.run(orb_service.stop())
