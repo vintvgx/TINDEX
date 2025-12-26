@@ -61,28 +61,7 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
 
   const isLoadingAction = startMutation.isPending || stopMutation.isPending;
 
-  // Show toast notifications for mutation results
-  useEffect(() => {
-    if (startMutation.isSuccess) {
-      showToast('ORB monitoring service started successfully', 'success');
-    }
-  }, [startMutation.isSuccess]);
-
-  useEffect(() => {
-    if (startMutation.isError) {
-      const errorMessage = startMutation.error instanceof Error 
-        ? startMutation.error.message 
-        : 'Failed to start ORB service';
-      showToast(errorMessage, 'error');
-    }
-  }, [startMutation.isError, startMutation.error]);
-
-  useEffect(() => {
-    if (stopMutation.isSuccess) {
-      showToast('ORB monitoring service stopped successfully', 'success');
-    }
-  }, [stopMutation.isSuccess]);
-
+  // show alert if there is an error
   useEffect(() => {
     if (stopMutation.isError) {
       const errorMessage = stopMutation.error instanceof Error 
