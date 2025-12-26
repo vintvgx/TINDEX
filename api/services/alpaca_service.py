@@ -10,11 +10,9 @@ import aiohttp
 from supabase import create_client, Client
 
 from alpaca.data.live import StockDataStream, OptionDataStream
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
 from alpaca.data.enums import DataFeed
 from alpaca.data.models import Bar
+import yfinance as yf
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -51,12 +49,6 @@ class AlpacaService:
 
         # Initialize supabase
         self.supabase: Client = create_client(self.supabase_url, self.supabase_key)
-
-        # Initialize historical data client for fetching ORB ranges
-        self.historical_client = StockHistoricalDataClient(
-            self.alpaca_api_key,
-            self.alpaca_secret_key
-        )
 
         # Market timezone
         self.et_timezone = pytz.timezone("America/New_York")
@@ -136,76 +128,96 @@ class AlpacaService:
 
     async def fetch_orb_range_historical(self, ticker: str) -> Optional[Dict]:
         """
-        Fetch ORB range using historical data (9:30-9:45 AM window).
+        Fetch ORB range using yfinance historical data (9:30-9:45 AM window).
         
-        This is the RELIABLE method - works even if service starts late.
-        Uses Alpaca's REST API to get minute bars for the ORB window.
+        Uses yfinance instead of Alpaca's historical API because Alpaca's free tier
+        only allows access to the latest 15 minutes of historical data.
+        
+        yfinance provides free access to intraday minute data for the current day.
         """
         try:
             today = self.get_current_et_time().date()
-
-            # Define the ORB window in ET timezone
-            orb_start = self.et_timezone.localize(
-                datetime.combine(today, self.market_open)
-            )
-            orb_end = self.et_timezone.localize(
-                datetime.combine(today, self.orb_end)
-            )
-
-            logger.info(f"Fetching historical bars for {ticker}: {orb_start} to {orb_end}")
-
-            request = StockBarsRequest(
-                symbol_or_symbols=ticker,
-                timeframe=TimeFrame.Minute,
-                start=orb_start,
-                end=orb_end,
-                feed=DataFeed.IEX
-            )
-
-            # This is a sync call, run in executor to not block
+            
+            logger.info(f"Fetching historical bars for {ticker} from yfinance for {today}")
+            
+            # Run yfinance call in executor to not block async loop
             loop = asyncio.get_event_loop()
-            bars = await loop.run_in_executor(
-                None,
-                lambda: self.historical_client.get_stock_bars(request)
-            )
-
-            if not bars or ticker not in bars:
-                logger.warning(f"No historical bars found for {ticker} in ORB window")
+            
+            def fetch_yfinance_data():
+                import yfinance as yf
+                stock = yf.Ticker(ticker)
+                # Get today's 1-minute bars
+                # period="1d" with interval="1m" gets today's minute data
+                hist = stock.history(period="1d", interval="1m")
+                return hist
+            
+            hist = await loop.run_in_executor(None, fetch_yfinance_data)
+            
+            if hist is None or hist.empty:
+                logger.warning(f"No yfinance data returned for {ticker} - market may be closed")
                 return None
-
-            ticker_bars = bars[ticker]
-            if not ticker_bars:
-                logger.warning(f"Empty bar list for {ticker}")
+            
+            # Debug: Log what we got
+            logger.info(f"yfinance returned {len(hist)} bars for {ticker}")
+            if not hist.empty:
+                logger.info(f"  Time range: {hist.index[0]} to {hist.index[-1]}")
+            
+            # Filter to ORB window (9:30-9:45 AM ET)
+            # yfinance returns timestamps in the exchange timezone (ET for US stocks)
+            orb_start_time = self.market_open  # time(9, 30)
+            orb_end_time = self.orb_end  # time(9, 45)
+            
+            # Convert index to ET timezone if needed and filter
+            orb_bars = []
+            for idx, row in hist.iterrows():
+                # Get the time component
+                bar_time = idx.time()
+                
+                # Check if bar falls within ORB window
+                if orb_start_time <= bar_time <= orb_end_time:
+                    orb_bars.append({
+                        'time': idx,
+                        'open': row['Open'],
+                        'high': row['High'],
+                        'low': row['Low'],
+                        'close': row['Close'],
+                        'volume': row['Volume']
+                    })
+            
+            if not orb_bars:
+                logger.warning(f"No bars found in ORB window (9:30-9:45) for {ticker}")
+                logger.info(f"  Available times: {[idx.time() for idx in hist.index[:10]]}...")
                 return None
-
-            # Calculate ORB from historical bars
-            # Use the actual high/low from each bar, not just close prices
-            highs = [Decimal(str(bar.high)) for bar in ticker_bars]
-            lows = [Decimal(str(bar.low)) for bar in ticker_bars]
-            volumes = [bar.volume for bar in ticker_bars]
-
+            
+            logger.info(f"Found {len(orb_bars)} bars in ORB window for {ticker}")
+            
+            # Calculate ORB from the filtered bars
+            highs = [Decimal(str(bar['high'])) for bar in orb_bars]
+            lows = [Decimal(str(bar['low'])) for bar in orb_bars]
+            volumes = [int(bar['volume']) for bar in orb_bars]
+            
             orb_high = max(highs)
             orb_low = min(lows)
-            opening_price = Decimal(str(ticker_bars[0].open))
+            opening_price = Decimal(str(orb_bars[0]['open']))  # First bar's open
             total_volume = sum(volumes)
-
+            
             orb_data = {
                 "high": orb_high,
                 "low": orb_low,
                 "open": opening_price,
                 "volume": total_volume
             }
-
+            
             logger.info(
-                f"[HISTORICAL ORB] {ticker}: "
+                f"[HISTORICAL ORB via yfinance] {ticker}: "
                 f"High={orb_high}, Low={orb_low}, Open={opening_price}, "
-                f"Volume={total_volume}, Bars={len(ticker_bars)}"
+                f"Volume={total_volume}, Bars={len(orb_bars)}"
             )
-
+            
             return orb_data
-
+            
         except Exception as e:
-            logger.error(f"Error fetching historical ORB for {ticker}: {e}", exc_info=True)
+            logger.error(f"Error fetching historical ORB for {ticker} via yfinance: {e}", exc_info=True)
             return None
 
     async def ensure_orb_ranges(self):
@@ -483,7 +495,7 @@ class AlpacaService:
                 self.supabase.table("user_profiles")
                 .select("id, expo_push_token, notification_preferences")
                 .in_("id", user_ids)
-                .not_("expo_push_token", "is", None)
+                .neq("expo_push_token", "null")
                 .execute()
             )
 
@@ -491,9 +503,11 @@ class AlpacaService:
                 logger.info(f"No users with push tokens for {ticker}")
                 return
 
+            # Filter for users with valid tokens and proper notification settings
             eligible_users = [
                 user for user in profiles_response.data
-                if user.get("notification_preferences", {}).get("enabled", False)
+                if user.get("expo_push_token")  # Ensure token exists
+                and user.get("notification_preferences", {}).get("enabled", False)
                 and user.get("notification_preferences", {}).get("orb_alerts", True)
             ]
 
@@ -660,17 +674,19 @@ class AlpacaService:
                 self.supabase.table("user_profiles")
                 .select("id, expo_push_token, notification_preferences")
                 .in_("id", user_ids)
-                .not_.is_("expo_push_token", None)
                 .execute()
             )
 
             if not profiles_response.data:
                 return []
 
+            # Filter out users without push tokens and without proper notification settings
+            # TODO [2025-12-26] apply logic when multiple users ,  right now just testing for @vintvgx
             eligible_users = [
                 user for user in profiles_response.data
-                if user.get("notification_preferences", {}).get("enabled", True)
-                or user.get("notification_preferences", {}).get("orb_alerts", True)
+                if user.get("expo_push_token")  # Ensure token exists
+                # and user.get("notification_preferences", {}).get("enabled", True)
+                # or user.get("notification_preferences", {}).get("orb_alerts", True)
             ]
 
             return eligible_users
