@@ -1011,12 +1011,15 @@ def get_orb_status():
     """Check ORB monitoring status"""
     global orb_service
     
-    if orb_service and orb_service.is_running:
+    # Safely check if service exists and is running
+    if (orb_service and 
+        hasattr(orb_service, 'is_running') and 
+        orb_service.is_running):
         return jsonify({
             "running": True,
-            "calculation_phase": orb_service.calculation_phase,
-            "active_tickers": list(orb_service.active_tickers),
-            "orb_ranges_count": len(orb_service.orb_ranges)
+            "calculation_phase": getattr(orb_service, 'calculation_phase', False),
+            "active_tickers": list(getattr(orb_service, 'active_tickers', set())),
+            "orb_ranges_count": len(getattr(orb_service, 'orb_ranges', {}))
         })
     
     return jsonify({"running": False})

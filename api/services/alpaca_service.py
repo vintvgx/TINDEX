@@ -76,6 +76,7 @@ class AlpacaService:
         # Service state
         self.is_running = False
         self.calculation_phase = False  # True during 9:30-9:45
+        self._stream_task: Optional[asyncio.Task] = None  # Track the stream task
         
         # url for sending push notifications
         self.expo_push_url = "https://exp.host/--/api/v2/push/send"
@@ -508,7 +509,9 @@ class AlpacaService:
                         await self.subscribe_to_tickers()
 
                         # Start streaming
-                        asyncio.create_task(self.stock_stream.run())
+                        if self._stream_task is None or self._stream_task.done():
+                            self._stream_task = asyncio.create_task(self.stock_stream.run())
+                            logger.info("Stock stream task created in calculation phase")
 
                 elif self.calculation_phase:
                     # Just exited ORB period - save ranges
@@ -533,24 +536,59 @@ class AlpacaService:
     async def start(self):
         """Start the monitoring service"""
         try:
+            # Ensure is_running is set early to prevent NoneType errors
+            self.is_running = True
+            
             # Load any existing ORB ranges for today
             if not self.is_orb_calculation_period():
                 await self.load_orb_ranges()
                 await self.subscribe_to_tickers()
-                asyncio.create_task(self.stock_stream.run())
+                
+                # Start the stream task and store it for proper management
+                try:
+                    self._stream_task = asyncio.create_task(self.stock_stream.run())
+                    logger.info("Stock stream task created")
+                except Exception as e:
+                    logger.error(f"Failed to start stock stream: {e}", exc_info=True)
+                    raise
 
             await self.run_service()
 
         except Exception as e:
-            logger.error(f"Service error: {e}")
+            logger.error(f"Service error: {e}", exc_info=True)
+            # Ensure is_running is False on error
+            self.is_running = False
         finally:
             await self.stop()
 
     async def stop(self):
         """Stop the monitoring service"""
         logger.info("Stopping ORB Monitoring Service")
-        self.is_running = False
-        await self.stock_stream.close()
+        
+        # Set is_running to False first
+        if hasattr(self, 'is_running'):
+            self.is_running = False
+        
+        # Cancel the stream task if it exists
+        if hasattr(self, '_stream_task') and self._stream_task is not None:
+            try:
+                self._stream_task.cancel()
+                try:
+                    await self._stream_task
+                except asyncio.CancelledError:
+                    logger.info("Stream task cancelled successfully")
+                except Exception as e:
+                    logger.error(f"Error waiting for stream task cancellation: {e}")
+            except Exception as e:
+                logger.error(f"Error cancelling stream task: {e}")
+        
+        # Close the stock stream
+        if hasattr(self, 'stock_stream') and self.stock_stream is not None:
+            try:
+                await self.stock_stream.close()
+                logger.info("Stock stream closed")
+            except Exception as e:
+                logger.error(f"Error closing stock stream: {e}")
 
 
 # Global instance for singleton pattern
