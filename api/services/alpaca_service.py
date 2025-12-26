@@ -832,39 +832,42 @@ class AlpacaService:
                 )
                 await self.record_breakout(ticker, "below", bar_low)
 
-    def _sync_bar_handler(self, data: Bar):
+    async def _bar_handler(self, data: Bar):
         """
-        Synchronous wrapper for handle_bar.
-        Alpaca's subscribe_bars expects a sync callback.
+        Async handler for bar data.
+        Alpaca's subscribe_bars requires a coroutine function.
         """
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(self.handle_bar(data))
-            else:
-                loop.run_until_complete(self.handle_bar(data))
+            await self.handle_bar(data)
         except Exception as e:
-            logger.error(f"Error in bar handler wrapper: {e}")
+            logger.error(f"Error in bar handler: {e}")
 
     async def subscribe_to_tickers(self):
         """Subscribe to bar data for followed tickers"""
-        tickers = await self.load_followed_stocks()
+        try: 
+            tickers = await self.load_followed_stocks()
 
-        if not tickers:
-            logger.warning("No tickers to monitor - check user_stock_follows table")
-            return False
+            if not tickers:
+                logger.warning("No tickers to monitor - check user_stock_follows table")
+                return False
 
-        self.active_tickers = tickers
+            self.active_tickers = tickers
 
-        # Create fresh stream instance
-        self._create_stock_stream()
+            # Create fresh stream instance
+            self._create_stock_stream()
 
-        # Subscribe using the SYNC handler
-        self.stock_stream.subscribe_bars(self._sync_bar_handler, *list(tickers))
-        self.subscribed_tickers = tickers.copy()
+            if not self.stock_stream:
+                logger.error(f"Unable to create stock stream")
+                raise RuntimeError("Unable to create stock stream")
+            
+            # Subscribe using the async handler (Alpaca requires a coroutine)
+            self.stock_stream.subscribe_bars(self._bar_handler, *list(tickers))
+            self.subscribed_tickers = tickers.copy()
 
-        logger.info(f"Subscribed to bars for {len(tickers)} tickers: {list(tickers)}")
-        return True
+            logger.info(f"Subscribed to bars for {len(tickers)} tickers: {list(tickers)}")
+            return True
+        except Exception as e:
+            logger.error(f"Error during unsubscribe: {e}")
 
     async def unsubscribe_all(self):
         """Unsubscribe from all tickers before closing"""
