@@ -673,7 +673,7 @@ class AlpacaService:
             profiles_response = (
                 self.supabase.table("user_profiles")
                 .select("id, expo_push_token, notification_preferences")
-                .in_("id", user_ids)
+                # .in_("id", user_ids)
                 .execute()
             )
 
