@@ -42,7 +42,7 @@ class AlpacaService:
 
         # Supabase setup
         self.supabase_url = os.getenv("SUPABASE_URL")
-        self.supabase_key = os.getenv("SUPABASE_ANON_KEY")
+        self.supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
         if not self.supabase_url or not self.supabase_key:
             raise ValueError("Supabase credentials not defined")
@@ -673,7 +673,7 @@ class AlpacaService:
             profiles_response = (
                 self.supabase.table("user_profiles")
                 .select("id, expo_push_token, notification_preferences")
-                # .in_("id", user_ids)
+                .in_("id", user_ids)
                 .execute()
             )
 
