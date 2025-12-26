@@ -269,8 +269,30 @@ class AlpacaService:
             
             notification_tasks = []
             for user in eligible_users:
+                message_title = f"🚨 ORB Alert: {ticker}"
+                direction = "above ORB high" if breakout_type == "above" else "below ORB low"
+                message_body = f"{ticker} broke {direction} at ${float(price):.2f}"
+                
+                message = {
+                    "sound": "default",
+                    "title": message_title,
+                    "body": message_body,
+                    "data": {
+                        "type": "orb_breakout",
+                        "ticker": ticker,
+                        "breakout_type": breakout_type,
+                        "price": float(price),
+                        "screen": "ticker",
+                        "timestamp": self.get_current_et_time().isoformat()
+                    },
+                    "badge": 1,
+                    "priority": "high",
+                    "channelId": "orb-alerts",
+                }
+                
                 task = self._send_push_notification(
                     user=user,
+                    message=message,
                     ticker=ticker,
                     breakout_type=breakout_type,
                     price=price
@@ -293,11 +315,10 @@ class AlpacaService:
     async def _send_push_notification(
         self, 
         user: Dict, 
-        ticker: str, 
-        breakout_type: str, 
-        price: Decimal,
-        title: Optional[str] = None,
-        body: Optional[str] = None
+        message: Dict,
+        ticker: Optional[str] = None,
+        breakout_type: Optional[str] = None,
+        price: Optional[Decimal] = None
     ) -> bool:
         """Send individual push notification via Expo"""
         try:
@@ -305,27 +326,8 @@ class AlpacaService:
             if not expo_token:
                 return False
             
-            message_title = title if title is not None else f"🚨 ORB Alert: {ticker}"
-            direction = "above ORB high" if breakout_type == "above" else "below ORB low"
-            message_body = body if body is not None else f"{ticker} broke {direction} at ${float(price):.2f}"
-            
-            message = {
-                "to": expo_token,
-                "sound": "default",
-                "title": message_title,
-                "body": message_body,
-                "data": {
-                    "type": "orb_breakout",
-                    "ticker": ticker,
-                    "breakout_type": breakout_type,
-                    "price": float(price),
-                    "screen": "ticker",
-                    "timestamp": self.get_current_et_time().isoformat()
-                },
-                "badge": 1,
-                "priority": "high",
-                "channelId": "orb-alerts",
-            }
+            # Set recipient
+            message["to"] = expo_token
             
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -349,10 +351,10 @@ class AlpacaService:
             
             await self._save_notification_record(
                 user_id=user['id'],
+                message=message,
                 ticker=ticker,
                 breakout_type=breakout_type,
-                price=price,
-                message=message
+                price=price
             )
             
             return True
@@ -364,25 +366,36 @@ class AlpacaService:
     async def _save_notification_record(
         self,
         user_id: str,
-        ticker: str,
-        breakout_type: str,
-        price: Decimal,
-        message: Dict
+        message: Dict,
+        ticker: Optional[str] = None,
+        breakout_type: Optional[str] = None,
+        price: Optional[Decimal] = None
     ):
         """Save notification record to database for UI display"""
         try:
+            notification_data = {
+                "screen": message.get("data", {}).get("screen", "home"),
+                "sentAt": self.get_current_et_time().isoformat()
+            }
+            
+            # Add ticker-specific data if provided
+            if ticker:
+                notification_data["ticker"] = ticker
+            if breakout_type:
+                notification_data["breakout_type"] = breakout_type
+            if price is not None:
+                notification_data["price"] = float(price)
+            
+            # Merge with any additional data from message
+            if "data" in message:
+                notification_data.update(message["data"])
+            
             notification_record = {
                 "user_id": user_id,
                 "title": message["title"],
                 "body": message["body"],
-                "type": "orb_breakout",
-                "data": {
-                    "ticker": ticker,
-                    "breakout_type": breakout_type,
-                    "price": float(price),
-                    "screen": "stock_detail",
-                    "sentAt": self.get_current_et_time().isoformat()
-                },
+                "type": message.get("data", {}).get("type", "orb_breakout"),
+                "data": notification_data,
                 "read": False,
                 "expires_at": (
                     datetime.now() + timedelta(days=7)
@@ -394,6 +407,109 @@ class AlpacaService:
             
         except Exception as e:
             logger.error(f"Failed to save notification record: {e}")
+
+    async def _get_all_orb_users(self) -> list:
+        """Get all unique users who have ORB enabled for any ticker"""
+        try:
+            # Get all unique user IDs with ORB enabled
+            response = (
+                self.supabase.table("user_stock_follows")
+                .select("user_id")
+                .eq("orb_enabled", True)
+                .execute()
+            )
+            
+            if not response.data:
+                return []
+            
+            # Get unique user IDs
+            user_ids = list(set([row["user_id"] for row in response.data]))
+            
+            # Get user profiles with push tokens
+            profiles_response = (
+                self.supabase.table("user_profiles")
+                .select("id, expo_push_token, notification_preferences")
+                .in_("id", user_ids)
+                .not_("expo_push_token", "is", None)
+                .execute()
+            )
+            
+            if not profiles_response.data:
+                return []
+            
+            # Filter for eligible users (notifications enabled and ORB alerts enabled)
+            eligible_users = [
+                user for user in profiles_response.data
+                if user.get("notification_preferences", {}).get("enabled", False)
+                and user.get("notification_preferences", {}).get("orb_alerts", True)
+            ]
+            
+            return eligible_users
+            
+        except Exception as e:
+            logger.error(f"Error getting ORB users: {e}")
+            return []
+
+    async def send_service_status_notification(self, status: str):
+        """Send push notifications to all ORB users about service status
+        
+        Args:
+            status: Either 'started' or 'stopped'
+        """
+        try:
+            if status not in ["started", "stopped"]:
+                logger.error(f"Invalid service status: {status}")
+                return
+            
+            users = await self._get_all_orb_users()
+            
+            if not users:
+                logger.info(f"No eligible users for service {status} notification")
+                return
+            
+            # Prepare notification message
+            if status == "started":
+                title = "✅ ORB Service Started"
+                body = "ORB monitoring service is now active and monitoring your followed stocks."
+            else:  # stopped
+                title = "⏸️ ORB Service Stopped"
+                body = "ORB monitoring service has stopped."
+            
+            message = {
+                "sound": "default",
+                "title": title,
+                "body": body,
+                "data": {
+                    "type": "service_status",
+                    "status": status,
+                    "screen": "home",
+                    "timestamp": self.get_current_et_time().isoformat()
+                },
+                "badge": 1,
+                "priority": "normal",
+                "channelId": "orb-alerts",
+            }
+            
+            notification_tasks = []
+            for user in users:
+                task = self._send_push_notification(
+                    user=user,
+                    message=message
+                )
+                notification_tasks.append(task)
+            
+            results = await asyncio.gather(*notification_tasks, return_exceptions=True)
+            
+            successful = sum(1 for r in results if r is True)
+            failed = len(results) - successful
+            
+            logger.info(
+                f"Service {status} notifications sent: "
+                f"{successful} successful, {failed} failed"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error sending service status notifications: {e}")
 
     async def handle_bar(self, data: Bar):
         """Handle incoming bar data"""
@@ -587,6 +703,9 @@ class AlpacaService:
             self.is_running = True
             self._debug_mode = debug_mode
             
+            # Send service started notification
+            await self.send_service_status_notification("started")
+            
             # Check market hours first - don't start stream if market is closed
             # Skip this check in debug mode for testing
             if not debug_mode and not self.is_market_hours():
@@ -635,6 +754,9 @@ class AlpacaService:
         
         # Stop the stream with proper cleanup
         await self.stop_stream()
+        
+        # Send service stopped notification
+        await self.send_service_status_notification("stopped")
         
         logger.info("ORB Monitoring Service stopped")
 
