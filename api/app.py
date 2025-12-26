@@ -955,10 +955,24 @@ def get_all_yahoo_watchlists():
 
 @app.route("/tindex/orb/start", methods=["POST"])
 def start_orb_monitoring():
-    """Start ORB monitoring - called by Supabase cron at 9:15 AM"""
+    """Start ORB monitoring - called by Supabase cron at 9:15 AM
+    
+    Query Parameters:
+        debug (optional): Set to 'true' to bypass market hours check for testing
+    """
     global orb_service, orb_task
     
     try:
+        # Check for debug mode in query parameters or request body
+        debug_mode = request.args.get('debug', '').lower() == 'true'
+        if not debug_mode:
+            # Also check request body for debug flag
+            try:
+                request_data = request.get_json(silent=True) or {}
+                debug_mode = request_data.get('debug', False)
+            except:
+                pass
+        
         if orb_service and orb_service.is_running:
             return jsonify({"message": "ORB service already running"})
         
@@ -970,14 +984,19 @@ def start_orb_monitoring():
             if orb_service is not None:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(orb_service.start())                
+                loop.run_until_complete(orb_service.start(debug_mode=debug_mode))                
         
         orb_task = threading.Thread(target=run_orb, daemon=True)
         orb_task.start()
         
+        message = "ORB monitoring started"
+        if debug_mode:
+            message += " (DEBUG MODE: Market hours check bypassed)"
+        
         return jsonify({
             "success": True,
-            "message": "ORB monitoring started"
+            "message": message,
+            "debug_mode": debug_mode
         })
         
     except Exception as e:

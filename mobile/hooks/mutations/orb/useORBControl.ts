@@ -11,8 +11,9 @@ interface ORBControlResponse {
 
 /**
  * Start ORB monitoring service
+ * @param debug - If true, bypasses market hours check for testing
  */
-const startORBService = async (): Promise<ORBControlResponse> => {
+const startORBService = async (debug: boolean = false): Promise<ORBControlResponse> => {
   try {
       //TODO Update to production once merged
     //   const apiUrl = `https://alethia-production.up.railway.app/tindex/orb/start`;
@@ -23,6 +24,7 @@ const startORBService = async (): Promise<ORBControlResponse> => {
       headers: {
         'Content-Type': 'application/json',
       },
+      body: JSON.stringify({ debug }),
     });
     
     if (!response.ok) {
@@ -78,7 +80,7 @@ export const useStartORBMutation = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: startORBService,
+    mutationFn: (debug: boolean = false) => startORBService(debug),
     
     onSuccess: () => {
       console.log('ORB service started successfully');

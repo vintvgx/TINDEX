@@ -52,7 +52,7 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
   const orbRangesCount = status?.orb_ranges_count ?? 0;
 
   const handleStart = () => {
-    startMutation.mutate();
+    startMutation.mutate(true);
   };
 
   const handleStop = () => {

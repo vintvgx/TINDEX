@@ -7,12 +7,11 @@ from datetime import datetime, time, timedelta
 import logging
 import aiohttp
 
-
 from supabase import create_client, Client
 
-
-from alpaca.data.live import CryptoDataStream, OptionDataStream, StockDataStream
-from alpaca.data.models import Bar, Trade, Quote
+from alpaca.data.live import StockDataStream, OptionDataStream
+from alpaca.data.enums import DataFeed
+from alpaca.data.models import Bar
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,7 +22,7 @@ class AlpacaService:
     Service class for managing Alpaca API requests with streaming support.
 
     This service provides:
-    ├──Subscribes to user-followed stocks
+    ├── Subscribes to user-followed stocks
     ├── Calculates ORB ranges (9:30-9:45)
     ├── Monitors breakouts in real-time
     └── Triggers notifications directly
@@ -47,26 +46,28 @@ class AlpacaService:
         if not self.supabase_url or not self.supabase_key:
             raise ValueError("Supabase credentials not defined")
 
-        # Initialize options and stock stream
-        self.stock_stream = StockDataStream(self.alpaca_api_key, self.alpaca_secret_key)
+        # Initialize streams with explicit IEX feed (free tier)
+        self.stock_stream = StockDataStream(
+            self.alpaca_api_key, 
+            self.alpaca_secret_key,
+            feed=DataFeed.IEX  # Explicit feed specification
+        )
         self.option_stream = OptionDataStream(
-            self.alpaca_api_key, self.alpaca_secret_key
+            self.alpaca_api_key, 
+            self.alpaca_secret_key
         )
 
         # Initialize supabase
-        # TODO come back to this, a call should be made to an already initialized supabase instead of re-initializing
-        # TODO verify how alpaca set up is and when the service is being called
         self.supabase: Client = create_client(self.supabase_url, self.supabase_key)
 
         # Market timezone
         self.et_timezone = pytz.timezone("America/New_York")
 
         # ORB tracking
-        self.orb_ranges: Dict[str, Dict] = {}  # ticker -> {high, low, volume}
-        self.monitoring_state: Dict[str, Dict] = (
-            {}
-        )  # ticker -> {high_broken, low_broken}
+        self.orb_ranges: Dict[str, Dict] = {}
+        self.monitoring_state: Dict[str, Dict] = {}
         self.active_tickers: Set[str] = set()
+        self.subscribed_tickers: Set[str] = set()  # Track what we've subscribed to
 
         # Market hours
         self.market_open = time(9, 30)
@@ -75,12 +76,13 @@ class AlpacaService:
 
         # Service state
         self.is_running = False
-        self.calculation_phase = False  # True during 9:30-9:45
-        self._stream_task: Optional[asyncio.Task] = None  # Track the stream task
+        self.calculation_phase = False
+        self._stream_task: Optional[asyncio.Task] = None
+        self._stream_started = False  # Track if stream was ever started
+        self._debug_mode = False  # Debug mode flag for testing
         
-        # url for sending push notifications
+        # Expo push URL
         self.expo_push_url = "https://exp.host/--/api/v2/push/send"
-
 
     def get_current_et_time(self) -> datetime:
         """Get current time in ET timezone"""
@@ -136,7 +138,6 @@ class AlpacaService:
                 }
             ).execute()
 
-            # Initialize monitoring state
             self.supabase.table("orb_monitoring_state").upsert(
                 {
                     "ticker": ticker,
@@ -174,7 +175,6 @@ class AlpacaService:
                     "volume": row.get("volume_in_range", 0),
                 }
 
-            # Load monitoring state
             state_response = (
                 self.supabase.table("orb_monitoring_state")
                 .select("*")
@@ -200,7 +200,6 @@ class AlpacaService:
             trade_date = self.get_current_et_time().date()
             orb_data = self.orb_ranges.get(ticker, {})
 
-            # Record breakout
             breakout_record = {
                 "ticker": ticker,
                 "trade_date": str(trade_date),
@@ -213,7 +212,6 @@ class AlpacaService:
 
             self.supabase.table("orb_breakouts").insert(breakout_record).execute()
 
-            # Update monitoring state
             state_update = {
                 "ticker": ticker,
                 "trade_date": str(trade_date),
@@ -227,8 +225,6 @@ class AlpacaService:
 
             self.supabase.table("orb_monitoring_state").upsert(state_update).execute()
 
-            # Trigger notification to alert user 
-            # TODO implement send_notification (use supabase/sendPushNotification line 240 - 265 for reference)
             await self.send_notifications(ticker, breakout_type, price)
 
             logger.info(f"BREAKOUT: {ticker} broke {breakout_type} ORB at ${price}")
@@ -239,7 +235,6 @@ class AlpacaService:
     async def send_notifications(self, ticker: str, breakout_type: str, price: Decimal):
         """Send push notifications to users following this stock with ORB enabled"""
         try:
-            # Step 1: Query users who are following this ticker with ORB notifications enabled
             users_response = self.supabase.table("user_stock_follows")\
                 .select("user_id")\
                 .eq("ticker", ticker)\
@@ -252,7 +247,6 @@ class AlpacaService:
             
             user_ids = [user['user_id'] for user in users_response.data]
             
-            # Step 2: Get user profiles with push tokens
             profiles_response = self.supabase.table("user_profiles")\
                 .select("id, expo_push_token, notification_preferences")\
                 .in_("id", user_ids)\
@@ -263,7 +257,6 @@ class AlpacaService:
                 logger.info(f"No users with push tokens for {ticker}")
                 return
             
-            # Step 3: Filter for users with notifications enabled
             eligible_users = [
                 user for user in profiles_response.data
                 if user.get("notification_preferences", {}).get("enabled", False)
@@ -274,7 +267,6 @@ class AlpacaService:
                 logger.info(f"No eligible users for {ticker} ORB notification")
                 return
             
-            # Step 4: Send notifications to each eligible user
             notification_tasks = []
             for user in eligible_users:
                 task = self._send_push_notification(
@@ -285,10 +277,8 @@ class AlpacaService:
                 )
                 notification_tasks.append(task)
             
-            # Send all notifications in parallel
             results = await asyncio.gather(*notification_tasks, return_exceptions=True)
             
-            # Log results
             successful = sum(1 for r in results if r is True)
             failed = len(results) - successful
             
@@ -315,12 +305,10 @@ class AlpacaService:
             if not expo_token:
                 return False
             
-            # Format notification message
             message_title = title if title is not None else f"🚨 ORB Alert: {ticker}"
             direction = "above ORB high" if breakout_type == "above" else "below ORB low"
             message_body = body if body is not None else f"{ticker} broke {direction} at ${float(price):.2f}"
             
-            # Create notification message
             message = {
                 "to": expo_token,
                 "sound": "default",
@@ -331,7 +319,7 @@ class AlpacaService:
                     "ticker": ticker,
                     "breakout_type": breakout_type,
                     "price": float(price),
-                    "screen": "ticker",  # Navigate to ticker screen
+                    "screen": "ticker",
                     "timestamp": self.get_current_et_time().isoformat()
                 },
                 "badge": 1,
@@ -339,7 +327,6 @@ class AlpacaService:
                 "channelId": "orb-alerts",
             }
             
-            # Send via Expo Push API
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     self.expo_push_url,
@@ -360,7 +347,6 @@ class AlpacaService:
                         logger.error(f"Expo error for user {user['id']}: {receipt}")
                         return False
             
-            # Save notification to database for UI display
             await self._save_notification_record(
                 user_id=user['id'],
                 ticker=ticker,
@@ -400,7 +386,7 @@ class AlpacaService:
                 "read": False,
                 "expires_at": (
                     datetime.now() + timedelta(days=7)
-                ).isoformat()  # Expire after 7 days
+                ).isoformat()
             }
             
             self.supabase.table("notifications").insert(notification_record).execute()
@@ -410,28 +396,11 @@ class AlpacaService:
             logger.error(f"Failed to save notification record: {e}")
 
     async def handle_bar(self, data: Bar):
-        """Handle incoming bar data
-
-                NOTE: Bar object structure from Alpaca
-        Bar(
-            symbol='AAPL',
-            timestamp=datetime,
-            open=150.00,
-            high=151.00,
-            low=149.50,
-            close=150.75,
-            volume=1000000,
-            trade_count=5000,
-            vwap=150.25  # Volume-weighted average price
-            exchange
-        )
-        """
+        """Handle incoming bar data"""
         ticker = data.symbol
         current_price = Decimal(str(data.close))
 
         if self.calculation_phase:
-            # During ORB calculation period (9:30-9:45)
-            # saves prices to Dict during initial market open
             if ticker not in self.orb_ranges:
                 self.orb_ranges[ticker] = {
                     "high": current_price,
@@ -440,7 +409,6 @@ class AlpacaService:
                     "volume": data.volume,
                 }
             else:
-                # prices are then updated as the Bar data is received
                 self.orb_ranges[ticker]["high"] = max(
                     self.orb_ranges[ticker]["high"], current_price
                 )
@@ -449,9 +417,8 @@ class AlpacaService:
                 )
                 self.orb_ranges[ticker]["volume"] += data.volume
         else:
-            # After ORB period - monitor for breakouts
             if ticker not in self.orb_ranges:
-                return  # No ORB data for this ticker
+                return
 
             orb_high = self.orb_ranges[ticker]["high"]
             orb_low = self.orb_ranges[ticker]["low"]
@@ -459,7 +426,6 @@ class AlpacaService:
                 ticker, {"high_broken": False, "low_broken": False}
             )
 
-            # Check for breakouts
             if not state["high_broken"] and current_price > orb_high:
                 await self.record_breakout(ticker, "above", current_price)
                 state["high_broken"] = True
@@ -478,25 +444,107 @@ class AlpacaService:
 
         self.active_tickers = tickers
 
-        # Subscribe to bar data
+        # Create async handler wrapper
         async def bar_handler(data):
             await self.handle_bar(data)
 
+        # Subscribe to bar data
         self.stock_stream.subscribe_bars(bar_handler, *list(tickers))
+        self.subscribed_tickers = tickers.copy()  # Track subscribed tickers
         logger.info(f"Subscribed to {len(tickers)} tickers")
+
+    async def unsubscribe_all(self):
+        """Unsubscribe from all tickers before closing"""
+        if not self.subscribed_tickers:
+            logger.info("No tickers to unsubscribe from")
+            return
+            
+        try:
+            logger.info(f"Unsubscribing from {len(self.subscribed_tickers)} tickers")
+            
+            # Unsubscribe from bars
+            for ticker in self.subscribed_tickers:
+                try:
+                    await self.stock_stream.unsubscribe_bars(ticker)
+                except Exception as e:
+                    logger.warning(f"Error unsubscribing from {ticker}: {e}")
+            
+            # Give time for unsubscribe to process
+            await asyncio.sleep(0.5)
+            
+            self.subscribed_tickers.clear()
+            logger.info("Unsubscribed from all tickers successfully")
+            
+        except Exception as e:
+            logger.error(f"Error during unsubscribe: {e}")
+
+    async def start_stream(self):
+        """Start the WebSocket stream"""
+        if self._stream_task is not None and not self._stream_task.done():
+            logger.info("Stream already running")
+            return
+            
+        try:
+            # Use _run_forever() for async contexts (not run())
+            self._stream_task = asyncio.create_task(self.stock_stream._run_forever())
+            self._stream_started = True
+            logger.info("Stock stream task created")
+        except Exception as e:
+            logger.error(f"Failed to start stock stream: {e}", exc_info=True)
+            raise
+
+    async def stop_stream(self):
+        """Stop the WebSocket stream with proper cleanup"""
+        if not self._stream_started:
+            logger.info("Stream was never started, skipping cleanup")
+            return
+            
+        try:
+            # Step 1: Unsubscribe from all tickers first
+            await self.unsubscribe_all()
+            
+            # Step 2: Cancel the stream task
+            if self._stream_task is not None:
+                logger.info("Cancelling stream task")
+                self._stream_task.cancel()
+                try:
+                    await self._stream_task
+                except asyncio.CancelledError:
+                    logger.info("Stream task cancelled successfully")
+                except Exception as e:
+                    logger.error(f"Error awaiting stream task cancellation: {e}")
+                finally:
+                    self._stream_task = None
+            
+            # Step 3: Close the WebSocket connection
+            try:
+                await self.stock_stream.close()
+                logger.info("Stock stream connection closed")
+            except Exception as e:
+                logger.error(f"Error closing stock stream: {e}")
+                
+            self._stream_started = False
+            
+        except Exception as e:
+            logger.error(f"Error stopping stream: {e}")
 
     async def run_service(self):
         """Main service loop"""
-        logger.info("Starting ORB Monitoring Service")
-        self.is_running = True
+        logger.info("Starting ORB Monitoring Service loop")
 
         while self.is_running:
             try:
                 current_time = self.get_current_et_time()
 
-                if not self.is_market_hours():
+                # Skip market hours check in debug mode
+                if not getattr(self, '_debug_mode', False) and not self.is_market_hours():
+                    # If stream was running, stop it outside market hours
+                    if self._stream_started:
+                        logger.info("Market closed, stopping stream")
+                        await self.stop_stream()
+                    
                     logger.info("Outside market hours, waiting...")
-                    await asyncio.sleep(60)  # Check every minute
+                    await asyncio.sleep(60)
                     continue
 
                 # Check if we're in ORB calculation period
@@ -507,11 +555,7 @@ class AlpacaService:
                         self.orb_ranges.clear()
                         self.monitoring_state.clear()
                         await self.subscribe_to_tickers()
-
-                        # Start streaming
-                        if self._stream_task is None or self._stream_task.done():
-                            self._stream_task = asyncio.create_task(self.stock_stream.run())
-                            logger.info("Stock stream task created in calculation phase")
+                        await self.start_stream()
 
                 elif self.calculation_phase:
                     # Just exited ORB period - save ranges
@@ -527,36 +571,58 @@ class AlpacaService:
                     self.is_running = False
                     break
 
-                await asyncio.sleep(10)  # Check every 10 seconds
+                await asyncio.sleep(10)
 
             except Exception as e:
                 logger.error(f"Error in service loop: {e}")
-                await asyncio.sleep(30)  # Wait before retry
+                await asyncio.sleep(30)
 
-    async def start(self):
-        """Start the monitoring service"""
+    async def start(self, debug_mode: bool = False):
+        """Start the monitoring service
+        
+        Args:
+            debug_mode: If True, bypasses market hours check for testing
+        """
         try:
-            # Ensure is_running is set early to prevent NoneType errors
             self.is_running = True
+            self._debug_mode = debug_mode
             
-            # Load any existing ORB ranges for today
-            if not self.is_orb_calculation_period():
+            # Check market hours first - don't start stream if market is closed
+            # Skip this check in debug mode for testing
+            if not debug_mode and not self.is_market_hours():
+                logger.info("Outside market hours - entering wait loop")
+                await self.run_service()
+                return
+            
+            # Load any existing ORB ranges for today (if joining mid-day)
+            # In debug mode, always load tickers and start stream for testing
+            if debug_mode:
+                logger.info("DEBUG MODE: Bypassing market hours check")
                 await self.load_orb_ranges()
+                logger.info(f"DEBUG MODE: Loaded {len(self.orb_ranges)} ORB ranges")
                 await self.subscribe_to_tickers()
+                logger.info(f"DEBUG MODE: Subscribed to {len(self.active_tickers)} tickers: {list(self.active_tickers)}")
+                await self.start_stream()
+                logger.info("DEBUG MODE: Service started with tickers loaded and stream connected")
+                logger.info("DEBUG MODE: Waiting 30 seconds to receive data from Alpaca...")
+                # In debug mode, run for a short time to test connection and data flow
+                await asyncio.sleep(30)  # Give it time to receive some data
+                logger.info("DEBUG MODE: Test complete, stopping service")
+                return
+            elif not self.is_orb_calculation_period():
+                await self.load_orb_ranges()
                 
-                # Start the stream task and store it for proper management
-                try:
-                    self._stream_task = asyncio.create_task(self.stock_stream.run())
-                    logger.info("Stock stream task created")
-                except Exception as e:
-                    logger.error(f"Failed to start stock stream: {e}", exc_info=True)
-                    raise
+                # Only start streaming if we have data to monitor
+                if self.orb_ranges:
+                    await self.subscribe_to_tickers()
+                    await self.start_stream()
+                else:
+                    logger.info("No ORB ranges found for today, will wait for calculation period")
 
             await self.run_service()
 
         except Exception as e:
             logger.error(f"Service error: {e}", exc_info=True)
-            # Ensure is_running is False on error
             self.is_running = False
         finally:
             await self.stop()
@@ -565,30 +631,12 @@ class AlpacaService:
         """Stop the monitoring service"""
         logger.info("Stopping ORB Monitoring Service")
         
-        # Set is_running to False first
-        if hasattr(self, 'is_running'):
-            self.is_running = False
+        self.is_running = False
         
-        # Cancel the stream task if it exists
-        if hasattr(self, '_stream_task') and self._stream_task is not None:
-            try:
-                self._stream_task.cancel()
-                try:
-                    await self._stream_task
-                except asyncio.CancelledError:
-                    logger.info("Stream task cancelled successfully")
-                except Exception as e:
-                    logger.error(f"Error waiting for stream task cancellation: {e}")
-            except Exception as e:
-                logger.error(f"Error cancelling stream task: {e}")
+        # Stop the stream with proper cleanup
+        await self.stop_stream()
         
-        # Close the stock stream
-        if hasattr(self, 'stock_stream') and self.stock_stream is not None:
-            try:
-                await self.stock_stream.close()
-                logger.info("Stock stream closed")
-            except Exception as e:
-                logger.error(f"Error closing stock stream: {e}")
+        logger.info("ORB Monitoring Service stopped")
 
 
 # Global instance for singleton pattern
@@ -596,19 +644,7 @@ _alpaca_service = None
 
 
 def get_alpaca_service() -> AlpacaService:
-    """
-    Get or create the singleton AlpacaService instance.
-
-    This factory function ensures only one instance of AlpacaService exists,
-    which is important for managing a single connection pool and avoiding
-    duplicate subscriptions to the same data streams.
-
-    Returns:
-        AlpacaService instance
-
-    Raises:
-        ValueError: If required environment variables are not set
-    """
+    """Get or create the singleton AlpacaService instance."""
     global _alpaca_service
 
     if _alpaca_service is None:
@@ -621,3 +657,9 @@ def get_alpaca_service() -> AlpacaService:
 
     return _alpaca_service
 
+
+def reset_alpaca_service():
+    """Reset the singleton instance (useful for testing or restarts)"""
+    global _alpaca_service
+    _alpaca_service = None
+    logger.info("AlpacaService singleton reset")
