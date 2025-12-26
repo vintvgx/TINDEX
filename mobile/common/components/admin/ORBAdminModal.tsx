@@ -51,9 +51,13 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
   const activeTickers = status?.active_tickers ?? [];
   const orbRangesCount = status?.orb_ranges_count ?? 0;
 
-  const handleStart = () => {
+  const handleStartServiceDebug = () => {
     startMutation.mutate(true);
   };
+
+  const handleStartService = () => {
+    startMutation.mutate(false)
+  }
 
   const handleStop = () => {
     stopMutation.mutate();
@@ -228,7 +232,23 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
             ) : (
               <View className="gap-3">
                 <TouchableOpacity
-                  onPress={handleStart}
+                  onPress={handleStartServiceDebug}
+                  disabled={isLoadingAction}
+                  className={`w-full h-14 rounded-md bg-blue-600 border-2 border-orange-500 items-center justify-center ${
+                    isLoadingAction ? 'opacity-50' : 'active:opacity-90'
+                  }`}>
+                  {startMutation.isPending ? (
+                    <View className="flex-row items-center">
+                      <ActivityIndicator size="small" color="#ffffff" />
+                      <Text className="text-white ml-2">Starting...</Text>
+                    </View>
+                  ) : (
+                    <Text className="text-white font-semibold text-lg">Start Debug</Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={handleStartService}
                   disabled={isLoadingAction}
                   className={`w-full h-14 rounded-md bg-green-600 items-center justify-center ${
                     isLoadingAction ? 'opacity-50' : 'active:opacity-90'
