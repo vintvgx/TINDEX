@@ -660,7 +660,7 @@ class AlpacaService:
                 self.supabase.table("user_profiles")
                 .select("id, expo_push_token, notification_preferences")
                 .in_("id", user_ids)
-                .not_("expo_push_token", "is", None)
+                .not_.is_("expo_push_token", None)
                 .execute()
             )
 
