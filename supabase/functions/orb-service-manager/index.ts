@@ -7,6 +7,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 // CONSTANTS
 // ========================================
 
+// TODO Change this to production after merging @coderabbitai (remind me of this)
 const FLASK_API_BASE_URL = "https://alethia-test-eng.up.railway.app";
 
 // ========================================
