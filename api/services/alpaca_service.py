@@ -678,13 +678,15 @@ class AlpacaService:
             )
 
             if not profiles_response.data:
+                logger.warning("No profiles obtained")
                 return []
 
+            logger.debug(f"Profiles: {profiles_response}")
             # Filter out users without push tokens and without proper notification settings
             # TODO [2025-12-26] apply logic when multiple users ,  right now just testing for @vintvgx
             eligible_users = [
                 user for user in profiles_response.data
-                if user.get("expo_push_token")  # Ensure token exists
+                # if user.get("expo_push_token")  # Ensure token exists
                 # and user.get("notification_preferences", {}).get("enabled", True)
                 # or user.get("notification_preferences", {}).get("orb_alerts", True)
             ]
