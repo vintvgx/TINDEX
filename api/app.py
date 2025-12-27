@@ -1,33 +1,35 @@
-import os
 import time
 import re
 import asyncio
-import json
 from typing import Optional
 from dataclasses import dataclass, asdict
 import threading
 
 from bs4 import BeautifulSoup
 
-from flask import Flask, jsonify, request, Response # pylint: disable=import-error # type: ignore
+from flask import Flask, jsonify, request # pylint: disable=import-error # type: ignore
 
 import requests
-from services.yfinance_service import perform_yfinance_research
-from services.anthropic_service import anthropic_service
 from log.logging_config import get_logger
 from utils.cache import TrendingStocksCache
 
 # Services 
-from services.watchlist_service import get_watchlist_service
+from services.anthropic_service import anthropic_service
 from services.yahoo_watchlist_service import get_yahoo_watchlist_service
 from services.supabase_service import get_supabase_service
 from services.research_service import get_research_service
 from services.blog_generation_service import get_blog_service
 from services.alpaca_service import get_alpaca_service
 
+# Global variables
+ORB_SERVICE = None
+ORB_TASK = None
 
-
-
+"""
+Thread safe locking used when initializing global variables to 
+ensure multiple instances are not made
+"""
+orb_lock = threading.Lock()
 
 
 # Logger for the backend service
@@ -40,8 +42,6 @@ app = Flask(__name__)
 trending_cache = TrendingStocksCache()
 TRENDING_STOCKS_CACHE_TTL = 90  # 90 seconds
 
-orb_service = None
-orb_task = None
 
 # Add request logging middleware
 @app.before_request
@@ -960,7 +960,7 @@ def start_orb_monitoring():
     Query Parameters:
         debug (optional): Set to 'true' to bypass market hours check for testing
     """
-    global orb_service, orb_task
+    global ORB_SERVICE, ORB_TASK
     
     try:
         # Check for debug mode in query parameters or request body
@@ -970,24 +970,26 @@ def start_orb_monitoring():
             try:
                 request_data = request.get_json(silent=True) or {}
                 debug_mode = request_data.get('debug', False)
-            except:
-                pass
+            except Exception as e:
+                logger.error("Failed to retrieve request data: %s", e)
+
         
-        if orb_service and orb_service.is_running:
-            return jsonify({"message": "ORB service already running"})
+        with orb_lock:
+            if ORB_SERVICE and ORB_SERVICE.is_running:
+                return jsonify({"message": "ORB service already running"})
         
         # Get service instance
-        orb_service = get_alpaca_service()
+        ORB_SERVICE = get_alpaca_service()
         
         # Run in background thread
         def run_orb():
-            if orb_service is not None:
+            if ORB_SERVICE is not None:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(orb_service.start(debug_mode=debug_mode))                
+                loop.run_until_complete(ORB_SERVICE.start(debug_mode=debug_mode))                
         
-        orb_task = threading.Thread(target=run_orb, daemon=True)
-        orb_task.start()
+        ORB_TASK = threading.Thread(target=run_orb, daemon=True)
+        ORB_TASK.start()
         
         message = "ORB monitoring started"
         if debug_mode:
@@ -1006,13 +1008,14 @@ def start_orb_monitoring():
 @app.route("/tindex/orb/stop", methods=["POST"])
 def stop_orb_monitoring():
     """Stop ORB monitoring - called by Supabase cron at 5:00 PM"""
-    global orb_service
+    global ORB_SERVICE
     
     try:
-        if orb_service and orb_service.is_running:
-            asyncio.run(orb_service.stop())
-            orb_service = None
-            return jsonify({"success": True, "message": "ORB monitoring stopped"})
+        with orb_lock:
+            if ORB_SERVICE and ORB_SERVICE.is_running:
+                asyncio.run(ORB_SERVICE.stop())
+                ORB_SERVICE = None
+                return jsonify({"success": True, "message": "ORB monitoring stopped"})
         
         return jsonify({"message": "ORB service not running"})
         
@@ -1023,20 +1026,20 @@ def stop_orb_monitoring():
 @app.route("/tindex/orb/status", methods=["GET"])
 def get_orb_status():
     """Check ORB monitoring status"""
-    global orb_service
     
-    # Safely check if service exists and is running
-    if (orb_service and 
-        hasattr(orb_service, 'is_running') and 
-        orb_service.is_running):
-        return jsonify({
-            "running": True,
-            "calculation_phase": getattr(orb_service, 'calculation_phase', False),
-            "active_tickers": list(getattr(orb_service, 'active_tickers', set())),
-            "orb_ranges_count": len(getattr(orb_service, 'orb_ranges', {}))
-        })
-    
-    return jsonify({"running": False})
+    with orb_lock:
+        # Safely check if service exists and is running
+        if (ORB_SERVICE and 
+            hasattr(ORB_SERVICE, 'is_running') and 
+            ORB_SERVICE.is_running):
+            return jsonify({
+                "running": True,
+                "calculation_phase": getattr(ORB_SERVICE, 'calculation_phase', False),
+                "active_tickers": list(getattr(ORB_SERVICE, 'active_tickers', set())),
+                "orb_ranges_count": len(getattr(ORB_SERVICE, 'orb_ranges', {}))
+            })
+        
+        return jsonify({"running": False})
 
 if __name__ == "__main__":
     app.run(debug=True)

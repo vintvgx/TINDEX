@@ -58,7 +58,7 @@ export function useToggleORBFollow(ticker: string) {
                 .single();
 
             if (existingFollow) {
-                console.debug(`User follows ORB of ${ticker}. REMOVING!`)
+                console.debug(`User ORB status for ${ticker} updated to: ${orbEnabled}`)
                 // Update existing record
                 const { data, error } = await supabase
                     .from("user_stock_follows")

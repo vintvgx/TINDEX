@@ -6,5 +6,5 @@ export interface FollowTickerORB {
     orb_enabled: boolean;
     notification_enabled: boolean;
     created_at: string;
-    updateD_at: string;
+    updated_at: string;
 }
