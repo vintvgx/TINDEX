@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { TickerResponse, TickerData } from "@/common/types/blogPosts/ticker";
 import { useState } from "react";
+import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 
 /**
  * Custom hook to fetch detailed ticker information
@@ -22,7 +23,7 @@ export function useTickerQuery(ticker: string) {
       }
 
       try {
-        const apiUrl = `https://alethia-production.up.railway.app/ticker/${ticker}`
+        const apiUrl = `${RAILWAY_BASE_URL}/ticker/${ticker}`;
         
         const requestBody = {
           userId: user.id,

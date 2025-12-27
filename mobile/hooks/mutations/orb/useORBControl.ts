@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 
 /**
  * Response from ORB control endpoints
@@ -15,10 +16,7 @@ interface ORBControlResponse {
  */
 const startORBService = async (debug: boolean = false): Promise<ORBControlResponse> => {
   try {
-      //TODO Update to production once merged
-    //   const apiUrl = `https://alethia-production.up.railway.app/tindex/orb/start`;
-
-        const apiUrl = `https://alethia-test-eng.up.railway.app/tindex/orb/start`
+    const apiUrl = `${RAILWAY_BASE_URL}/tindex/orb/start`;
     const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
@@ -45,10 +43,7 @@ const startORBService = async (debug: boolean = false): Promise<ORBControlRespon
  */
 const stopORBService = async (): Promise<ORBControlResponse> => {
   try {
-       //TODO Update to production once merged
-    //   const apiUrl = `https://alethia-production.up.railway.app/tindex/orb/stop`;
-
-    const apiUrl = `https://alethia-test-eng.up.railway.app/tindex/orb/stop`
+    const apiUrl = `${RAILWAY_BASE_URL}/tindex/orb/stop`;
     
     const response = await fetch(apiUrl, {
       method: 'POST',

@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase/supabase';
 import { BlogPostType } from '@/common/types';
 import {  GenerateBlogPostRequest, GenerateBlogPostResponse  } from '@/common/types/blogPosts/create';
 import { BlogGenerationException, validateBlogGenerationRequest } from '@/common/utils/posts/functions';
+import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 
 
 
@@ -31,8 +32,7 @@ const generateBlogPost = async (request: GenerateBlogPostRequest): Promise<Gener
 
     // Make the API call to the Edge Function
     const response = await fetch(
-      // `https://alethia-production.up.railway.app/generate_post/${request.ticker}`,
-      `https://alethia-test-eng.up.railway.app/generate_post/${request.ticker}`,
+      `${RAILWAY_BASE_URL}/generate_post/${request.ticker}`,
       {
         method: 'POST',
         headers: {

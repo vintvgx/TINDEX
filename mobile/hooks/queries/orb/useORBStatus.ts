@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 
 /**
  * ORB Status Response from API
@@ -20,10 +21,7 @@ export function useORBStatus() {
     queryKey: ['orb-status'],
     queryFn: async (): Promise<ORBStatusResponse> => {
       try {
-        //TODO Update to production once merged
-        // const apiUrl = `https://alethia-production.up.railway.app/tindex/orb/status`;
-
-        const apiUrl = `https://alethia-test-eng.up.railway.app/tindex/orb/status`
+        const apiUrl = `${RAILWAY_BASE_URL}/tindex/orb/status`;
         
         const response = await fetch(apiUrl, {
           method: 'GET',

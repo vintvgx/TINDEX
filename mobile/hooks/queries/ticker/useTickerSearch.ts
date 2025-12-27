@@ -1,5 +1,6 @@
 import { TickerSearchResponse } from "@/common/types/blogPosts/ticker";
 import { useQuery } from "@tanstack/react-query";
+import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 
 /**
  * Hook to search for ticker.
@@ -13,7 +14,7 @@ export function useTickerSearch(ticker: string) {
     queryKey: ["search", ticker],
     queryFn: async (): Promise<TickerSearchResponse> => {
       try {
-        const apiUrl = `https://alethia-production.up.railway.app/search/${ticker}`;
+        const apiUrl = `${RAILWAY_BASE_URL}/search/${ticker}`;
 
         const response = await fetch(apiUrl, {
           method: "POST",
