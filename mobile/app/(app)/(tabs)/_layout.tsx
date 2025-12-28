@@ -3,10 +3,15 @@
  */
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { View } from 'react-native';
 import { useNotificationHistory } from '@/hooks/queries/notifications/useNotificationHistory';
+import { useORBStatus } from '@/hooks/queries/orb/useORBStatus';
+import { cn } from '@/lib/utils';
 
 export default function Layout() {
   const { unreadCount } = useNotificationHistory();
+  const { data: orbStatus } = useORBStatus();
+  const isORBRunning = orbStatus?.running ?? false;
 
   return (
     <Tabs
@@ -89,19 +94,18 @@ export default function Layout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ color }) => (
-            <Ionicons name="person" size={20} color={color} />
+            <View className="relative items-center justify-center">
+              <Ionicons name="person" size={20} color={color} />
+              <View 
+                className={cn(
+                  "absolute -top-0.5 -right-1.5 w-2 h-2 rounded-full border-[1.5px] border-[#1A1A1A]",
+                  isORBRunning ? "bg-[#10B981]" : "bg-[#EF4444]"
+                )} 
+              />
+            </View>
           ),
         }}
       />
-      {/* Add ticker screen - hidden from tab bar */}
-      {/* <Tabs.Screen 
-        name="ticker" 
-        options={{
-          href: null, // This hides it from the tab bar
-          tabBarStyle: { display: 'none' }, // Hide tab bar for this screen
-          animation: 'shift'
-        }}
-      /> */}
     </Tabs>
   );
 }
