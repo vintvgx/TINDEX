@@ -6,10 +6,36 @@ export interface Notification {
   type: string;
   data: {
     screen: string;
-    watchlistType: string;
-    subscribedWatchlists: string[];
+    watchlistType?: string;
+    subscribedWatchlists?: string[];
     sentAt: string;
     ticker?: string;
+    // ORB breakout notification data
+    type?: "orb_breakout" | "orb_breakout_confirmed" | "orb_breakout_invalidated";
+    breakout_type?: "above" | "below";
+    price?: number;
+    timestamp?: string;
+    breakout_analysis?: {
+      signal: "BULLISH" | "BEARISH";
+      score: number;
+      confidence: "HIGH" | "MEDIUM" | "LOW";
+      reasons: string[];
+      rvol: number;
+      vwap_aligned: boolean;
+      entry_price: number;
+      stop_loss: number;
+      risk_per_share: number;
+    };
+    orb_high?: number;
+    orb_low?: number;
+    confidence?: "HIGH" | "MEDIUM" | "LOW";
+    score?: number;
+    reasons?: string[];
+    entry_price?: number;
+    stop_loss?: number;
+    risk_per_share?: number;
+    rvol?: number;
+    vwap_aligned?: boolean;
   };
   is_read: boolean;
   read_at: string | null;

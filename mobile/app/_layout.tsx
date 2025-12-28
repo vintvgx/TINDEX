@@ -30,6 +30,7 @@ import { Slot } from "expo-router";
 import { useNotifications } from "@/hooks/notifications/useNotifications";
 import { useRef } from "react";
 import { isValidWatchlistType } from "@/common/types/watchlist";
+import { ORBBreakoutNotificationData } from "@/common/components/FEED/modals/ORBNotificationModal";
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -104,6 +105,40 @@ function AppContent() {
     notificationResponseListener.current = 
       Notifications.addNotificationResponseReceivedListener(response => {
         const data = response.notification.request.content.data;
+        const title = response.notification.request.content.title;
+        const body = response.notification.request.content.body;
+        
+        // Handle ORB breakout notifications
+        if (data.type === 'orb_breakout' || data.type === 'orb_breakout_confirmed' || data.type === 'orb_breakout_invalidated') {
+          // Navigate to feed screen with notification data
+          router.push({
+            pathname: '/(app)/(tabs)/feed',
+            params: {
+              notificationData: JSON.stringify({
+                type: data.type,
+                ticker: data.ticker,
+                breakout_type: data.breakout_type,
+                price: data.price,
+                screen: data.screen || 'ticker',
+                timestamp: data.timestamp || new Date().toISOString(),
+                breakout_analysis: data.breakout_analysis,
+                orb_high: data.orb_high,
+                orb_low: data.orb_low,
+                confidence: data.confidence,
+                score: data.score,
+                reasons: data.reasons,
+                entry_price: data.entry_price,
+                stop_loss: data.stop_loss,
+                risk_per_share: data.risk_per_share,
+                rvol: data.rvol,
+                vwap_aligned: data.vwap_aligned,
+              } as ORBBreakoutNotificationData),
+              notificationTitle: title,
+              notificationBody: body,
+            },
+          });
+          return;
+        }
         
         // Handle different screen types
         if (data.screen === 'watchlists' && isValidWatchlistType(data.watchlistType)) {
@@ -114,7 +149,7 @@ function AppContent() {
             },
           });
         }
-        // Add more handlers as needed
+        // TODO : Add more handlers as needed
         // else if (data.screen === 'ticker') { ... }
       });
 
