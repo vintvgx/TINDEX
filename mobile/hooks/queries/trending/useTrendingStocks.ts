@@ -1,6 +1,7 @@
 import { SortBy } from "@/common/types/blogPosts/create";
 import { logDebug } from "@/common/utils/strings/function";
 import { useQuery } from "@tanstack/react-query";
+import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 
 interface TrendingStock {
     ticker: string;
@@ -38,7 +39,7 @@ export function useTrendingStocks(sortBy: SortBy = SortBy.VOLUME) {
         queryKey: ['trending-stocks', sortBy],
         queryFn: async (): Promise<TrendingStockResponse> => {
             const response = await fetch(
-                `https://alethia-test-eng.up.railway.app/trending-stocks-sort?sort_by=${sortBy}`
+                `${RAILWAY_BASE_URL}/trending-stocks-sort?sort_by=${sortBy}`
             );
             
             if (!response.ok) {

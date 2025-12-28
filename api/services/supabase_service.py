@@ -715,8 +715,47 @@ class SupabaseService:
                 exc_info=True
             )
             return self._handle_database_error(e, "get_all_watchlist_stats")
-    
+        
+        
+    def follow_stock(self, user_id: str, ticker: str) -> Dict[str, Any]:
+        """
+        Enable a user to follow a stock with ORB monitoring.
+        
+        Args:
+            user_id: The ID of the user following the stock
+            ticker: The stock ticker symbol to follow
+        
+        Returns:
+            Dict containing success status and message
+        """
+        try:
+            logger.info(
+                "User %s following stock %s with ORB monitoring", user_id, ticker
+            )
 
+            result = self.client.table('user_stock_follows').upsert({
+                'user_id': user_id,
+                'ticker': ticker.upper(),
+                'orb_enabled': True,
+                'notification_enabled': True
+            }).execute()
+
+            logger.info("User %s followed %s successfully", user_id, ticker)
+            
+            return {
+                "success": True,
+                "message": f"User {user_id} followed {ticker}",
+                "data": result.data[0] if result.data else None
+            }
+        except Exception as e:
+            logger.error(
+                "Failed to follow stock %s for user %s: %s", ticker, user_id, str(e),
+                exc_info=True
+            )
+            return self._handle_database_error(
+                e, f"follow_stock for user {user_id} and ticker {ticker}"
+            )
+    
 
 _supabase_service = None
 

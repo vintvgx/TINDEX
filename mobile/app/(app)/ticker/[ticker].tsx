@@ -1,5 +1,5 @@
 import type React from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -19,6 +19,10 @@ import { FinancialsTab } from "@/common/components/ticker/FinancialsTab";
 import { StockInfoHeader } from "@/common/components/ticker/StockInfoHeader";
 import { TabNavigation } from "@/common/components/ticker/TabNavigation";
 import { OptionsCard } from "@/common/components/ticker/OptionsTab";
+import {
+  useIsFollowingORB,
+  useToggleORBFollow,
+} from "@/hooks/mutations/ticker/tickerORB";
 
 export default function TickerScreen() {
   const { ticker } = useLocalSearchParams<{ ticker: string }>();
@@ -28,8 +32,12 @@ export default function TickerScreen() {
     isLoading,
     error,
     refetch,
-    isRefetching
+    isRefetching,
   } = useTickerQuery(ticker || "");
+
+  const { data: isFollowingORB, isLoading: isfollowORBLoading } =
+    useIsFollowingORB(ticker);
+  const followORB = useToggleORBFollow(ticker);
 
   const [activeTab, setActiveTab] = useState<
     "Summary" | "Analytics" | "Financials" | "Options"
@@ -45,8 +53,13 @@ export default function TickerScreen() {
   };
 
   const handleRefetch = () => {
-    refetch()
-  }
+    refetch();
+  };
+
+  const handleORBState = () => {
+    const newState = !isFollowingORB?.orb_enabled;
+    followORB.mutate(newState);
+  };
 
   // Loading state
   if (isLoading || isRefetching) {
@@ -176,7 +189,7 @@ export default function TickerScreen() {
             <Ionicons name="arrow-back" size={20} color="#fff" />
           </Pressable>
           <View className="flex-row items-center">
-          <Pressable 
+            <Pressable 
             className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30"
             onPress={handleRefetch}
             disabled={isLoading}
@@ -187,12 +200,26 @@ export default function TickerScreen() {
                 color={isLoading ? "#6B7280" : "#44efef"} 
               />
             </Pressable>
-            <Pressable className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30">
+            <Pressable
+              className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30"
+              onPress={handleORBState}
+              disabled={isfollowORBLoading}>
+              <Ionicons
+                name={
+                  isFollowingORB?.orb_enabled
+                    ? "remove-circle-outline"
+                    : "add-circle-outline"
+                }
+                size={20}
+                color={isFollowingORB?.orb_enabled ? "red" : "green"}
+              />
+            </Pressable>
+            {/* <Pressable className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30">
               <Ionicons name="heart-outline" size={20} color="#EF4444" />
-            </Pressable>
-            <Pressable className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center border border-gray-700/30">
+            </Pressable> */}
+            {/* <Pressable className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center border border-gray-700/30">
               <Ionicons name="share-outline" size={20} color="#fff" />
-            </Pressable>
+            </Pressable> */}
           </View>
         </View>
 

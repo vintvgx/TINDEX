@@ -24,6 +24,7 @@ export interface NotificationPreferences {
   feed_updates: boolean;
   messages: boolean;
   mentions: boolean;
+  orb_alerts: boolean
 //   market_news: boolean;
 //   price_alerts: boolean;
 //   daily_summary: boolean;

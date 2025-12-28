@@ -4,26 +4,33 @@ import asyncio
 import json
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, asdict
+import threading
 
 from bs4 import BeautifulSoup
 
-from flask import Flask, jsonify, request, Response # pylint: disable=import-error # type: ignore
+from flask import Flask, jsonify, request # pylint: disable=import-error # type: ignore
 
 import requests
-from services.yfinance_service import perform_yfinance_research
-from services.anthropic_service import anthropic_service
 from log.logging_config import get_logger
 from utils.cache import TrendingStocksCache
 
 # Services 
-from services.watchlist_service import get_watchlist_service
+from services.anthropic_service import anthropic_service
 from services.yahoo_watchlist_service import get_yahoo_watchlist_service
 from services.supabase_service import get_supabase_service
 from services.research_service import get_research_service
 from services.blog_generation_service import get_blog_service
+from services.alpaca_service import get_alpaca_service
 
+# Global variables
+ORB_SERVICE = None
+ORB_TASK = None
 
-
+"""
+Thread safe locking used when initializing global variables to 
+ensure multiple instances are not made
+"""
+orb_lock = threading.Lock()
 
 
 # Logger for the backend service
@@ -234,8 +241,6 @@ def search_for_ticker(ticker: str):
         logger.error("Ticker research failed for ticker '%s': %s", ticker, e, exc_info=True)
         return jsonify({"success": False, "data" : None, "error": f"Ticker not found: {str(e)}"}), 404
         
-
-    
 @app.route("/generate_post/<ticker>", methods=["POST"])
 def generate_post(ticker: str):
     """
@@ -373,7 +378,6 @@ def generate_post(ticker: str):
         logger.error("Blog generation failed for topic '%s': %s", _topic, e, exc_info=True)
         return jsonify({"success": False, "error": f"Blog generation failed: {str(e)}"}), 500
 
-
 def save_data(service, topic, research_results, blog_content):
     """
     Save research data and blog post to database.
@@ -458,7 +462,6 @@ def save_data(service, topic, research_results, blog_content):
     }
     return db_result
 
-
 def run_async(coro):
     """Execute an async coroutine in a sync context."""
     loop = asyncio.new_event_loop()
@@ -467,7 +470,6 @@ def run_async(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
-
 
 def validate_and_create_ticker_request_data(
     data: dict, ticker: str, require_user_id: bool = True
@@ -510,7 +512,6 @@ def validate_and_create_ticker_request_data(
             error=f"Invalid request data: {str(e)}"
         )
 
-
 def request_data_to_dict(request_data: RequestData) -> dict:
     """
     Convert RequestData instance to dictionary for logging or serialization.
@@ -522,7 +523,6 @@ def request_data_to_dict(request_data: RequestData) -> dict:
         Dictionary representation of RequestData
     """
     return asdict(request_data)
-
 
 def log_request_data(request_data: RequestData | None, endpoint: str):
     """
@@ -545,101 +545,6 @@ def log_request_data(request_data: RequestData | None, endpoint: str):
         request_data.save_to_db,
         request_data.use_cache
     )
-
-#TODO include once MVP app is complete and real time data is being used within UI
-# @app.route("/generate_blog_post_stream", methods=["POST"])
-# def generate_blog_post_stream():
-#     """
-#     Generate a blog post with streaming response using ticker information.
-
-#     This endpoint generates blog content in real-time as it becomes available,
-#     providing a better user experience for long-form content generation.
-
-#     Request Body:
-#         topic (str): The topic to generate content about
-#         research_data (dict): Research data to inform the content
-#         target_length (int, optional): Target word count (default: 800)
-#         ticker (str, optional): Stock ticker symbol for financial analysis
-
-#     Returns:
-#         Streaming response with generated content chunks
-#     """
-#     try:
-#         # Get request data
-#         data = request.get_json()
-
-#         # Validate and create RequestData instance (no user_id required for this endpoint)
-#         request_data, error_response = validate_and_create_request_data(
-#             data, require_user_id=False, validate_ticker=False
-#         )
-#         if error_response:
-#             return jsonify(error_response), 400
-
-#         # Extract values from RequestData
-#         topic = request_data.topic
-#         research_data = request_data.research_data or {}
-#         target_length = request_data.target_length
-#         ticker = request_data.ticker
-
-#         # Additional validation for research_data
-#         if not isinstance(research_data, dict):
-#             return (
-#                 jsonify(
-#                     {"success": False, "error": "Research data must be a dictionary"}
-#                 ),
-#                 400,
-#             )
-
-#         # Create async generator function for streaming
-#         async def generate_content():
-#             try:
-#                 async for chunk in anthropic_service.generate_blog_post_stream(
-#                     topic=topic,
-#                     research_data=research_data,
-#                     target_length=target_length,
-#                     ticker=ticker,
-#                 ):
-#                     yield f"data: {json.dumps({'chunk': chunk, 'success': True})}\n\n"
-
-#                 # Send completion signal
-#                 yield f"data: {json.dumps({'complete': True, 'success': True})}\n\n"
-
-#             except Exception as e:
-#                 error_msg = f"Error generating content: {str(e)}"
-#                 yield f"data: {json.dumps({'error': error_msg, 'success': False})}\n\n"
-
-#         # Convert async generator to sync generator for Flask
-#         def sync_generator():
-#             loop = asyncio.new_event_loop()
-#             asyncio.set_event_loop(loop)
-#             try:
-#                 async_gen = generate_content()
-#                 while True:
-#                     try:
-#                         chunk = loop.run_until_complete(async_gen.__anext__())
-#                         yield chunk
-#                     except StopAsyncIteration:
-#                         break
-#             finally:
-#                 loop.close()
-
-#         return Response(
-#             sync_generator(),
-#             mimetype="text/event-stream",
-#             headers={
-#                 "Cache-Control": "no-cache",
-#                 "Connection": "keep-alive",
-#                 "Access-Control-Allow-Origin": "*",
-#                 "Access-Control-Allow-Headers": "Content-Type",
-#             },
-#         )
-
-#     except Exception as e:
-#         return (
-#             jsonify({"success": False, "error": f"Blog generation failed: {str(e)}"}),
-#             500,
-#         )
-
 
 @app.route("/generate_blog_post/<ticker>", methods=["POST"])
 def generate_blog_post(ticker: str, target_length: int = 800):
@@ -821,7 +726,6 @@ def generate_ticker_update(ticker: str):
         )
 
 
-
 @app.route("/trending-stocks-sort", methods=["GET", "POST"])
 def get_trending_stocks_by_param():
     """
@@ -970,7 +874,6 @@ def get_trending_stocks_by_param():
             500,
         )
 
-
 @app.route("/yahoo/gainers", methods=["GET"])
 def get_yahoo_gainers():
     """
@@ -1024,7 +927,6 @@ def get_yahoo_gainers():
             "success": False,
             "error": f"Failed to fetch gainers: {str(e)}"
         }), 500
-
 
 @app.route("/yahoo/trending", methods=["GET"])
 def get_yahoo_trending():
@@ -1080,7 +982,6 @@ def get_yahoo_trending():
             "error": f"Failed to fetch trending stocks: {str(e)}"
         }), 500
 
-
 @app.route("/yahoo/most-active", methods=["GET"])
 def get_yahoo_most_active():
     """
@@ -1135,7 +1036,6 @@ def get_yahoo_most_active():
             "error": f"Failed to fetch most active stocks: {str(e)}"
         }), 500
 
-
 @app.route("/watchlist/all", methods=["GET"])
 def get_all_yahoo_watchlists():
     """
@@ -1173,6 +1073,93 @@ def get_all_yahoo_watchlists():
             "error": f"Failed to fetch watchlists: {str(e)}"
         }), 500
 
+@app.route("/tindex/orb/start", methods=["POST"])
+def start_orb_monitoring():
+    """Start ORB monitoring - called by Supabase cron at 9:15 AM
+    
+    Query Parameters:
+        debug (optional): Set to 'true' to bypass market hours check for testing
+    """
+    global ORB_SERVICE, ORB_TASK
+    
+    try:
+        # Check for debug mode in query parameters or request body
+        debug_mode = request.args.get('debug', '').lower() == 'true'
+        if not debug_mode:
+            # Also check request body for debug flag
+            try:
+                request_data = request.get_json(silent=True) or {}
+                debug_mode = request_data.get('debug', False)
+            except Exception as e:
+                logger.error("Failed to retrieve request data: %s", e)
+
+        
+        with orb_lock:
+            if ORB_SERVICE and ORB_SERVICE.is_running:
+                return jsonify({"message": "ORB service already running"})
+        
+        # Get service instance
+        ORB_SERVICE = get_alpaca_service()
+        
+        # Run in background thread
+        def run_orb():
+            if ORB_SERVICE is not None:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(ORB_SERVICE.start(debug_mode=debug_mode))                
+        
+        ORB_TASK = threading.Thread(target=run_orb, daemon=True)
+        ORB_TASK.start()
+        
+        message = "ORB monitoring started"
+        if debug_mode:
+            message += " (DEBUG MODE: Market hours check bypassed)"
+        
+        return jsonify({
+            "success": True,
+            "message": message,
+            "debug_mode": debug_mode
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to start ORB monitoring: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/tindex/orb/stop", methods=["POST"])
+def stop_orb_monitoring():
+    """Stop ORB monitoring - called by Supabase cron at 5:00 PM"""
+    global ORB_SERVICE
+    
+    try:
+        with orb_lock:
+            if ORB_SERVICE and ORB_SERVICE.is_running:
+                asyncio.run(ORB_SERVICE.stop())
+                ORB_SERVICE = None
+                return jsonify({"success": True, "message": "ORB monitoring stopped"})
+        
+        return jsonify({"message": "ORB service not running"})
+        
+    except Exception as e:
+        logger.error(f"Failed to stop ORB monitoring: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/tindex/orb/status", methods=["GET"])
+def get_orb_status():
+    """Check ORB monitoring status"""
+    
+    with orb_lock:
+        # Safely check if service exists and is running
+        if (ORB_SERVICE and 
+            hasattr(ORB_SERVICE, 'is_running') and 
+            ORB_SERVICE.is_running):
+            return jsonify({
+                "running": True,
+                "calculation_phase": getattr(ORB_SERVICE, 'calculation_phase', False),
+                "active_tickers": list(getattr(ORB_SERVICE, 'active_tickers', set())),
+                "orb_ranges_count": len(getattr(ORB_SERVICE, 'orb_ranges', {}))
+            })
+        
+        return jsonify({"running": False})
 
 if __name__ == "__main__":
     app.run(debug=True)

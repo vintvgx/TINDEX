@@ -3,6 +3,7 @@ import {
 } from '@/common/types/watchlist';
 import { prettyJSON } from '@/common/utils/strings/function';
 import { useQuery } from '@tanstack/react-query';
+import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 
 
 /**
@@ -16,7 +17,7 @@ export function useWatchlists()  {
   return useQuery({
     queryKey: ['watchlist'],
     queryFn: async(): Promise<WatchlistResponse> => {
-      const response = await fetch(`https://alethia-production.up.railway.app/watchlist/all`)
+      const response = await fetch(`${RAILWAY_BASE_URL}/watchlist/all`)
 
       if (!response.ok) {
         throw new Error(`Failed to fetch watchlists: ${response.statusText}`);
