@@ -4,9 +4,10 @@ import { View, Text, Pressable, Alert } from "react-native"
 
 interface HeaderProps {
   onAddPress: () => void
+  onPreviewPress?: () => void
 }
 
-export const Header: React.FC<HeaderProps> = ({ onAddPress }) => {
+export const Header: React.FC<HeaderProps> = ({ onAddPress, onPreviewPress }) => {
   const handleSignOut = async () => {
     try {
       Alert.alert(
@@ -58,7 +59,15 @@ export const Header: React.FC<HeaderProps> = ({ onAddPress }) => {
 
       {/* Action Buttons */}
       <View className="flex-row items-center space-x-3">
-        
+        {onPreviewPress && (
+          <Pressable
+            onPress={onPreviewPress}
+            className="w-12 h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-2xl flex items-center justify-center shadow-lg shadow-green-500/30 border border-green-400/20"
+            android_ripple={{ color: "rgba(255,255,255,0.2)", borderless: true }}
+          >
+            <Text className="text-lg font-bold text-white">🔔</Text>
+          </Pressable>
+        )}
 
         <Pressable
           onPress={onAddPress}

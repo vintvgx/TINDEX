@@ -6,6 +6,7 @@ import pytz
 from datetime import datetime, time, timedelta
 import logging
 import aiohttp
+import pandas as pd
 
 from supabase import create_client, Client
 
@@ -13,6 +14,8 @@ from alpaca.data.live import StockDataStream, OptionDataStream
 from alpaca.data.enums import DataFeed
 from alpaca.data.models import Bar
 import yfinance as yf
+
+from services.breakout_confirmation import BreakoutConfirmation
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -78,6 +81,9 @@ class AlpacaService:
 
         # Expo push URL
         self.expo_push_url = "https://exp.host/--/api/v2/push/send"
+        
+        # Breakout confirmation timers: {ticker: asyncio.Task}
+        self._confirmation_timers: Dict[str, asyncio.Task] = {}
 
     def _create_stock_stream(self):
         """Create a fresh stock stream instance with handlers"""
@@ -144,7 +150,6 @@ class AlpacaService:
             loop = asyncio.get_event_loop()
             
             def fetch_yfinance_data():
-                import yfinance as yf
                 stock = yf.Ticker(ticker)
                 # Get today's 1-minute bars
                 # period="1d" with interval="1m" gets today's minute data
@@ -423,8 +428,93 @@ class AlpacaService:
         except Exception as e:
             logger.error(f"Error loading ORB ranges: {e}", exc_info=True)
 
-    async def record_breakout(self, ticker: str, breakout_type: str, price: Decimal):
-        """Record a breakout event and trigger notifications"""
+    async def _fetch_market_data(self, ticker: str) -> Dict[str, Optional[float]]:
+        """
+        Fetch market data needed for breakout confirmation (VWAP, ATR, avg volume).
+        
+        Architecture:
+        - Uses yfinance for efficient data fetching
+        - Calculates VWAP from recent intraday bars
+        - Calculates ATR from daily bars
+        - Fetches average volume from ticker info
+        
+        Performance:
+        - Cached results could be added for frequently accessed tickers
+        - Runs in executor to avoid blocking async loop
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            
+            def fetch_data():
+                stock = yf.Ticker(ticker)
+                info = stock.info
+                
+                # Get average volume
+                avg_volume = info.get("averageVolume", 0) or info.get("averageVolume10days", 0) or 0
+                
+                # Get intraday data for VWAP calculation (last 20 minutes)
+                try:
+                    intraday = stock.history(period="1d", interval="1m")
+                    vwap = None
+                    if not intraday.empty and len(intraday) > 0:
+                        # Calculate VWAP: sum(price * volume) / sum(volume)
+                        typical_price = (intraday['High'] + intraday['Low'] + intraday['Close']) / 3
+                        total_volume = intraday['Volume'].sum()
+                        if total_volume > 0:
+                            vwap = float((typical_price * intraday['Volume']).sum() / total_volume)
+                        else:
+                            vwap = None
+                except Exception as e:
+                    logger.warning(f"Could not calculate VWAP for {ticker}: {e}")
+                    vwap = None
+                
+                # Get daily data for ATR calculation (last 14 days)
+                try:
+                    daily = stock.history(period="14d", interval="1d")
+                    atr = None
+                    if not daily.empty and len(daily) >= 14:
+                        # Calculate True Range
+                        high_low = daily['High'] - daily['Low']
+                        high_close = abs(daily['High'] - daily['Close'].shift(1))
+                        low_close = abs(daily['Low'] - daily['Close'].shift(1))
+                        true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+                        # ATR is 14-period SMA of True Range
+                        atr = float(true_range.tail(14).mean())
+                except Exception as e:
+                    logger.warning(f"Could not calculate ATR for {ticker}: {e}")
+                    atr = None
+                
+                return {
+                    "avg_volume": float(avg_volume),
+                    "vwap": vwap,
+                    "atr": atr
+                }
+            
+            result = await loop.run_in_executor(None, fetch_data)
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error fetching market data for {ticker}: {e}")
+            return {
+                "avg_volume": 0.0,
+                "vwap": None,
+                "atr": None
+            }
+
+    async def record_breakout(self, ticker: str, breakout_type: str, price: Decimal, bar_data: Optional[Bar] = None):
+        """
+        Record a breakout event and trigger notifications with enhanced breakout analysis.
+        
+        Architecture:
+        - Evaluates breakout quality using BreakoutConfirmation
+        - Fetches market data (VWAP, ATR, avg volume) for scoring
+        - Sends initial notification with detailed metrics
+        - Starts 3-minute confirmation timer
+        
+        Performance:
+        - Market data fetching runs in parallel where possible
+        - Confirmation timer uses asyncio.sleep for non-blocking delay
+        """
         try:
             trade_date = self.get_current_et_time().date()
             orb_data = self.orb_ranges.get(ticker, {})
@@ -433,6 +523,27 @@ class AlpacaService:
             breakout_price = float(price) if isinstance(price, Decimal) else price
             orb_high = float(orb_data.get("high", 0)) if isinstance(orb_data.get("high", 0), Decimal) else orb_data.get("high", 0)
             orb_low = float(orb_data.get("low", 0)) if isinstance(orb_data.get("low", 0), Decimal) else orb_data.get("low", 0)
+
+            # Get current bar data for breakout evaluation
+            current_close = breakout_price
+            current_volume = bar_data.volume if bar_data else 0
+
+            # Fetch market data for breakout confirmation
+            market_data = await self._fetch_market_data(ticker)
+            avg_volume_val = market_data.get("avg_volume", 0)
+            avg_volume = int(avg_volume_val) if avg_volume_val else 0
+            vwap = market_data.get("vwap")
+            atr = market_data.get("atr")
+
+            # Evaluate breakout with BreakoutConfirmation
+            breakout_evaluator = BreakoutConfirmation(ticker, orb_high, orb_low)
+            breakout_analysis = breakout_evaluator.evaluate_breakout(
+                current_close=current_close,
+                current_volume=current_volume,
+                avg_volume=avg_volume,
+                vwap=vwap if vwap else current_close,  # Fallback to current price if VWAP unavailable
+                atr=atr
+            )
 
             breakout_record = {
                 "ticker": ticker,
@@ -464,18 +575,119 @@ class AlpacaService:
 
             self.supabase.table("orb_monitoring_state").upsert(state_update).execute()
 
-            await self.send_notifications(ticker, breakout_type, price)
+            # Send initial notification with enhanced breakout data
+            await self.send_notifications(
+                ticker, 
+                breakout_type, 
+                price, 
+                breakout_analysis=breakout_analysis,
+                orb_high=orb_high,
+                orb_low=orb_low
+            )
+
+            # Start 3-minute confirmation timer
+            if ticker in self._confirmation_timers:
+                # Cancel existing timer if any
+                self._confirmation_timers[ticker].cancel()
+            
+            confirmation_task = asyncio.create_task(
+                self._wait_for_confirmation(ticker, breakout_type, orb_high, orb_low)
+            )
+            self._confirmation_timers[ticker] = confirmation_task
 
             logger.info(
                 f"[BREAKOUT RECORDED] {ticker} broke {breakout_type} ORB at ${breakout_price:.2f} "
-                f"(ORB High=${orb_high:.2f}, ORB Low=${orb_low:.2f})"
+                f"(ORB High=${orb_high:.2f}, ORB Low=${orb_low:.2f}) "
+                f"Score: {breakout_analysis.get('score', 'N/A')}/100 "
+                f"Confidence: {breakout_analysis.get('confidence', 'N/A')}"
             )
 
         except Exception as e:
             logger.error(f"Error recording breakout for {ticker}: {e}", exc_info=True)
 
-    async def send_notifications(self, ticker: str, breakout_type: str, price: Decimal):
-        """Send push notifications to users following this stock with ORB enabled"""
+    async def _wait_for_confirmation(self, ticker: str, breakout_type: str, orb_high: float, orb_low: float, breakout_timer: int = 180):
+        """
+        Wait 3 minutes after breakout, then check if price closed outside ORB.
+        If confirmed, send BREAKOUT CONFIRMED notification.
+        
+        Architecture:
+        - Non-blocking timer using asyncio.sleep
+        - Fetches current price after 3 minutes
+        - Validates breakout is still valid (price outside ORB)
+        - Sends confirmation notification
+        
+        Edge Cases:
+        - Handles case where breakout is invalidated before confirmation
+        - Cancels if ticker is no longer being monitored
+        """
+        try:
+            # Wait breakout_timer in minutes (default is 3 minutes/180 seconds)
+            await asyncio.sleep(breakout_timer)
+            
+            # Check if still monitoring this ticker
+            if ticker not in self.orb_ranges:
+                logger.info(f"[CONFIRMATION] {ticker} no longer in monitoring, skipping confirmation")
+                return
+            
+            # Fetch current price to check if breakout is confirmed
+            try:
+                loop = asyncio.get_event_loop()
+                def get_current_price():
+                    stock = yf.Ticker(ticker)
+                    info = stock.info
+                    return info.get("currentPrice") or info.get("regularMarketPrice")
+                
+                current_price = await loop.run_in_executor(None, get_current_price)
+                
+                if current_price is None:
+                    logger.warning(f"[CONFIRMATION] Could not fetch current price for {ticker}")
+                    return
+                
+                # Check if breakout is confirmed (price still outside ORB)
+                is_confirmed = False
+                if breakout_type == "above":
+                    is_confirmed = current_price > orb_high
+                else:
+                    is_confirmed = current_price < orb_low
+                
+                if is_confirmed:
+                    logger.info(
+                        f"[BREAKOUT CONFIRMED] {ticker} breakout confirmed after 3 minutes. "
+                        f"Price: ${current_price:.2f}, ORB High: ${orb_high:.2f}, ORB Low: ${orb_low:.2f}"
+                    )
+                    await self.send_confirmation_notification(ticker, breakout_type, current_price, orb_high, orb_low)
+                else:
+                    logger.info(
+                        f"[BREAKOUT INVALIDATED] {ticker} price returned inside ORB. "
+                        f"Price: ${current_price:.2f}, ORB High: ${orb_high:.2f}, ORB Low: ${orb_low:.2f}"
+                    )
+                    await self.send_invalidation_notification(ticker, breakout_type, current_price, orb_high, orb_low)
+                    
+            except Exception as e:
+                logger.error(f"Error checking confirmation for {ticker}: {e}")
+                
+        except asyncio.CancelledError:
+            logger.info(f"[CONFIRMATION] Timer cancelled for {ticker}")
+        except Exception as e:
+            logger.error(f"Error in confirmation timer for {ticker}: {e}")
+        finally:
+            # Clean up timer reference
+            if ticker in self._confirmation_timers:
+                del self._confirmation_timers[ticker]
+
+    async def get_eligible_users(self, ticker: str) -> list:
+        """
+        Get eligible users for ORB notifications for a given ticker.
+        
+        Architecture:
+        - Queries users following the ticker with ORB enabled
+        - Fetches user profiles with push tokens
+        - Filters for users with valid tokens and enabled notifications
+        
+        Returns:
+            List of eligible user dictionaries with id, expo_push_token, and notification_preferences
+            Empty list if no eligible users found
+        """
         try:
             users_response = (
                 self.supabase.table("user_stock_follows")
@@ -487,7 +699,7 @@ class AlpacaService:
 
             if not users_response.data:
                 logger.info(f"No users following {ticker} with ORB enabled")
-                return
+                return []
 
             user_ids = [user['user_id'] for user in users_response.data]
 
@@ -501,7 +713,7 @@ class AlpacaService:
 
             if not profiles_response.data:
                 logger.info(f"No users with push tokens for {ticker}")
-                return
+                return []
 
             # Filter for users with valid tokens and proper notification settings
             eligible_users = [
@@ -513,15 +725,221 @@ class AlpacaService:
 
             if not eligible_users:
                 logger.info(f"No eligible users for {ticker} ORB notification")
+                return []
+
+            return eligible_users
+
+        except Exception as e:
+            logger.error(f"Error getting eligible users for {ticker}: {e}")
+            return []
+
+    async def send_confirmation_notification(self, ticker: str, breakout_type: str, price: float, orb_high: float, orb_low: float):
+        """Send BREAKOUT CONFIRMED notification after 3-minute validation"""
+        try:
+            eligible_users = await self.get_eligible_users(ticker)
+            
+            if not eligible_users:
                 return
+
+            direction_emoji = "🟢" if breakout_type == "above" else "🔴"
+            direction_text = "BULLISH" if breakout_type == "above" else "BEARISH"
 
             notification_tasks = []
             for user in eligible_users:
+                message_title = f"{direction_emoji} {ticker} BREAKOUT CONFIRMED"
+                message_body = (
+                    f"{ticker} {direction_text} breakout confirmed after 3-minute close. "
+                    f"Price: ${price:.2f}"
+                )
+
+                message = {
+                    "sound": "default",
+                    "title": message_title,
+                    "body": message_body,
+                    "data": {
+                        "type": "orb_breakout_confirmed",
+                        "ticker": ticker,
+                        "breakout_type": breakout_type,
+                        "price": price,
+                        "orb_high": orb_high,
+                        "orb_low": orb_low,
+                        "screen": "ticker",
+                        "timestamp": self.get_current_et_time().isoformat()
+                    },
+                    "badge": 1,
+                    "priority": "high",
+                    "channelId": "orb-alerts",
+                }
+
+                task = self._send_push_notification(
+                    user=user,
+                    message=message,
+                    ticker=ticker,
+                    breakout_type=breakout_type,
+                    price=Decimal(str(price))
+                )
+                notification_tasks.append(task)
+
+            results = await asyncio.gather(*notification_tasks, return_exceptions=True)
+            successful = sum(1 for r in results if r is True)
+            failed = len(results) - successful
+
+            logger.info(
+                f"Breakout confirmation notifications sent for {ticker}: "
+                f"{successful} successful, {failed} failed"
+            )
+
+        except Exception as e:
+            logger.error(f"Error sending confirmation notifications for {ticker}: {e}")
+
+    async def send_invalidation_notification(self, ticker: str, breakout_type: str, price: float, orb_high: float, orb_low: float):
+        """
+        Send BREAKOUT INVALIDATED notification when price returns inside ORB after 3-minute timer.
+        
+        Architecture:
+        - Uses same eligible users logic as confirmation notifications
+        - Provides clear messaging about invalidation
+        - Includes current price and ORB levels for context
+        
+        Design:
+        - Warning-style notification with appropriate emoji
+        - Helps users understand the breakout failed to sustain
+        """
+        try:
+            eligible_users = await self.get_eligible_users(ticker)
+            
+            if not eligible_users:
+                return
+
+            direction_text = "BULLISH" if breakout_type == "above" else "BEARISH"
+
+            notification_tasks = []
+            for user in eligible_users:
+                message_title = f"⚠️ {ticker} BREAKOUT INVALIDATED"
+                message_body = (
+                    f"{ticker} {direction_text} breakout invalidated after 3-minute close. "
+                    f"Price returned inside ORB range. Current: ${price:.2f}"
+                )
+
+                message = {
+                    "sound": "default",
+                    "title": message_title,
+                    "body": message_body,
+                    "data": {
+                        "type": "orb_breakout_invalidated",
+                        "ticker": ticker,
+                        "breakout_type": breakout_type,
+                        "price": price,
+                        "orb_high": orb_high,
+                        "orb_low": orb_low,
+                        "screen": "ticker",
+                        "timestamp": self.get_current_et_time().isoformat()
+                    },
+                    "badge": 1,
+                    "priority": "high",
+                    "channelId": "orb-alerts",
+                }
+
+                task = self._send_push_notification(
+                    user=user,
+                    message=message,
+                    ticker=ticker,
+                    breakout_type=breakout_type,
+                    price=Decimal(str(price))
+                )
+                notification_tasks.append(task)
+
+            results = await asyncio.gather(*notification_tasks, return_exceptions=True)
+            successful = sum(1 for r in results if r is True)
+            failed = len(results) - successful
+
+            logger.info(
+                f"Breakout invalidation notifications sent for {ticker}: "
+                f"{successful} successful, {failed} failed"
+            )
+
+        except Exception as e:
+            logger.error(f"Error sending invalidation notifications for {ticker}: {e}")
+
+    async def send_notifications(
+        self, 
+        ticker: str, 
+        breakout_type: str, 
+        price: Decimal,
+        breakout_analysis: Optional[Dict] = None,
+        orb_high: Optional[float] = None,
+        orb_low: Optional[float] = None
+    ):
+        """
+        Send push notifications with enhanced breakout data.
+        
+        Architecture:
+        - Formats notification with detailed breakout metrics
+        - Includes confidence score, reasons, and trading information
+        - Maintains backward compatibility if breakout_analysis is not provided
+        
+        Notification Format:
+        - Title: Emoji + ticker + confidence level
+        - Body: Detailed breakout information with entry, stop loss, risk
+        - Data: Complete breakout analysis for app display
+        """
+        try:
+            eligible_users = await self.get_eligible_users(ticker)
+            
+            if not eligible_users:
+                return
+
+            price_float = float(price) if isinstance(price, Decimal) else price
+            
+            # Build enhanced notification if breakout analysis is available
+            if breakout_analysis and breakout_analysis.get("signal"):
+                signal = breakout_analysis.get("signal", "")
+                score = breakout_analysis.get("score", 0)
+                confidence = breakout_analysis.get("confidence", "MEDIUM")
+                reasons = breakout_analysis.get("reasons", [])
+                entry_price = breakout_analysis.get("entry_price", price_float)
+                stop_loss = breakout_analysis.get("stop_loss", orb_low if breakout_type == "above" else orb_high)
+                risk_per_share = breakout_analysis.get("risk_per_share", 0)
+                
+                # Determine emoji based on direction
+                emoji = "🟢" if signal == "BULLISH" else "🔴"
+                
+                # Build title
+                message_title = f"{emoji} {ticker} ORB BREAKOUT ({confidence} CONFIDENCE - {score}/100)"
+                
+                # Build detailed body
+                direction_text = "BULLISH (Call opportunity)" if signal == "BULLISH" else "BEARISH (Put opportunity)"
+                body_lines = [
+                    f"Direction: {direction_text}",
+                    f"Entry: ${entry_price:.2f}",
+                    f"ORB High: ${orb_high:.2f}" if orb_high else "",
+                    f"ORB Low: ${orb_low:.2f}" if orb_low else "",
+                    f"Stop Loss: ${stop_loss:.2f} ({'ORL' if signal == 'BULLISH' else 'ORH'})" if stop_loss else "",
+                    "",
+                ]
+                
+                # Add reasons with checkmarks
+                for reason in reasons:
+                    if reason.startswith("⚠️"):
+                        body_lines.append(reason)
+                    else:
+                        body_lines.append(f"✓ {reason}")
+                
+                # Add risk
+                if risk_per_share > 0:
+                    body_lines.append("")
+                    body_lines.append(f"Risk: ${risk_per_share:.2f} per share")
+                
+                message_body = "\n".join([line for line in body_lines if line])
+                
+            else:
+                # Fallback to simple notification if no analysis available
                 message_title = f"🚨 ORB Alert: {ticker}"
                 direction = "above ORB high" if breakout_type == "above" else "below ORB low"
-                price_float = float(price) if isinstance(price, Decimal) else price
                 message_body = f"{ticker} broke {direction} at ${price_float:.2f}"
 
+            notification_tasks = []
+            for user in eligible_users:
                 message = {
                     "sound": "default",
                     "title": message_title,
@@ -538,6 +956,22 @@ class AlpacaService:
                     "priority": "high",
                     "channelId": "orb-alerts",
                 }
+                
+                # Add enhanced breakout data if available
+                if breakout_analysis:
+                    message["data"].update({
+                        "breakout_analysis": breakout_analysis,
+                        "orb_high": orb_high,
+                        "orb_low": orb_low,
+                        "confidence": breakout_analysis.get("confidence"),
+                        "score": breakout_analysis.get("score"),
+                        "reasons": breakout_analysis.get("reasons", []),
+                        "entry_price": breakout_analysis.get("entry_price", price_float),
+                        "stop_loss": breakout_analysis.get("stop_loss"),
+                        "risk_per_share": breakout_analysis.get("risk_per_share", 0),
+                        "rvol": breakout_analysis.get("rvol", 0),
+                        "vwap_aligned": breakout_analysis.get("vwap_aligned", False)
+                    })
 
                 task = self._send_push_notification(
                     user=user,
@@ -643,7 +1077,7 @@ class AlpacaService:
                 "body": message["body"],
                 "type": message.get("data", {}).get("type", "orb_breakout"),
                 "data": notification_data,
-                "read": False,
+                "is_read": False,
                 "expires_at": (
                     datetime.now() + timedelta(days=7)
                 ).isoformat()
@@ -825,14 +1259,14 @@ class AlpacaService:
                     f"[BREAKOUT DETECTED] {ticker} above ORB high! "
                     f"Bar High={bar_high}, ORB High={orb_high}"
                 )
-                await self.record_breakout(ticker, "above", bar_high)
+                await self.record_breakout(ticker, "above", bar_close, bar_data=data)
 
             elif not state["low_broken"] and bar_low < orb_low:
                 logger.info(
                     f"[BREAKOUT DETECTED] {ticker} below ORB low! "
                     f"Bar Low={bar_low}, ORB Low={orb_low}"
                 )
-                await self.record_breakout(ticker, "below", bar_low)
+                await self.record_breakout(ticker, "below", bar_close, bar_data=data)
 
     async def _bar_handler(self, data: Bar):
         """

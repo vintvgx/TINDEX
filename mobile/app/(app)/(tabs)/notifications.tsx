@@ -7,12 +7,17 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
 import { useNotificationHistory } from "@/hooks/queries/notifications/useNotificationHistory";
 import { NotificationRecord } from "@/common/types/notifications/notificationModel";
 import { formatDistanceToNow } from "date-fns";
+import {
+  ORBNotificationModal,
+  ORBBreakoutNotificationData,
+} from "@/common/components/FEED/modals/ORBNotificationModal";
 
 const NotificationsScreen = () => {
   const { toTicker } = useBaseNavigation();
@@ -28,6 +33,17 @@ const NotificationsScreen = () => {
   } = useNotificationHistory();
 
   const [refreshing, setRefreshing] = useState(false);
+
+  // ORB Modal state
+  const [orbModalVisible, setOrbModalVisible] = useState(false);
+  const [orbNotificationData, setOrbNotificationData] =
+    useState<ORBBreakoutNotificationData | null>(null);
+  const [orbNotificationTitle, setOrbNotificationTitle] = useState<
+    string | undefined
+  >(undefined);
+  const [orbNotificationBody, setOrbNotificationBody] = useState<
+    string | undefined
+  >(undefined);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -58,6 +74,48 @@ const NotificationsScreen = () => {
         markAsRead(notification.id);
       }
 
+      // Check if this is an ORB notification
+      const orbType = notification.data?.type;
+      if (
+        orbType === "orb_breakout" ||
+        orbType === "orb_breakout_confirmed" ||
+        orbType === "orb_breakout_invalidated"
+      ) {
+        // Log warning and display Alert if ticker name is not included
+        if (!notification.data.ticker) {
+          console.warn("ORB notification missing ticker:", notification.id);
+          Alert.alert("ORB notification missing ticker:", notification.id);
+          return;
+        }
+
+        // Show ORB modal
+        const orbData: ORBBreakoutNotificationData = {
+          type: orbType,
+          ticker: notification.data.ticker || "",
+          breakout_type: notification.data.breakout_type || "above",
+          price: notification.data.price || 0,
+          screen: notification.data.screen || "ticker",
+          timestamp: notification.data.timestamp || notification.created_at,
+          breakout_analysis: notification.data.breakout_analysis,
+          orb_high: notification.data.orb_high,
+          orb_low: notification.data.orb_low,
+          confidence: notification.data.confidence,
+          score: notification.data.score,
+          reasons: notification.data.reasons,
+          entry_price: notification.data.entry_price,
+          stop_loss: notification.data.stop_loss,
+          risk_per_share: notification.data.risk_per_share,
+          rvol: notification.data.rvol,
+          vwap_aligned: notification.data.vwap_aligned,
+        };
+
+        setOrbNotificationData(orbData);
+        setOrbNotificationTitle(notification.title);
+        setOrbNotificationBody(notification.body);
+        setOrbModalVisible(true);
+        return;
+      }
+
       // Extract ticker and navigate if found
       const ticker = extractTicker(notification);
       if (ticker) {
@@ -70,6 +128,15 @@ const NotificationsScreen = () => {
     },
     [markAsRead, toTicker]
   );
+
+  const handleOrbModalClose = () => {
+    setOrbModalVisible(false);
+    setTimeout(() => {
+      setOrbNotificationData(null);
+      setOrbNotificationTitle(undefined);
+      setOrbNotificationBody(undefined);
+    }, 300);
+  };
 
   // Render individual notification item
   const renderNotification = ({ item }: { item: NotificationRecord }) => {
@@ -207,6 +274,15 @@ const NotificationsScreen = () => {
         contentContainerStyle={{
           flexGrow: 1,
         }}
+      />
+
+      {/* ORB Notification Modal */}
+      <ORBNotificationModal
+        visible={orbModalVisible}
+        onClose={handleOrbModalClose}
+        notificationData={orbNotificationData}
+        notificationTitle={orbNotificationTitle}
+        notificationBody={orbNotificationBody}
       />
     </SafeAreaView>
   );
