@@ -1009,7 +1009,7 @@ class AlpacaService:
             if not expo_token:
                 return False
 
-            # Set recipient©
+            # Set recipient
             message["to"] = expo_token
 
             async with aiohttp.ClientSession() as session:
