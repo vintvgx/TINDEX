@@ -869,7 +869,8 @@ class AlpacaService:
             logger.info(f"Subscribed to bars for {len(tickers)} tickers: {list(tickers)}")
             return True
         except Exception as e:
-            logger.error(f"Error during unsubscribe: {e}")
+            logger.error(f"Error subscribing to tickers: {e}")
+            return False
 
     async def unsubscribe_all(self):
         """Unsubscribe from all tickers before closing"""
