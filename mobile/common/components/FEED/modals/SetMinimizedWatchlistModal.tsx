@@ -1,4 +1,4 @@
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { RadioGroup, RadioGroupItem } from "@/common/components/ui/radio-group";
 import { useUpdateProfileMutation } from "@/hooks/mutations/auth/useUpdateProfileMutation";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import * as Haptics from "expo-haptics";

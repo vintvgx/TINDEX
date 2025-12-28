@@ -459,8 +459,11 @@ class AlpacaService:
                     if not intraday.empty and len(intraday) > 0:
                         # Calculate VWAP: sum(price * volume) / sum(volume)
                         typical_price = (intraday['High'] + intraday['Low'] + intraday['Close']) / 3
-                        vwap = (typical_price * intraday['Volume']).sum() / intraday['Volume'].sum()
-                        vwap = float(vwap)
+                        total_volume = intraday['Volume'].sum()
+                        if total_volume > 0:
+                            vwap = float((typical_price * intraday['Volume']).sum() / total_volume)
+                        else:
+                            vwap = None
                 except Exception as e:
                     logger.warning(f"Could not calculate VWAP for {ticker}: {e}")
                     vwap = None
@@ -911,7 +914,7 @@ class AlpacaService:
                     f"Entry: ${entry_price:.2f}",
                     f"ORB High: ${orb_high:.2f}" if orb_high else "",
                     f"ORB Low: ${orb_low:.2f}" if orb_low else "",
-                    f"Stop Loss: ${stop_loss:.2f} ({'ORL' if signal == 'BULLISH' else 'ORH'})",
+                    f"Stop Loss: ${stop_loss:.2f} ({'ORL' if signal == 'BULLISH' else 'ORH'})" if stop_loss else "",
                     "",
                 ]
                 
@@ -1006,7 +1009,7 @@ class AlpacaService:
             if not expo_token:
                 return False
 
-            # Set recipient
+            # Set recipient©
             message["to"] = expo_token
 
             async with aiohttp.ClientSession() as session:

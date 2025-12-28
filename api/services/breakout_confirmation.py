@@ -41,6 +41,9 @@ class BreakoutConfirmation:
             orb_high: ORB high level
             orb_low: ORB low level
         """
+        if orb_high < orb_low:
+            raise ValueError(f"Invalid ORB range: high ({orb_high}) < low ({orb_low})")
+        
         self.symbol = symbol
         self.orb_high = orb_high
         self.orb_low = orb_low
@@ -126,7 +129,7 @@ class BreakoutConfirmation:
         
         return {
             "signal": direction,
-            "score": min(score, 100),
+            "score": max(0, min(score, 100)),
             "confidence": "HIGH" if score >= 70 else "MEDIUM" if score >= 50 else "LOW",
             "reasons": reasons,
             "rvol": rvol,

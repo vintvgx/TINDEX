@@ -4,7 +4,10 @@ import MainContent from "@/common/components/FEED/MainContent";
 import { AddPostModal } from "@/common/components/FEED/modals/AddPostModal";
 import { PostDetailModal } from "@/common/components/FEED/modals/PostDetailModal";
 import { SetMinimizedWatchlistModal } from "@/common/components/FEED/modals/SetMinimizedWatchlistModal";
-import { ORBNotificationModal, ORBBreakoutNotificationData } from "@/common/components/FEED/modals/ORBNotificationModal";
+import {
+  ORBNotificationModal,
+  ORBBreakoutNotificationData,
+} from "@/common/components/FEED/modals/ORBNotificationModal";
 import type { BlogPostType } from "@/common/types";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { logDebug } from "@/common/utils/strings/function";
@@ -35,17 +38,29 @@ const FeedScreen = () => {
   const [watchlistModalVisible, setWatchlistModalVisible] = useState(false);
 
   //ORB Modal Notification
-  const [orbNotificationModalVisible, setOrbNotificationModalVisible] = useState(false);
-  const [orbNotificationData, setOrbNotificationData] = useState<ORBBreakoutNotificationData | null>(null);
-  const [orbNotificationTitle, setOrbNotificationTitle] = useState<string | undefined>(undefined);
-  const [orbNotificationBody, setOrbNotificationBody] = useState<string | undefined>(undefined);
-  const [previewMode, setPreviewMode] = useState<"breakout" | "confirmed" | null>(null);
+  const [orbNotificationModalVisible, setOrbNotificationModalVisible] =
+    useState(false);
+  const [orbNotificationData, setOrbNotificationData] =
+    useState<ORBBreakoutNotificationData | null>(null);
+  const [orbNotificationTitle, setOrbNotificationTitle] = useState<
+    string | undefined
+  >(undefined);
+  const [orbNotificationBody, setOrbNotificationBody] = useState<
+    string | undefined
+  >(undefined);
+  const [previewMode, setPreviewMode] = useState<
+    "breakout" | "confirmed" | null
+  >(null);
 
-  // Feed data 
+  // Feed data
   const { data: feed, isLoading: feedLoading } = useFeedQuery();
 
   // Watchlists
-  const { data: watchlistsData, isLoading: watchlistsLoading, error: watchlistError } = useWatchlists();
+  const {
+    data: watchlistsData,
+    isLoading: watchlistsLoading,
+    error: watchlistError,
+  } = useWatchlists();
 
   const {
     authState: { user, profile },
@@ -57,10 +72,9 @@ const FeedScreen = () => {
     setBlogPostModalVisible(true);
   };
 
-
   const handleCloseModal = () => {
-      setBlogPostModalVisible(false);
-      setTimeout(() => setSelectedPost(null), 300);
+    setBlogPostModalVisible(false);
+    setTimeout(() => setSelectedPost(null), 300);
   };
 
   const handleAddPress = () => {
@@ -72,12 +86,12 @@ const FeedScreen = () => {
   };
 
   const handleWatchlistModalClose = () => {
-    setWatchlistModalVisible(false)
-  }
+    setWatchlistModalVisible(false);
+  };
 
   const handleSetWatchlistModalPress = () => {
-    setWatchlistModalVisible(true)
-  }
+    setWatchlistModalVisible(true);
+  };
 
   const handleErrorOrNoDataChange = (hasErrorOrNoData: boolean) => {
     setHasErrorOrNoData(hasErrorOrNoData);
@@ -96,7 +110,9 @@ const FeedScreen = () => {
   useEffect(() => {
     if (params.notificationData) {
       try {
-        const notificationData = JSON.parse(params.notificationData as string) as ORBBreakoutNotificationData;
+        const notificationData = JSON.parse(
+          params.notificationData as string
+        ) as ORBBreakoutNotificationData;
         const title = params.notificationTitle as string | undefined;
         const body = params.notificationBody as string | undefined;
 
@@ -112,10 +128,15 @@ const FeedScreen = () => {
           notificationBody: undefined,
         });
       } catch (error) {
-        console.error(`Error parsing notification data:", ${error}`)
+        console.error(`Error parsing notification data: ${error}`);
       }
     }
-  }, [params.notificationData, params.notificationTitle, params.notificationBody, router]);
+  }, [
+    params.notificationData,
+    params.notificationTitle,
+    params.notificationBody,
+    router,
+  ]);
 
   const handleOrbNotificationClose = () => {
     setOrbNotificationModalVisible(false);
@@ -151,7 +172,7 @@ const FeedScreen = () => {
       vwap_aligned: true,
       entry_price: 690.28,
       stop_loss: 687.98,
-      risk_per_share: 2.30,
+      risk_per_share: 2.3,
     },
   };
 
@@ -176,8 +197,8 @@ Risk: $2.30 per share`;
     price: 195.45,
     screen: "ticker",
     timestamp: new Date().toISOString(),
-    orb_high: 194.20,
-    orb_low: 193.50,
+    orb_high: 194.2,
+    orb_low: 193.5,
     breakout_analysis: {
       signal: "BULLISH",
       score: 92,
@@ -192,7 +213,7 @@ Risk: $2.30 per share`;
       rvol: 2.3,
       vwap_aligned: true,
       entry_price: 194.25,
-      stop_loss: 193.50,
+      stop_loss: 193.5,
       risk_per_share: 0.75,
     },
   };

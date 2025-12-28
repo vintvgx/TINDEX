@@ -7,13 +7,17 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
 import { useNotificationHistory } from "@/hooks/queries/notifications/useNotificationHistory";
 import { NotificationRecord } from "@/common/types/notifications/notificationModel";
 import { formatDistanceToNow } from "date-fns";
-import { ORBNotificationModal, ORBBreakoutNotificationData } from "@/common/components/FEED/modals/ORBNotificationModal";
+import {
+  ORBNotificationModal,
+  ORBBreakoutNotificationData,
+} from "@/common/components/FEED/modals/ORBNotificationModal";
 
 const NotificationsScreen = () => {
   const { toTicker } = useBaseNavigation();
@@ -29,12 +33,17 @@ const NotificationsScreen = () => {
   } = useNotificationHistory();
 
   const [refreshing, setRefreshing] = useState(false);
-  
+
   // ORB Modal state
   const [orbModalVisible, setOrbModalVisible] = useState(false);
-  const [orbNotificationData, setOrbNotificationData] = useState<ORBBreakoutNotificationData | null>(null);
-  const [orbNotificationTitle, setOrbNotificationTitle] = useState<string | undefined>(undefined);
-  const [orbNotificationBody, setOrbNotificationBody] = useState<string | undefined>(undefined);
+  const [orbNotificationData, setOrbNotificationData] =
+    useState<ORBBreakoutNotificationData | null>(null);
+  const [orbNotificationTitle, setOrbNotificationTitle] = useState<
+    string | undefined
+  >(undefined);
+  const [orbNotificationBody, setOrbNotificationBody] = useState<
+    string | undefined
+  >(undefined);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -67,14 +76,25 @@ const NotificationsScreen = () => {
 
       // Check if this is an ORB notification
       const orbType = notification.data?.type;
-      if (orbType === 'orb_breakout' || orbType === 'orb_breakout_confirmed' || orbType === 'orb_breakout_invalidated') {
+      if (
+        orbType === "orb_breakout" ||
+        orbType === "orb_breakout_confirmed" ||
+        orbType === "orb_breakout_invalidated"
+      ) {
+        // Log warning and display Alert if ticker name is not included
+        if (!notification.data.ticker) {
+          console.warn("ORB notification missing ticker:", notification.id);
+          Alert.alert("ORB notification missing ticker:", notification.id);
+          return;
+        }
+
         // Show ORB modal
         const orbData: ORBBreakoutNotificationData = {
           type: orbType,
-          ticker: notification.data.ticker || '',
-          breakout_type: notification.data.breakout_type || 'above',
+          ticker: notification.data.ticker || "",
+          breakout_type: notification.data.breakout_type || "above",
           price: notification.data.price || 0,
-          screen: notification.data.screen || 'ticker',
+          screen: notification.data.screen || "ticker",
           timestamp: notification.data.timestamp || notification.created_at,
           breakout_analysis: notification.data.breakout_analysis,
           orb_high: notification.data.orb_high,
@@ -88,7 +108,7 @@ const NotificationsScreen = () => {
           rvol: notification.data.rvol,
           vwap_aligned: notification.data.vwap_aligned,
         };
-        
+
         setOrbNotificationData(orbData);
         setOrbNotificationTitle(notification.title);
         setOrbNotificationBody(notification.body);
@@ -255,7 +275,7 @@ const NotificationsScreen = () => {
           flexGrow: 1,
         }}
       />
-      
+
       {/* ORB Notification Modal */}
       <ORBNotificationModal
         visible={orbModalVisible}
