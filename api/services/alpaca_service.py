@@ -507,8 +507,8 @@ class AlpacaService:
             eligible_users = [
                 user for user in profiles_response.data
                 if user.get("expo_push_token")  # Ensure token exists
-                and user.get("notification_preferences", {}).get("enabled", False)
-                and user.get("notification_preferences", {}).get("orb_alerts", True)
+                and user.get("notification_preferences", {}).get("enabled", True)
+                # and user.get("notification_preferences", {}).get("orb_alerts", True)
             ]
 
             if not eligible_users:
