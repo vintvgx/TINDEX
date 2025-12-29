@@ -28,7 +28,7 @@ const RAILWAY_URLS = {
  * - RailwayEnvironment.PRODUCTION: Production environment
  * - RailwayEnvironment.ENGINEERING: Engineering/test environment
  */
-const ENVIRONMENT: RailwayEnvironment = RailwayEnvironment.ENGINEERING;
+const ENVIRONMENT: RailwayEnvironment = RailwayEnvironment.PRODUCTION;
 
 /**
  * Base URL for Railway API endpoints
