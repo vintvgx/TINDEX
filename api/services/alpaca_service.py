@@ -1306,8 +1306,22 @@ class AlpacaService:
             logger.error(f"Error subscribing to tickers: {e}")
             return False
 
+    def _unsubscribe_ticker_blocking(self, ticker: str):
+        """
+        Helper method to unsubscribe from a single ticker.
+        This is a blocking synchronous method that will be run in a thread pool.
+        """
+        if self.stock_stream:
+            self.stock_stream.unsubscribe_bars(ticker)
+
     async def unsubscribe_all(self):
-        """Unsubscribe from all tickers before closing"""
+        """
+        Unsubscribe from all tickers before closing.
+        
+        Note: unsubscribe_bars() is a blocking synchronous call from the Alpaca SDK
+        that waits on a future. We run it in a thread pool executor to avoid blocking
+        the event loop, with a timeout to prevent indefinite hanging.
+        """
         if not self.subscribed_tickers:
             logger.info("No tickers to unsubscribe from")
             return
@@ -1316,9 +1330,24 @@ class AlpacaService:
             logger.info(f"Unsubscribing from {len(self.subscribed_tickers)} tickers")
 
             if self.stock_stream:
-                for ticker in self.subscribed_tickers:
+                # Run blocking unsubscribe calls in thread pool with timeout
+                loop = asyncio.get_running_loop()
+                
+                for ticker in list(self.subscribed_tickers):  # Copy list to avoid mutation during iteration
                     try:
-                        self.stock_stream.unsubscribe_bars(ticker)
+                        # Run the blocking unsubscribe_bars() call in a thread pool
+                        # with a 5-second timeout per ticker to prevent indefinite hanging
+                        await asyncio.wait_for(
+                            loop.run_in_executor(
+                                None,
+                                self._unsubscribe_ticker_blocking,
+                                ticker
+                            ),
+                            timeout=5.0
+                        )
+                        logger.debug(f"Unsubscribed from {ticker}")
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Timeout unsubscribing from {ticker} (exceeded 5s), continuing...")
                     except Exception as e:
                         logger.warning(f"Error unsubscribing from {ticker}: {e}")
 
@@ -1328,7 +1357,7 @@ class AlpacaService:
             logger.info("Unsubscribed from all tickers successfully")
 
         except Exception as e:
-            logger.error(f"Error during unsubscribe: {e}")
+            logger.error(f"Error during unsubscribe: {e}", exc_info=True)
 
     async def start_stream(self):
         """Start the WebSocket stream"""
@@ -1357,19 +1386,29 @@ class AlpacaService:
             raise
 
     async def stop_stream(self):
-        """Stop the WebSocket stream with proper cleanup"""
+        """
+        Stop the WebSocket stream with proper cleanup.
+        
+        Order of operations:
+        1. Cancel the stream task first to stop the WebSocket connection
+        2. Then try to unsubscribe (this is safer and avoids hanging on unsubscribe)
+        3. Finally close the stream connection
+        """
         if not self._stream_started:
             logger.info("Stream was never started, skipping cleanup")
             return
 
         try:
-            await self.unsubscribe_all()
-
+            # Cancel the stream task first to stop the WebSocket connection
+            # This helps prevent hanging on unsubscribe operations
             if self._stream_task is not None:
                 logger.info("Cancelling stream task")
                 self._stream_task.cancel()
                 try:
-                    await self._stream_task
+                    # Wait up to 2 seconds for task cancellation
+                    await asyncio.wait_for(self._stream_task, timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Stream task cancellation timed out, forcing cleanup")
                 except asyncio.CancelledError:
                     logger.info("Stream task cancelled successfully")
                 except Exception as e:
@@ -1377,10 +1416,19 @@ class AlpacaService:
                 finally:
                     self._stream_task = None
 
+            # Now try to unsubscribe (with timeout protection)
+            await self.unsubscribe_all()
+
+            # Close the stream connection
             if self.stock_stream:
                 try:
-                    await self.stock_stream.close()
+                    await asyncio.wait_for(
+                        self.stock_stream.close(),
+                        timeout=5.0
+                    )
                     logger.info("Stock stream connection closed")
+                except asyncio.TimeoutError:
+                    logger.warning("Stream close timed out, continuing cleanup")
                 except Exception as e:
                     logger.error(f"Error closing stock stream: {e}")
 
@@ -1388,7 +1436,7 @@ class AlpacaService:
             self.stock_stream = None
 
         except Exception as e:
-            logger.error(f"Error stopping stream: {e}")
+            logger.error(f"Error stopping stream: {e}", exc_info=True)
 
     async def run_service(self):
         """Main service loop"""
