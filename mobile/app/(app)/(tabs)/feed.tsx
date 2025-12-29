@@ -9,6 +9,7 @@ import {
   ORBBreakoutNotificationData,
 } from "@/common/components/FEED/modals/ORBNotificationModal";
 import type { BlogPostType } from "@/common/types";
+import type { TickerUpdate } from "@/hooks/queries/ticker/useTickerUpdatesQuery";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { logDebug } from "@/common/utils/strings/function";
 import { useFeedQuery } from "@/hooks/queries/blogs/useFeedQuery";
@@ -53,7 +54,7 @@ const FeedScreen = () => {
   >(null);
 
   // Feed data
-  const { data: feed, isLoading: feedLoading } = useFeedQuery();
+  const { data: feed, isLoading: feedLoading, refetch: refetchFeed, isRefetching: isRefetchingFeed } = useFeedQuery();
 
   // Watchlists
   const {
@@ -66,10 +67,19 @@ const FeedScreen = () => {
     authState: { user, profile },
   } = useAuth();
 
-  const handlePostPress = (post: BlogPostType) => {
-    logDebug("Post pressed:", post.title);
-    setSelectedPost(post);
-    setBlogPostModalVisible(true);
+  const handlePostPress = (item: BlogPostType | TickerUpdate, type: "blog" | "update") => {
+    if (type === "blog") {
+      const blogPost = item as BlogPostType;
+      logDebug("Blog post pressed:", blogPost.title);
+      setSelectedPost(blogPost);
+      setBlogPostModalVisible(true);
+    } else {
+      // For updates, we can navigate to ticker detail or just log
+      const update = item as TickerUpdate;
+      logDebug("Ticker update pressed:", update.ticker, update.content);
+      // TODO: Navigate to ticker detail screen if needed
+      // router.push(`/ticker/${update.ticker}`);
+    }
   };
 
   const handleCloseModal = () => {
@@ -265,6 +275,8 @@ Risk: $2.30 per share`;
         feedLoading={feedLoading}
         handlePostPress={handlePostPress}
         onScroll={handleScroll}
+        refetchFeed={refetchFeed}
+        isRefetching={isRefetchingFeed}
       />
 
       {/* Modals */}

@@ -78,6 +78,11 @@ export const UnifiedPostCard: React.FC<UnifiedPostCardProps> = ({
     : (item.data.published_at || item.data.created_at)
   const relativeTime = formatRelativeTime(createdAt)
 
+  // Visual indicator colors and icons
+  const isUpdate = item.type === "update"
+  const accentColor = isUpdate ? "#3B82F6" : "#8B5CF6" // Blue for updates, Purple for blogs
+  const indicatorIcon = isUpdate ? "flash" : "document-text"
+
   // Get content and title based on type
   const title = item.type === "blog" ? item.data.title : undefined
   const content = item.type === "update" ? item.data.content : item.data.content
@@ -88,7 +93,6 @@ export const UnifiedPostCard: React.FC<UnifiedPostCardProps> = ({
 
   // For updates, show full content (max 500 chars)
   // For blog posts, truncate to 500 chars and show "read more" indicator
-  const isUpdate = item.type === "update"
   const displayContent = isUpdate ? content : truncateContent(content, 500)
   const hasMoreContent = !isUpdate && content.length > 500
 
@@ -170,7 +174,7 @@ export const UnifiedPostCard: React.FC<UnifiedPostCardProps> = ({
           )}
         </View>
 
-        {/* Row 5: Actions (Upvote) and Reading Time */}
+          {/* Row 5: Actions (Upvote) and Reading Time */}
         <View className="flex-row items-center justify-between">
           {/* Upvote Button */}
           <Pressable onPress={handleUpvote} className="flex-row items-center">
@@ -188,13 +192,28 @@ export const UnifiedPostCard: React.FC<UnifiedPostCardProps> = ({
             </Text>
           </Pressable>
 
-          {/* Reading Time (for blog posts) */}
-          {readingTime && (
-            <View className="flex-row items-center">
-              <Ionicons name="time-outline" size={14} color="#6B7280" />
-              <Text className="text-gray-500 text-xs ml-1">{readingTime} min read</Text>
+          {/* Right side: Type Indicator and Reading Time */}
+          <View className="flex-row items-center">
+            {/* Visual type indicator badge */}
+            <View 
+              style={{ backgroundColor: `${accentColor}20` }}
+              className="px-2 py-1 rounded-full flex-row items-center mr-3"
+            >
+              <Ionicons 
+                name={indicatorIcon as any} 
+                size={14} 
+                color={accentColor} 
+              />
             </View>
-          )}
+
+            {/* Reading Time (for blog posts) */}
+            {readingTime && (
+              <View className="flex-row items-center">
+                <Ionicons name="time-outline" size={14} color="#6B7280" />
+                <Text className="text-gray-500 text-xs ml-1">{readingTime} min read</Text>
+              </View>
+            )}
+          </View>
         </View>
       </View>
 
