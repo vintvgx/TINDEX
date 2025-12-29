@@ -44,7 +44,7 @@ export default function AuthScreen() {
         <View style={styles.content}>
           {/* App Title */}
           <View style={styles.titleContainer}>
-            <Text style={styles.title}>Alethia</Text>
+            <Text style={styles.title}>TINDEX</Text>
           </View>
 
           {/* Authentication Buttons */}

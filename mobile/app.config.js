@@ -10,6 +10,7 @@ export default {
     newArchEnabled: true,
     ios: {
       supportsTablet: true,
+      icon: "./assets/logo/tindex.png",
       // preview
       // bundleIdentifier: "com.communite.tindex",
       // dev
