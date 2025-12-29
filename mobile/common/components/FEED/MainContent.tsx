@@ -1,31 +1,42 @@
-import { BlogPostType, FeedType } from "@/common/types";
+import { FeedType, UnifiedFeedItem } from "@/common/types";
 import React from "react";
 import {
   ActivityIndicator,
+  RefreshControl,
   ScrollView,
   Text,
   View
 } from "react-native";
-import { BlogPostCard } from "./cards/BlogPostCard";
+import { UnifiedPostCard } from "./cards/UnifiedPostCard";
 
 interface MainContentType {
   feedLoading: boolean;
   feed: FeedType | null | undefined;
-  handlePostPress: (post: BlogPostType) => void;
+  handlePostPress: (item: UnifiedFeedItem) => void;
   onScroll?: (scrollY: number) => void;
+  refetchFeed?: () => void;
+  isRefetching?: boolean;
 }
 
 const MainContent: React.FC<MainContentType> = ({
   feedLoading,
   feed,
   handlePostPress,
-  onScroll
+  onScroll,
+  refetchFeed,
+  isRefetching = false
 }) => {
-  const posts = feed?.posts;
+  const items = feed?.items;
 
   const handleScroll = (event: any) => {
     const scrollY = event.nativeEvent.contentOffset.y
     onScroll?.(scrollY)
+  }
+
+  const handleRefresh = async () => {
+    if (refetchFeed) {
+      await refetchFeed();
+    }
   }
 
   return (
@@ -45,11 +56,24 @@ const MainContent: React.FC<MainContentType> = ({
           contentContainerStyle={{ paddingBottom: 20, paddingTop: 20 }}
           onScroll={handleScroll}
           scrollEventThrottle={16}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefetching}
+              onRefresh={handleRefresh}
+              tintColor="#007AFF"
+              colors={["#007AFF"]}
+            />
+          }
         >
-          {feed && posts && posts.length > 0 ? (
+          {feed && items && items.length > 0 ? (
             <>
-              {posts.map((post) => (
-                <BlogPostCard key={post.id} post={post} onPress={handlePostPress} />
+              {items.map((item, index) => (
+                <UnifiedPostCard
+                  key={item.id}
+                  item={item}
+                  onPress={() => handlePostPress(item)}
+                  isLast={index === items.length - 1}
+                />
               ))}
             </>
           ) : (

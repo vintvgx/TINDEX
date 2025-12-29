@@ -65,7 +65,7 @@ class BlogGenerationService:
         research_data: Dict[str, Any],
         save_to_db: bool | None= False,
         research_id: Optional[str] = None,
-        target_length: int = 800
+        target_length: int = 800,
     ) -> Dict[str, Any]:
         """
         Generate a complete blog post using AI and research data.
@@ -131,6 +131,7 @@ class BlogGenerationService:
             if research_id:
                 blog_content["stock_research_id"] = research_id
             
+            # Note: user_id is used for authentication only, not included in saved data
             # Step 4: Save to database if requested
             blog_id = None
             if save_to_db and self.supabase_service:
@@ -194,6 +195,7 @@ class BlogGenerationService:
         
         Args:
             blog_content: Blog content to save
+            user_id: User ID for authentication (not included in saved data)
             
         Returns:
             Database ID of saved blog post, or None if failed
@@ -201,22 +203,11 @@ class BlogGenerationService:
         try:
             logger.info("Beginning process of saving blog post to Supabase DB...")
             if not self.supabase_service:
-                return None
+                    logger.warning("Supabase service not available, cannot save blog post")
+                    return None
             
-            # Verify blog post contains the expected fields
-            can_save_blog = (
-                isinstance(blog_content, dict)
-                and bool(blog_content.get("title"))
-                and bool(blog_content.get("content"))
-            )
-            
-            if not can_save_blog:
-                logger.warning("Skipping blog save: missing title/content")
-                return None
-            
-            # Set status if not already set
-            if "status" not in blog_content:
-                blog_content["status"] = "published"
+            # Remove user_id from content if present (only used for auth, not saved)
+            blog_content.pop("user_id", None)
             
             result = self.supabase_service.save_blog_post(blog_content)
             

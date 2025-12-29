@@ -37,8 +37,23 @@ export interface UserType {
     user_id: string;
   }
 
+  // Unified Feed Item type matching the unified_feed view structure
+  export interface UnifiedFeedItem {
+    item_type: 'blog' | 'update';
+    id: string;
+    ticker: string;
+    content: string; // For updates this is the content, for blogs this is the title
+    full_content: string; // Full content for both
+    created_at: string;
+    published_at: string | null;
+    user_id: string | null;
+    status: string;
+    tags: string[] | null;
+    character_count: number | null; // Only for updates
+  }
+
   export interface FeedType {
-    posts: BlogPostType[];
+    items: UnifiedFeedItem[]; // Changed from posts to items to support unified feed
   }
   
   export interface GenerationJob {

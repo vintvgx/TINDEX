@@ -7,7 +7,6 @@ import {
   Pressable,
   Image,
   StatusBar,
-  Dimensions,
   Alert
 } from "react-native";
 import { BlogPostType } from "@/common/types";

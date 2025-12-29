@@ -8,7 +8,7 @@ import {
   ORBNotificationModal,
   ORBBreakoutNotificationData,
 } from "@/common/components/FEED/modals/ORBNotificationModal";
-import type { BlogPostType } from "@/common/types";
+import type { BlogPostType, UnifiedFeedItem } from "@/common/types";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { logDebug } from "@/common/utils/strings/function";
 import { useFeedQuery } from "@/hooks/queries/blogs/useFeedQuery";
@@ -53,7 +53,7 @@ const FeedScreen = () => {
   >(null);
 
   // Feed data
-  const { data: feed, isLoading: feedLoading } = useFeedQuery();
+  const { data: feed, isLoading: feedLoading, refetch: refetchFeed, isRefetching: isRefetchingFeed } = useFeedQuery();
 
   // Watchlists
   const {
@@ -66,10 +66,19 @@ const FeedScreen = () => {
     authState: { user, profile },
   } = useAuth();
 
-  const handlePostPress = (post: BlogPostType) => {
-    logDebug("Post pressed:", post.title);
-    setSelectedPost(post);
-    setBlogPostModalVisible(true);
+  const handlePostPress = (item: UnifiedFeedItem) => {
+    if (item.item_type === "blog") {
+      logDebug("Blog post pressed:", item.content); // content is the title for blogs
+      // TODO: Fetch full BlogPostType on demand if needed for the modal
+      // For now, we can pass the ID and fetch it in the modal
+      // setSelectedPost(blogPost);
+      // setBlogPostModalVisible(true);
+    } else {
+      // For updates, we can navigate to ticker detail or just log
+      logDebug("Ticker update pressed:", item.ticker, item.content);
+      // TODO: Navigate to ticker detail screen if needed
+      // router.push(`/ticker/${item.ticker}`);
+    }
   };
 
   const handleCloseModal = () => {
@@ -265,6 +274,8 @@ Risk: $2.30 per share`;
         feedLoading={feedLoading}
         handlePostPress={handlePostPress}
         onScroll={handleScroll}
+        refetchFeed={refetchFeed}
+        isRefetching={isRefetchingFeed}
       />
 
       {/* Modals */}

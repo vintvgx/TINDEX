@@ -276,7 +276,7 @@ class AnthropicService:
     async def generate_ticker_update(
         self,
         research_data: Dict[str, Any],
-        target_length: int = 270,
+        target_length: int = 500,
         ticker: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -337,6 +337,7 @@ class AnthropicService:
                     "character_count": len(parsed_response["content"]),
                     "ticker": ticker,
                     "model_used": self.anthropic_model,
+                    "research_data" : research_data["data"]
                 }
             else:
                 raise Exception("No content generated from AI response")
@@ -345,7 +346,10 @@ class AnthropicService:
             return {
                 "success": False,
                 "error": f"Failed to generate ticker update: {str(e)}",
-                "error_type": "unknown_error",
+                "error_details": {
+                    "type": "unknown_error",
+                    "status_code": 500
+                },
                 "ticker": ticker,
             }
 
@@ -372,7 +376,7 @@ class AnthropicService:
         prompt = f"""You are a financial analyst creating a concise, engaging stock market update (similar to a tweet) for {ticker_name} ({company_name}).
 
 IMPORTANT INSTRUCTIONS:
-1. Generate a tweet-like update that is engaging, informative, and exactly {target_length} characters or less
+1. Generate a tweet-like update that is engaging, informative, and up to {target_length} characters or less
 2. Focus on the most important and recent information: price movements, news, market sentiment, key metrics
 3. Make it conversational and engaging - use emojis sparingly if appropriate
 4. Include specific numbers (price changes, percentages, key metrics) when relevant
