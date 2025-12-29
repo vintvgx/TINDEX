@@ -7,14 +7,12 @@ import {
   Text,
   View
 } from "react-native";
-import { UnifiedPostCard, type FeedItemType } from "./cards/UnifiedPostCard";
-import type { BlogPostType } from "@/common/types";
-import type { TickerUpdate } from "@/hooks/queries/ticker/useTickerUpdatesQuery";
+import { UnifiedPostCard } from "./cards/UnifiedPostCard";
 
 interface MainContentType {
   feedLoading: boolean;
   feed: FeedType | null | undefined;
-  handlePostPress: (item: BlogPostType | TickerUpdate, type: "blog" | "update") => void;
+  handlePostPress: (item: UnifiedFeedItem) => void;
   onScroll?: (scrollY: number) => void;
   refetchFeed?: () => void;
   isRefetching?: boolean;
@@ -40,57 +38,6 @@ const MainContent: React.FC<MainContentType> = ({
       await refetchFeed();
     }
   }
-
-  // Convert UnifiedFeedItem to FeedItemType for UnifiedPostCard
-  const convertToFeedItem = (item: UnifiedFeedItem): FeedItemType => {
-    if (item.item_type === "update") {
-      // Convert to TickerUpdate format
-      const tickerUpdate: TickerUpdate = {
-        id: item.id,
-        ticker: item.ticker,
-        content: item.content, // For updates, content is the actual content
-        character_count: item.character_count,
-        tags: item.tags,
-        stock_research_id: null,
-        research_data: null, // Can be fetched separately if needed
-        model_used: null,
-        target_length: null,
-        status: item.status,
-        published_at: item.published_at,
-        user_id: item.user_id,
-        created_at: item.created_at,
-        updated_at: item.created_at,
-      };
-      return { type: "update", data: tickerUpdate };
-    } else {
-      // Convert to BlogPostType format
-      // In unified_feed view: content field = title for blogs, full_content = content
-      const blogPost: BlogPostType = {
-        id: item.id,
-        topic_id: "", // Not available in unified_feed view
-        topic: {
-          id: "",
-          name: item.ticker,
-          description: "",
-          category: "",
-          is_active: true,
-          created_at: item.created_at,
-        },
-        title: item.content, // For blogs, content field contains the title
-        content: item.full_content, // Full content
-        keywords: item.tags || [],
-        hashtags: [],
-        word_count: 0, // Can be calculated if needed
-        reading_time: 0, // Can be calculated if needed
-        status: item.status as 'draft' | 'published' | 'failed',
-        created_at: item.created_at,
-        published_at: item.published_at || undefined,
-        user_id: item.user_id || "",
-        research_data: null, // Can be fetched separately if needed
-      };
-      return { type: "blog", data: blogPost };
-    }
-  };
 
   return (
     <>
@@ -120,23 +67,14 @@ const MainContent: React.FC<MainContentType> = ({
         >
           {feed && items && items.length > 0 ? (
             <>
-              {items.map((item, index) => {
-                const feedItem = convertToFeedItem(item);
-                return (
-                  <UnifiedPostCard
-                    key={item.id}
-                    item={feedItem}
-                    onPress={() => {
-                      if (item.item_type === "update") {
-                        handlePostPress((feedItem.data as TickerUpdate), "update");
-                      } else {
-                        handlePostPress((feedItem.data as BlogPostType), "blog");
-                      }
-                    }}
-                    isLast={index === items.length - 1}
-                  />
-                );
-              })}
+              {items.map((item, index) => (
+                <UnifiedPostCard
+                  key={item.id}
+                  item={item}
+                  onPress={() => handlePostPress(item)}
+                  isLast={index === items.length - 1}
+                />
+              ))}
             </>
           ) : (
             <View className="flex-1 justify-center items-center px-8 py-24">

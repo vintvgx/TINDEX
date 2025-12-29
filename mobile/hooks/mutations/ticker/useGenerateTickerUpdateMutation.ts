@@ -23,6 +23,10 @@ export interface GenerateTickerUpdateResponse {
   error?: string;
 }
 
+export interface  TickerUpdateRequestBody {
+  target_length?: number
+};
+
 /**
  * Generates a ticker update (tweet-like content) using the API endpoint
  * 
@@ -34,14 +38,14 @@ const generateTickerUpdate = async (
 ): Promise<GenerateTickerUpdateResponse> => {
   try {
     // Validate the request
-    if (!request.ticker || !request.userId) {
-      throw new Error('Ticker and userId are required');
+    if (!request.ticker) {
+      throw new Error('Ticker is required');
     }
 
     // Validate targetLength if provided
     if (request.targetLength !== undefined) {
-      if (request.targetLength < 50 || request.targetLength > 750) {
-        throw new Error('targetLength must be between 50 and 750 characters');
+      if (request.targetLength < 50 || request.targetLength > 500) {
+        throw new Error('targetLength must be between 50 and 500 characters');
       }
     }
 
@@ -53,7 +57,7 @@ const generateTickerUpdate = async (
     }
 
     // Prepare request body
-    const requestBody: any = {};
+    const requestBody: TickerUpdateRequestBody = {};
     if (request.targetLength !== undefined) {
       requestBody.target_length = request.targetLength;
     }

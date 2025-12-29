@@ -189,7 +189,7 @@ class BlogGenerationService:
             logger.error(f"Content generation failed for {ticker}: {str(e)}", exc_info=True)
             return None
     
-    def _save_blog_post(self, blog_content: Dict[str, Any], user_id: Optional[str] = None) -> Optional[str]:
+    def _save_blog_post(self, blog_content: Dict[str, Any]) -> Optional[str]:
         """
         Save blog post to database.
         

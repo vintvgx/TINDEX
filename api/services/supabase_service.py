@@ -416,6 +416,10 @@ class SupabaseService:
                 raise ValueError(
                     "blog_data must be either BlogPost object or dictionary"
                 )
+                
+            # Capitalize ticker string for consistency
+            ticker = ticker.upper()
+            data_dict["ticker"] = ticker
 
             # Convert tags list to array format for PostgreSQL
             if data_dict.get("tags") and isinstance(data_dict["tags"], list):

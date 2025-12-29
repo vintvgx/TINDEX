@@ -15,28 +15,63 @@ export interface ORBStatusResponse {
 /**
  * Checks if the current time is within service hours (9:00 AM - 5:00 PM Eastern Time)
  * 
+ * Uses Intl.DateTimeFormat with formatToParts for reliable timezone-aware parsing
+ * across different environments and locales.
+ * 
  * @returns boolean indicating if we're within service hours
  */
 function isWithinServiceHours(): boolean {
-  const now = new Date();
-  
-  // Get current time in Eastern Time (America/New_York)
-  const easternTime = now.toLocaleString('en-US', {
-    timeZone: 'America/New_York',
-    hour: 'numeric',
-    minute: 'numeric',
-    hour12: false,
-  });
-  
-  const [hours, minutes] = easternTime.split(':').map(Number);
-  const currentMinutes = hours * 60 + minutes;
-  
-  // 9:00 AM = 9 * 60 = 540 minutes
-  const startMinutes = 9 * 60; // 9:00 AM
-  // 5:00 PM = 17 * 60 = 1020 minutes
-  const endMinutes = 17 * 60; // 5:00 PM
-  
-  return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  try {
+    const now = new Date();
+    
+    // Create Intl.DateTimeFormat configured for Eastern Time
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+    });
+    
+    // Use formatToParts to reliably extract hour and minute parts
+    const parts = formatter.formatToParts(now);
+    
+    // Extract hour and minute parts with defensive checks
+    let hour: number | null = null;
+    let minute: number | null = null;
+    
+    for (const part of parts) {
+      if (part.type === 'hour' && hour === null) {
+        const parsedHour = parseInt(part.value, 10);
+        if (!isNaN(parsedHour) && parsedHour >= 0 && parsedHour <= 23) {
+          hour = parsedHour;
+        }
+      } else if (part.type === 'minute' && minute === null) {
+        const parsedMinute = parseInt(part.value, 10);
+        if (!isNaN(parsedMinute) && parsedMinute >= 0 && parsedMinute <= 59) {
+          minute = parsedMinute;
+        }
+      }
+    }
+    
+    // Fallback behavior: if parsing fails, default to false (outside service hours)
+    if (hour === null || minute === null) {
+      console.warn('Failed to parse hour or minute from timezone formatter, defaulting to outside service hours');
+      return false;
+    }
+    
+    // Calculate current time in minutes since midnight
+    const currentMinutes = hour * 60 + minute;
+    
+    // Service hours: 9:00 AM - 5:00 PM Eastern Time
+    const startMinutes = 9 * 60; // 9:00 AM = 540 minutes
+    const endMinutes = 17 * 60; // 5:00 PM = 1020 minutes
+    
+    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  } catch (error) {
+    // Defensive fallback: if any error occurs, default to outside service hours
+    console.error('Error checking service hours:', error);
+    return false;
+  }
 }
 
 /**

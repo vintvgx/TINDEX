@@ -503,7 +503,7 @@ def generate_ticker_update(ticker: str):
         target_length = request_data.get("target_length", 500)
 
         # Validate target_length
-        if not isinstance(target_length, int) or target_length < 50 or target_length > 750:
+        if not isinstance(target_length, int) or target_length < 50 or target_length > 500:
             target_length = 500  # Default to 500 if invalid
 
         # Get research service instance
@@ -576,7 +576,11 @@ def generate_ticker_update(ticker: str):
             # Prepare ticker update data for saving (user_id not included - only for auth)
             # Get stock_research_id with fallback - try research_result first, then research_data, then None
             stock_research_id = None
-            if isinstance(research_data, dict) and research_data.get("id"):
+            if isinstance(research_result, dict) and research_result.get("research_id"):
+                stock_research_id = research_result.get("research_id")
+            elif isinstance(research_data, dict) and research_data.get("research_id"):
+                stock_research_id = research_data.get("research_id")
+            elif isinstance(research_data, dict) and research_data.get("id"):
                 stock_research_id = research_data.get("id")
             
             ticker_update_data = {

@@ -6,7 +6,9 @@
 import type React from "react";
 import { View, Text, ScrollView, ActivityIndicator } from "react-native";
 import { useTickerUpdatesQuery } from "@/hooks/queries/ticker/useTickerUpdatesQuery";
-import { UnifiedPostCard, type FeedItemType } from "@/common/components/FEED/cards/UnifiedPostCard";
+import { UnifiedPostCard } from "@/common/components/FEED/cards/UnifiedPostCard";
+import type { UnifiedFeedItem } from "@/common/types";
+import type { TickerUpdate } from "@/hooks/queries/ticker/useTickerUpdatesQuery";
 
 interface UpdatesTabProps {
   ticker: string;
@@ -58,10 +60,20 @@ export const UpdatesTab: React.FC<UpdatesTabProps> = ({ ticker }) => {
       className="flex-1"
       showsVerticalScrollIndicator={false}
       contentContainerStyle={{ paddingBottom: 20, paddingTop: 20 }}>
-      {tickerUpdates.map((update, index) => {
-        const feedItem: FeedItemType = {
-          type: "update",
-          data: update,
+      {tickerUpdates.map((update: TickerUpdate, index: number) => {
+        // Convert TickerUpdate to UnifiedFeedItem format
+        const feedItem: UnifiedFeedItem = {
+          item_type: "update",
+          id: update.id,
+          ticker: update.ticker,
+          content: update.content || "", // For updates, content is the actual content
+          full_content: update.content || "", // Same as content for updates
+          created_at: update.created_at,
+          published_at: update.published_at,
+          user_id: update.user_id,
+          status: update.status,
+          tags: update.tags,
+          character_count: update.character_count,
         };
         return (
           <UnifiedPostCard

@@ -7,16 +7,11 @@ import type React from "react"
 import { useState } from "react"
 import { View, Text, Pressable, Image } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
-import type { BlogPostType } from "@/common/types"
-import type { TickerUpdate } from "@/hooks/queries/ticker/useTickerUpdatesQuery"
-
-// Union type for feed items
-export type FeedItemType = 
-  | { type: "update"; data: TickerUpdate } 
-  | { type: "blog"; data: BlogPostType }
+import type { UnifiedFeedItem } from "@/common/types"
+import { useBaseNavigation } from "@/hooks/navigation/useBaseNavigation"
 
 interface UnifiedPostCardProps {
-  item: FeedItemType
+  item: UnifiedFeedItem
   onPress?: () => void
   onUpvote?: (id: string) => void
   isLast?: boolean
@@ -38,28 +33,21 @@ const formatRelativeTime = (dateString: string): string => {
 }
 
 // Helper to truncate content
-const truncateContent = (content: string, maxLength = 500): string => {
+const truncateContent = (content: string | null | undefined, maxLength = 500): string => {
+  if (!content || typeof content !== 'string') return ""
   if (content.length <= maxLength) return content
   return content.substring(0, maxLength).trim() + "..."
 }
 
 // Helper to get ticker display info
-const getTickerInfo = (item: FeedItemType) => {
-  if (item.type === "update") {
-    const researchData = item.data.research_data
-    return {
-      symbol: item.data.ticker,
-      name: researchData?.company_name || item.data.ticker,
-      logo: researchData?.logo_url,
-    }
-  }
-  // For blog posts, use research_data ticker if available
-  const ticker = item.data.research_data?.ticker
-  const researchData = item.data.research_data
+const getTickerInfo = (item: UnifiedFeedItem) => {
+  const ticker = item.ticker
+  // Note: research_data is not available in UnifiedFeedItem
+  // It can be fetched on demand if needed for logo/company_name
   return {
-    symbol: ticker || item.data.topic?.name || "POST",
-    name: researchData?.company_name || item.data.topic?.name || "Blog Post",
-    logo: researchData?.logo_url,
+    symbol: ticker || "TICKER",
+    name: ticker || (item.item_type === "update" ? "Ticker Update" : "Blog Post"),
+    logo: undefined, // Can be fetched on demand if needed
   }
 }
 
@@ -71,37 +59,38 @@ export const UnifiedPostCard: React.FC<UnifiedPostCardProps> = ({
 }) => {
   const [isUpvoted, setIsUpvoted] = useState(false)
   const [upvoteCount, setUpvoteCount] = useState(0)
+  const { toTicker } = useBaseNavigation()
 
   const tickerInfo = getTickerInfo(item)
-  const createdAt = item.type === "update" 
-    ? (item.data.published_at || item.data.created_at) 
-    : (item.data.published_at || item.data.created_at)
+  const createdAt = item.published_at || item.created_at
   const relativeTime = formatRelativeTime(createdAt)
 
-  // Visual indicator colors and icons
-  const isUpdate = item.type === "update"
+  // Visual indicator colors and icons based on item_type
+  const isUpdate = item.item_type === "update"
   const accentColor = isUpdate ? "#3B82F6" : "#8B5CF6" // Blue for updates, Purple for blogs
   const indicatorIcon = isUpdate ? "flash" : "document-text"
 
   // Get content and title based on type
-  const title = item.type === "blog" ? item.data.title : undefined
-  const content = item.type === "update" ? item.data.content : item.data.content
-  const tags = item.type === "update" 
-    ? (item.data.tags || []) 
-    : (item.data.keywords || [])
-  const readingTime = item.type === "blog" ? item.data.reading_time : undefined
+  // For updates: content field contains the actual content
+  // For blogs: content field contains the title, full_content contains the content
+  const title = isUpdate ? undefined : (item.content || "")
+  const content = isUpdate ? (item.content || "") : (item.full_content || "")
+  const tags = item.tags || []
+
+  // Ensure content is always a string
+  const safeContent = content || ""
 
   // For updates, show full content (max 500 chars)
   // For blog posts, truncate to 500 chars and show "read more" indicator
-  const displayContent = isUpdate ? content : truncateContent(content, 500)
-  const hasMoreContent = !isUpdate && content.length > 500
+  const displayContent = isUpdate ? safeContent : truncateContent(safeContent, 500)
+  const hasMoreContent = !isUpdate && safeContent.length > 500
 
   const handleUpvote = () => {
     const newUpvoted = !isUpvoted
     setIsUpvoted(newUpvoted)
     setUpvoteCount((prev) => (newUpvoted ? prev + 1 : Math.max(0, prev - 1)))
     if (onUpvote) {
-      onUpvote(item.type === "update" ? item.data.id : item.data.id)
+      onUpvote(item.id)
     }
   }
 
@@ -111,29 +100,39 @@ export const UnifiedPostCard: React.FC<UnifiedPostCardProps> = ({
     }
   }
 
+  const handleTickerPress = () => {
+    if (item.ticker) {
+      toTicker(item.ticker)
+    }
+  }
+
   return (
     <Pressable onPress={handlePress} className="bg-black">
       <View className="px-4 py-4">
         {/* Row 1: Ticker Logo, Name, and Date */}
         <View className="flex-row items-center mb-3">
-          {/* Ticker Logo */}
-          <View className="w-10 h-10 rounded-full bg-gray-800 items-center justify-center mr-3 overflow-hidden">
-            {tickerInfo.logo ? (
-              <Image 
-                source={{ uri: tickerInfo.logo }} 
-                className="w-10 h-10" 
-                resizeMode="cover" 
-              />
-            ) : (
-              <Text className="text-white font-bold text-sm">
-                {tickerInfo.symbol.substring(0, 2).toUpperCase()}
-              </Text>
-            )}
-          </View>
+          {/* Ticker Logo - Pressable to navigate to ticker */}
+          <Pressable onPress={handleTickerPress}>
+            <View className="w-10 h-10 rounded-full bg-gray-800 items-center justify-center mr-3 overflow-hidden">
+              {tickerInfo.logo ? (
+                <Image 
+                  source={{ uri: tickerInfo.logo }} 
+                  className="w-10 h-10" 
+                  resizeMode="cover" 
+                />
+              ) : (
+                <Text className="text-white font-bold text-sm">
+                  {tickerInfo.symbol.substring(0, 2).toUpperCase()}
+                </Text>
+              )}
+            </View>
+          </Pressable>
 
           {/* Ticker Name and Date */}
           <View className="flex-1 flex-row items-center">
-            <Text className="text-white font-semibold text-base">{tickerInfo.name}</Text>
+            <Pressable onPress={handleTickerPress}>
+              <Text className="text-white font-semibold text-base">{tickerInfo.name}</Text>
+            </Pressable>
             <Text className="text-gray-500 text-sm ml-2">{relativeTime}</Text>
           </View>
 
@@ -166,9 +165,11 @@ export const UnifiedPostCard: React.FC<UnifiedPostCardProps> = ({
 
         {/* Row 4: Content */}
         <View className="mb-3">
-          <Text className="text-gray-200 text-base leading-relaxed">
-            {displayContent}
-          </Text>
+          {displayContent ? (
+            <Text className="text-gray-200 text-base leading-relaxed">
+              {displayContent}
+            </Text>
+          ) : null}
           {hasMoreContent && (
             <Text className="text-blue-400 text-sm mt-1">Read more</Text>
           )}
@@ -206,11 +207,13 @@ export const UnifiedPostCard: React.FC<UnifiedPostCardProps> = ({
               />
             </View>
 
-            {/* Reading Time (for blog posts) */}
-            {readingTime && (
+            {/* Reading Time (for blog posts) - can be calculated on demand if needed */}
+            {!isUpdate && item.full_content && (
               <View className="flex-row items-center">
                 <Ionicons name="time-outline" size={14} color="#6B7280" />
-                <Text className="text-gray-500 text-xs ml-1">{readingTime} min read</Text>
+                <Text className="text-gray-500 text-xs ml-1">
+                  {Math.ceil((item.full_content.length || 0) / 200)} min read
+                </Text>
               </View>
             )}
           </View>
