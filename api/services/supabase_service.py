@@ -142,7 +142,7 @@ class TickerUpdate:
     stock_research_id: Optional[str] = None
     research_data: Optional[Dict] = None
     model_used: Optional[str] = "claude-3-5-sonnet-20241022"
-    target_length: Optional[int] = 270
+    target_length: Optional[int] = 500
     status: Optional[str] = "published"
     published_at: Optional[datetime] = None
     user_id: Optional[str] = None
@@ -255,6 +255,61 @@ class SupabaseService:
             "timestamp": datetime.now().isoformat(),
         }
 
+    def _prepare_data_for_db(self, data_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Prepare data dictionary for database insertion by:
+        - Converting datetime objects to ISO format strings
+        - Ensuring boolean fields are proper booleans
+        - Handling nested structures properly
+        - Removing None values
+        
+        Args:
+            data_dict: Raw data dictionary
+            
+        Returns:
+            Prepared data dictionary ready for database
+        """
+        prepared = {}
+        
+        # Boolean fields that must be explicitly converted to boolean type
+        # These fields are defined as boolean in the database schema
+        boolean_fields = {'has_options'}
+        
+        for key, value in data_dict.items():
+            if value is None:
+                # Skip None values - let database use defaults or NULL
+                continue
+                
+            # Convert datetime objects to ISO format strings
+            if isinstance(value, datetime):
+                prepared[key] = value.isoformat()
+            # Ensure boolean fields are actual booleans (not dicts, strings, etc.)
+            elif key in boolean_fields:
+                # Convert to boolean explicitly - critical for database type matching
+                if isinstance(value, bool):
+                    prepared[key] = value
+                elif isinstance(value, (dict, list)):
+                    # If it's a dict/list, it's wrong - log error and convert
+                    logger.error(
+                        f"CRITICAL: Field '{key}' should be boolean but got {type(value).__name__}. "
+                        f"Value: {str(value)[:100]}. Converting to False."
+                    )
+                    prepared[key] = False
+                elif isinstance(value, str):
+                    # Handle string booleans
+                    prepared[key] = value.lower() in ('true', '1', 'yes', 'on')
+                else:
+                    # Convert truthy/falsy values to boolean
+                    prepared[key] = bool(value)
+            # Handle nested dicts/lists (JSONB fields) - these should remain as-is
+            elif isinstance(value, (dict, list)):
+                prepared[key] = value
+            # Handle other types (strings, numbers, etc.) - pass through
+            else:
+                prepared[key] = value
+                
+        return prepared
+
     def save_stock_research(
         self, research_data: Union[StockResearch, Dict]
     ) -> Dict[str, Any]:
@@ -289,8 +344,12 @@ class SupabaseService:
             data_dict["ticker"] = ticker # upsert capitalized ticker (deduplication)
             logger.info(f"Processing stock research for ticker: {ticker}")
             
-            # Remove None values to avoid database issues
-            data_dict = {k: v for k, v in data_dict.items() if v is not None}
+            # Prepare data for database (handles datetime, boolean conversion, etc.)
+            data_dict = self._prepare_data_for_db(data_dict)
+            
+            # Log data types for debugging (only for boolean fields)
+            if 'has_options' in data_dict:
+                logger.debug(f"has_options type: {type(data_dict['has_options']).__name__}, value: {data_dict['has_options']}")
             
             # Call the PostgreSQL function - pass dict directly, not JSON string
             result = self.client.rpc(
@@ -363,8 +422,11 @@ class SupabaseService:
                 # PostgreSQL array format
                 pass  # Supabase handles list conversion automatically
 
-            # Remove None values
-            data_dict = {k: v for k, v in data_dict.items() if v is not None}
+            # Remove user_id if present (only used for authentication, not saved)
+            data_dict.pop("user_id", None)
+
+            # Prepare data for database (handles datetime, type conversion, etc.)
+            data_dict = self._prepare_data_for_db(data_dict)
 
             # Insert into database
             result = self.client.table("blog_posts").insert(data_dict).execute()
@@ -423,8 +485,9 @@ class SupabaseService:
                 # PostgreSQL array format
                 pass  # Supabase handles list conversion automatically
 
-            # Remove None values
-            data_dict = {k: v for k, v in data_dict.items() if v is not None}
+
+            # Prepare data for database (handles datetime, type conversion, etc.)
+            data_dict = self._prepare_data_for_db(data_dict)
 
             # Insert into database
             result = self.client.table("ticker_updates").insert(data_dict).execute()

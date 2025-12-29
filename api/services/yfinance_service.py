@@ -149,7 +149,9 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_opt
                 
                 # Add options analysis to research data
                 research_data["options_analysis"] = options_analysis
-                research_data["has_options"] = options_analysis.get('has_opportunities', False)
+                # Ensure has_options is explicitly a boolean (not dict, not None)
+                has_opportunities = options_analysis.get('has_opportunities', False)
+                research_data["has_options"] = bool(has_opportunities) if has_opportunities is not None else False
                 
                 # Extract top signal if available
                 if options_analysis.get('opportunities'):

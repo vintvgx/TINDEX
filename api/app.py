@@ -353,7 +353,7 @@ def generate_post(ticker: str):
             research_data=research_data,
             save_to_db=save_to_db,
             research_id=research_id,
-            target_length=target_length
+            target_length=target_length,
         )
 
         if not blog_result["success"]:
@@ -378,89 +378,6 @@ def generate_post(ticker: str):
         logger.error("Blog generation failed for topic '%s': %s", _topic, e, exc_info=True)
         return jsonify({"success": False, "error": f"Blog generation failed: {str(e)}"}), 500
 
-def save_data(service, topic, research_results, blog_content):
-    """
-    Save research data and blog post to database.
-
-    Args:
-        service: Supabase service instance
-        topic: Stock ticker
-        research_results: Research data from yFinance
-        blog_content: Generated blog content
-
-    Returns:
-        Dict containing save results and IDs
-    """
-    db_result = None
-    stock_research_id = None
-    research_db_result = None
-    blog_db_result = None
-
-    # Attempt to save stock research data
-    try:
-        stock_research = research_results["data"]
-        logger.info("Saving stock research data for %s", topic)
-        research_db_result = service.save_stock_research(stock_research)
-
-        # Extract the research ID if save was successful
-        if research_db_result and research_db_result.get("data", {}).get("id"):
-            stock_research_id = research_db_result["data"]["id"]
-
-            logger.info(
-                "Stock research saved successfully with ID: %s", stock_research_id
-            )
-        else:
-            logger.warning("Stock research save returned no ID for %s", topic)
-
-    except Exception as e:
-        logger.error("Failed to save stock research data for %s: %s", topic, str(e))
-
-    # Save blog post
-    try:
-        # verify blog post contains the expected fields
-        can_save_blog = (
-            isinstance(blog_content, dict)
-            and bool(blog_content.get("title"))
-            and bool(blog_content.get("content"))
-        )
-
-        if not can_save_blog:
-            logger.warning("Skipping blog save: missing title/content for %s", topic)
-            blog_db_result = {"success": False, "error": "Missing title/content"}
-        else:
-            # Set stock_research_id in blog_content (will be None if research save failed)
-            blog_content["stock_research_id"] = stock_research_id
-            blog_content["status"] = "published"
-
-            logger.info(
-                "Saving blog post for %s with stock_research_id: %s",
-                topic,
-                stock_research_id,
-            )
-            blog_db_result = service.save_blog_post(blog_content)
-
-            if blog_db_result and blog_db_result.get("success"):
-                logger.info("Blog post saved successfully for %s", topic)
-            else:
-                logger.warning(
-                    "Blog post save returned unexpected result for %s", topic
-                )
-    except Exception as e:
-        logger.error("Failed to save blog post for %s: %s", topic, str(e))
-
-    db_result = {
-        "research_saved": (
-            research_db_result.get("success", False) if research_db_result else False
-        ),
-        "blog_saved": blog_db_result.get("success", False) if blog_db_result else False,
-        "research_id": stock_research_id,
-        "blog_id": (
-            blog_db_result.get("data", {}).get("id")
-            if blog_db_result and blog_db_result.get("success")
-            else None
-        ),
-    }
-    return db_result
 
 def run_async(coro):
     """Execute an async coroutine in a sync context."""
@@ -546,66 +463,6 @@ def log_request_data(request_data: RequestData | None, endpoint: str):
         request_data.use_cache
     )
 
-@app.route("/generate_blog_post/<ticker>", methods=["POST"])
-def generate_blog_post(ticker: str, target_length: int = 800):
-    """
-    TODO add request validation to function (validate user id)
-    Generate a complete blog post without streaming.
-
-    This endpoint generates the full blog post content and returns it in a single response.
-    Useful for shorter content or when streaming is not needed.
-
-    Request Body:
-        topic (str): The topic to generate content about
-        research_data (dict): Research data to inform the content
-        target_length (int, optional): Target word count (default: 800)
-        ticker (str, optional): Stock ticker symbol for financial analysis
-
-    Returns:
-        JSON response containing the complete blog post
-    """
-    try:
-        # Validate ticker from URL path
-        ticker = ticker.strip().upper()
-        
-        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
-            return jsonify({
-                "success": False,
-                "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."
-            }), 400
-            
-        # Get research service instance
-        research_service = get_research_service()
-        
-        # Get research data using the service layer
-        research_data = research_service.get_research_data(
-            ticker=ticker,
-            use_cache=True,
-            save_to_db=True 
-        )
-
-        # Run async function in sync context
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                anthropic_service.generate_blog_post(
-                    topic=ticker,
-                    research_data=research_data,
-                    target_length=target_length,
-                    ticker=ticker,
-                )
-            )
-        finally:
-            loop.close()
-
-        return jsonify(result)
-
-    except Exception as e:
-        return (
-            jsonify({"success": False, "error": f"Blog generation failed: {str(e)}"}),
-            500,
-        )
         
 @app.route("/generate_ticker_update/<ticker>", methods=["POST"])
 def generate_ticker_update(ticker: str):
@@ -641,13 +498,13 @@ def generate_ticker_update(ticker: str):
                 "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."
             }), 400
 
-        # Get target_length from request body if provided
+        # Get request data
         request_data = request.get_json() or {}
-        target_length = request_data.get("target_length", 270)
+        target_length = request_data.get("target_length", 500)
 
         # Validate target_length
-        if not isinstance(target_length, int) or target_length < 50 or target_length > 500:
-            target_length = 270  # Default to 270 if invalid
+        if not isinstance(target_length, int) or target_length < 50 or target_length > 750:
+            target_length = 500  # Default to 500 if invalid
 
         # Get research service instance
         research_service = get_research_service()
@@ -655,7 +512,7 @@ def generate_ticker_update(ticker: str):
         # Get research data using the service layer
         research_result = research_service.get_research_data(
             ticker=ticker,
-            use_cache=True,
+            use_cache=False, # TODO fix cache logic to ensure cache is not past expiration 
             save_to_db=True
         )
 
@@ -669,7 +526,6 @@ def generate_ticker_update(ticker: str):
 
         # Extract research data (may be nested in "data" key)
         research_data = research_result
-        # research_data = research_result["data"]
 
         # Run async function in sync context
         loop = asyncio.new_event_loop()
@@ -711,8 +567,48 @@ def generate_ticker_update(ticker: str):
             
             return jsonify(result), http_status
 
-        # Success case
-        return jsonify(result), 200
+        # Step 3: Save ticker update to database if generation was successful
+        ticker_update_id = None
+        try:
+            # Get supabase service instance
+            service = get_supabase_service()
+            
+            # Prepare ticker update data for saving (user_id not included - only for auth)
+            # Get stock_research_id with fallback - try research_result first, then research_data, then None
+            stock_research_id = None
+            if isinstance(research_data, dict) and research_data.get("id"):
+                stock_research_id = research_data.get("id")
+            
+            ticker_update_data = {
+                "ticker": ticker,
+                "content": result.get("content", ""),
+                "character_count": result.get("character_count", 0),
+                "tags": result.get("tags", []),
+                "model_used": result.get("model_used", "claude-haiku-4-5"),
+                "target_length": target_length,
+                "stock_research_id": stock_research_id,
+                "status": "published",
+            }
+            
+            # Save to database
+            save_result = service.save_ticker_update(ticker_update_data)
+            
+            if save_result.get("success"):
+                ticker_update_id = save_result.get("data", {}).get("id")
+                logger.info(f"Ticker update saved successfully for {ticker} (ID: {ticker_update_id})")
+            else:
+                logger.warning(f"Failed to save ticker update for {ticker}: {save_result.get('error', 'Unknown error')}")
+                
+        except Exception as save_error:
+            # Log error but don't fail the request - generation was successful
+            logger.error(f"Error saving ticker update for {ticker}: {str(save_error)}", exc_info=True)
+
+        # Success case - include save status in response
+        response = result.copy()
+        response["ticker_update_id"] = ticker_update_id
+        response["saved"] = ticker_update_id is not None
+        
+        return jsonify(response), 200
 
     except Exception as e:
         logger.error(f"Ticker update generation failed for {ticker}: {str(e)}", exc_info=True)

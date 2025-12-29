@@ -337,6 +337,7 @@ class AnthropicService:
                     "character_count": len(parsed_response["content"]),
                     "ticker": ticker,
                     "model_used": self.anthropic_model,
+                    "research_data" : research_data["data"]
                 }
             else:
                 raise Exception("No content generated from AI response")
