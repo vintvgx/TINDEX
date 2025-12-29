@@ -132,6 +132,23 @@ class BlogPost:
     
     
 @dataclass
+class TickerUpdate:
+    """Data class for ticker update (tweet-like content)"""
+    
+    ticker: str
+    content: str
+    character_count: Optional[int] = None
+    tags: Optional[List[str]] = None
+    stock_research_id: Optional[str] = None
+    research_data: Optional[Dict] = None
+    model_used: Optional[str] = "claude-3-5-sonnet-20241022"
+    target_length: Optional[int] = 270
+    status: Optional[str] = "published"
+    published_at: Optional[datetime] = None
+    user_id: Optional[str] = None
+
+
+@dataclass
 class WatchlistData:
     """Data class for watchlist cache"""
     
@@ -372,6 +389,66 @@ class SupabaseService:
                 f"Failed to save blog post for {ticker}: {str(e)}", exc_info=True
             )
             return self._handle_database_error(e, f"save_blog_post for {ticker}")
+
+    def save_ticker_update(self, ticker_update_data: Union[TickerUpdate, Dict]) -> Dict[str, Any]:
+        """
+        Save ticker update data to the database.
+
+        Args:
+            ticker_update_data: TickerUpdate object or dictionary containing the ticker update data
+
+        Returns:
+            Dict containing success status and saved data or error information
+        """
+        try:
+            logger.info("Starting save_ticker_update operation")
+
+            # Initialize variables
+            ticker = "unknown"
+
+            # Handle both TickerUpdate objects and dictionaries
+            if isinstance(ticker_update_data, TickerUpdate):
+                data_dict = asdict(ticker_update_data)
+                ticker = ticker_update_data.ticker
+            elif isinstance(ticker_update_data, dict):
+                data_dict = ticker_update_data.copy()
+                ticker = ticker_update_data.get("ticker", "unknown")
+            else:
+                raise ValueError(
+                    "ticker_update_data must be either TickerUpdate object or dictionary"
+                )
+
+            # Convert tags list to array format for PostgreSQL
+            if data_dict.get("tags") and isinstance(data_dict["tags"], list):
+                # PostgreSQL array format
+                pass  # Supabase handles list conversion automatically
+
+            # Remove None values
+            data_dict = {k: v for k, v in data_dict.items() if v is not None}
+
+            # Insert into database
+            result = self.client.table("ticker_updates").insert(data_dict).execute()
+
+            if result.data:
+                logger.info(
+                    f"Ticker update saved successfully for {ticker}. Record ID: {result.data[0].get('id', 'unknown')}"
+                )
+                return {
+                    "success": True,
+                    "data": result.data[0],
+                    "message": "Ticker update saved successfully",
+                }
+            else:
+                logger.error(
+                    f"No data returned from ticker update insert operation for {ticker}"
+                )
+                raise Exception("No data returned from insert operation")
+
+        except Exception as e:
+            logger.error(
+                f"Failed to save ticker update for {ticker}: {str(e)}", exc_info=True
+            )
+            return self._handle_database_error(e, f"save_ticker_update for {ticker}")
 
     def get_blog_posts_by_ticker(
         self, ticker: str, limit: int = 10, index: int = 0

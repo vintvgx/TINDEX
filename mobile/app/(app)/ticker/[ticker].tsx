@@ -1,5 +1,5 @@
 import type React from "react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   View,
   Text,
@@ -19,10 +19,13 @@ import { FinancialsTab } from "@/common/components/ticker/FinancialsTab";
 import { StockInfoHeader } from "@/common/components/ticker/StockInfoHeader";
 import { TabNavigation } from "@/common/components/ticker/TabNavigation";
 import { OptionsCard } from "@/common/components/ticker/OptionsTab";
+import { UpdatesTab } from "@/common/components/ticker/UpdatesTab";
 import {
   useIsFollowingORB,
   useToggleORBFollow,
 } from "@/hooks/mutations/ticker/tickerORB";
+import { useGenerateTickerUpdateMutation } from "@/hooks/mutations/ticker/useGenerateTickerUpdateMutation";
+import { useAuth } from "@/common/utils/context/auth/AuthContext";
 
 export default function TickerScreen() {
   const { ticker } = useLocalSearchParams<{ ticker: string }>();
@@ -40,9 +43,12 @@ export default function TickerScreen() {
   const followORB = useToggleORBFollow(ticker);
 
   const [activeTab, setActiveTab] = useState<
-    "Summary" | "Analytics" | "Financials" | "Options"
+    "Summary" | "Analytics" | "Financials" | "Options" | "Updates"
   >("Summary");
   const [selectedPeriod, setSelectedPeriod] = useState("1D");
+
+  const { authState: { user } } = useAuth();
+  const generateTickerUpdate = useGenerateTickerUpdateMutation();
 
   const stockData = tickerResponse?.data;
 
@@ -59,6 +65,19 @@ export default function TickerScreen() {
   const handleORBState = () => {
     const newState = !isFollowingORB?.orb_enabled;
     followORB.mutate(newState);
+  };
+
+  const handleGenerateTweet = () => {
+    if (!user?.id || !ticker) {
+      console.error("User ID or ticker is missing");
+      return;
+    }
+
+    generateTickerUpdate.mutate({
+      ticker: ticker,
+      userId: user.id,
+      targetLength: 500,
+    });
   };
 
   // Loading state
@@ -173,6 +192,18 @@ export default function TickerScreen() {
     );
   };
 
+  const renderTweetsTab = () => {
+    if (!ticker) {
+      return (
+        <View className="flex-1 justify-center items-center">
+          <Text className="text-gray-400">No ticker selected</Text>
+        </View>
+      );
+    }
+
+    return <UpdatesTab ticker={ticker} />;
+  };
+
   return (
     <SafeAreaView className="flex-1 bg-black">
       <StatusBar barStyle="light-content" backgroundColor="#000000" />
@@ -189,6 +220,23 @@ export default function TickerScreen() {
             <Ionicons name="arrow-back" size={20} color="#fff" />
           </Pressable>
           <View className="flex-row items-center">
+            {/* Generate Tweet Button - Only show when Tweets tab is active */}
+            {activeTab === "Updates" && (
+              <Pressable
+                className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30"
+                onPress={handleGenerateTweet}
+                disabled={generateTickerUpdate.isPending || !user?.id}>
+                {generateTickerUpdate.isPending ? (
+                  <ActivityIndicator size="small" color="#007AFF" />
+                ) : (
+                  <Ionicons
+                    name="create-outline"
+                    size={20}
+                    color={!user?.id ? "#6B7280" : "#007AFF"}
+                  />
+                )}
+              </Pressable>
+            )}
             <Pressable 
             className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30"
             onPress={handleRefetch}
@@ -236,6 +284,7 @@ export default function TickerScreen() {
         {activeTab === "Analytics" && renderAnalyticsTab()}
         {activeTab === "Financials" && renderFinancialsTab()}
         {activeTab === "Options" && renderOptionsTab()}
+        {activeTab === "Updates" && renderTweetsTab()}
       </View>
     </SafeAreaView>
   );

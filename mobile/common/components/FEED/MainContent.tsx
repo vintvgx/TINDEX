@@ -6,7 +6,7 @@ import {
   Text,
   View
 } from "react-native";
-import { BlogPostCard } from "./cards/BlogPostCard";
+import { UnifiedPostCard, type FeedItemType } from "./cards/UnifiedPostCard";
 
 interface MainContentType {
   feedLoading: boolean;
@@ -48,9 +48,20 @@ const MainContent: React.FC<MainContentType> = ({
         >
           {feed && posts && posts.length > 0 ? (
             <>
-              {posts.map((post) => (
-                <BlogPostCard key={post.id} post={post} onPress={handlePostPress} />
-              ))}
+              {posts.map((post, index) => {
+                const feedItem: FeedItemType = {
+                  type: "blog",
+                  data: post,
+                };
+                return (
+                  <UnifiedPostCard
+                    key={post.id}
+                    item={feedItem}
+                    onPress={() => handlePostPress(post)}
+                    isLast={index === posts.length - 1}
+                  />
+                );
+              })}
             </>
           ) : (
             <View className="flex-1 justify-center items-center px-8 py-24">
