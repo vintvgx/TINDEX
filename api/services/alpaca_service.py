@@ -576,6 +576,8 @@ class AlpacaService:
                 "current_price": breakout_price,
                 "breakout_type": breakout_type_display,
                 "breakout_price": breakout_price,
+                "orb_high": orb_high,  # Ensure ORB high is persisted
+                "orb_low": orb_low,    # Ensure ORB low is persisted
             }
 
             if breakout_type == "above":
@@ -675,6 +677,8 @@ class AlpacaService:
                         "trade_date": str(trade_date),
                         "current_price": current_price,
                         "breakout_type": breakout_type_display,
+                        "orb_high": orb_high,  # Ensure ORB high is persisted
+                        "orb_low": orb_low,    # Ensure ORB low is persisted
                         # breakout_price remains the same (initial breakout price)
                     }).execute()
                     await self.send_confirmation_notification(ticker, breakout_type, current_price, orb_high, orb_low)
@@ -691,6 +695,8 @@ class AlpacaService:
                         "current_price": current_price,
                         "breakout_type": "invalidated",
                         "breakout_price": None,  # Clear breakout price on invalidation
+                        "orb_high": orb_high,  # Ensure ORB high is persisted
+                        "orb_low": orb_low,    # Ensure ORB low is persisted
                     }).execute()
                     await self.send_invalidation_notification(ticker, breakout_type, current_price, orb_high, orb_low)
                     
@@ -1316,12 +1322,15 @@ class AlpacaService:
                 self.monitoring_state[ticker] = {"high_broken": False, "low_broken": False}
             
             # Update current_price in database (use bar close as current price)
+            # Also include orb_high and orb_low to ensure they persist
             trade_date = self.get_current_et_time().date()
             try:
                 self.supabase.table("orb_monitoring_state").upsert({
                     "ticker": ticker,
                     "trade_date": str(trade_date),
                     "current_price": float(bar_close),
+                    "orb_high": float(orb_high),  # Ensure ORB high is persisted
+                    "orb_low": float(orb_low),    # Ensure ORB low is persisted
                 }).execute()
             except Exception as e:
                 logger.warning(f"Failed to update current_price for {ticker}: {e}")
