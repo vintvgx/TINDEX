@@ -257,15 +257,16 @@ class AlpacaService:
                 logger.info(f"  {ticker}: Already in memory")
                 continue
 
+            # TODO skip retrieving from DB - fetch historical ORL and ORH from yfinance to ensure accurate data
             # Check if it's in the database for today
-            existing = await self._get_orb_range_from_db(ticker)
-            if existing:
-                self.orb_ranges[ticker] = existing
-                logger.info(
-                    f"  {ticker}: Loaded from DB - "
-                    f"High={existing['high']}, Low={existing['low']}"
-                )
-                continue
+            # existing = await self._get_orb_range_from_db(ticker)
+            # if existing:
+            #     self.orb_ranges[ticker] = existing
+            #     logger.info(
+            #         f"  {ticker}: Loaded from DB - "
+            #         f"High={existing['high']}, Low={existing['low']}"
+            #     )
+            #     continue
 
             # Not in memory or DB - fetch historically
             logger.info(f"  {ticker}: Missing, fetching historically...")
@@ -348,11 +349,17 @@ class AlpacaService:
 
             self.supabase.table("orb_ranges").upsert(orb_record).execute()
 
-            # Initialize monitoring state
+            # Initialize monitoring state with all required fields
             state_record = {
                 "ticker": ticker,
                 "trade_date": str(trade_date),
-                "last_price": orb_high,  # Initialize with high
+                "opening_price": opening_price,
+                "orb_high": orb_high,
+                "orb_low": orb_low,
+                "current_price": orb_high,  # Initialize with high (will be updated as bars come in)
+                "volume": volume,
+                "breakout_type": "none",
+                "breakout_price": None,  # NULL when breakout_type is 'none'
                 "high_broken": False,
                 "low_broken": False,
                 "monitoring_active": True,
@@ -559,11 +566,16 @@ class AlpacaService:
 
             self.supabase.table("orb_breakouts").insert(breakout_record).execute()
 
-            # Update monitoring state in DB
+            # Update monitoring state in DB with breakout information
+            # Map "above" to "Bullish" and "below" to "Bearish" for frontend consistency
+            breakout_type_display = "Bullish" if breakout_type == "above" else "Bearish"
+            
             state_update = {
                 "ticker": ticker,
                 "trade_date": str(trade_date),
-                "last_price": breakout_price,
+                "current_price": breakout_price,
+                "breakout_type": breakout_type_display,
+                "breakout_price": breakout_price,
             }
 
             if breakout_type == "above":
@@ -655,12 +667,31 @@ class AlpacaService:
                         f"[BREAKOUT CONFIRMED] {ticker} breakout confirmed after 3 minutes. "
                         f"Price: ${current_price:.2f}, ORB High: ${orb_high:.2f}, ORB Low: ${orb_low:.2f}"
                     )
+                    # Update monitoring state: breakout confirmed (keep as Bullish/Bearish)
+                    breakout_type_display = "Confirmed Bullish" if breakout_type == "above" else "Confirmed Bearish"
+                    trade_date = self.get_current_et_time().date()
+                    self.supabase.table("orb_monitoring_state").upsert({
+                        "ticker": ticker,
+                        "trade_date": str(trade_date),
+                        "current_price": current_price,
+                        "breakout_type": breakout_type_display,
+                        # breakout_price remains the same (initial breakout price)
+                    }).execute()
                     await self.send_confirmation_notification(ticker, breakout_type, current_price, orb_high, orb_low)
                 else:
                     logger.info(
                         f"[BREAKOUT INVALIDATED] {ticker} price returned inside ORB. "
                         f"Price: ${current_price:.2f}, ORB High: ${orb_high:.2f}, ORB Low: ${orb_low:.2f}"
                     )
+                    # Update monitoring state: breakout invalidated
+                    trade_date = self.get_current_et_time().date()
+                    self.supabase.table("orb_monitoring_state").upsert({
+                        "ticker": ticker,
+                        "trade_date": str(trade_date),
+                        "current_price": current_price,
+                        "breakout_type": "invalidated",
+                        "breakout_price": None,  # Clear breakout price on invalidation
+                    }).execute()
                     await self.send_invalidation_notification(ticker, breakout_type, current_price, orb_high, orb_low)
                     
             except Exception as e:
@@ -1207,6 +1238,8 @@ class AlpacaService:
 
         if self.calculation_phase:
             # During ORB calculation, track the TRUE high and low from bar data
+            trade_date = self.get_current_et_time().date()
+            
             if ticker not in self.orb_ranges:
                 self.orb_ranges[ticker] = {
                     "high": bar_high,
@@ -1218,6 +1251,25 @@ class AlpacaService:
                     f"[ORB CALC] Started tracking {ticker}: "
                     f"High={bar_high}, Low={bar_low}, Open={bar_open}"
                 )
+                
+                # Initialize monitoring state in database with first bar data
+                try:
+                    self.supabase.table("orb_monitoring_state").upsert({
+                        "ticker": ticker,
+                        "trade_date": str(trade_date),
+                        "opening_price": float(bar_open),
+                        "orb_high": float(bar_high),
+                        "orb_low": float(bar_low),
+                        "current_price": float(bar_close),
+                        "volume": data.volume,
+                        "breakout_type": "none",
+                        "breakout_price": None,
+                        "high_broken": False,
+                        "low_broken": False,
+                        "monitoring_active": True,
+                    }).execute()
+                except Exception as e:
+                    logger.warning(f"Failed to initialize monitoring state for {ticker}: {e}")
             else:
                 old_high = self.orb_ranges[ticker]["high"]
                 old_low = self.orb_ranges[ticker]["low"]
@@ -1226,6 +1278,19 @@ class AlpacaService:
                 self.orb_ranges[ticker]["high"] = max(old_high, bar_high)
                 self.orb_ranges[ticker]["low"] = min(old_low, bar_low)
                 self.orb_ranges[ticker]["volume"] += data.volume
+
+                # Update monitoring state in database in real-time during calculation
+                try:
+                    self.supabase.table("orb_monitoring_state").upsert({
+                        "ticker": ticker,
+                        "trade_date": str(trade_date),
+                        "orb_high": float(self.orb_ranges[ticker]["high"]),
+                        "orb_low": float(self.orb_ranges[ticker]["low"]),
+                        "current_price": float(bar_close),
+                        "volume": self.orb_ranges[ticker]["volume"],
+                    }).execute()
+                except Exception as e:
+                    logger.warning(f"Failed to update monitoring state for {ticker} during calculation: {e}")
 
                 # Log if high/low changed
                 if self.orb_ranges[ticker]["high"] != old_high:
@@ -1249,6 +1314,17 @@ class AlpacaService:
             # Ensure monitoring state exists
             if ticker not in self.monitoring_state:
                 self.monitoring_state[ticker] = {"high_broken": False, "low_broken": False}
+            
+            # Update current_price in database (use bar close as current price)
+            trade_date = self.get_current_et_time().date()
+            try:
+                self.supabase.table("orb_monitoring_state").upsert({
+                    "ticker": ticker,
+                    "trade_date": str(trade_date),
+                    "current_price": float(bar_close),
+                }).execute()
+            except Exception as e:
+                logger.warning(f"Failed to update current_price for {ticker}: {e}")
             
             state = self.monitoring_state[ticker]
 
