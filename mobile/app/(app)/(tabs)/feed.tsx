@@ -252,7 +252,12 @@ Risk: $2.30 per share`;
   return (
     <SafeAreaView className="flex-1 bg-black">
       {/* Subtle background gradient */}
-      <View className="absolute inset-0 bg-gradient-to-b from-gray-900/20 via-transparent to-gray-900/10" />
+      <View 
+        className="absolute inset-0"
+        style={{
+          backgroundColor: 'rgba(17, 24, 39, 0.1)',
+        }}
+      />
 
       {/* Header Component */}
       <Header onAddPress={handleAddPress} onPreviewPress={handlePreviewPress} />

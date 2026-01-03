@@ -70,7 +70,12 @@ const WatchlistsScreen = () => {
   return (
     <SafeAreaView className="flex-1 bg-black">
       {/* Subtle background gradient matching feed screen */}
-      <View className="absolute inset-0 bg-gradient-to-b from-gray-900/20 via-transparent to-gray-900/10" />
+      <View 
+        className="absolute inset-0"
+        style={{
+          backgroundColor: 'rgba(17, 24, 39, 0.1)',
+        }}
+      />
 
       {/* Header */}
       <View className="px-6 py-4 border-b border-gray-800">
