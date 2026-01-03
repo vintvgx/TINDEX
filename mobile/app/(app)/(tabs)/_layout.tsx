@@ -70,12 +70,27 @@ export default function Layout() {
           ),
         }}
       />
+      {/* Hides the watchlists tab */}
       <Tabs.Screen 
         name="watchlists" 
         options={{
-          title: 'Watchlists',
+          href: null, // Hide from tab bar - only accessible via modal
+        }}
+      />
+      <Tabs.Screen 
+        name="orb" 
+        options={{
+          title: 'ORB',
           tabBarIcon: ({ color }) => (
-            <Ionicons name="layers" size={20} color={color} />
+            <View className="relative items-center justify-center">
+              <Ionicons name="pulse" size={20} color={color} />
+              <View 
+                className={cn(
+                  "absolute -top-0.5 -right-1.5 w-2 h-2 rounded-full border-[1.5px] border-[#1A1A1A]",
+                  isORBRunning ? "bg-[#10B981]" : "bg-[#EF4444]"
+                )} 
+              />
+            </View>
           ),
         }}
       />
@@ -94,15 +109,7 @@ export default function Layout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ color }) => (
-            <View className="relative items-center justify-center">
-              <Ionicons name="person" size={20} color={color} />
-              <View 
-                className={cn(
-                  "absolute -top-0.5 -right-1.5 w-2 h-2 rounded-full border-[1.5px] border-[#1A1A1A]",
-                  isORBRunning ? "bg-[#10B981]" : "bg-[#EF4444]"
-                )} 
-              />
-            </View>
+            <Ionicons name="person" size={20} color={color} />
           ),
         }}
       />

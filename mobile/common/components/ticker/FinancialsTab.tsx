@@ -50,7 +50,7 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
           )}
 
           {/* P/E Ratio */}
-          {stockData.pe_ratio != null && (
+          {stockData.pe_ratio != null && typeof stockData.pe_ratio === 'number' && !isNaN(stockData.pe_ratio) && (
             <View className="w-[48%] mb-4">
               <AppStoreCard variant="compact">
                 <View className="p-4">
@@ -66,7 +66,7 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
           )}
 
           {/* Price to Book */}
-          {stockData.price_to_book != null && (
+          {stockData.price_to_book != null && typeof stockData.price_to_book === 'number' && !isNaN(stockData.price_to_book) && (
             <View className="w-[48%] mb-4">
               <AppStoreCard variant="compact">
                 <View className="p-4">
@@ -82,7 +82,7 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
           )}
 
           {/* Dividend Yield */}
-          {stockData.dividend_yield != null && (
+          {stockData.dividend_yield != null && typeof stockData.dividend_yield === 'number' && !isNaN(stockData.dividend_yield) && (
             <View className="w-[48%] mb-4">
               <AppStoreCard variant="compact">
                 <View className="p-4">
@@ -98,7 +98,7 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
           )}
 
           {/* Profit Margins */}
-          {stockData.profit_margins !== undefined && stockData.profit_margins !== null && (
+          {stockData.profit_margins !== undefined && stockData.profit_margins !== null && typeof stockData.profit_margins === 'number' && !isNaN(stockData.profit_margins) && (
             <View className="w-[48%] mb-4">
               <AppStoreCard variant="compact">
                 <View className="p-4">
@@ -130,7 +130,7 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
           )}
 
           {/* Debt to Equity */}
-          {stockData.debt_to_equity !== undefined && stockData.debt_to_equity !== null && (
+          {stockData.debt_to_equity !== undefined && stockData.debt_to_equity !== null && typeof stockData.debt_to_equity === 'number' && !isNaN(stockData.debt_to_equity) && (
             <View className="w-[48%] mb-4">
               <AppStoreCard variant="compact">
                 <View className="p-4">
@@ -205,7 +205,7 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
             
             <View className="flex-row justify-between">
               {/* Earnings Growth */}
-              {stockData.earnings_growth !== undefined && stockData.earnings_growth !== null && (
+              {stockData.earnings_growth !== undefined && stockData.earnings_growth !== null && typeof stockData.earnings_growth === 'number' && !isNaN(stockData.earnings_growth) && (
                 <View className="flex-1 mr-4">
                   <Text className="text-gray-400 text-sm font-medium mb-1">
                     Earnings Growth
@@ -217,7 +217,7 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
               )}
               
               {/* Revenue Growth */}
-              {stockData.revenue_growth !== undefined && stockData.revenue_growth !== null && (
+              {stockData.revenue_growth !== undefined && stockData.revenue_growth !== null && typeof stockData.revenue_growth === 'number' && !isNaN(stockData.revenue_growth) && (
                 <View className="flex-1">
                   <Text className="text-gray-400 text-sm font-medium mb-1">
                     Revenue Growth
@@ -230,7 +230,7 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
             </View>
             
             {/* Return on Equity */}
-            {stockData.return_on_equity !== undefined && stockData.return_on_equity !== null && (
+            {stockData.return_on_equity !== undefined && stockData.return_on_equity !== null && typeof stockData.return_on_equity === 'number' && !isNaN(stockData.return_on_equity) && (
               <View className="mt-4">
                 <Text className="text-gray-400 text-sm font-medium mb-1">
                   Return on Equity

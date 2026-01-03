@@ -1,0 +1,149 @@
+import React from 'react';
+import { View, Text, TouchableOpacity } from 'react-native';
+import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
+
+interface ORBCardProps {
+  data: ORBMonitoringState;
+  onPress: () => void;
+}
+
+/**
+ * Formats price with null/undefined handling
+ */
+const formatPrice = (price: number | null | undefined): string => {
+  if (price === null || price === undefined || isNaN(price)) {
+    return 'N/A';
+  }
+  return `$${price.toFixed(2)}`;
+};
+
+/**
+ * Gets color for breakout type
+ */
+const getBreakoutColor = (breakoutType: string): string => {
+  switch (breakoutType) {
+    case 'Bullish':
+    case 'Confirmed Bullish':
+      return '#10B981'; // green
+    case 'Bearish':
+    case 'Confirmed Bearish':
+      return '#EF4444'; // red
+    case 'invalidated':
+      return '#F59E0B'; // amber
+    default:
+      return '#6B7280'; // gray
+  }
+};
+
+/**
+ * Gets background color for breakout badge
+ */
+const getBreakoutBadgeBg = (breakoutType: string): string => {
+  switch (breakoutType) {
+    case 'Bullish':
+      return 'bg-green-500/20';
+    case 'Confirmed Bullish':
+      return 'bg-green-500/30';
+    case 'Bearish':
+      return 'bg-red-500/20';
+    case 'Confirmed Bearish':
+      return 'bg-red-500/30';
+    case 'invalidated':
+      return 'bg-yellow-500/20';
+    default:
+      return 'bg-gray-800/50';
+  }
+};
+
+export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress }) => {
+  const orbHigh = data.orb_high ?? 0;
+  const orbLow = data.orb_low ?? 0;
+  const currentPrice = data.current_price ?? 0;
+  const isAboveHigh = currentPrice > orbHigh;
+  const isBelowLow = currentPrice < orbLow;
+  const isInRange = !isAboveHigh && !isBelowLow && (orbHigh - orbLow) > 0;
+  
+  // Price color based on position
+  let priceColor = '#FFFFFF';
+  if (isAboveHigh) priceColor = '#10B981';
+  else if (isBelowLow) priceColor = '#EF4444';
+  else if (isInRange) priceColor = '#9CA3AF';
+
+  const breakoutColor = getBreakoutColor(data.breakout_type);
+  const hasBreakout = data.breakout_type !== 'none';
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      className="bg-gray-800/60 border border-gray-700/30 rounded-xl p-4 mb-4 active:opacity-80"
+      style={{ flex: 1, marginHorizontal: 4 }}
+    >
+      {/* Header with Ticker and Breakout Indicator */}
+      <View className="flex-row items-center justify-between mb-3">
+        <Text className="text-white text-lg font-bold">{data.ticker}</Text>
+        {hasBreakout && (
+          <View 
+            className={`px-2 py-1 rounded ${getBreakoutBadgeBg(data.breakout_type)}`}
+            style={{ borderWidth: 1, borderColor: breakoutColor + '80' }}
+          >
+            <Text 
+              className="text-xs font-semibold"
+              style={{ color: breakoutColor }}
+            >
+              {data.breakout_type}
+            </Text>
+          </View>
+        )}
+      </View>
+
+      {/* Current Price - Large and Prominent */}
+      <View className="mb-3">
+        <Text className="text-gray-400 text-xs mb-1">Current Price</Text>
+        <Text 
+          className="text-2xl font-bold"
+          style={{ color: priceColor }}
+        >
+          {formatPrice(data.current_price)}
+        </Text>
+      </View>
+
+      {/* ORB Range */}
+      <View>
+        <View className="flex-row justify-between items-center mb-2">
+          <Text className="text-gray-400 text-xs">ORB High</Text>
+          <Text className="text-green-400 text-sm font-semibold">
+            {formatPrice(data.orb_high)}
+          </Text>
+        </View>
+        <View className="flex-row justify-between items-center mb-2">
+          <Text className="text-gray-400 text-xs">ORB Low</Text>
+          <Text className="text-red-400 text-sm font-semibold">
+            {formatPrice(data.orb_low)}
+          </Text>
+        </View>
+        <View className="flex-row justify-between items-center pt-2 border-t border-gray-700/50">
+          <Text className="text-gray-400 text-xs">Opening</Text>
+          <Text className="text-gray-300 text-sm font-medium">
+            {formatPrice(data.opening_price)}
+          </Text>
+        </View>
+      </View>
+
+      {/* Breakout Price if applicable */}
+      {hasBreakout && data.breakout_price !== null && (
+        <View className="mt-3 pt-3 border-t border-gray-700/50">
+          <View className="flex-row justify-between items-center">
+            <Text className="text-gray-400 text-xs">Breakout Price</Text>
+            <Text 
+              className="text-sm font-semibold"
+              style={{ color: breakoutColor }}
+            >
+              {formatPrice(data.breakout_price)}
+            </Text>
+          </View>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+};
+
