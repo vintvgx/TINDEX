@@ -110,7 +110,7 @@ class OrbService:
         
         # Breakout confirmation timers: {ticker: asyncio.Task}
         self._confirmation_timers: Dict[str, asyncio.Task] = {}
-        
+    
         # Bar history for VWAP calculation and reversal detection
         # {ticker: [StockBar, ...]} - stores recent bars (max 100 bars per ticker)
         self._bar_history: Dict[str, list] = {}
@@ -119,6 +119,9 @@ class OrbService:
         # Previous close cache: {ticker: {"previous_close": float, "data_source": str}}
         # Cached during calculation period to avoid repeated API calls
         self._previous_close_cache: Dict[str, Dict] = {}
+        
+        # Track bar handling tasks for proper cleanup
+        self._bar_tasks: Set[asyncio.Task] = set()
     
     def get_current_et_time(self) -> datetime:
         """Get current time in ET timezone"""
@@ -377,6 +380,51 @@ class OrbService:
             
         except Exception as e:
             logger.error(f"Error loading ORB ranges: {e}", exc_info=True)
+    
+    def _handle_bar_task_done(self, task: asyncio.Task):
+        """
+        Done callback for bar handling tasks.
+        
+        Logs exceptions and removes the task from the tracking set.
+        This ensures exceptions don't go silent and tasks are properly cleaned up.
+        
+        Args:
+            task: The completed asyncio.Task
+        """
+        try:
+            # Remove from tracking set
+            self._bar_tasks.discard(task)
+            
+            # Check for exceptions and log them
+            if task.cancelled():
+                logger.debug("Bar handling task was cancelled")
+            elif task.exception():
+                logger.error(
+                    f"Exception in bar handling task: {task.exception()}",
+                    exc_info=task.exception()
+                )
+        except Exception as e:
+            # Don't let the callback itself raise exceptions
+            logger.error(f"Error in bar task done callback: {e}", exc_info=True)
+    
+    def _create_bar_handler_wrapper(self) -> Callable[[StockBar], None]:
+        """
+        Create a synchronous wrapper for the async handle_bar method.
+        
+        This wrapper:
+        - Schedules handle_bar as an asyncio task
+        - Tracks the task in _bar_tasks for cleanup
+        - Attaches _handle_bar_task_done callback for exception handling
+        
+        Returns:
+            A synchronous callable that can be passed to streaming service subscribe()
+        """
+        def handle_bar_sync(bar: StockBar):
+            task = asyncio.create_task(self.handle_bar(bar))
+            self._bar_tasks.add(task)
+            task.add_done_callback(self._handle_bar_task_done)
+        
+        return handle_bar_sync
     
     async def _fetch_previous_close(self, ticker: str) -> Dict[str, Optional[float | str]]:
         """
@@ -1802,10 +1850,7 @@ class OrbService:
                         tickers = await self.load_followed_stocks()
                         if tickers:
                             self.active_tickers = tickers
-                            # Fix: wrap the async handler to match expected sync interface
-                            def handle_bar_sync(bar):
-                                asyncio.create_task(self.handle_bar(bar))
-                            subscribed = await self.streaming_service.subscribe(tickers, handle_bar_sync)
+                            subscribed = await self.streaming_service.subscribe(tickers, self._create_bar_handler_wrapper())
                             if subscribed:
                                 await self.streaming_service.start_stream()
                             else:
@@ -1878,7 +1923,7 @@ class OrbService:
                 tickers = await self.load_followed_stocks()
                 if tickers:
                     self.active_tickers = tickers
-                    subscribed = await self.streaming_service.subscribe(tickers, self.handle_bar)
+                    subscribed = await self.streaming_service.subscribe(tickers, self._create_bar_handler_wrapper())
                     if subscribed:
                         logger.info(f"DEBUG MODE: Subscribed to {len(tickers)} tickers")
                         await self.streaming_service.start_stream()
@@ -1905,7 +1950,7 @@ class OrbService:
                     tickers = await self.load_followed_stocks()
                     if tickers:
                         self.active_tickers = tickers
-                        subscribed = await self.streaming_service.subscribe(tickers, self.handle_bar)
+                        subscribed = await self.streaming_service.subscribe(tickers, self._create_bar_handler_wrapper())
                         if subscribed:
                             await self.streaming_service.start_stream()
                 else:
@@ -1932,6 +1977,28 @@ class OrbService:
         for ticker, timer_task in list(self._confirmation_timers.items()):
             timer_task.cancel()
         self._confirmation_timers.clear()
+        
+        # Cancel and wait for all bar handling tasks
+        if self._bar_tasks:
+            logger.info(f"Cancelling {len(self._bar_tasks)} bar handling tasks...")
+            for task in list(self._bar_tasks):
+                if not task.done():
+                    task.cancel()
+            
+            # Wait for all tasks to complete (with timeout)
+            if self._bar_tasks:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*self._bar_tasks, return_exceptions=True),
+                        timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Timeout waiting for bar tasks to complete")
+                except Exception as e:
+                    logger.error(f"Error waiting for bar tasks: {e}", exc_info=True)
+            
+            self._bar_tasks.clear()
+            logger.info("All bar handling tasks cancelled")
         
         # Stop streaming service
         await self.streaming_service.stop_stream()
