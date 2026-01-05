@@ -74,6 +74,11 @@ class AlpacaService:
         self._stream_started = False
         self._debug_mode = False
         self._bars_received_count = 0
+        
+        # Stream startup monitoring
+        self._stream_monitor_task: Optional[asyncio.Task] = None
+        self._stream_start_time: Optional[datetime] = None
+        self._bars_received_at_start = 0
 
         # Stream will be created fresh when needed
         self.stock_stream: Optional[StockDataStream] = None
@@ -1236,6 +1241,19 @@ class AlpacaService:
 
         # Debug: Log bar received
         self._bars_received_count += 1
+        
+        # Cancel stream monitoring task if bars are being received
+        # Use fire-and-forget to avoid blocking bar processing
+        if self._stream_monitor_task is not None and not self._stream_monitor_task.done():
+            if self._bars_received_count > self._bars_received_at_start:
+                logger.info("Stream is receiving data, cancelling startup monitoring")
+                monitor_task = self._stream_monitor_task
+                self._stream_monitor_task = None
+                
+                # Cancel and handle cleanup in background
+                monitor_task.cancel()
+                asyncio.create_task(self._cleanup_monitor_task(monitor_task))
+        
         if self._bars_received_count <= 5 or self._bars_received_count % 10 == 0:
             logger.info(
                 f"[BAR #{self._bars_received_count}] {ticker}: "
@@ -1457,8 +1475,15 @@ class AlpacaService:
         try:
             logger.info("Starting Alpaca WebSocket stream...")
 
+            # Record start time and initial bar count for monitoring
+            self._stream_start_time = self.get_current_et_time()
+            self._bars_received_at_start = self._bars_received_count
+
             self._stream_task = asyncio.create_task(self.stock_stream._run_forever())
             self._stream_started = True
+
+            # Start monitoring task to check if stream receives data within 2 minutes
+            self._start_stream_monitoring()
 
             await asyncio.sleep(2)
 
@@ -1470,6 +1495,186 @@ class AlpacaService:
             logger.error(f"Failed to start stock stream: {e}", exc_info=True)
             raise
 
+    def _start_stream_monitoring(self):
+        """
+        Start a background task to monitor if the stream receives data within 2 minutes.
+        If no data is received, sends a notification and attempts to restart the stream.
+        """
+        # Cancel any existing monitoring task
+        if self._stream_monitor_task is not None and not self._stream_monitor_task.done():
+            logger.warning("Cancelling existing stream monitoring task")
+            self._stream_monitor_task.cancel()
+            self._stream_monitor_task = None
+
+        # Start new monitoring task
+        self._stream_monitor_task = asyncio.create_task(self._monitor_stream_startup())
+        logger.info("Started stream startup monitoring (2 minute timeout)")
+
+    async def _cleanup_monitor_task(self, task: asyncio.Task):
+        """
+        Helper method to clean up a cancelled monitoring task.
+        This is called asynchronously to avoid blocking bar processing.
+        """
+        try:
+            await task
+        except asyncio.CancelledError:
+            logger.info("Stream monitoring cancelled - stream is healthy")
+        except Exception as e:
+            logger.error(f"Error cleaning up stream monitoring task: {e}")
+
+    async def _monitor_stream_startup(self):
+        """
+        Monitor stream startup to ensure data is received within 2 minutes.
+        If no bars are received, sends notification and attempts restart.
+        """
+        try:
+            # Wait 2 minutes (120 seconds)
+            await asyncio.sleep(120)
+
+            # Check if stream is still running and if we received any bars
+            if not self._stream_started:
+                logger.info("Stream was stopped during monitoring, cancelling check")
+                return
+
+            bars_received_since_start = self._bars_received_count - self._bars_received_at_start
+
+            if bars_received_since_start == 0:
+                logger.error(
+                    f"Stream startup timeout: No bars received after 2 minutes. "
+                    f"Subscribed tickers: {list(self.subscribed_tickers)}"
+                )
+
+                # Send notification to users
+                await self._send_stream_failure_notification()
+
+                # Attempt to restart the stream
+                logger.info("Attempting to restart stream after timeout...")
+                try:
+                    await self.stop_stream()
+                    await asyncio.sleep(2)  # Brief pause before restart
+
+                    # Recreate stream if needed
+                    if not self.stock_stream:
+                        self._create_stock_stream()
+                        await self.subscribe_to_tickers()
+
+                    await self.start_stream()
+                    logger.info("Stream restart attempted after timeout")
+                except Exception as restart_error:
+                    logger.error(
+                        f"Failed to restart stream after timeout: {restart_error}",
+                        exc_info=True
+                    )
+            else:
+                await self._send_stream_started_notification()
+                logger.info(
+                    f"Stream startup successful: Received {bars_received_since_start} bars "
+                    f"within 2 minutes"
+                )
+
+        except asyncio.CancelledError:
+            logger.info("Stream startup monitoring cancelled (stream is receiving data)")
+        except Exception as e:
+            logger.error(f"Error in stream startup monitoring: {e}", exc_info=True)
+
+    async def _send_stream_failure_notification(self):
+        """
+        Send push notification to all ORB users about stream startup failure.
+        """
+        try:
+            users = await self._get_all_orb_users()
+
+            if not users:
+                logger.info("No eligible users for stream failure notification")
+                return
+
+            message = {
+                "sound": "default",
+                "title": "⚠️ Stream Connection Issue",
+                "body": (
+                    "The stock data stream did not start successfully. "
+                    "Attempting to reconnect automatically..."
+                ),
+                "data": {
+                    "type": "stream_failure",
+                    "status": "timeout",
+                    "screen": "home",
+                    "timestamp": self.get_current_et_time().isoformat()
+                },
+                "badge": 1,
+                "priority": "high",
+                "channelId": "orb-alerts",
+            }
+
+            notification_tasks = []
+            for user in users:
+                task = self._send_push_notification(
+                    user=user,
+                    message=message
+                )
+                notification_tasks.append(task)
+
+            results = await asyncio.gather(*notification_tasks, return_exceptions=True)
+
+            successful = sum(1 for r in results if r is True)
+            failed = len(results) - successful
+
+            logger.info(
+                f"Stream failure notifications sent: "
+                f"{successful} successful, {failed} failed"
+            )
+
+        except Exception as e:
+            logger.error(f"Error sending stream failure notification: {e}", exc_info=True)
+
+    async def _send_stream_started_notification(self):
+        """
+        Send push notification to all ORB users about stream successful start.
+        """
+        try:
+            users = await self._get_all_orb_users()
+
+            if not users:
+                logger.info("No eligible users for stream failure notification")
+                return
+
+            message = {
+                "sound": "default",
+                "title": "🌐 Stream Started Successfully",
+                "body": (
+                    "The stock data stream started successfully. "
+                ),
+                "data": {
+                    "type": "stream_start",
+                    "status": "success",
+                    "screen": "home",
+                    "timestamp": self.get_current_et_time().isoformat()
+                },
+                "badge": 1,
+                "priority": "high",
+                "channelId": "orb-alerts",
+            }
+
+            notification_tasks = []
+            for user in users:
+                task = self._send_push_notification(
+                    user=user,
+                    message=message
+                )
+                notification_tasks.append(task)
+
+            results = await asyncio.gather(*notification_tasks, return_exceptions=True)
+
+            successful = sum(1 for r in results if r is True)
+            failed = len(results) - successful
+
+            logger.info(
+                f"Stream failure notifications sent: "
+                f"{successful} successful, {failed} failed"
+            )
+
+        except Exception as e:
+            logger.error(f"Error sending stream failure notification: {e}", exc_info=True)
     async def stop_stream(self):
         """
         Stop the WebSocket stream with proper cleanup.
@@ -1484,6 +1689,19 @@ class AlpacaService:
             return
 
         try:
+            # Cancel the stream monitoring task if it exists
+            if self._stream_monitor_task is not None:
+                logger.info("Cancelling stream monitoring task")
+                self._stream_monitor_task.cancel()
+                try:
+                    await self._stream_monitor_task
+                except asyncio.CancelledError:
+                    logger.info("Stream monitoring task cancelled successfully")
+                except Exception as e:
+                    logger.error(f"Error cancelling stream monitoring task: {e}")
+                finally:
+                    self._stream_monitor_task = None
+
             # Cancel the stream task first to stop the WebSocket connection
             # This helps prevent hanging on unsubscribe operations
             if self._stream_task is not None:
@@ -1519,6 +1737,8 @@ class AlpacaService:
 
             self._stream_started = False
             self.stock_stream = None
+            self._stream_start_time = None
+            self._bars_received_at_start = 0
 
         except Exception as e:
             logger.error(f"Error stopping stream: {e}", exc_info=True)

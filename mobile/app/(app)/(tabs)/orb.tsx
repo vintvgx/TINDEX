@@ -13,16 +13,18 @@ import { useStartORBMutation, useStopORBMutation } from "@/hooks/mutations/orb/u
 const ORBScreen = () => {
   const [watchlistsModalVisible, setWatchlistsModalVisible] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
-  const [useMockData, setUseMockData] = useState(false); 
+  const [useMockData, setUseMockData] = useState(false);
+  const [useCalculationMockData, setUseCalculationMockData] = useState(false);
   const [selectedORBData, setSelectedORBData] = useState<ORBMonitoringState | null>(null);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   
   // Fetch ORB monitoring state with real-time updates
-  const { data: orbData, isLoading: orbLoading } = useORBMonitoringState(useMockData);
+  const { data: orbData, isLoading: orbLoading } = useORBMonitoringState(useMockData, useCalculationMockData);
   
   // Fetch ORB service status
   const { data: orbStatus } = useORBStatus();
   const isORBRunning = orbStatus?.running ?? false;
+  const isCalculationPhase = orbStatus?.calculation_phase ?? false;
 
   // Service control mutations
   const startMutation = useStartORBMutation();
@@ -42,6 +44,18 @@ const ORBScreen = () => {
 
   const handleToggleMockData = () => {
     setUseMockData(!useMockData);
+    // Disable calculation mock data when enabling regular mock data
+    if (!useMockData) {
+      setUseCalculationMockData(false);
+    }
+  };
+
+  const handleToggleCalculationMockData = () => {
+    setUseCalculationMockData(!useCalculationMockData);
+    // Disable regular mock data when enabling calculation mock data
+    if (!useCalculationMockData) {
+      setUseMockData(false);
+    }
   };
 
   const handleToggleService = () => {
@@ -74,7 +88,9 @@ const ORBScreen = () => {
               }`} 
             />
             <Text className="text-gray-400 text-xs">
-              {isORBRunning ? 'Active' : 'Inactive'}
+              {isORBRunning 
+                ? (isCalculationPhase ? 'Calculation' : 'Running')
+                : 'Inactive'}
             </Text>
           </View>
         </View>
@@ -114,8 +130,10 @@ const ORBScreen = () => {
         onClose={() => setMenuVisible(false)}
         onViewWatchlists={() => setWatchlistsModalVisible(true)}
         onToggleMockData={handleToggleMockData}
+        onToggleCalculationMockData={handleToggleCalculationMockData}
         onToggleService={handleToggleService}
         isMockDataEnabled={useMockData}
+        isCalculationMockDataEnabled={useCalculationMockData}
         isServiceRunning={isORBRunning}
       />
 

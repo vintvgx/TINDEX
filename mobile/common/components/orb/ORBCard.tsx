@@ -30,6 +30,8 @@ const getBreakoutColor = (breakoutType: string): string => {
       return '#EF4444'; // red
     case 'invalidated':
       return '#F59E0B'; // amber
+    case 'reversal':
+      return '#8B5CF6'; // purple
     default:
       return '#6B7280'; // gray
   }
@@ -50,6 +52,8 @@ const getBreakoutBadgeBg = (breakoutType: string): string => {
       return 'bg-red-500/30';
     case 'invalidated':
       return 'bg-yellow-500/20';
+    case 'reversal':
+      return 'bg-purple-500/20';
     default:
       return 'bg-gray-800/50';
   }
@@ -82,16 +86,27 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress }) => {
       <View className="flex-row items-center justify-between mb-3">
         <Text className="text-white text-lg font-bold">{data.ticker}</Text>
         {hasBreakout && (
-          <View 
-            className={`px-2 py-1 rounded ${getBreakoutBadgeBg(data.breakout_type)}`}
-            style={{ borderWidth: 1, borderColor: breakoutColor + '80' }}
-          >
-            <Text 
-              className="text-xs font-semibold"
-              style={{ color: breakoutColor }}
+          <View className="items-end" style={{ gap: 4 }}>
+            <View 
+              className={`px-2 py-1 rounded ${getBreakoutBadgeBg(data.breakout_type)}`}
+              style={{ borderWidth: 1, borderColor: breakoutColor + '80' }}
             >
-              {data.breakout_type}
-            </Text>
+              <Text 
+                className="text-xs font-semibold"
+                style={{ color: breakoutColor }}
+              >
+                {data.breakout_type}
+              </Text>
+            </View>
+            {/* Show confidence for reversals */}
+            {data.breakout_type === 'reversal' && data.reversal_data?.confidence && (
+              <Text 
+                className="text-xs"
+                style={{ color: breakoutColor + 'CC' }}
+              >
+                {data.reversal_data.confidence} Confidence
+              </Text>
+            )}
           </View>
         )}
       </View>
@@ -99,12 +114,32 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress }) => {
       {/* Current Price - Large and Prominent */}
       <View className="mb-3">
         <Text className="text-gray-400 text-xs mb-1">Current Price</Text>
-        <Text 
-          className="text-2xl font-bold"
-          style={{ color: priceColor }}
-        >
-          {formatPrice(data.current_price)}
-        </Text>
+        <View className="flex-row items-baseline justify-between">
+          <Text 
+            className="text-2xl font-bold"
+            style={{ color: priceColor }}
+          >
+            {formatPrice(data.current_price)}
+          </Text>
+          {/* Percentage Change Display */}
+          {data.percentage_change !== null && data.percentage_change !== undefined && (
+            <View className="flex-row items-center" style={{ gap: 4 }}>
+              {data.percentage_change >= 0 ? (
+                <Text style={{ color: '#10B981' }}>▲</Text>
+              ) : (
+                <Text style={{ color: '#EF4444' }}>▼</Text>
+              )}
+              <Text 
+                className="text-sm font-semibold"
+                style={{ 
+                  color: data.percentage_change >= 0 ? '#10B981' : '#EF4444' 
+                }}
+              >
+                {data.percentage_change >= 0 ? '+' : ''}{data.percentage_change.toFixed(2)}%
+              </Text>
+            </View>
+          )}
+        </View>
       </View>
 
       {/* ORB Range */}
@@ -122,10 +157,22 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress }) => {
           </Text>
         </View>
         <View className="flex-row justify-between items-center pt-2 border-t border-gray-700/50">
-          <Text className="text-gray-400 text-xs">Opening</Text>
-          <Text className="text-gray-300 text-sm font-medium">
-            {formatPrice(data.opening_price)}
-          </Text>
+          {/* Show Previous Close during calculation period, Opening otherwise */}
+          {data.percentage_change !== null && data.percentage_change !== undefined && data.breakout_type === 'none' ? (
+            <>
+              <Text className="text-gray-400 text-xs">Previous Close</Text>
+              <Text className="text-gray-300 text-sm font-medium">
+                {formatPrice(data.previous_close)}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text className="text-gray-400 text-xs">Opening</Text>
+              <Text className="text-gray-300 text-sm font-medium">
+                {formatPrice(data.opening_price)}
+              </Text>
+            </>
+          )}
         </View>
       </View>
 

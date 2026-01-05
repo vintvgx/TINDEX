@@ -14,8 +14,10 @@ interface ORBMenuProps {
   onClose: () => void;
   onViewWatchlists: () => void;
   onToggleMockData: () => void;
+  onToggleCalculationMockData: () => void;
   onToggleService: () => void;
   isMockDataEnabled: boolean;
+  isCalculationMockDataEnabled: boolean;
   isServiceRunning: boolean;
 }
 
@@ -24,8 +26,10 @@ export const ORBMenu: React.FC<ORBMenuProps> = ({
   onClose,
   onViewWatchlists,
   onToggleMockData,
+  onToggleCalculationMockData,
   onToggleService,
   isMockDataEnabled,
+  isCalculationMockDataEnabled,
   isServiceRunning,
 }) => {
   const menuItems = [
@@ -45,6 +49,16 @@ export const ORBMenu: React.FC<ORBMenuProps> = ({
       icon: isMockDataEnabled ? 'eye-off-outline' : 'eye-outline' as const,
       onPress: () => {
         onToggleMockData();
+        onClose();
+      },
+      showDivider: true,
+    },
+    {
+      id: 'calculationMockData',
+      label: isCalculationMockDataEnabled ? 'Hide Calculation Mock Data' : 'Show Calculation Mock Data',
+      icon: isCalculationMockDataEnabled ? 'calculator-outline' : 'calculator' as const,
+      onPress: () => {
+        onToggleCalculationMockData();
         onClose();
       },
       showDivider: true,
@@ -121,6 +135,21 @@ export const ORBMenu: React.FC<ORBMenuProps> = ({
                         }`}
                       >
                         {isMockDataEnabled && (
+                          <View className="w-full h-full items-center justify-center">
+                            <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+                          </View>
+                        )}
+                      </View>
+                    )}
+                    {item.id === 'calculationMockData' && (
+                      <View
+                        className={`w-5 h-5 rounded-full border-2 mr-2 ${
+                          isCalculationMockDataEnabled
+                            ? 'bg-green-500 border-green-500'
+                            : 'border-gray-600'
+                        }`}
+                      >
+                        {isCalculationMockDataEnabled && (
                           <View className="w-full h-full items-center justify-center">
                             <Ionicons name="checkmark" size={12} color="#FFFFFF" />
                           </View>
