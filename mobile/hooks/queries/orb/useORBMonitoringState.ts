@@ -2,6 +2,29 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import { supabase } from "@/lib/supabase/supabase";
 import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+import { MOCK_ORB_DATA, CALCULATION_MOCK_ORB_DATA } from "./mockData/orbMockData";
+
+/**
+ * Reversal Data Structure (from JSONB field)
+ */
+export interface ReversalData {
+  original_breakout_type: 'above' | 'below';
+  reversal_detected_at: string;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  score: number;
+  max_score: number;
+  score_percentage: number;
+  vwap: number | null;
+  indicators: string[];
+  reversal_price: number;
+  orb_high: number;
+  orb_low: number;
+  detection_metadata: {
+    bars_analyzed: number;
+    reversal_detection_method: string;
+    indicators_count: number;
+  };
+}
 
 /**
  * ORB Monitoring State Record from Database
@@ -13,158 +36,51 @@ export interface ORBMonitoringState {
   orb_high: number | null;
   orb_low: number | null;
   current_price: number | null;
-  breakout_type: 'none' | 'invalidated' | 'Bullish' | 'Bearish' | 'Confirmed Bullish' | 'Confirmed Bearish';
+  breakout_type: 'none' | 'invalidated' | 'Bullish' | 'Bearish' | 'Confirmed Bullish' | 'Confirmed Bearish' | 'reversal';
   breakout_price: number | null;
   volume: number | null;
   tracking: string | null;
   high_broken: boolean;
   low_broken: boolean;
   monitoring_active: boolean;
+  timestamp?: string;
+  reversal_data?: ReversalData;
+  previous_close?: number | null;
+  percentage_change?: number | null;
+  data_source?: string | null;
   created_at?: string;
   updated_at?: string;
 }
-
-/**
- * Mock data for development/preview purposes
- */
-const MOCK_ORB_DATA: ORBMonitoringState[] = [
-  {
-    ticker: 'AAPL',
-    trade_date: new Date().toISOString().split('T')[0],
-    opening_price: 175.50,
-    orb_high: 178.25,
-    orb_low: 174.80,
-    current_price: 179.10,
-    breakout_type: 'Confirmed Bullish',
-    breakout_price: 178.30,
-    volume: 45230000,
-    tracking: null,
-    high_broken: true,
-    low_broken: false,
-    monitoring_active: true,
-  },
-  {
-    ticker: 'TSLA',
-    trade_date: new Date().toISOString().split('T')[0],
-    opening_price: 245.30,
-    orb_high: 248.90,
-    orb_low: 243.15,
-    current_price: 242.50,
-    breakout_type: 'Bearish',
-    breakout_price: 243.00,
-    volume: 67890000,
-    tracking: null,
-    high_broken: false,
-    low_broken: true,
-    monitoring_active: true,
-  },
-  {
-    ticker: 'MSFT',
-    trade_date: new Date().toISOString().split('T')[0],
-    opening_price: 378.20,
-    orb_high: 380.45,
-    orb_low: 376.80,
-    current_price: 379.25,
-    breakout_type: 'none',
-    breakout_price: null,
-    volume: 23450000,
-    tracking: null,
-    high_broken: false,
-    low_broken: false,
-    monitoring_active: true,
-  },
-  {
-    ticker: 'NVDA',
-    trade_date: new Date().toISOString().split('T')[0],
-    opening_price: 485.60,
-    orb_high: 492.30,
-    orb_low: 483.20,
-    current_price: 495.80,
-    breakout_type: 'Bullish',
-    breakout_price: 492.50,
-    volume: 56780000,
-    tracking: null,
-    high_broken: true,
-    low_broken: false,
-    monitoring_active: true,
-  },
-  {
-    ticker: 'GOOGL',
-    trade_date: new Date().toISOString().split('T')[0],
-    opening_price: 142.40,
-    orb_high: 144.20,
-    orb_low: 141.50,
-    current_price: 140.80,
-    breakout_type: 'invalidated',
-    breakout_price: null,
-    volume: 34560000,
-    tracking: null,
-    high_broken: false,
-    low_broken: false,
-    monitoring_active: true,
-  },
-  {
-    ticker: 'AMZN',
-    trade_date: new Date().toISOString().split('T')[0],
-    opening_price: 152.30,
-    orb_high: 154.80,
-    orb_low: 151.20,
-    current_price: 153.45,
-    breakout_type: 'none',
-    breakout_price: null,
-    volume: 41230000,
-    tracking: null,
-    high_broken: false,
-    low_broken: false,
-    monitoring_active: true,
-  },
-  {
-    ticker: 'META',
-    trade_date: new Date().toISOString().split('T')[0],
-    opening_price: 312.50,
-    orb_high: 318.90,
-    orb_low: 310.20,
-    current_price: 320.15,
-    breakout_type: 'Confirmed Bullish',
-    breakout_price: 319.00,
-    volume: 28940000,
-    tracking: null,
-    high_broken: true,
-    low_broken: false,
-    monitoring_active: true,
-  },
-  {
-    ticker: 'AMD',
-    trade_date: new Date().toISOString().split('T')[0],
-    opening_price: 128.40,
-    orb_high: 131.20,
-    orb_low: 127.10,
-    current_price: 126.50,
-    breakout_type: 'Confirmed Bearish',
-    breakout_price: 127.00,
-    volume: 52340000,
-    tracking: null,
-    high_broken: false,
-    low_broken: true,
-    monitoring_active: true,
-  },
-];
 
 /**
  * Custom hook to fetch ORB monitoring state for all active tickers
  * Fetches today's monitoring state with real-time updates via Supabase Realtime
  * 
  * @param useMockData - Set to true to use mock data for preview (default: false)
+ * @param useCalculationMockData - Set to true to use calculation period mock data (default: false)
  * @returns React Query result with ORB monitoring state data
  */
-export function useORBMonitoringState(useMockData: boolean = false) {
+export function useORBMonitoringState(
+  useMockData: boolean = false,
+  useCalculationMockData: boolean = false
+) {
   const queryClient = useQueryClient();
-  const queryKey = useMemo(() => ['orb-monitoring-state', useMockData], [useMockData]);
+  const queryKey = useMemo(
+    () => ['orb-monitoring-state', useMockData, useCalculationMockData],
+    [useMockData, useCalculationMockData]
+  );
 
   // Main query for fetching ORB monitoring state
   const queryResult = useQuery({
     queryKey,
     queryFn: async (): Promise<ORBMonitoringState[]> => {
+      // Return calculation mock data if requested
+      if (useCalculationMockData) {
+        // Simulate async delay
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return CALCULATION_MOCK_ORB_DATA;
+      }
+      
       // Return mock data if requested
       if (useMockData) {
         // Simulate async delay
@@ -198,7 +114,7 @@ export function useORBMonitoringState(useMockData: boolean = false) {
   // Set up real-time subscription for live updates
   useEffect(() => {
     // Skip subscription if using mock data
-    if (useMockData) {
+    if (useMockData || useCalculationMockData) {
       return;
     }
 
@@ -248,7 +164,7 @@ export function useORBMonitoringState(useMockData: boolean = false) {
       console.log('Unsubscribing from ORB monitoring state updates');
       supabase.removeChannel(channel);
     };
-  }, [useMockData, queryClient, queryKey]);
+  }, [useMockData, useCalculationMockData, queryClient, queryKey]);
 
   return queryResult;
 }

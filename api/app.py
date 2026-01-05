@@ -20,7 +20,9 @@ from services.yahoo_watchlist_service import get_yahoo_watchlist_service
 from services.supabase_service import get_supabase_service
 from services.research_service import get_research_service
 from services.blog_generation_service import get_blog_service
-from services.alpaca_service import get_alpaca_service
+from services.orb_service import OrbService
+from services.alpaca_streaming_service import AlpacaStreamingService
+from services.tradier_streaming_service import TradierStreamingService
 
 # Global variables
 ORB_SERVICE = None
@@ -973,23 +975,45 @@ def get_all_yahoo_watchlists():
             "error": f"Failed to fetch watchlists: {str(e)}"
         }), 500
 
+def get_orb_service(provider: str = "alpaca") -> OrbService:
+    """
+    Get ORB service with the specified streaming provider.
+    
+    Args:
+        provider: "alpaca" or "tradier" (default: "alpaca")
+        
+    Returns:
+        OrbService instance with the specified streaming service
+    """
+    if provider.lower() == "tradier":
+        streaming_service = TradierStreamingService()
+    else:
+        streaming_service = AlpacaStreamingService()
+    
+    return OrbService(streaming_service)
+
+
 @app.route("/tindex/orb/start", methods=["POST"])
 def start_orb_monitoring():
     """Start ORB monitoring - called by Supabase cron at 9:15 AM
     
     Query Parameters:
         debug (optional): Set to 'true' to bypass market hours check for testing
+        provider (optional): "alpaca" or "tradier" (default: "alpaca")
     """
     global ORB_SERVICE, ORB_TASK
     
     try:
         # Check for debug mode in query parameters or request body
         debug_mode = request.args.get('debug', '').lower() == 'true'
+        provider = request.args.get('provider', 'alpaca').lower()
+        
         if not debug_mode:
             # Also check request body for debug flag
             try:
                 request_data = request.get_json(silent=True) or {}
                 debug_mode = request_data.get('debug', False)
+                provider = request_data.get('provider', 'alpaca').lower()
             except Exception as e:
                 logger.error("Failed to retrieve request data: %s", e)
 
@@ -998,8 +1022,8 @@ def start_orb_monitoring():
             if ORB_SERVICE and ORB_SERVICE.is_running:
                 return jsonify({"message": "ORB service already running"})
         
-        # Get service instance
-        ORB_SERVICE = get_alpaca_service()
+        # Get service instance with specified provider
+        ORB_SERVICE = get_orb_service(provider=provider)
         
         # Run in background thread
         def run_orb():
@@ -1011,14 +1035,15 @@ def start_orb_monitoring():
         ORB_TASK = threading.Thread(target=run_orb, daemon=True)
         ORB_TASK.start()
         
-        message = "ORB monitoring started"
+        message = f"ORB monitoring started with {provider.upper()} streaming"
         if debug_mode:
             message += " (DEBUG MODE: Market hours check bypassed)"
         
         return jsonify({
             "success": True,
             "message": message,
-            "debug_mode": debug_mode
+            "debug_mode": debug_mode,
+            "provider": provider
         })
         
     except Exception as e:

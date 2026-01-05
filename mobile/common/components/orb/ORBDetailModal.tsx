@@ -62,6 +62,24 @@ const formatDate = (dateString: string | undefined): string => {
 };
 
 /**
+ * Formats timestamp to HH:MM:SS AM/PM format
+ */
+const formatTime = (timestamp: string | undefined): string => {
+  if (!timestamp) return 'N/A';
+  try {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    });
+  } catch {
+    return 'N/A';
+  }
+};
+
+/**
  * Gets color and styling for breakout type
  */
 const getBreakoutStyle = (breakoutType: string) => {
@@ -100,6 +118,13 @@ const getBreakoutStyle = (breakoutType: string) => {
         bgColor: 'bg-yellow-500/20',
         borderColor: 'border-yellow-500/50',
         label: 'Breakout Invalidated',
+      };
+    case 'reversal':
+      return {
+        color: '#8B5CF6',
+        bgColor: 'bg-purple-500/20',
+        borderColor: 'border-purple-500/50',
+        label: 'Reversal Detected',
       };
     default:
       return {
@@ -196,11 +221,58 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                 {breakoutStyle.label}
               </Text>
               {data.breakout_price !== null && (
-                <Text className="text-gray-300 text-sm">
+                <Text className="text-gray-300 text-sm mb-2">
                   Breakout Price: <Text className="font-semibold" style={{ color: breakoutStyle.color }}>
                     {formatPrice(data.breakout_price)}
                   </Text>
                 </Text>
+              )}
+              {/* Reversal Data Display */}
+              {data.breakout_type === 'reversal' && data.reversal_data && (
+                <View className="mt-3 pt-3 border-t border-gray-700/50">
+                  <Text className="text-gray-400 text-sm mb-2">Reversal Details</Text>
+                  <View className="mb-2">
+                    <Text className="text-gray-300 text-sm">
+                      Original Breakout: <Text className="font-semibold" style={{ color: breakoutStyle.color }}>
+                        {data.reversal_data.original_breakout_type === 'above' ? 'Bullish' : 'Bearish'}
+                      </Text>
+                    </Text>
+                  </View>
+                  <View className="mb-2">
+                    <Text className="text-gray-300 text-sm">
+                      Confidence: <Text className="font-semibold" style={{ color: breakoutStyle.color }}>
+                        {data.reversal_data.confidence}
+                      </Text>
+                    </Text>
+                  </View>
+                  <View className="mb-2">
+                    <Text className="text-gray-300 text-sm">
+                      Score: <Text className="font-semibold" style={{ color: breakoutStyle.color }}>
+                        {data.reversal_data.score_percentage.toFixed(1)}%
+                      </Text>
+                      {' '}({data.reversal_data.score}/{data.reversal_data.max_score})
+                    </Text>
+                  </View>
+                  {data.reversal_data.vwap !== null && (
+                    <View className="mb-2">
+                      <Text className="text-gray-300 text-sm">
+                        VWAP: <Text className="font-semibold" style={{ color: breakoutStyle.color }}>
+                          {formatPrice(data.reversal_data.vwap)}
+                        </Text>
+                      </Text>
+                    </View>
+                  )}
+                  {data.reversal_data.indicators && data.reversal_data.indicators.length > 0 && (
+                    <View className="mt-2">
+                      <Text className="text-gray-400 text-xs mb-1">Indicators:</Text>
+                      {data.reversal_data.indicators.map((indicator, index) => (
+                        <Text key={index} className="text-gray-300 text-xs ml-2">
+                          • {indicator}
+                        </Text>
+                      ))}
+                    </View>
+                  )}
+                </View>
               )}
             </View>
           )}
@@ -269,6 +341,14 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                   {formatPrice(data.opening_price)}
                 </Text>
               </View>
+              {data.previous_close !== null && data.previous_close !== undefined && (
+                <View className="flex-row justify-between items-center mb-3">
+                  <Text className="text-gray-400 text-sm">Previous Close</Text>
+                  <Text className="text-gray-300 text-base font-medium">
+                    {formatPrice(data.previous_close)}
+                  </Text>
+                </View>
+              )}
               <View className="flex-row justify-between items-center mb-3">
                 <Text className="text-gray-400 text-sm">Volume</Text>
                 <Text className="text-gray-300 text-base font-medium">
@@ -281,6 +361,22 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                   {formatDate(data.trade_date)}
                 </Text>
               </View>
+              {data.timestamp && (
+                <View className="flex-row justify-between items-center mb-3">
+                  <Text className="text-gray-400 text-sm">Time</Text>
+                  <Text className="text-gray-300 text-base font-medium">
+                    {formatTime(data.timestamp)}
+                  </Text>
+                </View>
+              )}
+              {data.data_source && (
+                <View className="flex-row justify-between items-center mb-3">
+                  <Text className="text-gray-400 text-sm">Data Source</Text>
+                  <Text className="text-gray-300 text-base font-medium">
+                    {data.data_source}
+                  </Text>
+                </View>
+              )}
               <View className="flex-row justify-between items-center pt-3 border-t border-gray-700/50 mb-3">
                 <Text className="text-gray-400 text-sm">Status</Text>
                 <View className="flex-row items-center" style={{ gap: 8 }}>
