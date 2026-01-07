@@ -17,7 +17,7 @@ import { User } from "@supabase/supabase-js";
 import { useDeleteBlogPostMutation } from "@/hooks/mutations/blogs/deleteBlogPostMutation";
 import { DeleteBlogPostRequest } from "@/common/types/blogPosts/delete";
 import { StockResearchModal } from "@/common/components/StockResearchModal";
-import { useBlogPostQuery } from "@/hooks/queries/blogs/useBlogPostQuery";
+import { useBlogPostQuery, BlogPostFromDB } from "@/hooks/queries/blogs/useBlogPostQuery";
 
 interface PostDetailModalProps {
   user: User | null;
@@ -34,14 +34,15 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 }) => {
   const [showResearchModal, setShowResearchModal] = useState(false);
 
-  const { mutateAsync: deleteBlogPost, isPending: deletionPending, isError: deleteBlogPostError } = useDeleteBlogPostMutation()
+  const { mutateAsync: deleteBlogPost } = useDeleteBlogPostMutation()
 
   // Fetch full blog post if only ID is provided
   const blogPostId = post?.id || null;
   const { data: fullBlogPost, isLoading: isLoadingBlogPost, error: blogPostError } = useBlogPostQuery(blogPostId);
   
   // Use fetched post if available, otherwise use the passed post
-  const displayPost = fullBlogPost || post;
+  // Type assertion: fullBlogPost matches the actual DB schema, post might be partial
+  const displayPost = (fullBlogPost || post) as BlogPostFromDB | BlogPostType | null;
 
   if (!displayPost) {
     // Show loading state if we're fetching
@@ -52,10 +53,10 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
           animationType="slide"
           presentationStyle="pageSheet"
           onRequestClose={onClose}>
-          <StatusBar barStyle="light-content" backgroundColor="rgba(0,0,0,0.8)" />
-          <View className="flex-1 bg-white justify-center items-center">
+          <StatusBar barStyle="light-content" backgroundColor="#000000" />
+          <View className="flex-1 bg-black justify-center items-center">
             <ActivityIndicator size="large" color="#3B82F6" />
-            <Text className="text-gray-600 mt-4">Loading blog post...</Text>
+            <Text className="text-gray-300 mt-4 font-medium">Loading blog post...</Text>
           </View>
         </Modal>
       );
@@ -63,32 +64,35 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
     return null;
   }
 
-  // Show error state if fetch failed
-  if (blogPostError && !post) {
-    return (
-      <Modal
-        visible={visible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={onClose}>
-        <StatusBar barStyle="light-content" backgroundColor="rgba(0,0,0,0.8)" />
-        <View className="flex-1 bg-white justify-center items-center px-6">
-          <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
-          <Text className="text-gray-900 text-xl font-bold mt-4 text-center">
-            Failed to load blog post
-          </Text>
-          <Text className="text-gray-600 mt-2 text-center">
-            {blogPostError instanceof Error ? blogPostError.message : 'Unknown error'}
-          </Text>
-          <Pressable
-            onPress={onClose}
-            className="mt-6 bg-blue-600 px-6 py-3 rounded-lg">
-            <Text className="text-white font-semibold">Close</Text>
-          </Pressable>
-        </View>
-      </Modal>
-    );
-  }
+      // Show error state if fetch failed
+      if (blogPostError && !post) {
+        const errorMessage = blogPostError instanceof Error 
+          ? blogPostError.message 
+          : 'Unknown error';
+        return (
+          <Modal
+            visible={visible}
+            animationType="slide"
+            presentationStyle="pageSheet"
+            onRequestClose={onClose}>
+            <StatusBar barStyle="light-content" backgroundColor="#000000" />
+            <View className="flex-1 bg-black justify-center items-center px-6">
+              <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+              <Text className="text-white text-xl font-bold mt-4 text-center">
+                Failed to load blog post
+              </Text>
+              <Text className="text-gray-400 mt-2 text-center">
+                {errorMessage}
+              </Text>
+              <Pressable
+                onPress={onClose}
+                className="mt-6 bg-blue-600 px-6 py-3 rounded-xl active:opacity-80">
+                <Text className="text-white font-semibold">Close</Text>
+              </Pressable>
+            </View>
+          </Modal>
+        );
+      }
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -100,12 +104,25 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
   };
 
   const getImageUrl = () => {
-    if (displayPost.multimedia_data?.images?.[0]?.url) {
-      return displayPost.multimedia_data.images[0].url;
+    if (!displayPost) return "https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=800&h=400&fit=crop";
+    
+    const post = displayPost as any;
+    
+    // Check if research_data has any image URLs
+    if (post.research_data?.images?.[0]?.url) {
+      return post.research_data.images[0].url;
     }
-    if (displayPost.multimedia_data?.featured_image) {
-      return displayPost.multimedia_data.featured_image;
+    if (post.research_data?.featured_image) {
+      return post.research_data.featured_image;
     }
+    // Check multimedia_data (for backward compatibility)
+    if (post.multimedia_data?.images?.[0]?.url) {
+      return post.multimedia_data.images[0].url;
+    }
+    if (post.multimedia_data?.featured_image) {
+      return post.multimedia_data.featured_image;
+    }
+    // Fallback to a default stock market image
     return "https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=800&h=400&fit=crop";
   };
 
@@ -126,9 +143,10 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
         onClose()
       }
     } catch (error: any) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       Alert.alert(
         "Error",
-        `Failed to  delete blog post!`
+        `Failed to delete blog post: ${errorMessage}`
       );
     }
   }
@@ -139,22 +157,22 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
       animationType="slide"
       presentationStyle="pageSheet" // iOS only - gives native modal feel
       onRequestClose={onClose}>
-      <StatusBar barStyle="light-content" backgroundColor="rgba(0,0,0,0.8)" />
+      <StatusBar barStyle="light-content" backgroundColor="#000000" />
 
       {/* Header with close button */}
-      <View className="absolute top-0 left-0 right-0 z-10 bg-transparent pt-12 pb-4 px-4">
+      <View className="absolute top-0 left-0 right-0 z-10 bg-black/80 backdrop-blur-xl pt-12 pb-4 px-4">
         <View className="flex-row justify-between items-center">
           <View />
           <Pressable
             onPress={onClose}
-            className="bg-black/50 rounded-full p-2 backdrop-blur-sm">
-            <Ionicons name="close" size={24} color="white" />
+            className="bg-gray-800/80 rounded-full p-2 active:opacity-70">
+            <Ionicons name="close" size={24} color="#FFFFFF" />
           </Pressable>
         </View>
       </View>
 
       <ScrollView
-        className="flex-1 bg-white"
+        className="flex-1 bg-black"
         showsVerticalScrollIndicator={false}
         bounces={false}>
         {/* Hero Image */}
@@ -164,36 +182,51 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
             className="w-full h-80"
             style={{ resizeMode: "cover" }}
           />
-          <View className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-black/20" />
+          <View className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
         </View>
 
         {/* Content Container */}
-        <View className="px-6 py-6 -mt-8 bg-white rounded-t-3xl relative z-10">
-          {/* Topics/Tags */}
-          {displayPost.topic && (
-            <View className="flex-row flex-wrap mb-4">
-              <View className="bg-blue-100 px-3 py-1.5 rounded-full">
-                <Text className="text-sm text-blue-700 font-semibold">
-                  {displayPost.topic.name}
+        <View className="px-6 py-6 -mt-8 bg-black rounded-t-3xl relative z-10">
+          {/* Ticker and Category */}
+          <View className="flex-row flex-wrap items-center gap-2 mb-4">
+            {(displayPost as any)?.ticker && (
+              <View className="bg-blue-500/20 px-3 py-1.5 rounded-full border border-blue-500/30">
+                <Text className="text-sm text-blue-400 font-semibold">
+                  {(displayPost as any).ticker}
                 </Text>
               </View>
-            </View>
-          )}
+            )}
+            {(displayPost as any)?.category && (
+              <View className="bg-gray-800/80 px-3 py-1.5 rounded-full border border-gray-700/50">
+                <Text className="text-sm text-gray-300 font-semibold">
+                  {(displayPost as any).category}
+                </Text>
+              </View>
+            )}
+            {/* Fallback: show topic if it exists (for backward compatibility) */}
+            {(displayPost as any)?.topic?.name && !(displayPost as any)?.ticker && (
+              <View className="bg-blue-500/20 px-3 py-1.5 rounded-full border border-blue-500/30">
+                <Text className="text-sm text-blue-400 font-semibold">
+                  {(displayPost as any).topic.name}
+                </Text>
+              </View>
+            )}
+          </View>
 
           {/* Title */}
-          <Text className="text-3xl font-bold text-gray-900 mb-4 leading-tight">
+          <Text className="text-3xl font-black text-white mb-4 leading-tight tracking-tight">
             {displayPost.title}
           </Text>
 
           {/* Row for displaying Ticker and Delete button */}
-          <View className="flex-row justify-between items-center pt-2 border-t border-gray-100">
+          <View className="flex-row justify-between items-center pt-2 border-t border-gray-800 mb-4">
             {/* Stock Ticker */}
             {displayPost.research_data?.ticker && (
               <Pressable
                 onPress={() => setShowResearchModal(true)}
-                className="mb-4">
-                <View className="bg-blue-100 px-4 py-2 rounded-full self-start">
-                  <Text className="text-blue-700 font-bold text-lg">
+                className="active:opacity-70">
+                <View className="bg-blue-500/20 px-4 py-2 rounded-full border border-blue-500/30">
+                  <Text className="text-blue-400 font-bold text-lg">
                     {displayPost.research_data.ticker}
                   </Text>
                 </View>
@@ -203,35 +236,51 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
             {user?.role && (
               <Pressable
                 onPress={handleDeleteBlogPost}
-                className="mb-4"
+                className="bg-red-500/20 p-2 rounded-full border border-red-500/30 active:opacity-70"
               >
-                <MaterialIcons name="delete" size={24} color="black" />
+                <MaterialIcons name="delete" size={20} color="#EF4444" />
               </Pressable>
             )}
           </View>
 
           {/* Meta Information */}
-          <View className="flex-row justify-between items-center mb-6 pb-6 border-b border-gray-200">
-            <Text className="text-base text-gray-600 font-medium">
-              {formatDate(displayPost.created_at)}
-            </Text>
-            {displayPost.reading_time && (
-              <Text className="text-base text-gray-600 font-medium">
-                {displayPost.reading_time} min read
+          <View className="flex-row justify-between items-center mb-6 pb-6 border-b border-gray-800">
+            <View className="flex-row items-center">
+              <Ionicons name="time-outline" size={16} color="#6B7280" />
+              <Text className="text-gray-400 text-sm font-medium ml-2">
+                {formatDate(displayPost.created_at)}
               </Text>
+            </View>
+            {displayPost.reading_time && (
+              <View className="flex-row items-center">
+                <Ionicons name="book-outline" size={16} color="#6B7280" />
+                <Text className="text-gray-400 text-sm font-medium ml-2">
+                  {displayPost.reading_time} min read
+                </Text>
+              </View>
             )}
           </View>
 
-
-
           {/* Full Content */}
           <View className="mb-8">
-            <Text className="text-lg text-gray-800 leading-7 font-normal">
+            <Text className="text-base text-gray-200 leading-7 font-normal">
               {displayPost.content}
             </Text>
           </View>
 
-          {/* Additional content sections can go here */}
+          {/* Tags if available */}
+          {(displayPost as any)?.tags && Array.isArray((displayPost as any).tags) && (displayPost as any).tags.length > 0 && (
+            <View className="flex-row flex-wrap gap-2 mb-8">
+              {(displayPost as any).tags.slice(0, 5).map((tag: string, index: number) => (
+                <View 
+                  key={index}
+                  className="bg-gray-800/80 px-3 py-1.5 rounded-full border border-gray-700/50"
+                >
+                  <Text className="text-gray-300 text-xs font-medium">#{tag}</Text>
+                </View>
+              ))}
+            </View>
+          )}
 
           {/* Bottom spacing for safe scrolling */}
           <View className="h-20" />

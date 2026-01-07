@@ -122,6 +122,11 @@ export function useORBMonitoringState(
 
     // Create a unique channel name for this subscription
     const channelName = `orb-monitoring-state-${Date.now()}`;
+    
+    // Track subscription state to avoid logging transient errors that resolve
+    let subscriptionState: 'connecting' | 'subscribed' | 'error' | 'closed' = 'connecting';
+    let hasLoggedError = false;
+    
     const channel = supabase
       .channel(channelName)
       .on<ORBMonitoringState>(
@@ -158,16 +163,33 @@ export function useORBMonitoringState(
         }
       )
       .subscribe((status) => {
+        // Update subscription state
         if (status === 'SUBSCRIBED') {
-          console.log('✅ Subscribed to ORB monitoring state real-time updates');
+          subscriptionState = 'subscribed';
+          // Only log success if we previously logged an error (to show recovery)
+          if (hasLoggedError) {
+            console.log('✅ Subscribed to ORB monitoring state real-time updates (recovered from error)');
+            hasLoggedError = false;
+          } else {
+            console.log('✅ Subscribed to ORB monitoring state real-time updates');
+          }
         } else if (status === 'CHANNEL_ERROR') {
-          console.error('❌ Error subscribing to ORB monitoring state updates');
+          // Only log error if we haven't already logged one and aren't already subscribed
+          // This prevents logging transient errors that resolve quickly
+          if (!hasLoggedError && subscriptionState !== 'subscribed') {
+            console.warn('⚠️ Temporary error subscribing to ORB monitoring state updates (will retry)');
+            hasLoggedError = true;
+            subscriptionState = 'error';
+          }
         } else if (status === 'TIMED_OUT') {
+          subscriptionState = 'error';
           console.warn('⏱️ Subscription to ORB monitoring state timed out');
         } else if (status === 'CLOSED') {
+          subscriptionState = 'closed';
           console.log('🔌 ORB monitoring state subscription closed');
         } else {
-          console.log('📡 ORB monitoring state subscription status:', status);
+          // Log other statuses at debug level to reduce noise
+          console.debug('📡 ORB monitoring state subscription status:', status);
         }
       });
 
