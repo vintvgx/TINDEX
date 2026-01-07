@@ -598,17 +598,18 @@ class OrbService:
         current_bar: StockBar, 
         breakout_type: str,
         orb_high: Decimal,
-        orb_low: Decimal
+        orb_low: Decimal,
+        range_midpoint: float
     ) -> Dict:
         """
-        Hybrid approach to detect reversal after a breakout.
+        Detect reversal after a breakout.
         
-        Uses multiple indicators:
-        1. VWAP cross: Price crossing back through VWAP
-        2. ORB re-entry: Price returning inside ORB range
-        3. Volume pattern: Decreasing volume on reversal move
-        4. Momentum: Price moving opposite to breakout direction
-        5. Price action: Multiple consecutive bars in reversal direction
+        Reversal conditions (ALL must be met):
+        1. Price must return within ORB range after breakout
+        2. Price must move beyond range_midpoint (range_size / 2) in the opposite direction
+        
+        Note: VWAP is NOT used because Alpaca returns VWAP from IEX, which doesn't match
+        NYSE/Nasdaq prices accurately.
         
         Args:
             ticker: Stock ticker symbol
@@ -616,161 +617,78 @@ class OrbService:
             breakout_type: "above" or "below" (original breakout direction)
             orb_high: ORB high level
             orb_low: ORB low level
+            range_midpoint: ORB range size / 2 (average of range size)
             
         Returns:
             Dict with reversal detection result:
             {
                 "is_reversal": bool,
                 "confidence": "HIGH" | "MEDIUM" | "LOW",
-                "indicators": list of indicator signals,
-                "vwap": float or None
+                "indicators": list of indicator signals
             }
         """
-        if ticker not in self._bar_history or len(self._bar_history[ticker]) < 5:
-            return {"is_reversal": False, "confidence": "LOW", "indicators": [], "vwap": None}
+        if ticker not in self._bar_history or len(self._bar_history[ticker]) < 2:
+            return {"is_reversal": False, "confidence": "LOW", "indicators": []}
         
         bars = self._bar_history[ticker]
         current_close = float(current_bar.close)
         current_high = float(current_bar.high)
         current_low = float(current_bar.low)
-        current_volume = current_bar.volume
-        
-        # Calculate VWAP from recent bars
-        vwap = self._calculate_vwap_from_bars(bars)
-        
-        if vwap is None:
-            return {"is_reversal": False, "confidence": "LOW", "indicators": [], "vwap": None}
         
         indicators = []
-        reversal_score = 0
-        max_score = 0
+        is_reversal = False
+        confidence = "LOW"
         
-        # Indicator 1: VWAP Cross (30 points)
-        # For bullish breakout: reversal if price crosses below VWAP
-        # For bearish breakout: reversal if price crosses above VWAP
-        max_score += 30
+        orb_high_float = float(orb_high)
+        orb_low_float = float(orb_low)
+        orb_midpoint = (orb_high_float + orb_low_float) / 2.0
+        
+        # Condition 1: Price must return within ORB range
+        price_within_orb = orb_low_float <= current_close <= orb_high_float
+        
+        if not price_within_orb:
+            return {"is_reversal": False, "confidence": "LOW", "indicators": []}
+        
+        indicators.append(f"Price re-entered ORB (${current_close:.2f} within ${orb_low_float:.2f}-${orb_high_float:.2f})")
+        
+        # Condition 2: Price must move beyond range_midpoint in opposite direction
         if breakout_type == "above":
-            # Bullish breakout - reversal if price goes below VWAP
-            if current_close < vwap:
-                # Check if previous bar was above VWAP (cross confirmation)
-                if len(bars) >= 2:
-                    prev_close = float(bars[-2].close)
-                    if prev_close >= vwap:
-                        reversal_score += 30
-                        indicators.append(f"VWAP cross below (${vwap:.2f})")
-                    else:
-                        reversal_score += 15
-                        indicators.append(f"Price below VWAP (${vwap:.2f})")
+            # Bullish breakout - reversal if price goes below (orb_midpoint - range_midpoint/2)
+            # This means price moved at least range_midpoint below the midpoint
+            reversal_threshold = orb_midpoint - (range_midpoint / 2.0)
+            if current_close < reversal_threshold:
+                is_reversal = True
+                distance_below = orb_midpoint - current_close
+                if distance_below >= range_midpoint:
+                    confidence = "HIGH"
+                    indicators.append(f"Price moved {distance_below:.2f} below midpoint (threshold: {range_midpoint:.2f})")
+                elif distance_below >= range_midpoint * 0.7:
+                    confidence = "MEDIUM"
+                    indicators.append(f"Price moved {distance_below:.2f} below midpoint (threshold: {range_midpoint:.2f})")
+                else:
+                    confidence = "LOW"
+                    indicators.append(f"Price moved {distance_below:.2f} below midpoint (threshold: {range_midpoint:.2f})")
         else:
-            # Bearish breakout - reversal if price goes above VWAP
-            if current_close > vwap:
-                # Check if previous bar was below VWAP (cross confirmation)
-                if len(bars) >= 2:
-                    prev_close = float(bars[-2].close)
-                    if prev_close <= vwap:
-                        reversal_score += 30
-                        indicators.append(f"VWAP cross above (${vwap:.2f})")
-                    else:
-                        reversal_score += 15
-                        indicators.append(f"Price above VWAP (${vwap:.2f})")
-        
-        # Indicator 2: ORB Re-entry (25 points)
-        # Price returning inside ORB range after breakout
-        max_score += 25
-        if breakout_type == "above":
-            # Bullish breakout - reversal if price returns below ORB high
-            if current_close < float(orb_high):
-                reversal_score += 25
-                indicators.append(f"Price re-entered ORB (below ${orb_high:.2f})")
-            elif current_low < float(orb_high):
-                reversal_score += 15
-                indicators.append(f"Price touched ORB high (${orb_high:.2f})")
-        else:
-            # Bearish breakout - reversal if price returns above ORB low
-            if current_close > float(orb_low):
-                reversal_score += 25
-                indicators.append(f"Price re-entered ORB (above ${orb_low:.2f})")
-            elif current_high > float(orb_low):
-                reversal_score += 15
-                indicators.append(f"Price touched ORB low (${orb_low:.2f})")
-        
-        # Indicator 3: Volume Pattern (20 points)
-        # Decreasing volume on reversal move suggests weak continuation
-        max_score += 20
-        if len(bars) >= 3:
-            recent_volumes = [b.volume for b in bars[-3:]]
-            avg_recent_volume = sum(recent_volumes) / len(recent_volumes)
-            
-            # Check if current volume is decreasing
-            if current_volume < avg_recent_volume * 0.7:
-                reversal_score += 20
-                indicators.append("Decreasing volume on reversal")
-            elif current_volume < avg_recent_volume * 0.85:
-                reversal_score += 10
-                indicators.append("Moderate volume decrease")
-        
-        # Indicator 4: Momentum Shift (15 points)
-        # Multiple consecutive bars moving opposite to breakout direction
-        max_score += 15
-        if len(bars) >= 3:
-            recent_closes = [float(b.close) for b in bars[-3:]]
-            
-            if breakout_type == "above":
-                # Bullish breakout - check for consecutive down moves
-                down_moves = sum(1 for i in range(1, len(recent_closes)) 
-                               if recent_closes[i] < recent_closes[i-1])
-                if down_moves >= 2:
-                    reversal_score += 15
-                    indicators.append(f"{down_moves} consecutive down bars")
-            else:
-                # Bearish breakout - check for consecutive up moves
-                up_moves = sum(1 for i in range(1, len(recent_closes)) 
-                             if recent_closes[i] > recent_closes[i-1])
-                if up_moves >= 2:
-                    reversal_score += 15
-                    indicators.append(f"{up_moves} consecutive up bars")
-        
-        # Indicator 5: Price Action - Strong Reversal Candle (10 points)
-        # Strong opposite-direction candle (e.g., bearish candle after bullish breakout)
-        max_score += 10
-        if breakout_type == "above":
-            # Bullish breakout - look for bearish candle
-            if current_close < float(current_bar.open):
-                body_size = abs(current_close - float(current_bar.open))
-                candle_range = current_high - current_low
-                if candle_range > 0 and body_size / candle_range > 0.6:  # Strong body
-                    reversal_score += 10
-                    indicators.append("Strong bearish reversal candle")
-        else:
-            # Bearish breakout - look for bullish candle
-            if current_close > float(current_bar.open):
-                body_size = abs(current_close - float(current_bar.open))
-                candle_range = current_high - current_low
-                if candle_range > 0 and body_size / candle_range > 0.6:  # Strong body
-                    reversal_score += 10
-                    indicators.append("Strong bullish reversal candle")
-        
-        # Determine if reversal is detected
-        # Require at least 40% of max score for low confidence
-        # 60% for medium, 75% for high
-        score_percentage = (reversal_score / max_score * 100) if max_score > 0 else 0
-        
-        is_reversal = score_percentage >= 40
-        if score_percentage >= 75:
-            confidence = "HIGH"
-        elif score_percentage >= 60:
-            confidence = "MEDIUM"
-        else:
-            confidence = "LOW"
+            # Bearish breakout - reversal if price goes above (orb_midpoint + range_midpoint/2)
+            # This means price moved at least range_midpoint above the midpoint
+            reversal_threshold = orb_midpoint + (range_midpoint / 2.0)
+            if current_close > reversal_threshold:
+                is_reversal = True
+                distance_above = current_close - orb_midpoint
+                if distance_above >= range_midpoint:
+                    confidence = "HIGH"
+                    indicators.append(f"Price moved {distance_above:.2f} above midpoint (threshold: {range_midpoint:.2f})")
+                elif distance_above >= range_midpoint * 0.7:
+                    confidence = "MEDIUM"
+                    indicators.append(f"Price moved {distance_above:.2f} above midpoint (threshold: {range_midpoint:.2f})")
+                else:
+                    confidence = "LOW"
+                    indicators.append(f"Price moved {distance_above:.2f} above midpoint (threshold: {range_midpoint:.2f})")
         
         return {
             "is_reversal": is_reversal,
             "confidence": confidence,
-            "indicators": indicators,
-            "vwap": vwap,
-            "score": reversal_score,
-            "max_score": max_score,
-            "score_percentage": score_percentage
+            "indicators": indicators
         }
     
     async def handle_bar(self, stock_bar: StockBar):
@@ -940,7 +858,77 @@ class OrbService:
             
             state = self.monitoring_state[ticker]
             
-            # Check for reversals if a breakout has already occurred
+            # PRIORITY 1: Check if price is currently Bullish (above ORH) or Bearish (below ORL)
+            # This takes priority over reversal detection
+            current_price = float(bar_close)
+            orb_range_size = float(orb_high - orb_low)
+            range_midpoint = orb_range_size / 2.0  # Average of range size
+            
+            # Determine current bullish/bearish status based on price position
+            is_above_orb_high = current_price > float(orb_high)
+            is_below_orb_low = current_price < float(orb_low)
+            is_within_orb = float(orb_low) <= current_price <= float(orb_high)
+            
+            # Update breakout_type based on current price position (prioritize this)
+            breakout_type_to_set = None
+            if is_above_orb_high:
+                breakout_type_to_set = "Bullish"
+                # Mark high as broken if not already
+                if not state["high_broken"]:
+                    logger.info(
+                        f"[BREAKOUT DETECTED] {ticker} above ORB high! "
+                        f"Current Price={current_price:.2f}, ORB High={orb_high:.2f}"
+                    )
+                    await self.record_breakout(ticker, "above", bar_close, bar_data=stock_bar)
+            elif is_below_orb_low:
+                breakout_type_to_set = "Bearish"
+                # Mark low as broken if not already
+                if not state["low_broken"]:
+                    logger.info(
+                        f"[BREAKOUT DETECTED] {ticker} below ORB low! "
+                        f"Current Price={current_price:.2f}, ORB Low={orb_low:.2f}"
+                    )
+                    await self.record_breakout(ticker, "below", bar_close, bar_data=stock_bar)
+            elif is_within_orb:
+                # Price is within ORB - check if we should set to "none" or keep current state
+                # Only set to "none" if there's no active breakout or reversal
+                current_state = None
+                try:
+                    current_state = (
+                        self.supabase.table("orb_monitoring_state")
+                        .select("breakout_type")
+                        .eq("ticker", ticker)
+                        .eq("trade_date", str(trade_date))
+                        .execute()
+                    )
+                except Exception as e:
+                    logger.warning(f"Error fetching current state for {ticker}: {e}")
+                
+                current_breakout_type = None
+                if current_state and current_state.data and len(current_state.data) > 0:
+                    current_breakout_type = current_state.data[0].get("breakout_type")
+                
+                # If price is within ORB and no active breakout/reversal, set to "none"
+                if current_breakout_type not in ["Bullish", "Bearish", "Confirmed Bullish", "Confirmed Bearish", "reversal"]:
+                    breakout_type_to_set = "none"
+            
+            # Update breakout_type if determined
+            if breakout_type_to_set is not None:
+                try:
+                    self.supabase.table("orb_monitoring_state").upsert({
+                        "ticker": ticker,
+                        "trade_date": str(trade_date),
+                        "current_price": current_price,
+                        "breakout_type": breakout_type_to_set,
+                        "orb_high": float(orb_high),
+                        "orb_low": float(orb_low),
+                        "timestamp": self.get_current_et_time().isoformat(),
+                        "data_source": "alpaca",
+                    }).execute()
+                except Exception as e:
+                    logger.warning(f"Failed to update breakout_type for {ticker}: {e}")
+            
+            # PRIORITY 2: Check for reversals if a breakout has already occurred
             # IMPORTANT: Only check for reversals if there was an actual breakout (ORH or ORL broken)
             if state["high_broken"] or state["low_broken"]:
                 # First, check if we should clear an existing reversal
@@ -969,13 +957,14 @@ class OrbService:
                 
                 # Only check for reversal if not already in reversal state
                 if current_breakout_type != "reversal":
-                    # Check for reversal
+                    # Check for reversal (only if price returned within ORB AND moved beyond range_midpoint)
                     reversal_result = self._detect_reversal(
                         ticker=ticker,
                         current_bar=stock_bar,
                         breakout_type=original_breakout_type,
                         orb_high=orb_high,
-                        orb_low=orb_low
+                        orb_low=orb_low,
+                        range_midpoint=range_midpoint
                     )
                     
                     if reversal_result["is_reversal"]:
@@ -995,22 +984,6 @@ class OrbService:
                     # We're in reversal state - update the bar count
                     if ticker in self._reversal_tracking:
                         self._reversal_tracking[ticker]["bars_since"] += 1
-            
-            # Check breakouts - use bar_high for upper breakout, bar_low for lower
-            # This catches intrabar breakouts, not just close-based
-            if not state["high_broken"] and bar_high > orb_high:
-                logger.info(
-                    f"[BREAKOUT DETECTED] {ticker} above ORB high! "
-                    f"Bar High={bar_high}, ORB High={orb_high}"
-                )
-                await self.record_breakout(ticker, "above", bar_close, bar_data=stock_bar)
-            
-            elif not state["low_broken"] and bar_low < orb_low:
-                logger.info(
-                    f"[BREAKOUT DETECTED] {ticker} below ORB low! "
-                    f"Bar Low={bar_low}, ORB Low={orb_low}"
-                )
-                await self.record_breakout(ticker, "below", bar_close, bar_data=stock_bar)
     
     async def record_breakout(self, ticker: str, breakout_type: str, price: Decimal, bar_data: Optional[StockBar] = None):
         """
@@ -1156,27 +1129,19 @@ class OrbService:
             
             confidence = reversal_result.get("confidence", "LOW")
             indicators = reversal_result.get("indicators", [])
-            vwap = reversal_result.get("vwap")
-            score_percentage = reversal_result.get("score_percentage", 0)
-            score = reversal_result.get("score", 0)
-            max_score = reversal_result.get("max_score", 0)
             
             # Prepare reversal data as JSON object for JSONB column
             reversal_data = {
                 "original_breakout_type": original_breakout_type,
                 "reversal_detected_at": self.get_current_et_time().isoformat(),
                 "confidence": confidence,
-                "score": score,
-                "max_score": max_score,
-                "score_percentage": round(score_percentage, 2),
-                "vwap": vwap,
                 "indicators": indicators,
                 "reversal_price": price_float,
                 "orb_high": orb_high_float,
                 "orb_low": orb_low_float,
                 "detection_metadata": {
                     "bars_analyzed": len(self._bar_history.get(ticker, [])),
-                    "reversal_detection_method": "hybrid",
+                    "reversal_detection_method": "range_midpoint",
                     "indicators_count": len(indicators)
                 }
             }
@@ -1206,7 +1171,6 @@ class OrbService:
             logger.info(
                 f"[REVERSAL DETECTED] {ticker} reversal after {original_breakout_type} breakout. "
                 f"Price: ${price_float:.2f}, Confidence: {confidence}, "
-                f"Score: {score_percentage:.1f}%, VWAP: ${vwap:.2f if vwap else 'N/A'}, "
                 f"Indicators: {', '.join(indicators)}. "
                 f"Will auto-clear after {self._reversal_display_bars} bars (≈{self._reversal_display_bars} minutes for 1-min bars)."
             )
@@ -1218,7 +1182,6 @@ class OrbService:
                 price=price_float,
                 confidence=confidence,
                 indicators=indicators,
-                vwap=vwap,
                 orb_high=orb_high_float,
                 orb_low=orb_low_float
             )
@@ -1318,7 +1281,6 @@ class OrbService:
         price: float,
         confidence: str,
         indicators: list,
-        vwap: Optional[float],
         orb_high: float,
         orb_low: float
     ):
@@ -1343,9 +1305,6 @@ class OrbService:
                     f"ORB Low: ${orb_low:.2f}",
                 ]
                 
-                if vwap:
-                    body_lines.append(f"VWAP: ${vwap:.2f}")
-                
                 if indicators:
                     body_lines.append("")
                     body_lines.append("Reversal Signals:")
@@ -1365,7 +1324,6 @@ class OrbService:
                         "price": price,
                         "confidence": confidence,
                         "indicators": indicators,
-                        "vwap": vwap,
                         "orb_high": orb_high,
                         "orb_low": orb_low,
                         "screen": "ticker",
