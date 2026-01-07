@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
+import { AnimatedNumber } from './AnimatedNumber';
 
 interface ORBDetailModalProps {
   visible: boolean;
@@ -195,12 +196,12 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
           {/* Current Price - Large Display */}
           <View className="mb-6">
             <Text className="text-gray-400 text-sm mb-2">Current Price</Text>
-            <Text 
-              className="text-4xl font-bold mb-1"
-              style={{ color: priceColor }}
-            >
-              {formatPrice(data.current_price)}
-            </Text>
+            <AnimatedNumber
+              value={data.current_price}
+              format={(v) => `$${v.toFixed(2)}`}
+              style={{ fontSize: 36, fontWeight: 'bold', marginBottom: 4 }}
+              color={priceColor}
+            />
             <Text className="text-gray-500 text-xs">
               {isAboveHigh && 'Above ORB High'}
               {isBelowLow && 'Below ORB Low'}
@@ -221,11 +222,15 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                 {breakoutStyle.label}
               </Text>
               {data.breakout_price !== null && (
-                <Text className="text-gray-300 text-sm mb-2">
-                  Breakout Price: <Text className="font-semibold" style={{ color: breakoutStyle.color }}>
-                    {formatPrice(data.breakout_price)}
-                  </Text>
-                </Text>
+                <View className="flex-row items-center mb-2">
+                  <Text className="text-gray-300 text-sm">Breakout Price: </Text>
+                  <AnimatedNumber
+                    value={data.breakout_price}
+                    format={(v) => `$${v.toFixed(2)}`}
+                    style={{ fontSize: 14, fontWeight: '600' }}
+                    color={breakoutStyle.color}
+                  />
+                </View>
               )}
               {/* Reversal Data Display */}
               {data.breakout_type === 'reversal' && data.reversal_data && (
@@ -254,12 +259,14 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                     </Text>
                   </View>
                   {data.reversal_data.vwap !== null && (
-                    <View className="mb-2">
-                      <Text className="text-gray-300 text-sm">
-                        VWAP: <Text className="font-semibold" style={{ color: breakoutStyle.color }}>
-                          {formatPrice(data.reversal_data.vwap)}
-                        </Text>
-                      </Text>
+                    <View className="flex-row items-center mb-2">
+                      <Text className="text-gray-300 text-sm">VWAP: </Text>
+                      <AnimatedNumber
+                        value={data.reversal_data.vwap}
+                        format={(v) => `$${v.toFixed(2)}`}
+                        style={{ fontSize: 14, fontWeight: '600' }}
+                        color={breakoutStyle.color}
+                      />
                     </View>
                   )}
                   {data.reversal_data.indicators && data.reversal_data.indicators.length > 0 && (
@@ -310,22 +317,31 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
             <View className="bg-gray-800/50 rounded-xl p-4">
               <View className="flex-row justify-between items-center mb-3">
                 <Text className="text-gray-400 text-sm">ORB High</Text>
-                <Text className="text-green-400 text-lg font-semibold">
-                  {formatPrice(data.orb_high)}
-                </Text>
+                <AnimatedNumber
+                  value={data.orb_high}
+                  format={(v) => `$${v.toFixed(2)}`}
+                  style={{ fontSize: 18, fontWeight: '600' }}
+                  color="#10B981"
+                />
               </View>
               <View className="flex-row justify-between items-center mb-3">
                 <Text className="text-gray-400 text-sm">ORB Low</Text>
-                <Text className="text-red-400 text-lg font-semibold">
-                  {formatPrice(data.orb_low)}
-                </Text>
+                <AnimatedNumber
+                  value={data.orb_low}
+                  format={(v) => `$${v.toFixed(2)}`}
+                  style={{ fontSize: 18, fontWeight: '600' }}
+                  color="#EF4444"
+                />
               </View>
               {orbRange > 0 && (
                 <View className="flex-row justify-between items-center pt-3 border-t border-gray-700/50">
                   <Text className="text-gray-400 text-sm">Range Size</Text>
-                  <Text className="text-gray-300 text-lg font-semibold">
-                    {formatPrice(orbRange)}
-                  </Text>
+                  <AnimatedNumber
+                    value={orbRange}
+                    format={(v) => `$${v.toFixed(2)}`}
+                    style={{ fontSize: 18, fontWeight: '600' }}
+                    color="#D1D5DB"
+                  />
                 </View>
               )}
             </View>
@@ -337,16 +353,22 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
             <View className="bg-gray-800/50 rounded-xl p-4">
               <View className="flex-row justify-between items-center mb-3">
                 <Text className="text-gray-400 text-sm">Opening Price</Text>
-                <Text className="text-gray-300 text-base font-medium">
-                  {formatPrice(data.opening_price)}
-                </Text>
+                <AnimatedNumber
+                  value={data.opening_price}
+                  format={(v) => `$${v.toFixed(2)}`}
+                  style={{ fontSize: 16, fontWeight: '500' }}
+                  color="#D1D5DB"
+                />
               </View>
               {data.previous_close !== null && data.previous_close !== undefined && (
                 <View className="flex-row justify-between items-center mb-3">
                   <Text className="text-gray-400 text-sm">Previous Close</Text>
-                  <Text className="text-gray-300 text-base font-medium">
-                    {formatPrice(data.previous_close)}
-                  </Text>
+                  <AnimatedNumber
+                    value={data.previous_close}
+                    format={(v) => `$${v.toFixed(2)}`}
+                    style={{ fontSize: 16, fontWeight: '500' }}
+                    color="#D1D5DB"
+                  />
                 </View>
               )}
               <View className="flex-row justify-between items-center mb-3">

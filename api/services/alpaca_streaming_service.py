@@ -75,28 +75,86 @@ class AlpacaStreamingService(StockStreamingService):
         Handler for Alpaca bar data - converts to StockBar and calls callback.
         
         This is the bridge between Alpaca's data format and our standardized format.
+        
+        Error Handling:
+        - Gracefully handles None data or missing attributes
+        - Prevents race conditions by storing callback in local variable
+        - Ensures stream continues even if callback fails
+        - Validates data before conversion to prevent type errors
         """
         try:
-            if not self._bar_handler_callback:
+            # Validate input data
+            if data is None:
+                logger.warning("Received None data in Alpaca bar handler, ignoring")
+                return
+            
+            # Store callback in local variable to avoid race conditions
+            callback = self._bar_handler_callback
+            if not callback:
                 logger.warning("Bar handler callback not set, ignoring bar data")
+                return
+            
+            if not callable(callback):
+                logger.error(f"Bar handler callback is not callable: {type(callback)}")
+                return
+            
+            # Validate required data attributes before conversion
+            symbol = getattr(data, 'symbol', None)
+            if not symbol:
+                logger.warning("Bar data missing symbol, ignoring")
+                return
+            
+            # Safely extract and convert price data with None checks
+            try:
+                open_price = Decimal(str(data.open)) if data.open is not None else None
+                high_price = Decimal(str(data.high)) if data.high is not None else None
+                low_price = Decimal(str(data.low)) if data.low is not None else None
+                close_price = Decimal(str(data.close)) if data.close is not None else None
+                
+                # Validate that we have at least one price
+                if open_price is None and high_price is None and low_price is None and close_price is None:
+                    logger.warning(f"Bar data for {symbol} has no valid price data, ignoring")
+                    return
+                
+                # Use close as fallback for missing prices, or 0 if all are None (shouldn't happen after check above)
+                open_price = open_price if open_price is not None else (close_price if close_price is not None else Decimal('0'))
+                high_price = high_price if high_price is not None else (close_price if close_price is not None else Decimal('0'))
+                low_price = low_price if low_price is not None else (close_price if close_price is not None else Decimal('0'))
+                close_price = close_price if close_price is not None else Decimal('0')
+                
+            except (ValueError, TypeError, AttributeError) as e:
+                logger.error(f"Error converting price data for {symbol}: {e}", exc_info=True)
                 return
             
             # Convert Alpaca Bar to standardized StockBar
             stock_bar = StockBar(
-                symbol=data.symbol,
-                open=Decimal(str(data.open)),
-                high=Decimal(str(data.high)),
-                low=Decimal(str(data.low)),
-                close=Decimal(str(data.close)),
-                volume=data.volume,
-                timestamp=data.timestamp if hasattr(data, 'timestamp') else None
+                symbol=symbol,
+                open=open_price,
+                high=high_price,
+                low=low_price,
+                close=close_price,
+                volume=int(data.volume) if data.volume is not None else 0,
+                timestamp=getattr(data, 'timestamp', None) if hasattr(data, 'timestamp') else None
             )
             
-            # Call the registered handler
-            await self._bar_handler_callback(stock_bar)
+            # Call the registered handler (synchronous callback, no await needed)
+            try:
+                callback(stock_bar)
+            except Exception as callback_error:
+                # Log callback errors but don't let them stop the stream
+                logger.error(
+                    f"Error in bar handler callback for {symbol}: {callback_error}",
+                    exc_info=True
+                )
             
         except Exception as e:
-            logger.error(f"Error in Alpaca bar handler for {data.symbol}: {e}", exc_info=True)
+            # Get symbol safely for error logging
+            symbol = getattr(data, 'symbol', 'UNKNOWN') if data is not None else 'UNKNOWN'
+            logger.error(
+                f"Error in Alpaca bar handler for {symbol}: {e}",
+                exc_info=True
+            )
+            # Don't re-raise - let the stream continue processing other bars
     
     async def subscribe(self, tickers: Set[str], bar_handler: Callable[[StockBar], None]) -> bool:
         """
@@ -252,17 +310,42 @@ class AlpacaStreamingService(StockStreamingService):
             # Cancel the stream task first
             if self._stream_task is not None:
                 logger.info("Cancelling Alpaca stream task")
-                self._stream_task.cancel()
+                stream_task = self._stream_task
+                self._stream_task = None  # Clear reference immediately to prevent reuse
+                
+                # Cancel the task
+                stream_task.cancel()
+                
+                # Try to await cancellation, but handle event loop mismatches gracefully
                 try:
-                    await asyncio.wait_for(self._stream_task, timeout=2.0)
-                except asyncio.TimeoutError:
-                    logger.warning("Alpaca stream task cancellation timed out")
-                except asyncio.CancelledError:
-                    logger.info("Alpaca stream task cancelled successfully")
+                    # Check if task's loop matches current loop
+                    current_loop = asyncio.get_running_loop()
+                    task_loop = getattr(stream_task, '_loop', None)
+                    
+                    if task_loop is not None and task_loop is not current_loop:
+                        logger.warning(
+                            f"Stream task attached to different event loop. "
+                            f"Task loop: {task_loop}, Current loop: {current_loop}. "
+                            f"Cancelling without awaiting."
+                        )
+                    else:
+                        # Safe to await - same loop or no loop info
+                        try:
+                            await asyncio.wait_for(stream_task, timeout=2.0)
+                        except asyncio.TimeoutError:
+                            logger.warning("Alpaca stream task cancellation timed out")
+                        except asyncio.CancelledError:
+                            logger.info("Alpaca stream task cancelled successfully")
+                except RuntimeError as e:
+                    # Handle "attached to a different loop" error gracefully
+                    if "different loop" in str(e).lower() or "attached to" in str(e).lower():
+                        logger.warning(
+                            f"Stream task attached to different event loop, skipping await: {e}"
+                        )
+                    else:
+                        raise
                 except Exception as e:
-                    logger.error(f"Error awaiting Alpaca stream task cancellation: {e}")
-                finally:
-                    self._stream_task = None
+                    logger.error(f"Error awaiting Alpaca stream task cancellation: {e}", exc_info=True)
             
             # Unsubscribe from all tickers
             await self.unsubscribe()

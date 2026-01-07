@@ -7,7 +7,8 @@ import {
   Pressable,
   Image,
   StatusBar,
-  Alert
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { BlogPostType } from "@/common/types";
 import { Ionicons } from "@expo/vector-icons";
@@ -16,6 +17,7 @@ import { User } from "@supabase/supabase-js";
 import { useDeleteBlogPostMutation } from "@/hooks/mutations/blogs/deleteBlogPostMutation";
 import { DeleteBlogPostRequest } from "@/common/types/blogPosts/delete";
 import { StockResearchModal } from "@/common/components/StockResearchModal";
+import { useBlogPostQuery } from "@/hooks/queries/blogs/useBlogPostQuery";
 
 interface PostDetailModalProps {
   user: User | null;
@@ -34,7 +36,59 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 
   const { mutateAsync: deleteBlogPost, isPending: deletionPending, isError: deleteBlogPostError } = useDeleteBlogPostMutation()
 
-  if (!post) return null;
+  // Fetch full blog post if only ID is provided
+  const blogPostId = post?.id || null;
+  const { data: fullBlogPost, isLoading: isLoadingBlogPost, error: blogPostError } = useBlogPostQuery(blogPostId);
+  
+  // Use fetched post if available, otherwise use the passed post
+  const displayPost = fullBlogPost || post;
+
+  if (!displayPost) {
+    // Show loading state if we're fetching
+    if (isLoadingBlogPost && visible) {
+      return (
+        <Modal
+          visible={visible}
+          animationType="slide"
+          presentationStyle="pageSheet"
+          onRequestClose={onClose}>
+          <StatusBar barStyle="light-content" backgroundColor="rgba(0,0,0,0.8)" />
+          <View className="flex-1 bg-white justify-center items-center">
+            <ActivityIndicator size="large" color="#3B82F6" />
+            <Text className="text-gray-600 mt-4">Loading blog post...</Text>
+          </View>
+        </Modal>
+      );
+    }
+    return null;
+  }
+
+  // Show error state if fetch failed
+  if (blogPostError && !post) {
+    return (
+      <Modal
+        visible={visible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={onClose}>
+        <StatusBar barStyle="light-content" backgroundColor="rgba(0,0,0,0.8)" />
+        <View className="flex-1 bg-white justify-center items-center px-6">
+          <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+          <Text className="text-gray-900 text-xl font-bold mt-4 text-center">
+            Failed to load blog post
+          </Text>
+          <Text className="text-gray-600 mt-2 text-center">
+            {blogPostError instanceof Error ? blogPostError.message : 'Unknown error'}
+          </Text>
+          <Pressable
+            onPress={onClose}
+            className="mt-6 bg-blue-600 px-6 py-3 rounded-lg">
+            <Text className="text-white font-semibold">Close</Text>
+          </Pressable>
+        </View>
+      </Modal>
+    );
+  }
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -46,11 +100,11 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
   };
 
   const getImageUrl = () => {
-    if (post.multimedia_data?.images?.[0]?.url) {
-      return post.multimedia_data.images[0].url;
+    if (displayPost.multimedia_data?.images?.[0]?.url) {
+      return displayPost.multimedia_data.images[0].url;
     }
-    if (post.multimedia_data?.featured_image) {
-      return post.multimedia_data.featured_image;
+    if (displayPost.multimedia_data?.featured_image) {
+      return displayPost.multimedia_data.featured_image;
     }
     return "https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=800&h=400&fit=crop";
   };
@@ -58,7 +112,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
   const handleDeleteBlogPost = async () => {
     try {
       const request: DeleteBlogPostRequest = {
-        id: post.id,
+        id: displayPost.id,
         user: user
       }
       const result = await deleteBlogPost(request)
@@ -116,11 +170,11 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
         {/* Content Container */}
         <View className="px-6 py-6 -mt-8 bg-white rounded-t-3xl relative z-10">
           {/* Topics/Tags */}
-          {post.topic && (
+          {displayPost.topic && (
             <View className="flex-row flex-wrap mb-4">
               <View className="bg-blue-100 px-3 py-1.5 rounded-full">
                 <Text className="text-sm text-blue-700 font-semibold">
-                  {post.topic.name}
+                  {displayPost.topic.name}
                 </Text>
               </View>
             </View>
@@ -128,19 +182,19 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
 
           {/* Title */}
           <Text className="text-3xl font-bold text-gray-900 mb-4 leading-tight">
-            {post.title}
+            {displayPost.title}
           </Text>
 
           {/* Row for displaying Ticker and Delete button */}
           <View className="flex-row justify-between items-center pt-2 border-t border-gray-100">
             {/* Stock Ticker */}
-            {post.research_data?.ticker && (
+            {displayPost.research_data?.ticker && (
               <Pressable
                 onPress={() => setShowResearchModal(true)}
                 className="mb-4">
                 <View className="bg-blue-100 px-4 py-2 rounded-full self-start">
                   <Text className="text-blue-700 font-bold text-lg">
-                    {post.research_data.ticker}
+                    {displayPost.research_data.ticker}
                   </Text>
                 </View>
               </Pressable>
@@ -159,11 +213,11 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
           {/* Meta Information */}
           <View className="flex-row justify-between items-center mb-6 pb-6 border-b border-gray-200">
             <Text className="text-base text-gray-600 font-medium">
-              {formatDate(post.created_at)}
+              {formatDate(displayPost.created_at)}
             </Text>
-            {post.reading_time && (
+            {displayPost.reading_time && (
               <Text className="text-base text-gray-600 font-medium">
-                {post.reading_time} min read
+                {displayPost.reading_time} min read
               </Text>
             )}
           </View>
@@ -173,7 +227,7 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
           {/* Full Content */}
           <View className="mb-8">
             <Text className="text-lg text-gray-800 leading-7 font-normal">
-              {post.content}
+              {displayPost.content}
             </Text>
           </View>
 
@@ -188,8 +242,8 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
       <StockResearchModal
         visible={showResearchModal}
         onClose={() => setShowResearchModal(false)}
-        researchData={post.research_data}
-        ticker={post.research_data?.ticker || ""}
+        researchData={displayPost.research_data}
+        ticker={displayPost.research_data?.ticker || ""}
       />
     </Modal>
   );

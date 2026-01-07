@@ -105,7 +105,7 @@ export function useORBMonitoringState(
       // Return real data (empty array if no data)
       return (data || []) as ORBMonitoringState[];
     },
-    staleTime: Infinity, // Data is fresh as long as subscription is active
+    staleTime: 0, // Always consider data stale so real-time updates trigger refetch
     refetchInterval: false, // No polling needed with real-time subscription
     retry: 2,
     retryDelay: 1000,
@@ -136,26 +136,38 @@ export function useORBMonitoringState(
           // Additional filtering: only process events for today's trade_date
           // We filter here because 'today' is dynamic and can't be used in the subscription filter
           const record = payload.new || payload.old;
-          if (
-            record &&
-            typeof record === 'object' &&
-            'trade_date' in record &&
-            record.trade_date === today
-          ) {
-            const typedRecord = record as ORBMonitoringState;
-            console.log('ORB monitoring state changed:', payload.eventType, typedRecord.ticker);
-            
-            // Invalidate query to trigger refetch with latest filtered data
-            // This ensures we always have the correct filtered and sorted results
-            queryClient.invalidateQueries({ queryKey });
+          
+          if (!record || typeof record !== 'object' || !('trade_date' in record)) {
+            console.debug('ORB update: Skipping event - invalid record structure');
+            return;
           }
+          
+          if (record.trade_date !== today) {
+            console.debug(`ORB update: Skipping event - trade_date mismatch (${record.trade_date} !== ${today})`);
+            return;
+          }
+          
+          const typedRecord = record as ORBMonitoringState;
+          console.log(`🔄 ORB monitoring state changed: ${payload.eventType} for ${typedRecord.ticker}`);
+          
+          // Refetch query to get latest data immediately
+          // Using refetchQueries ensures data is fetched even with staleTime: 0
+          queryClient.refetchQueries({ queryKey }).catch((error) => {
+            console.error('Error refetching ORB monitoring state:', error);
+          });
         }
       )
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
-          console.log('Subscribed to ORB monitoring state real-time updates');
+          console.log('✅ Subscribed to ORB monitoring state real-time updates');
         } else if (status === 'CHANNEL_ERROR') {
-          console.error('Error subscribing to ORB monitoring state updates');
+          console.error('❌ Error subscribing to ORB monitoring state updates');
+        } else if (status === 'TIMED_OUT') {
+          console.warn('⏱️ Subscription to ORB monitoring state timed out');
+        } else if (status === 'CLOSED') {
+          console.log('🔌 ORB monitoring state subscription closed');
+        } else {
+          console.log('📡 ORB monitoring state subscription status:', status);
         }
       });
 

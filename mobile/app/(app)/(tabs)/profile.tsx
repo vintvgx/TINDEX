@@ -2,10 +2,12 @@ import { useState } from "react";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { SafeAreaView, Text, View, Pressable } from "react-native";
 import { ORBAdminModal } from "@/common/components/admin/ORBAdminModal";
+import { LogViewerModal } from "@/common/components/orb/LogViewerModal";
 
 const ProfileScreen = () => {
   const { authState: { user } } = useAuth();
   const [adminModalVisible, setAdminModalVisible] = useState(false);
+  const [logViewerVisible, setLogViewerVisible] = useState(false);
 
   return (
     <SafeAreaView className="flex-1 bg-black">
@@ -32,6 +34,13 @@ const ProfileScreen = () => {
       <ORBAdminModal
         visible={adminModalVisible}
         onClose={() => setAdminModalVisible(false)}
+        onViewLogs={() => setLogViewerVisible(true)}
+      />
+
+      {/* Log Viewer Modal */}
+      <LogViewerModal
+        visible={logViewerVisible}
+        onClose={() => setLogViewerVisible(false)}
       />
     </SafeAreaView>
   );

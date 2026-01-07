@@ -122,6 +122,14 @@ class OrbService:
         
         # Track bar handling tasks for proper cleanup
         self._bar_tasks: Set[asyncio.Task] = set()
+        
+        # Reversal tracking: {ticker: {"detected_at": datetime, "bars_since": int, "original_breakout_type": str}}
+        # Tracks when reversals were detected so we can clear them after a period
+        self._reversal_tracking: Dict[str, Dict] = {}
+        
+        # Reversal display duration settings
+        # Alpaca provides 1-minute bars, so 25 bars ≈ 25 minutes
+        self._reversal_display_bars = 5  # Clear reversal after 5 bars have been processed (5 minutes)
     
     def get_current_et_time(self) -> datetime:
         """Get current time in ET timezone"""
@@ -816,7 +824,7 @@ class OrbService:
                     "high": bar_high,
                     "low": bar_low,
                     "open": bar_open,  # First bar's open is the opening price
-                    "volume": bar_volume,
+                    "volume": int(bar_volume),
                 }
                 logger.info(
                     f"[ORB CALC] Started tracking {ticker}: "
@@ -832,7 +840,7 @@ class OrbService:
                         "orb_high": float(bar_high),
                         "orb_low": float(bar_low),
                         "current_price": float(bar_close),
-                        "volume": bar_volume,
+                        "volume": int(bar_volume),
                         "breakout_type": "none",
                         "breakout_price": None,
                         "high_broken": False,
@@ -861,7 +869,7 @@ class OrbService:
                 # Update with bar's high/low, not just close
                 self.orb_ranges[ticker]["high"] = max(old_high, bar_high)
                 self.orb_ranges[ticker]["low"] = min(old_low, bar_low)
-                self.orb_ranges[ticker]["volume"] += bar_volume
+                self.orb_ranges[ticker]["volume"] = int(self.orb_ranges[ticker]["volume"]) + int(bar_volume)
                 
                 # Update monitoring state in database in real-time during calculation
                 try:
@@ -871,7 +879,7 @@ class OrbService:
                         "orb_high": float(self.orb_ranges[ticker]["high"]),
                         "orb_low": float(self.orb_ranges[ticker]["low"]),
                         "current_price": float(bar_close),
-                        "volume": self.orb_ranges[ticker]["volume"],
+                        "volume": int(self.orb_ranges[ticker]["volume"]),
                         "timestamp": self.get_current_et_time().isoformat(),
                         "data_source": "alpaca",  # Streaming data from Alpaca
                     }
@@ -933,36 +941,46 @@ class OrbService:
             state = self.monitoring_state[ticker]
             
             # Check for reversals if a breakout has already occurred
+            # IMPORTANT: Only check for reversals if there was an actual breakout (ORH or ORL broken)
             if state["high_broken"] or state["low_broken"]:
+                # First, check if we should clear an existing reversal
+                await self._check_and_clear_reversal(ticker, trade_date, orb_high, orb_low, bar_close)
+                
                 # Determine original breakout type
                 original_breakout_type = "above" if state["high_broken"] else "below"
                 
-                # Check for reversal
-                reversal_result = self._detect_reversal(
-                    ticker=ticker,
-                    current_bar=stock_bar,
-                    breakout_type=original_breakout_type,
-                    orb_high=orb_high,
-                    orb_low=orb_low
-                )
+                # Only check for new reversals if we're not already showing a reversal
+                # (to avoid constantly re-triggering on price fluctuations)
+                current_state = None
+                try:
+                    current_state = (
+                        self.supabase.table("orb_monitoring_state")
+                        .select("breakout_type, reversal_data")
+                        .eq("ticker", ticker)
+                        .eq("trade_date", str(trade_date))
+                        .execute()
+                    )
+                except Exception as e:
+                    logger.warning(f"Error fetching current state for {ticker}: {e}")
                 
-                if reversal_result["is_reversal"]:
-                    # Check if reversal hasn't already been recorded
-                    try:
-                        current_state = (
-                            self.supabase.table("orb_monitoring_state")
-                            .select("breakout_type")
-                            .eq("ticker", ticker)
-                            .eq("trade_date", str(trade_date))
-                            .execute()
-                        )
-                        
-                        current_breakout_type = None
-                        if current_state.data and len(current_state.data) > 0:
-                            current_breakout_type = current_state.data[0].get("breakout_type")
-                        
-                        # Only update if not already marked as reversal
-                        if current_breakout_type != "reversal":
+                current_breakout_type = None
+                if current_state and current_state.data and len(current_state.data) > 0:
+                    current_breakout_type = current_state.data[0].get("breakout_type")
+                
+                # Only check for reversal if not already in reversal state
+                if current_breakout_type != "reversal":
+                    # Check for reversal
+                    reversal_result = self._detect_reversal(
+                        ticker=ticker,
+                        current_bar=stock_bar,
+                        breakout_type=original_breakout_type,
+                        orb_high=orb_high,
+                        orb_low=orb_low
+                    )
+                    
+                    if reversal_result["is_reversal"]:
+                        # Only record if reversal hasn't already been recorded
+                        try:
                             await self.record_reversal(
                                 ticker=ticker,
                                 original_breakout_type=original_breakout_type,
@@ -971,8 +989,12 @@ class OrbService:
                                 orb_high=orb_high,
                                 orb_low=orb_low
                             )
-                    except Exception as e:
-                        logger.error(f"Error checking/recording reversal for {ticker}: {e}")
+                        except Exception as e:
+                            logger.error(f"Error recording reversal for {ticker}: {e}")
+                else:
+                    # We're in reversal state - update the bar count
+                    if ticker in self._reversal_tracking:
+                        self._reversal_tracking[ticker]["bars_since"] += 1
             
             # Check breakouts - use bar_high for upper breakout, bar_low for lower
             # This catches intrabar breakouts, not just close-based
@@ -1064,6 +1086,11 @@ class OrbService:
             else:
                 state_update["low_broken"] = True
                 self.monitoring_state[ticker]["low_broken"] = True
+            
+            # Clear any existing reversal tracking when a new breakout occurs
+            if ticker in self._reversal_tracking:
+                logger.debug(f"Clearing reversal tracking for {ticker} due to new breakout")
+                del self._reversal_tracking[ticker]
             
             self.supabase.table("orb_monitoring_state").upsert(state_update).execute()
             
@@ -1169,11 +1196,19 @@ class OrbService:
             
             self.supabase.table("orb_monitoring_state").upsert(state_update).execute()
             
+            # Track reversal detection for auto-clearing
+            self._reversal_tracking[ticker] = {
+                "detected_at": self.get_current_et_time(),
+                "bars_since": 0,
+                "original_breakout_type": original_breakout_type
+            }
+            
             logger.info(
                 f"[REVERSAL DETECTED] {ticker} reversal after {original_breakout_type} breakout. "
                 f"Price: ${price_float:.2f}, Confidence: {confidence}, "
                 f"Score: {score_percentage:.1f}%, VWAP: ${vwap:.2f if vwap else 'N/A'}, "
-                f"Indicators: {', '.join(indicators)}"
+                f"Indicators: {', '.join(indicators)}. "
+                f"Will auto-clear after {self._reversal_display_bars} bars (≈{self._reversal_display_bars} minutes for 1-min bars)."
             )
             
             # Send reversal notification
@@ -1190,6 +1225,91 @@ class OrbService:
             
         except Exception as e:
             logger.error(f"Error recording reversal for {ticker}: {e}", exc_info=True)
+    
+    async def _check_and_clear_reversal(
+        self,
+        ticker: str,
+        trade_date,
+        orb_high: Decimal,
+        orb_low: Decimal,
+        current_price: Decimal
+    ):
+        """
+        Check if a reversal should be cleared based on bar count.
+        
+        Reversals are automatically cleared after 25 bars have been processed.
+        Alpaca provides 1-minute bars, so 25 bars ≈ 25 minutes.
+        
+        When cleared, the breakout_type is set to "none" (only if it was "reversal").
+        
+        Args:
+            ticker: Stock ticker symbol
+            trade_date: Current trade date
+            orb_high: ORB high level
+            orb_low: ORB low level
+            current_price: Current price
+        """
+        if ticker not in self._reversal_tracking:
+            return  # No reversal to clear
+        
+        try:
+            reversal_info = self._reversal_tracking[ticker]
+            bars_since = reversal_info["bars_since"]
+            
+            # Check if enough bars have passed (5 bars ≈ 5 minutes for 1-minute bars)
+            bars_exceeded = bars_since >= self._reversal_display_bars
+            
+            if bars_exceeded:
+                # Verify current breakout_type is "reversal" before clearing
+                current_state = None
+                try:
+                    current_state = (
+                        self.supabase.table("orb_monitoring_state")
+                        .select("breakout_type")
+                        .eq("ticker", ticker)
+                        .eq("trade_date", str(trade_date))
+                        .execute()
+                    )
+                except Exception as e:
+                    logger.warning(f"Error fetching current state for {ticker} during reversal clear: {e}")
+                
+                current_breakout_type = None
+                if current_state and current_state.data and len(current_state.data) > 0:
+                    current_breakout_type = current_state.data[0].get("breakout_type")
+                
+                # Only clear if current type is "reversal"
+                if current_breakout_type == "reversal":
+                    # Clear the reversal and set breakout_type to "none"
+                    logger.info(
+                        f"[REVERSAL CLEARED] {ticker} reversal cleared after {bars_since} bars "
+                        f"(≈{bars_since} minutes). Setting breakout_type to 'none'."
+                    )
+                    
+                    # Update monitoring state to set breakout_type to "none"
+                    state_update = {
+                        "ticker": ticker,
+                        "trade_date": str(trade_date),
+                        "current_price": float(current_price),
+                        "breakout_type": "none",  # Set to "none" after reversal period
+                        "orb_high": float(orb_high),
+                        "orb_low": float(orb_low),
+                        "timestamp": self.get_current_et_time().isoformat(),
+                        "data_source": "alpaca",
+                        # Keep reversal_data for historical reference
+                    }
+                    
+                    self.supabase.table("orb_monitoring_state").upsert(state_update).execute()
+                else:
+                    logger.debug(
+                        f"[REVERSAL CLEAR] {ticker} reversal tracking cleared but breakout_type "
+                        f"was '{current_breakout_type}', not 'reversal'. Skipping update."
+                    )
+                
+                # Remove from tracking regardless
+                del self._reversal_tracking[ticker]
+                
+        except Exception as e:
+            logger.error(f"Error checking/clearing reversal for {ticker}: {e}", exc_info=True)
     
     async def send_reversal_notification(
         self,

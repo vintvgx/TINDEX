@@ -22,6 +22,9 @@ import { router } from 'expo-router';
 import "react-native-reanimated";
 import "@/global.css";
 
+// Initialize log service early to capture all console logs
+import "@/common/services/LogService";
+
 import LoadingScreen from "@/common/components/LoadingScreen";
 
 // import { GluestackUIProvider } from "../components/ui/gluestack-ui-provider";

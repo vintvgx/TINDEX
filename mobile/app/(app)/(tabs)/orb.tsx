@@ -6,12 +6,14 @@ import { ORBCardGrid } from "@/common/components/orb/ORBCardGrid";
 import { ORBDetailModal } from "@/common/components/orb/ORBDetailModal";
 import { WatchlistsModal } from "@/common/components/watchlist/WatchlistsModal";
 import { ORBMenu } from "@/common/components/orb/ORBMenu";
+import { LogViewerModal } from "@/common/components/orb/LogViewerModal";
 import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
 import { useORBStatus } from "@/hooks/queries/orb/useORBStatus";
 import { useStartORBMutation, useStopORBMutation } from "@/hooks/mutations/orb/useORBControl";
 
 const ORBScreen = () => {
   const [watchlistsModalVisible, setWatchlistsModalVisible] = useState(false);
+  const [logViewerVisible, setLogViewerVisible] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [useMockData, setUseMockData] = useState(false);
   const [useCalculationMockData, setUseCalculationMockData] = useState(false);
@@ -129,6 +131,7 @@ const ORBScreen = () => {
         visible={menuVisible}
         onClose={() => setMenuVisible(false)}
         onViewWatchlists={() => setWatchlistsModalVisible(true)}
+        onViewLogs={() => setLogViewerVisible(true)}
         onToggleMockData={handleToggleMockData}
         onToggleCalculationMockData={handleToggleCalculationMockData}
         onToggleService={handleToggleService}
@@ -141,6 +144,12 @@ const ORBScreen = () => {
       <WatchlistsModal
         visible={watchlistsModalVisible}
         onClose={() => setWatchlistsModalVisible(false)}
+      />
+
+      {/* Log Viewer Modal */}
+      <LogViewerModal
+        visible={logViewerVisible}
+        onClose={() => setLogViewerVisible(false)}
       />
     </SafeAreaView>
   );
