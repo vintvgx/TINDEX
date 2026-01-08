@@ -841,26 +841,37 @@ class OrbService:
             # Update bar history for VWAP calculation and reversal detection
             self._update_bar_history(ticker, stock_bar)
             
+            # Get opening price for percentage_change calculation
+            opening_price = self.orb_ranges[ticker].get("open")
+            if opening_price is None:
+                # Fallback: try to get from database
+                try:
+                    current_state = (
+                        self.supabase.table("orb_monitoring_state")
+                        .select("opening_price")
+                        .eq("ticker", ticker)
+                        .eq("trade_date", str(self.get_current_et_time().date()))
+                        .execute()
+                    )
+                    if current_state and current_state.data and len(current_state.data) > 0:
+                        opening_price = current_state.data[0].get("opening_price")
+                except Exception as e:
+                    logger.warning(f"Error fetching opening_price for {ticker}: {e}")
+            
+            # Calculate percentage_change from opening price
+            current_price = float(bar_close)
+            percentage_change = None
+            if opening_price and opening_price > 0:
+                opening_price_float = float(opening_price) if isinstance(opening_price, Decimal) else opening_price
+                price_change = current_price - opening_price_float
+                percentage_change = (price_change / opening_price_float) * 100
+            
             # Update current_price in database (use bar close as current price)
             trade_date = self.get_current_et_time().date()
-            try:
-                self.supabase.table("orb_monitoring_state").upsert({
-                    "ticker": ticker,
-                    "trade_date": str(trade_date),
-                    "current_price": float(bar_close),
-                    "orb_high": float(orb_high),
-                    "orb_low": float(orb_low),
-                    "timestamp": self.get_current_et_time().isoformat(),
-                    "data_source": "alpaca",  # Streaming data from Alpaca
-                }).execute()
-            except Exception as e:
-                logger.warning(f"Failed to update current_price for {ticker}: {e}")
-            
             state = self.monitoring_state[ticker]
             
             # PRIORITY 1: Check if price is currently Bullish (above ORH) or Bearish (below ORL)
             # This takes priority over reversal detection
-            current_price = float(bar_close)
             orb_range_size = float(orb_high - orb_low)
             range_midpoint = orb_range_size / 2.0  # Average of range size
             
@@ -872,6 +883,7 @@ class OrbService:
             # Update breakout_type based on current price position (prioritize this)
             breakout_type_to_set = None
             if is_above_orb_high:
+                # Price is above ORB high - set to Bullish
                 breakout_type_to_set = "Bullish"
                 # Mark high as broken if not already
                 if not state["high_broken"]:
@@ -881,6 +893,7 @@ class OrbService:
                     )
                     await self.record_breakout(ticker, "above", bar_close, bar_data=stock_bar)
             elif is_below_orb_low:
+                # Price is below ORB low - set to Bearish
                 breakout_type_to_set = "Bearish"
                 # Mark low as broken if not already
                 if not state["low_broken"]:
@@ -890,8 +903,8 @@ class OrbService:
                     )
                     await self.record_breakout(ticker, "below", bar_close, bar_data=stock_bar)
             elif is_within_orb:
-                # Price is within ORB - check if we should set to "none" or keep current state
-                # Only set to "none" if there's no active breakout or reversal
+                # Price is within ORB - MUST set to "none" or keep reversal if active
+                # Never show Bullish/Bearish when price is within ORB
                 current_state = None
                 try:
                     current_state = (
@@ -908,25 +921,36 @@ class OrbService:
                 if current_state and current_state.data and len(current_state.data) > 0:
                     current_breakout_type = current_state.data[0].get("breakout_type")
                 
-                # If price is within ORB and no active breakout/reversal, set to "none"
-                if current_breakout_type not in ["Bullish", "Bearish", "Confirmed Bullish", "Confirmed Bearish", "reversal"]:
+                # If price is within ORB, only keep "reversal" if active, otherwise set to "none"
+                # Never keep "Bullish" or "Bearish" when price is within ORB
+                if current_breakout_type == "reversal":
+                    # Keep reversal state if active
+                    breakout_type_to_set = None  # Don't change it
+                else:
+                    # Set to "none" - price is within ORB, no breakout/reversal
                     breakout_type_to_set = "none"
             
-            # Update breakout_type if determined
+            # Update breakout_type and percentage_change if determined
+            update_data = {
+                "ticker": ticker,
+                "trade_date": str(trade_date),
+                "current_price": current_price,
+                "orb_high": float(orb_high),
+                "orb_low": float(orb_low),
+                "timestamp": self.get_current_et_time().isoformat(),
+                "data_source": "alpaca",
+            }
+            
             if breakout_type_to_set is not None:
-                try:
-                    self.supabase.table("orb_monitoring_state").upsert({
-                        "ticker": ticker,
-                        "trade_date": str(trade_date),
-                        "current_price": current_price,
-                        "breakout_type": breakout_type_to_set,
-                        "orb_high": float(orb_high),
-                        "orb_low": float(orb_low),
-                        "timestamp": self.get_current_et_time().isoformat(),
-                        "data_source": "alpaca",
-                    }).execute()
-                except Exception as e:
-                    logger.warning(f"Failed to update breakout_type for {ticker}: {e}")
+                update_data["breakout_type"] = breakout_type_to_set
+            
+            if percentage_change is not None:
+                update_data["percentage_change"] = round(percentage_change, 2)
+            
+            try:
+                self.supabase.table("orb_monitoring_state").upsert(update_data).execute()
+            except Exception as e:
+                logger.warning(f"Failed to update monitoring state for {ticker}: {e}")
             
             # PRIORITY 2: Check for reversals if a breakout has already occurred
             # IMPORTANT: Only check for reversals if there was an actual breakout (ORH or ORL broken)
