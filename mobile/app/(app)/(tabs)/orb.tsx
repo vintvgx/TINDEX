@@ -1,5 +1,5 @@
 import { View, Text, SafeAreaView, TouchableOpacity } from "react-native";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { useORBMonitoringState, ORBMonitoringState } from "@/hooks/queries/orb/useORBMonitoringState";
 import { ORBCardGrid } from "@/common/components/orb/ORBCardGrid";
@@ -17,11 +17,17 @@ const ORBScreen = () => {
   const [menuVisible, setMenuVisible] = useState(false);
   const [useMockData, setUseMockData] = useState(false);
   const [useCalculationMockData, setUseCalculationMockData] = useState(false);
-  const [selectedORBData, setSelectedORBData] = useState<ORBMonitoringState | null>(null);
+  const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   
   // Fetch ORB monitoring state with real-time updates
   const { data: orbData, isLoading: orbLoading } = useORBMonitoringState(useMockData, useCalculationMockData);
+  
+  // Get current data for selected ticker - this will update automatically when orbData changes
+  const selectedORBData = useMemo(() => {
+    if (!selectedTicker || !orbData) return null;
+    return orbData.find(item => item.ticker === selectedTicker) || null;
+  }, [selectedTicker, orbData]);
   
   // Fetch ORB service status
   const { data: orbStatus } = useORBStatus();
@@ -36,7 +42,7 @@ const ORBScreen = () => {
   const { toTicker } = useBaseNavigation();
   
   const handleCardPress = (data: ORBMonitoringState) => {
-    setSelectedORBData(data);
+    setSelectedTicker(data.ticker);
     setDetailModalVisible(true);
   };
 
@@ -121,7 +127,7 @@ const ORBScreen = () => {
         data={selectedORBData}
         onClose={() => {
           setDetailModalVisible(false);
-          setSelectedORBData(null);
+          setSelectedTicker(null);
         }}
         onNavigateToTicker={handleNavigateToTicker}
       />
