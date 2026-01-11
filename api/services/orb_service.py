@@ -312,7 +312,15 @@ class OrbService:
             
             orb_high = float(data["high"]) if isinstance(data["high"], Decimal) else data["high"]
             orb_low = float(data["low"]) if isinstance(data["low"], Decimal) else data["low"]
-            opening_price = float(data.get("open", 0)) if isinstance(data.get("open", 0), Decimal) else data.get("open", 0)
+            # Convert opening_price to float if present, otherwise None (not 0)
+            # Avoid persisting ambiguous zero values - use None instead
+            opening_price_raw = data.get("open")
+            if opening_price_raw is not None:
+                opening_price = float(opening_price_raw) if isinstance(opening_price_raw, Decimal) else opening_price_raw
+                # Set to None if equals 0 to avoid ambiguous sentinel value
+                opening_price = opening_price if opening_price != 0 else None
+            else:
+                opening_price = None
             volume = int(data.get("volume", 0))
             
             if orb_high <= 0 or orb_low <= 0:
@@ -329,19 +337,28 @@ class OrbService:
                 "orb_high": orb_high,
                 "orb_low": orb_low,
                 "volume_in_range": volume,
-                "opening_price": opening_price,
+                "opening_price": opening_price,  # Now None instead of 0 when missing/invalid
             }
             
             self.supabase.table("orb_ranges").upsert(orb_record).execute()
+            
+            # Determine current_price: prefer real last trade/close value if available
+            # Check previous_close_cache for a valid previous close value
+            current_price = None
+            if ticker in self._previous_close_cache:
+                previous_close = self._previous_close_cache[ticker].get("previous_close")
+                if previous_close and previous_close > 0:
+                    current_price = previous_close
+                    logger.debug(f"Using previous_close as current_price for {ticker}: {current_price}")
             
             # Update cache state (no database call - cached)
             self._state_cache.update_state(
                 ticker=ticker,
                 trade_date=trade_date,
-                opening_price=opening_price,
+                opening_price=opening_price,  # Now None instead of 0 when missing/invalid
                 orb_high=orb_high,
                 orb_low=orb_low,
-                current_price=orb_high,
+                current_price=current_price,  # None instead of orb_high, or previous_close if available
                 volume=volume,
                 breakout_type="none",
                 breakout_price=None,
@@ -395,19 +412,30 @@ class OrbService:
                 ticker = row["ticker"]
                 opening_price = row.get("opening_price")
                 
-                # If opening_price is missing or 0 (invalid), try to get it from monitoring_state
-                if opening_price is None or opening_price == 0:
+                # If opening_price is None (no longer using 0 as sentinel), try to get it from monitoring_state
+                if opening_price is None:
                     if ticker in opening_price_from_state:
                         opening_price = opening_price_from_state[ticker]
                         logger.debug(f"Using opening_price from monitoring_state for {ticker}: {opening_price}")
                     else:
-                        opening_price = 0
+                        opening_price = None
                         logger.warning(f"No opening_price found for {ticker} in orb_ranges or monitoring_state")
+                # Handle legacy 0 values (shouldn't happen with new code, but for backward compatibility)
+                elif opening_price == 0:
+                    logger.debug(f"Found legacy 0 opening_price for {ticker}, treating as None")
+                    if ticker in opening_price_from_state:
+                        opening_price = opening_price_from_state[ticker]
+                        logger.debug(f"Using opening_price from monitoring_state for {ticker}: {opening_price}")
+                    else:
+                        opening_price = None
+                
+                # Convert opening_price to Decimal, handling None case
+                opening_price_decimal = Decimal(str(opening_price)) if opening_price is not None else None
                 
                 self.orb_ranges[ticker] = {
                     "high": Decimal(str(row["orb_high"])),
                     "low": Decimal(str(row["orb_low"])),
-                    "open": Decimal(str(opening_price)),
+                    "open": opening_price_decimal,  # Now properly handles None
                     "volume": row.get("volume_in_range", 0),
                 }
             
