@@ -19,7 +19,7 @@ Key Responsibilities:
 
 from typing import Dict, Any, Optional
 from log.logging_config import get_logger
-from yfinance_service import perform_yfinance_research, perform_yfinance_search
+from yfinance.yfinance_service import perform_yfinance_research, perform_yfinance_search
 
 from datetime import datetime, timedelta, timezone
 
@@ -65,7 +65,7 @@ class StockResearchService:
         ticker: str,
         use_cache: bool | None = True,
         save_to_db: bool | None = True,
-        include_options: bool | None = True
+        include_options: bool | None = True,
     ) -> Dict[str, Any]:
         """
         Get comprehensive research data for a stock ticker.
@@ -108,7 +108,7 @@ class StockResearchService:
         """
         # Time stamp with proper timezone support
         timestamp = datetime.now(timezone.utc).isoformat()
-        
+
         try:
             logger.info(
                 f"Getting research data for {ticker} (cache={use_cache}, save={save_to_db})"
@@ -128,7 +128,7 @@ class StockResearchService:
                         "success": True,
                         "data": cached_research,
                         "data_source": data_source,
-                        "from_cache": True, #TODO apply to metadata,
+                        "from_cache": True,  # TODO apply to metadata,
                         "cached": True,
                         "research_id": cached_research.get("id"),
                         "cache_info": {
@@ -136,7 +136,7 @@ class StockResearchService:
                             "cache_age": "recent",
                             "cache_type": "database_cache",
                         },
-                        "timestamp":timestamp
+                        "timestamp": timestamp,
                     }
 
             # Step 2: Fetch fresh research data from yFinance
@@ -149,8 +149,7 @@ class StockResearchService:
                     "error": "Research results does not include data object",
                     "data_source": "none",
                     "cached": False,
-                    "timestamp":timestamp
-
+                    "timestamp": timestamp,
                 }
 
             research_data = research_results["data"]
@@ -176,7 +175,7 @@ class StockResearchService:
                     "saved_to_database": bool(research_id),
                     "cached_for_future": is_cached,
                 },
-                "timestamp":timestamp
+                "timestamp": timestamp,
             }
 
         except Exception as e:
@@ -186,13 +185,10 @@ class StockResearchService:
                 "error": f"Research failed: {str(e)}",
                 "data_source": "none",
                 "cached": False,
-                "timestamp":timestamp
+                "timestamp": timestamp,
             }
-            
-    def get_ticker_search(
-        self,
-        ticker: str
-    ) -> Dict[str, Any]:
+
+    def get_ticker_search(self, ticker: str) -> Dict[str, Any]:
         """
         Search for ticker and return data if found.
 
@@ -206,24 +202,15 @@ class StockResearchService:
                 - error (str, optional): Error message if failed
         """
         try:
-            logger.info(
-                f"Searching for ticker: {ticker}"
-            )
-            
+            logger.info(f"Searching for ticker: {ticker}")
+
             search_results = perform_yfinance_search(ticker)
             search_data = search_results["data"]
-            
-            return {
-                "success": True,
-                "data": search_data
-            }
+
+            return {"success": True, "data": search_data}
         except Exception as e:
             logger.error(f"No ticker found for {ticker}: {str(e)}", exc_info=True)
-            return {
-                "success": False,
-                "error": f"No ticker found: {str(e)}"
-            }
-
+            return {"success": False, "error": f"No ticker found: {str(e)}"}
 
     def _get_cached_research(self, ticker: str) -> Optional[Dict[str, Any]]:
         """
@@ -280,6 +267,7 @@ class StockResearchService:
 # Global instance for use across the application
 # Note: This will be initialized with supabase_service when first used
 stock_research_service = None
+
 
 def get_research_service():
     """
