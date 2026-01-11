@@ -1,5 +1,5 @@
 import { View, Text, SafeAreaView, TouchableOpacity } from "react-native";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { useORBMonitoringState, ORBMonitoringState } from "@/hooks/queries/orb/useORBMonitoringState";
 import { ORBCardGrid } from "@/common/components/orb/ORBCardGrid";
@@ -10,6 +10,7 @@ import { LogViewerModal } from "@/common/components/orb/LogViewerModal";
 import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
 import { useORBStatus } from "@/hooks/queries/orb/useORBStatus";
 import { useStartORBMutation, useStopORBMutation } from "@/hooks/mutations/orb/useORBControl";
+import { prettyJSON } from "@/common/utils/strings/function";
 
 const ORBScreen = () => {
   const [watchlistsModalVisible, setWatchlistsModalVisible] = useState(false);
@@ -19,20 +20,49 @@ const ORBScreen = () => {
   const [useCalculationMockData, setUseCalculationMockData] = useState(false);
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
+  const [lastFetchTime, setLastFetchTime] = useState<Date | null>(null);
   
   // Fetch ORB monitoring state with real-time updates
+  // useQuery automatically fetches on mount - no need to manually refetch
   const { data: orbData, isLoading: orbLoading } = useORBMonitoringState(useMockData, useCalculationMockData);
-  
-  // Get current data for selected ticker - this will update automatically when orbData changes
-  const selectedORBData = useMemo(() => {
-    if (!selectedTicker || !orbData) return null;
-    return orbData.find(item => item.ticker === selectedTicker) || null;
-  }, [selectedTicker, orbData]);
   
   // Fetch ORB service status
   const { data: orbStatus } = useORBStatus();
   const isORBRunning = orbStatus?.running ?? false;
   const isCalculationPhase = orbStatus?.calculation_phase ?? false;
+
+  // Log data when it changes (after query completes)
+  useEffect(() => {
+    console.log("ORB DATA (after query):", prettyJSON(orbData), "Loading:", orbLoading);
+  }, [orbData, orbLoading]);
+
+  // Transform data: set breakout_type to "Offline" when service is not running
+  const transformedORBData = useMemo(() => {
+    if (!orbData) return [];
+    
+    // If service is not running, mark all items as Offline
+    if (!isORBRunning) {
+      return orbData.map(item => ({
+        ...item,
+        breakout_type: 'Offline' as const,
+      }));
+    }
+    
+    return orbData;
+  }, [orbData, isORBRunning]);
+
+  // Update last fetch time when data changes
+  useEffect(() => {
+    if (orbData !== undefined && !orbLoading) {
+      setLastFetchTime(new Date());
+    }
+  }, [orbData, orbLoading]);
+  
+  // Get current data for selected ticker - this will update automatically when transformedORBData changes
+  const selectedORBData = useMemo(() => {
+    if (!selectedTicker || !transformedORBData) return null;
+    return transformedORBData.find(item => item.ticker === selectedTicker) || null;
+  }, [selectedTicker, transformedORBData]);
 
   // Service control mutations
   const startMutation = useStartORBMutation();
@@ -115,9 +145,10 @@ const ORBScreen = () => {
       {/* ORB Card Grid */}
       <View className="flex-1">
         <ORBCardGrid 
-          data={orbData || []} 
+          data={transformedORBData || []} 
           isLoading={orbLoading} 
-          onCardPress={handleCardPress} 
+          onCardPress={handleCardPress}
+          lastFetchTime={lastFetchTime}
         />
       </View>
 

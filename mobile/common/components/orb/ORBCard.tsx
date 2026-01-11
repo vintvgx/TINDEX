@@ -33,6 +33,8 @@ const getBreakoutColor = (breakoutType: string): string => {
       return '#F59E0B'; // amber
     case 'reversal':
       return '#8B5CF6'; // purple
+    case 'Offline':
+      return '#9CA3AF'; // gray
     default:
       return '#6B7280'; // gray
   }
@@ -55,6 +57,8 @@ const getBreakoutBadgeBg = (breakoutType: string): string => {
       return 'bg-yellow-500/20';
     case 'reversal':
       return 'bg-purple-500/20';
+    case 'Offline':
+      return 'bg-gray-700/30';
     default:
       return 'bg-gray-800/50';
   }

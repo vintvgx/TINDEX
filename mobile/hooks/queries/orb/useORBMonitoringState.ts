@@ -36,7 +36,7 @@ export interface ORBMonitoringState {
   orb_high: number | null;
   orb_low: number | null;
   current_price: number | null;
-  breakout_type: 'none' | 'invalidated' | 'Bullish' | 'Bearish' | 'Confirmed Bullish' | 'Confirmed Bearish' | 'reversal';
+  breakout_type: 'none' | 'invalidated' | 'Bullish' | 'Bearish' | 'Confirmed Bullish' | 'Confirmed Bearish' | 'reversal' | 'Offline';
   breakout_price: number | null;
   volume: number | null;
   tracking: string | null;
@@ -90,11 +90,13 @@ export function useORBMonitoringState(
 
       const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
       
+      console.log(`[ORB Query] Fetching data for trade_date: ${today}`);
+      
       const { data, error } = await supabase
         .from('orb_monitoring_state')
         .select('*')
-        .eq('trade_date', today)
-        .eq('monitoring_active', true)
+        // .eq('trade_date', today)
+        // .eq('monitoring_active', true)
         .order('ticker', { ascending: true });
 
       if (error) {
@@ -102,6 +104,8 @@ export function useORBMonitoringState(
         throw error;
       }
 
+      console.log(`[ORB Query] Fetched ${data?.length || 0} records`);
+      
       // Return real data (empty array if no data)
       return (data || []) as ORBMonitoringState[];
     },
