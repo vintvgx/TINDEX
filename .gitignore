@@ -44,3 +44,5 @@ SUPABASE.md
 
 # github workflow (needs to be updated before merging)
 .github/
+
+/docs

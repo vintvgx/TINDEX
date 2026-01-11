@@ -289,7 +289,7 @@ def get_research_service():
     global stock_research_service
     if stock_research_service is None:
         try:
-            from services.supabase_service import get_supabase_service
+            from api.services.supabase.supabase_service import get_supabase_service
 
             stock_research_service = StockResearchService(get_supabase_service())
         except Exception as e:

@@ -4,6 +4,7 @@ import asyncio
 import json
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, asdict
+from datetime import datetime
 import threading
 
 from bs4 import BeautifulSoup
@@ -11,18 +12,19 @@ from bs4 import BeautifulSoup
 from flask import Flask, jsonify, request # pylint: disable=import-error # type: ignore
 
 import requests
+import aiohttp
 from log.logging_config import get_logger
 from utils.cache import TrendingStocksCache
 
 # Services 
-from services.anthropic_service import anthropic_service
-from services.yahoo_watchlist_service import get_yahoo_watchlist_service
-from services.supabase_service import get_supabase_service
-from services.research_service import get_research_service
-from services.blog_generation_service import get_blog_service
-from services.orb_service import OrbService
-from services.alpaca_streaming_service import AlpacaStreamingService
-from services.tradier_streaming_service import TradierStreamingService
+from api.services.anthropic.anthropic_service import anthropic_service
+from api.services.yfinance.yahoo_watchlist_service import get_yahoo_watchlist_service
+from api.services.supabase.supabase_service import get_supabase_service
+from api.services.utils.research_service import get_research_service
+from api.services.utils.blog_generation_service import get_blog_service
+from api.services.tindex.orb_service import OrbService
+from api.services.alpaca.alpaca_streaming_service import AlpacaStreamingService
+from api.services.tradier.tradier_streaming_service import TradierStreamingService
 
 # Global variables
 ORB_SERVICE = None
@@ -1085,6 +1087,148 @@ def get_orb_status():
             })
         
         return jsonify({"running": False})
+
+@app.route("/options/<ticker>", methods=["GET"])
+def get_options(ticker: str):
+    """
+    Retrieve options data for a ticker.
+    
+    This endpoint retrieves options data from Tradier API and returns it.
+    It does NOT start a stream - it's a one-time request. For real-time
+    updates, options streaming will be integrated into the ORB service.
+    
+    Query Parameters:
+        feed (optional): Deprecated - kept for backward compatibility but ignored (Tradier uses consolidated data)
+        limit (optional): Maximum contracts to return (default: 25)
+        strike_price_gte (optional): Minimum strike price (float)
+        strike_price_lte (optional): Maximum strike price (float)
+        expiration_date_gte (optional): Minimum expiration date in format 'YYYY-MM-DD' (default: today + 7 days)
+        expiration_date_lte (optional): Maximum expiration date in format 'YYYY-MM-DD' (default: today + 14 days)
+    
+    Returns:
+        JSON response containing options data with calls and puts
+    
+    Example Request:
+        GET /options/IWM?limit=25&strike_price_gte=185&strike_price_lte=205&expiration_date_gte=2024-01-22&expiration_date_lte=2024-01-29
+    
+    Example Response:
+        {
+            "success": true,
+            "data": {
+                "ticker": "IWM",
+                "current_price": 195.50,
+                "calls": [...],
+                "puts": [...],
+                "last_updated": "2024-01-15T10:30:00Z",
+                "source": "tradier"
+            },
+            "timestamp": 1705323000
+        }
+    """
+    try:
+        # Validate ticker from URL path
+        ticker = ticker.strip().upper()
+        
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({
+                "success": False,
+                "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters.",
+                "ticker": ticker
+            }), 400
+        
+        # Get query parameters
+        feed = request.args.get('feed', 'indicative')  # Deprecated but kept for backward compatibility
+        limit = request.args.get('limit', 25, type=int)
+        strike_price_gte = request.args.get('strike_price_gte', type=float)
+        strike_price_lte = request.args.get('strike_price_lte', type=float)
+        expiration_date_gte = request.args.get('expiration_date_gte')
+        expiration_date_lte = request.args.get('expiration_date_lte')
+        
+        # Note: feed parameter is ignored when using Tradier (they provide consolidated exchange data)
+        # Keeping validation for backward compatibility but it won't affect the request
+        if feed and feed not in ['indicative', 'opra']:
+            logger.warning(f"Invalid feed parameter '{feed}' for ticker {ticker} - ignored (Tradier uses consolidated data)")
+        
+        # Validate limit
+        if limit < 1 or limit > 100:
+            return jsonify({
+                "success": False,
+                "error": "Limit must be between 1 and 100",
+                "ticker": ticker
+            }), 400
+        
+        # Validate date formats if provided
+        if expiration_date_gte:
+            try:
+                datetime.strptime(expiration_date_gte, '%Y-%m-%d')
+            except ValueError:
+                return jsonify({
+                    "success": False,
+                    "error": "Invalid expiration_date_gte format. Must be 'YYYY-MM-DD'",
+                    "ticker": ticker
+                }), 400
+        
+        if expiration_date_lte:
+            try:
+                datetime.strptime(expiration_date_lte, '%Y-%m-%d')
+            except ValueError:
+                return jsonify({
+                    "success": False,
+                    "error": "Invalid expiration_date_lte format. Must be 'YYYY-MM-DD'",
+                    "ticker": ticker
+                }), 400
+        
+        # Get Tradier options service
+        from api.services.tradier.tradier_option_service import get_tradier_option_service
+        options_service = get_tradier_option_service()
+        
+        # Fetch options (async call wrapped for Flask)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(
+                options_service.get_options(
+                    ticker=ticker,
+                    limit=limit,
+                    strike_price_gte=strike_price_gte,
+                    strike_price_lte=strike_price_lte,
+                    expiration_date_gte=expiration_date_gte,
+                    expiration_date_lte=expiration_date_lte,
+                    include_greeks=True
+                )
+            )
+        finally:
+            loop.close()
+        
+        return jsonify({
+            "success": True,
+            "data": result,
+            "timestamp": time.time()
+        })
+        
+    except ValueError as e:
+        logger.error(f"Validation error for options request {ticker}: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "ticker": ticker
+        }), 400
+    except Exception as e:
+        # Handle Tradier SDK errors
+        error_type = type(e).__name__
+        if "API" in error_type or "client" in error_type.lower() or "tradier" in error_type.lower():
+            logger.error(f"Tradier SDK error for options {ticker}: {e}", exc_info=True)
+            return jsonify({
+                "success": False,
+                "error": f"Failed to fetch options data: {str(e)}",
+                "ticker": ticker
+            }), 503
+        logger.error(f"Options retrieval failed for {ticker}: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"Options retrieval failed: {str(e)}",
+            "ticker": ticker
+        }), 500
 
 if __name__ == "__main__":
     app.run(debug=True)

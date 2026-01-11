@@ -27,7 +27,7 @@ except ImportError:
     TRADIER_AVAILABLE = False
     logging.warning("uvatradier not available. TradierStreamingService will not work.")
 
-from services.stock_streaming_base import StockStreamingService, StockBar
+from api.services.utils.stock_streaming_base import StockStreamingService, StockBar
 
 logger = logging.getLogger(__name__)
 
