@@ -21,7 +21,7 @@ from alpaca.data.live import StockDataStream
 from alpaca.data.enums import DataFeed
 from alpaca.data.models import Bar as AlpacaBar
 
-from services.stock_streaming_base import StockStreamingService, StockBar
+from services.utils.stock_streaming_base import StockStreamingService, StockBar
 
 logger = logging.getLogger(__name__)
 

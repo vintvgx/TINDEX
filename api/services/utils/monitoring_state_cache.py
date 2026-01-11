@@ -65,6 +65,7 @@ class MonitoringState:
     previous_close: Optional[float] = None
     percentage_change: Optional[float] = None
     reversal_data: Optional[Dict] = None
+    options_data: Optional[Dict] = None  # Options contracts data (calls/puts)
     
     # Cache metadata (not persisted to DB)
     _dirty: bool = field(default=False, repr=False)
@@ -115,6 +116,8 @@ class MonitoringState:
             record["percentage_change"] = self.percentage_change
         if self.reversal_data is not None:
             record["reversal_data"] = self.reversal_data
+        if self.options_data is not None:
+            record["options_data"] = self.options_data
             
         # Boolean fields always included
         record["high_broken"] = self.high_broken
@@ -155,6 +158,7 @@ class MonitoringState:
             previous_close=record.get("previous_close"),
             percentage_change=record.get("percentage_change"),
             reversal_data=record.get("reversal_data"),
+            options_data=record.get("options_data"),
         )
 
 
@@ -473,6 +477,37 @@ class MonitoringStateCache:
             timestamp=timestamp,
             percentage_change=percentage_change,
         )
+    
+    def update_options_data(
+        self,
+        ticker: str,
+        trade_date: date,
+        options_data: Dict,
+        timestamp: Optional[str] = None,
+    ) -> MonitoringState:
+        """
+        Update options data for a ticker in the monitoring state cache.
+        
+        Args:
+            ticker: Stock ticker symbol
+            trade_date: Trade date
+            options_data: Options data dict with calls/puts
+            timestamp: Optional timestamp for the update
+            
+        Returns:
+            Updated MonitoringState
+        """
+        state = self.get_or_create_state(ticker, trade_date)
+        state.options_data = options_data
+        if timestamp:
+            state.timestamp = timestamp
+        
+        state.mark_dirty()
+        key = self._cache_key(ticker, trade_date)
+        self._dirty_keys.add(key)
+        
+        logger.debug(f"Updated options data for {ticker} on {trade_date}")
+        return state
     
     def update_orb_calculation(
         self,
