@@ -90,13 +90,11 @@ export function useORBMonitoringState(
 
       const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
       
-      console.log(`[ORB Query] Fetching data for trade_date: ${today}`);
       
       const { data, error } = await supabase
         .from('orb_monitoring_state')
         .select('*')
-        // .eq('trade_date', today)
-        // .eq('monitoring_active', true)
+
         .order('ticker', { ascending: true });
 
       if (error) {

@@ -3,7 +3,10 @@
  * 
  * Captures and stores console logs, warnings, and errors for in-app viewing.
  * Intercepts console methods to capture all log output.
+ * Persists logs to file system for persistence across app restarts.
  */
+
+import * as FileSystem from 'expo-file-system';
 
 export interface LogEntry {
   id: string;
@@ -13,9 +16,24 @@ export interface LogEntry {
   data?: any[];
 }
 
+/**
+ * Serialized log entry format for file storage
+ */
+interface SerializedLogEntry {
+  id: string;
+  timestamp: string; // ISO string
+  level: 'log' | 'warn' | 'error' | 'info' | 'debug';
+  message: string;
+  data?: any[];
+}
+
 class LogService {
   private logs: LogEntry[] = [];
   private maxLogs: number = 100000; // Maximum number of logs to keep
+  private logFilePath: string;
+  private saveTimeout: NodeJS.Timeout | null = null;
+  private isInitialized: boolean = false;
+  private initializationPromise: Promise<void> | null = null;
   private originalConsole: {
     log: typeof console.log;
     warn: typeof console.warn;
@@ -25,6 +43,9 @@ class LogService {
   };
 
   constructor() {
+    // Set up log file path in document directory (persistent storage)
+    this.logFilePath = `${FileSystem.documentDirectory}app_logs.json`;
+
     // Store original console methods
     this.originalConsole = {
       log: console.log.bind(console),
@@ -34,8 +55,88 @@ class LogService {
       debug: console.debug.bind(console),
     };
 
+    // Initialize file persistence (load existing logs)
+    this.initializationPromise = this.initialize();
+
     // Intercept console methods
     this.setupInterceptors();
+  }
+
+  /**
+   * Initialize the log service by loading existing logs from file
+   */
+  private async initialize(): Promise<void> {
+    try {
+      const fileInfo = await FileSystem.getInfoAsync(this.logFilePath);
+      
+      if (fileInfo.exists) {
+        const fileContent = await FileSystem.readAsStringAsync(this.logFilePath);
+        const serializedLogs: SerializedLogEntry[] = JSON.parse(fileContent);
+        
+        // Deserialize logs (convert ISO strings back to Date objects)
+        this.logs = serializedLogs.map((log) => ({
+          ...log,
+          timestamp: new Date(log.timestamp),
+        }));
+
+        // Ensure we don't exceed maxLogs
+        if (this.logs.length > this.maxLogs) {
+          this.logs = this.logs.slice(-this.maxLogs);
+          // Save the trimmed logs back to file
+          await this.saveLogsToFile();
+        }
+      }
+    } catch (error) {
+      // If file doesn't exist or is corrupted, start with empty logs
+      // Silently fail to prevent breaking app initialization
+      this.originalConsole.error('Error initializing LogService from file:', error);
+      this.logs = [];
+    } finally {
+      this.isInitialized = true;
+    }
+  }
+
+  /**
+   * Serialize logs for file storage
+   */
+  private serializeLogs(): SerializedLogEntry[] {
+    return this.logs.map((log) => ({
+      id: log.id,
+      timestamp: log.timestamp.toISOString(),
+      level: log.level,
+      message: log.message,
+      data: log.data,
+    }));
+  }
+
+  /**
+   * Save logs to file (with debouncing for performance)
+   */
+  private async saveLogsToFile(): Promise<void> {
+    try {
+      const serializedLogs = this.serializeLogs();
+      const jsonContent = JSON.stringify(serializedLogs, null, 2);
+      await FileSystem.writeAsStringAsync(this.logFilePath, jsonContent);
+    } catch (error) {
+      // Silently fail to prevent infinite loops
+      this.originalConsole.error('Error saving logs to file:', error);
+    }
+  }
+
+  /**
+   * Debounced save to file (waits 1 second after last log addition)
+   */
+  private scheduleSave(): void {
+    // Clear existing timeout
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+    }
+
+    // Schedule save after 1 second of inactivity
+    this.saveTimeout = setTimeout(() => {
+      this.saveLogsToFile();
+      this.saveTimeout = null;
+    }, 1000);
   }
 
   private setupInterceptors() {
@@ -102,6 +203,11 @@ class LogService {
       if (this.logs.length > this.maxLogs) {
         this.logs = this.logs.slice(-this.maxLogs);
       }
+
+      // Schedule save to file (debounced)
+      if (this.isInitialized) {
+        this.scheduleSave();
+      }
     } catch (error) {
       // Silently fail if logging fails to prevent infinite loops
       this.originalConsole.error('Error in LogService.addLog:', error);
@@ -123,10 +229,47 @@ class LogService {
   }
 
   /**
-   * Clear all logs
+   * Clear all logs (also clears file)
    */
-  clearLogs(): void {
+  async clearLogs(): Promise<void> {
     this.logs = [];
+    
+    // Clear the save timeout
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+    }
+
+    // Clear the file
+    try {
+      const fileInfo = await FileSystem.getInfoAsync(this.logFilePath);
+      if (fileInfo.exists) {
+        await FileSystem.deleteAsync(this.logFilePath, { idempotent: true });
+      }
+    } catch (error) {
+      // Silently fail
+      this.originalConsole.error('Error clearing log file:', error);
+    }
+  }
+
+  /**
+   * Ensure logs are saved to file (useful before app close)
+   */
+  async flushLogs(): Promise<void> {
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+    }
+    await this.saveLogsToFile();
+  }
+
+  /**
+   * Wait for initialization to complete (useful for testing or ensuring logs are loaded)
+   */
+  async waitForInitialization(): Promise<void> {
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+    }
   }
 
   /**

@@ -31,11 +31,6 @@ const ORBScreen = () => {
   const isORBRunning = orbStatus?.running ?? false;
   const isCalculationPhase = orbStatus?.calculation_phase ?? false;
 
-  // Log data when it changes (after query completes)
-  useEffect(() => {
-    console.log("ORB DATA (after query):", prettyJSON(orbData), "Loading:", orbLoading);
-  }, [orbData, orbLoading]);
-
   // Transform data: set breakout_type to "Offline" when service is not running
   const transformedORBData = useMemo(() => {
     if (!orbData) return [];
