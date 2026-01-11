@@ -37,6 +37,7 @@ from alpaca.data.models import Bar
 
 from services.stock_streaming_base import StockStreamingService, StockBar
 from services.breakout_confirmation import BreakoutConfirmation
+from services.monitoring_state_cache import MonitoringStateCache, MonitoringState
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -86,6 +87,13 @@ class OrbService:
         
         self.supabase: Client = create_client(self.supabase_url, self.supabase_key)
         
+        # Initialize monitoring state cache
+        self._state_cache = MonitoringStateCache(
+            supabase=self.supabase,
+            sync_interval=5.0,
+            max_batch_size=50,
+        )
+        
         # Market timezone
         self.et_timezone = pytz.timezone("America/New_York")
         
@@ -96,6 +104,8 @@ class OrbService:
         
         # ORB tracking
         self.orb_ranges: Dict[str, Dict] = {}
+        # Legacy monitoring state dict (kept for backward compatibility)
+        # This tracks high_broken/low_broken flags locally
         self.monitoring_state: Dict[str, Dict] = {}
         self.active_tickers: Set[str] = set()
         
@@ -324,24 +334,22 @@ class OrbService:
             
             self.supabase.table("orb_ranges").upsert(orb_record).execute()
             
-            state_record = {
-                "ticker": ticker,
-                "trade_date": str(trade_date),
-                "opening_price": opening_price,
-                "orb_high": orb_high,
-                "orb_low": orb_low,
-                "current_price": orb_high,
-                "volume": volume,
-                "breakout_type": "none",
-                "breakout_price": None,
-                "high_broken": False,
-                "low_broken": False,
-                "monitoring_active": True,
-                "timestamp": self.get_current_et_time().isoformat(),
-            }
-            
-            self.supabase.table("orb_monitoring_state").upsert(state_record).execute()
-            self.monitoring_state[ticker] = {"high_broken": False, "low_broken": False}
+            # Update cache state (no database call - cached)
+            self._state_cache.update_state(
+                ticker=ticker,
+                trade_date=trade_date,
+                opening_price=opening_price,
+                orb_high=orb_high,
+                orb_low=orb_low,
+                current_price=orb_high,
+                volume=volume,
+                breakout_type="none",
+                breakout_price=None,
+                high_broken=False,
+                low_broken=False,
+                monitoring_active=True,
+                timestamp=self.get_current_et_time().isoformat(),
+            )
             
             logger.info(f"[DB SAVE] Saved ORB range for {ticker}: High={orb_high}, Low={orb_low}")
             
@@ -766,37 +774,24 @@ class OrbService:
                     f"High={bar_high}, Low={bar_low}, Open={bar_open}"
                 )
                 
-                # Initialize monitoring state in database with first bar data
-                try:
-                    state_update = {
-                        "ticker": ticker,
-                        "trade_date": str(trade_date),
-                        "opening_price": float(bar_open),
-                        "orb_high": float(bar_high),
-                        "orb_low": float(bar_low),
-                        "current_price": float(bar_close),
-                        "volume": int(bar_volume),
-                        "breakout_type": "none",
-                        "breakout_price": None,
-                        "high_broken": False,
-                        "low_broken": False,
-                        "monitoring_active": True,
-                        "timestamp": self.get_current_et_time().isoformat(),
-                        "data_source": "alpaca",  # Streaming data from Alpaca
-                    }
-                    
-                    # Add previous close and percentage change if available
-                    if previous_close:
-                        state_update["previous_close"] = previous_close
-                    if percentage_change is not None:
-                        state_update["percentage_change"] = round(percentage_change, 2)
-                    if prev_close_data_source:
-                        # Track both data sources: streaming (alpaca) and previous close source
-                        state_update["data_source"] = f"alpaca,prev_close:{prev_close_data_source}"
-                    
-                    self.supabase.table("orb_monitoring_state").upsert(state_update).execute()
-                except Exception as e:
-                    logger.warning(f"Failed to initialize monitoring state for {ticker}: {e}")
+                # Initialize monitoring state in cache (NO DATABASE CALL)
+                data_source = "alpaca"
+                if prev_close_data_source:
+                    data_source = f"alpaca,prev_close:{prev_close_data_source}"
+                
+                self._state_cache.update_orb_calculation(
+                    ticker=ticker,
+                    trade_date=trade_date,
+                    orb_high=float(bar_high),
+                    orb_low=float(bar_low),
+                    current_price=float(bar_close),
+                    volume=int(bar_volume),
+                    opening_price=float(bar_open),
+                    previous_close=previous_close,
+                    percentage_change=round(percentage_change, 2) if percentage_change is not None else None,
+                    timestamp=self.get_current_et_time().isoformat(),
+                    data_source=data_source,
+                )
             else:
                 old_high = self.orb_ranges[ticker]["high"]
                 old_low = self.orb_ranges[ticker]["low"]
@@ -806,31 +801,23 @@ class OrbService:
                 self.orb_ranges[ticker]["low"] = min(old_low, bar_low)
                 self.orb_ranges[ticker]["volume"] = int(self.orb_ranges[ticker]["volume"]) + int(bar_volume)
                 
-                # Update monitoring state in database in real-time during calculation
-                try:
-                    state_update = {
-                        "ticker": ticker,
-                        "trade_date": str(trade_date),
-                        "orb_high": float(self.orb_ranges[ticker]["high"]),
-                        "orb_low": float(self.orb_ranges[ticker]["low"]),
-                        "current_price": float(bar_close),
-                        "volume": int(self.orb_ranges[ticker]["volume"]),
-                        "timestamp": self.get_current_et_time().isoformat(),
-                        "data_source": "alpaca",  # Streaming data from Alpaca
-                    }
-                    
-                    # Add previous close and percentage change if available
-                    if previous_close:
-                        state_update["previous_close"] = previous_close
-                    if percentage_change is not None:
-                        state_update["percentage_change"] = round(percentage_change, 2)
-                    if prev_close_data_source:
-                        # Track both data sources: streaming (alpaca) and previous close source
-                        state_update["data_source"] = f"alpaca,prev_close:{prev_close_data_source}"
-                    
-                    self.supabase.table("orb_monitoring_state").upsert(state_update).execute()
-                except Exception as e:
-                    logger.warning(f"Failed to update monitoring state for {ticker} during calculation: {e}")
+                # Update monitoring state in cache (NO DATABASE CALL)
+                data_source = "alpaca"
+                if prev_close_data_source:
+                    data_source = f"alpaca,prev_close:{prev_close_data_source}"
+                
+                self._state_cache.update_orb_calculation(
+                    ticker=ticker,
+                    trade_date=trade_date,
+                    orb_high=float(self.orb_ranges[ticker]["high"]),
+                    orb_low=float(self.orb_ranges[ticker]["low"]),
+                    current_price=float(bar_close),
+                    volume=int(self.orb_ranges[ticker]["volume"]),
+                    previous_close=previous_close,
+                    percentage_change=round(percentage_change, 2) if percentage_change is not None else None,
+                    timestamp=self.get_current_et_time().isoformat(),
+                    data_source=data_source,
+                )
                 
                 # Log if high/low changed
                 if self.orb_ranges[ticker]["high"] != old_high:
@@ -851,10 +838,6 @@ class OrbService:
             orb_high = self.orb_ranges[ticker]["high"]
             orb_low = self.orb_ranges[ticker]["low"]
             
-            # Ensure monitoring state exists
-            if ticker not in self.monitoring_state:
-                self.monitoring_state[ticker] = {"high_broken": False, "low_broken": False}
-            
             # Update bar history for VWAP calculation and reversal detection
             self._update_bar_history(ticker, stock_bar)
             
@@ -871,8 +854,14 @@ class OrbService:
                 price_change = current_price - opening_price_float
                 percentage_change = (price_change / opening_price_float) * 100
             
-            # Update current_price in database (use bar close as current price)
             trade_date = self.get_current_et_time().date()
+            
+            # Get current state from cache (NO DATABASE CALL)
+            cache_state = self._state_cache.get_or_create_state(ticker, trade_date)
+            
+            # Maintain backward compatibility with monitoring_state dict for breakout tracking
+            if ticker not in self.monitoring_state:
+                self.monitoring_state[ticker] = {"high_broken": cache_state.high_broken, "low_broken": cache_state.low_broken}
             state = self.monitoring_state[ticker]
             
             # PRIORITY 1: Check if price is currently Bullish (above ORH) or Bearish (below ORL)
@@ -910,21 +899,10 @@ class OrbService:
             elif is_within_orb:
                 # Price is within ORB - MUST set to "none" or keep reversal if active
                 # Never show Bullish/Bearish when price is within ORB
-                current_state = None
-                try:
-                    current_state = (
-                        self.supabase.table("orb_monitoring_state")
-                        .select("breakout_type")
-                        .eq("ticker", ticker)
-                        .eq("trade_date", str(trade_date))
-                        .execute()
-                    )
-                except Exception as e:
-                    logger.warning(f"Error fetching current state for {ticker}: {e}")
+                # Get current state from cache (NO DATABASE CALL)
+                current_state = self._state_cache.get_state(ticker, trade_date)
                 
-                current_breakout_type = None
-                if current_state and current_state.data and len(current_state.data) > 0:
-                    current_breakout_type = current_state.data[0].get("breakout_type")
+                current_breakout_type = current_state.breakout_type if current_state else None
                 
                 # If price is within ORB, only keep "reversal" if active, otherwise set to "none"
                 # Never keep "Bullish" or "Bearish" when price is within ORB
@@ -935,27 +913,28 @@ class OrbService:
                     # Set to "none" - price is within ORB, no breakout/reversal
                     breakout_type_to_set = "none"
             
-            # Update breakout_type and percentage_change if determined
-            update_data = {
-                "ticker": ticker,
-                "trade_date": str(trade_date),
-                "current_price": current_price,
-                "orb_high": float(orb_high),
-                "orb_low": float(orb_low),
-                "timestamp": self.get_current_et_time().isoformat(),
-                "data_source": "alpaca",
-            }
-            
+            # Update cache state (NO DATABASE CALL)
             if breakout_type_to_set is not None:
-                update_data["breakout_type"] = breakout_type_to_set
-            
-            if percentage_change is not None:
-                update_data["percentage_change"] = round(percentage_change, 2)
-            
-            try:
-                self.supabase.table("orb_monitoring_state").upsert(update_data).execute()
-            except Exception as e:
-                logger.warning(f"Failed to update monitoring state for {ticker}: {e}")
+                self._state_cache.update_state(
+                    ticker=ticker,
+                    trade_date=trade_date,
+                    current_price=current_price,
+                    orb_high=float(orb_high),
+                    orb_low=float(orb_low),
+                    breakout_type=breakout_type_to_set,
+                    percentage_change=round(percentage_change, 2) if percentage_change is not None else None,
+                    timestamp=self.get_current_et_time().isoformat(),
+                )
+            else:
+                self._state_cache.update_price(
+                    ticker=ticker,
+                    trade_date=trade_date,
+                    current_price=current_price,
+                    orb_high=float(orb_high),
+                    orb_low=float(orb_low),
+                    percentage_change=round(percentage_change, 2) if percentage_change is not None else None,
+                    timestamp=self.get_current_et_time().isoformat(),
+                )
             
             # PRIORITY 2: Check for reversals if a breakout has already occurred
             # IMPORTANT: Only check for reversals if there was an actual breakout (ORH or ORL broken)
@@ -968,21 +947,9 @@ class OrbService:
                 
                 # Only check for new reversals if we're not already showing a reversal
                 # (to avoid constantly re-triggering on price fluctuations)
-                current_state = None
-                try:
-                    current_state = (
-                        self.supabase.table("orb_monitoring_state")
-                        .select("breakout_type, reversal_data")
-                        .eq("ticker", ticker)
-                        .eq("trade_date", str(trade_date))
-                        .execute()
-                    )
-                except Exception as e:
-                    logger.exception(f"Error fetching current state for {ticker}: {e}")
-                
-                current_breakout_type = None
-                if current_state and current_state.data and len(current_state.data) > 0:
-                    current_breakout_type = current_state.data[0].get("breakout_type")
+                # Get current state from cache (NO DATABASE CALL)
+                current_cache_state = self._state_cache.get_state(ticker, trade_date)
+                current_breakout_type = current_cache_state.breakout_type if current_cache_state else None
                 
                 # Only check for reversal if not already in reversal state
                 if current_breakout_type != "reversal":
@@ -1068,25 +1035,16 @@ class OrbService:
             
             self.supabase.table("orb_breakouts").insert(breakout_record).execute()
             
-            # Update monitoring state in DB with breakout information
+            # Update monitoring state in cache (NO DATABASE CALL)
             breakout_type_display = "Bullish" if breakout_type == "above" else "Bearish"
             
-            state_update = {
-                "ticker": ticker,
-                "trade_date": str(trade_date),
-                "current_price": breakout_price,
-                "breakout_type": breakout_type_display,
-                "breakout_price": breakout_price,
-                "orb_high": orb_high,
-                "orb_low": orb_low,
-                "timestamp": self.get_current_et_time().isoformat(),
-            }
+            # Update monitoring_state dict for backward compatibility
+            if ticker not in self.monitoring_state:
+                self.monitoring_state[ticker] = {"high_broken": False, "low_broken": False}
             
             if breakout_type == "above":
-                state_update["high_broken"] = True
                 self.monitoring_state[ticker]["high_broken"] = True
             else:
-                state_update["low_broken"] = True
                 self.monitoring_state[ticker]["low_broken"] = True
             
             # Clear any existing reversal tracking when a new breakout occurs
@@ -1094,7 +1052,16 @@ class OrbService:
                 logger.debug(f"Clearing reversal tracking for {ticker} due to new breakout")
                 del self._reversal_tracking[ticker]
             
-            self.supabase.table("orb_monitoring_state").upsert(state_update).execute()
+            # Update cache state (NO DATABASE CALL)
+            self._state_cache.set_breakout(
+                ticker=ticker,
+                trade_date=trade_date,
+                breakout_type=breakout_type_display,
+                breakout_price=breakout_price,
+                is_high_broken=(breakout_type == "above"),
+                is_low_broken=(breakout_type == "below"),
+                timestamp=self.get_current_et_time().isoformat(),
+            )
             
             # Send initial notification with enhanced breakout data
             await self.send_notifications(
@@ -1151,6 +1118,10 @@ class OrbService:
             orb_low: ORB low level
         """
         try:
+            if price is None:
+                logger.error(f"Cannot record reversal for {ticker}: price is None")
+                return
+            
             trade_date = self.get_current_et_time().date()
             price_float = float(price) if isinstance(price, Decimal) else price
             orb_high_float = float(orb_high) if isinstance(orb_high, Decimal) else orb_high
@@ -1175,20 +1146,14 @@ class OrbService:
                 }
             }
             
-            # Update monitoring state with reversal and reversal data
-            state_update = {
-                "ticker": ticker,
-                "trade_date": str(trade_date),
-                "current_price": price_float,
-                "breakout_type": "reversal",
-                "orb_high": orb_high_float,
-                "orb_low": orb_low_float,
-                "reversal_data": reversal_data,  # JSONB field
-                "timestamp": self.get_current_et_time().isoformat(),
-                "data_source": "alpaca",  # Streaming data from Alpaca
-            }
-            
-            self.supabase.table("orb_monitoring_state").upsert(state_update).execute()
+            # Update cache state with reversal (NO DATABASE CALL)
+            self._state_cache.set_reversal(
+                ticker=ticker,
+                trade_date=trade_date,
+                reversal_data=reversal_data,
+                current_price=price_float,
+                timestamp=self.get_current_et_time().isoformat(),
+            )
             
             # Track reversal detection for auto-clearing
             self._reversal_tracking[ticker] = {
@@ -1252,22 +1217,9 @@ class OrbService:
             bars_exceeded = bars_since >= self._reversal_display_bars
             
             if bars_exceeded:
-                # Verify current breakout_type is "reversal" before clearing
-                current_state = None
-                try:
-                    current_state = (
-                        self.supabase.table("orb_monitoring_state")
-                        .select("breakout_type")
-                        .eq("ticker", ticker)
-                        .eq("trade_date", str(trade_date))
-                        .execute()
-                    )
-                except Exception as e:
-                    logger.warning(f"Error fetching current state for {ticker} during reversal clear: {e}")
-                
-                current_breakout_type = None
-                if current_state and current_state.data and len(current_state.data) > 0:
-                    current_breakout_type = current_state.data[0].get("breakout_type")
+                # Get current state from cache (NO DATABASE CALL)
+                current_cache_state = self._state_cache.get_state(ticker, trade_date)
+                current_breakout_type = current_cache_state.breakout_type if current_cache_state else None
                 
                 # Only clear if current type is "reversal"
                 if current_breakout_type == "reversal":
@@ -1277,20 +1229,13 @@ class OrbService:
                         f"(≈{bars_since} minutes). Setting breakout_type to 'none'."
                     )
                     
-                    # Update monitoring state to set breakout_type to "none"
-                    state_update = {
-                        "ticker": ticker,
-                        "trade_date": str(trade_date),
-                        "current_price": float(current_price),
-                        "breakout_type": "none",  # Set to "none" after reversal period
-                        "orb_high": float(orb_high),
-                        "orb_low": float(orb_low),
-                        "timestamp": self.get_current_et_time().isoformat(),
-                        "data_source": "alpaca",
-                        # Keep reversal_data for historical reference
-                    }
-                    
-                    self.supabase.table("orb_monitoring_state").upsert(state_update).execute()
+                    # Update cache state to set breakout_type to "none" (NO DATABASE CALL)
+                    self._state_cache.clear_reversal(
+                        ticker=ticker,
+                        trade_date=trade_date,
+                        current_price=float(current_price),
+                        timestamp=self.get_current_et_time().isoformat(),
+                    )
                 else:
                     logger.debug(
                         f"[REVERSAL CLEAR] {ticker} reversal tracking cleared but breakout_type "
@@ -1424,15 +1369,16 @@ class OrbService:
                     )
                     breakout_type_display = "Confirmed Bullish" if breakout_type == "above" else "Confirmed Bearish"
                     trade_date = self.get_current_et_time().date()
-                    self.supabase.table("orb_monitoring_state").upsert({
-                        "ticker": ticker,
-                        "trade_date": str(trade_date),
-                        "current_price": current_price,
-                        "breakout_type": breakout_type_display,
-                        "orb_high": orb_high,
-                        "orb_low": orb_low,
-                        "timestamp": self.get_current_et_time().isoformat(),
-                    }).execute()
+                    # Update cache state (NO DATABASE CALL)
+                    self._state_cache.update_state(
+                        ticker=ticker,
+                        trade_date=trade_date,
+                        current_price=current_price,
+                        breakout_type=breakout_type_display,
+                        orb_high=orb_high,
+                        orb_low=orb_low,
+                        timestamp=self.get_current_et_time().isoformat(),
+                    )
                     await self.send_confirmation_notification(ticker, breakout_type, current_price, orb_high, orb_low)
                 else:
                     logger.info(
@@ -1440,17 +1386,17 @@ class OrbService:
                         f"Price: ${current_price:.2f}, ORB High: ${orb_high:.2f}, ORB Low: ${orb_low:.2f}"
                     )
                     trade_date = self.get_current_et_time().date()
-                    self.supabase.table("orb_monitoring_state").upsert({
-                        "ticker": ticker,
-                        "trade_date": str(trade_date),
-                        "current_price": current_price,
-                        "breakout_type": "invalidated",
-                        "breakout_price": None,
-                        "orb_high": orb_high,
-                        "orb_low": orb_low,
-                        "timestamp": self.get_current_et_time().isoformat(),
-                        "data_source": "yfinance",  # Confirmation check uses yfinance
-                    }).execute()
+                    # Update cache state (NO DATABASE CALL)
+                    self._state_cache.update_state(
+                        ticker=ticker,
+                        trade_date=trade_date,
+                        current_price=current_price,
+                        breakout_type="invalidated",
+                        breakout_price=None,
+                        orb_high=orb_high,
+                        orb_low=orb_low,
+                        timestamp=self.get_current_et_time().isoformat(),
+                    )
                     await self.send_invalidation_notification(ticker, breakout_type, current_price, orb_high, orb_low)
                     
             except Exception as e:
@@ -2005,7 +1951,14 @@ class OrbService:
             logger.info(f"Current ET time: {self.get_current_et_time()}")
             logger.info(f"Market hours: {self.is_market_hours()}")
             logger.info(f"ORB calculation period: {self.is_orb_calculation_period()}")
+            logger.info(f"Cache sync interval: {self._state_cache.sync_interval}s")
             logger.info("=" * 60)
+            
+            # Start the cache background sync
+            await self._state_cache.cache_monitoring_start()
+            
+            # Warm cache from database
+            await self._state_cache.load_from_database(self.get_current_et_time().date())
             
             # Send service started notification
             await self.send_service_status_notification("started")
@@ -2109,6 +2062,9 @@ class OrbService:
         
         # Stop streaming service
         await self.streaming_service.stop_stream()
+        
+        # Stop cache (flushes remaining dirty entries)
+        await self._state_cache.cache_monitoring_stop()
         
         await self.send_service_status_notification("stopped")
         
