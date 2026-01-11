@@ -61,9 +61,6 @@ class TradierOptionService:
     
     def __init__(self):
         """Initialize Tradier Options service with API credentials."""
-        if not UVATRADIER_AVAILABLE:
-            raise ImportError("uvatradier package is required. Install with: pip install uvatradier")
-        
         self.tradier_account = os.getenv("TRADIER_ACCOUNT_NUMBER")
         self.tradier_api_key = os.getenv("TRADIER_API_KEY")
         self.live_trade = os.getenv("TRADIER_LIVE_TRADE", "false").lower() == "true"
