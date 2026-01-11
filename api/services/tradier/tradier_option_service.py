@@ -763,7 +763,7 @@ def get_tradier_option_service() -> TradierOptionService:
     """Get or create the singleton TradierOptionService instance (thread-safe)."""
     global _tradier_option_service
     
-Á    # Double-check locking pattern for thread-safe singleton initialization
+    # Double-check locking pattern for thread-safe singleton initialization
     if _tradier_option_service is None:
         with _tradier_option_service_lock:
             # Check again after acquiring lock (another thread may have initialized it)
