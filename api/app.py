@@ -17,14 +17,14 @@ from log.logging_config import get_logger
 from utils.cache import TrendingStocksCache
 
 # Services 
-from api.services.anthropic.anthropic_service import anthropic_service
-from api.services.yfinance.yahoo_watchlist_service import get_yahoo_watchlist_service
-from api.services.supabase.supabase_service import get_supabase_service
-from api.services.utils.research_service import get_research_service
-from api.services.utils.blog_generation_service import get_blog_service
-from api.services.tindex.orb_service import OrbService
-from api.services.alpaca.alpaca_streaming_service import AlpacaStreamingService
-from api.services.tradier.tradier_streaming_service import TradierStreamingService
+from services.anthropic.anthropic_service import anthropic_service
+from services.yfinance.yahoo_watchlist_service import get_yahoo_watchlist_service
+from services.supabase.supabase_service import get_supabase_service
+from services.utils.research_service import get_research_service
+from services.utils.blog_generation_service import get_blog_service
+from services.tindex.orb_service import OrbService
+from services.alpaca.alpaca_streaming_service import AlpacaStreamingService
+from services.tradier.tradier_streaming_service import TradierStreamingService
 
 # Global variables
 ORB_SERVICE = None
