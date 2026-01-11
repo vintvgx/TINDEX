@@ -128,7 +128,7 @@ class OrbService:
         self._reversal_tracking: Dict[str, Dict] = {}
         
         # Reversal display duration settings
-        # Alpaca provides 1-minute bars, so 25 bars ≈ 25 minutes
+        # Alpaca provides 1-minute bars, so 5 bars ≈ 5 minutes
         self._reversal_display_bars = 5  # Clear reversal after 5 bars have been processed (5 minutes)
     
     def get_current_et_time(self) -> datetime:
@@ -360,15 +360,8 @@ class OrbService:
                 .execute()
             )
             
-            for row in response.data:
-                ticker = row["ticker"]
-                self.orb_ranges[ticker] = {
-                    "high": Decimal(str(row["orb_high"])),
-                    "low": Decimal(str(row["orb_low"])),
-                    "open": Decimal(str(row.get("opening_price", 0))),
-                    "volume": row.get("volume_in_range", 0),
-                }
-            
+            # First, build a mapping of ticker -> opening_price from orb_monitoring_state
+            # This will be used to fill missing opening_price values
             state_response = (
                 self.supabase.table("orb_monitoring_state")
                 .select("*")
@@ -377,11 +370,37 @@ class OrbService:
                 .execute()
             )
             
+            # Create a mapping of ticker -> opening_price from monitoring_state
+            opening_price_from_state = {}
             for row in state_response.data:
                 ticker = row["ticker"]
+                opening_price = row.get("opening_price")
+                if opening_price is not None:
+                    opening_price_from_state[ticker] = opening_price
                 self.monitoring_state[ticker] = {
                     "high_broken": row["high_broken"],
                     "low_broken": row["low_broken"],
+                }
+            
+            # Load orb_ranges and populate opening_price, using monitoring_state as fallback
+            for row in response.data:
+                ticker = row["ticker"]
+                opening_price = row.get("opening_price")
+                
+                # If opening_price is missing or 0 (invalid), try to get it from monitoring_state
+                if opening_price is None or opening_price == 0:
+                    if ticker in opening_price_from_state:
+                        opening_price = opening_price_from_state[ticker]
+                        logger.debug(f"Using opening_price from monitoring_state for {ticker}: {opening_price}")
+                    else:
+                        opening_price = 0
+                        logger.warning(f"No opening_price found for {ticker} in orb_ranges or monitoring_state")
+                
+                self.orb_ranges[ticker] = {
+                    "high": Decimal(str(row["orb_high"])),
+                    "low": Decimal(str(row["orb_low"])),
+                    "open": Decimal(str(opening_price)),
+                    "volume": row.get("volume_in_range", 0),
                 }
             
             logger.info(f"Loaded {len(self.orb_ranges)} ORB ranges from DB")
@@ -632,8 +651,6 @@ class OrbService:
         
         bars = self._bar_history[ticker]
         current_close = float(current_bar.close)
-        current_high = float(current_bar.high)
-        current_low = float(current_bar.low)
         
         indicators = []
         is_reversal = False
@@ -842,21 +859,9 @@ class OrbService:
             self._update_bar_history(ticker, stock_bar)
             
             # Get opening price for percentage_change calculation
+            # opening_price is preloaded and cached in self.orb_ranges[ticker]["open"]
+            # during load_orb_ranges(), so no DB call is needed here
             opening_price = self.orb_ranges[ticker].get("open")
-            if opening_price is None:
-                # Fallback: try to get from database
-                try:
-                    current_state = (
-                        self.supabase.table("orb_monitoring_state")
-                        .select("opening_price")
-                        .eq("ticker", ticker)
-                        .eq("trade_date", str(self.get_current_et_time().date()))
-                        .execute()
-                    )
-                    if current_state and current_state.data and len(current_state.data) > 0:
-                        opening_price = current_state.data[0].get("opening_price")
-                except Exception as e:
-                    logger.warning(f"Error fetching opening_price for {ticker}: {e}")
             
             # Calculate percentage_change from opening price
             current_price = float(bar_close)
@@ -973,7 +978,7 @@ class OrbService:
                         .execute()
                     )
                 except Exception as e:
-                    logger.warning(f"Error fetching current state for {ticker}: {e}")
+                    logger.exception(f"Error fetching current state for {ticker}: {e}")
                 
                 current_breakout_type = None
                 if current_state and current_state.data and len(current_state.data) > 0:
@@ -1003,7 +1008,7 @@ class OrbService:
                                 orb_low=orb_low
                             )
                         except Exception as e:
-                            logger.error(f"Error recording reversal for {ticker}: {e}")
+                            logger.exception(f"Error recording reversal for {ticker}: {e}")
                 else:
                     # We're in reversal state - update the bar count
                     if ticker in self._reversal_tracking:
@@ -1124,7 +1129,7 @@ class OrbService:
         self, 
         ticker: str, 
         original_breakout_type: str, 
-        price: Decimal,
+        price: Decimal | None,
         reversal_result: Dict,
         orb_high: Decimal,
         orb_low: Decimal
@@ -1224,8 +1229,8 @@ class OrbService:
         """
         Check if a reversal should be cleared based on bar count.
         
-        Reversals are automatically cleared after 25 bars have been processed.
-        Alpaca provides 1-minute bars, so 25 bars ≈ 25 minutes.
+        Reversals are automatically cleared after 5 bars have been processed.
+        Alpaca provides 1-minute bars, so 5 bars ≈ 5 minutes.
         
         When cleared, the breakout_type is set to "none" (only if it was "reversal").
         

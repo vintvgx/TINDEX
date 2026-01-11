@@ -40,10 +40,10 @@ class StockBar:
         timestamp: Bar timestamp (optional)
     """
     symbol: str
-    open: Decimal
-    high: Decimal
-    low: Decimal
-    close: Decimal
+    open: Decimal | None
+    high: Decimal | None
+    low: Decimal | None
+    close: Decimal | None
     volume: int
     timestamp: Optional[datetime] = None
 

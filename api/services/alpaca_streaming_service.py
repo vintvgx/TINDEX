@@ -116,11 +116,14 @@ class AlpacaStreamingService(StockStreamingService):
                     logger.warning(f"Bar data for {symbol} has no valid price data, ignoring")
                     return
                 
-                # Use close as fallback for missing prices, or 0 if all are None (shouldn't happen after check above)
-                open_price = open_price if open_price is not None else (close_price if close_price is not None else Decimal('0'))
-                high_price = high_price if high_price is not None else (close_price if close_price is not None else Decimal('0'))
-                low_price = low_price if low_price is not None else (close_price if close_price is not None else Decimal('0'))
-                close_price = close_price if close_price is not None else Decimal('0')
+                # Find first available price to use as fallback
+                fallback_price = close_price or high_price or low_price or open_price
+                
+                # Use fallback for any missing prices
+                open_price = open_price if open_price is not None else fallback_price
+                high_price = high_price if high_price is not None else fallback_price
+                low_price = low_price if low_price is not None else fallback_price
+                close_price = close_price if close_price is not None else fallback_price
                 
             except (ValueError, TypeError, AttributeError) as e:
                 logger.error(f"Error converting price data for {symbol}: {e}", exc_info=True)
