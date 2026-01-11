@@ -64,35 +64,35 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
     return null;
   }
 
-      // Show error state if fetch failed
-      if (blogPostError && !post) {
-        const errorMessage = blogPostError instanceof Error 
-          ? blogPostError.message 
-          : 'Unknown error';
-        return (
-          <Modal
-            visible={visible}
-            animationType="slide"
-            presentationStyle="pageSheet"
-            onRequestClose={onClose}>
-            <StatusBar barStyle="light-content" backgroundColor="#000000" />
-            <View className="flex-1 bg-black justify-center items-center px-6">
-              <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
-              <Text className="text-white text-xl font-bold mt-4 text-center">
-                Failed to load blog post
-              </Text>
-              <Text className="text-gray-400 mt-2 text-center">
-                {errorMessage}
-              </Text>
-              <Pressable
-                onPress={onClose}
-                className="mt-6 bg-blue-600 px-6 py-3 rounded-xl active:opacity-80">
-                <Text className="text-white font-semibold">Close</Text>
-              </Pressable>
-            </View>
-          </Modal>
-        );
-      }
+  // Show error state if fetch failed
+  if (blogPostError && !post) {
+    const errorMessage = blogPostError instanceof Error 
+      ? blogPostError.message 
+      : 'Unknown error';
+    return (
+      <Modal
+        visible={visible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={onClose}>
+        <StatusBar barStyle="light-content" backgroundColor="#000000" />
+        <View className="flex-1 bg-black justify-center items-center px-6">
+          <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+          <Text className="text-white text-xl font-bold mt-4 text-center">
+            Failed to load blog post
+          </Text>
+          <Text className="text-gray-400 mt-2 text-center">
+            {errorMessage}
+          </Text>
+          <Pressable
+            onPress={onClose}
+            className="mt-6 bg-blue-600 px-6 py-3 rounded-xl active:opacity-80">
+            <Text className="text-white font-semibold">Close</Text>
+          </Pressable>
+        </View>
+      </Modal>
+    );
+  }
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
