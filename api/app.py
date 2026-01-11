@@ -1179,7 +1179,7 @@ def get_options(ticker: str):
                 }), 400
         
         # Get Tradier options service
-        from api.services.tradier.tradier_option_service import get_tradier_option_service
+        from services.tradier.tradier_option_service import get_tradier_option_service
         options_service = get_tradier_option_service()
         
         # Fetch options (async call wrapped for Flask)

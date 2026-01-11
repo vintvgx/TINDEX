@@ -20,7 +20,7 @@ Key Responsibilities:
 from typing import Dict, Any, Optional
 import asyncio
 from log import get_logger
-from api.services.anthropic.anthropic_service import anthropic_service
+from services.anthropic.anthropic_service import anthropic_service
 
 logger = get_logger(__name__)
 
@@ -235,7 +235,7 @@ def get_blog_service():
     global blog_generation_service
     if blog_generation_service is None:
         try:
-            from api.services.supabase.supabase_service import get_supabase_service
+            from services.supabase.supabase_service import get_supabase_service
             blog_generation_service = BlogGenerationService(get_supabase_service())
         except Exception as e:
             logger.warning(f"Could not initialize blog service with Supabase: {e}")
