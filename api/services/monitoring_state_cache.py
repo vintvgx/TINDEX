@@ -401,9 +401,9 @@ class MonitoringStateCache:
         state = self.get_or_create_state(ticker, trade_date)
         
         # Apply updates
-        for field, value in updates.items():
-            if hasattr(state, field) and not field.startswith('_'):
-                setattr(state, field, value)
+        for attr_name, value in updates.items():
+            if hasattr(state, attr_name) and not attr_name.startswith('_'):
+                setattr(state, attr_name, value)
         
         if timestamp:
             state.timestamp = timestamp
