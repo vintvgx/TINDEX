@@ -35,9 +35,9 @@ import yfinance as yf
 
 from alpaca.data.models import Bar
 
-from utils.stock_streaming_base import StockStreamingService, StockBar
-from utils.breakout_confirmation import BreakoutConfirmation
-from utils.monitoring_state_cache import MonitoringStateCache, MonitoringState
+from services.utils.stock_streaming_base import StockStreamingService, StockBar
+from services.utils.breakout_confirmation import BreakoutConfirmation
+from services.utils.monitoring_state_cache import MonitoringStateCache, MonitoringState
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

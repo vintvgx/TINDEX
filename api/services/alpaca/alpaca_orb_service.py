@@ -15,7 +15,7 @@ from alpaca.data.enums import DataFeed
 from alpaca.data.models import Bar
 import yfinance as yf
 
-from utils.breakout_confirmation import BreakoutConfirmation
+from services.utils.breakout_confirmation import BreakoutConfirmation
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
