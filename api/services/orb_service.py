@@ -592,6 +592,12 @@ class OrbService:
         total_volume = 0
         
         for bar in bars:
+            # Only calculate typical_price when all three price fields are present
+            # Price fields (high/low/close) are now optional (Decimal | None)
+            if bar.high is None or bar.low is None or bar.close is None:
+                # Skip bars with missing price data
+                continue
+            
             typical_price = (bar.high + bar.low + bar.close) / Decimal(3)
             total_price_volume += typical_price * Decimal(bar.volume)
             total_volume += bar.volume
@@ -656,6 +662,13 @@ class OrbService:
         """
         if ticker not in self._bar_history or len(self._bar_history[ticker]) < 2:
             return {"is_reversal": False, "confidence": "LOW", "indicators": []}
+        
+        # Validate that current_bar.close is not None before converting to float
+        # Price fields (close) are now optional (Decimal | None)
+        if current_bar.close is None:
+            logger.warning(f"Reversal detection skipped for {ticker}: current_bar.close is None")
+            return {"is_reversal": False, "confidence": "LOW", "indicators": []}
+        
         current_close = float(current_bar.close)
         
         indicators = []
@@ -720,6 +733,9 @@ class OrbService:
         
         This method processes bars during both ORB calculation phase and monitoring phase.
         Adapted to work with standardized StockBar instead of provider-specific bar types.
+        
+        Note: Price fields (open/high/low/close) are now optional (Decimal | None).
+        This method guards against None values and skips processing if critical fields are missing.
         """
         ticker = stock_bar.symbol
         bar_high = stock_bar.high
@@ -738,6 +754,15 @@ class OrbService:
         
         if self.calculation_phase:
             # During ORB calculation, track the TRUE high and low from bar data
+            # Require high, low, and close for valid ORB calculation
+            # Price fields (high/low/close/open) are now optional (Decimal | None)
+            if bar_high is None or bar_low is None or bar_close is None:
+                logger.warning(
+                    f"[ORB CALC] Skipping {ticker} - missing required price fields "
+                    f"(high={bar_high}, low={bar_low}, close={bar_close})"
+                )
+                return
+            
             trade_date = self.get_current_et_time().date()
             
             # Fetch previous close on first bar for this ticker (cache it)
@@ -753,23 +778,25 @@ class OrbService:
             previous_close = self._previous_close_cache[ticker].get("previous_close")
             prev_close_data_source = self._previous_close_cache[ticker].get("data_source", "alpaca")
             
-            # Calculate percentage change if we have previous close
+            # Calculate percentage change if we have previous close and bar_close is not None
             percentage_change = None
-            if previous_close and previous_close > 0:
+            if previous_close and previous_close > 0 and bar_close is not None:
                 current_price_float = float(bar_close)
                 price_change = current_price_float - previous_close
                 percentage_change = (price_change / previous_close) * 100
             
             if ticker not in self.orb_ranges:
+                # Use close as fallback for open if open is None
+                opening_price = bar_open if bar_open is not None else bar_close
                 self.orb_ranges[ticker] = {
                     "high": bar_high,
                     "low": bar_low,
-                    "open": bar_open,  # First bar's open is the opening price
+                    "open": opening_price,  # First bar's open is the opening price
                     "volume": int(bar_volume),
                 }
                 logger.info(
                     f"[ORB CALC] Started tracking {ticker}: "
-                    f"High={bar_high}, Low={bar_low}, Open={bar_open}"
+                    f"High={bar_high}, Low={bar_low}, Open={opening_price}"
                 )
                 
                 # Initialize monitoring state in cache (NO DATABASE CALL)
@@ -777,6 +804,7 @@ class OrbService:
                 if prev_close_data_source:
                     data_source = f"alpaca,prev_close:{prev_close_data_source}"
                 
+                opening_price_float = float(opening_price)
                 self._state_cache.update_orb_calculation(
                     ticker=ticker,
                     trade_date=trade_date,
@@ -784,7 +812,7 @@ class OrbService:
                     orb_low=float(bar_low),
                     current_price=float(bar_close),
                     volume=int(bar_volume),
-                    opening_price=float(bar_open),
+                    opening_price=opening_price_float,
                     previous_close=previous_close,
                     percentage_change=round(percentage_change, 2) if percentage_change is not None else None,
                     timestamp=self.get_current_et_time().isoformat(),
@@ -795,6 +823,7 @@ class OrbService:
                 old_low = self.orb_ranges[ticker]["low"]
                 
                 # Update with bar's high/low, not just close
+                # bar_high and bar_low are guaranteed to be not None at this point
                 self.orb_ranges[ticker]["high"] = max(old_high, bar_high)
                 self.orb_ranges[ticker]["low"] = min(old_low, bar_low)
                 self.orb_ranges[ticker]["volume"] = int(self.orb_ranges[ticker]["volume"]) + int(bar_volume)
@@ -833,6 +862,14 @@ class OrbService:
             if ticker not in self.orb_ranges:
                 return
             
+            # Require close for monitoring phase (needed for price comparisons and breakout detection)
+            # Price fields (close) are now optional (Decimal | None)
+            if bar_close is None:
+                logger.warning(
+                    f"[MONITORING] Skipping {ticker} - missing required price field (close=None)"
+                )
+                return
+            
             orb_high = self.orb_ranges[ticker]["high"]
             orb_low = self.orb_ranges[ticker]["low"]
             
@@ -845,6 +882,7 @@ class OrbService:
             opening_price = self.orb_ranges[ticker].get("open")
             
             # Calculate percentage_change from opening price
+            # bar_close is guaranteed to be not None at this point
             current_price = float(bar_close)
             percentage_change = None
             if opening_price and opening_price > 0:

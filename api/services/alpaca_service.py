@@ -1337,11 +1337,21 @@ class AlpacaService:
         """Handle incoming bar data from Alpaca stream"""
         ticker = data.symbol
 
-        # Use the BAR's high and low, not just close!
-        bar_high = Decimal(str(data.high))
-        bar_low = Decimal(str(data.low))
-        bar_close = Decimal(str(data.close))
-        bar_open = Decimal(str(data.open))
+        # Safely extract and convert price data with None checks
+        # Price fields (open/high/low/close) are now optional (Decimal | None)
+        try:
+            bar_open = Decimal(str(data.open)) if data.open is not None else None
+            bar_high = Decimal(str(data.high)) if data.high is not None else None
+            bar_low = Decimal(str(data.low)) if data.low is not None else None
+            bar_close = Decimal(str(data.close)) if data.close is not None else None
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.error(f"Error converting price data for {ticker}: {e}", exc_info=True)
+            return
+        
+        # Validate that we have at least one price field
+        if bar_open is None and bar_high is None and bar_low is None and bar_close is None:
+            logger.warning(f"Bar data for {ticker} has no valid price data (all None), ignoring")
+            return
 
         # Debug: Log bar received
         self._bars_received_count += 1
@@ -1364,32 +1374,41 @@ class AlpacaService:
         if self._bars_received_count <= 5 or self._bars_received_count % 10 == 0:
             logger.info(
                 f"[BAR #{self._bars_received_count}] {ticker}: "
-                f"O={data.open} H={data.high} L={data.low} C={data.close} V={data.volume}"
+                f"O={bar_open} H={bar_high} L={bar_low} C={bar_close} V={data.volume}"
             )
 
         if self.calculation_phase:
             # During ORB calculation, track the TRUE high and low from bar data
+            # Require high, low, and close for valid ORB calculation
+            if bar_high is None or bar_low is None or bar_close is None:
+                logger.warning(
+                    f"[ORB CALC] Skipping {ticker} - missing required price fields "
+                    f"(high={bar_high}, low={bar_low}, close={bar_close})"
+                )
+                return
+            
             trade_date = self.get_current_et_time().date()
 
             if ticker not in self.orb_ranges:
                 self.orb_ranges[ticker] = {
                     "high": bar_high,
                     "low": bar_low,
-                    "open": bar_open,  # First bar's open is the opening price
+                    "open": bar_open if bar_open is not None else bar_close,  # Fallback to close if open is None
                     "volume": data.volume,
                 }
                 logger.info(
                     f"[ORB CALC] Started tracking {ticker}: "
-                    f"High={bar_high}, Low={bar_low}, Open={bar_open}"
+                    f"High={bar_high}, Low={bar_low}, Open={self.orb_ranges[ticker]['open']}"
                 )
 
                 # Initialize monitoring state in database with first bar data
                 try:
+                    opening_price = float(bar_open) if bar_open is not None else float(bar_close)
                     self.supabase.table("orb_monitoring_state").upsert(
                         {
                             "ticker": ticker,
                             "trade_date": str(trade_date),
-                            "opening_price": float(bar_open),
+                            "opening_price": opening_price,
                             "orb_high": float(bar_high),
                             "orb_low": float(bar_low),
                             "current_price": float(bar_close),
@@ -1445,6 +1464,14 @@ class AlpacaService:
         else:
             # Monitoring phase - check for breakouts using current price (close)
             if ticker not in self.orb_ranges:
+                return
+
+            # Require high, low, and close for breakout detection
+            if bar_high is None or bar_low is None or bar_close is None:
+                logger.warning(
+                    f"[MONITORING] Skipping {ticker} - missing required price fields "
+                    f"(high={bar_high}, low={bar_low}, close={bar_close})"
+                )
                 return
 
             orb_high = self.orb_ranges[ticker]["high"]
