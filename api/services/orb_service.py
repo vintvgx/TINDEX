@@ -656,8 +656,6 @@ class OrbService:
         """
         if ticker not in self._bar_history or len(self._bar_history[ticker]) < 2:
             return {"is_reversal": False, "confidence": "LOW", "indicators": []}
-        
-        bars = self._bar_history[ticker]
         current_close = float(current_bar.close)
         
         indicators = []
