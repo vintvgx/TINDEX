@@ -1832,7 +1832,7 @@ class OrbService:
                 "data": notification_data,
                 "is_read": False,
                 "expires_at": (
-                    datetime.now() + timedelta(days=7)
+                    self.get_current_et_time() + timedelta(days=7)
                 ).isoformat()
             }
             

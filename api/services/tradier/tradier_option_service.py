@@ -68,7 +68,7 @@ class TradierOptionService:
         if not self.tradier_account:
             raise ValueError("TRADIER_ACCOUNT_NUMBER not defined")
         if not self.tradier_api_key:
-            raise ValueError("TRADIER_ACCESS_TOKEN not defined")
+            raise ValueError("TRADIER_API_KEY not defined")
         
         # Initialize uvatradier SDK clients
         self.quotes = Quotes(self.tradier_account, self.tradier_api_key, live_trade=self.live_trade)
@@ -449,7 +449,7 @@ class TradierOptionService:
                 else:
                     try:
                         return row[key] if key in row.index else default
-                    except:
+                    except (KeyError, IndexError, AttributeError, TypeError):
                         return default
             
             # Extract basic fields
@@ -654,19 +654,56 @@ class TradierOptionService:
             # Start stream in background task
             async def run_stream():
                 try:
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(
-                        None,
-                        lambda: self._stream.stream_market_events(
-                            symbol_list=symbols,
-                            filter_list=filter_list or ['trade', 'quote'],
-                            line_break=True
-                        )
-                    )
+                    loop = asyncio.get_running_loop()
+                    
+                    # Blocking function that iterates over the generator and processes events
+                    def process_stream():
+                        try:
+                            # Get the generator from stream_market_events
+                            event_generator = self._stream.stream_market_events(
+                                symbol_list=symbols,
+                                filter_list=filter_list or ['trade', 'quote'],
+                                line_break=True
+                            )
+                            
+                            # Iterate over events from the generator
+                            for event in event_generator:
+                                # Submit the handler coroutine back to the event loop
+                                try:
+                                    future = asyncio.run_coroutine_threadsafe(
+                                        self._option_handler(event),
+                                        loop
+                                    )
+                                    
+                                    # Add callback to catch and log handler execution errors
+                                    def handle_future_result(fut):
+                                        try:
+                                            fut.result()  # This will raise if the coroutine raised
+                                        except Exception as handler_error:
+                                            logger.error(
+                                                f"Error in option handler execution: {handler_error}",
+                                                exc_info=True
+                                            )
+                                    
+                                    future.add_done_callback(handle_future_result)
+                                except Exception as submission_error:
+                                    logger.error(
+                                        f"Error submitting handler for event: {submission_error}",
+                                        exc_info=True
+                                    )
+                        except Exception as stream_error:
+                            logger.error(
+                                f"Error in stream iteration: {stream_error}",
+                                exc_info=True
+                            )
+                            raise
+                    
+                    # Run the blocking function in executor
+                    await loop.run_in_executor(None, process_stream)
                 except asyncio.CancelledError:
                     logger.info("Stream task cancelled")
                 except Exception as e:
-                    logger.error(f"Stream error: {e}")
+                    logger.error(f"Stream error: {e}", exc_info=True)
                 finally:
                     self._is_streaming = False
             
