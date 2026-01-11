@@ -19,7 +19,7 @@ Key Responsibilities:
 
 from typing import Dict, Any, Optional
 from log.logging_config import get_logger
-from yfinance.yfinance_service import perform_yfinance_research, perform_yfinance_search
+from services.yfinance.yfinance_service import perform_yfinance_research, perform_yfinance_search
 
 from datetime import datetime, timedelta, timezone
 
