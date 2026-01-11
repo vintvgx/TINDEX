@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
+import { AnimatedNumber } from './AnimatedNumber';
 
 interface ORBCardProps {
   data: ORBMonitoringState;
@@ -115,12 +116,12 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress }) => {
       <View className="mb-3">
         <Text className="text-gray-400 text-xs mb-1">Current Price</Text>
         <View className="flex-row items-baseline justify-between">
-          <Text 
-            className="text-2xl font-bold"
-            style={{ color: priceColor }}
-          >
-            {formatPrice(data.current_price)}
-          </Text>
+          <AnimatedNumber
+            value={data.current_price}
+            format={(v) => `$${v.toFixed(2)}`}
+            style={{ fontSize: 24, fontWeight: 'bold' }}
+            color={priceColor}
+          />
           {/* Percentage Change Display */}
           {data.percentage_change !== null && data.percentage_change !== undefined && (
             <View className="flex-row items-center" style={{ gap: 4 }}>
@@ -129,14 +130,12 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress }) => {
               ) : (
                 <Text style={{ color: '#EF4444' }}>▼</Text>
               )}
-              <Text 
-                className="text-sm font-semibold"
-                style={{ 
-                  color: data.percentage_change >= 0 ? '#10B981' : '#EF4444' 
-                }}
-              >
-                {data.percentage_change >= 0 ? '+' : ''}{data.percentage_change.toFixed(2)}%
-              </Text>
+              <AnimatedNumber
+                value={data.percentage_change}
+                format={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`}
+                style={{ fontSize: 14, fontWeight: '600' }}
+                color={data.percentage_change >= 0 ? '#10B981' : '#EF4444'}
+              />
             </View>
           )}
         </View>
@@ -146,31 +145,43 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress }) => {
       <View>
         <View className="flex-row justify-between items-center mb-2">
           <Text className="text-gray-400 text-xs">ORB High</Text>
-          <Text className="text-green-400 text-sm font-semibold">
-            {formatPrice(data.orb_high)}
-          </Text>
+          <AnimatedNumber
+            value={data.orb_high}
+            format={(v) => `$${v.toFixed(2)}`}
+            style={{ fontSize: 14, fontWeight: '600' }}
+            color="#10B981"
+          />
         </View>
         <View className="flex-row justify-between items-center mb-2">
           <Text className="text-gray-400 text-xs">ORB Low</Text>
-          <Text className="text-red-400 text-sm font-semibold">
-            {formatPrice(data.orb_low)}
-          </Text>
+          <AnimatedNumber
+            value={data.orb_low}
+            format={(v) => `$${v.toFixed(2)}`}
+            style={{ fontSize: 14, fontWeight: '600' }}
+            color="#EF4444"
+          />
         </View>
         <View className="flex-row justify-between items-center pt-2 border-t border-gray-700/50">
           {/* Show Previous Close during calculation period, Opening otherwise */}
           {data.percentage_change !== null && data.percentage_change !== undefined && data.breakout_type === 'none' ? (
             <>
               <Text className="text-gray-400 text-xs">Previous Close</Text>
-              <Text className="text-gray-300 text-sm font-medium">
-                {formatPrice(data.previous_close)}
-              </Text>
+              <AnimatedNumber
+                value={data.previous_close}
+                format={(v) => `$${v.toFixed(2)}`}
+                style={{ fontSize: 14, fontWeight: '500' }}
+                color="#D1D5DB"
+              />
             </>
           ) : (
             <>
               <Text className="text-gray-400 text-xs">Opening</Text>
-              <Text className="text-gray-300 text-sm font-medium">
-                {formatPrice(data.opening_price)}
-              </Text>
+              <AnimatedNumber
+                value={data.opening_price}
+                format={(v) => `$${v.toFixed(2)}`}
+                style={{ fontSize: 14, fontWeight: '500' }}
+                color="#D1D5DB"
+              />
             </>
           )}
         </View>
@@ -181,12 +192,12 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress }) => {
         <View className="mt-3 pt-3 border-t border-gray-700/50">
           <View className="flex-row justify-between items-center">
             <Text className="text-gray-400 text-xs">Breakout Price</Text>
-            <Text 
-              className="text-sm font-semibold"
-              style={{ color: breakoutColor }}
-            >
-              {formatPrice(data.breakout_price)}
-            </Text>
+            <AnimatedNumber
+              value={data.breakout_price}
+              format={(v) => `$${v.toFixed(2)}`}
+              style={{ fontSize: 14, fontWeight: '600' }}
+              color={breakoutColor}
+            />
           </View>
         </View>
       )}

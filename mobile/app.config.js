@@ -2,7 +2,7 @@ export default {
   expo: {
     name: "alethia",
     slug: "alethia",
-    version: "0.0.28",
+    version: "0.0.30",
     orientation: "portrait",
     icon: "./assets/logo/tindex_logo.png",
     scheme: "mobile",

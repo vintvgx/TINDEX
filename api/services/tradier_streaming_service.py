@@ -113,23 +113,55 @@ class TradierStreamingService(StockStreamingService):
         
         This is the bridge between Tradier's data format and our standardized format.
         Adjust the data parsing based on actual Tradier response structure.
+        
+        Error Handling:
+        - Gracefully handles None data or missing keys
+        - Prevents race conditions by storing callback in local variable
+        - Ensures stream continues even if callback fails
+        - Validates data before conversion to prevent type errors
         """
         try:
-            if not self._bar_handler_callback:
+            # Validate input data
+            if data is None:
+                logger.warning("Received None data in Tradier bar handler, ignoring")
+                return
+            
+            # Store callback in local variable to avoid race conditions
+            callback = self._bar_handler_callback
+            if not callback:
                 logger.warning("Bar handler callback not set, ignoring bar data")
+                return
+            
+            if not callable(callback):
+                logger.error(f"Bar handler callback is not callable: {type(callback)}")
                 return
             
             # Parse Tradier data format (adjust based on actual API response)
             # This is a placeholder - adjust based on actual uvatradier/Tradier format
             symbol = data.get('symbol') or data.get('s')
-            open_price = float(data.get('open') or data.get('o', 0))
-            high = float(data.get('high') or data.get('h', 0))
-            low = float(data.get('low') or data.get('l', 0))
-            close = float(data.get('close') or data.get('c', 0))
-            volume = int(data.get('volume') or data.get('v', 0))
-            timestamp_str = data.get('timestamp') or data.get('time')
+            if not symbol:
+                logger.warning("Bar data missing symbol, ignoring")
+                return
             
+            # Safely extract price data with validation
+            try:
+                open_price = float(data.get('open') or data.get('o', 0))
+                high = float(data.get('high') or data.get('h', 0))
+                low = float(data.get('low') or data.get('l', 0))
+                close = float(data.get('close') or data.get('c', 0))
+                volume = int(data.get('volume') or data.get('v', 0))
+            except (ValueError, TypeError) as e:
+                logger.error(f"Error converting price data for {symbol}: {e}", exc_info=True)
+                return
+            
+            # Validate that we have valid price data
+            if open_price == 0 and high == 0 and low == 0 and close == 0:
+                logger.warning(f"Bar data for {symbol} has no valid price data, ignoring")
+                return
+            
+            # Parse timestamp
             timestamp = None
+            timestamp_str = data.get('timestamp') or data.get('time')
             if timestamp_str:
                 try:
                     # Parse timestamp (adjust format as needed)
@@ -148,11 +180,24 @@ class TradierStreamingService(StockStreamingService):
                 timestamp=timestamp
             )
             
-            # Call the registered handler
-            await self._bar_handler_callback(stock_bar)
+            # Call the registered handler (synchronous callback, no await needed)
+            try:
+                callback(stock_bar)
+            except Exception as callback_error:
+                # Log callback errors but don't let them stop the stream
+                logger.error(
+                    f"Error in bar handler callback for {symbol}: {callback_error}",
+                    exc_info=True
+                )
             
         except Exception as e:
-            logger.error(f"Error in Tradier bar handler: {e}", exc_info=True)
+            # Get symbol safely for error logging
+            symbol = data.get('symbol') or data.get('s', 'UNKNOWN') if data is not None else 'UNKNOWN'
+            logger.error(
+                f"Error in Tradier bar handler for {symbol}: {e}",
+                exc_info=True
+            )
+            # Don't re-raise - let the stream continue processing other bars
     
     async def subscribe(self, tickers: Set[str], bar_handler: Callable[[StockBar], None]) -> bool:
         """

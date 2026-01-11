@@ -25,6 +25,7 @@ const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info')
 interface ORBAdminModalProps {
   visible: boolean;
   onClose: () => void;
+  onViewLogs?: () => void;
 }
 
 /**
@@ -41,6 +42,7 @@ interface ORBAdminModalProps {
 export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
   visible,
   onClose,
+  onViewLogs,
 }) => {
   const { data: status, isLoading, error } = useORBStatus();
   const startMutation = useStartORBMutation();
@@ -199,6 +201,24 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
                   </Text>
                 </View>
               )}
+            </View>
+          )}
+
+          {/* View Logs Section */}
+          {onViewLogs && (
+            <View className="mb-6">
+              <Text className="text-lg font-semibold text-gray-900 mb-4">Debug Tools</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  onViewLogs();
+                  onClose();
+                }}
+                className="w-full h-14 rounded-md bg-gray-700 items-center justify-center active:opacity-90">
+                <View className="flex-row items-center gap-3">
+                  <Ionicons name="document-text-outline" size={20} color="#ffffff" />
+                  <Text className="text-white font-semibold text-lg">View Logs</Text>
+                </View>
+              </TouchableOpacity>
             </View>
           )}
 

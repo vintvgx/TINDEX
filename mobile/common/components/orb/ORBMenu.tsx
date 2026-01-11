@@ -13,6 +13,7 @@ interface ORBMenuProps {
   visible: boolean;
   onClose: () => void;
   onViewWatchlists: () => void;
+  onViewLogs: () => void;
   onToggleMockData: () => void;
   onToggleCalculationMockData: () => void;
   onToggleService: () => void;
@@ -25,6 +26,7 @@ export const ORBMenu: React.FC<ORBMenuProps> = ({
   visible,
   onClose,
   onViewWatchlists,
+  onViewLogs,
   onToggleMockData,
   onToggleCalculationMockData,
   onToggleService,
@@ -39,6 +41,16 @@ export const ORBMenu: React.FC<ORBMenuProps> = ({
       icon: 'layers-outline' as const,
       onPress: () => {
         onViewWatchlists();
+        onClose();
+      },
+      showDivider: true,
+    },
+    {
+      id: 'logs',
+      label: 'View Logs',
+      icon: 'document-text-outline' as const,
+      onPress: () => {
+        onViewLogs();
         onClose();
       },
       showDivider: true,

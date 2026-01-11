@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
+import { AnimatedNumber } from './AnimatedNumber';
 
 interface ORBDetailModalProps {
   visible: boolean;
@@ -77,6 +78,71 @@ const formatTime = (timestamp: string | undefined): string => {
   } catch {
     return 'N/A';
   }
+};
+
+/**
+ * Calculate ORB profit targets based on breakout direction
+ * 
+ * Targets are calculated using measured move projections:
+ * - Target 1: 1.0× range extension (one full range)
+ * - Target 2: 1.618× range extension (Fibonacci extension)
+ * - Target 3: 2.0× range extension (two full ranges)
+ */
+const calculateORBTargets = (
+  orbHigh: number,
+  orbLow: number,
+  breakoutType: string
+): { level: number; price: number; label: string; multiplier: number }[] => {
+  const orbRange = orbHigh - orbLow;
+  const targets: { level: number; price: number; label: string; multiplier: number }[] = [];
+
+  if (breakoutType === 'Bullish' || breakoutType === 'Confirmed Bullish') {
+    // Bullish targets: above ORH
+    targets.push(
+      {
+        level: 1,
+        price: orbHigh + (orbRange * 1.0),
+        label: 'Target 1',
+        multiplier: 1.0,
+      },
+      {
+        level: 2,
+        price: orbHigh + (orbRange * 1.618),
+        label: 'Target 2',
+        multiplier: 1.618,
+      },
+      {
+        level: 3,
+        price: orbHigh + (orbRange * 2.0),
+        label: 'Target 3',
+        multiplier: 2.0,
+      }
+    );
+  } else if (breakoutType === 'Bearish' || breakoutType === 'Confirmed Bearish') {
+    // Bearish targets: below ORL
+    targets.push(
+      {
+        level: 1,
+        price: orbLow - (orbRange * 1.0),
+        label: 'Target 1',
+        multiplier: 1.0,
+      },
+      {
+        level: 2,
+        price: orbLow - (orbRange * 1.618),
+        label: 'Target 2',
+        multiplier: 1.618,
+      },
+      {
+        level: 3,
+        price: orbLow - (orbRange * 2.0),
+        label: 'Target 3',
+        multiplier: 2.0,
+      }
+    );
+  }
+
+  return targets;
 };
 
 /**
@@ -195,12 +261,12 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
           {/* Current Price - Large Display */}
           <View className="mb-6">
             <Text className="text-gray-400 text-sm mb-2">Current Price</Text>
-            <Text 
-              className="text-4xl font-bold mb-1"
-              style={{ color: priceColor }}
-            >
-              {formatPrice(data.current_price)}
-            </Text>
+            <AnimatedNumber
+              value={data.current_price}
+              format={(v) => `$${v.toFixed(2)}`}
+              style={{ fontSize: 36, fontWeight: 'bold', marginBottom: 4 }}
+              color={priceColor}
+            />
             <Text className="text-gray-500 text-xs">
               {isAboveHigh && 'Above ORB High'}
               {isBelowLow && 'Below ORB Low'}
@@ -221,11 +287,15 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                 {breakoutStyle.label}
               </Text>
               {data.breakout_price !== null && (
-                <Text className="text-gray-300 text-sm mb-2">
-                  Breakout Price: <Text className="font-semibold" style={{ color: breakoutStyle.color }}>
-                    {formatPrice(data.breakout_price)}
-                  </Text>
-                </Text>
+                <View className="flex-row items-center mb-2">
+                  <Text className="text-gray-300 text-sm">Breakout Price: </Text>
+                  <AnimatedNumber
+                    value={data.breakout_price}
+                    format={(v) => `$${v.toFixed(2)}`}
+                    style={{ fontSize: 14, fontWeight: '600' }}
+                    color={breakoutStyle.color}
+                  />
+                </View>
               )}
               {/* Reversal Data Display */}
               {data.breakout_type === 'reversal' && data.reversal_data && (
@@ -254,12 +324,14 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                     </Text>
                   </View>
                   {data.reversal_data.vwap !== null && (
-                    <View className="mb-2">
-                      <Text className="text-gray-300 text-sm">
-                        VWAP: <Text className="font-semibold" style={{ color: breakoutStyle.color }}>
-                          {formatPrice(data.reversal_data.vwap)}
-                        </Text>
-                      </Text>
+                    <View className="flex-row items-center mb-2">
+                      <Text className="text-gray-300 text-sm">VWAP: </Text>
+                      <AnimatedNumber
+                        value={data.reversal_data.vwap}
+                        format={(v) => `$${v.toFixed(2)}`}
+                        style={{ fontSize: 14, fontWeight: '600' }}
+                        color={breakoutStyle.color}
+                      />
                     </View>
                   )}
                   {data.reversal_data.indicators && data.reversal_data.indicators.length > 0 && (
@@ -283,16 +355,33 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
             
             {/* Visual Range Indicator */}
             <View className="mb-4">
-              <View className="h-8 bg-gray-800 rounded-lg relative overflow-hidden mb-2">
+              <View className="h-12 bg-gray-800 rounded-lg relative overflow-hidden mb-2">
                 {/* Range Bar */}
                 <View 
                   className="absolute h-full bg-gradient-to-r from-red-500/30 via-gray-600/30 to-green-500/30"
                   style={{ left: 0, right: 0 }}
                 />
+                
+                {/* ORL Line (left edge) */}
+                {orbRange > 0 && (
+                  <View
+                    className="absolute w-0.5 h-full bg-red-500"
+                    style={{ left: 0 }}
+                  />
+                )}
+                
+                {/* ORH Line (right edge) */}
+                {orbRange > 0 && (
+                  <View
+                    className="absolute w-0.5 h-full bg-green-500"
+                    style={{ right: 0 }}
+                  />
+                )}
+                
                 {/* Current Price Indicator */}
                 {orbRange > 0 && (
                   <View
-                    className="absolute w-0.5 h-full bg-white"
+                    className="absolute w-1 h-full"
                     style={{ 
                       left: `${Math.max(0, Math.min(100, pricePositionPercent))}%`,
                       backgroundColor: priceColor 
@@ -300,36 +389,104 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                   />
                 )}
               </View>
-              <View className="flex-row justify-between">
-                <Text className="text-red-400 text-xs">Low</Text>
-                <Text className="text-green-400 text-xs">High</Text>
+              <View className="flex-row justify-between mb-1">
+                <Text className="text-red-400 text-xs">ORL</Text>
+                <Text className="text-green-400 text-xs">ORH</Text>
               </View>
+              {/* Current Price Label */}
+              {orbRange > 0 && isInRange && (
+                <View className="items-center mt-1">
+                  <Text 
+                    className="text-xs font-semibold"
+                    style={{ color: priceColor }}
+                  >
+                    {formatPrice(currentPrice)}
+                  </Text>
+                </View>
+              )}
             </View>
 
             {/* Range Values */}
             <View className="bg-gray-800/50 rounded-xl p-4">
               <View className="flex-row justify-between items-center mb-3">
                 <Text className="text-gray-400 text-sm">ORB High</Text>
-                <Text className="text-green-400 text-lg font-semibold">
-                  {formatPrice(data.orb_high)}
-                </Text>
+                <AnimatedNumber
+                  value={data.orb_high}
+                  format={(v) => `$${v.toFixed(2)}`}
+                  style={{ fontSize: 18, fontWeight: '600' }}
+                  color="#10B981"
+                />
               </View>
               <View className="flex-row justify-between items-center mb-3">
                 <Text className="text-gray-400 text-sm">ORB Low</Text>
-                <Text className="text-red-400 text-lg font-semibold">
-                  {formatPrice(data.orb_low)}
-                </Text>
+                <AnimatedNumber
+                  value={data.orb_low}
+                  format={(v) => `$${v.toFixed(2)}`}
+                  style={{ fontSize: 18, fontWeight: '600' }}
+                  color="#EF4444"
+                />
               </View>
               {orbRange > 0 && (
                 <View className="flex-row justify-between items-center pt-3 border-t border-gray-700/50">
                   <Text className="text-gray-400 text-sm">Range Size</Text>
-                  <Text className="text-gray-300 text-lg font-semibold">
-                    {formatPrice(orbRange)}
-                  </Text>
+                  <AnimatedNumber
+                    value={orbRange}
+                    format={(v) => `$${v.toFixed(2)}`}
+                    style={{ fontSize: 18, fontWeight: '600' }}
+                    color="#D1D5DB"
+                  />
                 </View>
               )}
             </View>
           </View>
+
+          {/* ORB Profit Targets - Only show when breakout has occurred */}
+          {(data.breakout_type === 'Bullish' || 
+            data.breakout_type === 'Bearish' || 
+            data.breakout_type === 'Confirmed Bullish' || 
+            data.breakout_type === 'Confirmed Bearish') && (
+            <View className="mb-6">
+              <Text className="text-gray-400 text-sm mb-4">Profit Targets</Text>
+              <View className="bg-gray-800/50 rounded-xl p-4">
+                {calculateORBTargets(orbHigh, orbLow, data.breakout_type).map((target, index) => (
+                  <View 
+                    key={target.level} 
+                    className={`flex-row justify-between items-center ${index < 2 ? 'mb-3' : ''}`}
+                  >
+                    <View className="flex-row items-center" style={{ gap: 12 }}>
+                      <View 
+                        className={`w-7 h-7 rounded-full items-center justify-center ${
+                          data.breakout_type.includes('Bullish') 
+                            ? 'bg-green-500/20' 
+                            : 'bg-red-500/20'
+                        }`}
+                      >
+                        <Text 
+                          className={`text-sm font-bold ${
+                            data.breakout_type.includes('Bullish')
+                              ? 'text-green-400'
+                              : 'text-red-400'
+                          }`}
+                        >
+                          {target.level}
+                        </Text>
+                      </View>
+                      <View>
+                        <Text className="text-gray-300 text-sm font-medium">{target.label}</Text>
+                        <Text className="text-gray-500 text-xs">{target.multiplier}× Range</Text>
+                      </View>
+                    </View>
+                    <AnimatedNumber
+                      value={target.price}
+                      format={(v) => `$${v.toFixed(2)}`}
+                      style={{ fontSize: 16, fontWeight: '600' }}
+                      color={data.breakout_type.includes('Bullish') ? '#10B981' : '#EF4444'}
+                    />
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
 
           {/* Additional Information */}
           <View className="mb-6">
@@ -337,16 +494,22 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
             <View className="bg-gray-800/50 rounded-xl p-4">
               <View className="flex-row justify-between items-center mb-3">
                 <Text className="text-gray-400 text-sm">Opening Price</Text>
-                <Text className="text-gray-300 text-base font-medium">
-                  {formatPrice(data.opening_price)}
-                </Text>
+                <AnimatedNumber
+                  value={data.opening_price}
+                  format={(v) => `$${v.toFixed(2)}`}
+                  style={{ fontSize: 16, fontWeight: '500' }}
+                  color="#D1D5DB"
+                />
               </View>
               {data.previous_close !== null && data.previous_close !== undefined && (
                 <View className="flex-row justify-between items-center mb-3">
                   <Text className="text-gray-400 text-sm">Previous Close</Text>
-                  <Text className="text-gray-300 text-base font-medium">
-                    {formatPrice(data.previous_close)}
-                  </Text>
+                  <AnimatedNumber
+                    value={data.previous_close}
+                    format={(v) => `$${v.toFixed(2)}`}
+                    style={{ fontSize: 16, fontWeight: '500' }}
+                    color="#D1D5DB"
+                  />
                 </View>
               )}
               <View className="flex-row justify-between items-center mb-3">

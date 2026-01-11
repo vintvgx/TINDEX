@@ -69,10 +69,9 @@ const FeedScreen = () => {
   const handlePostPress = (item: UnifiedFeedItem) => {
     if (item.item_type === "blog") {
       logDebug("Blog post pressed:", item.content); // content is the title for blogs
-      // TODO: Fetch full BlogPostType on demand if needed for the modal
-      // For now, we can pass the ID and fetch it in the modal
-      // setSelectedPost(blogPost);
-      // setBlogPostModalVisible(true);
+      // Set the selected post ID to trigger the query
+      setSelectedPost({ id: item.id } as BlogPostType);
+      setBlogPostModalVisible(true);
     } else {
       // For updates, we can navigate to ticker detail or just log
       logDebug("Ticker update pressed:", item.ticker, item.content);
