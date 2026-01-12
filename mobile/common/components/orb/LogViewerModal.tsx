@@ -76,6 +76,7 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
   const [autoScroll, setAutoScroll] = useState(true);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const previousLogCountRef = useRef(0);
+  const hasScrolledOnOpen = useRef(false);
 
   // Refresh logs periodically and on mount
   useEffect(() => {
@@ -104,10 +105,14 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
     return () => clearInterval(interval);
   }, [visible]);
 
-  // Scroll to bottom when modal becomes visible and logs are loaded
+  // Scroll to bottom when modal becomes visible (initial open only)
   useEffect(() => {
-    if (visible && logs.length > 0 && scrollViewRef.current) {
-      // Small delay to ensure ScrollView is fully rendered
+    if (!visible) {
+      hasScrolledOnOpen.current = false;
+      return;
+    }
+    if (visible && logs.length > 0 && !hasScrolledOnOpen.current && scrollViewRef.current) {
+      hasScrolledOnOpen.current = true;
       setTimeout(() => {
         scrollViewRef.current?.scrollToEnd({ animated: false });
       }, 100);
