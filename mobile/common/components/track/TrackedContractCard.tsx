@@ -112,7 +112,6 @@ export const TrackedContractCard: React.FC<TrackedContractCardProps> = ({
 
   const handleUntrack = () => {
     if (!user?.id) {
-      Alert.alert('Error', 'User not authenticated');
       return;
     }
 
@@ -130,17 +129,10 @@ export const TrackedContractCard: React.FC<TrackedContractCardProps> = ({
           onPress: async () => {
             try {
               await untrackContract.mutateAsync(contract.id);
-              setTimeout(() => {
-                Alert.alert('Success', 'Contract untracked successfully');
-              }, 100);
+              // Contract will be removed from the list automatically via React Query invalidation
               onStatusUpdate?.();
             } catch (error) {
-              setTimeout(() => {
-                Alert.alert(
-                  'Error',
-                  error instanceof Error ? error.message : 'Failed to untrack contract'
-                );
-              }, 100);
+              console.error('Failed to untrack contract:', error);
             }
           },
         },

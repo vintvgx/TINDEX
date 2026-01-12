@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, TextInput, ActivityIndicator, TouchableOpacity, Alert, ScrollView } from 'react-native';
+import { View, Text, TextInput, ActivityIndicator, TouchableOpacity, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
 import { OptionsContractLine } from '@/common/components/ticker/OptionsContractLine';
@@ -146,12 +146,10 @@ export const SearchContractsSection: React.FC = () => {
 
   const handleTrackContract = async () => {
     if (!user?.id || !selectedContract) {
-      Alert.alert('Error', 'User not authenticated');
       return;
     }
 
     if (!debouncedTicker) {
-      Alert.alert('Error', 'Please enter a ticker symbol');
       return;
     }
 
@@ -172,20 +170,12 @@ export const SearchContractsSection: React.FC = () => {
         initialAnalysisScore: selectedContract.total_score,
       });
 
-      // Close modal first, then show alert after a brief delay to avoid navigation context issues
+      // Close modal - tracked status will be shown in the card component
       setModalVisible(false);
-      setTimeout(() => {
-        Alert.alert('Success', `Contract ${selectedContract.contractSymbol} is now being tracked`);
-      }, 100);
     } catch (error) {
-      // Close modal first on error too
+      // Close modal on error - error will be handled by React Query
       setModalVisible(false);
-      setTimeout(() => {
-        Alert.alert(
-          'Error',
-          error instanceof Error ? error.message : 'Failed to track contract'
-        );
-      }, 100);
+      console.error('Failed to track contract:', error);
     }
   };
 

@@ -44,10 +44,11 @@ export interface ORBMonitoringState {
   low_broken: boolean;
   monitoring_active: boolean;
   timestamp?: string;
-  reversal_data?: ReversalData;
+  reversal_data?: ReversalData | Record<string, any>; // Allow generic JSONB structure
   previous_close?: number | null;
   percentage_change?: number | null;
   data_source?: string | null;
+  options_data?: Record<string, any>; // Generic JSONB structure for options data
   created_at?: string;
   updated_at?: string;
 }

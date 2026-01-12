@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useRef } from "react"
-import { View, Text, ActivityIndicator, Alert, ScrollView, NativeScrollEvent, NativeSyntheticEvent } from "react-native"
+import { View, Text, ActivityIndicator, ScrollView, NativeScrollEvent, NativeSyntheticEvent } from "react-native"
 import { useUserORBFollows } from "@/hooks/mutations/ticker/tickerORB"
 import { useTickerQuery } from "@/hooks/queries/ticker/useTickerQuery"
 import { useTrackContract } from "@/hooks/mutations/track/useTrackContract"
@@ -69,7 +69,6 @@ const FollowedStocksListContent: React.FC<FollowedStocksListContentProps> = ({ t
 
   const handleTrackContract = async () => {
     if (!user?.id || !selectedContract) {
-      Alert.alert("Error", "User not authenticated")
       return
     }
 
@@ -90,17 +89,12 @@ const FollowedStocksListContent: React.FC<FollowedStocksListContentProps> = ({ t
         initialAnalysisScore: selectedContract.total_score,
       })
 
-      // Close modal first, then show alert after a brief delay to avoid navigation context issues
+      // Close modal - tracked status will be shown in the card component
       setModalVisible(false)
-      setTimeout(() => {
-        Alert.alert("Success", `Contract ${selectedContract.contractSymbol} is now being tracked`)
-      }, 100)
     } catch (error) {
-      // Close modal first on error too
+      // Close modal on error - error will be handled by React Query
       setModalVisible(false)
-      setTimeout(() => {
-        Alert.alert("Error", error instanceof Error ? error.message : "Failed to track contract")
-      }, 100)
+      console.error("Failed to track contract:", error)
     }
   }
 
