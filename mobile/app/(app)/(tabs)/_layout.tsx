@@ -15,7 +15,7 @@ export default function Layout() {
 
   return (
     <Tabs
-      initialRouteName="feed"
+      initialRouteName="orb"
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
@@ -62,19 +62,12 @@ export default function Layout() {
         }}
       />
       <Tabs.Screen 
-        name="search" 
+        name="track" 
         options={{
-          title: 'Search',
+          title: 'Track',
           tabBarIcon: ({ color }) => (
-            <Ionicons name="search" size={20} color={color} />
+            <Ionicons name="analytics" size={20} color={color} />
           ),
-        }}
-      />
-      {/* Hides the watchlists tab */}
-      <Tabs.Screen 
-        name="watchlists" 
-        options={{
-          href: null, // Hide from tab bar - only accessible via modal
         }}
       />
       <Tabs.Screen 
@@ -111,6 +104,19 @@ export default function Layout() {
           tabBarIcon: ({ color }) => (
             <Ionicons name="person" size={20} color={color} />
           ),
+        }}
+      />
+      {/* Hide search and watchlists from tab bar - only accessible via modal */}
+      <Tabs.Screen 
+        name="search" 
+        options={{
+          href: null, // Hide from tab bar - only accessible via modal
+        }}
+      />
+      <Tabs.Screen 
+        name="watchlists" 
+        options={{
+          href: null, // Hide from tab bar - only accessible via modal
         }}
       />
     </Tabs>

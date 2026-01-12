@@ -67,15 +67,16 @@ const SearchScreen = () => {
 
   const renderTickerCard = ({ item }: { item: SearchHistoryItem }) => {
     const isPositive = item.price_change_percent >= 0;
+    const priceChangeColor = isPositive ? '#10B981' : '#EF4444';
     
     return (
       <TouchableOpacity
         onPress={() => handleTickerPress(item)}
-        className="flex-row items-center bg-white rounded-2xl p-4 mb-3 shadow-sm"
+        className="flex-row items-center bg-gray-800/60 border border-gray-700/30 rounded-xl p-4 mb-3"
         activeOpacity={0.7}
       >
         {/* Logo */}
-        <View className="w-14 h-14 rounded-xl bg-gray-100 items-center justify-center mr-3 overflow-hidden">
+        <View className="w-14 h-14 rounded-xl bg-gray-800/50 items-center justify-center mr-3 overflow-hidden">
           {item.logo_url ? (
             <Image 
               source={{ uri: item.logo_url }} 
@@ -91,10 +92,10 @@ const SearchScreen = () => {
 
         {/* Company Info */}
         <View className="flex-1">
-          <Text className="text-gray-500 text-xs font-medium mb-0.5">
+          <Text className="text-gray-400 text-xs font-medium mb-0.5">
             {item.ticker}
           </Text>
-          <Text className="text-black text-base font-semibold mb-1">
+          <Text className="text-white text-base font-semibold mb-1">
             {item.company_name}
           </Text>
           <Text className="text-gray-400 text-xs uppercase">
@@ -104,18 +105,16 @@ const SearchScreen = () => {
 
         {/* Price Info */}
         <View className="items-end">
-          <Text className="text-black text-xl font-bold mb-1">
+          <Text className="text-white text-xl font-bold mb-1">
           ${(item.current_price ?? 0).toFixed(2)}
           </Text>
           <View
-            className={`px-3 py-1 rounded-full ${
-              isPositive ? "bg-green-100" : "bg-red-100"
-            }`}
+            className="px-3 py-1 rounded-full"
+            style={{ backgroundColor: priceChangeColor + '20' }}
           >
             <Text
-              className={`text-sm font-medium ${
-                isPositive ? "text-green-600" : "text-red-600"
-              }`}
+              className="text-sm font-medium"
+              style={{ color: priceChangeColor }}
             >
               {isPositive ? "+" : ""}{item.price_change_percent.toFixed(2)}%
             </Text>
@@ -142,16 +141,16 @@ const SearchScreen = () => {
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-gradient-to-b from-blue-50 to-green-50">
+    <SafeAreaView className="flex-1 bg-black">
       {/* Main Content Card */}
-      <View className="flex-1 bg-black rounded-t-3xl mt-6 px-5 pt-6 shadow-lg">
+      <View className="flex-1 bg-black px-5 pt-20">
         {/* Search Input */}
-        <View className="flex-row items-center bg-gray-50 rounded-full px-5 py-3.5 mb-4 border border-gray-200">
+        <View className="flex-row items-center bg-gray-800/60 border border-gray-700/30 rounded-full px-5 py-3.5 mb-4">
           <Text className="text-gray-400 text-lg mr-2">🔍</Text>
           <TextInput
-            className="flex-1 text-gray-900 text-base"
+            className="flex-1 text-white text-base"
             placeholder="Search stocks..."
-            placeholderTextColor="#9CA3AF"
+            placeholderTextColor="#6B7280"
             value={searchText}
             onChangeText={setSearchText}
             autoCapitalize="characters"
@@ -166,12 +165,12 @@ const SearchScreen = () => {
           <TouchableOpacity
             onPress={() => setActiveTab("stocks")}
             className={`px-6 py-2.5 rounded-full mr-2 ${
-              activeTab === "stocks" ? "bg-blue-100" : "bg-gray-100"
+              activeTab === "stocks" ? "bg-gray-700/50" : "bg-gray-800/30"
             }`}
           >
             <Text
               className={`font-semibold ${
-                activeTab === "stocks" ? "text-blue-600" : "text-gray-500"
+                activeTab === "stocks" ? "text-white" : "text-gray-400"
               }`}
             >
               Stocks
@@ -180,12 +179,12 @@ const SearchScreen = () => {
           <TouchableOpacity
             onPress={() => setActiveTab("users")}
             className={`px-6 py-2.5 rounded-full ${
-              activeTab === "users" ? "bg-blue-100" : "bg-gray-100"
+              activeTab === "users" ? "bg-gray-700/50" : "bg-gray-800/30"
             }`}
           >
             <Text
               className={`font-semibold ${
-                activeTab === "users" ? "text-blue-600" : "text-gray-500"
+                activeTab === "users" ? "text-white" : "text-gray-400"
               }`}
             >
               Users
@@ -198,8 +197,8 @@ const SearchScreen = () => {
           <View className="flex-1">
             {isLoading ? (
               <View className="flex-1 items-center justify-center">
-                <ActivityIndicator size="large" color="#3B82F6" />
-                <Text className="text-gray-500 mt-3">Searching...</Text>
+                <ActivityIndicator size="large" color="#10B981" />
+                <Text className="text-gray-400 mt-3">Searching...</Text>
               </View>
             ) : displayData.length > 0 ? (
               <>

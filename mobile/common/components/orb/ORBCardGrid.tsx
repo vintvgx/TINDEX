@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, ScrollView, ActivityIndicator, FlatList } from 'react-native';
+import { View, Text, ActivityIndicator, FlatList } from 'react-native';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { ORBCard } from './ORBCard';
 
@@ -7,9 +7,25 @@ interface ORBCardGridProps {
   data: ORBMonitoringState[];
   isLoading: boolean;
   onCardPress: (data: ORBMonitoringState) => void;
+  lastFetchTime?: Date | null;
 }
 
-export const ORBCardGrid: React.FC<ORBCardGridProps> = ({ data, isLoading, onCardPress }) => {
+/**
+ * Formats date and time for display
+ */
+const formatDateTime = (date: Date): string => {
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  });
+};
+
+export const ORBCardGrid: React.FC<ORBCardGridProps> = ({ data, isLoading, onCardPress, lastFetchTime }) => {
   if (isLoading) {
     return (
       <View className="flex-1 justify-center items-center py-20">
@@ -30,6 +46,22 @@ export const ORBCardGrid: React.FC<ORBCardGridProps> = ({ data, isLoading, onCar
     );
   }
 
+  // Footer component with spacer line and last fetch time
+  const renderFooter = () => {
+    if (!lastFetchTime) return null;
+
+    return (
+      <View className="px-4 pb-8 pt-4">
+        {/* Spacer line */}
+        <View className="border-t border-gray-800 mb-4" />
+        {/* Last fetch time */}
+        <Text className="text-gray-500 text-xs text-center">
+          Last updated: {formatDateTime(lastFetchTime)}
+        </Text>
+      </View>
+    );
+  };
+
   return (
     <FlatList
       data={data}
@@ -38,9 +70,10 @@ export const ORBCardGrid: React.FC<ORBCardGridProps> = ({ data, isLoading, onCar
       renderItem={({ item }) => (
         <ORBCard data={item} onPress={() => onCardPress(item)} />
       )}
-      contentContainerStyle={{ padding: 16 }}
+      contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
       columnWrapperStyle={{ justifyContent: 'space-between' }}
       showsVerticalScrollIndicator={false}
+      ListFooterComponent={renderFooter}
     />
   );
 };

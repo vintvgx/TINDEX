@@ -29,8 +29,10 @@ Environment Variables Required:
 import asyncio
 import os
 import logging
+import threading
 from typing import Dict, Optional, List, Callable
 from datetime import datetime, timedelta, date
+import math
 
 from uvatradier import Quotes, OptionsData, Stream
 
@@ -292,7 +294,8 @@ class TradierOptionService:
                                 return float(quote['close'].iloc[0])
                         # Handle dict return
                         elif isinstance(quote, dict):
-                            return float(quote.get('last') or quote.get('close', 0))
+                            val = quote.get('last') or quote.get('close')
+                            return float(val) if val is not None else None
                     return None
                 except Exception as e:
                     logger.warning(f"Tradier quote fetch failed for {ticker}: {e}")
@@ -317,6 +320,15 @@ class TradierOptionService:
         except Exception as e:
             logger.warning(f"Could not fetch current price for {ticker}: {e}")
             return None
+        
+    def _is_valid_num(self, val) -> bool:
+        """Check if value is a valid number (not None/NaN)."""
+        if val is None:
+            return False
+        try:
+            return not math.isnan(float(val))
+        except (ValueError, TypeError):
+            return False
     
     def _process_chain_data(
         self,
@@ -744,19 +756,24 @@ class TradierOptionService:
 
 # Global instance for singleton pattern
 _tradier_option_service = None
+_tradier_option_service_lock = threading.Lock()
 
 
 def get_tradier_option_service() -> TradierOptionService:
-    """Get or create the singleton TradierOptionService instance."""
+    """Get or create the singleton TradierOptionService instance (thread-safe)."""
     global _tradier_option_service
     
+    # Double-check locking pattern for thread-safe singleton initialization
     if _tradier_option_service is None:
-        try:
-            _tradier_option_service = TradierOptionService()
-            logger.info("TradierOptionService singleton created")
-        except Exception as e:
-            logger.error(f"Failed to initialize TradierOptionService: {str(e)}", exc_info=True)
-            raise Exception(f"Tradier option service initialization failed: {str(e)}") from e
+        with _tradier_option_service_lock:
+            # Check again after acquiring lock (another thread may have initialized it)
+            if _tradier_option_service is None:
+                try:
+                    _tradier_option_service = TradierOptionService()
+                    logger.info("TradierOptionService singleton created")
+                except Exception as e:
+                    logger.error(f"Failed to initialize TradierOptionService: {str(e)}", exc_info=True)
+                    raise Exception(f"Tradier option service initialization failed: {str(e)}") from e
     
     return _tradier_option_service
 

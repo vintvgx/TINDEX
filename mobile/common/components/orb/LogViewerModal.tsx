@@ -76,12 +76,16 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
   const [autoScroll, setAutoScroll] = useState(true);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const previousLogCountRef = useRef(0);
+  const hasScrolledOnOpen = useRef(false);
 
   // Refresh logs periodically and on mount
   useEffect(() => {
     if (!visible) return;
 
-    const updateLogs = () => {
+    const updateLogs = async () => {
+      // Ensure logs are loaded from file
+      await logService.waitForInitialization();
+      
       const allLogs = logService.getLogs();
       setLogs((prevLogs) => {
         // Track if new logs were added
@@ -100,6 +104,20 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
 
     return () => clearInterval(interval);
   }, [visible]);
+
+  // Scroll to bottom when modal becomes visible (initial open only)
+  useEffect(() => {
+    if (!visible) {
+      hasScrolledOnOpen.current = false;
+      return;
+    }
+    if (visible && logs.length > 0 && !hasScrolledOnOpen.current && scrollViewRef.current) {
+      hasScrolledOnOpen.current = true;
+      setTimeout(() => {
+        scrollViewRef.current?.scrollToEnd({ animated: false });
+      }, 100);
+    }
+  }, [visible, logs.length]);
 
   // Auto-scroll to bottom when new logs arrive, but only if user is at bottom
   useEffect(() => {
@@ -145,8 +163,8 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
     return true;
   });
 
-  const handleClearLogs = () => {
-    logService.clearLogs();
+  const handleClearLogs = async () => {
+    await logService.clearLogs();
     setLogs([]);
   };
 

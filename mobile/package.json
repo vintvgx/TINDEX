@@ -1,7 +1,7 @@
 {
   "name": "mobile",
   "main": "expo-router/entry",
-  "version": "0.0.30",
+  "version": "0.0.32",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
@@ -40,6 +40,7 @@
     "expo-constants": "~17.1.7",
     "expo-dev-client": "~5.2.1",
     "expo-device": "~7.1.4",
+    "expo-file-system": "~18.1.11",
     "expo-font": "~13.3.1",
     "expo-haptics": "~14.1.4",
     "expo-image": "~2.3.0",
