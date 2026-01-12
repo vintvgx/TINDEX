@@ -1230,5 +1230,445 @@ def get_options(ticker: str):
             "ticker": ticker
         }), 500
 
+
+@app.route("/track-option", methods=["POST"])
+def track_option():
+    """
+    Track an options contract for a user.
+    
+    Request Body (JSON):
+        userId (str): The ID of the user tracking the contract
+        ticker (str): Stock ticker symbol
+        contractSymbol (str): Contract symbol (e.g., "AAPL231215C00150000")
+        optionType (str): "CALL" or "PUT"
+        strike (float): Strike price
+        expirationDate (str): Expiration date (ISO format: "YYYY-MM-DD")
+        trackingSnapshot (dict): Full OptionsOpportunity object
+        trackedFromSource (str, optional): "orb_breakout", "manual", or "followed_stock"
+        orbBreakoutId (str, optional): Link to orb_monitoring_state if applicable
+        initialAnalysisScore (float, optional): Score from OptionsAnalyzer
+        trackingReason (str, optional): User's reason for tracking
+    
+    Returns:
+        JSON response containing success status and tracked contract data
+    
+    Example Request:
+        POST /track-option
+        {
+            "userId": "user123",
+            "ticker": "AAPL",
+            "contractSymbol": "AAPL231215C00150000",
+            "optionType": "CALL",
+            "strike": 150.00,
+            "expirationDate": "2024-12-15",
+            "trackingSnapshot": {...},
+            "trackedFromSource": "orb_breakout",
+            "initialAnalysisScore": 85.5
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "Request body is required"
+            }), 400
+        
+        # Validate required fields
+        user_id = data.get("userId")
+        if not user_id:
+            return jsonify({
+                "success": False,
+                "error": "userId is required"
+            }), 400
+        
+        ticker = data.get("ticker", "").strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({
+                "success": False,
+                "error": "Invalid ticker symbol format"
+            }), 400
+        
+        # Get supabase service
+        service = get_supabase_service()
+        
+        # Verify user
+        service.verify_user(user_id=user_id)
+        
+        # Prepare contract data
+        contract_data = {
+            'ticker': ticker,
+            'contract_symbol': data.get('contractSymbol', ''),
+            'option_type': data.get('optionType', '').upper(),
+            'strike': data.get('strike'),
+            'expiration_date': data.get('expirationDate'),
+            'tracking_snapshot': data.get('trackingSnapshot', {}),
+            'tracked_from_source': data.get('trackedFromSource', 'manual'),
+            'orb_breakout_id': data.get('orbBreakoutId'),
+            'initial_analysis_score': data.get('initialAnalysisScore'),
+            'tracking_reason': data.get('trackingReason'),
+        }
+        
+        # Track contract
+        result = service.track_option_contract(user_id, contract_data)
+        
+        if result.get("success"):
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Failed to track option contract: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"Failed to track contract: {str(e)}"
+        }), 500
+
+
+@app.route("/tracked-options", methods=["GET"])
+def get_tracked_options():
+    """
+    Get tracked contracts for a user.
+    
+    Query Parameters:
+        userId (str, required): The ID of the user
+        status (str, optional): Filter by status ("tracking", "entered", "exited", "expired", "cancelled")
+    
+    Returns:
+        JSON response containing list of tracked contracts
+    
+    Example Request:
+        GET /tracked-options?userId=user123&status=tracking
+    """
+    try:
+        user_id = request.args.get("userId")
+        status_filter = request.args.get("status")
+        
+        if not user_id:
+            return jsonify({
+                "success": False,
+                "error": "userId query parameter is required"
+            }), 400
+        
+        # Get supabase service
+        service = get_supabase_service()
+        
+        # Verify user
+        service.verify_user(user_id=user_id)
+        
+        # Get tracked contracts
+        result = service.get_tracked_contracts(user_id, status_filter)
+        
+        return jsonify(result), 200
+            
+    except Exception as e:
+        logger.error(f"Failed to get tracked options: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"Failed to get tracked contracts: {str(e)}"
+        }), 500
+
+
+@app.route("/track-option/<contract_id>", methods=["PUT"])
+def update_tracked_option(contract_id: str):
+    """
+    Update the status of a tracked contract.
+    
+    URL Parameters:
+        contract_id (str): The ID of the contract
+    
+    Request Body (JSON):
+        userId (str): The ID of the user
+        status (str): New status ("entered", "exited", "cancelled")
+        entryPrice (float, optional): Entry price (required for "entered")
+        exitPrice (float, optional): Exit price (required for "exited")
+        positionSize (int, optional): Position size
+    
+    Returns:
+        JSON response containing updated contract data
+    
+    Example Request:
+        PUT /track-option/contract-uuid-here
+        {
+            "userId": "user123",
+            "status": "entered",
+            "entryPrice": 2.50,
+            "positionSize": 10
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "Request body is required"
+            }), 400
+        
+        user_id = data.get("userId")
+        if not user_id:
+            return jsonify({
+                "success": False,
+                "error": "userId is required"
+            }), 400
+        
+        status = data.get("status")
+        if status not in ["entered", "exited", "cancelled"]:
+            return jsonify({
+                "success": False,
+                "error": "status must be 'entered', 'exited', or 'cancelled'"
+            }), 400
+        
+        # Get supabase service
+        service = get_supabase_service()
+        
+        # Verify user
+        service.verify_user(user_id=user_id)
+        
+        # Update contract status
+        result = service.update_contract_status(
+            user_id=user_id,
+            contract_id=contract_id,
+            status=status,
+            entry_price=data.get("entryPrice"),
+            exit_price=data.get("exitPrice"),
+            position_size=data.get("positionSize")
+        )
+        
+        if result.get("success"):
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Failed to update tracked option: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"Failed to update contract: {str(e)}"
+        }), 500
+
+
+@app.route("/suggested-contracts/<ticker>", methods=["GET"])
+def get_suggested_contracts(ticker: str):
+    """
+    Get top 3 suggested contracts for a ticker after ORB breakout.
+    
+    Uses OptionsAnalyzer to score and prioritize contracts.
+    
+    URL Parameters:
+        ticker (str): Stock ticker symbol
+    
+    Query Parameters:
+        limit (int, optional): Number of contracts to return (default: 5, max: 10)
+    
+    Returns:
+        JSON response containing top suggested contracts
+    
+    Example Request:
+        GET /suggested-contracts/AAPL?limit=3
+    
+    Example Response:
+        {
+            "success": true,
+            "data": {
+                "ticker": "AAPL",
+                "contracts": [...],  // Top 5 OptionsOpportunity objects
+                "count": 5
+            },
+            "timestamp": 1705323000
+        }
+    """
+    try:
+        # Validate ticker
+        ticker = ticker.strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({
+                "success": False,
+                "error": "Invalid ticker symbol format"
+            }), 400
+        
+        limit = request.args.get("limit", 5, type=int)
+        limit = min(max(limit, 1), 10)  # Clamp between 1 and 10
+        
+        # Get research service
+        research_service = get_research_service()
+        
+        # Get ticker data with options
+        research_result = research_service.get_research_data(
+            ticker=ticker,
+            use_cache=True,
+            save_to_db=False,
+            include_options=True
+        )
+        
+        if not research_result.get("success"):
+            return jsonify({
+                "success": False,
+                "error": "Failed to fetch ticker data",
+                "details": research_result.get("error")
+            }), 400
+        
+        research_data = research_result.get("data", {})
+        options_analysis = research_data.get("options_analysis", {})
+        
+        if not options_analysis or not options_analysis.get("has_opportunities"):
+            return jsonify({
+                "success": False,
+                "error": f"No options opportunities available for {ticker}",
+                "data": {
+                    "ticker": ticker,
+                    "contracts": [],
+                    "count": 0
+                }
+            }), 404
+        
+        opportunities = options_analysis.get("opportunities", [])
+        
+        # Sort by total_score (highest first) and take top N
+        sorted_opportunities = sorted(
+            opportunities,
+            key=lambda x: x.get("total_score", 0),
+            reverse=True
+        )[:limit]
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "ticker": ticker,
+                "contracts": sorted_opportunities,
+                "count": len(sorted_opportunities)
+            },
+            "timestamp": time.time()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Failed to get suggested contracts for {ticker}: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"Failed to get suggested contracts: {str(e)}",
+            "ticker": ticker
+        }), 500
+
+
+@app.route("/portfolio-metrics", methods=["GET"])
+def get_portfolio_metrics():
+    """
+    Get aggregate portfolio metrics for a user.
+    
+    Query Parameters:
+        userId (str, required): The ID of the user
+    
+    Returns:
+        JSON response containing portfolio metrics:
+        - totalContracts: Total number of tracked contracts
+        - activeContracts: Number of active contracts (tracking or entered)
+        - totalUnrealizedPnL: Total unrealized P&L (if contracts are entered)
+        - totalUnrealizedPnLPercent: Percentage P&L
+        - totalCostBasis: Total cost basis
+        - totalCurrentValue: Total current value
+        - riskExposure: Array of exposure by ticker
+    
+    Example Request:
+        GET /portfolio-metrics?userId=user123
+    """
+    try:
+        user_id = request.args.get("userId")
+        
+        if not user_id:
+            return jsonify({
+                "success": False,
+                "error": "userId query parameter is required"
+            }), 400
+        
+        # Get supabase service
+        service = get_supabase_service()
+        
+        # Verify user
+        service.verify_user(user_id=user_id)
+        
+        # Get all tracked contracts
+        result = service.get_tracked_contracts(user_id, status_filter=None)
+        
+        if not result.get("success"):
+            return jsonify(result), 400
+        
+        contracts = result.get("data", [])
+        
+        # Calculate metrics
+        total_contracts = len(contracts)
+        active_contracts = len([c for c in contracts if c.get("status") in ["tracking", "entered"]])
+        
+        # Calculate PnL for entered contracts
+        entered_contracts = [c for c in contracts if c.get("status") == "entered"]
+        total_cost_basis = sum(
+            (c.get("entry_price") or 0) * (c.get("position_size") or 1)
+            for c in entered_contracts
+        )
+        
+        # TODO: Calculate current value from market prices (Phase 2)
+        # For now, use entry price as placeholder
+        total_current_value = total_cost_basis
+        total_unrealized_pnl = 0
+        total_unrealized_pnl_percent = 0
+        
+        # Calculate risk exposure by ticker
+        ticker_exposure = {}
+        for contract in contracts:
+            ticker = contract.get("ticker", "")
+            if not ticker:
+                continue
+            
+            if ticker not in ticker_exposure:
+                ticker_exposure[ticker] = {
+                    "ticker": ticker,
+                    "contractCount": 0,
+                    "totalCostBasis": 0,
+                    "unrealizedPnL": 0,
+                    "unrealizedPnLPercent": 0,
+                }
+            
+            ticker_exposure[ticker]["contractCount"] += 1
+            
+            if contract.get("status") == "entered":
+                cost_basis = (contract.get("entry_price") or 0) * (contract.get("position_size") or 1)
+                ticker_exposure[ticker]["totalCostBasis"] += cost_basis
+        
+        # Calculate exposure percentages
+        risk_exposure = list(ticker_exposure.values())
+        if total_cost_basis > 0:
+            for exposure in risk_exposure:
+                exposure["exposurePercent"] = (exposure["totalCostBasis"] / total_cost_basis) * 100
+        else:
+            for exposure in risk_exposure:
+                exposure["exposurePercent"] = 0
+        
+        # Sort by exposure (highest first)
+        risk_exposure.sort(key=lambda x: x["totalCostBasis"], reverse=True)
+        
+        metrics = {
+            "totalContracts": total_contracts,
+            "activeContracts": active_contracts,
+            "totalUnrealizedPnL": total_unrealized_pnl,
+            "totalUnrealizedPnLPercent": total_unrealized_pnl_percent,
+            "totalCostBasis": total_cost_basis,
+            "totalCurrentValue": total_current_value,
+            "riskExposure": risk_exposure,
+        }
+        
+        return jsonify({
+            "success": True,
+            "data": metrics,
+            "timestamp": time.time()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Failed to get portfolio metrics: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"Failed to get portfolio metrics: {str(e)}"
+        }), 500
+
+
 if __name__ == "__main__":
     app.run(debug=True)

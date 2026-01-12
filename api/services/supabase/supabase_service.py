@@ -900,6 +900,181 @@ class SupabaseService:
                 e, f"follow_stock for user {user_id} and ticker {ticker}"
             )
     
+    def track_option_contract(self, user_id: str, contract_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Track an options contract for a user.
+        
+        Args:
+            user_id: The ID of the user tracking the contract
+            contract_data: Dictionary containing contract information
+        
+        Returns:
+            Dict containing success status and tracked contract data
+        """
+        try:
+            logger.info(
+                "User %s tracking option contract %s", user_id, contract_data.get("contract_symbol", "unknown")
+            )
+            
+            # Prepare data for database
+            data_dict = {
+                'user_id': user_id,
+                'ticker': contract_data.get('ticker', '').upper(),
+                'contract_symbol': contract_data.get('contract_symbol', ''),
+                'option_type': contract_data.get('option_type', ''),
+                'strike': contract_data.get('strike'),
+                'expiration_date': contract_data.get('expiration_date'),
+                'tracking_snapshot': contract_data.get('tracking_snapshot', {}),
+                'status': 'tracking',
+                'tracked_from_source': contract_data.get('tracked_from_source', 'manual'),
+                'orb_breakout_id': contract_data.get('orb_breakout_id'),
+                'initial_analysis_score': contract_data.get('initial_analysis_score'),
+                'tracking_reason': contract_data.get('tracking_reason'),
+            }
+            
+            # Prepare data (handles datetime, JSONB conversion, etc.)
+            data_dict = self._prepare_data_for_db(data_dict)
+            
+            # Upsert contract (upsert handles both insert and update)
+            # For composite unique constraint, use comma-separated string
+            result = self.client.table('tracked_options_contracts').upsert(
+                data_dict,
+                on_conflict='user_id,contract_symbol'
+            ).execute()
+            
+            if result.data and len(result.data) > 0:
+                logger.info(
+                    "User %s tracked contract %s successfully", user_id, contract_data.get("contract_symbol", "unknown")
+                )
+                return {
+                    "success": True,
+                    "message": f"Contract tracked successfully",
+                    "data": result.data[0]
+                }
+            else:
+                raise Exception("No data returned from upsert operation")
+                
+        except Exception as e:
+            logger.error(
+                "Failed to track option contract for user %s: %s", user_id, str(e),
+                exc_info=True
+            )
+            return self._handle_database_error(
+                e, f"track_option_contract for user {user_id}"
+            )
+    
+    def get_tracked_contracts(self, user_id: str, status_filter: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get tracked contracts for a user.
+        
+        Args:
+            user_id: The ID of the user
+            status_filter: Optional status filter ('tracking', 'entered', 'exited', 'expired', 'cancelled')
+        
+        Returns:
+            Dict containing success status and list of tracked contracts
+        """
+        try:
+            logger.info(
+                "Fetching tracked contracts for user %s (status: %s)", user_id, status_filter or "all"
+            )
+            
+            query = self.client.table('tracked_options_contracts').select('*').eq('user_id', user_id)
+            
+            if status_filter:
+                query = query.eq('status', status_filter)
+            
+            query = query.order('created_at', desc=True)
+            result = query.execute()
+            
+            logger.info(
+                "Retrieved %d tracked contracts for user %s", len(result.data) if result.data else 0, user_id
+            )
+            
+            return {
+                "success": True,
+                "data": result.data if result.data else [],
+                "message": f"Retrieved {len(result.data) if result.data else 0} tracked contracts"
+            }
+            
+        except Exception as e:
+            logger.error(
+                "Failed to get tracked contracts for user %s: %s", user_id, str(e),
+                exc_info=True
+            )
+            return self._handle_database_error(
+                e, f"get_tracked_contracts for user {user_id}"
+            )
+    
+    def update_contract_status(
+        self, 
+        user_id: str, 
+        contract_id: str, 
+        status: str,
+        entry_price: Optional[float] = None,
+        exit_price: Optional[float] = None,
+        position_size: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Update the status of a tracked contract.
+        
+        Args:
+            user_id: The ID of the user
+            contract_id: The ID of the contract
+            status: New status ('entered', 'exited', 'cancelled')
+            entry_price: Optional entry price
+            exit_price: Optional exit price
+            position_size: Optional position size
+        
+        Returns:
+            Dict containing success status and updated contract data
+        """
+        try:
+            logger.info(
+                "User %s updating contract %s status to %s", user_id, contract_id, status
+            )
+            
+            update_data: Dict[str, Any] = {
+                'status': status,
+                'updated_at': datetime.now(timezone.utc).isoformat()
+            }
+            
+            if status == 'entered' and entry_price is not None:
+                update_data['entry_price'] = entry_price
+                update_data['entry_date'] = datetime.now(timezone.utc).isoformat()
+                if position_size is not None:
+                    update_data['position_size'] = position_size
+            
+            if status == 'exited' and exit_price is not None:
+                update_data['exit_price'] = exit_price
+                update_data['exit_date'] = datetime.now(timezone.utc).isoformat()
+            
+            # Prepare data
+            update_data = self._prepare_data_for_db(update_data)
+            
+            result = self.client.table('tracked_options_contracts').update(update_data).eq('id', contract_id).eq('user_id', user_id).execute()
+            
+            if result.data and len(result.data) > 0:
+                logger.info(
+                    "Contract %s status updated to %s successfully", contract_id, status
+                )
+                return {
+                    "success": True,
+                    "message": f"Contract status updated to {status}",
+                    "data": result.data[0]
+                }
+            else:
+                raise Exception("No data returned from update operation")
+                
+        except Exception as e:
+            logger.error(
+                "Failed to update contract status for contract %s: %s", contract_id, str(e),
+                exc_info=True
+            )
+            return self._handle_database_error(
+                e, f"update_contract_status for contract {contract_id}"
+            )
+
 
 _supabase_service = None
 
