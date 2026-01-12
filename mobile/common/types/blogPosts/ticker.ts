@@ -207,3 +207,44 @@ export interface SearchHistoryItem {
 export interface TickerViewProps {
   ticker: string;
 }
+
+/**
+ * Options contract from the /options/<ticker> endpoint
+ */
+export interface OptionsContract {
+  ask: number;
+  bid: number;
+  delta: number | null;
+  expiration: string;
+  gamma: number | null;
+  implied_volatility: number | null;
+  last_price: number | null;
+  open_interest: number;
+  option_type: "CALL" | "PUT";
+  rho: number | null;
+  strike: number;
+  symbol: string;
+  theta: number | null;
+  ticker: string;
+  timestamp: string;
+  vega: number | null;
+  volume: number;
+}
+
+/**
+ * Options data response from /options/<ticker> endpoint
+ */
+export interface OptionsResponse {
+  success: boolean;
+  data: {
+    calls: OptionsContract[];
+    puts: OptionsContract[];
+    current_price: number;
+    expirations_fetched: string[];
+    last_updated: string;
+    source: string;
+    ticker: string;
+  };
+  timestamp: number;
+  error?: string;
+}

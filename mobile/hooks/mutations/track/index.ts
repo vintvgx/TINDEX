@@ -6,3 +6,4 @@
 
 export { useTrackContract } from "./useTrackContract";
 export { useUpdateContractStatus } from "./useUpdateContractStatus";
+export { useUntrackContract } from "./useUntrackContract";

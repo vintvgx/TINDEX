@@ -1,5 +1,5 @@
 import type React from "react";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   StatusBar,
   ActivityIndicator,
   SafeAreaView,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
@@ -18,7 +19,8 @@ import { AnalyticsTab } from "@/common/components/ticker/AnalyticsTab";
 import { FinancialsTab } from "@/common/components/ticker/FinancialsTab";
 import { StockInfoHeader } from "@/common/components/ticker/StockInfoHeader";
 import { TabNavigation } from "@/common/components/ticker/TabNavigation";
-import { OptionsCard } from "@/common/components/ticker/OptionsTab";
+import { OptionsList } from "@/common/components/ticker/OptionsList";
+import { useTrackedContracts } from "@/hooks/queries/track/useTrackedContracts";
 import { UpdatesTab } from "@/common/components/ticker/UpdatesTab";
 import {
   useIsFollowingORB,
@@ -26,10 +28,13 @@ import {
 } from "@/hooks/mutations/ticker/tickerORB";
 import { useGenerateTickerUpdateMutation } from "@/hooks/mutations/ticker/useGenerateTickerUpdateMutation";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
+import { useTrackContract } from "@/hooks/mutations/track/useTrackContract";
 
 export default function TickerScreen() {
   const { ticker } = useLocalSearchParams<{ ticker: string }>();
   console.log("[ticker] TICKER", ticker);
+  
+  // All hooks must be called at the top before any early returns
   const {
     data: tickerResponse,
     isLoading,
@@ -49,6 +54,15 @@ export default function TickerScreen() {
 
   const { authState: { user } } = useAuth();
   const generateTickerUpdate = useGenerateTickerUpdateMutation();
+  
+  // Options tracking hooks
+  const { data: trackedContracts = [] } = useTrackedContracts();
+  const trackContract = useTrackContract();
+  
+  // Create a Set of tracked contract symbols for quick lookup
+  const trackedContractSymbols = useMemo(() => {
+    return new Set(trackedContracts.map(c => c.contract_symbol));
+  }, [trackedContracts]);
 
   const stockData = tickerResponse?.data;
 
@@ -156,6 +170,44 @@ export default function TickerScreen() {
     </ScrollView>
   );
 
+  const handleTrackContract = async (contract: any) => {
+    if (!user?.id) {
+      Alert.alert('Error', 'User must be authenticated to track contracts');
+      return;
+    }
+
+    try {
+      const expirationDate = contract.expirationDate
+        ? new Date(contract.expirationDate).toISOString().split('T')[0]
+        : '';
+
+      await trackContract.mutateAsync({
+        userId: user.id,
+        ticker: ticker || '',
+        contractSymbol: contract.contractSymbol,
+        optionType: contract.optionType,
+        strike: contract.strike,
+        expirationDate: expirationDate,
+        trackingSnapshot: contract,
+        trackedFromSource: 'manual',
+        initialAnalysisScore: contract.total_score,
+      });
+
+      // Delay alert to avoid navigation context issues during re-renders
+      setTimeout(() => {
+        Alert.alert('Success', `Contract ${contract.contractSymbol} is now being tracked`);
+      }, 100);
+    } catch (error) {
+      // Delay alert to avoid navigation context issues
+      setTimeout(() => {
+        Alert.alert(
+          'Error',
+          error instanceof Error ? error.message : 'Failed to track contract'
+        );
+      }, 100);
+    }
+  };
+
   const renderOptionsTab = () => {
     const optionsData = stockData?.options_analysis;
 
@@ -181,14 +233,16 @@ export default function TickerScreen() {
     }
 
     return (
-      <ScrollView
-        className="flex-1 px-5"
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 20, paddingTop: 20 }}>
-        {optionsData.opportunities.map((option, index) => (
-          <OptionsCard key={option.contractSymbol || index} option={option} />
-        ))}
-      </ScrollView>
+      <View className="flex-1">
+        <OptionsList
+          opportunities={optionsData.opportunities}
+          ticker={ticker || ''}
+          currentPrice={stockData?.current_price || 0}
+          trackedContractSymbols={trackedContractSymbols}
+          onTrackContract={handleTrackContract}
+          isTracking={trackContract.isPending}
+        />
+      </View>
     );
   };
 

@@ -1074,6 +1074,50 @@ class SupabaseService:
             return self._handle_database_error(
                 e, f"update_contract_status for contract {contract_id}"
             )
+    
+    def delete_tracked_contract(self, user_id: str, contract_id: str) -> Dict[str, Any]:
+        """
+        Delete (untrack) an options contract for a user.
+        
+        Args:
+            user_id: The ID of the user
+            contract_id: The ID of the contract to delete
+        
+        Returns:
+            Dict containing success status
+        """
+        try:
+            logger.info(
+                "User %s deleting (untracking) contract %s", user_id, contract_id
+            )
+            
+            # Delete contract (only if it belongs to the user)
+            result = self.client.table('tracked_options_contracts').delete().eq('id', contract_id).eq('user_id', user_id).execute()
+            
+            if result.data:
+                logger.info(
+                    "Contract %s deleted successfully for user %s", contract_id, user_id
+                )
+                return {
+                    "success": True,
+                    "message": "Contract untracked successfully",
+                    "data": {"id": contract_id}
+                }
+            else:
+                # Contract not found or doesn't belong to user
+                return {
+                    "success": False,
+                    "error": "Contract not found or access denied"
+                }
+                
+        except Exception as e:
+            logger.error(
+                "Failed to delete tracked contract %s for user %s: %s", contract_id, user_id, str(e),
+                exc_info=True
+            )
+            return self._handle_database_error(
+                e, f"delete_tracked_contract for user {user_id} and contract {contract_id}"
+            )
 
 
 _supabase_service = None

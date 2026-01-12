@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   Modal,
   View,
@@ -6,16 +6,17 @@ import {
   ScrollView,
   StatusBar,
   ActivityIndicator,
-  TouchableOpacity,
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/common/components/ui/text';
 import type { OptionsOpportunity } from '@/common/types/blogPosts/ticker';
-import { OptionsCard } from '@/common/components/ticker/OptionsTab';
+import { OptionsList } from '@/common/components/ticker/OptionsList';
+import { useTrackedContracts } from '@/hooks/queries/track/useTrackedContracts';
 import { useSuggestedContracts } from '@/hooks/queries/track/useSuggestedContracts';
 import { useTrackContract } from '@/hooks/mutations/track/useTrackContract';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
+import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 
 /**
  * Smart Contract Suggestions Component
@@ -46,19 +47,22 @@ export const SmartContractSuggestions: React.FC<SmartContractSuggestionsProps> =
   const { authState: { user } } = useAuth();
   const { data: suggestedContracts = [], isLoading, error } = useSuggestedContracts(ticker, 5);
   const trackContract = useTrackContract();
-  const [trackingContract, setTrackingContract] = useState<string | null>(null);
+  const { data: trackedContracts = [] } = useTrackedContracts();
+  const { data: tickerData } = useTickerQuery(ticker);
+  
+  // Create a Set of tracked contract symbols for quick lookup
+  const trackedContractSymbols = React.useMemo(() => {
+    return new Set(trackedContracts.map(c => c.contract_symbol));
+  }, [trackedContracts]);
+
+  // Get current price from ticker data
+  const currentPrice = tickerData?.data?.current_price || 0;
 
   const handleTrackContract = async (contract: OptionsOpportunity) => {
     if (!user?.id) {
       Alert.alert("Authentication Required", "Please sign in to track contracts");
       return;
     }
-
-    if (trackingContract) {
-      return; // Prevent duplicate tracking
-    }
-
-    setTrackingContract(contract.contractSymbol);
 
     try {
       // Parse expiration date from contract
@@ -84,24 +88,21 @@ export const SmartContractSuggestions: React.FC<SmartContractSuggestionsProps> =
         onTrackContract(contract);
       }
 
-      Alert.alert("Success", `Contract ${contract.contractSymbol} is now being tracked`);
+      // Delay alert to avoid navigation context issues during re-renders
+      setTimeout(() => {
+        Alert.alert("Success", `Contract ${contract.contractSymbol} is now being tracked`);
+      }, 100);
     } catch (error) {
       console.error("Error tracking contract:", error);
-      Alert.alert(
-        "Error",
-        error instanceof Error ? error.message : "Failed to track contract"
-      );
-    } finally {
-      setTrackingContract(null);
+      // Delay alert to avoid navigation context issues
+      setTimeout(() => {
+        Alert.alert(
+          "Error",
+          error instanceof Error ? error.message : "Failed to track contract"
+        );
+      }, 100);
     }
   };
-
-  // Sort contracts by score (highest first) - already sorted by API, but ensure
-  const topContracts = React.useMemo(() => {
-    return [...suggestedContracts]
-      .sort((a, b) => b.total_score - a.total_score)
-      .slice(0, 3);
-  }, [suggestedContracts]);
 
   return (
     <Modal
@@ -129,17 +130,17 @@ export const SmartContractSuggestions: React.FC<SmartContractSuggestionsProps> =
       </View>
 
       {/* Content */}
-      <ScrollView className="flex-1 bg-black" showsVerticalScrollIndicator={false}>
-        <View className="px-6 py-6">
-          {isLoading && !error && (
-            <View className="items-center py-12">
-              <ActivityIndicator size="large" color="#10B981" />
-              <Text className="text-gray-400 mt-4">Analyzing contracts...</Text>
-            </View>
-          )}
+      <View className="flex-1 bg-black">
+        {isLoading && !error && (
+          <View className="flex-1 items-center justify-center py-12">
+            <ActivityIndicator size="large" color="#10B981" />
+            <Text className="text-gray-400 mt-4">Analyzing contracts...</Text>
+          </View>
+        )}
 
-          {error && (
-            <View className="bg-red-900/30 border border-red-700/50 rounded-xl p-6 mb-4">
+        {error && (
+          <View className="flex-1 items-center justify-center px-6 py-12">
+            <View className="bg-red-900/30 border border-red-700/50 rounded-xl p-6 w-full">
               <View className="flex-row items-start gap-3">
                 <Ionicons name="alert-circle-outline" size={20} color="#EF4444" />
                 <View className="flex-1">
@@ -152,10 +153,12 @@ export const SmartContractSuggestions: React.FC<SmartContractSuggestionsProps> =
                 </View>
               </View>
             </View>
-          )}
+          </View>
+        )}
 
-          {!isLoading && !error && topContracts.length === 0 && (
-            <View className="bg-gray-900/50 rounded-xl p-8 items-center border border-gray-800">
+        {!isLoading && !error && suggestedContracts.length === 0 && (
+          <View className="flex-1 items-center justify-center px-6 py-12">
+            <View className="bg-gray-900/50 rounded-xl p-8 items-center border border-gray-800 w-full">
               <Ionicons name="analytics-outline" size={48} color="#6B7280" />
               <Text className="text-gray-400 text-center mt-4 font-medium">
                 No contracts available
@@ -164,84 +167,20 @@ export const SmartContractSuggestions: React.FC<SmartContractSuggestionsProps> =
                 Options data not available for {ticker}
               </Text>
             </View>
-          )}
+          </View>
+        )}
 
-          {!isLoading && !error && topContracts.length > 0 && (
-            <>
-              {/* Info Banner */}
-              <View className="bg-blue-900/30 border border-blue-700/50 rounded-xl p-4 mb-6">
-                <View className="flex-row items-start gap-3">
-                  <Ionicons name="information-circle-outline" size={20} color="#60A5FA" />
-                  <View className="flex-1">
-                    <Text className="text-blue-300 font-semibold text-sm mb-1">
-                      Top {topContracts.length} Contracts Selected
-                    </Text>
-                    <Text className="text-blue-400 text-xs">
-                      These contracts are ranked by OptionsAnalyzer score. Click "Track" to add them to your portfolio.
-                    </Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* Contracts List */}
-              <View className="gap-4">
-                {topContracts.map((contract, index) => (
-                  <View key={contract.contractSymbol || index}>
-                    {/* Rank Badge */}
-                    <View className="flex-row items-center mb-2">
-                      <View className="bg-emerald-500 rounded-full w-8 h-8 items-center justify-center mr-2">
-                        <Text className="text-white font-bold text-sm">#{index + 1}</Text>
-                      </View>
-                      <Text className="text-gray-400 text-sm font-medium">
-                        Score: {contract.total_score.toFixed(1)}
-                      </Text>
-                    </View>
-
-                    {/* Contract Card */}
-                    <View className="mb-4">
-                      <OptionsCard option={contract} />
-                      
-                      {/* Track Button */}
-                      <TouchableOpacity
-                        onPress={() => handleTrackContract(contract)}
-                        disabled={trackContract.isPending || trackingContract === contract.contractSymbol}
-                        className={`rounded-xl p-4 items-center justify-center mt-3 ${
-                          trackContract.isPending || trackingContract === contract.contractSymbol
-                            ? 'bg-gray-600 opacity-50'
-                            : 'bg-emerald-600 active:opacity-90'
-                        }`}>
-                        {trackContract.isPending && trackingContract === contract.contractSymbol ? (
-                          <View className="flex-row items-center gap-2">
-                            <ActivityIndicator size="small" color="#FFFFFF" />
-                            <Text className="text-white font-semibold text-base">Tracking...</Text>
-                          </View>
-                        ) : (
-                          <View className="flex-row items-center gap-2">
-                            <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
-                            <Text className="text-white font-semibold text-base">Track Contract</Text>
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                    </View>
-
-                    {/* Divider */}
-                    {index < topContracts.length - 1 && (
-                      <View className="h-px bg-gray-800 mb-4" />
-                    )}
-                  </View>
-                ))}
-              </View>
-
-              {/* Footer Info */}
-              <View className="mt-6 bg-gray-900/50 rounded-xl p-4 border border-gray-800">
-                <Text className="text-gray-400 text-xs text-center">
-                  Contracts are ranked by OptionsAnalyzer scoring algorithm based on liquidity, Greeks, momentum, and value metrics.
-                </Text>
-              </View>
-            </>
-          )}
-        </View>
-      </ScrollView>
+        {!isLoading && !error && suggestedContracts.length > 0 && (
+          <OptionsList
+            opportunities={suggestedContracts.slice(0, 5)}
+            ticker={ticker}
+            currentPrice={currentPrice}
+            trackedContractSymbols={trackedContractSymbols}
+            onTrackContract={handleTrackContract}
+            isTracking={trackContract.isPending}
+          />
+        )}
+      </View>
     </Modal>
   );
 };

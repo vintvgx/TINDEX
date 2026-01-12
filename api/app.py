@@ -1449,6 +1449,54 @@ def update_tracked_option(contract_id: str):
         }), 500
 
 
+@app.route("/track-option/<contract_id>", methods=["DELETE"])
+def delete_tracked_option(contract_id: str):
+    """
+    Delete (untrack) an options contract for a user.
+    
+    URL Parameters:
+        contract_id (str): The ID of the contract
+    
+    Query Parameters:
+        userId (str, required): The ID of the user
+    
+    Returns:
+        JSON response containing success status
+    
+    Example Request:
+        DELETE /track-option/contract-uuid-here?userId=user123
+    """
+    try:
+        user_id = request.args.get("userId")
+        
+        if not user_id:
+            return jsonify({
+                "success": False,
+                "error": "userId query parameter is required"
+            }), 400
+        
+        # Get supabase service
+        service = get_supabase_service()
+        
+        # Verify user
+        service.verify_user(user_id=user_id)
+        
+        # Delete contract
+        result = service.delete_tracked_contract(user_id=user_id, contract_id=contract_id)
+        
+        if result.get("success"):
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Failed to delete tracked option: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": f"Failed to delete contract: {str(e)}"
+        }), 500
+
+
 @app.route("/suggested-contracts/<ticker>", methods=["GET"])
 def get_suggested_contracts(ticker: str):
     """
