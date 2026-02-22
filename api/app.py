@@ -25,6 +25,10 @@ from services.utils.blog_generation_service import get_blog_service
 from services.tindex.orb_service import OrbService
 from services.alpaca.alpaca_streaming_service import AlpacaStreamingService
 from services.tradier.tradier_streaming_service import TradierStreamingService
+from services.portfolio.portfolio_service import (
+    batch_fetch_current_prices,
+    calculate_position_pnl,
+)
 
 # Global variables
 ORB_SERVICE = None
@@ -1597,6 +1601,119 @@ def get_suggested_contracts(ticker: str):
             "error": f"Failed to get suggested contracts: {str(e)}",
             "ticker": ticker
         }), 500
+
+
+@app.route("/portfolio/refresh-prices", methods=["POST"])
+def refresh_portfolio_prices():
+    """
+    Fetch current prices for all open positions, compute unrealized P&L,
+    and update the portfolio summary table.
+
+    Request Body:
+        userId (str): The authenticated user's ID
+
+    Returns:
+        JSON with success, positions (enriched with current_price, unrealized_pnl, etc.),
+        and summary (total_cost_basis, total_current_value, total_unrealized_pnl, performance_pct).
+        If no open positions, returns positions=[], summary=None.
+    """
+    try:
+        data = request.get_json() or {}
+        user_id = data.get("userId")
+
+        if not user_id:
+            return jsonify({"success": False, "error": "userId required"}), 400
+
+        service = get_supabase_service()
+        service.verify_user(user_id=user_id)
+
+        result = (
+            service.client.table("portfolio_positions")
+            .select("id, ticker, shares, average_cost, position_type")
+            .eq("user_id", user_id)
+            .eq("status", "open")
+            .execute()
+        )
+
+        positions = result.data or []
+        if not positions:
+            return jsonify({"success": True, "positions": [], "summary": None})
+
+        tickers = list({p["ticker"] for p in positions})
+        prices = batch_fetch_current_prices(tickers)
+
+        if not prices:
+            return (
+                jsonify({"success": False, "error": "Could not fetch market prices"}),
+                502,
+            )
+
+        enriched_positions = []
+        total_cost_basis = 0.0
+        total_current_value = 0.0
+        total_unrealized = 0.0
+
+        for pos in positions:
+            ticker = pos["ticker"]
+            current_price = prices.get(ticker)
+
+            if current_price is None:
+                enriched_positions.append({
+                    **pos,
+                    "current_price": None,
+                    "unrealized_pnl": None,
+                    "current_value": None,
+                    "cost_basis": None,
+                    "pnl_pct": None,
+                })
+                continue
+
+            pnl = calculate_position_pnl(
+                shares=float(pos["shares"]),
+                avg_cost=float(pos["average_cost"]),
+                current_price=current_price,
+                position_type=pos.get("position_type") or "long",
+            )
+
+            total_cost_basis += pnl["cost_basis"]
+            total_current_value += pnl["current_value"]
+            total_unrealized += pnl["unrealized_pnl"]
+
+            enriched_positions.append({**pos, **pnl})
+
+        performance_pct = (
+            (total_current_value - total_cost_basis) / total_cost_basis * 100
+            if total_cost_basis > 0
+            else 0.0
+        )
+
+        positions_with_price = len([p for p in enriched_positions if p.get("current_price") is not None])
+        service.client.table("portfolio").upsert(
+            {
+                "user_id": user_id,
+                "total_cost_basis": round(total_cost_basis, 4),
+                "total_current_value": round(total_current_value, 4),
+                "total_unrealized_pnl": round(total_unrealized, 4),
+                "performance_pct": round(performance_pct, 4),
+                "positions_count": positions_with_price,
+            },
+            on_conflict="user_id",
+        ).execute()
+
+        return jsonify({
+            "success": True,
+            "positions": enriched_positions,
+            "summary": {
+                "total_cost_basis": round(total_cost_basis, 4),
+                "total_current_value": round(total_current_value, 4),
+                "total_unrealized_pnl": round(total_unrealized, 4),
+                "performance_pct": round(performance_pct, 4),
+            },
+        })
+
+    except Exception as e:
+        logger.error("Portfolio refresh failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/portfolio-metrics", methods=["GET"])

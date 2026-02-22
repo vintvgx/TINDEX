@@ -16,6 +16,7 @@ import { NewTradeModal, type NewTradePayload } from "@/common/components/track/N
 import { PortfolioModalContent } from "@/common/components/track/PortfolioModal";
 import { useUpsertPortfolioPosition } from "@/hooks/mutations/portfolio/useUpsertPortfolioPosition";
 import { usePortfolioSummaryQuery } from "@/hooks/queries/track/usePortfolioSummary";
+import { usePortfolioWithPrices } from "@/hooks/queries/track/usePortfolioWithPrices";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const PORTFOLIO_MODAL_HEIGHT = Math.max(SCREEN_HEIGHT * 0.75, 400); // Fits 3/4 of the screen
@@ -39,10 +40,18 @@ const TrackScreen = () => {
   const [portfolioModalVisible, setPortfolioModalVisible] = useState(false);
 
   const { data: portfolioSummary } = usePortfolioSummaryQuery();
+  const { data: livePortfolio } = usePortfolioWithPrices();
   const upsertPosition = useUpsertPortfolioPosition();
 
-  // P&L: use portfolio summary when available; period filter is for future date-based filtering
+  // P&L: prefer live refresh (positions + current prices); fallback to portfolio summary table
   const displayPnL = useMemo(() => {
+    if (livePortfolio?.summary) {
+      const realized = portfolioSummary?.total_realized_pnl != null
+        ? Number(portfolioSummary.total_realized_pnl)
+        : 0;
+      const unrealized = livePortfolio.summary.total_unrealized_pnl;
+      return realized + unrealized;
+    }
     if (portfolioSummary != null) {
       const realized = Number(portfolioSummary.total_realized_pnl);
       const unrealized = portfolioSummary.total_unrealized_pnl != null
@@ -51,7 +60,7 @@ const TrackScreen = () => {
       return realized + unrealized;
     }
     return period === "week" ? -45 : period === "month" ? -225 : -1250;
-  }, [portfolioSummary, period]);
+  }, [livePortfolio, portfolioSummary, period]);
 
   // Today so calendar can highlight current day and scroll to current month
   const today = useMemo(() => new Date(), []);
