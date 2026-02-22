@@ -16,8 +16,9 @@ def batch_fetch_current_prices(tickers: list[str]) -> dict[str, float]:
     """
     Fetch current (latest close) prices for multiple tickers in a single yfinance call.
 
-    Uses yf.download with period="1d" for one HTTP request for all tickers.
-    Single-ticker and multi-ticker responses have different shapes; both are handled.
+    Uses yf.download with period="5d" so we get the latest available close even when
+    the market is closed (e.g. weekend). Single-ticker and multi-ticker responses have
+    different shapes; both are handled.
 
     Args:
         tickers: List of ticker symbols (e.g. ["AAPL", "TSLA"]).
@@ -31,26 +32,27 @@ def batch_fetch_current_prices(tickers: list[str]) -> dict[str, float]:
     try:
         data = yf.download(
             tickers,
-            period="1d",
+            period="5d",
             group_by="ticker" if len(tickers) > 1 else None,
             progress=False,
             threads=False,
+            auto_adjust=True,
         )
 
         if data.empty:
-            return {}
+            logger.warning("yf.download returned empty DataFrame for tickers=%s", tickers)
+            return _fallback_fetch_prices(tickers)
 
         prices: dict[str, float] = {}
 
         if len(tickers) == 1:
-            # Single ticker: columns are ["Open", "High", "Low", "Close", ...], no ticker level
-            close_series = data["Close"] if "Close" in data.columns else None
+            # Single ticker: flat columns ["Close", ...] or MultiIndex (ticker, "Close")
+            close_series = _get_close_series_single(data, tickers[0])
             if close_series is not None:
                 last = close_series.iloc[-1]
                 if last is not None and not pd.isna(last):
                     prices[tickers[0]] = float(last)
         else:
-            # Multi ticker with group_by="ticker": columns are (ticker, "Close") -> data[ticker]["Close"]
             for ticker in tickers:
                 try:
                     close_series = data[ticker]["Close"]
@@ -60,11 +62,40 @@ def batch_fetch_current_prices(tickers: list[str]) -> dict[str, float]:
                 except (KeyError, IndexError, TypeError) as e:
                     logger.warning("No price data for %s: %s", ticker, e)
 
+        if not prices and tickers:
+            return _fallback_fetch_prices(tickers)
         return prices
 
     except Exception as e:
         logger.error("Batch price fetch failed: %s", e, exc_info=True)
-        return {}
+        return _fallback_fetch_prices(tickers)
+
+
+def _get_close_series_single(data: pd.DataFrame, ticker: str):
+    """Get Close series for single-ticker download; handle flat or MultiIndex columns."""
+    if "Close" in data.columns:
+        return data["Close"]
+    if isinstance(data.columns, pd.MultiIndex):
+        try:
+            return data[ticker]["Close"]
+        except (KeyError, TypeError):
+            pass
+    return None
+
+
+def _fallback_fetch_prices(tickers: list[str]) -> dict[str, float]:
+    """Fetch price per ticker via Ticker().info when batch download returns nothing."""
+    prices: dict[str, float] = {}
+    for ticker in tickers:
+        try:
+            t = yf.Ticker(ticker)
+            info = t.info
+            price = info.get("currentPrice") or info.get("regularMarketPrice")
+            if price is not None and not (isinstance(price, float) and pd.isna(price)):
+                prices[ticker] = float(price)
+        except Exception as e:
+            logger.warning("Fallback price fetch failed for %s: %s", ticker, e)
+    return prices
 
 
 def calculate_position_pnl(
