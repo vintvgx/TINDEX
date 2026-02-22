@@ -16,8 +16,14 @@ export const OptionsContractLine: React.FC<OptionsContractLineProps> = ({
 }) => {
   const getBackgroundColor = () => {
     return contract.optionType === 'CALL' 
-      ? 'bg-emerald-500/10 border-emerald-500/30' 
-      : 'bg-red-500/10 border-red-500/30';
+      ? 'bg-emerald-500/10' 
+      : 'bg-red-500/10';
+  };
+
+  const getBorderColor = () => {
+    return contract.optionType === 'CALL' 
+      ? 'border-emerald-500/30' 
+      : 'border-red-500/30';
   };
 
   const getTextColor = () => {
@@ -30,8 +36,8 @@ export const OptionsContractLine: React.FC<OptionsContractLineProps> = ({
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={0.7}
-      className={`rounded-lg p-3 mb-2 border ${getBackgroundColor()} ${
-        isTracked ? 'ring-2 ring-blue-500' : ''
+      className={`rounded-lg p-3 mb-2 ${getBackgroundColor()} ${
+        isTracked ? 'border-2 border-blue-500' : `border ${getBorderColor()}`
       }`}>
       <View className="flex-row items-center justify-between">
         {/* Left side - Strike and Type */}

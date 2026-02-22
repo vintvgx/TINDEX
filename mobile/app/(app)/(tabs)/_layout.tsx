@@ -70,6 +70,13 @@ export default function Layout() {
           ),
         }}
       />
+      {/* Deprecated Track screen (displayed options + followed options) */}
+      <Tabs.Screen 
+        name="track-legacy" 
+        options={{
+          href: null, // Hidden from tab bar - reachable via router for legacy view
+        }}
+      />
       <Tabs.Screen 
         name="orb" 
         options={{

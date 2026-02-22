@@ -151,7 +151,7 @@ export const OptionsContractDetailModal: React.FC<OptionsContractDetailModalProp
               </View>
               <View className="flex-row justify-between py-2">
                 <Text className="text-gray-400 text-sm">Spread</Text>
-                <Text className="text-white font-semibold">{formatPercent(contract.spreadPct)}</Text>
+                <Text className="text-white font-semibold">{contract.spreadPct.toFixed(2)}%</Text>
               </View>
             </View>
           </View>
