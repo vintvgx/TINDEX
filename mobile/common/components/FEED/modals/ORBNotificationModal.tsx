@@ -143,11 +143,11 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
       statusBarTranslucent>
       <StatusBar barStyle="light-content" />
       <View className="flex-1 bg-black/80 justify-center items-center px-4">
-        <Pressable 
-          className="absolute inset-0" 
-          onPress={onClose} 
+        <Pressable
+          className="absolute inset-0"
+          onPress={onClose}
         />
-        <View className="bg-gray-900 rounded-3xl w-full max-w-md max-h-[85%] border border-gray-800 shadow-2xl">
+        <View className="bg-gray-900 rounded-3xl w-full max-w-md border border-gray-800 shadow-2xl overflow-hidden" style={{ height: "90%" }}>
           {/* Header */}
           <View className="flex-row items-center justify-between p-4 border-b border-gray-800">
             <View className="flex-row items-center flex-1">
@@ -155,9 +155,9 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
                 className="w-3 h-3 rounded-full mr-3"
                 style={{ backgroundColor: isInvalidated ? invalidatedColor : directionColor }}
               />
-              <Text className="text-white text-lg font-bold flex-1">
+              <Text className="text-white text-lg font-bold flex-1" numberOfLines={2}>
                 {notificationTitle ||
-                  `${isInvalidated ? "⚠️" : directionEmoji} ${notificationData.ticker} ORB ${
+                  `${isInvalidated ? "⚠️ " : ""}${directionEmoji} ${notificationData.ticker} ORB ${
                     isConfirmed ? "CONFIRMED" : isInvalidated ? "INVALIDATED" : "BREAKOUT"
                   }`}
               </Text>
@@ -170,21 +170,27 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
           </View>
 
           <ScrollView
+            style={{ flex: 1 }}
             showsVerticalScrollIndicator={true}
-            contentContainerStyle={{ padding: 16, paddingBottom: 24 }}
+            contentContainerStyle={{ padding: 16, paddingBottom: 48 }}
             nestedScrollEnabled={true}>
             {/* Notification Body */}
             {notificationBody && (
               <View className={`mb-4 p-3 rounded-lg border ${
-                isInvalidated 
-                  ? "bg-amber-900/30 border-amber-700/50" 
+                isInvalidated
+                  ? "bg-amber-900/30 border-amber-700/50"
                   : "bg-gray-800/50 border-gray-700/50"
               }`}>
-                <Text className={`text-sm leading-5 ${
-                  isInvalidated ? "text-amber-200" : "text-gray-300"
-                }`}>
-                  {notificationBody}
-                </Text>
+                {notificationBody.split("\n").map((line, i) => (
+                  <Text
+                    key={i}
+                    className={`text-sm leading-6 ${i > 0 ? "mt-1" : ""} ${
+                      isInvalidated ? "text-amber-200" : "text-gray-300"
+                    }`}
+                  >
+                    {line || " "}
+                  </Text>
+                ))}
               </View>
             )}
 
@@ -206,7 +212,7 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
             {/* Gap & Prior Day Context (from notification data) */}
             {(notificationData.gap_direction != null || notificationData.prior_day_trend != null) && (
               <View className="mb-4 p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
-                <Text className="text-gray-400 text-sm mb-2">Gap & Prior Day</Text>
+                <Text className="text-gray-400 text-sm mb-2">📊 Gap & Prior Day</Text>
                 <GapTrendBadges
                   context={
                     {
@@ -226,7 +232,7 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
             {/* Ticker and Direction */}
             <View className="mb-4">
               <View className="flex-row items-center justify-between mb-2">
-                <Text className="text-gray-400 text-sm">Ticker</Text>
+                <Text className="text-gray-400 text-sm">📌 Ticker</Text>
                 <Text className="text-white text-lg font-bold">
                   {notificationData.ticker}
                 </Text>
@@ -248,7 +254,7 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
             {analysis && analysis.score > 0 && (
               <View className="mb-4">
                 <Text className="text-white text-base font-semibold mb-3">
-                  Breakout Analysis
+                  📈 Breakout Analysis
                 </Text>
 
                 {/* Confidence Score */}
@@ -315,7 +321,7 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
             {/* Trading Metrics */}
             <View className="mb-4">
               <Text className="text-white text-base font-semibold mb-3">
-                Trading Metrics
+                💹 Trading Metrics
               </Text>
 
               <View>
@@ -448,9 +454,9 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
             )}
 
             {/* Timestamp */}
-            <View className="mt-4 pt-4 border-t border-gray-800">
+            <View className="mt-4 pt-4 border-t border-gray-800 pb-2">
               <Text className="text-gray-500 text-xs text-center">
-                {formatTimestamp(notificationData.timestamp)}
+                🕐 {formatTimestamp(notificationData.timestamp)}
               </Text>
             </View>
           </ScrollView>

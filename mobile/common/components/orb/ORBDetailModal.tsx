@@ -360,10 +360,10 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
           </TouchableOpacity>
         </View>
 
-        <ScrollView 
+        <ScrollView
           className="flex-1"
-          contentContainerStyle={{ padding: 24 }}
-          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ padding: 24, paddingBottom: 48 }}
+          showsVerticalScrollIndicator={true}
         >
           {/* Current Price - Large Display */}
           <View className="mb-6">

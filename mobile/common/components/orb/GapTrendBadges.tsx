@@ -31,41 +31,60 @@ const TREND_COLORS: Record<PriorDayTrend, { bg: string; text: string }> = {
   flat: { bg: "bg-gray-600/30", text: "text-gray-400" },
 };
 
+/** Term type for glossary styling: continuation = green, againstGap = caution/amber */
+type GlossaryTermKey = "gap" | "priorTrend" | "continuation" | "againstGap";
+
 /** Info modal content: glossary and why positive/negative matters by prior trend */
 const GAP_TREND_INFO = {
   title: "Understanding Gap & Prior Day Trend",
   glossary: [
     {
+      key: "gap" as GlossaryTermKey,
       term: "Gap (Up / Down / Flat)",
       definition:
-        "The difference between yesterday's closing price and today's opening price. Up = stock opened higher than prior close; Down = opened lower; Flat = opened near the prior close (small move).",
+        "The difference between yesterday's closing price and today's opening price.\n\n" +
+        "• Up = stock opened higher than prior close\n" +
+        "• Down = opened lower\n" +
+        "• Flat = opened near the prior close (small move)",
     },
     {
+      key: "priorTrend" as GlossaryTermKey,
       term: "Prior Day Trend (Bullish / Bearish / Flat)",
       definition:
-        "Whether the previous trading day closed above or below its open. Bullish = closed higher than open; Bearish = closed lower than open; Flat = little change between open and close.",
+        "Whether the previous trading day closed above or below its open.\n\n" +
+        "• Bullish = closed higher than open\n" +
+        "• Bearish = closed lower than open\n" +
+        "• Flat = little change between open and close",
     },
     {
+      key: "continuation" as GlossaryTermKey,
       term: "Continuation ✓",
       definition:
-        "The gap direction aligns with the prior day's trend (e.g. bullish day + gap up, or bearish day + gap down). Suggests momentum is continuing into the open.",
+        "The gap direction aligns with the prior day's trend (e.g. bullish day + gap up, or bearish day + gap down).\n\n" +
+        "Suggests momentum is continuing into the open.",
     },
     {
+      key: "againstGap" as GlossaryTermKey,
       term: "Against Gap ⚠",
       definition:
-        "The gap or breakout goes opposite to the prior trend (e.g. bullish day but gap down). Can signal reversal, profit-taking, or failed follow-through—worth extra caution.",
+        "The gap or breakout goes opposite to the prior trend (e.g. bullish day but gap down).\n\n" +
+        "Can signal reversal, profit-taking, or failed follow-through—worth extra caution. Not favorable in the direction of the prior trend.",
     },
   ],
   whyItMatters: [
     {
       prior: "After a bullish day",
-      positive: "A gap up (positive) is favorable—it continues bullish momentum. Traders often see this as confirmation.",
-      negative: "A gap down (negative) goes against the trend and can indicate profit-taking or a reversal; treat with more caution.",
+      positive:
+        "A gap up (positive) is favorable—it continues bullish momentum.\n\nTraders often see this as confirmation.",
+      negative:
+        "A gap down (negative) goes against the trend and can indicate profit-taking or a reversal.\n\nTreat with more caution.",
     },
     {
       prior: "After a bearish day",
-      positive: "A gap up (positive) can signal a bounce or short squeeze; it goes against the prior trend.",
-      negative: "A gap down (negative) is favorable—it continues bearish momentum and suggests selling pressure persists.",
+      positive:
+        "A gap up (positive) can signal a bounce or short squeeze; it goes against the prior trend.",
+      negative:
+        "A gap down (negative) is favorable—it continues bearish momentum.\n\nSuggests selling pressure persists.",
     },
     {
       prior: "After a flat day",
@@ -84,6 +103,12 @@ function GapTrendInfoModal({
   visible: boolean;
   onClose: () => void;
 }) {
+  const termColor = (key: GlossaryTermKey) => {
+    if (key === "continuation") return "#10B981"; // green
+    if (key === "againstGap") return "#D97706";   // amber/caution (not green)
+    return "#9ca3af"; // gray for gap, priorTrend
+  };
+
   return (
     <Modal
       visible={visible}
@@ -97,11 +122,12 @@ function GapTrendInfoModal({
       >
         <Pressable
           className="w-full max-w-md bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden"
+          style={{ height: "90%" }}
           onPress={(e) => e.stopPropagation()}
         >
           <View className="border-b border-gray-800 px-4 pt-4 pb-3 flex-row justify-between items-center">
             <Text className="text-lg font-bold text-white flex-1 pr-2">
-              {GAP_TREND_INFO.title}
+              📖 {GAP_TREND_INFO.title}
             </Text>
             <TouchableOpacity
               onPress={onClose}
@@ -112,45 +138,68 @@ function GapTrendInfoModal({
             </TouchableOpacity>
           </View>
           <ScrollView
-            className="max-h-[75%]"
-            showsVerticalScrollIndicator
-            contentContainerStyle={{ paddingBottom: 24 }}
+            style={{ flex: 1 }}
+            showsVerticalScrollIndicator={true}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 48 }}
           >
-            <View className="px-4 pt-4">
-              <Text className="text-sm font-semibold text-gray-300 mb-2">
-                Key concepts
-              </Text>
-              {GAP_TREND_INFO.glossary.map((item, i) => (
-                <View key={i} className="mb-4">
-                  <Text className="text-sm font-semibold text-green-400 mb-1">
-                    {item.term}
+            <Text className="text-sm font-semibold text-gray-300 mb-3">
+              📌 Key concepts
+            </Text>
+            {GAP_TREND_INFO.glossary.map((item, i) => (
+              <View key={i} className="mb-4">
+                <Text
+                  className="text-sm font-semibold mb-1.5"
+                  style={{ color: termColor(item.key) }}
+                >
+                  {item.term}
+                </Text>
+                {item.definition.split("\n").map((line, j) => (
+                  <Text
+                    key={j}
+                    className="text-sm text-gray-400 leading-6"
+                    style={{ marginTop: j > 0 ? 2 : 0 }}
+                  >
+                    {line || " "}
                   </Text>
-                  <Text className="text-sm text-gray-400 leading-5">
-                    {item.definition}
-                  </Text>
-                </View>
-              ))}
-              <Text className="text-sm font-semibold text-gray-300 mt-2 mb-2">
-                Why positive or negative matters
-              </Text>
-              {GAP_TREND_INFO.whyItMatters.map((item, i) => (
-                <View key={i} className="mb-4">
-                  <Text className="text-sm font-semibold text-amber-400 mb-1">
-                    {item.prior}
-                  </Text>
-                  {item.positive != null && (
-                    <Text className="text-sm text-gray-400 leading-5 mb-1">
-                      {item.positive}
-                    </Text>
-                  )}
-                  {item.negative != null && (
-                    <Text className="text-sm text-gray-400 leading-5">
-                      {item.negative}
-                    </Text>
-                  )}
-                </View>
-              ))}
-            </View>
+                ))}
+              </View>
+            ))}
+            <Text className="text-sm font-semibold text-gray-300 mt-4 mb-3">
+              💡 Why positive or negative matters
+            </Text>
+            {GAP_TREND_INFO.whyItMatters.map((item, i) => (
+              <View key={i} className="mb-4">
+                <Text className="text-sm font-semibold text-amber-400 mb-1.5">
+                  {item.prior}
+                </Text>
+                {item.positive != null && (
+                  <View className="mb-1.5">
+                    {item.positive.split("\n").map((line, j) => (
+                      <Text
+                        key={j}
+                        className="text-sm text-gray-400 leading-6"
+                        style={{ marginTop: j > 0 ? 2 : 0 }}
+                      >
+                        {line || " "}
+                      </Text>
+                    ))}
+                  </View>
+                )}
+                {item.negative != null && (
+                  <View>
+                    {item.negative.split("\n").map((line, j) => (
+                      <Text
+                        key={j}
+                        className="text-sm text-gray-400 leading-6"
+                        style={{ marginTop: j > 0 ? 2 : 0 }}
+                      >
+                        {line || " "}
+                      </Text>
+                    ))}
+                  </View>
+                )}
+              </View>
+            ))}
           </ScrollView>
         </Pressable>
       </Pressable>
@@ -222,7 +271,7 @@ export const GapTrendBadges: React.FC<GapTrendBadgesProps> = ({
             <Ionicons name="checkmark-circle" size={14} color="#10B981" />
           )}
           {showWarning && (
-            <Ionicons name="warning" size={14} color="#F59E0B" />
+            <Ionicons name="warning" size={14} color="#D97706" />
           )}
         </View>
         <GapTrendInfoModal visible={infoVisible} onClose={() => setInfoVisible(false)} />
@@ -249,7 +298,7 @@ export const GapTrendBadges: React.FC<GapTrendBadgesProps> = ({
         {showWarning && (
           <View className="flex-row items-center">
             <Ionicons name="warning" size={18} color="#F59E0B" />
-            <Text className="text-amber-400 text-sm font-medium ml-1">Against Gap ⚠</Text>
+            <Text className="text-sm font-medium ml-1" style={{ color: "#D97706" }}>Against Gap ⚠</Text>
           </View>
         )}
       </View>
