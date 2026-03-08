@@ -43,8 +43,24 @@ const TrackScreen = () => {
   const { data: livePortfolio } = usePortfolioWithPrices();
   const upsertPosition = useUpsertPortfolioPosition();
 
-  // P&L: prefer live refresh (positions + current prices); fallback to portfolio summary table
+  // P&L: prefer period-specific data when available, then totals, then static defaults
   const displayPnL = useMemo(() => {
+    // 1) Period-specific from live portfolio (when API provides periodic_pnl)
+    const liveSummary = livePortfolio?.summary as { periodic_pnl?: Record<PnLPeriod, number> } | undefined;
+    const livePeriodPnL = liveSummary?.periodic_pnl?.[period];
+    if (typeof livePeriodPnL === "number") return livePeriodPnL;
+
+    // 2) Period-specific from portfolio summary (when DB/API provides periods)
+    const summaryWithPeriods = portfolioSummary as { periods?: Record<PnLPeriod, number | { realized?: number; unrealized?: number }> } | undefined;
+    const summaryPeriod = summaryWithPeriods?.periods?.[period];
+    if (summaryPeriod != null) {
+      if (typeof summaryPeriod === "number") return summaryPeriod;
+      const r = summaryPeriod.realized ?? 0;
+      const u = summaryPeriod.unrealized ?? 0;
+      return r + u;
+    }
+
+    // 3) Fallback: current totals (realized + unrealized) when no period-specific data
     if (livePortfolio?.summary) {
       const realized = portfolioSummary?.total_realized_pnl != null
         ? Number(portfolioSummary.total_realized_pnl)
@@ -59,6 +75,8 @@ const TrackScreen = () => {
         : 0;
       return realized + unrealized;
     }
+
+    // 4) No data for any period: static defaults per period
     return period === "week" ? -45 : period === "month" ? -225 : -1250;
   }, [livePortfolio, portfolioSummary, period]);
 
