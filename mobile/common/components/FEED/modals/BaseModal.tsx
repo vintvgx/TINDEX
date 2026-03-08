@@ -169,9 +169,10 @@ const ModalContent: React.FC<ModalContentProps> = ({
 
       {/* Scrollable Content */}
       <ScrollView
-        style={{ maxHeight: maxContentHeight * 4 }} // maxContentHeight in Tailwind units (96 = 384px)
-        showsVerticalScrollIndicator={false}
+        style={{ maxHeight: maxContentHeight * 4 }} // maxContentHeight in Tailwind units (96 = 384px, 200 = 800px)
+        showsVerticalScrollIndicator={true}
         keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ paddingBottom: 20 }}
       >
         <View className="px-6 py-6">{children}</View>
       </ScrollView>

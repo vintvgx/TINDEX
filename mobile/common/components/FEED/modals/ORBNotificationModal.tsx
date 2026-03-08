@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   Modal,
   View,
@@ -6,8 +6,11 @@ import {
   ScrollView,
   Pressable,
   StatusBar,
+  TouchableOpacity,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { SmartContractSuggestions } from "@/common/components/orb/SmartContractSuggestions";
+import type { OptionsOpportunity } from "@/common/types/blogPosts/ticker";
 
 /**
  * Interface for ORB breakout notification data
@@ -71,6 +74,8 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
   notificationBody,
   notificationTitle,
 }) => {
+  const [suggestionsModalVisible, setSuggestionsModalVisible] = useState(false);
+
   if (!notificationData) return null;
 
   const isConfirmed = notificationData.type === "orb_breakout_confirmed";
@@ -80,6 +85,18 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
   const directionText = isBullish ? "BULLISH" : "BEARISH";
   const directionColor = isBullish ? "#10B981" : "#EF4444";
   const invalidatedColor = "#F59E0B"; // Amber/orange for warnings
+
+  // Only show suggestions button for confirmed breakouts (not invalidated)
+  const showSuggestionsButton = isConfirmed && !isInvalidated;
+
+  const handleViewSuggestedContracts = () => {
+    setSuggestionsModalVisible(true);
+  };
+
+  const handleTrackContract = (contract: OptionsOpportunity) => {
+    // Track contract functionality will be handled by SmartContractSuggestions component
+    console.log('Track contract:', contract.contractSymbol);
+  };
 
   // Get breakout analysis data (prefer nested structure, fallback to flat)
   const analysis = notificationData.breakout_analysis || {
@@ -381,6 +398,26 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
               </View>
             </View>
 
+            {/* Suggested Contracts Button - Only for confirmed breakouts */}
+            {showSuggestionsButton && (
+              <View className="mt-4 pt-4 border-t border-gray-800">
+                <TouchableOpacity
+                  onPress={handleViewSuggestedContracts}
+                  className="bg-emerald-600/20 border border-emerald-500/50 rounded-xl p-4 items-center justify-center active:opacity-90">
+                  <View className="flex-row items-center gap-3">
+                    <Ionicons name="analytics-outline" size={20} color="#10B981" />
+                    <Text className="text-emerald-400 font-semibold text-base">
+                      View Suggested Contracts
+                    </Text>
+                    <Ionicons name="chevron-forward" size={16} color="#10B981" />
+                  </View>
+                  <Text className="text-emerald-500/70 text-xs mt-1 text-center">
+                    Top 3 options contracts ranked by score
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* Timestamp */}
             <View className="mt-4 pt-4 border-t border-gray-800">
               <Text className="text-gray-500 text-xs text-center">
@@ -390,6 +427,14 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
           </ScrollView>
         </View>
       </View>
+
+      {/* Smart Contract Suggestions Modal */}
+      <SmartContractSuggestions
+        visible={suggestionsModalVisible}
+        onClose={() => setSuggestionsModalVisible(false)}
+        ticker={notificationData.ticker}
+        onTrackContract={handleTrackContract}
+      />
     </Modal>
   );
 };

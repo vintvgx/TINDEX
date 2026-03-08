@@ -81,6 +81,108 @@ const formatTime = (timestamp: string | undefined): string => {
 };
 
 /**
+ * Renders generic JSONB data in a readable format
+ * Handles nested objects, arrays, and primitive values
+ */
+const renderGenericJSONBData = (data: any, accentColor: string, depth: number = 0): React.ReactElement => {
+  if (data === null || data === undefined) {
+    return <Text className="text-gray-500 text-sm">N/A</Text>;
+  }
+
+  // Handle arrays
+  if (Array.isArray(data)) {
+    return (
+      <View className="ml-2">
+        {data.map((item, index) => (
+          <View key={index} className="mb-1">
+            <Text className="text-gray-300 text-xs">
+              • {typeof item === 'object' && item !== null 
+                ? JSON.stringify(item, null, 2) 
+                : String(item)}
+            </Text>
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  // Handle objects
+  if (typeof data === 'object') {
+    const entries = Object.entries(data);
+    if (entries.length === 0) {
+      return <Text className="text-gray-500 text-sm">No data</Text>;
+    }
+
+    return (
+      <View className={depth > 0 ? 'ml-2' : ''}>
+        {entries.map(([key, value], index) => {
+          const formattedKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+          const isLast = index === entries.length - 1;
+
+          // Handle nested objects
+          if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+            return (
+              <View key={key} className={!isLast ? 'mb-2' : ''}>
+                <Text className="text-gray-400 text-xs mb-1">{formattedKey}:</Text>
+                <View className="ml-2">
+                  {renderGenericJSONBData(value, accentColor, depth + 1)}
+                </View>
+              </View>
+            );
+          }
+
+          // Handle arrays
+          if (Array.isArray(value)) {
+            return (
+              <View key={key} className={!isLast ? 'mb-2' : ''}>
+                <Text className="text-gray-400 text-xs mb-1">{formattedKey}:</Text>
+                {renderGenericJSONBData(value, accentColor, depth + 1)}
+              </View>
+            );
+          }
+
+          // Handle primitive values
+          let displayValue: string | React.ReactElement;
+          if (typeof value === 'number') {
+            // Format numbers - check if it's a price (between 0.01 and 10000)
+            if (value > 0.01 && value < 10000 && value % 1 !== 0) {
+              displayValue = `$${value.toFixed(2)}`;
+            } else if (value % 1 === 0) {
+              displayValue = value.toLocaleString();
+            } else {
+              displayValue = value.toFixed(4);
+            }
+          } else if (typeof value === 'boolean') {
+            displayValue = value ? 'Yes' : 'No';
+          } else {
+            displayValue = String(value);
+          }
+
+          return (
+            <View key={key} className={`flex-row justify-between items-center ${!isLast ? 'mb-2' : ''}`}>
+              <Text className="text-gray-300 text-sm flex-1">{formattedKey}</Text>
+              <Text 
+                className="text-sm font-semibold flex-1 text-right"
+                style={{ color: accentColor }}
+              >
+                {displayValue}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+    );
+  }
+
+  // Handle primitive values (shouldn't happen at root level, but handle it)
+  return (
+    <Text className="text-gray-300 text-sm" style={{ color: accentColor }}>
+      {String(data)}
+    </Text>
+  );
+};
+
+/**
  * Calculate ORB profit targets based on breakout direction
  * 
  * Targets are calculated using measured move projections:
@@ -297,53 +399,11 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                   />
                 </View>
               )}
-              {/* Reversal Data Display */}
+              {/* Reversal Data Display - Generic to handle any structure */}
               {data.breakout_type === 'reversal' && data.reversal_data && (
                 <View className="mt-3 pt-3 border-t border-gray-700/50">
                   <Text className="text-gray-400 text-sm mb-2">Reversal Details</Text>
-                  <View className="mb-2">
-                    <Text className="text-gray-300 text-sm">
-                      Original Breakout: <Text className="font-semibold" style={{ color: breakoutStyle.color }}>
-                        {data.reversal_data.original_breakout_type === 'above' ? 'Bullish' : 'Bearish'}
-                      </Text>
-                    </Text>
-                  </View>
-                  <View className="mb-2">
-                    <Text className="text-gray-300 text-sm">
-                      Confidence: <Text className="font-semibold" style={{ color: breakoutStyle.color }}>
-                        {data.reversal_data.confidence}
-                      </Text>
-                    </Text>
-                  </View>
-                  <View className="mb-2">
-                    <Text className="text-gray-300 text-sm">
-                      Score: <Text className="font-semibold" style={{ color: breakoutStyle.color }}>
-                        {data.reversal_data.score_percentage.toFixed(1)}%
-                      </Text>
-                      {' '}({data.reversal_data.score}/{data.reversal_data.max_score})
-                    </Text>
-                  </View>
-                  {data.reversal_data.vwap !== null && (
-                    <View className="flex-row items-center mb-2">
-                      <Text className="text-gray-300 text-sm">VWAP: </Text>
-                      <AnimatedNumber
-                        value={data.reversal_data.vwap}
-                        format={(v) => `$${v.toFixed(2)}`}
-                        style={{ fontSize: 14, fontWeight: '600' }}
-                        color={breakoutStyle.color}
-                      />
-                    </View>
-                  )}
-                  {data.reversal_data.indicators && data.reversal_data.indicators.length > 0 && (
-                    <View className="mt-2">
-                      <Text className="text-gray-400 text-xs mb-1">Indicators:</Text>
-                      {data.reversal_data.indicators.map((indicator, index) => (
-                        <Text key={index} className="text-gray-300 text-xs ml-2">
-                          • {indicator}
-                        </Text>
-                      ))}
-                    </View>
-                  )}
+                  {renderGenericJSONBData(data.reversal_data, breakoutStyle.color)}
                 </View>
               )}
             </View>
@@ -574,6 +634,16 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
               )}
             </View>
           </View>
+
+          {/* Options Data Display */}
+          {data.options_data && (
+            <View className="mb-6">
+              <Text className="text-gray-400 text-sm mb-4">Options Data</Text>
+              <View className="bg-gray-800/50 rounded-xl p-4">
+                {renderGenericJSONBData(data.options_data, breakoutStyle.color)}
+              </View>
+            </View>
+          )}
 
           {/* Navigation Button */}
           {onNavigateToTicker && (

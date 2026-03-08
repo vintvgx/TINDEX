@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Modal,
   View,
@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/common/components/ui/text';
 import { useORBStatus } from '@/hooks/queries/orb/useORBStatus';
 import { useStartORBMutation, useStopORBMutation } from '@/hooks/mutations/orb/useORBControl';
+import { PortfolioViewModal } from './PortfolioViewModal';
 
 /**
  * Simple toast function using Alert (can be replaced with proper toast implementation)
@@ -26,6 +27,7 @@ interface ORBAdminModalProps {
   visible: boolean;
   onClose: () => void;
   onViewLogs?: () => void;
+  onViewPortfolio?: () => void;
 }
 
 /**
@@ -43,15 +45,26 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
   visible,
   onClose,
   onViewLogs,
+  onViewPortfolio,
 }) => {
   const { data: status, isLoading, error } = useORBStatus();
   const startMutation = useStartORBMutation();
   const stopMutation = useStopORBMutation();
+  const [portfolioModalVisible, setPortfolioModalVisible] = useState(false);
 
   const isRunning = status?.running ?? false;
   const isCalculationPhase = status?.calculation_phase ?? false;
   const activeTickers = status?.active_tickers ?? [];
   const orbRangesCount = status?.orb_ranges_count ?? 0;
+
+  const handleViewPortfolio = () => {
+    if (onViewPortfolio) {
+      onViewPortfolio();
+    } else {
+      setPortfolioModalVisible(true);
+    }
+    onClose();
+  };
 
   const handleStartServiceDebug = () => {
     startMutation.mutate(true);
@@ -204,23 +217,37 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
             </View>
           )}
 
-          {/* View Logs Section */}
-          {onViewLogs && (
-            <View className="mb-6">
-              <Text className="text-lg font-semibold text-gray-900 mb-4">Debug Tools</Text>
+          {/* Portfolio & Tools Section */}
+          <View className="mb-6">
+            <Text className="text-lg font-semibold text-gray-900 mb-4">Analytics & Tools</Text>
+            
+            <View className="gap-3">
+              {/* Portfolio View */}
               <TouchableOpacity
-                onPress={() => {
-                  onViewLogs();
-                  onClose();
-                }}
-                className="w-full h-14 rounded-md bg-gray-700 items-center justify-center active:opacity-90">
+                onPress={handleViewPortfolio}
+                className="w-full h-14 rounded-md bg-blue-600 items-center justify-center active:opacity-90">
                 <View className="flex-row items-center gap-3">
-                  <Ionicons name="document-text-outline" size={20} color="#ffffff" />
-                  <Text className="text-white font-semibold text-lg">View Logs</Text>
+                  <Ionicons name="briefcase-outline" size={20} color="#ffffff" />
+                  <Text className="text-white font-semibold text-lg">Portfolio View</Text>
                 </View>
               </TouchableOpacity>
+
+              {/* View Logs */}
+              {onViewLogs && (
+                <TouchableOpacity
+                  onPress={() => {
+                    onViewLogs();
+                    onClose();
+                  }}
+                  className="w-full h-14 rounded-md bg-gray-700 items-center justify-center active:opacity-90">
+                  <View className="flex-row items-center gap-3">
+                    <Ionicons name="document-text-outline" size={20} color="#ffffff" />
+                    <Text className="text-white font-semibold text-lg">View Logs</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
             </View>
-          )}
+          </View>
 
           {/* Control Section */}
           <View className="mb-6">
@@ -293,6 +320,12 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
           </View>
         </View>
       </ScrollView>
+
+      {/* Portfolio View Modal */}
+      <PortfolioViewModal
+        visible={portfolioModalVisible}
+        onClose={() => setPortfolioModalVisible(false)}
+      />
     </Modal>
   );
 };

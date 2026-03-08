@@ -1210,7 +1210,7 @@ class OrbService:
                 }
             }
             
-            # Update cache state with reversal (NO DATABASE CALL)
+            # Update cache state with reversal briefly (for notification context)
             self._state_cache.set_reversal(
                 ticker=ticker,
                 trade_date=trade_date,
@@ -1219,21 +1219,13 @@ class OrbService:
                 timestamp=self.get_current_et_time().isoformat(),
             )
             
-            # Track reversal detection for auto-clearing
-            self._reversal_tracking[ticker] = {
-                "detected_at": self.get_current_et_time(),
-                "bars_since": 0,
-                "original_breakout_type": original_breakout_type
-            }
-            
             logger.info(
                 f"[REVERSAL DETECTED] {ticker} reversal after {original_breakout_type} breakout. "
                 f"Price: ${price_float:.2f}, Confidence: {confidence}, "
-                f"Indicators: {', '.join(indicators)}. "
-                f"Will auto-clear after {self._reversal_display_bars} bars (≈{self._reversal_display_bars} minutes for 1-min bars)."
+                f"Indicators: {', '.join(indicators)}."
             )
             
-            # Send reversal notification
+            # Send reversal notification (user is notified once)
             await self.send_reversal_notification(
                 ticker=ticker,
                 original_breakout_type=original_breakout_type,
@@ -1242,6 +1234,27 @@ class OrbService:
                 indicators=indicators,
                 orb_high=orb_high_float,
                 orb_low=orb_low_float
+            )
+            
+            # Reset state to "none" and clear breakout flags so reversal is no longer tracked.
+            # Next reversal will only trigger after a fresh breakout (price goes above ORH or below ORL again).
+            self._state_cache.update_state(
+                ticker=ticker,
+                trade_date=trade_date,
+                breakout_type="none",
+                high_broken=False,
+                low_broken=False,
+                reversal_data=None,
+                current_price=price_float,
+                timestamp=self.get_current_et_time().isoformat(),
+            )
+            if ticker in self.monitoring_state:
+                self.monitoring_state[ticker]["high_broken"] = False
+                self.monitoring_state[ticker]["low_broken"] = False
+            if ticker in self._reversal_tracking:
+                del self._reversal_tracking[ticker]
+            logger.debug(
+                f"[REVERSAL] {ticker} state reset to none; next reversal requires a new breakout (above ORH or below ORL)."
             )
             
         except Exception as e:
