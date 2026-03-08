@@ -60,19 +60,17 @@ const ORBScreen = () => {
   const isORBRunning = orbStatus?.running ?? false;
   const isCalculationPhase = orbStatus?.calculation_phase ?? false;
 
-  // Transform data: set breakout_type to "Offline" when service is not running
+  // Transform data: only show monitoring_active tickers; set breakout_type to "Offline" when service is not running
   const transformedORBData = useMemo(() => {
     if (!orbData) return [];
-    
-    // If service is not running, mark all items as Offline
+    const activeOnly = orbData.filter((item) => item.monitoring_active);
     if (!isORBRunning) {
-      return orbData.map(item => ({
+      return activeOnly.map((item) => ({
         ...item,
         breakout_type: 'Offline' as const,
       }));
     }
-    
-    return orbData;
+    return activeOnly;
   }, [orbData, isORBRunning]);
 
   // Update last fetch time when data changes

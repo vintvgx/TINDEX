@@ -117,6 +117,8 @@ class OrbService:
         self._bars_received_count = 0
         # Gap analysis: prefetch at ~9:25 AM ET once per trade date
         self._gap_prefetch_date: Optional[date] = None
+        # Periodic ticker list refresh (re-load from DB so add/remove tickers takes effect)
+        self._last_ticker_refresh_at: Optional[datetime] = None
         
         # Expo push URL
         self.expo_push_url = "https://exp.host/--/api/v2/push/send"
@@ -2136,6 +2138,38 @@ class OrbService:
                             f"  {ticker}: High={data['high']}, Low={data['low']}, "
                             f"Open={data.get('open', 'N/A')}, Volume={data.get('volume', 0)}"
                         )
+                
+                # Periodic ticker list refresh: re-load from DB and re-subscribe if changed
+                # (so add/remove tickers takes effect without restart; interval avoids DB hammering)
+                if not self.is_orb_calculation_period():
+                    now = self.get_current_et_time()
+                    interval_sec = 120  # 2 minutes
+                    if (
+                        self._last_ticker_refresh_at is None
+                        or (now - self._last_ticker_refresh_at).total_seconds() >= interval_sec
+                    ):
+                        self._last_ticker_refresh_at = now
+                        tickers = await self.load_followed_stocks()
+                        if tickers != self.active_tickers:
+                            logger.info(
+                                "Ticker list changed: refreshing subscription. Previous=%s, New=%s",
+                                sorted(self.active_tickers),
+                                sorted(tickers),
+                            )
+                            await self.ensure_orb_ranges()
+                            if self.streaming_service.is_running:
+                                await self.streaming_service.stop_stream()
+                            self.active_tickers = tickers
+                            if tickers:
+                                subscribed = await self.streaming_service.subscribe(
+                                    tickers, self._create_bar_handler_wrapper()
+                                )
+                                if subscribed:
+                                    await self.streaming_service.start_stream()
+                                else:
+                                    logger.error("Failed to re-subscribe after ticker list refresh")
+                            else:
+                                logger.warning("No tickers to monitor after refresh")
                 
                 # After market close
                 if current_time.time() > self.market_close:
