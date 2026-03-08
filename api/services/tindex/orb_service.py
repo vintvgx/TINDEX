@@ -1727,7 +1727,6 @@ class OrbService:
         gap_pct = gap_context.get("gap_percent")
         gap_pts = gap_context.get("gap_points")
         prior_trend = gap_context.get("prior_day_trend")
-        continuation = gap_context.get("trend_continuation")
         breakout_aligns = gap_context.get("breakout_aligns_gap")
         if gap_dir == "flat":
             gap_str = "Flat"
