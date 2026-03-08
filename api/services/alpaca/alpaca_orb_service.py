@@ -638,10 +638,13 @@ class AlpacaService:
             gap_direction = orb_data.get("gap_direction")
             prior_day_trend = orb_data.get("prior_day_trend")
             trend_continuation = orb_data.get("trend_continuation")
-            breakout_aligns_gap = (
-                (breakout_type == "above" and gap_direction == "up")
-                or (breakout_type == "below" and gap_direction == "down")
-            ) if gap_direction else None
+            if gap_direction in ("up", "down"):
+                breakout_aligns_gap = (
+                    (breakout_type == "above" and gap_direction == "up")
+                    or (breakout_type == "below" and gap_direction == "down")
+                )
+            else:
+                breakout_aligns_gap = None
             breakout_record = {
                 "ticker": ticker,
                 "trade_date": str(trade_date),
