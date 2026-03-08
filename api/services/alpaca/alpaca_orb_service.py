@@ -656,6 +656,7 @@ class AlpacaService:
             }
             if orb_data.get("gap_percent") is not None:
                 breakout_record["gap_percent"] = orb_data.get("gap_percent")
+                breakout_record["gap_points"] = orb_data.get("gap_points")
                 breakout_record["gap_direction"] = gap_direction
                 breakout_record["prior_day_trend"] = prior_day_trend
                 breakout_record["trend_continuation"] = trend_continuation

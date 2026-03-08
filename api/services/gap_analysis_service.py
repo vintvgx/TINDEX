@@ -67,10 +67,13 @@ def compute_gap_context(
     else:
         prior_day_trend = "bearish"
 
-    trend_continuation = (
-        (prior_day_trend == "bullish" and gap_direction == "up")
-        or (prior_day_trend == "bearish" and gap_direction == "down")
-    )
+    if prior_day_trend == "flat" or gap_direction == "flat":
+        trend_continuation = None
+    else:
+        trend_continuation = (
+            (prior_day_trend == "bullish" and gap_direction == "up")
+            or (prior_day_trend == "bearish" and gap_direction == "down")
+        )
 
     return {
         "prior_close": round(prior_close, 2),
