@@ -385,7 +385,7 @@ class AlpacaService:
             }
             today_open_float = float(opening_price) if opening_price else None
             if today_open_float and today_open_float > 0:
-                prior = get_gap_analysis_service().get_cached_prior(ticker)
+                prior = get_gap_analysis_service().get_cached_prior(ticker, trade_date)
                 if prior:
                     gap_ctx = compute_gap_context(
                         prior["prior_close"],
@@ -2049,7 +2049,7 @@ class AlpacaService:
                     tickers_list = await self.load_followed_stocks()
                     if tickers_list:
                         count = await get_gap_analysis_service().fetch_and_cache_prior_day_ohlc(
-                            list(tickers_list)
+                            list(tickers_list), trade_date
                         )
                         if count > 0:
                             self._gap_prefetch_date = trade_date
@@ -2072,7 +2072,7 @@ class AlpacaService:
                         tickers_list = await self.load_followed_stocks()
                         if tickers_list and (self._gap_prefetch_date != trade_date):
                             await get_gap_analysis_service().fetch_and_cache_prior_day_ohlc(
-                                list(tickers_list)
+                                list(tickers_list), trade_date
                             )
                             self._gap_prefetch_date = trade_date
                         subscribed = await self.subscribe_to_tickers()

@@ -105,7 +105,7 @@ def _empty_gap_context(
 class GapAnalysisService:
     """
     Fetches and caches prior-day OHLC for monitored tickers (~9:25 AM ET).
-    ORB services call get_cached_prior(ticker) and compute_gap_context(..., today_open)
+    ORB services call get_cached_prior(ticker, trade_date) and compute_gap_context(..., today_open)
     when saving the ORB range.
     """
 
@@ -113,12 +113,13 @@ class GapAnalysisService:
         self._cache: Dict[str, Dict[str, float]] = {}
         self._cache_date: Optional[date] = None
 
-    def get_cached_prior(self, ticker: str) -> Optional[Dict[str, float]]:
+    def get_cached_prior(self, ticker: str, trade_date: date) -> Optional[Dict[str, float]]:
         """
         Return cached prior_close and prior_day_open for ticker, or None.
-        Cache is keyed by date; if cache is for a different day, returns None.
+        Returns None if cache is empty, or if cache is for a different ET trade_date
+        (rejects stale entries).
         """
-        if self._cache_date is None:
+        if self._cache_date is None or self._cache_date != trade_date:
             return None
         return self._cache.get(ticker)
 
@@ -129,10 +130,17 @@ class GapAnalysisService:
         self._cache.clear()
         self._cache_date = None
 
-    async def fetch_and_cache_prior_day_ohlc(self, tickers: List[str]) -> int:
+    async def fetch_and_cache_prior_day_ohlc(
+        self, tickers: List[str], trade_date: date
+    ) -> int:
         """
         Fetch previous trading day's open and close for each ticker via yfinance;
-        store in memory for the current trade date. Run at ~9:25 AM ET.
+        store in memory keyed by the given ET trade_date. Run at ~9:25 AM ET.
+
+        Args:
+            tickers: List of ticker symbols to fetch.
+            trade_date: ET trade date to key the cache (caller must pass
+                get_current_et_time().date() or equivalent).
 
         Returns:
             Number of tickers for which we successfully cached prior OHLC.
@@ -140,8 +148,7 @@ class GapAnalysisService:
         if not tickers:
             return 0
 
-        trade_date = date.today()
-        if self._cache_date != trade_date:
+        if self._cache_date is not None and self._cache_date != trade_date:
             self.clear_cache()
         self._cache_date = trade_date
 
@@ -156,7 +163,11 @@ class GapAnalysisService:
                         "[GAP] %s: insufficient history (need at least 2 days)", ticker
                     )
                     return None
-                prev_row = hist.iloc[-2]
+                prior_rows = hist[hist.index.date < trade_date]
+                if prior_rows.empty:
+                    logger.warning("[GAP] %s: no completed prior session found", ticker)
+                    return None
+                prev_row = prior_rows.iloc[-1]
                 prior_close = float(prev_row["Close"])
                 prior_day_open = float(prev_row["Open"])
                 if prior_close <= 0 or prior_day_open <= 0:

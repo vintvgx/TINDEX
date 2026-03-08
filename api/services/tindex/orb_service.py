@@ -348,7 +348,7 @@ class OrbService:
             # Merge gap/trend context when we have prior-day cache and today_open
             today_open_float = float(opening_price) if opening_price is not None else None
             if today_open_float and today_open_float > 0:
-                prior = get_gap_analysis_service().get_cached_prior(ticker)
+                prior = get_gap_analysis_service().get_cached_prior(ticker, trade_date)
                 if prior:
                     gap_ctx = compute_gap_context(
                         prior["prior_close"],
@@ -2090,7 +2090,7 @@ class OrbService:
                     tickers = await self.load_followed_stocks()
                     if tickers:
                         count = await get_gap_analysis_service().fetch_and_cache_prior_day_ohlc(
-                            list(tickers)
+                            list(tickers), trade_date
                         )
                         if count > 0:
                             self._gap_prefetch_date = trade_date
@@ -2113,7 +2113,7 @@ class OrbService:
                             # Ensure gap prior-day OHLC is cached (in case 9:25 window was missed)
                             if self._gap_prefetch_date != trade_date:
                                 await get_gap_analysis_service().fetch_and_cache_prior_day_ohlc(
-                                    list(tickers)
+                                    list(tickers), trade_date
                                 )
                                 self._gap_prefetch_date = trade_date
                             subscribed = await self.streaming_service.subscribe(tickers, self._create_bar_handler_wrapper())

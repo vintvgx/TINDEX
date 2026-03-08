@@ -472,7 +472,7 @@ export const MOCK_ORB_RANGES: ORBRange[] = [
     opening_price: 445.20,
     volume_in_range: 78200000,
     prior_close: 444.10,
-    today_open: 438.00,
+    today_open: 445.20,
     gap_points: -6.10,
     gap_percent: -1.37,
     gap_direction: 'down',

@@ -210,7 +210,7 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
             )}
 
             {/* Gap & Prior Day Context (from notification data) */}
-            {(notificationData.gap_direction != null || notificationData.prior_day_trend != null) && (
+            {notificationData.gap_direction != null && (
               <View className="mb-4 p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
                 <Text className="text-gray-400 text-sm mb-2">📊 Gap & Prior Day</Text>
                 <GapTrendBadges

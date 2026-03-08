@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { GapTrendContext, GapDirection, PriorDayTrend } from "@/common/types/orb";
+import { GAP_TREND_INFO } from "@/common/docs/GapTrendingBadge/GapTrendInfo";
 
 export interface GapTrendBadgesProps {
   /** Gap/trend context from orb_ranges or notification payload */
@@ -18,6 +19,9 @@ export interface GapTrendBadgesProps {
   /** Compact layout for cards; default false for full badges */
   compact?: boolean;
 }
+
+/** Term type for glossary styling: continuation = green, againstGap = caution/amber */
+export type GapBadgeGlossaryTermKey = "gap" | "priorTrend" | "continuation" | "againstGap";
 
 const GAP_DIRECTION_COLORS: Record<GapDirection, { bg: string; text: string }> = {
   up: { bg: "bg-green-500/20", text: "text-green-400" },
@@ -31,70 +35,6 @@ const TREND_COLORS: Record<PriorDayTrend, { bg: string; text: string }> = {
   flat: { bg: "bg-gray-600/30", text: "text-gray-400" },
 };
 
-/** Term type for glossary styling: continuation = green, againstGap = caution/amber */
-type GlossaryTermKey = "gap" | "priorTrend" | "continuation" | "againstGap";
-
-/** Info modal content: glossary and why positive/negative matters by prior trend */
-const GAP_TREND_INFO = {
-  title: "Understanding Gap & Prior Day Trend",
-  glossary: [
-    {
-      key: "gap" as GlossaryTermKey,
-      term: "Gap (Up / Down / Flat)",
-      definition:
-        "The difference between yesterday's closing price and today's opening price.\n\n" +
-        "• Up = stock opened higher than prior close\n" +
-        "• Down = opened lower\n" +
-        "• Flat = opened near the prior close (small move)",
-    },
-    {
-      key: "priorTrend" as GlossaryTermKey,
-      term: "Prior Day Trend (Bullish / Bearish / Flat)",
-      definition:
-        "Whether the previous trading day closed above or below its open.\n\n" +
-        "• Bullish = closed higher than open\n" +
-        "• Bearish = closed lower than open\n" +
-        "• Flat = little change between open and close",
-    },
-    {
-      key: "continuation" as GlossaryTermKey,
-      term: "Continuation ✓",
-      definition:
-        "The gap direction aligns with the prior day's trend (e.g. bullish day + gap up, or bearish day + gap down).\n\n" +
-        "Suggests momentum is continuing into the open.",
-    },
-    {
-      key: "againstGap" as GlossaryTermKey,
-      term: "Against Gap ⚠",
-      definition:
-        "The gap or breakout goes opposite to the prior trend (e.g. bullish day but gap down).\n\n" +
-        "Can signal reversal, profit-taking, or failed follow-through—worth extra caution. Not favorable in the direction of the prior trend.",
-    },
-  ],
-  whyItMatters: [
-    {
-      prior: "After a bullish day",
-      positive:
-        "A gap up (positive) is favorable—it continues bullish momentum.\n\nTraders often see this as confirmation.",
-      negative:
-        "A gap down (negative) goes against the trend and can indicate profit-taking or a reversal.\n\nTreat with more caution.",
-    },
-    {
-      prior: "After a bearish day",
-      positive:
-        "A gap up (positive) can signal a bounce or short squeeze; it goes against the prior trend.",
-      negative:
-        "A gap down (negative) is favorable—it continues bearish momentum.\n\nSuggests selling pressure persists.",
-    },
-    {
-      prior: "After a flat day",
-      positive:
-        "Either direction is more neutral; continuation is less meaningful without a clear prior trend.",
-      negative: null,
-    },
-  ],
-};
-
 /** Modal that explains gap/trend concepts and when positive/negative is favorable */
 function GapTrendInfoModal({
   visible,
@@ -103,7 +43,7 @@ function GapTrendInfoModal({
   visible: boolean;
   onClose: () => void;
 }) {
-  const termColor = (key: GlossaryTermKey) => {
+  const termColor = (key: GapBadgeGlossaryTermKey) => {
     if (key === "continuation") return "#10B981"; // green
     if (key === "againstGap") return "#D97706";   // amber/caution (not green)
     return "#9ca3af"; // gray for gap, priorTrend
@@ -242,6 +182,9 @@ export const GapTrendBadges: React.FC<GapTrendBadgesProps> = ({
   const gapLabel = formatGapLabel(context);
   const priorLabel = priorTrend ? `Prior Day: ${priorTrend.charAt(0).toUpperCase() + priorTrend.slice(1)}` : "Prior Day: —";
 
+  const positiveLabel = showBreakoutAlignment ? "Aligns Gap ✓" : "Continuation ✓";
+  const negativeLabel = showBreakoutAlignment ? "Against Gap ⚠" : "Against Prior Trend ⚠";
+
   const infoButton = (
     <TouchableOpacity
       onPress={() => setInfoVisible(true)}
@@ -292,13 +235,13 @@ export const GapTrendBadges: React.FC<GapTrendBadgesProps> = ({
         {showCheck && (
           <View className="flex-row items-center">
             <Ionicons name="checkmark-circle" size={18} color="#10B981" />
-            <Text className="text-green-400 text-sm font-medium ml-1">Continuation ✓</Text>
+            <Text className="text-green-400 text-sm font-medium ml-1">{positiveLabel}</Text>
           </View>
         )}
         {showWarning && (
           <View className="flex-row items-center">
             <Ionicons name="warning" size={18} color="#F59E0B" />
-            <Text className="text-sm font-medium ml-1" style={{ color: "#D97706" }}>Against Gap ⚠</Text>
+            <Text className="text-sm font-medium ml-1" style={{ color: "#D97706" }}>{negativeLabel}</Text>
           </View>
         )}
       </View>
