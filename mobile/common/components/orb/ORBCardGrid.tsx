@@ -2,12 +2,18 @@ import React from 'react';
 import { View, Text, ActivityIndicator, FlatList } from 'react-native';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { ORBCard } from './ORBCard';
+import type { ORBRange } from '@/common/types/orb';
+import type { ORBGridLayout } from './ORBMenu';
 
 interface ORBCardGridProps {
   data: ORBMonitoringState[];
   isLoading: boolean;
   onCardPress: (data: ORBMonitoringState) => void;
   lastFetchTime?: Date | null;
+  /** Optional orb_ranges by ticker for gap/trend badges */
+  rangesByTicker?: Record<string, ORBRange>;
+  /** 2x2 grid or 1x1 single column */
+  gridLayout?: ORBGridLayout;
 }
 
 /**
@@ -25,7 +31,7 @@ const formatDateTime = (date: Date): string => {
   });
 };
 
-export const ORBCardGrid: React.FC<ORBCardGridProps> = ({ data, isLoading, onCardPress, lastFetchTime }) => {
+export const ORBCardGrid: React.FC<ORBCardGridProps> = ({ data, isLoading, onCardPress, lastFetchTime, rangesByTicker, gridLayout = "2x2" }) => {
   if (isLoading) {
     return (
       <View className="flex-1 justify-center items-center py-20">
@@ -62,16 +68,25 @@ export const ORBCardGrid: React.FC<ORBCardGridProps> = ({ data, isLoading, onCar
     );
   };
 
+  const numColumns = gridLayout === "1x1" ? 1 : 2;
+  const fullWidth = gridLayout === "1x1";
+
   return (
     <FlatList
+      key={`orb-grid-${gridLayout}`}
       data={data}
-      numColumns={2}
+      numColumns={numColumns}
       keyExtractor={(item, index) => `${item.ticker}-${index}`}
       renderItem={({ item }) => (
-        <ORBCard data={item} onPress={() => onCardPress(item)} />
+        <ORBCard
+          data={item}
+          onPress={() => onCardPress(item)}
+          orbRange={rangesByTicker?.[item.ticker]}
+          fullWidth={fullWidth}
+        />
       )}
       contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
-      columnWrapperStyle={{ justifyContent: 'space-between' }}
+      columnWrapperStyle={numColumns === 2 ? { justifyContent: "space-between" } : undefined}
       showsVerticalScrollIndicator={false}
       ListFooterComponent={renderFooter}
     />

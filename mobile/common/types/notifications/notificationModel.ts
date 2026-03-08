@@ -36,6 +36,13 @@ export interface Notification {
     risk_per_share?: number;
     rvol?: number;
     vwap_aligned?: boolean;
+    // Gap & prior-day trend context (ORB notification payload)
+    gap_percent?: number | null;
+    gap_points?: number | null;
+    gap_direction?: "up" | "down" | "flat" | null;
+    prior_day_trend?: "bullish" | "bearish" | "flat" | null;
+    trend_continuation?: boolean | null;
+    breakout_aligns_gap?: boolean | null;
   };
   is_read: boolean;
   read_at: string | null;

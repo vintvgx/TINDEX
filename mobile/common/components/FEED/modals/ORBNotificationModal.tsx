@@ -10,7 +10,9 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { SmartContractSuggestions } from "@/common/components/orb/SmartContractSuggestions";
+import { GapTrendBadges } from "@/common/components/orb/GapTrendBadges";
 import type { OptionsOpportunity } from "@/common/types/blogPosts/ticker";
+import type { GapTrendContext } from "@/common/types/orb";
 
 /**
  * Interface for ORB breakout notification data
@@ -44,6 +46,13 @@ export interface ORBBreakoutNotificationData {
   risk_per_share?: number;
   rvol?: number;
   vwap_aligned?: boolean;
+  // Gap & prior-day trend context (from backend notification payload)
+  gap_percent?: number | null;
+  gap_points?: number | null;
+  gap_direction?: "up" | "down" | "flat" | null;
+  prior_day_trend?: "bullish" | "bearish" | "flat" | null;
+  trend_continuation?: boolean | null;
+  breakout_aligns_gap?: boolean | null;
 }
 
 interface ORBNotificationModalProps {
@@ -191,6 +200,26 @@ export const ORBNotificationModal: React.FC<ORBNotificationModalProps> = ({
                 <Text className="text-amber-200 text-sm">
                   The price returned inside the ORB range after the 3-minute confirmation period. This breakout did not sustain.
                 </Text>
+              </View>
+            )}
+
+            {/* Gap & Prior Day Context (from notification data) */}
+            {(notificationData.gap_direction != null || notificationData.prior_day_trend != null) && (
+              <View className="mb-4 p-3 bg-gray-800/50 rounded-lg border border-gray-700/50">
+                <Text className="text-gray-400 text-sm mb-2">Gap & Prior Day</Text>
+                <GapTrendBadges
+                  context={
+                    {
+                      gap_percent: notificationData.gap_percent ?? null,
+                      gap_points: notificationData.gap_points ?? null,
+                      gap_direction: notificationData.gap_direction ?? null,
+                      prior_day_trend: notificationData.prior_day_trend ?? null,
+                      trend_continuation: notificationData.trend_continuation ?? null,
+                      breakout_aligns_gap: notificationData.breakout_aligns_gap ?? null,
+                    } as GapTrendContext
+                  }
+                  showBreakoutAlignment
+                />
               </View>
             )}
 

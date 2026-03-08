@@ -40,7 +40,9 @@ Thumbs.db
 *.tmp
 *.temp
 
+#supabase files
 SUPABASE.md
+/supabase/migrations
 
 # github workflow (needs to be updated before merging)
 .github/

@@ -11,12 +11,16 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { AnimatedNumber } from './AnimatedNumber';
+import { GapTrendBadges } from './GapTrendBadges';
+import type { GapTrendContext } from '@/common/types/orb';
 
 interface ORBDetailModalProps {
   visible: boolean;
   data: ORBMonitoringState | null;
   onClose: () => void;
   onNavigateToTicker?: (ticker: string) => void;
+  /** Optional gap/trend from orb_ranges for context bar */
+  gapTrendContext?: GapTrendContext | null;
 }
 
 /**
@@ -309,6 +313,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   data,
   onClose,
   onNavigateToTicker,
+  gapTrendContext,
 }) => {
   if (!data) return null;
 
@@ -406,6 +411,14 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                   {renderGenericJSONBData(data.reversal_data, breakoutStyle.color)}
                 </View>
               )}
+            </View>
+          )}
+
+          {/* Gap / Prior Day / Continuation context bar */}
+          {gapTrendContext && gapTrendContext.gap_direction != null && (
+            <View className="mb-6 p-4 bg-gray-800/50 rounded-xl border border-gray-700/50">
+              <Text className="text-gray-400 text-sm mb-3">Gap & Prior Day Context</Text>
+              <GapTrendBadges context={gapTrendContext} />
             </View>
           )}
 

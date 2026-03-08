@@ -107,6 +107,12 @@ const NotificationsScreen = () => {
           risk_per_share: notification.data.risk_per_share,
           rvol: notification.data.rvol,
           vwap_aligned: notification.data.vwap_aligned,
+          gap_percent: notification.data.gap_percent,
+          gap_points: notification.data.gap_points,
+          gap_direction: notification.data.gap_direction,
+          prior_day_trend: notification.data.prior_day_trend,
+          trend_continuation: notification.data.trend_continuation,
+          breakout_aligns_gap: notification.data.breakout_aligns_gap,
         };
 
         setOrbNotificationData(orbData);
