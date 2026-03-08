@@ -123,7 +123,11 @@ def calculate_position_pnl(
 
     cost_basis = avg_cost * shares
     current_value = current_price * shares
-    pnl_pct = ((current_price - avg_cost) / avg_cost * 100) if avg_cost > 0 else 0.0
+    if avg_cost > 0:
+        price_delta = avg_cost - current_price if position_type == "short" else current_price - avg_cost
+        pnl_pct = price_delta / avg_cost * 100
+    else:
+        pnl_pct = 0.0
 
     return {
         "unrealized_pnl": round(float(unrealized), 4),
