@@ -170,6 +170,38 @@ export const MOCK_ORB_DATA: ORBMonitoringState[] = [
       },
     },
   },
+  // Mock: price above ORH — for testing Fibonacci extension (visual range + extension above ORH)
+  {
+    ticker: 'JPM',
+    trade_date: TODAY,
+    opening_price: 198.00,
+    orb_high: 200.50,
+    orb_low: 197.20,
+    current_price: 206.80,
+    breakout_type: 'Confirmed Bullish',
+    breakout_price: 200.60,
+    volume: 8910000,
+    tracking: null,
+    high_broken: true,
+    low_broken: false,
+    monitoring_active: true,
+  },
+  // Mock: price below ORL — for testing Fibonacci extension (visual range + extension below ORL)
+  {
+    ticker: 'BAC',
+    trade_date: TODAY,
+    opening_price: 42.80,
+    orb_high: 43.50,
+    orb_low: 42.40,
+    current_price: 40.10,
+    breakout_type: 'Confirmed Bearish',
+    breakout_price: 42.30,
+    volume: 45600000,
+    tracking: null,
+    high_broken: false,
+    low_broken: true,
+    monitoring_active: true,
+  },
 ];
 
 /**

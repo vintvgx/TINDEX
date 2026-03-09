@@ -256,6 +256,74 @@ const calculateORBTargets = (
 };
 
 /**
+ * Fibonacci extension multipliers (aligned with profit targets).
+ * Derived from orb_high/orb_low only — no Supabase schema changes required.
+ */
+const FIB_EXTENSION_MULTIPLIERS = [1.0, 1.618, 2.0] as const;
+
+export interface FibExtensionLevel {
+  label: string;
+  price: number;
+  multiplier: number;
+}
+
+/**
+ * Returns Fibonacci extension levels above ORH and below ORL for visual range and stats.
+ * Used when price is outside the ORB range so we can show extended scale and level labels.
+ */
+const getFibonacciExtensionLevels = (
+  orbHigh: number,
+  orbLow: number
+): { above: FibExtensionLevel[]; below: FibExtensionLevel[] } => {
+  const range = orbHigh - orbLow;
+  if (range <= 0) return { above: [], below: [] };
+  const above: FibExtensionLevel[] = FIB_EXTENSION_MULTIPLIERS.map((mult, i) => ({
+    label: `Fib ${mult}×`,
+    price: orbHigh + range * mult,
+    multiplier: mult,
+  }));
+  const below: FibExtensionLevel[] = FIB_EXTENSION_MULTIPLIERS.map((mult) => ({
+    label: `Fib ${mult}×`,
+    price: orbLow - range * mult,
+    multiplier: mult,
+  }));
+  return { above, below };
+};
+
+/**
+ * Resolves which Fibonacci level the current price is at (above ORH or below ORL).
+ * Returns the highest level price has reached above ORH, or lowest below ORL; null if in range.
+ */
+const getCurrentFibLevel = (
+  currentPrice: number,
+  orbHigh: number,
+  orbLow: number,
+  levels: { above: FibExtensionLevel[]; below: FibExtensionLevel[] }
+): FibExtensionLevel | null => {
+  if (currentPrice > orbHigh) {
+    const reached = levels.above.filter((l) => currentPrice >= l.price);
+    return reached.length > 0 ? reached[reached.length - 1] : null;
+  }
+  if (currentPrice < orbLow) {
+    const reached = levels.below.filter((l) => currentPrice <= l.price);
+    return reached.length > 0 ? reached[reached.length - 1] : null;
+  }
+  return null;
+};
+
+/**
+ * Gets color for Fibonacci extension (green above ORH, red below ORL).
+ */
+const FIB_COLOR_ABOVE = '#10B981';
+const FIB_COLOR_BELOW = '#EF4444';
+
+/** Fibonacci level colors: yellow, progressively lighter as value increases (1× → 1.618× → 2×). */
+const FIB_YELLOW_COLORS: [string, string, string] = ['#B45309', '#D97706', '#FCD34D'];
+function getFibColor(index: number): string {
+  return FIB_YELLOW_COLORS[Math.min(index, FIB_YELLOW_COLORS.length - 1)];
+}
+
+/**
  * Gets color and styling for breakout type
  */
 const getBreakoutStyle = (breakoutType: string) => {
@@ -351,15 +419,31 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   const isBelowLow = currentPrice < orbLow;
   const isInRange = !isAboveHigh && !isBelowLow && orbRange > 0;
 
-  // Calculate price position percentage
-  const pricePositionPercent = orbRange > 0 
-    ? ((currentPrice - orbLow) / orbRange) * 100 
+  // Fibonacci extension levels for extended visual range and stats (when price outside range)
+  const fibLevels = orbRange > 0 ? getFibonacciExtensionLevels(orbHigh, orbLow) : { above: [], below: [] };
+  const currentFibLevel = orbRange > 0 ? getCurrentFibLevel(currentPrice, orbHigh, orbLow, fibLevels) : null;
+
+  // Visual range bounds: extend when price is above ORH or below ORL so the price indicator stays visible
+  let visualMin = orbLow;
+  let visualMax = orbHigh;
+  if (orbRange > 0) {
+    if (isAboveHigh) {
+      const extensionMax = orbHigh + orbRange * 2;
+      visualMax = Math.max(extensionMax, currentPrice + orbRange * 0.02);
+    } else if (isBelowLow) {
+      const extensionMin = orbLow - orbRange * 2;
+      visualMin = Math.min(extensionMin, currentPrice - orbRange * 0.02);
+    }
+  }
+  const visualRange = visualMax - visualMin;
+  const pricePositionPercent = visualRange > 0
+    ? Math.max(0, Math.min(100, ((currentPrice - visualMin) / visualRange) * 100))
     : 50;
 
   // Price color based on position
   let priceColor = '#FFFFFF';
-  if (isAboveHigh) priceColor = '#10B981';
-  else if (isBelowLow) priceColor = '#EF4444';
+  if (isAboveHigh) priceColor = FIB_COLOR_ABOVE;
+  else if (isBelowLow) priceColor = FIB_COLOR_BELOW;
   else if (isInRange) priceColor = '#9CA3AF';
 
   const breakoutStyle = getBreakoutStyle(data.breakout_type);
@@ -452,7 +536,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
           <View className="mb-6">
             <Text className="text-gray-400 text-sm mb-4">ORB Range</Text>
             
-            {/* Visual Range Indicator */}
+            {/* Visual Range Indicator - extends with Fibonacci when price is above ORH or below ORL */}
             <View className="mb-4">
               <View className="h-12 bg-gray-800 rounded-lg relative overflow-hidden mb-2">
                 {/* Range Bar */}
@@ -460,52 +544,114 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                   className="absolute h-full bg-gradient-to-r from-red-500/30 via-gray-600/30 to-green-500/30"
                   style={{ left: 0, right: 0 }}
                 />
-                
-                {/* ORL Line (left edge) */}
-                {orbRange > 0 && (
-                  <View
-                    className="absolute w-0.5 h-full bg-red-500"
-                    style={{ left: 0 }}
-                  />
-                )}
-                
-                {/* ORH Line (right edge) */}
-                {orbRange > 0 && (
-                  <View
-                    className="absolute w-0.5 h-full bg-green-500"
-                    style={{ right: 0 }}
-                  />
-                )}
-                
-                {/* Current Price Indicator */}
-                {orbRange > 0 && (
-                  <View
-                    className="absolute w-1 h-full"
-                    style={{ 
-                      left: `${Math.max(0, Math.min(100, pricePositionPercent))}%`,
-                      backgroundColor: priceColor 
-                    }}
-                  />
-                )}
+                {orbRange > 0 && (() => {
+                  const priceToPercent = (p: number) =>
+                    visualRange > 0 ? ((p - visualMin) / visualRange) * 100 : 0;
+                  const orlPercent = Math.max(0, Math.min(100, priceToPercent(orbLow)));
+                  const orhPercent = Math.max(0, Math.min(100, priceToPercent(orbHigh)));
+                  const showOrl = isInRange || isBelowLow;
+                  const showOrh = isInRange || isAboveHigh;
+                  return (
+                    <>
+                      {/* ORL line - only when price in range or below ORL */}
+                      {showOrl && (
+                        <View
+                          className="absolute w-0.5 h-full bg-red-500"
+                          style={{ left: `${orlPercent}%` }}
+                        />
+                      )}
+                      {/* ORH line - only when price in range or above ORH */}
+                      {showOrh && (
+                        <View
+                          className="absolute w-0.5 h-full bg-green-500"
+                          style={{ left: `${orhPercent}%` }}
+                        />
+                      )}
+                      {/* Fibonacci level lines (yellow, lighter as value increases) - only when outside range */}
+                      {isAboveHigh &&
+                        fibLevels.above.map((level, idx) => {
+                          const pct = priceToPercent(level.price);
+                          if (pct <= 0 || pct >= 100) return null;
+                          return (
+                            <View
+                              key={level.multiplier}
+                              className="absolute w-0.5 h-full"
+                              style={{ left: `${pct}%`, backgroundColor: getFibColor(idx) }}
+                            />
+                          );
+                        })}
+                      {isBelowLow &&
+                        fibLevels.below.map((level, idx) => {
+                          const pct = priceToPercent(level.price);
+                          if (pct <= 0 || pct >= 100) return null;
+                          return (
+                            <View
+                              key={level.multiplier}
+                              className="absolute w-0.5 h-full"
+                              style={{ left: `${pct}%`, backgroundColor: getFibColor(idx) }}
+                            />
+                          );
+                        })}
+                      {/* Current Price Indicator - always shown when we have a range */}
+                      <View
+                        className="absolute w-1 h-full"
+                        style={{
+                          left: `${pricePositionPercent}%`,
+                          backgroundColor: priceColor,
+                        }}
+                      />
+                    </>
+                  );
+                })()}
               </View>
-              <View className="flex-row justify-between mb-1">
-                <Text className="text-red-400 text-xs">ORL</Text>
-                <Text className="text-green-400 text-xs">ORH</Text>
-              </View>
-              {/* Current Price Label */}
-              {orbRange > 0 && isInRange && (
+              {/* Labels positioned under their lines (ORL/ORH only when visible; no ORL when above ORH, no ORH when below ORL) */}
+              {orbRange > 0 && (() => {
+                const priceToPercent = (p: number) =>
+                  visualRange > 0 ? ((p - visualMin) / visualRange) * 100 : 0;
+                const orlPercent = Math.max(0, Math.min(100, priceToPercent(orbLow)));
+                const orhPercent = Math.max(0, Math.min(100, priceToPercent(orbHigh)));
+                const showOrl = isInRange || isBelowLow;
+                const showOrh = isInRange || isAboveHigh;
+                return (
+                  <View className="relative h-5 mb-1">
+                    {showOrl && (
+                      <View
+                        className="absolute top-0"
+                        style={{ left: `${orlPercent}%`, transform: [{ translateX: -12 }] }}
+                      >
+                        <Text className="text-red-400 text-xs">ORL</Text>
+                      </View>
+                    )}
+                    {showOrh && (
+                      <View
+                        className="absolute top-0"
+                        style={{ left: `${orhPercent}%`, transform: [{ translateX: -12 }] }}
+                      >
+                        <Text className="text-green-400 text-xs">ORH</Text>
+                      </View>
+                    )}
+                  </View>
+                );
+              })()}
+              {/* Current price and optional Fib level - always show when orbRange > 0 */}
+              {orbRange > 0 && (
                 <View className="items-center mt-1">
-                  <Text 
-                    className="text-xs font-semibold"
-                    style={{ color: priceColor }}
-                  >
+                  <Text className="text-xs font-semibold" style={{ color: priceColor }}>
                     {formatPrice(currentPrice)}
                   </Text>
+                  {currentFibLevel && (
+                    <Text
+                      className="text-xs mt-0.5"
+                      style={{ color: priceColor, opacity: 0.9 }}
+                    >
+                      {currentFibLevel.label}
+                    </Text>
+                  )}
                 </View>
               )}
             </View>
 
-            {/* Range Values */}
+            {/* Range Values: ORB High, ORB Low, Range Size, and Fibonacci levels when applicable */}
             <View className="bg-gray-800/50 rounded-xl p-4">
               <View className="flex-row justify-between items-center mb-3">
                 <Text className="text-gray-400 text-sm">ORB High</Text>
@@ -513,7 +659,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                   value={data.orb_high}
                   format={(v) => `$${v.toFixed(2)}`}
                   style={{ fontSize: 18, fontWeight: '600' }}
-                  color="#10B981"
+                  color={FIB_COLOR_ABOVE}
                 />
               </View>
               <View className="flex-row justify-between items-center mb-3">
@@ -522,7 +668,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                   value={data.orb_low}
                   format={(v) => `$${v.toFixed(2)}`}
                   style={{ fontSize: 18, fontWeight: '600' }}
-                  color="#EF4444"
+                  color={FIB_COLOR_BELOW}
                 />
               </View>
               {orbRange > 0 && (
@@ -534,6 +680,49 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                     style={{ fontSize: 18, fontWeight: '600' }}
                     color="#D1D5DB"
                   />
+                </View>
+              )}
+              {/* Fibonacci extension levels - yellow, lighter as value increases; matches visual indicator */}
+              {isAboveHigh && fibLevels.above.length > 0 && (
+                <View className="pt-3 mt-3 border-t border-gray-700/50">
+                  <Text className="text-gray-400 text-sm mb-2">Extension above ORH</Text>
+                  {fibLevels.above.map((level, idx) => (
+                    <View
+                      key={level.multiplier}
+                      className="flex-row justify-between items-center mb-2"
+                    >
+                      <Text className="text-sm" style={{ color: getFibColor(idx) }}>
+                        {level.label}
+                      </Text>
+                      <AnimatedNumber
+                        value={level.price}
+                        format={(v) => `$${v.toFixed(2)}`}
+                        style={{ fontSize: 16, fontWeight: '600' }}
+                        color={getFibColor(idx)}
+                      />
+                    </View>
+                  ))}
+                </View>
+              )}
+              {isBelowLow && fibLevels.below.length > 0 && (
+                <View className="pt-3 mt-3 border-t border-gray-700/50">
+                  <Text className="text-gray-400 text-sm mb-2">Extension below ORL</Text>
+                  {fibLevels.below.map((level, idx) => (
+                    <View
+                      key={level.multiplier}
+                      className="flex-row justify-between items-center mb-2"
+                    >
+                      <Text className="text-sm" style={{ color: getFibColor(idx) }}>
+                        {level.label}
+                      </Text>
+                      <AnimatedNumber
+                        value={level.price}
+                        format={(v) => `$${v.toFixed(2)}`}
+                        style={{ fontSize: 16, fontWeight: '600' }}
+                        color={getFibColor(idx)}
+                      />
+                    </View>
+                  ))}
                 </View>
               )}
             </View>
