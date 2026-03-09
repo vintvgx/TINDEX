@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
-import { useSetORBMonitoringActiveMutation } from '@/hooks/mutations/orb/useSetORBMonitoringActiveMutation';
+import { useUnfollowTickerORB } from '@/hooks/mutations/orb/useSetORBMonitoringActiveMutation';
 import { AnimatedNumber } from './AnimatedNumber';
 import { GapTrendBadges } from './GapTrendBadges';
 import type { GapTrendContext } from '@/common/types/orb';
@@ -319,7 +319,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   onNavigateToTicker,
   gapTrendContext,
 }) => {
-  const setMonitoringActive = useSetORBMonitoringActiveMutation();
+  const setMonitoringActive = useUnfollowTickerORB();
 
   const {
     authState: { user, profile },

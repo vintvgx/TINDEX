@@ -309,7 +309,28 @@ class OrbService:
                 logger.warning(f"  {ticker}: Could not fetch ORB range")
         
         logger.info(f"ORB ranges ensured. Total in memory: {len(self.orb_ranges)}")
-    
+
+    async def _run_gap_prefetch_background(
+        self, tickers: Set[str], trade_date: date
+    ) -> None:
+        """
+        Run gap prior-day OHLC fetch in the background; update _gap_prefetch_date
+        when done. Exceptions are caught and logged so they do not affect the
+        caller. Used so subscribe/start_stream are not delayed by yfinance prefetch.
+        """
+        try:
+            count = await get_gap_analysis_service().fetch_and_cache_prior_day_ohlc(
+                list(tickers), trade_date
+            )
+            if count > 0:
+                self._gap_prefetch_date = trade_date
+                logger.info(
+                    "[GAP] Pre-fetch done for %d/%d tickers (trade_date=%s)",
+                    count, len(tickers), trade_date,
+                )
+        except Exception as e:
+            logger.exception("Gap pre-fetch background task failed: %s", e)
+
     async def save_orb_range(self, ticker: str, data: Dict):
         """Save calculated ORB range to database."""
         try:
@@ -2088,10 +2109,11 @@ class OrbService:
                 ):
                     tickers = await self.load_followed_stocks()
                     if tickers:
-                        count = await get_gap_analysis_service().fetch_and_cache_prior_day_ohlc(
+                        gap_service = get_gap_analysis_service()
+                        count = await gap_service.fetch_and_cache_prior_day_ohlc(
                             list(tickers), trade_date
                         )
-                        if count > 0:
+                        if count == len(tickers):
                             self._gap_prefetch_date = trade_date
                             logger.info("[GAP] Pre-fetch done for %d tickers (trade_date=%s)", count, trade_date)
                 
@@ -2109,12 +2131,12 @@ class OrbService:
                         tickers = await self.load_followed_stocks()
                         if tickers:
                             self.active_tickers = tickers
-                            # Ensure gap prior-day OHLC is cached (in case 9:25 window was missed)
+                            # Pre-fetch gap prior-day OHLC in background (in case 9:25 was missed)
+                            # so subscribe/start_stream are not delayed by yfinance
                             if self._gap_prefetch_date != trade_date:
-                                await get_gap_analysis_service().fetch_and_cache_prior_day_ohlc(
-                                    list(tickers), trade_date
+                                asyncio.create_task(
+                                    self._run_gap_prefetch_background(tickers, trade_date)
                                 )
-                                self._gap_prefetch_date = trade_date
                             subscribed = await self.streaming_service.subscribe(tickers, self._create_bar_handler_wrapper())
                             if subscribed:
                                 await self.streaming_service.start_stream()
