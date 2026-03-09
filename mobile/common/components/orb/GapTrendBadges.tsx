@@ -9,7 +9,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { GapTrendContext, GapDirection, PriorDayTrend } from "@/common/types/orb";
-import { GAP_TREND_INFO } from "@/common/docs/GapTrendingBadge/GapTrendInfo";
+import { GAP_ALIGNMENT_INFO, GAP_TREND_INFO } from "@/common/docs/GapTrendingBadge/GapTrendInfo";
 
 export interface GapTrendBadgesProps {
   /** Gap/trend context from orb_ranges or notification payload */
@@ -35,13 +35,17 @@ const TREND_COLORS: Record<PriorDayTrend, { bg: string; text: string }> = {
   flat: { bg: "bg-gray-600/30", text: "text-gray-400" },
 };
 
-/** Modal that explains gap/trend concepts and when positive/negative is favorable */
+type GapTrendInfoContent = typeof GAP_TREND_INFO;
+
+/** Modal that explains gap/trend or gap/alignment concepts and when positive/negative is favorable */
 function GapTrendInfoModal({
   visible,
   onClose,
+  content,
 }: {
   visible: boolean;
   onClose: () => void;
+  content: GapTrendInfoContent;
 }) {
   const termColor = (key: GapBadgeGlossaryTermKey) => {
     if (key === "continuation") return "#10B981"; // green
@@ -67,7 +71,7 @@ function GapTrendInfoModal({
         >
           <View className="border-b border-gray-800 px-4 pt-4 pb-3 flex-row justify-between items-center">
             <Text className="text-lg font-bold text-white flex-1 pr-2">
-              📖 {GAP_TREND_INFO.title}
+              📖 {content.title}
             </Text>
             <TouchableOpacity
               onPress={onClose}
@@ -85,7 +89,7 @@ function GapTrendInfoModal({
             <Text className="text-sm font-semibold text-gray-300 mb-3">
               📌 Key concepts
             </Text>
-            {GAP_TREND_INFO.glossary.map((item, i) => (
+            {content.glossary.map((item, i) => (
               <View key={i} className="mb-4">
                 <Text
                   className="text-sm font-semibold mb-1.5"
@@ -107,7 +111,7 @@ function GapTrendInfoModal({
             <Text className="text-sm font-semibold text-gray-300 mt-4 mb-3">
               💡 Why positive or negative matters
             </Text>
-            {GAP_TREND_INFO.whyItMatters.map((item, i) => (
+            {content.whyItMatters.map((item, i) => (
               <View key={i} className="mb-4">
                 <Text className="text-sm font-semibold text-amber-400 mb-1.5">
                   {item.prior}
@@ -217,7 +221,11 @@ export const GapTrendBadges: React.FC<GapTrendBadgesProps> = ({
             <Ionicons name="warning" size={14} color="#D97706" />
           )}
         </View>
-        <GapTrendInfoModal visible={infoVisible} onClose={() => setInfoVisible(false)} />
+        <GapTrendInfoModal
+          visible={infoVisible}
+          onClose={() => setInfoVisible(false)}
+          content={showBreakoutAlignment ? GAP_ALIGNMENT_INFO : GAP_TREND_INFO}
+        />
       </>
     );
   }
@@ -245,7 +253,11 @@ export const GapTrendBadges: React.FC<GapTrendBadgesProps> = ({
           </View>
         )}
       </View>
-      <GapTrendInfoModal visible={infoVisible} onClose={() => setInfoVisible(false)} />
+      <GapTrendInfoModal
+        visible={infoVisible}
+        onClose={() => setInfoVisible(false)}
+        content={showBreakoutAlignment ? GAP_ALIGNMENT_INFO : GAP_TREND_INFO}
+      />
     </>
   );
 };

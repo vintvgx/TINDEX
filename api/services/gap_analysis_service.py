@@ -184,10 +184,19 @@ class GapAnalysisService:
                 logger.warning("[GAP] %s: fetch failed: %s", ticker, e)
                 return None
 
+        # Launch all fetches concurrently so one slow ticker doesn't block the rest
+        futures = [
+            loop.run_in_executor(None, lambda t=ticker: fetch_one(t))
+            for ticker in tickers
+        ]
+        results = await asyncio.gather(*futures, return_exceptions=True)
+
         count = 0
-        for ticker in tickers:
-            result = await loop.run_in_executor(None, lambda t=ticker: fetch_one(t))
-            if result:
+        for ticker, result in zip(tickers, results):
+            if isinstance(result, Exception):
+                logger.warning("[GAP] %s: executor error: %s", ticker, result)
+                continue
+            if isinstance(result, dict) and result:
                 self._cache[ticker] = result
                 count += 1
                 logger.info(
