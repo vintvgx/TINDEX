@@ -99,7 +99,7 @@ class OrbService:
         self.et_timezone = pytz.timezone("America/New_York")
         
         # Market hours
-        self.market_open = time(9, 30)
+        self.market_open = time(9, 15)
         self.orb_end = time(9, 45)
         self.market_close = time(16, 0)
         
