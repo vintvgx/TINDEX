@@ -7,16 +7,24 @@ import {
   TouchableOpacity,
   ScrollView,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
+import { useUnfollowTickerORB } from '@/hooks/mutations/orb/useSetORBMonitoringActiveMutation';
 import { AnimatedNumber } from './AnimatedNumber';
+import { GapTrendBadges } from './GapTrendBadges';
+import type { GapTrendContext } from '@/common/types/orb';
+import { useToggleORBFollow } from '@/hooks/mutations/ticker/tickerORB';
+import { useAuth } from '@/common/utils/context/auth/AuthContext';
 
 interface ORBDetailModalProps {
   visible: boolean;
   data: ORBMonitoringState | null;
   onClose: () => void;
   onNavigateToTicker?: (ticker: string) => void;
+  /** Optional gap/trend from orb_ranges for context bar */
+  gapTrendContext?: GapTrendContext | null;
 }
 
 /**
@@ -309,7 +317,30 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   data,
   onClose,
   onNavigateToTicker,
+  gapTrendContext,
 }) => {
+  const setMonitoringActive = useUnfollowTickerORB();
+
+  const {
+    authState: { user, profile },
+  } = useAuth();
+
+  const handleUnfollow = () => {
+    if (!data?.ticker || !data?.trade_date) return;
+    setMonitoringActive.mutate(
+      {
+        user: user,
+        ticker: data.ticker,
+        monitoring_active: false,
+      },
+      {
+        onSuccess: () => {
+          onClose();
+        },
+      }
+    );
+  };
+
   if (!data) return null;
 
   const orbHigh = data.orb_high ?? 0;
@@ -355,10 +386,10 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
           </TouchableOpacity>
         </View>
 
-        <ScrollView 
+        <ScrollView
           className="flex-1"
-          contentContainerStyle={{ padding: 24 }}
-          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ padding: 24, paddingBottom: 48 }}
+          showsVerticalScrollIndicator={true}
         >
           {/* Current Price - Large Display */}
           <View className="mb-6">
@@ -406,6 +437,14 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                   {renderGenericJSONBData(data.reversal_data, breakoutStyle.color)}
                 </View>
               )}
+            </View>
+          )}
+
+          {/* Gap / Prior Day / Continuation context bar */}
+          {gapTrendContext && gapTrendContext.gap_direction != null && (
+            <View className="mb-6 p-4 bg-gray-800/50 rounded-xl border border-gray-700/50">
+              <Text className="text-gray-400 text-sm mb-3">Gap & Prior Day Context</Text>
+              <GapTrendBadges context={gapTrendContext} />
             </View>
           )}
 
@@ -643,6 +682,24 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
                 {renderGenericJSONBData(data.options_data, breakoutStyle.color)}
               </View>
             </View>
+          )}
+
+          {/* Unfollow from ORB list - stop monitoring so orb is no longer calculated */}
+          {data.monitoring_active && (
+            <TouchableOpacity
+              onPress={handleUnfollow}
+              disabled={setMonitoringActive.isPending}
+              className="mb-4 rounded-xl p-4 flex-row items-center justify-center gap-2 border border-red-500/50 bg-red-500/10"
+            >
+              {setMonitoringActive.isPending ? (
+                <ActivityIndicator size="small" color="#EF4444" />
+              ) : (
+                <Ionicons name="remove-circle-outline" size={20} color="#EF4444" />
+              )}
+              <Text className="text-red-400 text-base font-semibold">
+                {setMonitoringActive.isPending ? 'Unfollowing…' : 'Unfollow from ORB list'}
+              </Text>
+            </TouchableOpacity>
           )}
 
           {/* Navigation Button */}

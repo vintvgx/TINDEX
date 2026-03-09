@@ -156,7 +156,7 @@ const FeedScreen = () => {
     }, 300);
   };
 
-  // Mock data for breakout notification
+  // Mock data for breakout notification (includes gap/trend for preview)
   const mockBreakoutNotification: ORBBreakoutNotificationData = {
     type: "orb_breakout",
     ticker: "SPY",
@@ -182,6 +182,12 @@ const FeedScreen = () => {
       stop_loss: 687.98,
       risk_per_share: 2.3,
     },
+    gap_percent: -1.37,
+    gap_points: -6.1,
+    gap_direction: "down",
+    prior_day_trend: "bearish",
+    trend_continuation: true,
+    breakout_aligns_gap: false,
   };
 
   const mockBreakoutTitle = "🟢 SPY ORB BREAKOUT (HIGH CONFIDENCE - 85/100)";
@@ -197,7 +203,7 @@ Stop Loss: $687.98 (ORL)
 
 Risk: $2.30 per share`;
 
-  // Mock data for confirmed notification
+  // Mock data for confirmed notification (includes gap/trend for preview)
   const mockConfirmedNotification: ORBBreakoutNotificationData = {
     type: "orb_breakout_confirmed",
     ticker: "AAPL",
@@ -224,6 +230,12 @@ Risk: $2.30 per share`;
       stop_loss: 193.5,
       risk_per_share: 0.75,
     },
+    gap_percent: 0.75,
+    gap_points: 3.6,
+    gap_direction: "up",
+    prior_day_trend: "bullish",
+    trend_continuation: true,
+    breakout_aligns_gap: true,
   };
 
   const mockConfirmedTitle = "🟢 AAPL BREAKOUT CONFIRMED";

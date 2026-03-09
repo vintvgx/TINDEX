@@ -1,4 +1,7 @@
 import { ORBMonitoringState } from '../useORBMonitoringState';
+import type { ORBRange } from '@/common/types/orb';
+
+const TODAY = new Date().toISOString().split('T')[0];
 
 /**
  * Mock data for development/preview purposes - Normal monitoring state
@@ -6,7 +9,7 @@ import { ORBMonitoringState } from '../useORBMonitoringState';
 export const MOCK_ORB_DATA: ORBMonitoringState[] = [
   {
     ticker: 'AAPL',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 175.50,
     orb_high: 178.25,
     orb_low: 174.80,
@@ -21,7 +24,7 @@ export const MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'TSLA',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 245.30,
     orb_high: 248.90,
     orb_low: 243.15,
@@ -36,7 +39,7 @@ export const MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'MSFT',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 378.20,
     orb_high: 380.45,
     orb_low: 376.80,
@@ -51,7 +54,7 @@ export const MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'NVDA',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 485.60,
     orb_high: 492.30,
     orb_low: 483.20,
@@ -66,7 +69,7 @@ export const MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'GOOGL',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 142.40,
     orb_high: 144.20,
     orb_low: 141.50,
@@ -81,7 +84,7 @@ export const MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'AMZN',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 152.30,
     orb_high: 154.80,
     orb_low: 151.20,
@@ -96,7 +99,7 @@ export const MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'META',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 312.50,
     orb_high: 318.90,
     orb_low: 310.20,
@@ -111,7 +114,7 @@ export const MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'AMD',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 128.40,
     orb_high: 131.20,
     orb_low: 127.10,
@@ -126,7 +129,7 @@ export const MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'SPY',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 445.20,
     orb_high: 448.50,
     orb_low: 443.80,
@@ -176,7 +179,7 @@ export const MOCK_ORB_DATA: ORBMonitoringState[] = [
 export const CALCULATION_MOCK_ORB_DATA: ORBMonitoringState[] = [
   {
     ticker: 'AAPL',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 175.50,
     orb_high: 177.80,
     orb_low: 175.20,
@@ -195,7 +198,7 @@ export const CALCULATION_MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'TSLA',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 245.30,
     orb_high: 247.20,
     orb_low: 244.80,
@@ -214,7 +217,7 @@ export const CALCULATION_MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'MSFT',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 378.20,
     orb_high: 379.50,
     orb_low: 377.90,
@@ -233,7 +236,7 @@ export const CALCULATION_MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'NVDA',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 485.60,
     orb_high: 488.20,
     orb_low: 485.10,
@@ -252,7 +255,7 @@ export const CALCULATION_MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'GOOGL',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 142.40,
     orb_high: 143.10,
     orb_low: 142.20,
@@ -271,7 +274,7 @@ export const CALCULATION_MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'AMZN',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 152.30,
     orb_high: 153.20,
     orb_low: 152.10,
@@ -290,7 +293,7 @@ export const CALCULATION_MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'META',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 312.50,
     orb_high: 314.20,
     orb_low: 312.10,
@@ -309,7 +312,7 @@ export const CALCULATION_MOCK_ORB_DATA: ORBMonitoringState[] = [
   },
   {
     ticker: 'AMD',
-    trade_date: new Date().toISOString().split('T')[0],
+    trade_date: TODAY,
     opening_price: 128.40,
     orb_high: 129.50,
     orb_low: 128.20,
@@ -325,6 +328,157 @@ export const CALCULATION_MOCK_ORB_DATA: ORBMonitoringState[] = [
     percentage_change: 0.23,
     data_source: 'alpaca,prev_close:yfinance',
     timestamp: new Date().toISOString(),
+  },
+];
+
+/**
+ * Mock orb_ranges with gap/trend examples for preview.
+ * Aligns with MOCK_ORB_DATA tickers so gap badges show when mock mode is on.
+ */
+export const MOCK_ORB_RANGES: ORBRange[] = [
+  {
+    ticker: 'AAPL',
+    trade_date: TODAY,
+    orb_high: 178.25,
+    orb_low: 174.80,
+    opening_price: 175.50,
+    volume_in_range: 45230000,
+    prior_close: 176.20,
+    today_open: 175.50,
+    gap_points: -0.70,
+    gap_percent: -0.40,
+    gap_direction: 'down',
+    prior_day_open: 175.80,
+    prior_day_trend: 'bearish',
+    trend_continuation: true,
+  },
+  {
+    ticker: 'TSLA',
+    trade_date: TODAY,
+    orb_high: 248.90,
+    orb_low: 243.15,
+    opening_price: 245.30,
+    volume_in_range: 67890000,
+    prior_close: 248.50,
+    today_open: 245.30,
+    gap_points: -3.20,
+    gap_percent: -1.29,
+    gap_direction: 'down',
+    prior_day_open: 246.00,
+    prior_day_trend: 'bearish',
+    trend_continuation: true,
+  },
+  {
+    ticker: 'MSFT',
+    trade_date: TODAY,
+    orb_high: 380.45,
+    orb_low: 376.80,
+    opening_price: 378.20,
+    volume_in_range: 23450000,
+    prior_close: 378.15,
+    today_open: 378.20,
+    gap_points: 0.05,
+    gap_percent: 0.01,
+    gap_direction: 'flat',
+    prior_day_open: 377.90,
+    prior_day_trend: 'flat',
+    trend_continuation: false,
+  },
+  {
+    ticker: 'NVDA',
+    trade_date: TODAY,
+    orb_high: 492.30,
+    orb_low: 483.20,
+    opening_price: 485.60,
+    volume_in_range: 56780000,
+    prior_close: 482.00,
+    today_open: 485.60,
+    gap_points: 3.60,
+    gap_percent: 0.75,
+    gap_direction: 'up',
+    prior_day_open: 478.50,
+    prior_day_trend: 'bullish',
+    trend_continuation: true,
+  },
+  {
+    ticker: 'GOOGL',
+    trade_date: TODAY,
+    orb_high: 144.20,
+    orb_low: 141.50,
+    opening_price: 142.40,
+    volume_in_range: 34560000,
+    prior_close: 144.80,
+    today_open: 142.40,
+    gap_points: -2.40,
+    gap_percent: -1.66,
+    gap_direction: 'down',
+    prior_day_open: 143.20,
+    prior_day_trend: 'bearish',
+    trend_continuation: true,
+  },
+  {
+    ticker: 'AMZN',
+    trade_date: TODAY,
+    orb_high: 154.80,
+    orb_low: 151.20,
+    opening_price: 152.30,
+    volume_in_range: 41230000,
+    prior_close: 150.80,
+    today_open: 152.30,
+    gap_points: 1.50,
+    gap_percent: 0.99,
+    gap_direction: 'up',
+    prior_day_open: 149.50,
+    prior_day_trend: 'bullish',
+    trend_continuation: true,
+  },
+  {
+    ticker: 'META',
+    trade_date: TODAY,
+    orb_high: 318.90,
+    orb_low: 310.20,
+    opening_price: 312.50,
+    volume_in_range: 28940000,
+    prior_close: 311.00,
+    today_open: 312.50,
+    gap_points: 1.50,
+    gap_percent: 0.48,
+    gap_direction: 'up',
+    prior_day_open: 310.80,
+    prior_day_trend: 'flat',
+    trend_continuation: false,
+  },
+  {
+    ticker: 'AMD',
+    trade_date: TODAY,
+    orb_high: 131.20,
+    orb_low: 127.10,
+    opening_price: 128.40,
+    volume_in_range: 52340000,
+    prior_close: 132.00,
+    today_open: 128.40,
+    gap_points: -3.60,
+    gap_percent: -2.73,
+    gap_direction: 'down',
+    prior_day_open: 133.50,
+    prior_day_trend: 'bearish',
+    trend_continuation: true,
+  },
+  {
+    ticker: 'SPY',
+    trade_date: TODAY,
+    orb_high: 448.50,
+    orb_low: 443.80,
+    opening_price: 445.20,
+    volume_in_range: 78200000,
+    prior_close: 444.10,
+    today_open: 445.20,
+    gap_points: -6.10,
+    gap_percent: -1.37,
+    gap_direction: 'down',
+    prior_day_open: 442.00,
+    prior_day_trend: 'bearish',
+    trend_continuation: true,
   },
 ];
 

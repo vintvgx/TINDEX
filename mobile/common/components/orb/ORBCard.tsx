@@ -2,10 +2,16 @@ import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { AnimatedNumber } from './AnimatedNumber';
+import { GapTrendBadges } from './GapTrendBadges';
+import type { GapTrendContext } from '@/common/types/orb';
 
 interface ORBCardProps {
   data: ORBMonitoringState;
   onPress: () => void;
+  /** Optional gap/trend from orb_ranges for context badges */
+  orbRange?: GapTrendContext | null;
+  /** When true, card uses full width (1x1 layout) */
+  fullWidth?: boolean;
 }
 
 /**
@@ -64,7 +70,7 @@ const getBreakoutBadgeBg = (breakoutType: string): string => {
   }
 };
 
-export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress }) => {
+export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullWidth = false }) => {
   const orbHigh = data.orb_high ?? 0;
   const orbLow = data.orb_low ?? 0;
   const currentPrice = data.current_price ?? 0;
@@ -85,7 +91,7 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress }) => {
     <TouchableOpacity
       onPress={onPress}
       className="bg-gray-800/60 border border-gray-700/30 rounded-xl p-4 mb-4 active:opacity-80"
-      style={{ flex: 1, marginHorizontal: 4 }}
+      style={{ flex: 1, marginHorizontal: fullWidth ? 0 : 4 }}
     >
       {/* Header with Ticker and Breakout Indicator */}
       <View className="flex-row items-center justify-between mb-3">
@@ -144,6 +150,13 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress }) => {
           )}
         </View>
       </View>
+
+      {/* Gap / Prior Day / Continuation context bar */}
+      {orbRange && orbRange.gap_direction != null && (
+        <View className="mb-3">
+          <GapTrendBadges context={orbRange} compact />
+        </View>
+      )}
 
       {/* ORB Range */}
       <View>

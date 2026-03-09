@@ -25,7 +25,7 @@ from decimal import Decimal
 import os
 from typing import Dict, Set, Optional, Callable
 import pytz
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 import logging
 import aiohttp
 import pandas as pd
@@ -38,6 +38,7 @@ from alpaca.data.models import Bar
 from services.utils.stock_streaming_base import StockStreamingService, StockBar
 from services.utils.breakout_confirmation import BreakoutConfirmation
 from services.utils.monitoring_state_cache import MonitoringStateCache, MonitoringState
+from services.gap_analysis_service import get_gap_analysis_service, compute_gap_context
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -114,6 +115,10 @@ class OrbService:
         self.calculation_phase = False
         self._debug_mode = False
         self._bars_received_count = 0
+        # Gap analysis: prefetch at ~9:25 AM ET once per trade date
+        self._gap_prefetch_date: Optional[date] = None
+        # Periodic ticker list refresh (re-load from DB so add/remove tickers takes effect)
+        self._last_ticker_refresh_at: Optional[datetime] = None
         
         # Expo push URL
         self.expo_push_url = "https://exp.host/--/api/v2/push/send"
@@ -304,7 +309,28 @@ class OrbService:
                 logger.warning(f"  {ticker}: Could not fetch ORB range")
         
         logger.info(f"ORB ranges ensured. Total in memory: {len(self.orb_ranges)}")
-    
+
+    async def _run_gap_prefetch_background(
+        self, tickers: Set[str], trade_date: date
+    ) -> None:
+        """
+        Run gap prior-day OHLC fetch in the background; update _gap_prefetch_date
+        when done. Exceptions are caught and logged so they do not affect the
+        caller. Used so subscribe/start_stream are not delayed by yfinance prefetch.
+        """
+        try:
+            count = await get_gap_analysis_service().fetch_and_cache_prior_day_ohlc(
+                list(tickers), trade_date
+            )
+            if count > 0:
+                self._gap_prefetch_date = trade_date
+                logger.info(
+                    "[GAP] Pre-fetch done for %d/%d tickers (trade_date=%s)",
+                    count, len(tickers), trade_date,
+                )
+        except Exception as e:
+            logger.exception("Gap pre-fetch background task failed: %s", e)
+
     async def save_orb_range(self, ticker: str, data: Dict):
         """Save calculated ORB range to database."""
         try:
@@ -339,6 +365,32 @@ class OrbService:
                 "volume_in_range": volume,
                 "opening_price": opening_price,  # Now None instead of 0 when missing/invalid
             }
+            
+            # Merge gap/trend context when we have prior-day cache and today_open
+            today_open_float = float(opening_price) if opening_price is not None else None
+            if today_open_float and today_open_float > 0:
+                prior = get_gap_analysis_service().get_cached_prior(ticker, trade_date)
+                if prior:
+                    gap_ctx = compute_gap_context(
+                        prior["prior_close"],
+                        prior["prior_day_open"],
+                        today_open_float,
+                    )
+                    orb_record["prior_close"] = gap_ctx["prior_close"]
+                    orb_record["today_open"] = gap_ctx["today_open"]
+                    orb_record["gap_points"] = gap_ctx["gap_points"]
+                    orb_record["gap_percent"] = gap_ctx["gap_percent"]
+                    orb_record["gap_direction"] = gap_ctx["gap_direction"]
+                    orb_record["prior_day_open"] = gap_ctx["prior_day_open"]
+                    orb_record["prior_day_trend"] = gap_ctx["prior_day_trend"]
+                    orb_record["trend_continuation"] = gap_ctx["trend_continuation"]
+                    # Keep in memory for record_breakout / notifications
+                    if ticker in self.orb_ranges:
+                        self.orb_ranges[ticker]["gap_percent"] = gap_ctx["gap_percent"]
+                        self.orb_ranges[ticker]["gap_points"] = gap_ctx["gap_points"]
+                        self.orb_ranges[ticker]["gap_direction"] = gap_ctx["gap_direction"]
+                        self.orb_ranges[ticker]["prior_day_trend"] = gap_ctx["prior_day_trend"]
+                        self.orb_ranges[ticker]["trend_continuation"] = gap_ctx["trend_continuation"]
             
             self.supabase.table("orb_ranges").upsert(orb_record).execute()
             
@@ -432,12 +484,19 @@ class OrbService:
                 # Convert opening_price to Decimal, handling None case
                 opening_price_decimal = Decimal(str(opening_price)) if opening_price is not None else None
                 
-                self.orb_ranges[ticker] = {
+                orb_entry = {
                     "high": Decimal(str(row["orb_high"])),
                     "low": Decimal(str(row["orb_low"])),
                     "open": opening_price_decimal,  # Now properly handles None
                     "volume": row.get("volume_in_range", 0),
                 }
+                if row.get("gap_percent") is not None:
+                    orb_entry["gap_percent"] = row["gap_percent"]
+                    orb_entry["gap_points"] = row.get("gap_points")
+                    orb_entry["gap_direction"] = row.get("gap_direction")
+                    orb_entry["prior_day_trend"] = row.get("prior_day_trend")
+                    orb_entry["trend_continuation"] = row.get("trend_continuation")
+                self.orb_ranges[ticker] = orb_entry
             
             logger.info(f"Loaded {len(self.orb_ranges)} ORB ranges from DB")
             
@@ -1085,6 +1144,16 @@ class OrbService:
                 atr=atr
             )
             
+            gap_direction = orb_data.get("gap_direction")
+            prior_day_trend = orb_data.get("prior_day_trend")
+            trend_continuation = orb_data.get("trend_continuation")
+            if gap_direction == "up":
+                breakout_aligns_gap = breakout_type == "above"
+            elif gap_direction == "down":
+                breakout_aligns_gap = breakout_type == "below"
+            else:
+                breakout_aligns_gap = None
+            
             breakout_record = {
                 "ticker": ticker,
                 "trade_date": str(trade_date),
@@ -1094,6 +1163,23 @@ class OrbService:
                 "orb_high": orb_high,
                 "orb_low": orb_low,
             }
+            if orb_data.get("gap_percent") is not None:
+                breakout_record["gap_percent"] = orb_data.get("gap_percent")
+                breakout_record["gap_direction"] = gap_direction
+                breakout_record["prior_day_trend"] = prior_day_trend
+                breakout_record["trend_continuation"] = trend_continuation
+                breakout_record["breakout_aligns_gap"] = breakout_aligns_gap
+            
+            gap_context = None
+            if gap_direction is not None:
+                gap_context = {
+                    "gap_percent": orb_data.get("gap_percent"),
+                    "gap_points": orb_data.get("gap_points"),
+                    "gap_direction": gap_direction,
+                    "prior_day_trend": prior_day_trend,
+                    "trend_continuation": trend_continuation,
+                    "breakout_aligns_gap": breakout_aligns_gap,
+                }
             
             logger.info(f"[DB SAVE] Recording breakout: {breakout_record}")
             
@@ -1129,12 +1215,13 @@ class OrbService:
             
             # Send initial notification with enhanced breakout data
             await self.send_notifications(
-                ticker, 
-                breakout_type, 
-                price, 
+                ticker,
+                breakout_type,
+                price,
                 breakout_analysis=breakout_analysis,
                 orb_high=orb_high,
-                orb_low=orb_low
+                orb_low=orb_low,
+                gap_context=gap_context,
             )
             
             # Start 3-minute confirmation timer
@@ -1649,16 +1736,47 @@ class OrbService:
         except Exception as e:
             logger.error(f"Error sending invalidation notifications for {ticker}: {e}")
     
+    def _format_gap_trend_line(
+        self,
+        ticker: str,
+        breakout_type: str,
+        gap_context: Optional[Dict],
+    ) -> str:
+        """Format one-line gap/prior-day/continuation for notification body."""
+        if not gap_context:
+            return ""
+        direction_char = "↑" if breakout_type == "above" else "↓"
+        gap_dir = gap_context.get("gap_direction")
+        gap_pct = gap_context.get("gap_percent")
+        gap_pts = gap_context.get("gap_points")
+        prior_trend = gap_context.get("prior_day_trend")
+        breakout_aligns = gap_context.get("breakout_aligns_gap")
+        if gap_dir == "flat":
+            gap_str = "Flat"
+        elif gap_pct is not None and gap_pts is not None:
+            gap_str = f"{gap_pct:+.1f}% ({gap_pts:+.1f} pts)"
+        else:
+            gap_str = str(gap_pct) if gap_pct is not None else "—"
+        prior_str = (prior_trend or "—").capitalize()
+        if breakout_aligns is True:
+            suffix = "Continuation ✓"
+        elif breakout_aligns is False:
+            suffix = "Against Gap ⚠"
+        else:
+            suffix = "—"
+        return f"{ticker} ORB Break {direction_char} | Gap: {gap_str} | Prior Day: {prior_str} | {suffix}"
+
     async def send_notifications(
-        self, 
-        ticker: str, 
-        breakout_type: str, 
+        self,
+        ticker: str,
+        breakout_type: str,
         price: Decimal,
         breakout_analysis: Optional[Dict] = None,
         orb_high: Optional[float] = None,
-        orb_low: Optional[float] = None
+        orb_low: Optional[float] = None,
+        gap_context: Optional[Dict] = None,
     ):
-        """Send push notifications with enhanced breakout data."""
+        """Send push notifications with enhanced breakout data and optional gap/trend context."""
         try:
             eligible_users = await self.get_eligible_users(ticker)
             
@@ -1666,6 +1784,8 @@ class OrbService:
                 return
             
             price_float = float(price) if isinstance(price, Decimal) else price
+            
+            gap_trend_line = self._format_gap_trend_line(ticker, breakout_type, gap_context)
             
             # Build enhanced notification if breakout analysis is available
             if breakout_analysis and breakout_analysis.get("signal"):
@@ -1681,14 +1801,18 @@ class OrbService:
                 message_title = f"{emoji} {ticker} ORB BREAKOUT ({confidence} CONFIDENCE - {score}/100)"
                 
                 direction_text = "BULLISH (Call opportunity)" if signal == "BULLISH" else "BEARISH (Put opportunity)"
-                body_lines = [
+                body_lines = []
+                if gap_trend_line:
+                    body_lines.append(gap_trend_line)
+                    body_lines.append("")
+                body_lines.extend([
                     f"Direction: {direction_text}",
                     f"Entry: ${entry_price:.2f}",
                     f"ORB High: ${orb_high:.2f}" if orb_high else "",
                     f"ORB Low: ${orb_low:.2f}" if orb_low else "",
                     f"Stop Loss: ${stop_loss:.2f} ({'ORL' if signal == 'BULLISH' else 'ORH'})" if stop_loss else "",
                     "",
-                ]
+                ])
                 
                 for reason in reasons:
                     if reason.startswith("⚠️"):
@@ -1705,7 +1829,10 @@ class OrbService:
             else:
                 message_title = f"🚨 ORB Alert: {ticker}"
                 direction = "above ORB high" if breakout_type == "above" else "below ORB low"
-                message_body = f"{ticker} broke {direction} at ${price_float:.2f}"
+                message_body = (
+                    f"{gap_trend_line}\n\n" if gap_trend_line
+                    else ""
+                ) + f"{ticker} broke {direction} at ${price_float:.2f}"
             
             notification_tasks = []
             for user in eligible_users:
@@ -1739,6 +1866,15 @@ class OrbService:
                         "risk_per_share": breakout_analysis.get("risk_per_share", 0),
                         "rvol": breakout_analysis.get("rvol", 0),
                         "vwap_aligned": breakout_analysis.get("vwap_aligned", False)
+                    })
+                if gap_context:
+                    message["data"].update({
+                        "gap_percent": gap_context.get("gap_percent"),
+                        "gap_points": gap_context.get("gap_points"),
+                        "gap_direction": gap_context.get("gap_direction"),
+                        "prior_day_trend": gap_context.get("prior_day_trend"),
+                        "trend_continuation": gap_context.get("trend_continuation"),
+                        "breakout_aligns_gap": gap_context.get("breakout_aligns_gap"),
                     })
                 
                 task = self._send_push_notification(
@@ -1955,6 +2091,7 @@ class OrbService:
         while self.is_running:
             try:
                 current_time = self.get_current_et_time()
+                trade_date = current_time.date()
                 
                 # Skip market hours check in debug mode
                 if not self._debug_mode and not self.is_market_hours():
@@ -1965,6 +2102,22 @@ class OrbService:
                     logger.info("Outside market hours, waiting...")
                     await asyncio.sleep(60)
                     continue
+                
+                # ~9:25 AM ET: pre-fetch prior-day OHLC for gap/trend (before ORB window 9:30)
+                if (
+                    current_time.time() >= time(9, 25)
+                    and current_time.time() < self.market_open
+                    and (self._gap_prefetch_date is None or self._gap_prefetch_date != trade_date)
+                ):
+                    tickers = await self.load_followed_stocks()
+                    if tickers:
+                        gap_service = get_gap_analysis_service()
+                        count = await gap_service.fetch_and_cache_prior_day_ohlc(
+                            list(tickers), trade_date
+                        )
+                        if count == len(tickers):
+                            self._gap_prefetch_date = trade_date
+                            logger.info("[GAP] Pre-fetch done for %d tickers (trade_date=%s)", count, trade_date)
                 
                 # Check if we're in ORB calculation period
                 if self.is_orb_calculation_period():
@@ -1980,6 +2133,12 @@ class OrbService:
                         tickers = await self.load_followed_stocks()
                         if tickers:
                             self.active_tickers = tickers
+                            # Pre-fetch gap prior-day OHLC in background (in case 9:25 was missed)
+                            # so subscribe/start_stream are not delayed by yfinance
+                            if self._gap_prefetch_date != trade_date:
+                                asyncio.create_task(
+                                    self._run_gap_prefetch_background(tickers, trade_date)
+                                )
                             subscribed = await self.streaming_service.subscribe(tickers, self._create_bar_handler_wrapper())
                             if subscribed:
                                 await self.streaming_service.start_stream()
@@ -2002,6 +2161,38 @@ class OrbService:
                             f"  {ticker}: High={data['high']}, Low={data['low']}, "
                             f"Open={data.get('open', 'N/A')}, Volume={data.get('volume', 0)}"
                         )
+                
+                # Periodic ticker list refresh: re-load from DB and re-subscribe if changed
+                # (so add/remove tickers takes effect without restart; interval avoids DB hammering)
+                if not self.is_orb_calculation_period():
+                    now = self.get_current_et_time()
+                    interval_sec = 120  # 2 minutes
+                    if (
+                        self._last_ticker_refresh_at is None
+                        or (now - self._last_ticker_refresh_at).total_seconds() >= interval_sec
+                    ):
+                        self._last_ticker_refresh_at = now
+                        tickers = await self.load_followed_stocks()
+                        if tickers != self.active_tickers:
+                            logger.info(
+                                "Ticker list changed: refreshing subscription. Previous=%s, New=%s",
+                                sorted(self.active_tickers),
+                                sorted(tickers),
+                            )
+                            await self.ensure_orb_ranges()
+                            if self.streaming_service.is_running:
+                                await self.streaming_service.stop_stream()
+                            self.active_tickers = tickers
+                            if tickers:
+                                subscribed = await self.streaming_service.subscribe(
+                                    tickers, self._create_bar_handler_wrapper()
+                                )
+                                if subscribed:
+                                    await self.streaming_service.start_stream()
+                                else:
+                                    logger.error("Failed to re-subscribe after ticker list refresh")
+                            else:
+                                logger.warning("No tickers to monitor after refresh")
                 
                 # After market close
                 if current_time.time() > self.market_close:

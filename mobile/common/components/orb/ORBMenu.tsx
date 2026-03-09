@@ -9,9 +9,13 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
+export type ORBGridLayout = "2x2" | "1x1";
+
 interface ORBMenuProps {
   visible: boolean;
   onClose: () => void;
+  gridLayout: ORBGridLayout;
+  onGridLayoutChange: (layout: ORBGridLayout) => void;
   onViewWatchlists: () => void;
   onViewLogs: () => void;
   onToggleMockData: () => void;
@@ -25,6 +29,8 @@ interface ORBMenuProps {
 export const ORBMenu: React.FC<ORBMenuProps> = ({
   visible,
   onClose,
+  gridLayout,
+  onGridLayoutChange,
   onViewWatchlists,
   onViewLogs,
   onToggleMockData,
@@ -108,6 +114,65 @@ export const ORBMenu: React.FC<ORBMenuProps> = ({
             {/* Handle Bar */}
             <View className="items-center py-3">
               <View className="w-12 h-1 bg-gray-600 rounded-full" />
+            </View>
+
+            {/* Quick settings: Card layout */}
+            <View className="px-4 mb-2">
+              <Text className="text-gray-400 text-xs font-medium uppercase tracking-wider px-2 py-2">
+                Card layout
+              </Text>
+              <View className="flex-row gap-2">
+                <TouchableOpacity
+                  onPress={() => {
+                    onGridLayoutChange("2x2");
+                  }}
+                  className="flex-1 flex-row items-center py-3 px-4 rounded-xl bg-gray-800/50 border border-gray-700/50 active:opacity-80"
+                  style={{ borderColor: gridLayout === "2x2" ? "#10B981" : undefined }}
+                >
+                  <Ionicons
+                    name="grid-outline"
+                    size={20}
+                    color={gridLayout === "2x2" ? "#10B981" : "#9CA3AF"}
+                  />
+                  <Text
+                    className={`ml-2 text-sm font-medium ${
+                      gridLayout === "2x2" ? "text-green-400" : "text-gray-400"
+                    }`}
+                  >
+                    2×2
+                  </Text>
+                  {gridLayout === "2x2" && (
+                    <View style={{ marginLeft: "auto" }}>
+                      <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                    </View>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => {
+                    onGridLayoutChange("1x1");
+                  }}
+                  className="flex-1 flex-row items-center py-3 px-4 rounded-xl bg-gray-800/50 border border-gray-700/50 active:opacity-80"
+                  style={{ borderColor: gridLayout === "1x1" ? "#10B981" : undefined }}
+                >
+                  <Ionicons
+                    name="list-outline"
+                    size={20}
+                    color={gridLayout === "1x1" ? "#10B981" : "#9CA3AF"}
+                  />
+                  <Text
+                    className={`ml-2 text-sm font-medium ${
+                      gridLayout === "1x1" ? "text-green-400" : "text-gray-400"
+                    }`}
+                  >
+                    1×1
+                  </Text>
+                  {gridLayout === "1x1" && (
+                    <View style={{ marginLeft: "auto" }}>
+                      <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
 
             {/* Menu Items */}

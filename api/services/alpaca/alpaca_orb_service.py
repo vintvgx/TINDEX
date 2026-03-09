@@ -3,7 +3,7 @@ from decimal import Decimal
 import os
 from typing import Dict, Set, Optional
 import pytz
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 import logging
 import aiohttp
 import pandas as pd
@@ -16,6 +16,7 @@ from alpaca.data.models import Bar
 import yfinance as yf
 
 from services.utils.breakout_confirmation import BreakoutConfirmation
+from services.gap_analysis_service import get_gap_analysis_service, compute_gap_context
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -93,6 +94,10 @@ class AlpacaService:
 
         # Breakout confirmation timers: {ticker: asyncio.Task}
         self._confirmation_timers: Dict[str, asyncio.Task] = {}
+        # Gap analysis: prefetch at ~9:25 AM ET once per trade date
+        self._gap_prefetch_date: Optional[date] = None
+        # Periodic ticker list refresh (re-load from DB so add/remove tickers takes effect)
+        self._last_ticker_refresh_at: Optional[datetime] = None
 
     def _create_stock_stream(self):
         """Create a fresh stock stream instance with handlers"""
@@ -250,11 +255,11 @@ class AlpacaService:
         Ensure we have ORB ranges for all followed tickers.
 
         If we're past the ORB calculation period (9:45 AM) and don't have
-        ranges in memory or database, fetch them historically.
+        ranges in memory or database, fetch them historically (using yfinance).
         """
         current_time = self.get_current_et_time().time()
 
-        # If still in calculation period, real-time streaming will handle it
+        # If still in calculation period (9:30-9:45 AM), real-time streaming will handle it
         if self.is_orb_calculation_period():
             logger.info("Still in ORB calculation period, using real-time data")
             return
@@ -378,9 +383,30 @@ class AlpacaService:
                 "volume_in_range": volume,
                 "opening_price": opening_price,
             }
-
+            today_open_float = float(opening_price) if opening_price else None
+            if today_open_float and today_open_float > 0:
+                prior = get_gap_analysis_service().get_cached_prior(ticker, trade_date)
+                if prior:
+                    gap_ctx = compute_gap_context(
+                        prior["prior_close"],
+                        prior["prior_day_open"],
+                        today_open_float,
+                    )
+                    orb_record["prior_close"] = gap_ctx["prior_close"]
+                    orb_record["today_open"] = gap_ctx["today_open"]
+                    orb_record["gap_points"] = gap_ctx["gap_points"]
+                    orb_record["gap_percent"] = gap_ctx["gap_percent"]
+                    orb_record["gap_direction"] = gap_ctx["gap_direction"]
+                    orb_record["prior_day_open"] = gap_ctx["prior_day_open"]
+                    orb_record["prior_day_trend"] = gap_ctx["prior_day_trend"]
+                    orb_record["trend_continuation"] = gap_ctx["trend_continuation"]
+                    if ticker in self.orb_ranges:
+                        self.orb_ranges[ticker]["gap_percent"] = gap_ctx["gap_percent"]
+                        self.orb_ranges[ticker]["gap_points"] = gap_ctx["gap_points"]
+                        self.orb_ranges[ticker]["gap_direction"] = gap_ctx["gap_direction"]
+                        self.orb_ranges[ticker]["prior_day_trend"] = gap_ctx["prior_day_trend"]
+                        self.orb_ranges[ticker]["trend_continuation"] = gap_ctx["trend_continuation"]
             logger.info(f"[DB SAVE] Saving ORB range for {ticker}: {orb_record}")
-
             self.supabase.table("orb_ranges").upsert(orb_record).execute()
 
             # Initialize monitoring state with all required fields
@@ -426,12 +452,19 @@ class AlpacaService:
 
             for row in response.data:
                 ticker = row["ticker"]
-                self.orb_ranges[ticker] = {
+                orb_entry = {
                     "high": Decimal(str(row["orb_high"])),
                     "low": Decimal(str(row["orb_low"])),
                     "open": Decimal(str(row.get("opening_price", 0))),
                     "volume": row.get("volume_in_range", 0),
                 }
+                if row.get("gap_percent") is not None:
+                    orb_entry["gap_percent"] = row["gap_percent"]
+                    orb_entry["gap_points"] = row.get("gap_points")
+                    orb_entry["gap_direction"] = row.get("gap_direction")
+                    orb_entry["prior_day_trend"] = row.get("prior_day_trend")
+                    orb_entry["trend_continuation"] = row.get("trend_continuation")
+                self.orb_ranges[ticker] = orb_entry
 
             # Load monitoring state
             state_response = (
@@ -602,6 +635,16 @@ class AlpacaService:
                 atr=atr,
             )
 
+            gap_direction = orb_data.get("gap_direction")
+            prior_day_trend = orb_data.get("prior_day_trend")
+            trend_continuation = orb_data.get("trend_continuation")
+            if gap_direction in ("up", "down"):
+                breakout_aligns_gap = (
+                    (breakout_type == "above" and gap_direction == "up")
+                    or (breakout_type == "below" and gap_direction == "down")
+                )
+            else:
+                breakout_aligns_gap = None
             breakout_record = {
                 "ticker": ticker,
                 "trade_date": str(trade_date),
@@ -611,9 +654,24 @@ class AlpacaService:
                 "orb_high": orb_high,
                 "orb_low": orb_low,
             }
-
+            if orb_data.get("gap_percent") is not None:
+                breakout_record["gap_percent"] = orb_data.get("gap_percent")
+                breakout_record["gap_points"] = orb_data.get("gap_points")
+                breakout_record["gap_direction"] = gap_direction
+                breakout_record["prior_day_trend"] = prior_day_trend
+                breakout_record["trend_continuation"] = trend_continuation
+                breakout_record["breakout_aligns_gap"] = breakout_aligns_gap
+            gap_context = None
+            if gap_direction is not None:
+                gap_context = {
+                    "gap_percent": orb_data.get("gap_percent"),
+                    "gap_points": orb_data.get("gap_points"),
+                    "gap_direction": gap_direction,
+                    "prior_day_trend": prior_day_trend,
+                    "trend_continuation": trend_continuation,
+                    "breakout_aligns_gap": breakout_aligns_gap,
+                }
             logger.info(f"[DB SAVE] Recording breakout: {breakout_record}")
-
             self.supabase.table("orb_breakouts").insert(breakout_record).execute()
 
             # Update monitoring state in DB with breakout information
@@ -647,6 +705,7 @@ class AlpacaService:
                 breakout_analysis=breakout_analysis,
                 orb_high=orb_high,
                 orb_low=orb_low,
+                gap_context=gap_context,
             )
 
             # Start 3-minute confirmation timer
@@ -987,6 +1046,36 @@ class AlpacaService:
         except Exception as e:
             logger.error(f"Error sending invalidation notifications for {ticker}: {e}")
 
+    def _format_gap_trend_line(
+        self,
+        ticker: str,
+        breakout_type: str,
+        gap_context: Optional[Dict],
+    ) -> str:
+        """Format one-line gap/prior-day/continuation for notification body."""
+        if not gap_context:
+            return ""
+        direction_char = "↑" if breakout_type == "above" else "↓"
+        gap_dir = gap_context.get("gap_direction")
+        gap_pct = gap_context.get("gap_percent")
+        gap_pts = gap_context.get("gap_points")
+        prior_trend = gap_context.get("prior_day_trend")
+        breakout_aligns = gap_context.get("breakout_aligns_gap")
+        if gap_dir == "flat":
+            gap_str = "Flat"
+        elif gap_pct is not None and gap_pts is not None:
+            gap_str = f"{gap_pct:+.1f}% ({gap_pts:+.1f} pts)"
+        else:
+            gap_str = str(gap_pct) if gap_pct is not None else "—"
+        prior_str = (prior_trend or "—").capitalize()
+        if breakout_aligns is True:
+            suffix = "Continuation ✓"
+        elif breakout_aligns is False:
+            suffix = "Against Gap ⚠"
+        else:
+            suffix = "—"
+        return f"{ticker} ORB Break {direction_char} | Gap: {gap_str} | Prior Day: {prior_str} | {suffix}"
+
     async def send_notifications(
         self,
         ticker: str,
@@ -995,9 +1084,10 @@ class AlpacaService:
         breakout_analysis: Optional[Dict] = None,
         orb_high: Optional[float] = None,
         orb_low: Optional[float] = None,
+        gap_context: Optional[Dict] = None,
     ):
         """
-        Send push notifications with enhanced breakout data.
+        Send push notifications with enhanced breakout data and optional gap/trend context.
 
         Architecture:
         - Formats notification with detailed breakout metrics
@@ -1006,8 +1096,8 @@ class AlpacaService:
 
         Notification Format:
         - Title: Emoji + ticker + confidence level
-        - Body: Detailed breakout information with entry, stop loss, risk
-        - Data: Complete breakout analysis for app display
+        - Body: Gap/trend line (if available) then detailed breakout information
+        - Data: Complete breakout analysis and gap context for app display
         """
         try:
             eligible_users = await self.get_eligible_users(ticker)
@@ -1016,6 +1106,7 @@ class AlpacaService:
                 return
 
             price_float = float(price) if isinstance(price, Decimal) else price
+            gap_trend_line = self._format_gap_trend_line(ticker, breakout_type, gap_context)
 
             # Build enhanced notification if breakout analysis is available
             if breakout_analysis and breakout_analysis.get("signal"):
@@ -1041,7 +1132,11 @@ class AlpacaService:
                     if signal == "BULLISH"
                     else "BEARISH (Put opportunity)"
                 )
-                body_lines = [
+                body_lines = []
+                if gap_trend_line:
+                    body_lines.append(gap_trend_line)
+                    body_lines.append("")
+                body_lines.extend([
                     f"Direction: {direction_text}",
                     f"Entry: ${entry_price:.2f}",
                     f"ORB High: ${orb_high:.2f}" if orb_high else "",
@@ -1052,7 +1147,7 @@ class AlpacaService:
                         else ""
                     ),
                     "",
-                ]
+                ])
 
                 # Add reasons with checkmarks
                 for reason in reasons:
@@ -1074,7 +1169,9 @@ class AlpacaService:
                 direction = (
                     "above ORB high" if breakout_type == "above" else "below ORB low"
                 )
-                message_body = f"{ticker} broke {direction} at ${price_float:.2f}"
+                message_body = (
+                    f"{gap_trend_line}\n\n" if gap_trend_line else ""
+                ) + f"{ticker} broke {direction} at ${price_float:.2f}"
 
             notification_tasks = []
             for user in eligible_users:
@@ -1116,6 +1213,17 @@ class AlpacaService:
                             "vwap_aligned": breakout_analysis.get(
                                 "vwap_aligned", False
                             ),
+                        }
+                    )
+                if gap_context:
+                    message["data"].update(
+                        {
+                            "gap_percent": gap_context.get("gap_percent"),
+                            "gap_points": gap_context.get("gap_points"),
+                            "gap_direction": gap_context.get("gap_direction"),
+                            "prior_day_trend": gap_context.get("prior_day_trend"),
+                            "trend_continuation": gap_context.get("trend_continuation"),
+                            "breakout_aligns_gap": gap_context.get("breakout_aligns_gap"),
                         }
                     )
 
@@ -1911,6 +2019,7 @@ class AlpacaService:
         while self.is_running:
             try:
                 current_time = self.get_current_et_time()
+                trade_date = current_time.date()
 
                 # Debug: Log service state periodically
                 if self._bars_received_count == 0 and self._stream_started:
@@ -1932,6 +2041,24 @@ class AlpacaService:
                     await asyncio.sleep(60)
                     continue
 
+                # ~9:25 AM ET: pre-fetch prior-day OHLC for gap/trend (before ORB window 9:30)
+                if (
+                    current_time.time() >= time(9, 25)
+                    and current_time.time() < self.market_open
+                    and (self._gap_prefetch_date is None or self._gap_prefetch_date != trade_date)
+                ):
+                    tickers_list = await self.load_followed_stocks()
+                    if tickers_list:
+                        count = await get_gap_analysis_service().fetch_and_cache_prior_day_ohlc(
+                            list(tickers_list), trade_date
+                        )
+                        if count > 0:
+                            self._gap_prefetch_date = trade_date
+                            logger.info(
+                                "[GAP] Pre-fetch done for %d tickers (trade_date=%s)",
+                                count, trade_date,
+                            )
+
                 # Check if we're in ORB calculation period
                 if self.is_orb_calculation_period():
                     if not self.calculation_phase:
@@ -1943,6 +2070,12 @@ class AlpacaService:
                         self.monitoring_state.clear()
                         self._bars_received_count = 0
 
+                        tickers_list = await self.load_followed_stocks()
+                        if tickers_list and (self._gap_prefetch_date != trade_date):
+                            await get_gap_analysis_service().fetch_and_cache_prior_day_ohlc(
+                                list(tickers_list), trade_date
+                            )
+                            self._gap_prefetch_date = trade_date
                         subscribed = await self.subscribe_to_tickers()
                         if subscribed:
                             await self.start_stream()
@@ -1967,6 +2100,36 @@ class AlpacaService:
                             f"  {ticker}: High={data['high']}, Low={data['low']}, "
                             f"Open={data.get('open', 'N/A')}, Volume={data.get('volume', 0)}"
                         )
+
+                # Periodic ticker list refresh: re-load from DB and re-subscribe if changed
+                # (so add/remove tickers takes effect without restart; interval avoids DB hammering)
+                if not self.is_orb_calculation_period():
+                    now = self.get_current_et_time()
+                    interval_sec = 120  # 2 minutes
+                    if (
+                        self._last_ticker_refresh_at is None
+                        or (now - self._last_ticker_refresh_at).total_seconds() >= interval_sec
+                    ):
+                        self._last_ticker_refresh_at = now
+                        tickers = await self.load_followed_stocks()
+                        if tickers != self.active_tickers:
+                            logger.info(
+                                "Ticker list changed: refreshing subscription. Previous=%s, New=%s",
+                                sorted(self.active_tickers),
+                                sorted(tickers),
+                            )
+                            await self.ensure_orb_ranges()
+                            if self._stream_started:
+                                await self.stop_stream()
+                            self.active_tickers = tickers
+                            if tickers:
+                                subscribed = await self.subscribe_to_tickers()
+                                if subscribed:
+                                    await self.start_stream()
+                                else:
+                                    logger.error("Failed to re-subscribe after ticker list refresh")
+                            else:
+                                logger.warning("No tickers to monitor after refresh")
 
                 # After market close
                 if current_time.time() > self.market_close:
