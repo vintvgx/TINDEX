@@ -1147,10 +1147,12 @@ class OrbService:
             gap_direction = orb_data.get("gap_direction")
             prior_day_trend = orb_data.get("prior_day_trend")
             trend_continuation = orb_data.get("trend_continuation")
-            breakout_aligns_gap = (
-                (breakout_type == "above" and gap_direction == "up")
-                or (breakout_type == "below" and gap_direction == "down")
-            ) if gap_direction else None
+            if gap_direction == "up":
+                breakout_aligns_gap = breakout_type == "above"
+            elif gap_direction == "down":
+                breakout_aligns_gap = breakout_type == "below"
+            else:
+                breakout_aligns_gap = None
             
             breakout_record = {
                 "ticker": ticker,
