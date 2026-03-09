@@ -24,7 +24,7 @@ const ORBScreen = () => {
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [lastFetchTime, setLastFetchTime] = useState<Date | null>(null);
-  const [gridLayout, setGridLayout] = useState<ORBGridLayout>("2x2");
+  const [gridLayout, setGridLayout] = useState<ORBGridLayout>("1x1");
 
   // Load saved grid layout from device
   useEffect(() => {
