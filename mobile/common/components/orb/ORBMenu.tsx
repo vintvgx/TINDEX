@@ -4,8 +4,7 @@ import {
   Text,
   Modal,
   TouchableOpacity,
-  SafeAreaView,
-  StatusBar,
+  SafeAreaView
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -191,6 +190,7 @@ export const ORBMenu: React.FC<ORBMenuProps> = ({
                       }`}
                     >
                       <Ionicons
+                        //@ts-ignore
                         name={item.icon}
                         size={22}
                         color={item.danger ? '#EF4444' : '#FFFFFF'}
