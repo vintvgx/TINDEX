@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { View, Text, Dimensions, StyleSheet } from 'react-native';
+import { View, Text, useColorScheme } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -9,203 +9,67 @@ import Animated, {
   interpolate,
   Extrapolate,
 } from 'react-native-reanimated';
-import { LinearGradient } from 'expo-linear-gradient';
-
-const { width, height } = Dimensions.get('window');
+import { lightTheme, darkTheme } from '@/styles/index';
 
 interface LoadingScreenProps {
   message?: string;
 }
 
-const LoadingScreen: React.FC<LoadingScreenProps> = ({ 
-  message = "Loading your experience..." 
-}) => {
-  // Animation values
-  const logoScale = useSharedValue(0.8);
-  const logoOpacity = useSharedValue(0);
-  const dotsOpacity = useSharedValue(0);
-  const gradientRotation = useSharedValue(0);
-  const pulseValue = useSharedValue(0);
+const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = 'Loading…' }) => {
+  const scheme = useColorScheme();
+  const colors = scheme === 'dark' ? darkTheme : lightTheme;
 
-  // Logo animation
+  const opacity = useSharedValue(0);
+  const scale = useSharedValue(0.9);
+  const pulse = useSharedValue(0);
+
   useEffect(() => {
-    logoOpacity.value = withTiming(1, { duration: 800 });
-    logoScale.value = withTiming(1, { duration: 800 });
-    
-    // Subtle pulse animation
-    pulseValue.value = withRepeat(
-      withSequence(
-        withTiming(1, { duration: 2000 }),
-        withTiming(0, { duration: 2000 })
-      ),
-      -1,
-      true
-    );
+    opacity.value = withTiming(1, { duration: 600 });
+    scale.value = withTiming(1, { duration: 600 });
+    pulse.value = withRepeat(withSequence(withTiming(1, { duration: 1500 }), withTiming(0, { duration: 1500 })), -1, true);
   }, []);
 
-  // Dots animation
-  useEffect(() => {
-    const dotsAnimation = () => {
-      dotsOpacity.value = withSequence(
-        withTiming(1, { duration: 600 }),
-        withTiming(0.3, { duration: 600 })
-      );
-    };
+  const containerStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+    transform: [{ scale: interpolate(pulse.value, [0, 1], [1, 1.04], Extrapolate.CLAMP) * scale.value }],
+  }));
 
-    dotsAnimation();
-    const interval = setInterval(dotsAnimation, 1200);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Gradient rotation animation
-  useEffect(() => {
-    gradientRotation.value = withRepeat(
-      withTiming(360, { duration: 3000 }),
-      -1,
-      false
-    );
-  }, []);
-
-  // Animated styles
-  const logoAnimatedStyle = useAnimatedStyle(() => {
-    const scale = interpolate(
-      pulseValue.value,
-      [0, 1],
-      [1, 1.05],
-      Extrapolate.CLAMP
-    );
-
-    return {
-      opacity: logoOpacity.value,
-      transform: [
-        { scale: logoScale.value * scale },
-      ],
-    };
-  });
-
-  const dotsAnimatedStyle = useAnimatedStyle(() => {
-    return {
-      opacity: dotsOpacity.value,
-    };
-  });
-
-  const gradientAnimatedStyle = useAnimatedStyle(() => {
-    return {
-      transform: [
-        { rotate: `${gradientRotation.value}deg` },
-      ],
-    };
-  });
+  const dotStyle = useAnimatedStyle(() => ({ opacity: interpolate(pulse.value, [0, 1], [0.3, 1], Extrapolate.CLAMP) }));
 
   return (
-    <View style={styles.container}>
-      {/* Animated gradient background */}
-      <Animated.View 
-        style={[styles.gradientContainer, gradientAnimatedStyle]}
-      >
-        <LinearGradient
-          colors={['rgba(59, 130, 246, 0.1)', 'rgba(147, 51, 234, 0.1)', 'rgba(236, 72, 153, 0.1)']}
-          style={styles.gradient}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-        />
-      </Animated.View>
-
-      {/* Main content */}
-      <View style={styles.content}>
-        {/* Logo/App Name */}
-        <Animated.View style={logoAnimatedStyle}>
-          <Text style={styles.logoText}>
-            ALE
-            <Text style={styles.logoAccent}>THIA</Text>
-          </Text>
-        </Animated.View>
-
-        {/* Loading dots */}
-        <Animated.View 
-          style={[styles.dotsContainer, dotsAnimatedStyle]}
+    <View style={{ flex: 1, backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center' }}>
+      <Animated.View style={[{ alignItems: 'center', gap: 20 }, containerStyle]}>
+        {/* Logo mark */}
+        <View
+          style={{
+            width: 64,
+            height: 64,
+            borderRadius: 18,
+            backgroundColor: colors.accent + '18',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderWidth: 1.5,
+            borderColor: colors.accent + '30',
+            marginBottom: 8,
+          }}
         >
-          <View style={[styles.dot, styles.dotBlue]} />
-          <View style={[styles.dot, styles.dotPurple]} />
-          <View style={[styles.dot, styles.dotPink]} />
+          <View style={{ width: 28, height: 28, borderRadius: 8, backgroundColor: colors.accent }} />
+        </View>
+
+        <Text style={{ color: colors.text, fontSize: 28, fontWeight: '800', letterSpacing: -0.5 }}>
+          TINDEX
+        </Text>
+
+        <Animated.View style={[{ flexDirection: 'row', gap: 6 }, dotStyle]}>
+          {[colors.accent, colors.success, colors.textTertiary].map((c, i) => (
+            <View key={i} style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: c }} />
+          ))}
         </Animated.View>
 
-        {/* Loading message */}
-        <Text style={styles.messageText}>
-          {message}
-        </Text>
-      </View>
-
-      {/* Subtle bottom accent */}
-      <View style={styles.bottomAccent} />
+        <Text style={{ color: colors.textSecondary, fontSize: 14, textAlign: 'center' }}>{message}</Text>
+      </Animated.View>
     </View>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000000',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  gradientContainer: {
-    position: 'absolute',
-    width: '100%',
-    height: '100%',
-  },
-  gradient: {
-    width: '100%',
-    height: '100%',
-  },
-  content: {
-    alignItems: 'center',
-    gap: 32,
-  },
-  logoText: {
-    fontSize: 48,
-    fontWeight: 'bold',
-    color: '#ffffff',
-    letterSpacing: 2,
-  },
-  logoAccent: {
-    color: '#60a5fa', // blue-400
-  },
-  dotsContainer: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  dot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-  dotBlue: {
-    backgroundColor: '#60a5fa', // blue-400
-  },
-  dotPurple: {
-    backgroundColor: '#a78bfa', // purple-400
-  },
-  dotPink: {
-    backgroundColor: '#f472b6', // pink-400
-  },
-  messageText: {
-    color: '#d1d5db', // gray-300
-    fontSize: 18,
-    textAlign: 'center',
-    paddingHorizontal: 32,
-  },
-  bottomAccent: {
-    position: 'absolute',
-    bottom: 80,
-    width: 128,
-    height: 4,
-    borderRadius: 2,
-    opacity: 0.5,
-    // Note: Linear gradient for bottom accent would need to be implemented differently
-    // For now using a solid color that matches the gradient theme
-    backgroundColor: '#60a5fa',
-  },
-});
-
-export default LoadingScreen; 
+export default LoadingScreen;

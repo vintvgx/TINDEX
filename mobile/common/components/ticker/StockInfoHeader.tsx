@@ -1,88 +1,82 @@
-/**
- * The info header section displayed within [ticker].tsx
- */
-
-import type React from "react";
-import { View, Text, Image } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import type { TickerData } from "@/common/types/blogPosts/ticker";
+import type React from 'react';
+import { View, Text, Image } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import type { TickerData } from '@/common/types/blogPosts/ticker';
+import { useThemeColors } from '@/lib/useColorScheme';
 
 interface StockInfoHeaderProps {
   stockData: TickerData;
 }
 
 export const StockInfoHeader: React.FC<StockInfoHeaderProps> = ({ stockData }) => {
+  const colors = useThemeColors();
+  const priceChangePositive = (stockData.price_change ?? 0) >= 0;
+  const priceColor = priceChangePositive ? colors.success : colors.error;
+
   return (
-    <View className="flex-row items-center mb-6">
-      <View className="flex-1">
-        <View className="flex-row items-center mb-2">
-          {/* Company Logo */}
+    <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 14 }}>
+      <View style={{ flex: 1 }}>
+        {/* Company logo + name */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
           {stockData.logo_url && (
-            <View className="w-8 h-8 rounded-lg bg-gray-800/50 mr-3 border border-gray-700/30 overflow-hidden">
-              <Image
-                source={{ uri: stockData.logo_url }}
-                className="w-full h-full"
-                resizeMode="contain"
-              />
+            <View
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                backgroundColor: colors.surface,
+                marginRight: 10,
+                borderWidth: 1,
+                borderColor: colors.border,
+                overflow: 'hidden',
+              }}
+            >
+              <Image source={{ uri: stockData.logo_url }} style={{ width: '100%', height: '100%' }} resizeMode="contain" />
             </View>
           )}
-          
-          {/* Company Name */}
           {stockData.company_name && (
-            <Text className="text-gray-400 text-sm font-medium">
+            <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '500' }} numberOfLines={1}>
               {stockData.company_name}
             </Text>
           )}
         </View>
-        
-        {/* Ticker Symbol */}
+
+        {/* Ticker symbol */}
         {stockData.ticker && (
-          <Text className="text-white text-3xl font-black tracking-tight mt-1">
+          <Text style={{ color: colors.text, fontSize: 30, fontWeight: '800', letterSpacing: -0.5, marginBottom: 2 }}>
             {stockData.ticker}
           </Text>
         )}
-        
+
         {/* Sector */}
         {stockData.sector && (
-          <Text className="text-gray-400 text-sm font-medium mt-1">
-            {stockData.sector}
-          </Text>
+          <Text style={{ color: colors.textTertiary, fontSize: 12, fontWeight: '500' }}>{stockData.sector}</Text>
         )}
       </View>
-      
-      {/* Price Information */}
-      <View className="items-end">
-        {/* Current Price */}
+
+      {/* Price */}
+      <View style={{ alignItems: 'flex-end' }}>
         {stockData.current_price && (
-          <Text className="text-white text-3xl font-black tracking-tight">
-            ${stockData.current_price.toFixed(2)} {stockData.currency || 'USD'}
+          <Text style={{ color: colors.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.5 }}>
+            ${stockData.current_price.toFixed(2)}
           </Text>
         )}
-        
-        {/* Price Change */}
         {stockData.price_change !== undefined && stockData.price_change_percent !== undefined && (
-          <View className="flex-row items-center mt-1">
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 }}>
             <Ionicons
-              name={stockData.price_change >= 0 ? "triangle" : "triangle"}
-              size={12}
-              color={stockData.price_change >= 0 ? "#22C55E" : "#EF4444"}
-              style={{
-                transform: [
-                  { rotate: stockData.price_change >= 0 ? "0deg" : "180deg" },
-                ],
-              }}
+              name="triangle"
+              size={10}
+              color={priceColor}
+              style={{ transform: [{ rotate: priceChangePositive ? '0deg' : '180deg' }] }}
             />
-            <Text
-              className={`ml-2 font-bold tracking-wide ${
-                stockData.price_change >= 0
-                  ? "text-green-400"
-                  : "text-red-400"
-              }`}>
-              {stockData.price_change >= 0 ? "+" : ""}
-              {stockData.price_change.toFixed(2)} (
-              {stockData.price_change_percent.toFixed(2)}%)
+            <Text style={{ color: priceColor, fontWeight: '700', fontSize: 13 }}>
+              {priceChangePositive ? '+' : ''}
+              {stockData.price_change.toFixed(2)} ({stockData.price_change_percent.toFixed(2)}%)
             </Text>
           </View>
+        )}
+        {stockData.currency && (
+          <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 2 }}>{stockData.currency}</Text>
         )}
       </View>
     </View>

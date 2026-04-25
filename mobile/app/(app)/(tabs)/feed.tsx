@@ -1,6 +1,7 @@
 import { MinimizedWatchlistComponent } from "@/common/components/FEED/cards/MinimizedWatchlistComponent";
 import { Header } from "@/common/components/FEED/Header";
 import MainContent from "@/common/components/FEED/MainContent";
+import { useThemeColors } from "@/lib/useColorScheme";
 import { AddPostModal } from "@/common/components/FEED/modals/AddPostModal";
 import { PostDetailModal } from "@/common/components/FEED/modals/PostDetailModal";
 import { SetMinimizedWatchlistModal } from "@/common/components/FEED/modals/SetMinimizedWatchlistModal";
@@ -20,6 +21,7 @@ import { SafeAreaView, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 
 const FeedScreen = () => {
+  const colors = useThemeColors();
   const queryClient = useQueryClient();
   const isQueryClientReady = useQueryClientReady();
   const params = useLocalSearchParams();
@@ -261,14 +263,8 @@ Risk: $2.30 per share`;
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-black">
-      {/* Subtle background gradient */}
-      <View 
-        className="absolute inset-0"
-        style={{
-          backgroundColor: 'rgba(17, 24, 39, 0.1)',
-        }}
-      />
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+      <View />
 
       {/* Header Component */}
       <Header onAddPress={handleAddPress} onPreviewPress={handlePreviewPress} />

@@ -4,23 +4,19 @@ import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { ORBCard } from './ORBCard';
 import type { ORBRange } from '@/common/types/orb';
 import type { ORBGridLayout } from './ORBMenu';
+import { useThemeColors } from '@/lib/useColorScheme';
 
 interface ORBCardGridProps {
   data: ORBMonitoringState[];
   isLoading: boolean;
   onCardPress: (data: ORBMonitoringState) => void;
   lastFetchTime?: Date | null;
-  /** Optional orb_ranges by ticker for gap/trend badges */
   rangesByTicker?: Record<string, ORBRange>;
-  /** 2x2 grid or 1x1 single column */
   gridLayout?: ORBGridLayout;
 }
 
-/**
- * Formats date and time for display
- */
-const formatDateTime = (date: Date): string => {
-  return date.toLocaleString('en-US', {
+const formatDateTime = (date: Date): string =>
+  date.toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -29,47 +25,64 @@ const formatDateTime = (date: Date): string => {
     second: '2-digit',
     hour12: true,
   });
-};
 
-export const ORBCardGrid: React.FC<ORBCardGridProps> = ({ data, isLoading, onCardPress, lastFetchTime, rangesByTicker, gridLayout = "2x2" }) => {
+export const ORBCardGrid: React.FC<ORBCardGridProps> = ({
+  data,
+  isLoading,
+  onCardPress,
+  lastFetchTime,
+  rangesByTicker,
+  gridLayout = '2x2',
+}) => {
+  const colors = useThemeColors();
+
   if (isLoading) {
     return (
-      <View className="flex-1 justify-center items-center py-20">
-        <ActivityIndicator size="large" color="#3B82F6" />
-        <Text className="text-gray-400 mt-4">Loading ORB data...</Text>
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 80 }}>
+        <ActivityIndicator size="large" color={colors.accent} />
+        <Text style={{ color: colors.textSecondary, marginTop: 12, fontSize: 14 }}>Loading ORB data…</Text>
       </View>
     );
   }
 
   if (!data || data.length === 0) {
     return (
-      <View className="flex-1 justify-center items-center py-20">
-        <Text className="text-gray-400 text-center">No ORB monitoring data available</Text>
-        <Text className="text-gray-500 text-center text-sm mt-2">
-          Tickers will appear here once ORB monitoring starts
-        </Text>
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 80, paddingHorizontal: 32 }}>
+        <View
+          style={{
+            backgroundColor: colors.surface,
+            borderRadius: 20,
+            padding: 32,
+            alignItems: 'center',
+            borderWidth: 1,
+            borderColor: colors.border,
+          }}
+        >
+          <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700', marginBottom: 8, textAlign: 'center' }}>
+            No ORB Data
+          </Text>
+          <Text style={{ color: colors.textSecondary, fontSize: 14, textAlign: 'center', lineHeight: 20 }}>
+            Tickers will appear here once ORB monitoring starts
+          </Text>
+        </View>
       </View>
     );
   }
 
-  // Footer component with spacer line and last fetch time
   const renderFooter = () => {
     if (!lastFetchTime) return null;
-
     return (
-      <View className="px-4 pb-8 pt-4">
-        {/* Spacer line */}
-        <View className="border-t border-gray-800 mb-4" />
-        {/* Last fetch time */}
-        <Text className="text-gray-500 text-xs text-center">
+      <View style={{ paddingHorizontal: 16, paddingBottom: 32, paddingTop: 8 }}>
+        <View style={{ height: 1, backgroundColor: colors.separator, marginBottom: 12 }} />
+        <Text style={{ color: colors.textTertiary, fontSize: 12, textAlign: 'center' }}>
           Last updated: {formatDateTime(lastFetchTime)}
         </Text>
       </View>
     );
   };
 
-  const numColumns = gridLayout === "1x1" ? 1 : 2;
-  const fullWidth = gridLayout === "1x1";
+  const numColumns = gridLayout === '1x1' ? 1 : 2;
+  const fullWidth = gridLayout === '1x1';
 
   return (
     <FlatList
@@ -86,10 +99,9 @@ export const ORBCardGrid: React.FC<ORBCardGridProps> = ({ data, isLoading, onCar
         />
       )}
       contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
-      columnWrapperStyle={numColumns === 2 ? { justifyContent: "space-between" } : undefined}
+      columnWrapperStyle={numColumns === 2 ? { justifyContent: 'space-between' } : undefined}
       showsVerticalScrollIndicator={false}
       ListFooterComponent={renderFooter}
     />
   );
 };
-

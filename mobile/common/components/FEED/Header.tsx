@@ -1,82 +1,110 @@
-import { signOut } from "@/common/utils/auth/function"
-import type React from "react"
-import { View, Text, Pressable, Alert } from "react-native"
+import { signOut } from '@/common/utils/auth/function';
+import { useThemeColors } from '@/lib/useColorScheme';
+import { Ionicons } from '@expo/vector-icons';
+import type React from 'react';
+import { Alert, Pressable, Text, View } from 'react-native';
 
 interface HeaderProps {
-  onAddPress: () => void
-  onPreviewPress?: () => void
+  onAddPress: () => void;
+  onPreviewPress?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ onAddPress, onPreviewPress }) => {
+  const colors = useThemeColors();
+
   const handleSignOut = async () => {
-    try {
-      Alert.alert(
-        "Sign Out",
-        "Are you sure you want to sign out?",
-        [
-          {
-            text: "Cancel",
-            style: "cancel",
+    Alert.alert(
+      'Sign Out',
+      'Are you sure you want to sign out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await signOut();
+            } catch {
+              Alert.alert('Sign Out Failed', 'There was an error signing out. Please try again.');
+            }
           },
-          {
-            text: "Sign Out",
-            style: "destructive",
-            onPress: async () => {
-              try {
-                await signOut()
-              } catch (error) {
-                console.error("Sign out failed:", error)
-                Alert.alert(
-                  "Sign Out Failed",
-                  "There was an error signing out. Please try again.",
-                  [{ text: "OK" }]
-                )
-              }
-            },
-          },
-        ],
-        { cancelable: true }
-      )
-    } catch (error) {
-      console.error("Error showing sign out confirmation:", error)
-    }
-  }
+        },
+      ],
+      { cancelable: true }
+    );
+  };
 
   return (
-    <View className="flex-row justify-between items-center px-6 py-6 bg-black/95 backdrop-blur-xl">
-      {/* App Title */}
-      <View>
-      <Pressable
-          onPress={handleSignOut}
-          accessibilityRole="button"
-          accessible={true}
-          accessibilityLabel="Sign out of the application"
-          accessibilityHint="Double tap to sign out of your account">
-        <Text className="text-3xl font-black text-white tracking-tight">TINDEX</Text>
-        <Text className="text-xs text-gray-400 font-medium tracking-wider uppercase mt-1">Market Intelligence</Text>
-        </Pressable>
-      </View>
+    <View
+      style={{
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        paddingHorizontal: 24,
+        paddingTop: 8,
+        paddingBottom: 16,
+        backgroundColor: colors.background,
+      }}
+    >
+      {/* App title */}
+      <Pressable onPress={handleSignOut} accessibilityRole="button">
+        <Text
+          style={{
+            fontSize: 36,
+            fontWeight: '800',
+            color: colors.text,
+            letterSpacing: -0.5,
+            lineHeight: 40,
+          }}
+        >
+          TINDEX
+        </Text>
+        <Text
+          style={{
+            fontSize: 13,
+            color: colors.textSecondary,
+            fontWeight: '500',
+            letterSpacing: 0.3,
+            marginTop: 2,
+          }}
+        >
+          Market Intelligence
+        </Text>
+      </Pressable>
 
-      {/* Action Buttons */}
-      <View className="flex-row items-center space-x-3">
+      {/* Action buttons */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 }}>
         {onPreviewPress && (
           <Pressable
             onPress={onPreviewPress}
-            className="w-12 h-12 bg-gradient-to-br from-green-500 to-green-600 rounded-2xl flex items-center justify-center shadow-lg shadow-green-500/30 border border-green-400/20"
-            android_ripple={{ color: "rgba(255,255,255,0.2)", borderless: true }}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: colors.iconButton,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderWidth: 1,
+              borderColor: colors.iconButtonBorder,
+            }}
           >
-            <Text className="text-lg font-bold text-white">🔔</Text>
+            <Ionicons name="notifications-outline" size={17} color={colors.text} />
           </Pressable>
         )}
-
         <Pressable
           onPress={onAddPress}
-          className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/30 border border-blue-400/20"
-          android_ripple={{ color: "rgba(255,255,255,0.2)", borderless: true }}
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            backgroundColor: colors.accent,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
         >
-          <Text className="text-xl font-bold text-white">+</Text>
+          <Ionicons name="add" size={20} color="#FFFFFF" />
         </Pressable>
       </View>
     </View>
-  )
-}
+  );
+};

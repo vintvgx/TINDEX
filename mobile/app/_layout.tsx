@@ -10,6 +10,7 @@ import {
   DefaultTheme,
   ThemeProvider,
 } from "@react-navigation/native";
+import { ThemeProvider as AppThemeProvider } from "@/lib/ThemeContext";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useFonts } from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
@@ -86,9 +87,11 @@ export default function RootLayout() {
   // Render the AuthProvider, once font is loaded
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <AppContent />
-      </AuthProvider>
+      <AppThemeProvider>
+        <AuthProvider>
+          <AppContent />
+        </AuthProvider>
+      </AppThemeProvider>
     </QueryClientProvider>
   );
 }
@@ -179,22 +182,13 @@ function AppContent() {
   }, [expoPushToken, isRegistering]);
 
   if (authState.isLoading) {
-    return (
-      <View>
-        <Text>Loading...</Text>
-      </View>
-    );
-    // return <LoadingScreen message="Initializing Alethia..." />;
+    return <LoadingScreen message="Initializing Alethia..." />;
   }
 
   return (
-    // <GluestackUIProvider mode={colorScheme === "dark" ? 'light' : 'light'}>
     <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-      {/* <ToastProvider> */}
       <Slot />
       <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
-      {/* </ToastProvider> */}
     </ThemeProvider>
-    // </GluestackUIProvider>
   );
 }
