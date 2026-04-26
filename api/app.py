@@ -1142,22 +1142,22 @@ def get_options(ticker: str):
         
         # Get query parameters
         feed = request.args.get('feed', 'indicative')  # Deprecated but kept for backward compatibility
-        limit = request.args.get('limit', 25, type=int)
+        limit = request.args.get('limit', 100, type=int)
         strike_price_gte = request.args.get('strike_price_gte', type=float)
         strike_price_lte = request.args.get('strike_price_lte', type=float)
         expiration_date_gte = request.args.get('expiration_date_gte')
         expiration_date_lte = request.args.get('expiration_date_lte')
-        
+
         # Note: feed parameter is ignored when using Tradier (they provide consolidated exchange data)
         # Keeping validation for backward compatibility but it won't affect the request
         if feed and feed not in ['indicative', 'opra']:
             logger.warning(f"Invalid feed parameter '{feed}' for ticker {ticker} - ignored (Tradier uses consolidated data)")
-        
+
         # Validate limit
-        if limit < 1 or limit > 100:
+        if limit < 1 or limit > 500:
             return jsonify({
                 "success": False,
-                "error": "Limit must be between 1 and 100",
+                "error": "Limit must be between 1 and 500",
                 "ticker": ticker
             }), 400
         

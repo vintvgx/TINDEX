@@ -1,0 +1,675 @@
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import {
+  View,
+  Text,
+  FlatList,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+  StyleSheet,
+  SafeAreaView,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
+import type { OptionsContract } from '@/common/types/blogPosts/ticker';
+import { useThemeColors } from '@/lib/useColorScheme';
+import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsContractDetailModal';
+import { useOptionsTicker } from '@/lib/optionsTickerContext';
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+type OptionSide = 'CALL' | 'PUT';
+type DatePreset = '1W' | '2W' | '1M' | '3M';
+
+type TableRow =
+  | { type: 'contract'; data: OptionsContract; isITM: boolean }
+  | { type: 'separator'; price: number };
+
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const COL_WIDTHS = { strike: 70, bid: 56, ask: 56, last: 56, oi: 64 };
+
+const ET_OPEN_SECS = (9 * 60 + 30) * 60;
+const ET_CLOSE_SECS = 16 * 60 * 60;
+
+const MOCK_STRIKES = [
+  182.5, 185, 187.5, 190, 192.5, 195, 197.5,
+  200, 202.5, 205, 207.5, 210, 212.5, 215, 217.5,
+];
+const MOCK_PRICE = 200.0;
+
+const DATE_PRESETS: { label: string; id: DatePreset; days: number }[] = [
+  { label: '1W', id: '1W', days: 7 },
+  { label: '2W', id: '2W', days: 14 },
+  { label: '1M', id: '1M', days: 30 },
+  { label: '3M', id: '3M', days: 90 },
+];
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const toDateStr = (d: Date) => d.toISOString().split('T')[0];
+
+const getDateRange = (preset: DatePreset): { gte: string; lte: string } => {
+  const today = new Date();
+  const lte = new Date(today);
+  lte.setDate(today.getDate() + DATE_PRESETS.find(p => p.id === preset)!.days);
+  return { gte: toDateStr(today), lte: toDateStr(lte) };
+};
+
+const formatExpiry = (d: string) => {
+  const [, m, day] = d.split('-').map(Number);
+  return `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m - 1]} ${day}`;
+};
+
+const formatVol = (n: number) => {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+};
+
+const formatCountdown = (secs: number): string => {
+  const s = Math.max(Math.floor(secs), 0);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sc = s % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sc).padStart(2, '0')}`;
+};
+
+const getMarketStatus = (): { isOpen: boolean; secondsUntilOpen: number } => {
+  try {
+    const now = new Date();
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', second: 'numeric',
+      hour12: false,
+    });
+    const parts = fmt.formatToParts(now);
+    const v = (t: string) => parseInt(parts.find(p => p.type === t)?.value ?? '0');
+    const [year, month, day, hour, min, sec] =
+      [v('year'), v('month') - 1, v('day'), v('hour'), v('minute'), v('second')];
+
+    const dow = new Date(year, month, day).getDay();
+    const isWeekday = dow >= 1 && dow <= 5;
+    const currentSecs = hour * 3600 + min * 60 + sec;
+    const isOpen = isWeekday && currentSecs >= ET_OPEN_SECS && currentSecs < ET_CLOSE_SECS;
+
+    if (isOpen) return { isOpen: true, secondsUntilOpen: 0 };
+
+    const secsToMidnight = 24 * 3600 - currentSecs;
+    let secsUntilOpen: number;
+
+    if (isWeekday && currentSecs < ET_OPEN_SECS) {
+      secsUntilOpen = ET_OPEN_SECS - currentSecs;
+    } else {
+      const daysAhead = dow === 5 ? 3 : dow === 6 ? 2 : dow === 0 ? 1 : 1;
+      secsUntilOpen = secsToMidnight + (daysAhead - 1) * 86400 + ET_OPEN_SECS;
+    }
+
+    return { isOpen: false, secondsUntilOpen: Math.max(secsUntilOpen, 0) };
+  } catch {
+    return { isOpen: false, secondsUntilOpen: 0 };
+  }
+};
+
+const makeMockData = (ticker: string) => {
+  const now = new Date();
+  const daysToFri = ((5 - now.getDay()) + 7) % 7 || 7;
+  const fri1 = new Date(now); fri1.setDate(now.getDate() + daysToFri); fri1.setHours(0,0,0,0);
+  const fri2 = new Date(fri1); fri2.setDate(fri1.getDate() + 7);
+
+  const mkRow = (strike: number, type: 'CALL' | 'PUT', expiration: string): OptionsContract => {
+    const dist = Math.abs(strike - MOCK_PRICE);
+    const isITM = type === 'CALL' ? strike < MOCK_PRICE : strike > MOCK_PRICE;
+    const intrinsic = isITM ? Math.abs(strike - MOCK_PRICE) : 0;
+    const extrinsic = Math.max(4.5 - dist * 0.22, 0.05);
+    const mark = parseFloat((intrinsic + extrinsic).toFixed(2));
+    const spread = parseFloat(Math.max(mark * 0.035, 0.02).toFixed(2));
+    const bid = parseFloat(Math.max(mark - spread / 2, 0.01).toFixed(2));
+    const ask = parseFloat((bid + spread).toFixed(2));
+    const oi = Math.max(Math.floor((12 - dist / 4) * 750), 150);
+    return {
+      ask, bid,
+      delta: parseFloat(Math.min(Math.max(
+        type === 'CALL' ? 0.5 - (strike - MOCK_PRICE) / MOCK_PRICE * 2.2
+                        : -(0.5 + (strike - MOCK_PRICE) / MOCK_PRICE * 2.2),
+        -0.99), 0.99).toFixed(3)),
+      expiration,
+      gamma: parseFloat(Math.max(0.04 - dist * 0.0018, 0.001).toFixed(4)),
+      implied_volatility: parseFloat((0.21 + dist * 0.0035).toFixed(4)),
+      last_price: mark,
+      open_interest: oi,
+      option_type: type,
+      rho: type === 'CALL' ? 0.01 : -0.01,
+      strike,
+      symbol: `${ticker}${expiration.replace(/-/g,'').slice(2)}${type[0]}${String(Math.floor(strike * 1000)).padStart(8,'0')}`,
+      theta: parseFloat((-0.018 - dist * 0.0008).toFixed(4)),
+      ticker,
+      timestamp: now.toISOString(),
+      vega: parseFloat(Math.max(0.14 - dist * 0.003, 0.01).toFixed(4)),
+      volume: Math.max(Math.floor(oi * 0.18), 20),
+    };
+  };
+
+  const expirations = [toDateStr(fri1), toDateStr(fri2)];
+  const calls: OptionsContract[] = [];
+  const puts: OptionsContract[] = [];
+  expirations.forEach(exp => {
+    MOCK_STRIKES.forEach(s => {
+      calls.push(mkRow(s, 'CALL', exp));
+      puts.push(mkRow(s, 'PUT', exp));
+    });
+  });
+
+  return { calls, puts, current_price: MOCK_PRICE, expirations_fetched: expirations };
+};
+
+// ─── Row builders ─────────────────────────────────────────────────────────────
+
+const buildRows = (contracts: OptionsContract[], price: number, side: OptionSide): TableRow[] => {
+  if (!price || contracts.length === 0) return [];
+  if (side === 'CALL') {
+    const sorted = [...contracts].sort((a, b) => b.strike - a.strike);
+    return [
+      ...sorted.filter(c => c.strike >= price).map(c => ({ type: 'contract' as const, data: c, isITM: false })),
+      { type: 'separator' as const, price },
+      ...sorted.filter(c => c.strike < price).map(c => ({ type: 'contract' as const, data: c, isITM: true })),
+    ];
+  }
+  const sorted = [...contracts].sort((a, b) => a.strike - b.strike);
+  return [
+    ...sorted.filter(c => c.strike <= price).map(c => ({ type: 'contract' as const, data: c, isITM: false })),
+    { type: 'separator' as const, price },
+    ...sorted.filter(c => c.strike > price).map(c => ({ type: 'contract' as const, data: c, isITM: true })),
+  ];
+};
+
+// ─── Screen ───────────────────────────────────────────────────────────────────
+
+const OptionsScreen = () => {
+  const colors = useThemeColors();
+  const { optionsTicker: activeTicker, setOptionsTicker } = useOptionsTicker();
+  const [side, setSide] = useState<OptionSide>('CALL');
+  const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
+  const [detailContract, setDetailContract] = useState<OptionsContract | null>(null);
+  const [useMockData, setUseMockData] = useState(false);
+  const [datePreset, setDatePreset] = useState<DatePreset>('1M');
+  const [marketStatus, setMarketStatus] = useState(() => getMarketStatus());
+  const prevTickerRef = useRef('');
+
+  // Live countdown
+  useEffect(() => {
+    const id = setInterval(() => setMarketStatus(getMarketStatus()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Reset expiry when ticker changes
+  useEffect(() => {
+    if (activeTicker !== prevTickerRef.current) {
+      prevTickerRef.current = activeTicker;
+      setSelectedExpiry(null);
+    }
+  }, [activeTicker]);
+
+  const dateRange = useMemo(() => getDateRange(datePreset), [datePreset]);
+
+  const { data: optionsData, isLoading, error } = useOptionsQuery(
+    useMockData ? '' : activeTicker,
+    activeTicker && !useMockData
+      ? { limit: 100, expiration_date_gte: dateRange.gte, expiration_date_lte: dateRange.lte }
+      : undefined,
+  );
+
+  const mockData = useMemo(
+    () => (activeTicker ? makeMockData(activeTicker) : null),
+    [activeTicker],
+  );
+
+  const activeData = useMockData ? mockData : (optionsData?.success ? optionsData.data : null);
+
+  const currentPrice = activeData?.current_price ?? 0;
+  const expirations = useMemo(() => activeData?.expirations_fetched ?? [], [activeData]);
+
+  useEffect(() => {
+    if (expirations.length > 0 && !selectedExpiry) setSelectedExpiry(expirations[0]);
+  }, [expirations, selectedExpiry]);
+
+  const rawContracts = useMemo(() => {
+    if (!activeData) return [];
+    return side === 'CALL' ? activeData.calls : activeData.puts;
+  }, [activeData, side]);
+
+  const filtered = useMemo(
+    () => selectedExpiry ? rawContracts.filter(c => c.expiration === selectedExpiry) : rawContracts,
+    [rawContracts, selectedExpiry],
+  );
+
+  const rows = useMemo(() => buildRows(filtered, currentPrice, side), [filtered, currentPrice, side]);
+
+  const handleSideSwitch = useCallback((s: OptionSide) => {
+    setSide(s);
+    setSelectedExpiry(null);
+  }, []);
+
+  const handleEnableMock = useCallback(() => {
+    setUseMockData(true);
+    if (!activeTicker) setOptionsTicker('AAPL');
+  }, [activeTicker, setOptionsTicker]);
+
+  const handleMockToggle = useCallback(() => {
+    setUseMockData(m => {
+      if (!m && !activeTicker) setOptionsTicker('AAPL');
+      return !m;
+    });
+  }, [activeTicker, setOptionsTicker]);
+
+  const asOpportunity = (c: OptionsContract) => ({
+    ask: c.ask,
+    bid: c.bid,
+    contractSymbol: c.symbol,
+    delta: c.delta,
+    dte: 0,
+    expirationDate: c.expiration,
+    extrinsicValue: 0,
+    gamma: c.gamma,
+    impliedVolatility: c.implied_volatility ?? 0,
+    intrinsicValue: 0,
+    mark: (c.bid + c.ask) / 2,
+    moneyness: 0,
+    openInterest: c.open_interest,
+    optionType: c.option_type,
+    reasons: '',
+    signal: 'CONSIDER' as const,
+    spreadPct: c.ask > 0 ? ((c.ask - c.bid) / c.ask) * 100 : 0,
+    strike: c.strike,
+    theta: c.theta,
+    total_score: 0,
+    vega: c.vega,
+    volume: c.volume,
+  });
+
+  const renderRow = useCallback(
+    ({ item }: { item: TableRow }) => {
+      if (item.type === 'separator') {
+        return (
+          <View style={[styles.separatorRow, { backgroundColor: colors.surface, borderColor: colors.separator }]}>
+            <View style={[styles.separatorPill, { backgroundColor: colors.accent + '22' }]}>
+              <Text style={[styles.separatorPillText, { color: colors.accent }]}>ITM</Text>
+            </View>
+            <Text style={[styles.separatorPrice, { color: colors.text }]}>${item.price.toFixed(2)}</Text>
+            <View style={[styles.separatorPill, { backgroundColor: colors.accent + '22' }]}>
+              <Text style={[styles.separatorPillText, { color: colors.accent }]}>ITM</Text>
+            </View>
+          </View>
+        );
+      }
+      const c = item.data;
+      return (
+        <TouchableOpacity
+          onPress={() => setDetailContract(c)}
+          activeOpacity={0.7}
+          style={[
+            styles.contractRow,
+            {
+              backgroundColor: item.isITM ? colors.surface : 'transparent',
+              borderBottomColor: colors.separator,
+            },
+          ]}
+        >
+          <Text numberOfLines={1} style={[styles.cell, { width: COL_WIDTHS.strike, color: colors.text, fontWeight: '600' }]}>
+            ${c.strike.toFixed(1)}
+          </Text>
+          <Text numberOfLines={1} style={[styles.cell, { width: COL_WIDTHS.bid, color: colors.success }]}>
+            {c.bid > 0 ? c.bid.toFixed(2) : '-'}
+          </Text>
+          <Text numberOfLines={1} style={[styles.cell, { width: COL_WIDTHS.ask, color: colors.error }]}>
+            {c.ask > 0 ? c.ask.toFixed(2) : '-'}
+          </Text>
+          <Text numberOfLines={1} style={[styles.cell, { width: COL_WIDTHS.last, color: colors.textSecondary }]}>
+            {c.last_price != null ? c.last_price.toFixed(2) : '-'}
+          </Text>
+          <Text numberOfLines={1} style={[styles.cell, { width: COL_WIDTHS.oi, color: colors.textTertiary }]}>
+            {formatVol(c.open_interest)}
+          </Text>
+          <Text numberOfLines={1} style={[styles.cell, { flex: 1, color: colors.textTertiary }]}>
+            {formatVol(c.volume)}
+          </Text>
+        </TouchableOpacity>
+      );
+    },
+    [colors],
+  );
+
+  const showError = !useMockData && activeTicker && (error || (optionsData && !optionsData.success));
+  const showOutsideHours = showError && !marketStatus.isOpen;
+  const showGenericError = showError && marketStatus.isOpen;
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+
+      {/* ── Header ── */}
+      <View style={{
+        paddingHorizontal: 24,
+        paddingVertical: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.separator,
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        justifyContent: 'space-between',
+      }}>
+        <View>
+          <Text style={{ color: colors.text, fontSize: 36, fontWeight: '800', letterSpacing: -0.5 }}>
+            Options
+          </Text>
+          <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '500', marginTop: 2 }}>
+            {activeTicker && currentPrice > 0
+              ? `${activeTicker} · $${currentPrice.toFixed(2)}`
+              : 'Enter a ticker in the search bar'}
+          </Text>
+        </View>
+
+        {/* Mock data toggle */}
+        <TouchableOpacity
+          onPress={handleMockToggle}
+          activeOpacity={0.75}
+          style={{
+            paddingHorizontal: 14,
+            paddingVertical: 8,
+            backgroundColor: useMockData ? colors.accent + '22' : colors.iconButton,
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: useMockData ? colors.accent + '66' : colors.iconButtonBorder,
+            marginBottom: 2,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <Ionicons
+            name="flask-outline"
+            size={14}
+            color={useMockData ? colors.accent : colors.textSecondary}
+          />
+          <Text style={{ color: useMockData ? colors.accent : colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
+            Mock
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* ── Mock data banner ── */}
+      {useMockData && (
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          backgroundColor: colors.warningBg,
+          paddingHorizontal: 16,
+          paddingVertical: 8,
+          gap: 6,
+        }}>
+          <Ionicons name="flask" size={13} color={colors.warning} />
+          <Text style={{ color: colors.warning, fontSize: 12, fontWeight: '600', flex: 1 }}>
+            Mock data — for demonstration only
+          </Text>
+          <TouchableOpacity onPress={() => setUseMockData(false)} hitSlop={8}>
+            <Ionicons name="close" size={14} color={colors.warning} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ── Controls row: Calls/Puts toggle + date range presets ── */}
+      {activeTicker ? (
+        <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10, gap: 10 }}>
+          {/* Calls / Puts + expiry row */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            {/* Pill toggle */}
+            <View style={{
+              flexDirection: 'row',
+              backgroundColor: colors.surface,
+              borderRadius: 100,
+              padding: 3,
+              borderWidth: 1,
+              borderColor: colors.border,
+            }}>
+              {(['CALL', 'PUT'] as const).map(s => (
+                <TouchableOpacity
+                  key={s}
+                  onPress={() => handleSideSwitch(s)}
+                  activeOpacity={0.8}
+                  style={{
+                    paddingHorizontal: 14,
+                    paddingVertical: 6,
+                    borderRadius: 100,
+                    backgroundColor: side === s ? colors.surfaceTertiary : 'transparent',
+                  }}
+                >
+                  <Text style={{
+                    fontSize: 13,
+                    fontWeight: '600',
+                    color: side === s
+                      ? (s === 'CALL' ? colors.success : colors.error)
+                      : colors.textSecondary,
+                  }}>
+                    {s === 'CALL' ? 'Calls' : 'Puts'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Expiry chips */}
+            {expirations.length > 0 && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: 6 }}
+                style={{ flex: 1 }}
+              >
+                {expirations.map(exp => {
+                  const active = selectedExpiry === exp;
+                  return (
+                    <TouchableOpacity
+                      key={exp}
+                      onPress={() => setSelectedExpiry(active ? null : exp)}
+                      activeOpacity={0.75}
+                      style={{
+                        paddingHorizontal: 10,
+                        paddingVertical: 5,
+                        borderRadius: 20,
+                        borderWidth: 1,
+                        borderColor: active ? colors.accent : colors.border,
+                        backgroundColor: active ? colors.accent + '1A' : 'transparent',
+                      }}
+                    >
+                      <Text style={{ fontSize: 11, fontWeight: '600', color: active ? colors.accent : colors.textSecondary }}>
+                        {formatExpiry(exp)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </View>
+
+          {/* Date range presets */}
+          {!useMockData && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '500', marginRight: 4 }}>Range:</Text>
+              {DATE_PRESETS.map(p => {
+                const active = datePreset === p.id;
+                return (
+                  <TouchableOpacity
+                    key={p.id}
+                    onPress={() => { setDatePreset(p.id); setSelectedExpiry(null); }}
+                    activeOpacity={0.75}
+                    style={{
+                      paddingHorizontal: 12,
+                      paddingVertical: 5,
+                      borderRadius: 20,
+                      borderWidth: 1,
+                      borderColor: active ? colors.accent : colors.border,
+                      backgroundColor: active ? colors.accent + '1A' : 'transparent',
+                    }}
+                  >
+                    <Text style={{ fontSize: 12, fontWeight: '600', color: active ? colors.accent : colors.textSecondary }}>
+                      {p.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+        </View>
+      ) : null}
+
+      {/* ── Column headers ── */}
+      {activeTicker && !showError ? (
+        <View style={[styles.colHeaderRow, { backgroundColor: colors.surface, borderBottomColor: colors.separator }]}>
+          <Text style={[styles.colHead, { width: COL_WIDTHS.strike, color: colors.textTertiary }]}>Strike</Text>
+          <Text style={[styles.colHead, { width: COL_WIDTHS.bid, color: colors.success }]}>Bid</Text>
+          <Text style={[styles.colHead, { width: COL_WIDTHS.ask, color: colors.error }]}>Ask</Text>
+          <Text style={[styles.colHead, { width: COL_WIDTHS.last, color: colors.textTertiary }]}>Last</Text>
+          <Text style={[styles.colHead, { width: COL_WIDTHS.oi, color: colors.textTertiary }]}>OI</Text>
+          <Text style={[styles.colHead, { flex: 1, color: colors.textTertiary }]}>Volume</Text>
+        </View>
+      ) : null}
+
+      {/* ── Content area ── */}
+
+      {!activeTicker ? (
+        <View style={styles.centered}>
+          <View style={[styles.iconCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Ionicons name="layers-outline" size={32} color={colors.textSecondary} />
+          </View>
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>Options Chain</Text>
+          <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+            Type a ticker in the search bar{'\n'}below to view the options chain
+          </Text>
+        </View>
+
+      ) : !useMockData && isLoading ? (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={colors.accent} />
+          <Text style={{ color: colors.textSecondary, fontSize: 14, marginTop: 12 }}>
+            Loading {activeTicker} options...
+          </Text>
+        </View>
+
+      ) : showOutsideHours ? (
+        <View style={styles.centered}>
+          <View style={[styles.iconCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Ionicons name="time-outline" size={32} color={colors.textSecondary} />
+          </View>
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>Outside of Market Hours</Text>
+          <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+            Options data is only available{'\n'}during market hours.
+          </Text>
+
+          <View style={[styles.countdownCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '500', marginBottom: 6 }}>
+              Market opens in
+            </Text>
+            <Text style={[styles.countdown, { color: colors.text }]}>
+              {formatCountdown(marketStatus.secondsUntilOpen)}
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            onPress={handleEnableMock}
+            activeOpacity={0.8}
+            style={[styles.mockCta, { backgroundColor: colors.accent + '18', borderColor: colors.accent + '44' }]}
+          >
+            <Ionicons name="flask-outline" size={15} color={colors.accent} />
+            <Text style={{ color: colors.accent, fontSize: 14, fontWeight: '600' }}>
+              View Mock Data
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+      ) : showGenericError ? (
+        <View style={styles.centered}>
+          <Ionicons name="alert-circle-outline" size={44} color={colors.error} />
+          <Text style={[styles.emptyTitle, { color: colors.text }]}>Could not load options</Text>
+          <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+            Check the ticker and try again
+          </Text>
+        </View>
+
+      ) : rows.length === 0 ? (
+        <View style={styles.centered}>
+          <Text style={{ color: colors.textSecondary, fontSize: 15 }}>No contracts found</Text>
+          <Text style={{ color: colors.textTertiary, fontSize: 13, marginTop: 4 }}>
+            Try selecting a different expiration or date range
+          </Text>
+        </View>
+
+      ) : (
+        <FlatList
+          data={rows}
+          renderItem={renderRow}
+          keyExtractor={(item, i) => item.type === 'separator' ? `sep-${i}` : item.data.symbol}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 200 }}
+          initialNumToRender={30}
+          maxToRenderPerBatch={20}
+          windowSize={10}
+        />
+      )}
+
+      {/* ── Detail modal ── */}
+      {detailContract && (
+        <OptionsContractDetailModal
+          visible
+          onClose={() => setDetailContract(null)}
+          contract={asOpportunity(detailContract)}
+          ticker={activeTicker}
+          currentPrice={currentPrice}
+          isTracked={false}
+          onTrackContract={() => {}}
+          isTracking={false}
+        />
+      )}
+    </SafeAreaView>
+  );
+};
+
+export default OptionsScreen;
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
+  iconCard: {
+    width: 72, height: 72, borderRadius: 20,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, marginBottom: 16,
+  },
+  emptyTitle: { fontSize: 17, fontWeight: '700' },
+  emptySubtitle: { fontSize: 13, textAlign: 'center', marginTop: 6, lineHeight: 20 },
+  countdownCard: {
+    marginTop: 20, paddingHorizontal: 28, paddingVertical: 16,
+    borderRadius: 16, borderWidth: 1, alignItems: 'center',
+  },
+  countdown: { fontSize: 32, fontWeight: '700', letterSpacing: 2 },
+  mockCta: {
+    marginTop: 14, paddingHorizontal: 20, paddingVertical: 11,
+    borderRadius: 12, borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+  },
+  colHeaderRow: {
+    flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 9,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  colHead: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
+  contractRow: {
+    flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  cell: { fontSize: 13, textAlign: 'left' },
+  separatorRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth, gap: 12,
+  },
+  separatorPill: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 100 },
+  separatorPillText: { fontSize: 11, fontWeight: '700' },
+  separatorPrice: { fontSize: 13, fontWeight: '700' },
+});

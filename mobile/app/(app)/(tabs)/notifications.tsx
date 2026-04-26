@@ -288,7 +288,7 @@ const NotificationsScreen = () => {
             onRefresh={handleRefresh}
           />
         }
-        contentContainerStyle={{ flexGrow: 1, paddingBottom: 110 }}
+        contentContainerStyle={{ flexGrow: 1, paddingBottom: 170 }}
       />
 
       <ORBNotificationModal
