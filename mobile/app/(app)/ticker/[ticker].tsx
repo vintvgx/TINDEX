@@ -1,5 +1,5 @@
-import type React from "react";
-import { useState, useMemo } from "react";
+import type React from 'react';
+import { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,231 +9,152 @@ import {
   ActivityIndicator,
   SafeAreaView,
   Alert,
-} from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
-import { useTickerQuery } from "@/hooks/queries/ticker/useTickerQuery";
-import { useBaseNavigation } from "@/hooks/navigation/useBaseNavigation";
-import { SummaryTab } from "@/common/components/ticker/SummaryTab";
-import { AnalyticsTab } from "@/common/components/ticker/AnalyticsTab";
-import { FinancialsTab } from "@/common/components/ticker/FinancialsTab";
-import { StockInfoHeader } from "@/common/components/ticker/StockInfoHeader";
-import { TabNavigation } from "@/common/components/ticker/TabNavigation";
-import { OptionsList } from "@/common/components/ticker/OptionsList";
-import { useTrackedContracts } from "@/hooks/queries/track/useTrackedContracts";
-import { UpdatesTab } from "@/common/components/ticker/UpdatesTab";
-import {
-  useIsFollowingORB,
-  useToggleORBFollow,
-} from "@/hooks/mutations/ticker/tickerORB";
-import { useGenerateTickerUpdateMutation } from "@/hooks/mutations/ticker/useGenerateTickerUpdateMutation";
-import { useAuth } from "@/common/utils/context/auth/AuthContext";
-import { useTrackContract } from "@/hooks/mutations/track/useTrackContract";
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams } from 'expo-router';
+import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
+import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
+import { SummaryTab } from '@/common/components/ticker/SummaryTab';
+import { AnalyticsTab } from '@/common/components/ticker/AnalyticsTab';
+import { FinancialsTab } from '@/common/components/ticker/FinancialsTab';
+import { StockInfoHeader } from '@/common/components/ticker/StockInfoHeader';
+import { TabNavigation } from '@/common/components/ticker/TabNavigation';
+import { OptionsList } from '@/common/components/ticker/OptionsList';
+import { useTrackedContracts } from '@/hooks/queries/track/useTrackedContracts';
+import { UpdatesTab } from '@/common/components/ticker/UpdatesTab';
+import { useIsFollowingORB, useToggleORBFollow } from '@/hooks/mutations/ticker/tickerORB';
+import { useGenerateTickerUpdateMutation } from '@/hooks/mutations/ticker/useGenerateTickerUpdateMutation';
+import { useAuth } from '@/common/utils/context/auth/AuthContext';
+import { useTrackContract } from '@/hooks/mutations/track/useTrackContract';
+import { useThemeColors } from '@/lib/useColorScheme';
 
 export default function TickerScreen() {
+  const colors = useThemeColors();
   const { ticker } = useLocalSearchParams<{ ticker: string }>();
-  console.log("[ticker] TICKER", ticker);
-  
-  // All hooks must be called at the top before any early returns
-  const {
-    data: tickerResponse,
-    isLoading,
-    error,
-    refetch,
-    isRefetching,
-  } = useTickerQuery(ticker || "");
 
-  const { data: isFollowingORB, isLoading: isfollowORBLoading } =
-    useIsFollowingORB(ticker);
+  const { data: tickerResponse, isLoading, error, refetch, isRefetching } = useTickerQuery(ticker || '');
+  const { data: isFollowingORB, isLoading: isfollowORBLoading } = useIsFollowingORB(ticker);
   const followORB = useToggleORBFollow(ticker);
 
-  const [activeTab, setActiveTab] = useState<
-    "Summary" | "Analytics" | "Financials" | "Options" | "Updates"
-  >("Summary");
-  const [selectedPeriod, setSelectedPeriod] = useState("1D");
+  const [activeTab, setActiveTab] = useState<'Summary' | 'Analytics' | 'Financials' | 'Options' | 'Updates'>('Summary');
+  const [selectedPeriod, setSelectedPeriod] = useState('1D');
 
   const { authState: { user } } = useAuth();
   const generateTickerUpdate = useGenerateTickerUpdateMutation();
-  
-  // Options tracking hooks
   const { data: trackedContracts = [] } = useTrackedContracts();
   const trackContract = useTrackContract();
-  
-  // Create a Set of tracked contract symbols for quick lookup
-  const trackedContractSymbols = useMemo(() => {
-    return new Set(trackedContracts.map(c => c.contract_symbol));
-  }, [trackedContracts]);
+
+  const trackedContractSymbols = useMemo(() => new Set(trackedContracts.map((c) => c.contract_symbol)), [trackedContracts]);
 
   const stockData = tickerResponse?.data;
-
   const { navigateBack } = useBaseNavigation();
 
-  const handleBack = () => {
-    navigateBack();
-  };
-
-  const handleRefetch = () => {
-    refetch();
-  };
-
-  const handleORBState = () => {
-    const newState = !isFollowingORB?.orb_enabled;
-    followORB.mutate(newState);
-  };
+  const handleORBState = () => followORB.mutate(!isFollowingORB?.orb_enabled);
 
   const handleGenerateTweet = () => {
-    if (!user?.id || !ticker) {
-      console.error("User ID or ticker is missing");
-      return;
-    }
-
-    generateTickerUpdate.mutate({
-      ticker: ticker,
-      userId: user.id,
-      targetLength: 500,
-    });
+    if (!user?.id || !ticker) return;
+    generateTickerUpdate.mutate({ ticker, userId: user.id, targetLength: 500 });
   };
 
-  // Loading state
-  if (isLoading || isRefetching) {
-    return (
-      <SafeAreaView className="flex-1 bg-black">
-        <View className="absolute inset-0 bg-gradient-to-b from-gray-900/20 via-transparent to-gray-900/10" />
-        <View className="flex-1 justify-center items-center px-8">
-          <View className="bg-gray-900/50 rounded-3xl p-8 border border-gray-800/30">
-            <ActivityIndicator size="large" color="#007AFF" />
-            <Text className="mt-6 text-lg text-gray-300 font-semibold text-center tracking-wide">
-              Loading {ticker}...
-            </Text>
-            <Text className="mt-2 text-sm text-gray-500 text-center font-medium">
-              Fetching ticker data
-            </Text>
-          </View>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  // Error state or if there is no data to be displayed
-  if (error || !stockData) {
-    return (
-      <SafeAreaView className="flex-1 bg-black">
-        <View className="absolute inset-0 bg-gradient-to-b from-gray-900/20 via-transparent to-gray-900/10" />
-        <View className="flex-1 justify-center items-center px-8">
-          <View className="bg-gray-900/30 rounded-3xl p-12 border border-gray-800/30 text-center">
-            <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
-            <Text className="mt-6 text-2xl font-black text-white mb-4 text-center tracking-tight">
-              Error Loading Ticker
-            </Text>
-            <Text className="text-base text-gray-400 text-center leading-7 font-medium mb-6">
-              {error instanceof Error ? error.message : "Something went wrong"}
-            </Text>
-            <Pressable
-              onPress={handleBack}
-              className="bg-gradient-to-br from-blue-500 to-blue-600 px-6 py-3 rounded-2xl shadow-lg shadow-blue-500/30 border border-blue-400/20">
-              <Text className="text-white font-bold text-center">Go Back</Text>
-            </Pressable>
-          </View>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  const renderSummaryTab = () => (
-    <ScrollView
-      className="flex-1 px-5"
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={{ paddingBottom: 20, paddingTop: 20 }}>
-      <SummaryTab
-        stockData={stockData}
-        selectedPeriod={selectedPeriod}
-        onPeriodChange={setSelectedPeriod}
-      />
-    </ScrollView>
-  );
-
-  const renderAnalyticsTab = () => (
-    <ScrollView
-      className="flex-1 px-5"
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={{ paddingBottom: 20, paddingTop: 20 }}>
-      <AnalyticsTab stockData={stockData} />
-    </ScrollView>
-  );
-
-  const renderFinancialsTab = () => (
-    <ScrollView
-      className="flex-1 px-5"
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={{ paddingBottom: 20, paddingTop: 20 }}>
-      <FinancialsTab stockData={stockData} />
-    </ScrollView>
-  );
-
   const handleTrackContract = async (contract: any) => {
-    if (!user?.id) {
-      Alert.alert('Error', 'User must be authenticated to track contracts');
-      return;
-    }
-
+    if (!user?.id) { Alert.alert('Error', 'User must be authenticated to track contracts'); return; }
     try {
-      const expirationDate = contract.expirationDate
-        ? new Date(contract.expirationDate).toISOString().split('T')[0]
-        : '';
-
       await trackContract.mutateAsync({
         userId: user.id,
         ticker: ticker || '',
         contractSymbol: contract.contractSymbol,
         optionType: contract.optionType,
         strike: contract.strike,
-        expirationDate: expirationDate,
+        expirationDate: contract.expirationDate,
         trackingSnapshot: contract,
         trackedFromSource: 'manual',
-        initialAnalysisScore: contract.total_score,
       });
-
-      // Delay alert to avoid navigation context issues during re-renders
-      setTimeout(() => {
-        Alert.alert('Success', `Contract ${contract.contractSymbol} is now being tracked`);
-      }, 100);
     } catch (error) {
-      // Delay alert to avoid navigation context issues
-      setTimeout(() => {
-        Alert.alert(
-          'Error',
-          error instanceof Error ? error.message : 'Failed to track contract'
-        );
-      }, 100);
+      setTimeout(() => Alert.alert('Error', error instanceof Error ? error.message : 'Failed to track contract'), 100);
     }
   };
 
+  const iconButtonStyle = {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.iconButton,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    borderWidth: 1,
+    borderColor: colors.iconButtonBorder,
+  };
+
+  if (isLoading || isRefetching) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color={colors.accent} />
+          <Text style={{ marginTop: 12, fontSize: 15, color: colors.textSecondary, fontWeight: '500' }}>
+            Loading {ticker}…
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (error || !stockData) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 }}>
+          <Ionicons name="alert-circle-outline" size={48} color={colors.error} />
+          <Text style={{ marginTop: 16, fontSize: 20, fontWeight: '700', color: colors.text, textAlign: 'center', marginBottom: 8 }}>
+            Error Loading Ticker
+          </Text>
+          <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: 'center', marginBottom: 24 }}>
+            {error instanceof Error ? error.message : 'Something went wrong'}
+          </Text>
+          <Pressable
+            onPress={navigateBack}
+            style={{ backgroundColor: colors.accent, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 14 }}
+          >
+            <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>Go Back</Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const renderSummaryTab = () => (
+    <ScrollView style={{ flex: 1, paddingHorizontal: 20 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24, paddingTop: 20 }}>
+      <SummaryTab stockData={stockData} selectedPeriod={selectedPeriod} onPeriodChange={setSelectedPeriod} />
+    </ScrollView>
+  );
+
+  const renderAnalyticsTab = () => (
+    <ScrollView style={{ flex: 1, paddingHorizontal: 20 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24, paddingTop: 20 }}>
+      <AnalyticsTab stockData={stockData} />
+    </ScrollView>
+  );
+
+  const renderFinancialsTab = () => (
+    <ScrollView style={{ flex: 1, paddingHorizontal: 20 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24, paddingTop: 20 }}>
+      <FinancialsTab stockData={stockData} />
+    </ScrollView>
+  );
+
   const renderOptionsTab = () => {
     const optionsData = stockData?.options_analysis;
-
-    if (
-      !optionsData?.has_opportunities ||
-      !optionsData?.opportunities?.length
-    ) {
+    if (!optionsData?.has_opportunities || !optionsData?.opportunities?.length) {
       return (
-        <View className="flex-1 justify-center items-center px-8">
-          <View className="bg-gray-900/50 rounded-3xl p-8 border border-gray-800/30">
-            <Ionicons name="analytics-outline" size={48} color="#6B7280" />
-            <Text className="mt-6 text-xl font-bold text-white text-center">
-              No Options Available
-            </Text>
-            <Text className="mt-2 text-sm text-gray-400 text-center leading-6">
-              {stockData?.has_options === false
-                ? "This ticker does not have options trading available."
-                : "No options opportunities found at this time."}
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 }}>
+          <View style={{ backgroundColor: colors.surface, borderRadius: 20, padding: 32, alignItems: 'center', borderWidth: 1, borderColor: colors.border }}>
+            <Ionicons name="analytics-outline" size={40} color={colors.textTertiary} />
+            <Text style={{ marginTop: 14, fontSize: 17, fontWeight: '700', color: colors.text, textAlign: 'center', marginBottom: 8 }}>No Options Available</Text>
+            <Text style={{ fontSize: 14, color: colors.textSecondary, textAlign: 'center', lineHeight: 20 }}>
+              {stockData?.has_options === false ? 'This ticker does not have options trading available.' : 'No options opportunities found at this time.'}
             </Text>
           </View>
         </View>
       );
     }
-
     return (
-      <View className="flex-1">
+      <View style={{ flex: 1 }}>
         <OptionsList
           opportunities={optionsData.opportunities}
           ticker={ticker || ''}
@@ -247,98 +168,73 @@ export default function TickerScreen() {
   };
 
   const renderTweetsTab = () => {
-    if (!ticker) {
-      return (
-        <View className="flex-1 justify-center items-center">
-          <Text className="text-gray-400">No ticker selected</Text>
-        </View>
-      );
-    }
-
+    if (!ticker) return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ color: colors.textSecondary }}>No ticker selected</Text>
+      </View>
+    );
     return <UpdatesTab ticker={ticker} />;
   };
 
   return (
-    <SafeAreaView className="flex-1 bg-black">
-      <StatusBar barStyle="light-content" backgroundColor="#000000" />
-
-      {/* Subtle background gradient */}
-      <View className="absolute inset-0 bg-gradient-to-b from-gray-900/20 via-transparent to-gray-900/10" />
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+      <StatusBar barStyle={colors.background === '#FFFFFF' ? 'dark-content' : 'light-content'} />
 
       {/* Header */}
-      <View className="bg-black/95 backdrop-blur-xl pt-4 pb-4 px-6 border-b border-gray-800/50">
-        <View className="flex-row items-center justify-between mb-6">
-          <Pressable
-            onPress={handleBack}
-            className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center border border-gray-700/30">
-            <Ionicons name="arrow-back" size={20} color="#fff" />
+      <View
+        style={{
+          backgroundColor: colors.background,
+          paddingTop: 8,
+          paddingBottom: 12,
+          paddingHorizontal: 20,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.separator,
+        }}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          {/* Back button */}
+          <Pressable onPress={navigateBack} style={iconButtonStyle}>
+            <Ionicons name="arrow-back" size={18} color={colors.text} />
           </Pressable>
-          <View className="flex-row items-center">
-            {/* Generate Tweet Button - Only show when Tweets tab is active */}
-            {activeTab === "Updates" && (
+
+          {/* Action buttons */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {activeTab === 'Updates' && (
               <Pressable
-                className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30"
+                style={iconButtonStyle}
                 onPress={handleGenerateTweet}
-                disabled={generateTickerUpdate.isPending || !user?.id}>
+                disabled={generateTickerUpdate.isPending || !user?.id}
+              >
                 {generateTickerUpdate.isPending ? (
-                  <ActivityIndicator size="small" color="#007AFF" />
+                  <ActivityIndicator size="small" color={colors.accent} />
                 ) : (
-                  <Ionicons
-                    name="create-outline"
-                    size={20}
-                    color={!user?.id ? "#6B7280" : "#007AFF"}
-                  />
+                  <Ionicons name="create-outline" size={18} color={!user?.id ? colors.textTertiary : colors.accent} />
                 )}
               </Pressable>
             )}
-            <Pressable 
-            className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30"
-            onPress={handleRefetch}
-            disabled={isLoading}
-          >
-              <Ionicons 
-                name={isLoading ? "hourglass-outline" : "refresh-circle-outline"} 
-                size={20} 
-                color={isLoading ? "#6B7280" : "#44efef"} 
-              />
+            <Pressable style={iconButtonStyle} onPress={() => refetch()} disabled={isLoading}>
+              <Ionicons name="refresh-outline" size={18} color={isLoading ? colors.textTertiary : colors.accent} />
             </Pressable>
-            <Pressable
-              className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30"
-              onPress={handleORBState}
-              disabled={isfollowORBLoading}>
+            <Pressable style={iconButtonStyle} onPress={handleORBState} disabled={isfollowORBLoading}>
               <Ionicons
-                name={
-                  isFollowingORB?.orb_enabled
-                    ? "remove-circle-outline"
-                    : "add-circle-outline"
-                }
-                size={20}
-                color={isFollowingORB?.orb_enabled ? "red" : "green"}
+                name={isFollowingORB?.orb_enabled ? 'remove-circle-outline' : 'add-circle-outline'}
+                size={18}
+                color={isFollowingORB?.orb_enabled ? colors.error : colors.success}
               />
             </Pressable>
-            {/* <Pressable className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center mr-3 border border-gray-700/30">
-              <Ionicons name="heart-outline" size={20} color="#EF4444" />
-            </Pressable> */}
-            {/* <Pressable className="w-10 h-10 bg-gray-800/60 rounded-2xl flex items-center justify-center border border-gray-700/30">
-              <Ionicons name="share-outline" size={20} color="#fff" />
-            </Pressable> */}
           </View>
         </View>
 
-        {/* Stock Info */}
         <StockInfoHeader stockData={stockData} />
-
-        {/* Tab Navigation */}
         <TabNavigation activeTab={activeTab} onTabChange={setActiveTab} />
       </View>
 
-      {/* Tab Content */}
-      <View className="flex-1">
-        {activeTab === "Summary" && renderSummaryTab()}
-        {activeTab === "Analytics" && renderAnalyticsTab()}
-        {activeTab === "Financials" && renderFinancialsTab()}
-        {activeTab === "Options" && renderOptionsTab()}
-        {activeTab === "Updates" && renderTweetsTab()}
+      <View style={{ flex: 1 }}>
+        {activeTab === 'Summary' && renderSummaryTab()}
+        {activeTab === 'Analytics' && renderAnalyticsTab()}
+        {activeTab === 'Financials' && renderFinancialsTab()}
+        {activeTab === 'Options' && renderOptionsTab()}
+        {activeTab === 'Updates' && renderTweetsTab()}
       </View>
     </SafeAreaView>
   );

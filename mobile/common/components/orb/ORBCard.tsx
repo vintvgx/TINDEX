@@ -1,214 +1,177 @@
 import React from 'react';
-import { View, Text, TouchableOpacity } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { AnimatedNumber } from './AnimatedNumber';
 import { GapTrendBadges } from './GapTrendBadges';
 import type { GapTrendContext } from '@/common/types/orb';
+import { useThemeColors } from '@/lib/useColorScheme';
 
 interface ORBCardProps {
   data: ORBMonitoringState;
   onPress: () => void;
-  /** Optional gap/trend from orb_ranges for context badges */
   orbRange?: GapTrendContext | null;
-  /** When true, card uses full width (1x1 layout) */
   fullWidth?: boolean;
 }
 
-/**
- * Formats price with null/undefined handling
- */
 const formatPrice = (price: number | null | undefined): string => {
-  if (price === null || price === undefined || isNaN(price)) {
-    return 'N/A';
-  }
+  if (price == null || isNaN(price)) return 'N/A';
   return `$${price.toFixed(2)}`;
 };
 
-/**
- * Gets color for breakout type
- */
-const getBreakoutColor = (breakoutType: string): string => {
+const getBreakoutColor = (breakoutType: string, colors: ReturnType<typeof useThemeColors>): string => {
   switch (breakoutType) {
     case 'Bullish':
-    case 'Confirmed Bullish':
-      return '#10B981'; // green
+    case 'Confirmed Bullish': return colors.success;
     case 'Bearish':
-    case 'Confirmed Bearish':
-      return '#EF4444'; // red
-    case 'invalidated':
-      return '#F59E0B'; // amber
-    case 'reversal':
-      return '#8B5CF6'; // purple
-    case 'Offline':
-      return '#9CA3AF'; // gray
-    default:
-      return '#6B7280'; // gray
-  }
-};
-
-/**
- * Gets background color for breakout badge
- */
-const getBreakoutBadgeBg = (breakoutType: string): string => {
-  switch (breakoutType) {
-    case 'Bullish':
-      return 'bg-green-500/20';
-    case 'Confirmed Bullish':
-      return 'bg-green-500/30';
-    case 'Bearish':
-      return 'bg-red-500/20';
-    case 'Confirmed Bearish':
-      return 'bg-red-500/30';
-    case 'invalidated':
-      return 'bg-yellow-500/20';
-    case 'reversal':
-      return 'bg-purple-500/20';
-    case 'Offline':
-      return 'bg-gray-700/30';
-    default:
-      return 'bg-gray-800/50';
+    case 'Confirmed Bearish': return colors.error;
+    case 'invalidated': return colors.warning;
+    case 'reversal': return '#5856D6';
+    case 'Offline': return colors.textTertiary;
+    default: return colors.textSecondary;
   }
 };
 
 export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullWidth = false }) => {
+  const colors = useThemeColors();
+
   const orbHigh = data.orb_high ?? 0;
   const orbLow = data.orb_low ?? 0;
   const currentPrice = data.current_price ?? 0;
   const isAboveHigh = currentPrice > orbHigh;
   const isBelowLow = currentPrice < orbLow;
-  const isInRange = !isAboveHigh && !isBelowLow && (orbHigh - orbLow) > 0;
-  
-  // Price color based on position
-  let priceColor = '#FFFFFF';
-  if (isAboveHigh) priceColor = '#10B981';
-  else if (isBelowLow) priceColor = '#EF4444';
-  else if (isInRange) priceColor = '#9CA3AF';
+  const isInRange = !isAboveHigh && !isBelowLow && orbHigh - orbLow > 0;
 
-  const breakoutColor = getBreakoutColor(data.breakout_type);
+  let priceColor = colors.text;
+  if (isAboveHigh) priceColor = colors.success;
+  else if (isBelowLow) priceColor = colors.error;
+  else if (isInRange) priceColor = colors.textSecondary;
+
+  const breakoutColor = getBreakoutColor(data.breakout_type, colors);
   const hasBreakout = data.breakout_type !== 'none';
 
   return (
     <TouchableOpacity
       onPress={onPress}
-      className="bg-gray-800/60 border border-gray-700/30 rounded-xl p-4 mb-4 active:opacity-80"
-      style={{ flex: 1, marginHorizontal: fullWidth ? 0 : 4 }}
+      activeOpacity={0.7}
+      style={{
+        flex: 1,
+        marginHorizontal: fullWidth ? 0 : 4,
+        marginBottom: 12,
+        backgroundColor: colors.surface,
+        borderRadius: 20,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: colors.border,
+        shadowColor: colors.cardShadow,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 1,
+        shadowRadius: 8,
+        elevation: 3,
+      }}
     >
-      {/* Header with Ticker and Breakout Indicator */}
-      <View className="flex-row items-center justify-between mb-3">
-        <Text className="text-white text-lg font-bold">{data.ticker}</Text>
+      {/* Header: Ticker + breakout badge */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <Text style={{ color: colors.text, fontSize: 18, fontWeight: '700', letterSpacing: -0.3 }}>
+          {data.ticker}
+        </Text>
         {hasBreakout && (
-          <View className="items-end" style={{ gap: 4 }}>
-            <View 
-              className={`px-2 py-1 rounded ${getBreakoutBadgeBg(data.breakout_type)}`}
-              style={{ borderWidth: 1, borderColor: breakoutColor + '80' }}
+          <View style={{ alignItems: 'flex-end', gap: 4 }}>
+            <View
+              style={{
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+                borderRadius: 100,
+                backgroundColor: breakoutColor + '18',
+                borderWidth: 1,
+                borderColor: breakoutColor + '40',
+              }}
             >
-              <Text 
-                className="text-xs font-semibold"
-                style={{ color: breakoutColor }}
-              >
+              <Text style={{ color: breakoutColor, fontSize: 11, fontWeight: '700' }}>
                 {data.breakout_type}
               </Text>
             </View>
-            {/* Show confidence for reversals */}
             {data.breakout_type === 'reversal' && data.reversal_data?.confidence && (
-              <Text 
-                className="text-xs"
-                style={{ color: breakoutColor + 'CC' }}
-              >
-                {data.reversal_data.confidence} Confidence
+              <Text style={{ color: breakoutColor + 'CC', fontSize: 11 }}>
+                {data.reversal_data.confidence} Conf.
               </Text>
             )}
           </View>
         )}
       </View>
 
-      {/* Current Price - Large and Prominent */}
-      <View className="mb-3">
-        <Text className="text-gray-400 text-xs mb-1">Current Price</Text>
-        <View className="flex-row items-baseline justify-between">
+      {/* Current Price */}
+      <View style={{ marginBottom: 12 }}>
+        <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '500', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          Current Price
+        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' }}>
           <AnimatedNumber
             value={data.current_price}
             format={(v) => `$${v.toFixed(2)}`}
-            style={{ fontSize: 24, fontWeight: 'bold' }}
+            style={{ fontSize: 26, fontWeight: '800' }}
             color={priceColor}
           />
-          {/* Percentage Change Display */}
-          {data.percentage_change !== null && data.percentage_change !== undefined && (
-            <View className="flex-row items-center" style={{ gap: 4 }}>
-              {data.percentage_change >= 0 ? (
-                <Text style={{ color: '#10B981' }}>▲</Text>
-              ) : (
-                <Text style={{ color: '#EF4444' }}>▼</Text>
-              )}
+          {data.percentage_change != null && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <Text style={{ color: data.percentage_change >= 0 ? colors.success : colors.error, fontSize: 13 }}>
+                {data.percentage_change >= 0 ? '▲' : '▼'}
+              </Text>
               <AnimatedNumber
                 value={data.percentage_change}
                 format={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`}
                 style={{ fontSize: 14, fontWeight: '600' }}
-                color={data.percentage_change >= 0 ? '#10B981' : '#EF4444'}
+                color={data.percentage_change >= 0 ? colors.success : colors.error}
               />
             </View>
           )}
         </View>
       </View>
 
-      {/* Gap / Prior Day / Continuation context bar */}
-      {orbRange && orbRange.gap_direction != null && (
-        <View className="mb-3">
+      {/* Gap / trend badges */}
+      {orbRange?.gap_direction != null && (
+        <View style={{ marginBottom: 12 }}>
           <GapTrendBadges context={orbRange} compact />
         </View>
       )}
 
       {/* ORB Range */}
-      <View>
-        <View className="flex-row justify-between items-center mb-2">
-          <Text className="text-gray-400 text-xs">ORB High</Text>
+      <View style={{ borderTopWidth: 1, borderTopColor: colors.separator, paddingTop: 12, gap: 8 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={{ color: colors.textSecondary, fontSize: 12 }}>ORB High</Text>
           <AnimatedNumber
             value={data.orb_high}
             format={(v) => `$${v.toFixed(2)}`}
             style={{ fontSize: 14, fontWeight: '600' }}
-            color="#10B981"
+            color={colors.success}
           />
         </View>
-        <View className="flex-row justify-between items-center mb-2">
-          <Text className="text-gray-400 text-xs">ORB Low</Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={{ color: colors.textSecondary, fontSize: 12 }}>ORB Low</Text>
           <AnimatedNumber
             value={data.orb_low}
             format={(v) => `$${v.toFixed(2)}`}
             style={{ fontSize: 14, fontWeight: '600' }}
-            color="#EF4444"
+            color={colors.error}
           />
         </View>
-        <View className="flex-row justify-between items-center pt-2 border-t border-gray-700/50">
-          {/* Show Previous Close during calculation period, Opening otherwise */}
-          {data.percentage_change !== null && data.percentage_change !== undefined && data.breakout_type === 'none' ? (
-            <>
-              <Text className="text-gray-400 text-xs">Previous Close</Text>
-              <AnimatedNumber
-                value={data.previous_close}
-                format={(v) => `$${v.toFixed(2)}`}
-                style={{ fontSize: 14, fontWeight: '500' }}
-                color="#D1D5DB"
-              />
-            </>
-          ) : (
-            <>
-              <Text className="text-gray-400 text-xs">Opening</Text>
-              <AnimatedNumber
-                value={data.opening_price}
-                format={(v) => `$${v.toFixed(2)}`}
-                style={{ fontSize: 14, fontWeight: '500' }}
-                color="#D1D5DB"
-              />
-            </>
-          )}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
+            {data.percentage_change != null && data.breakout_type === 'none' ? 'Prev. Close' : 'Opening'}
+          </Text>
+          <AnimatedNumber
+            value={data.percentage_change != null && data.breakout_type === 'none' ? data.previous_close : data.opening_price}
+            format={(v) => `$${v.toFixed(2)}`}
+            style={{ fontSize: 14, fontWeight: '500' }}
+            color={colors.textSecondary}
+          />
         </View>
       </View>
 
-      {/* Breakout Price if applicable */}
-      {hasBreakout && data.breakout_price !== null && (
-        <View className="mt-3 pt-3 border-t border-gray-700/50">
-          <View className="flex-row justify-between items-center">
-            <Text className="text-gray-400 text-xs">Breakout Price</Text>
+      {/* Breakout price */}
+      {hasBreakout && data.breakout_price != null && (
+        <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.separator }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 12 }}>Breakout Price</Text>
             <AnimatedNumber
               value={data.breakout_price}
               format={(v) => `$${v.toFixed(2)}`}
@@ -221,4 +184,3 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
     </TouchableOpacity>
   );
 };
-

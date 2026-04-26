@@ -1,71 +1,120 @@
+export const lightTheme = {
+  background: '#FFFFFF',
+  surface: '#F5F5F7',
+  surfaceSecondary: '#EFEFF4',
+  surfaceTertiary: '#E5E5EA',
+  text: '#000000',
+  textSecondary: '#6B6B6B',
+  textTertiary: '#AEAEB2',
+  accent: '#007AFF',
+  accentForeground: '#FFFFFF',
+  success: '#34C759',
+  successBg: 'rgba(52,199,89,0.12)',
+  error: '#FF3B30',
+  errorBg: 'rgba(255,59,48,0.12)',
+  warning: '#FF9500',
+  warningBg: 'rgba(255,149,0,0.12)',
+  border: '#E5E5EA',
+  separator: 'rgba(0,0,0,0.08)',
+  card: '#F5F5F7',
+  cardBorder: 'rgba(0,0,0,0.05)',
+  cardShadow: 'rgba(0,0,0,0.06)',
+  tabBar: '#1C1C1E',
+  tabBarBorder: 'rgba(255,255,255,0.08)',
+  tabBarActive: '#FFFFFF',
+  tabBarInactive: '#636366',
+  iconButton: '#F0F0F5',
+  iconButtonBorder: 'rgba(0,0,0,0.06)',
+  unread: '#007AFF',
+  badge: '#FF3B30',
+};
+
+export const darkTheme = {
+  background: '#000000',
+  surface: '#1C1C1E',
+  surfaceSecondary: '#2C2C2E',
+  surfaceTertiary: '#3A3A3C',
+  text: '#FFFFFF',
+  textSecondary: '#8A8A8E',
+  textTertiary: '#636366',
+  accent: '#0A84FF',
+  accentForeground: '#FFFFFF',
+  success: '#30D158',
+  successBg: 'rgba(48,209,88,0.15)',
+  error: '#FF453A',
+  errorBg: 'rgba(255,69,58,0.15)',
+  warning: '#FF9F0A',
+  warningBg: 'rgba(255,159,10,0.15)',
+  border: '#38383A',
+  separator: 'rgba(255,255,255,0.08)',
+  card: '#1C1C1E',
+  cardBorder: 'rgba(255,255,255,0.06)',
+  cardShadow: 'rgba(0,0,0,0.4)',
+  tabBar: '#1C1C1E',
+  tabBarBorder: 'rgba(255,255,255,0.08)',
+  tabBarActive: '#FFFFFF',
+  tabBarInactive: '#636366',
+  iconButton: '#2C2C2E',
+  iconButtonBorder: 'rgba(255,255,255,0.06)',
+  unread: '#0A84FF',
+  badge: '#FF453A',
+};
+
+export type Theme = typeof lightTheme;
+
+export const typography = {
+  displayTitle: { fontSize: 36, fontWeight: '800' as const, letterSpacing: -0.5 },
+  pageTitle: { fontSize: 28, fontWeight: '700' as const, letterSpacing: -0.3 },
+  sectionTitle: { fontSize: 20, fontWeight: '700' as const },
+  title: { fontSize: 17, fontWeight: '600' as const },
+  body: { fontSize: 15, fontWeight: '400' as const, lineHeight: 22 },
+  caption: { fontSize: 13, fontWeight: '400' as const },
+  small: { fontSize: 11, fontWeight: '500' as const },
+  label: { fontSize: 13, fontWeight: '600' as const },
+};
+
+export const spacing = {
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 20,
+  xxl: 24,
+  xxxl: 32,
+};
+
+export const radius = {
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 20,
+  xxl: 24,
+  pill: 100,
+};
+
+// Legacy color exports for backward compat
 export const colors = {
-    primary: '#6366F1',
-    primaryDark: '#4F46E5',
-    secondary: '#EC4899',
-    success: '#10B981',
-    warning: '#F59E0B',
-    error: '#EF4444',
-    
-    background: '#FFFFFF',
-    backgroundSecondary: '#F9FAFB',
-    surface: '#FFFFFF',
-    
-    text: '#111827',
-    textSecondary: '#6B7280',
-    textLight: '#9CA3AF',
-    
-    border: '#E5E7EB',
-    borderLight: '#F3F4F6',
-    
-    gradientStart: '#6366F1',
-    gradientEnd: '#8B5CF6',
-  };
-  
-  export const typography = {
-    h1: {
-      fontSize: 32,
-      fontWeight: 'bold' as const,
-      lineHeight: 40,
-    },
-    h2: {
-      fontSize: 24,
-      fontWeight: 'bold' as const,
-      lineHeight: 32,
-    },
-    h3: {
-      fontSize: 20,
-      fontWeight: '600' as const,
-      lineHeight: 28,
-    },
-    body: {
-      fontSize: 16,
-      fontWeight: 'normal' as const,
-      lineHeight: 24,
-    },
-    caption: {
-      fontSize: 14,
-      fontWeight: 'normal' as const,
-      lineHeight: 20,
-    },
-    small: {
-      fontSize: 12,
-      fontWeight: 'normal' as const,
-      lineHeight: 16,
-    },
-  };
-  
-  export const spacing = {
-    xs: 4,
-    sm: 8,
-    md: 16,
-    lg: 24,
-    xl: 32,
-    xxl: 48,
-  };
-  
-  export const borderRadius = {
-    sm: 8,
-    md: 12,
-    lg: 16,
-    xl: 24,
-  };
+  primary: '#007AFF',
+  primaryDark: '#0051D5',
+  secondary: '#5856D6',
+  success: '#34C759',
+  warning: '#FF9500',
+  error: '#FF3B30',
+  background: '#FFFFFF',
+  backgroundSecondary: '#F5F5F7',
+  surface: '#FFFFFF',
+  text: '#000000',
+  textSecondary: '#6B6B6B',
+  textLight: '#AEAEB2',
+  border: '#E5E5EA',
+  borderLight: '#F5F5F7',
+  gradientStart: '#007AFF',
+  gradientEnd: '#5856D6',
+};
+
+export const borderRadius = {
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 24,
+};

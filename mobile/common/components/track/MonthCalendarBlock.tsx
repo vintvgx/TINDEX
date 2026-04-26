@@ -1,108 +1,85 @@
-import React from "react";
-import { View, Text, TouchableOpacity } from "react-native";
-import {
-  format,
-  startOfMonth,
-  endOfMonth,
-  eachDayOfInterval,
-  getDay,
-  isSameDay,
-} from "date-fns";
+import React from 'react';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, getDay, isSameDay } from 'date-fns';
+import { useThemeColors } from '@/lib/useColorScheme';
 
-const DAY_LABELS = ["S", "M", "T", "W", "TH", "F", "S"];
+const DAY_LABELS = ['S', 'M', 'T', 'W', 'TH', 'F', 'S'];
 
 export interface DayPnL {
-  date: string; // YYYY-MM-DD
+  date: string;
   pnl: number;
 }
 
 interface MonthCalendarBlockProps {
-  /** First day of the month to display */
   monthDate: Date;
-  /** Map of date string (YYYY-MM-DD) to P&L for that day. Negative = loss (red), positive = profit (blue). */
   dailyPnL?: Map<string, number> | Record<string, number>;
-  /** Today, used to highlight the current day when it falls in this month. */
   today?: Date;
-  /** Called when a day is pressed; when provided, day cells are pressable. */
   onDayPress?: (date: Date) => void;
 }
 
-/**
- * Renders a single month in the track calendar style:
- * - Month name (left) and year (right)
- * - Day-of-week headers (S M T W TH F S)
- * - Grid of days with optional P&L; losses in red, profits in blue on dark rounded background
- */
 export const MonthCalendarBlock: React.FC<MonthCalendarBlockProps> = ({
   monthDate,
   dailyPnL = {},
   today,
   onDayPress,
 }) => {
+  const colors = useThemeColors();
   const monthStart = startOfMonth(monthDate);
   const monthEnd = endOfMonth(monthDate);
   const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd });
-  const startWeekday = getDay(monthStart); // 0 = Sunday
+  const startWeekday = getDay(monthStart);
 
   const pnlMap = dailyPnL instanceof Map ? dailyPnL : new Map(Object.entries(dailyPnL));
-
-  // Build flat list of cells: leading empty slots + day numbers
   const leadingEmpty = startWeekday;
-  const totalCells = leadingEmpty + daysInMonth.length;
-  const rows = Math.ceil(totalCells / 7);
+  const rows = Math.ceil((leadingEmpty + daysInMonth.length) / 7);
 
   return (
-    <View className="mb-8">
+    <View style={s.month}>
       {/* Month / Year header */}
-      <View className="flex-row justify-between items-baseline px-1 mb-3">
-        <Text className="text-white text-2xl font-bold tracking-wide">
-          {format(monthDate, "MMMM").toUpperCase()}
-        </Text>
-        <Text className="text-white text-lg font-medium opacity-90">
-          {format(monthDate, "yyyy")}
-        </Text>
+      <View style={s.monthHeader}>
+        <Text style={[s.monthName, { color: colors.text }]}>{format(monthDate, 'MMMM')}</Text>
+        <Text style={[s.yearText, { color: colors.textSecondary }]}>{format(monthDate, 'yyyy')}</Text>
       </View>
 
       {/* Day-of-week headers */}
-      <View className="flex-row mb-2">
+      <View style={s.dayLabelsRow}>
         {DAY_LABELS.map((label, i) => (
-          <View key={i} className="flex-1 items-center">
-            <Text className="text-gray-500 text-xs font-medium">{label}</Text>
+          <View key={i} style={s.dayLabelCell}>
+            <Text style={[s.dayLabel, { color: colors.textTertiary }]}>{label}</Text>
           </View>
         ))}
       </View>
 
       {/* Calendar grid */}
-      <View className="flex flex-wrap flex-row">
+      <View style={s.grid}>
         {Array.from({ length: rows * 7 }, (_, i) => {
           const dayIndex = i - leadingEmpty;
           const isPadding = dayIndex < 0 || dayIndex >= daysInMonth.length;
           const day = isPadding ? null : daysInMonth[dayIndex];
-          const dateKey = day ? format(day, "yyyy-MM-dd") : "";
+          const dateKey = day ? format(day, 'yyyy-MM-dd') : '';
           const pnl = dateKey ? pnlMap.get(dateKey) : undefined;
           const hasPnL = pnl !== undefined && pnl !== 0;
           const isToday = day && today ? isSameDay(day, today) : false;
 
+          if (isPadding) {
+            return <View key={i} style={s.cell} />;
+          }
+
+          const pnlColor = pnl != null && pnl >= 0 ? colors.accent : colors.error;
+
           const dayCell = (
             <View
-              className={`w-full min-h-[36px] rounded-lg items-center justify-center ${
-                hasPnL ? "bg-gray-800/80" : ""
-              } ${isToday ? "border border-indigo-400" : ""}`}
-              style={{ paddingVertical: 4 }}
+              style={[
+                s.dayCellInner,
+                hasPnL && { backgroundColor: colors.surface },
+                isToday && { borderWidth: 1.5, borderColor: colors.accent },
+              ]}
             >
-              <Text
-                className="text-white text-sm font-medium"
-                style={isToday ? { fontWeight: "900" } : undefined}
-              >
-                {format(day!, "d")}
+              <Text style={[s.dayNumber, { color: colors.text, fontWeight: isToday ? '800' : '400' }]}>
+                {format(day!, 'd')}
               </Text>
               {hasPnL && (
-                <Text
-                  className="text-xs font-semibold mt-0.5"
-                  style={{
-                    color: pnl! >= 0 ? "#3B82F6" : "#EF4444",
-                  }}
-                >
+                <Text style={[s.pnlText, { color: pnlColor }]}>
                   ${Math.abs(pnl!).toFixed(0)}
                 </Text>
               )}
@@ -110,15 +87,9 @@ export const MonthCalendarBlock: React.FC<MonthCalendarBlockProps> = ({
           );
 
           return (
-            <View key={i} className="w-[14.28%] aspect-square items-center justify-center py-0.5">
-              {isPadding ? (
-                <View className="w-full aspect-square" />
-              ) : onDayPress ? (
-                <TouchableOpacity
-                  className="w-full"
-                  activeOpacity={0.7}
-                  onPress={() => onDayPress(day!)}
-                >
+            <View key={i} style={s.cell}>
+              {onDayPress ? (
+                <TouchableOpacity style={s.cellTouchable} activeOpacity={0.7} onPress={() => onDayPress(day!)}>
                   {dayCell}
                 </TouchableOpacity>
               ) : (
@@ -131,3 +102,19 @@ export const MonthCalendarBlock: React.FC<MonthCalendarBlockProps> = ({
     </View>
   );
 };
+
+const s = StyleSheet.create({
+  month: { marginBottom: 32 },
+  monthHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 },
+  monthName: { fontSize: 20, fontWeight: '700', letterSpacing: -0.3 },
+  yearText: { fontSize: 15, fontWeight: '500' },
+  dayLabelsRow: { flexDirection: 'row', marginBottom: 6 },
+  dayLabelCell: { flex: 1, alignItems: 'center' },
+  dayLabel: { fontSize: 11, fontWeight: '600' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap' },
+  cell: { width: '14.28%', aspectRatio: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
+  cellTouchable: { width: '100%' },
+  dayCellInner: { width: '100%', minHeight: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', paddingVertical: 4 },
+  dayNumber: { fontSize: 13 },
+  pnlText: { fontSize: 10, fontWeight: '700', marginTop: 1 },
+});

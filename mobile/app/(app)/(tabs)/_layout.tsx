@@ -1,131 +1,111 @@
-/**
- * Layout for (app) directory with bottom tab navigation
- */
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { View } from 'react-native';
+import { useMemo } from 'react';
+import { View, StyleSheet } from 'react-native';
 import { useNotificationHistory } from '@/hooks/queries/notifications/useNotificationHistory';
 import { useORBStatus } from '@/hooks/queries/orb/useORBStatus';
-import { cn } from '@/lib/utils';
+import { useThemeColors } from '@/lib/useColorScheme';
 
 export default function Layout() {
   const { unreadCount } = useNotificationHistory();
   const { data: orbStatus } = useORBStatus();
   const isORBRunning = orbStatus?.running ?? false;
+  const colors = useThemeColors();
+
+  // Memoize the style objects so they are not recreated on every tab press
+  const screenOptions = useMemo(() => ({
+    headerShown: false,
+    tabBarStyle: {
+      backgroundColor: colors.tabBar,
+      borderTopWidth: 0,
+      height: 68,
+      width: '88%' as const,
+      paddingBottom: 18,
+      paddingTop: 10,
+      borderRadius: 34,
+      alignSelf: 'center' as const,
+      bottom: 22,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.25,
+      shadowRadius: 16,
+      elevation: 12,
+      borderWidth: 1,
+      borderColor: colors.tabBarBorder,
+    },
+    tabBarActiveTintColor: colors.tabBarActive,
+    tabBarInactiveTintColor: colors.tabBarInactive,
+    tabBarLabelStyle: styles.label,
+    tabBarIconStyle: styles.icon,
+  }), [colors]);
+
+  const orbStatusDotStyle = useMemo(() => ({
+    ...styles.statusDot,
+    backgroundColor: isORBRunning ? '#30D158' : '#FF453A',
+    borderColor: colors.tabBar,
+  }), [isORBRunning, colors.tabBar]);
 
   return (
-    <Tabs
-      initialRouteName="orb"
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: {
-          backgroundColor: '#1A1A1A',
-          borderTopWidth: 0,
-          height: 70,
-          width: "90%",
-          paddingBottom: 20,
-          paddingTop: 10,
-          justifyContent: 'center',
-          borderRadius: 30,
-          alignSelf: 'center',
-          bottom: 20,
-          shadowColor: '#000',
-          shadowOffset: {
-            width: 0,
-            height: 4,
-          },
-          shadowOpacity: 0.3,
-          shadowRadius: 8,
-          elevation: 10,
-        },
-        tabBarActiveTintColor: 'white',
-        tabBarInactiveTintColor: '#666',
-        tabBarLabelStyle: {
-          fontSize: 10,
-          fontWeight: '500',
-        },
-        tabBarIconStyle: {
-          marginBottom: 4,
-        },
-        // Add navigation animations
-        // animation: 'slide_from_right',
-        // animationDuration: 300,
-      }}
-    >
-      <Tabs.Screen 
-        name="feed" 
+    <Tabs initialRouteName="orb" screenOptions={screenOptions}>
+      <Tabs.Screen
+        name="feed"
         options={{
           title: 'Feed',
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="menu" size={20} color={color} />
-          ),
+          tabBarIcon: ({ color }) => <Ionicons name="newspaper-outline" size={20} color={color} />,
         }}
       />
-      <Tabs.Screen 
-        name="track" 
+      <Tabs.Screen
+        name="track"
         options={{
           title: 'Track',
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="analytics" size={20} color={color} />
-          ),
+          tabBarIcon: ({ color }) => <Ionicons name="analytics-outline" size={20} color={color} />,
         }}
       />
-      {/* Deprecated Track screen (displayed options + followed options) */}
-      <Tabs.Screen 
-        name="track-legacy" 
-        options={{
-          href: null, // Hidden from tab bar - reachable via router for legacy view
-        }}
-      />
-      <Tabs.Screen 
-        name="orb" 
+      <Tabs.Screen name="track-legacy" options={{ href: null }} />
+      <Tabs.Screen
+        name="orb"
         options={{
           title: 'ORB',
           tabBarIcon: ({ color }) => (
-            <View className="relative items-center justify-center">
-              <Ionicons name="pulse" size={20} color={color} />
-              <View 
-                className={cn(
-                  "absolute -top-0.5 -right-1.5 w-2 h-2 rounded-full border-[1.5px] border-[#1A1A1A]",
-                  isORBRunning ? "bg-[#10B981]" : "bg-[#EF4444]"
-                )} 
-              />
+            <View style={styles.orbIconContainer}>
+              <Ionicons name="pulse-outline" size={20} color={color} />
+              <View style={orbStatusDotStyle} />
             </View>
           ),
         }}
       />
-      <Tabs.Screen 
-        name="notifications" 
+      <Tabs.Screen
+        name="notifications"
         options={{
-          title: 'Notifications',
+          title: 'Alerts',
           tabBarBadge: unreadCount > 0 ? unreadCount : undefined,
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="notifications-outline" size={20} color={color} />
-          ),
+          tabBarIcon: ({ color }) => <Ionicons name="notifications-outline" size={20} color={color} />,
         }}
       />
-      <Tabs.Screen 
-        name="profile" 
+      <Tabs.Screen
+        name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="person" size={20} color={color} />
-          ),
+          tabBarIcon: ({ color }) => <Ionicons name="person-outline" size={20} color={color} />,
         }}
       />
-      {/* Hide search and watchlists from tab bar - only accessible via modal */}
-      <Tabs.Screen 
-        name="search" 
-        options={{
-          href: null, // Hide from tab bar - only accessible via modal
-        }}
-      />
-      <Tabs.Screen 
-        name="watchlists" 
-        options={{
-          href: null, // Hide from tab bar - only accessible via modal
-        }}
-      />
+      <Tabs.Screen name="search" options={{ href: null }} />
+      <Tabs.Screen name="watchlists" options={{ href: null }} />
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  label: { fontSize: 10, fontWeight: '500', letterSpacing: 0.2 },
+  icon: { marginBottom: 2 },
+  orbIconContainer: { position: 'relative', alignItems: 'center', justifyContent: 'center' },
+  statusDot: {
+    position: 'absolute',
+    top: -1,
+    right: -6,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    borderWidth: 1.5,
+  },
+});
