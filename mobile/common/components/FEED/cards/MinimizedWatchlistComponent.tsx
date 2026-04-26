@@ -21,16 +21,6 @@ const STOCK_ITEM_WIDTH = 180;
 const AUTO_SCROLL_DURATION = 3000;
 const AUTO_SCROLL_PAUSE_DURATION = 2000;
 
-const formatVolume = (v: string | number | null | undefined): string => {
-  if (v == null) return 'N/A';
-  const n = typeof v === 'string' ? parseFloat(v.replace(/,/g, '')) : v;
-  if (isNaN(n) || n === 0) return 'N/A';
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(0)}K`;
-  return String(n);
-};
-
 const formatChange = (c: number | null | undefined): string => {
   if (c == null) return 'N/A';
   return c >= 0 ? `+${c.toFixed(2)}%` : `${c.toFixed(2)}%`;
