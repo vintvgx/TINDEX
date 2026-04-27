@@ -40,6 +40,9 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
   const CONTAINER_GAP = 8;   // matches styles.container gap
   const SEARCH_BAR_MARGIN = 8; // gap between search bar bottom and keyboard top
 
+  const visibleRoutes = state.routes.filter(r => VISIBLE_ROUTES.has(r.name));
+  const bottomPadding = Math.max(insets.bottom, 16);
+
   useEffect(() => {
     bottomPaddingRef.current = bottomPadding;
   }, [bottomPadding]);
@@ -129,9 +132,6 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
         return null;
     }
   };
-
-  const visibleRoutes = state.routes.filter(r => VISIBLE_ROUTES.has(r.name));
-  const bottomPadding = Math.max(insets.bottom, 16);
 
   return (
     <>

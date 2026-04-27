@@ -1,416 +1,133 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
   Modal,
-  SafeAreaView,
   TouchableOpacity,
   ScrollView,
-  StatusBar,
   ActivityIndicator,
+  StyleSheet,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useUnfollowTickerORB } from '@/hooks/mutations/orb/useSetORBMonitoringActiveMutation';
 import { AnimatedNumber } from './AnimatedNumber';
 import { GapTrendBadges } from './GapTrendBadges';
 import type { GapTrendContext } from '@/common/types/orb';
-import { useToggleORBFollow } from '@/hooks/mutations/ticker/tickerORB';
+import { useThemeColors } from '@/lib/useColorScheme';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface ORBDetailModalProps {
   visible: boolean;
   data: ORBMonitoringState | null;
   onClose: () => void;
   onNavigateToTicker?: (ticker: string) => void;
-  /** Optional gap/trend from orb_ranges for context bar */
   gapTrendContext?: GapTrendContext | null;
 }
 
-/**
- * Formats price with null/undefined handling
- */
-const formatPrice = (price: number | null | undefined): string => {
-  if (price === null || price === undefined || isNaN(price)) {
-    return 'N/A';
-  }
-  return `$${price.toFixed(2)}`;
+type Tab = 'Overview' | 'Levels' | 'Details';
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const FIB_MULTIPLIERS = [1.0, 1.618, 2.0] as const;
+const FIB_COLORS: [string, string, string] = ['#B45309', '#D97706', '#FCD34D'];
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+const fp = (v: number | null | undefined) =>
+  v == null || isNaN(v) ? 'N/A' : `$${v.toFixed(2)}`;
+
+const fv = (v: number | null | undefined): string => {
+  if (v == null || isNaN(v)) return 'N/A';
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
+  return v.toLocaleString();
 };
 
-/**
- * Formats volume with null/undefined handling
- */
-const formatVolume = (volume: number | null | undefined): string => {
-  if (volume === null || volume === undefined || isNaN(volume)) {
-    return 'N/A';
-  }
-  if (volume >= 1000000) {
-    return `${(volume / 1000000).toFixed(2)}M`;
-  }
-  if (volume >= 1000) {
-    return `${(volume / 1000).toFixed(2)}K`;
-  }
-  return volume.toLocaleString();
-};
-
-/**
- * Formats date string
- */
-const formatDate = (dateString: string | undefined): string => {
-  if (!dateString) return 'N/A';
+const fd = (s: string | undefined): string => {
+  if (!s) return 'N/A';
   try {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { 
-      year: 'numeric', 
-      month: 'short', 
-      day: 'numeric' 
-    });
-  } catch {
-    return dateString;
-  }
+    return new Date(s).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch { return s; }
 };
 
-/**
- * Formats timestamp to HH:MM:SS AM/PM format
- */
-const formatTime = (timestamp: string | undefined): string => {
-  if (!timestamp) return 'N/A';
+const ft = (s: string | undefined): string => {
+  if (!s) return 'N/A';
   try {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true,
-    });
-  } catch {
-    return 'N/A';
-  }
+    return new Date(s).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+  } catch { return 'N/A'; }
 };
 
-/**
- * Renders generic JSONB data in a readable format
- * Handles nested objects, arrays, and primitive values
- */
-const renderGenericJSONBData = (data: any, accentColor: string, depth: number = 0): React.ReactElement => {
-  if (data === null || data === undefined) {
-    return <Text className="text-gray-500 text-sm">N/A</Text>;
-  }
-
-  // Handle arrays
-  if (Array.isArray(data)) {
-    return (
-      <View className="ml-2">
-        {data.map((item, index) => (
-          <View key={index} className="mb-1">
-            <Text className="text-gray-300 text-xs">
-              • {typeof item === 'object' && item !== null 
-                ? JSON.stringify(item, null, 2) 
-                : String(item)}
-            </Text>
-          </View>
-        ))}
-      </View>
-    );
-  }
-
-  // Handle objects
-  if (typeof data === 'object') {
-    const entries = Object.entries(data);
-    if (entries.length === 0) {
-      return <Text className="text-gray-500 text-sm">No data</Text>;
-    }
-
-    return (
-      <View className={depth > 0 ? 'ml-2' : ''}>
-        {entries.map(([key, value], index) => {
-          const formattedKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-          const isLast = index === entries.length - 1;
-
-          // Handle nested objects
-          if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-            return (
-              <View key={key} className={!isLast ? 'mb-2' : ''}>
-                <Text className="text-gray-400 text-xs mb-1">{formattedKey}:</Text>
-                <View className="ml-2">
-                  {renderGenericJSONBData(value, accentColor, depth + 1)}
-                </View>
-              </View>
-            );
-          }
-
-          // Handle arrays
-          if (Array.isArray(value)) {
-            return (
-              <View key={key} className={!isLast ? 'mb-2' : ''}>
-                <Text className="text-gray-400 text-xs mb-1">{formattedKey}:</Text>
-                {renderGenericJSONBData(value, accentColor, depth + 1)}
-              </View>
-            );
-          }
-
-          // Handle primitive values
-          let displayValue: string | React.ReactElement;
-          if (typeof value === 'number') {
-            // Format numbers - check if it's a price (between 0.01 and 10000)
-            if (value > 0.01 && value < 10000 && value % 1 !== 0) {
-              displayValue = `$${value.toFixed(2)}`;
-            } else if (value % 1 === 0) {
-              displayValue = value.toLocaleString();
-            } else {
-              displayValue = value.toFixed(4);
-            }
-          } else if (typeof value === 'boolean') {
-            displayValue = value ? 'Yes' : 'No';
-          } else {
-            displayValue = String(value);
-          }
-
-          return (
-            <View key={key} className={`flex-row justify-between items-center ${!isLast ? 'mb-2' : ''}`}>
-              <Text className="text-gray-300 text-sm flex-1">{formattedKey}</Text>
-              <Text 
-                className="text-sm font-semibold flex-1 text-right"
-                style={{ color: accentColor }}
-              >
-                {displayValue}
-              </Text>
-            </View>
-          );
-        })}
-      </View>
-    );
-  }
-
-  // Handle primitive values (shouldn't happen at root level, but handle it)
-  return (
-    <Text className="text-gray-300 text-sm" style={{ color: accentColor }}>
-      {String(data)}
-    </Text>
-  );
-};
-
-/**
- * Calculate ORB profit targets based on breakout direction
- * 
- * Targets are calculated using measured move projections:
- * - Target 1: 1.0× range extension (one full range)
- * - Target 2: 1.618× range extension (Fibonacci extension)
- * - Target 3: 2.0× range extension (two full ranges)
- */
-const calculateORBTargets = (
-  orbHigh: number,
-  orbLow: number,
-  breakoutType: string
-): { level: number; price: number; label: string; multiplier: number }[] => {
-  const orbRange = orbHigh - orbLow;
-  const targets: { level: number; price: number; label: string; multiplier: number }[] = [];
-
-  if (breakoutType === 'Bullish' || breakoutType === 'Confirmed Bullish') {
-    // Bullish targets: above ORH
-    targets.push(
-      {
-        level: 1,
-        price: orbHigh + (orbRange * 1.0),
-        label: 'Target 1',
-        multiplier: 1.0,
-      },
-      {
-        level: 2,
-        price: orbHigh + (orbRange * 1.618),
-        label: 'Target 2',
-        multiplier: 1.618,
-      },
-      {
-        level: 3,
-        price: orbHigh + (orbRange * 2.0),
-        label: 'Target 3',
-        multiplier: 2.0,
-      }
-    );
-  } else if (breakoutType === 'Bearish' || breakoutType === 'Confirmed Bearish') {
-    // Bearish targets: below ORL
-    targets.push(
-      {
-        level: 1,
-        price: orbLow - (orbRange * 1.0),
-        label: 'Target 1',
-        multiplier: 1.0,
-      },
-      {
-        level: 2,
-        price: orbLow - (orbRange * 1.618),
-        label: 'Target 2',
-        multiplier: 1.618,
-      },
-      {
-        level: 3,
-        price: orbLow - (orbRange * 2.0),
-        label: 'Target 3',
-        multiplier: 2.0,
-      }
-    );
-  }
-
-  return targets;
-};
-
-/**
- * Fibonacci extension multipliers (aligned with profit targets).
- * Derived from orb_high/orb_low only — no Supabase schema changes required.
- */
-const FIB_EXTENSION_MULTIPLIERS = [1.0, 1.618, 2.0] as const;
-
-export interface FibExtensionLevel {
-  label: string;
-  price: number;
-  multiplier: number;
-}
-
-/**
- * Returns Fibonacci extension levels above ORH and below ORL for visual range and stats.
- * Used when price is outside the ORB range so we can show extended scale and level labels.
- */
-const getFibonacciExtensionLevels = (
-  orbHigh: number,
-  orbLow: number
-): { above: FibExtensionLevel[]; below: FibExtensionLevel[] } => {
+const getFibLevels = (orbHigh: number, orbLow: number) => {
   const range = orbHigh - orbLow;
   if (range <= 0) return { above: [], below: [] };
-  const above: FibExtensionLevel[] = FIB_EXTENSION_MULTIPLIERS.map((mult, i) => ({
-    label: `Fib ${mult}×`,
-    price: orbHigh + range * mult,
-    multiplier: mult,
-  }));
-  const below: FibExtensionLevel[] = FIB_EXTENSION_MULTIPLIERS.map((mult) => ({
-    label: `Fib ${mult}×`,
-    price: orbLow - range * mult,
-    multiplier: mult,
-  }));
-  return { above, below };
+  return {
+    above: FIB_MULTIPLIERS.map((m, i) => ({ label: `${m}×`, price: orbHigh + range * m, multiplier: m, color: FIB_COLORS[i] })),
+    below: FIB_MULTIPLIERS.map((m, i) => ({ label: `${m}×`, price: orbLow - range * m, multiplier: m, color: FIB_COLORS[i] })),
+  };
 };
 
-/**
- * Resolves which Fibonacci level the current price is at (above ORH or below ORL).
- * Returns the highest level price has reached above ORH, or lowest below ORL; null if in range.
- */
-const getCurrentFibLevel = (
-  currentPrice: number,
-  orbHigh: number,
-  orbLow: number,
-  levels: { above: FibExtensionLevel[]; below: FibExtensionLevel[] }
-): FibExtensionLevel | null => {
-  if (currentPrice > orbHigh) {
-    const reached = levels.above.filter((l) => currentPrice >= l.price);
-    return reached.length > 0 ? reached[reached.length - 1] : null;
-  }
-  if (currentPrice < orbLow) {
-    const reached = levels.below.filter((l) => currentPrice <= l.price);
-    return reached.length > 0 ? reached[reached.length - 1] : null;
-  }
-  return null;
+const getBreakoutColor = (type: string, colors: ReturnType<typeof useThemeColors>) => {
+  if (type.includes('Bullish')) return colors.success;
+  if (type.includes('Bearish')) return colors.error;
+  if (type === 'invalidated') return '#F59E0B';
+  if (type === 'reversal') return '#8B5CF6';
+  return colors.textTertiary;
 };
 
-/**
- * Gets color for Fibonacci extension (green above ORH, red below ORL).
- */
-const FIB_COLOR_ABOVE = '#10B981';
-const FIB_COLOR_BELOW = '#EF4444';
-
-/** Fibonacci level colors: yellow, progressively lighter as value increases (1× → 1.618× → 2×). */
-const FIB_YELLOW_COLORS: [string, string, string] = ['#B45309', '#D97706', '#FCD34D'];
-function getFibColor(index: number): string {
-  return FIB_YELLOW_COLORS[Math.min(index, FIB_YELLOW_COLORS.length - 1)];
-}
-
-/**
- * Gets color and styling for breakout type
- */
-const getBreakoutStyle = (breakoutType: string) => {
-  switch (breakoutType) {
-    case 'Bullish':
-      return {
-        color: '#10B981',
-        bgColor: 'bg-green-500/20',
-        borderColor: 'border-green-500/50',
-        label: 'Bullish Breakout',
-      };
-    case 'Confirmed Bullish':
-      return {
-        color: '#10B981',
-        bgColor: 'bg-green-500/30',
-        borderColor: 'border-green-500',
-        label: 'Confirmed Bullish',
-      };
-    case 'Bearish':
-      return {
-        color: '#EF4444',
-        bgColor: 'bg-red-500/20',
-        borderColor: 'border-red-500/50',
-        label: 'Bearish Breakout',
-      };
-    case 'Confirmed Bearish':
-      return {
-        color: '#EF4444',
-        bgColor: 'bg-red-500/30',
-        borderColor: 'border-red-500',
-        label: 'Confirmed Bearish',
-      };
-    case 'invalidated':
-      return {
-        color: '#F59E0B',
-        bgColor: 'bg-yellow-500/20',
-        borderColor: 'border-yellow-500/50',
-        label: 'Breakout Invalidated',
-      };
-    case 'reversal':
-      return {
-        color: '#8B5CF6',
-        bgColor: 'bg-purple-500/20',
-        borderColor: 'border-purple-500/50',
-        label: 'Reversal Detected',
-      };
-    default:
-      return {
-        color: '#6B7280',
-        bgColor: 'bg-gray-800/50',
-        borderColor: 'border-gray-700/50',
-        label: 'No Breakout',
-      };
+const getBreakoutLabel = (type: string): string => {
+  switch (type) {
+    case 'Bullish': return 'Bullish Breakout';
+    case 'Confirmed Bullish': return 'Confirmed Bullish ✓';
+    case 'Bearish': return 'Bearish Breakdown';
+    case 'Confirmed Bearish': return 'Confirmed Bearish ✓';
+    case 'invalidated': return 'Breakout Invalidated';
+    case 'reversal': return 'Reversal Detected';
+    default: return 'No Breakout';
   }
 };
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+const Divider = ({ colors }: { colors: ReturnType<typeof useThemeColors> }) => (
+  <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: colors.separator, marginVertical: 12 }} />
+);
+
+const Row = ({
+  label, value, valueColor, colors,
+}: {
+  label: string; value: string; valueColor?: string; colors: ReturnType<typeof useThemeColors>;
+}) => (
+  <View style={styles.row}>
+    <Text style={[styles.rowLabel, { color: colors.textSecondary }]}>{label}</Text>
+    <Text style={[styles.rowValue, { color: valueColor ?? colors.text }]}>{value}</Text>
+  </View>
+);
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
-  visible,
-  data,
-  onClose,
-  onNavigateToTicker,
-  gapTrendContext,
+  visible, data, onClose, onNavigateToTicker, gapTrendContext,
 }) => {
+  const colors = useThemeColors();
   const setMonitoringActive = useUnfollowTickerORB();
-
-  const {
-    authState: { user, profile },
-  } = useAuth();
+  const { authState: { user } } = useAuth();
+  const [activeTab, setActiveTab] = useState<Tab>('Overview');
 
   const handleUnfollow = () => {
-    if (!data?.ticker || !data?.trade_date) return;
+    if (!data?.ticker) return;
     setMonitoringActive.mutate(
-      {
-        user: user,
-        ticker: data.ticker,
-        monitoring_active: false,
-      },
-      {
-        onSuccess: () => {
-          onClose();
-        },
-      }
+      { user, ticker: data.ticker, monitoring_active: false },
+      { onSuccess: onClose },
     );
   };
 
   if (!data) return null;
 
+  // ── Computed values ────────────────────────────────────────────────────────
   const orbHigh = data.orb_high ?? 0;
   const orbLow = data.orb_low ?? 0;
   const currentPrice = data.current_price ?? 0;
@@ -419,496 +136,662 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   const isBelowLow = currentPrice < orbLow;
   const isInRange = !isAboveHigh && !isBelowLow && orbRange > 0;
 
-  // Fibonacci extension levels for extended visual range and stats (when price outside range)
-  const fibLevels = orbRange > 0 ? getFibonacciExtensionLevels(orbHigh, orbLow) : { above: [], below: [] };
-  const currentFibLevel = orbRange > 0 ? getCurrentFibLevel(currentPrice, orbHigh, orbLow, fibLevels) : null;
-
-  // Visual range bounds: extend when price is above ORH or below ORL so the price indicator stays visible
+  // Visual range bounds
   let visualMin = orbLow;
   let visualMax = orbHigh;
   if (orbRange > 0) {
-    if (isAboveHigh) {
-      const extensionMax = orbHigh + orbRange * 2;
-      visualMax = Math.max(extensionMax, currentPrice + orbRange * 0.02);
-    } else if (isBelowLow) {
-      const extensionMin = orbLow - orbRange * 2;
-      visualMin = Math.min(extensionMin, currentPrice - orbRange * 0.02);
-    }
+    if (isAboveHigh) visualMax = Math.max(orbHigh + orbRange * 2, currentPrice + orbRange * 0.1);
+    else if (isBelowLow) visualMin = Math.min(orbLow - orbRange * 2, currentPrice - orbRange * 0.1);
   }
   const visualRange = visualMax - visualMin;
-  const pricePositionPercent = visualRange > 0
-    ? Math.max(0, Math.min(100, ((currentPrice - visualMin) / visualRange) * 100))
-    : 50;
+  const pct = (price: number) =>
+    visualRange > 0 ? Math.max(0, Math.min(100, ((price - visualMin) / visualRange) * 100)) : 50;
 
-  // Price color based on position
-  let priceColor = '#FFFFFF';
-  if (isAboveHigh) priceColor = FIB_COLOR_ABOVE;
-  else if (isBelowLow) priceColor = FIB_COLOR_BELOW;
-  else if (isInRange) priceColor = '#9CA3AF';
-
-  const breakoutStyle = getBreakoutStyle(data.breakout_type);
+  const fibLevels = orbRange > 0 ? getFibLevels(orbHigh, orbLow) : { above: [], below: [] };
+  const priceColor = isAboveHigh ? colors.success : isBelowLow ? colors.error : colors.text;
+  const bkColor = getBreakoutColor(data.breakout_type, colors);
   const hasBreakout = data.breakout_type !== 'none';
 
+  // Position label
+  const distFromORH = isAboveHigh ? currentPrice - orbHigh : null;
+  const distFromORL = isBelowLow ? orbLow - currentPrice : null;
+
+  // Percentage change
+  const pctChange = data.percentage_change
+    ?? (data.opening_price && data.opening_price > 0
+      ? ((currentPrice - data.opening_price) / data.opening_price) * 100
+      : null);
+
+  // Contract suggestion
+  const suggestion = (() => {
+    if (isAboveHigh && orbHigh > 0) {
+      const nextFib = fibLevels.above.find(l => l.price > currentPrice);
+      return {
+        type: 'CALL',
+        icon: 'trending-up' as const,
+        color: colors.success,
+        bg: colors.success + '18',
+        border: colors.success + '50',
+        headline: 'Consider CALL Options',
+        context: `+$${distFromORH!.toFixed(2)} above ORH — bullish extension`,
+        target: nextFib ? `Next Fib target: $${nextFib.price.toFixed(2)} (${nextFib.multiplier}×)` : 'Beyond Fib 2× extension',
+      };
+    }
+    if (isBelowLow && orbLow > 0) {
+      const nextFib = fibLevels.below.find(l => l.price < currentPrice);
+      return {
+        type: 'PUT',
+        icon: 'trending-down' as const,
+        color: colors.error,
+        bg: colors.error + '18',
+        border: colors.error + '50',
+        headline: 'Consider PUT Options',
+        context: `-$${distFromORL!.toFixed(2)} below ORL — bearish extension`,
+        target: nextFib ? `Next Fib target: $${nextFib.price.toFixed(2)} (${nextFib.multiplier}×)` : 'Beyond Fib 2× extension',
+      };
+    }
+    if (data.breakout_type.includes('Bullish')) {
+      return {
+        type: 'CALL',
+        icon: 'arrow-up-circle' as const,
+        color: colors.success,
+        bg: colors.success + '18',
+        border: colors.success + '50',
+        headline: 'Watch ORH for CALL Entry',
+        context: `Bullish signal — ORH at $${orbHigh.toFixed(2)}`,
+        target: `Confirm break + hold above ORH`,
+      };
+    }
+    if (data.breakout_type.includes('Bearish')) {
+      return {
+        type: 'PUT',
+        icon: 'arrow-down-circle' as const,
+        color: colors.error,
+        bg: colors.error + '18',
+        border: colors.error + '50',
+        headline: 'Watch ORL for PUT Entry',
+        context: `Bearish signal — ORL at $${orbLow.toFixed(2)}`,
+        target: `Confirm break + hold below ORL`,
+      };
+    }
+    return {
+      type: 'WAIT',
+      icon: 'time-outline' as const,
+      color: colors.textTertiary,
+      bg: colors.surface,
+      border: colors.border,
+      headline: 'Awaiting Breakout',
+      context: `Price consolidating in ORB range`,
+      target: `Watch ORH $${orbHigh.toFixed(2)} and ORL $${orbLow.toFixed(2)}`,
+    };
+  })();
+
+  // ── ORB Range Bar ──────────────────────────────────────────────────────────
+  const ORBRangeBar = () => {
+    if (orbRange <= 0) return null;
+    const orhPct = pct(orbHigh);
+    const orlPct = pct(orbLow);
+    const pricePct = pct(currentPrice);
+
+    return (
+      <View style={styles.rangeSection}>
+        {/* Bar */}
+        <View style={[styles.rangeBar, { backgroundColor: colors.surfaceSecondary }]}>
+          {/* Zone tints */}
+          {isInRange && (
+            <View style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.accent + '12' }]} />
+          )}
+          {isAboveHigh && (
+            <View style={[StyleSheet.absoluteFillObject, { left: `${orhPct}%`, backgroundColor: colors.success + '20' }]} />
+          )}
+          {isBelowLow && (
+            <View style={[StyleSheet.absoluteFillObject, { right: `${100 - orlPct}%`, backgroundColor: colors.error + '20' }]} />
+          )}
+
+          {/* ORL line */}
+          {(isInRange || isBelowLow) && (
+            <View style={[styles.rangeLine, { left: `${orlPct}%`, backgroundColor: colors.error }]} />
+          )}
+
+          {/* ORH line */}
+          {(isInRange || isAboveHigh) && (
+            <View style={[styles.rangeLine, { left: `${orhPct}%`, backgroundColor: colors.success }]} />
+          )}
+
+          {/* Fibonacci lines */}
+          {isAboveHigh && fibLevels.above.map(l => (
+            <View key={l.multiplier} style={[styles.fibLine, { left: `${pct(l.price)}%`, backgroundColor: l.color }]} />
+          ))}
+          {isBelowLow && fibLevels.below.map(l => (
+            <View key={l.multiplier} style={[styles.fibLine, { left: `${pct(l.price)}%`, backgroundColor: l.color }]} />
+          ))}
+
+          {/* Price marker */}
+          <View style={[styles.priceMarker, { left: `${pricePct}%`, backgroundColor: priceColor }]} />
+
+          {/* Price label floating on bar */}
+          <View style={[styles.priceBubbleWrap, { left: `${pricePct}%` }]}>
+            <View style={[styles.priceBubble, { backgroundColor: priceColor }]}>
+              <Text style={styles.priceBubbleText}>${currentPrice.toFixed(2)}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Labels below bar */}
+        <View style={styles.barLabelRow}>
+          {/* ORL label */}
+          {(isInRange || isBelowLow) && (
+            <View style={[styles.barLabelPin, { left: `${orlPct}%` }]}>
+              <Text style={[styles.barLabelTop, { color: colors.error }]}>ORL</Text>
+              <Text style={[styles.barLabelBot, { color: colors.error }]}>{fp(orbLow)}</Text>
+            </View>
+          )}
+          {/* ORH label */}
+          {(isInRange || isAboveHigh) && (
+            <View style={[styles.barLabelPin, { left: `${orhPct}%` }]}>
+              <Text style={[styles.barLabelTop, { color: colors.success }]}>ORH</Text>
+              <Text style={[styles.barLabelBot, { color: colors.success }]}>{fp(orbHigh)}</Text>
+            </View>
+          )}
+          {/* Fibonacci labels */}
+          {isAboveHigh && fibLevels.above.map(l => (
+            <View key={l.multiplier} style={[styles.barLabelPin, { left: `${pct(l.price)}%` }]}>
+              <Text style={[styles.barLabelTop, { color: l.color }]}>{l.label}</Text>
+              <Text style={[styles.barLabelBot, { color: l.color }]}>${l.price.toFixed(0)}</Text>
+            </View>
+          ))}
+          {isBelowLow && fibLevels.below.map(l => (
+            <View key={l.multiplier} style={[styles.barLabelPin, { left: `${pct(l.price)}%` }]}>
+              <Text style={[styles.barLabelTop, { color: l.color }]}>{l.label}</Text>
+              <Text style={[styles.barLabelBot, { color: l.color }]}>${l.price.toFixed(0)}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    );
+  };
+
+  // ── Tab content ────────────────────────────────────────────────────────────
+
+  const OverviewTab = () => (
+    <View style={styles.tabContent}>
+      {/* Contract Suggestion */}
+      <View style={[styles.suggestionCard, { backgroundColor: suggestion.bg, borderColor: suggestion.border }]}>
+        <View style={styles.suggestionLeft}>
+          <Ionicons name={suggestion.icon} size={22} color={suggestion.color} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+            <Text style={[styles.suggestionHeadline, { color: suggestion.color }]}>
+              {suggestion.headline}
+            </Text>
+            <View style={[styles.typeBadge, { backgroundColor: suggestion.color + '25', borderColor: suggestion.color + '60' }]}>
+              <Text style={[styles.typeBadgeText, { color: suggestion.color }]}>{suggestion.type}</Text>
+            </View>
+          </View>
+          <Text style={[styles.suggestionContext, { color: colors.textSecondary }]}>{suggestion.context}</Text>
+          {suggestion.target && (
+            <Text style={[styles.suggestionTarget, { color: suggestion.color }]}>{suggestion.target}</Text>
+          )}
+        </View>
+      </View>
+
+      {/* Breakout status row */}
+      {hasBreakout && (
+        <View style={[styles.breakoutRow, { backgroundColor: bkColor + '15', borderColor: bkColor + '40' }]}>
+          <View style={[styles.dot, { backgroundColor: bkColor }]} />
+          <Text style={[styles.breakoutLabel, { color: bkColor }]}>{getBreakoutLabel(data.breakout_type)}</Text>
+          {data.breakout_price != null && (
+            <Text style={[styles.breakoutPrice, { color: colors.textSecondary }]}>@ {fp(data.breakout_price)}</Text>
+          )}
+        </View>
+      )}
+
+      {/* Stats grid */}
+      <View style={[styles.statsGrid, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <StatItem label="Open" value={fp(data.opening_price)} colors={colors} />
+        <View style={[styles.statDividerV, { backgroundColor: colors.separator }]} />
+        <StatItem label="Prev Close" value={fp(data.previous_close)} colors={colors} />
+        <View style={[styles.statDividerV, { backgroundColor: colors.separator }]} />
+        <StatItem
+          label="Change"
+          value={pctChange != null ? `${pctChange >= 0 ? '+' : ''}${pctChange.toFixed(2)}%` : 'N/A'}
+          valueColor={pctChange != null ? (pctChange >= 0 ? colors.success : colors.error) : undefined}
+          colors={colors}
+        />
+        <View style={[styles.statDividerH, { backgroundColor: colors.separator }]} />
+        <StatItem label="Volume" value={fv(data.volume)} colors={colors} />
+        <View style={[styles.statDividerV, { backgroundColor: colors.separator }]} />
+        <StatItem label="Range" value={orbRange > 0 ? fp(orbRange) : 'N/A'} colors={colors} />
+        <View style={[styles.statDividerV, { backgroundColor: colors.separator }]} />
+        <StatItem
+          label="vs ORH/ORL"
+          value={isAboveHigh ? `+${fp(distFromORH!)}` : isBelowLow ? `-${fp(distFromORL!)}` : 'In Range'}
+          valueColor={isAboveHigh ? colors.success : isBelowLow ? colors.error : colors.textSecondary}
+          colors={colors}
+        />
+      </View>
+
+      {/* Gap / trend context */}
+      {gapTrendContext && gapTrendContext.gap_direction != null && (
+        <View style={[styles.gapRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <GapTrendBadges context={gapTrendContext} compact />
+        </View>
+      )}
+    </View>
+  );
+
+  const LevelsTab = () => (
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.tabContent} showsVerticalScrollIndicator={false}>
+      {/* ORB Key Levels */}
+      <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <Text style={[styles.cardTitle, { color: colors.textTertiary }]}>ORB Key Levels</Text>
+        <Row label="ORB High" value={fp(orbHigh)} valueColor={colors.success} colors={colors} />
+        <Divider colors={colors} />
+        <Row label="ORB Low" value={fp(orbLow)} valueColor={colors.error} colors={colors} />
+        <Divider colors={colors} />
+        <Row label="Range" value={orbRange > 0 ? fp(orbRange) : 'N/A'} colors={colors} />
+        <Divider colors={colors} />
+        <Row label="Opening Price" value={fp(data.opening_price)} colors={colors} />
+        {data.previous_close != null && (
+          <>
+            <Divider colors={colors} />
+            <Row label="Prev Close" value={fp(data.previous_close)} colors={colors} />
+          </>
+        )}
+      </View>
+
+      {/* Fibonacci extensions */}
+      {isAboveHigh && fibLevels.above.length > 0 && (
+        <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Text style={[styles.cardTitle, { color: colors.textTertiary }]}>Fibonacci Extensions (above ORH)</Text>
+          {fibLevels.above.map((l, i) => (
+            <React.Fragment key={l.multiplier}>
+              {i > 0 && <Divider colors={colors} />}
+              <View style={styles.row}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={[styles.fibDot, { backgroundColor: l.color }]} />
+                  <Text style={[styles.rowLabel, { color: colors.textSecondary }]}>Fib {l.label} · T{i + 1}</Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={[styles.rowValue, { color: l.color }]}>{fp(l.price)}</Text>
+                  {currentPrice >= l.price && (
+                    <Text style={{ fontSize: 10, color: l.color, fontWeight: '600' }}>✓ Reached</Text>
+                  )}
+                </View>
+              </View>
+            </React.Fragment>
+          ))}
+        </View>
+      )}
+
+      {isBelowLow && fibLevels.below.length > 0 && (
+        <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Text style={[styles.cardTitle, { color: colors.textTertiary }]}>Fibonacci Extensions (below ORL)</Text>
+          {fibLevels.below.map((l, i) => (
+            <React.Fragment key={l.multiplier}>
+              {i > 0 && <Divider colors={colors} />}
+              <View style={styles.row}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={[styles.fibDot, { backgroundColor: l.color }]} />
+                  <Text style={[styles.rowLabel, { color: colors.textSecondary }]}>Fib {l.label} · T{i + 1}</Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={[styles.rowValue, { color: l.color }]}>{fp(l.price)}</Text>
+                  {currentPrice <= l.price && (
+                    <Text style={{ fontSize: 10, color: l.color, fontWeight: '600' }}>✓ Reached</Text>
+                  )}
+                </View>
+              </View>
+            </React.Fragment>
+          ))}
+        </View>
+      )}
+
+      {!isAboveHigh && !isBelowLow && orbRange > 0 && (
+        <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Text style={[styles.cardTitle, { color: colors.textTertiary }]}>Fibonacci Targets (on breakout)</Text>
+          <Text style={[styles.cardNote, { color: colors.textTertiary }]}>
+            Bullish break above ORH — CALL targets:
+          </Text>
+          {fibLevels.above.map((l, i) => (
+            <React.Fragment key={`a-${l.multiplier}`}>
+              {i > 0 && <Divider colors={colors} />}
+              <Row label={`T${i + 1} · Fib ${l.label}`} value={fp(l.price)} valueColor={colors.success} colors={colors} />
+            </React.Fragment>
+          ))}
+          <View style={[styles.cardSectionDivider, { backgroundColor: colors.separator }]} />
+          <Text style={[styles.cardNote, { color: colors.textTertiary }]}>
+            Bearish break below ORL — PUT targets:
+          </Text>
+          {fibLevels.below.map((l, i) => (
+            <React.Fragment key={`b-${l.multiplier}`}>
+              {i > 0 && <Divider colors={colors} />}
+              <Row label={`T${i + 1} · Fib ${l.label}`} value={fp(l.price)} valueColor={colors.error} colors={colors} />
+            </React.Fragment>
+          ))}
+        </View>
+      )}
+    </ScrollView>
+  );
+
+  const DetailsTab = () => (
+    <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.tabContent, { paddingBottom: 32 }]} showsVerticalScrollIndicator={false}>
+      {/* Trade Info */}
+      <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <Text style={[styles.cardTitle, { color: colors.textTertiary }]}>Trade Info</Text>
+        <Row label="Trade Date" value={fd(data.trade_date)} colors={colors} />
+        {data.timestamp && <><Divider colors={colors} /><Row label="Last Update" value={ft(data.timestamp)} colors={colors} /></>}
+        {data.data_source && <><Divider colors={colors} /><Row label="Data Source" value={data.data_source} colors={colors} /></>}
+        <Divider colors={colors} />
+        <View style={styles.row}>
+          <Text style={[styles.rowLabel, { color: colors.textSecondary }]}>Status</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={[styles.dot, { backgroundColor: data.monitoring_active ? colors.success : colors.error }]} />
+            <Text style={[styles.rowValue, { color: data.monitoring_active ? colors.success : colors.error }]}>
+              {data.monitoring_active ? 'Active' : 'Inactive'}
+            </Text>
+          </View>
+        </View>
+        {(data.high_broken || data.low_broken) && (
+          <>
+            <Divider colors={colors} />
+            <View style={styles.row}>
+              <Text style={[styles.rowLabel, { color: colors.textSecondary }]}>Flags</Text>
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                {data.high_broken && (
+                  <Text style={{ color: colors.success, fontSize: 12, fontWeight: '600' }}>High ✓</Text>
+                )}
+                {data.low_broken && (
+                  <Text style={{ color: colors.error, fontSize: 12, fontWeight: '600' }}>Low ✓</Text>
+                )}
+              </View>
+            </View>
+          </>
+        )}
+      </View>
+
+      {/* Options data */}
+      {data.options_data && (
+        <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Text style={[styles.cardTitle, { color: colors.textTertiary }]}>Options Data</Text>
+          {Object.entries(data.options_data).map(([k, v], i) => (
+            <React.Fragment key={k}>
+              {i > 0 && <Divider colors={colors} />}
+              <Row
+                label={k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                value={typeof v === 'number' ? fp(v) : String(v)}
+                colors={colors}
+              />
+            </React.Fragment>
+          ))}
+        </View>
+      )}
+
+      {/* Actions */}
+      <View style={{ gap: 10 }}>
+        {data.monitoring_active && (
+          <TouchableOpacity
+            onPress={handleUnfollow}
+            disabled={setMonitoringActive.isPending}
+            style={[styles.actionBtn, { backgroundColor: colors.error + '15', borderColor: colors.error + '50' }]}
+          >
+            {setMonitoringActive.isPending
+              ? <ActivityIndicator size="small" color={colors.error} />
+              : <Ionicons name="remove-circle-outline" size={18} color={colors.error} />}
+            <Text style={[styles.actionBtnText, { color: colors.error }]}>
+              {setMonitoringActive.isPending ? 'Removing…' : 'Remove from ORB list'}
+            </Text>
+          </TouchableOpacity>
+        )}
+        {onNavigateToTicker && (
+          <TouchableOpacity
+            onPress={() => { onNavigateToTicker(data.ticker); onClose(); }}
+            style={[styles.actionBtn, { backgroundColor: colors.accent + '20', borderColor: colors.accent + '50' }]}
+          >
+            <Ionicons name="open-outline" size={18} color={colors.accent} />
+            <Text style={[styles.actionBtnText, { color: colors.accent }]}>View {data.ticker} Details</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </ScrollView>
+  );
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <Modal
       visible={visible}
       animationType="slide"
-      presentationStyle="fullScreen"
+      presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <SafeAreaView className="flex-1 bg-black">
-        <StatusBar barStyle="light-content" />
-        
+      <SafeAreaView style={[styles.root, { backgroundColor: colors.background }]} edges={['top', 'left', 'right', 'bottom']}>
+
+        {/* Drag handle */}
+        <View style={[styles.dragHandle, { backgroundColor: colors.surfaceTertiary }]} />
+
         {/* Header */}
-        <View className="px-6 py-4 border-b border-gray-800 flex-row items-center justify-between">
-          <Text className="text-white text-2xl font-bold">{data.ticker}</Text>
-          <TouchableOpacity
-            onPress={onClose}
-            className="w-10 h-10 items-center justify-center"
-          >
-            <Ionicons name="close" size={24} color="#fff" />
+        <View style={[styles.header, { borderBottomColor: colors.separator }]}>
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+              <Text style={[styles.ticker, { color: colors.text }]}>{data.ticker}</Text>
+              {/* Suggestion type pill */}
+              <View style={[styles.typeBadge, { backgroundColor: suggestion.color + '25', borderColor: suggestion.color + '60' }]}>
+                <Text style={[styles.typeBadgeText, { color: suggestion.color }]}>{suggestion.type}</Text>
+              </View>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <AnimatedNumber
+                value={currentPrice}
+                format={v => `$${v.toFixed(2)}`}
+                style={styles.price}
+                color={priceColor}
+              />
+              <Text style={[styles.pricePosition, { color: priceColor }]}>
+                {isAboveHigh && `▲ $${distFromORH!.toFixed(2)} above ORH`}
+                {isBelowLow && `▼ $${distFromORL!.toFixed(2)} below ORL`}
+                {isInRange && '↔ In ORB Range'}
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: colors.surface }]}>
+            <Ionicons name="close" size={18} color={colors.textSecondary} />
           </TouchableOpacity>
         </View>
 
-        <ScrollView
-          className="flex-1"
-          contentContainerStyle={{ padding: 24, paddingBottom: 48 }}
-          showsVerticalScrollIndicator={true}
-        >
-          {/* Current Price - Large Display */}
-          <View className="mb-6">
-            <Text className="text-gray-400 text-sm mb-2">Current Price</Text>
-            <AnimatedNumber
-              value={data.current_price}
-              format={(v) => `$${v.toFixed(2)}`}
-              style={{ fontSize: 36, fontWeight: 'bold', marginBottom: 4 }}
-              color={priceColor}
-            />
-            <Text className="text-gray-500 text-xs">
-              {isAboveHigh && 'Above ORB High'}
-              {isBelowLow && 'Below ORB Low'}
-              {isInRange && 'Within ORB Range'}
-            </Text>
-          </View>
+        {/* ORB Range Bar */}
+        <ORBRangeBar />
 
-          {/* Breakout Status */}
-          {hasBreakout && (
-            <View 
-              className={`mb-6 p-4 rounded-xl border ${breakoutStyle.bgColor} ${breakoutStyle.borderColor}`}
-            >
-              <Text className="text-gray-400 text-sm mb-2">Breakout Status</Text>
-              <Text 
-                className="text-xl font-bold mb-2"
-                style={{ color: breakoutStyle.color }}
+        {/* Tab bar */}
+        <View style={[styles.tabRow, { borderBottomColor: colors.separator }]}>
+          {(['Overview', 'Levels', 'Details'] as Tab[]).map(tab => {
+            const active = activeTab === tab;
+            return (
+              <TouchableOpacity
+                key={tab}
+                onPress={() => setActiveTab(tab)}
+                style={[styles.tabBtn, active && { borderBottomColor: colors.accent, borderBottomWidth: 2 }]}
+                activeOpacity={0.75}
               >
-                {breakoutStyle.label}
-              </Text>
-              {data.breakout_price !== null && (
-                <View className="flex-row items-center mb-2">
-                  <Text className="text-gray-300 text-sm">Breakout Price: </Text>
-                  <AnimatedNumber
-                    value={data.breakout_price}
-                    format={(v) => `$${v.toFixed(2)}`}
-                    style={{ fontSize: 14, fontWeight: '600' }}
-                    color={breakoutStyle.color}
-                  />
-                </View>
-              )}
-              {/* Reversal Data Display - Generic to handle any structure */}
-              {data.breakout_type === 'reversal' && data.reversal_data && (
-                <View className="mt-3 pt-3 border-t border-gray-700/50">
-                  <Text className="text-gray-400 text-sm mb-2">Reversal Details</Text>
-                  {renderGenericJSONBData(data.reversal_data, breakoutStyle.color)}
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* Gap / Prior Day / Continuation context bar */}
-          {gapTrendContext && gapTrendContext.gap_direction != null && (
-            <View className="mb-6 p-4 bg-gray-800/50 rounded-xl border border-gray-700/50">
-              <Text className="text-gray-400 text-sm mb-3">Gap & Prior Day Context</Text>
-              <GapTrendBadges context={gapTrendContext} />
-            </View>
-          )}
-
-          {/* ORB Range Section */}
-          <View className="mb-6">
-            <Text className="text-gray-400 text-sm mb-4">ORB Range</Text>
-            
-            {/* Visual Range Indicator - extends with Fibonacci when price is above ORH or below ORL */}
-            <View className="mb-4">
-              <View className="h-12 bg-gray-800 rounded-lg relative overflow-hidden mb-2">
-                {/* Range Bar */}
-                <View 
-                  className="absolute h-full bg-gradient-to-r from-red-500/30 via-gray-600/30 to-green-500/30"
-                  style={{ left: 0, right: 0 }}
-                />
-                {orbRange > 0 && (() => {
-                  const priceToPercent = (p: number) =>
-                    visualRange > 0 ? ((p - visualMin) / visualRange) * 100 : 0;
-                  const orlPercent = Math.max(0, Math.min(100, priceToPercent(orbLow)));
-                  const orhPercent = Math.max(0, Math.min(100, priceToPercent(orbHigh)));
-                  const showOrl = isInRange || isBelowLow;
-                  const showOrh = isInRange || isAboveHigh;
-                  return (
-                    <>
-                      {/* ORL line - only when price in range or below ORL */}
-                      {showOrl && (
-                        <View
-                          className="absolute w-0.5 h-full bg-red-500"
-                          style={{ left: `${orlPercent}%` }}
-                        />
-                      )}
-                      {/* ORH line - only when price in range or above ORH */}
-                      {showOrh && (
-                        <View
-                          className="absolute w-0.5 h-full bg-green-500"
-                          style={{ left: `${orhPercent}%` }}
-                        />
-                      )}
-                      {/* Fibonacci level lines (yellow, lighter as value increases) - only when outside range */}
-                      {isAboveHigh &&
-                        fibLevels.above.map((level, idx) => {
-                          const pct = priceToPercent(level.price);
-                          if (pct <= 0 || pct >= 100) return null;
-                          return (
-                            <View
-                              key={level.multiplier}
-                              className="absolute w-0.5 h-full"
-                              style={{ left: `${pct}%`, backgroundColor: getFibColor(idx) }}
-                            />
-                          );
-                        })}
-                      {isBelowLow &&
-                        fibLevels.below.map((level, idx) => {
-                          const pct = priceToPercent(level.price);
-                          if (pct <= 0 || pct >= 100) return null;
-                          return (
-                            <View
-                              key={level.multiplier}
-                              className="absolute w-0.5 h-full"
-                              style={{ left: `${pct}%`, backgroundColor: getFibColor(idx) }}
-                            />
-                          );
-                        })}
-                      {/* Current Price Indicator - always shown when we have a range */}
-                      <View
-                        className="absolute w-1 h-full"
-                        style={{
-                          left: `${pricePositionPercent}%`,
-                          backgroundColor: priceColor,
-                        }}
-                      />
-                    </>
-                  );
-                })()}
-              </View>
-              {/* Labels positioned under their lines (ORL/ORH only when visible; no ORL when above ORH, no ORH when below ORL) */}
-              {orbRange > 0 && (() => {
-                const priceToPercent = (p: number) =>
-                  visualRange > 0 ? ((p - visualMin) / visualRange) * 100 : 0;
-                const orlPercent = Math.max(0, Math.min(100, priceToPercent(orbLow)));
-                const orhPercent = Math.max(0, Math.min(100, priceToPercent(orbHigh)));
-                const showOrl = isInRange || isBelowLow;
-                const showOrh = isInRange || isAboveHigh;
-                return (
-                  <View className="relative h-5 mb-1">
-                    {showOrl && (
-                      <View
-                        className="absolute top-0"
-                        style={{ left: `${orlPercent}%`, transform: [{ translateX: -12 }] }}
-                      >
-                        <Text className="text-red-400 text-xs">ORL</Text>
-                      </View>
-                    )}
-                    {showOrh && (
-                      <View
-                        className="absolute top-0"
-                        style={{ left: `${orhPercent}%`, transform: [{ translateX: -12 }] }}
-                      >
-                        <Text className="text-green-400 text-xs">ORH</Text>
-                      </View>
-                    )}
-                  </View>
-                );
-              })()}
-              {/* Current price and optional Fib level - always show when orbRange > 0 */}
-              {orbRange > 0 && (
-                <View className="items-center mt-1">
-                  <Text className="text-xs font-semibold" style={{ color: priceColor }}>
-                    {formatPrice(currentPrice)}
-                  </Text>
-                  {currentFibLevel && (
-                    <Text
-                      className="text-xs mt-0.5"
-                      style={{ color: priceColor, opacity: 0.9 }}
-                    >
-                      {currentFibLevel.label}
-                    </Text>
-                  )}
-                </View>
-              )}
-            </View>
-
-            {/* Range Values: ORB High, ORB Low, Range Size, and Fibonacci levels when applicable */}
-            <View className="bg-gray-800/50 rounded-xl p-4">
-              <View className="flex-row justify-between items-center mb-3">
-                <Text className="text-gray-400 text-sm">ORB High</Text>
-                <AnimatedNumber
-                  value={data.orb_high}
-                  format={(v) => `$${v.toFixed(2)}`}
-                  style={{ fontSize: 18, fontWeight: '600' }}
-                  color={FIB_COLOR_ABOVE}
-                />
-              </View>
-              <View className="flex-row justify-between items-center mb-3">
-                <Text className="text-gray-400 text-sm">ORB Low</Text>
-                <AnimatedNumber
-                  value={data.orb_low}
-                  format={(v) => `$${v.toFixed(2)}`}
-                  style={{ fontSize: 18, fontWeight: '600' }}
-                  color={FIB_COLOR_BELOW}
-                />
-              </View>
-              {orbRange > 0 && (
-                <View className="flex-row justify-between items-center pt-3 border-t border-gray-700/50">
-                  <Text className="text-gray-400 text-sm">Range Size</Text>
-                  <AnimatedNumber
-                    value={orbRange}
-                    format={(v) => `$${v.toFixed(2)}`}
-                    style={{ fontSize: 18, fontWeight: '600' }}
-                    color="#D1D5DB"
-                  />
-                </View>
-              )}
-              {/* Fibonacci extension levels - yellow, lighter as value increases; matches visual indicator */}
-              {isAboveHigh && fibLevels.above.length > 0 && (
-                <View className="pt-3 mt-3 border-t border-gray-700/50">
-                  <Text className="text-gray-400 text-sm mb-2">Extension above ORH</Text>
-                  {fibLevels.above.map((level, idx) => (
-                    <View
-                      key={level.multiplier}
-                      className="flex-row justify-between items-center mb-2"
-                    >
-                      <Text className="text-sm" style={{ color: getFibColor(idx) }}>
-                        {level.label}
-                      </Text>
-                      <AnimatedNumber
-                        value={level.price}
-                        format={(v) => `$${v.toFixed(2)}`}
-                        style={{ fontSize: 16, fontWeight: '600' }}
-                        color={getFibColor(idx)}
-                      />
-                    </View>
-                  ))}
-                </View>
-              )}
-              {isBelowLow && fibLevels.below.length > 0 && (
-                <View className="pt-3 mt-3 border-t border-gray-700/50">
-                  <Text className="text-gray-400 text-sm mb-2">Extension below ORL</Text>
-                  {fibLevels.below.map((level, idx) => (
-                    <View
-                      key={level.multiplier}
-                      className="flex-row justify-between items-center mb-2"
-                    >
-                      <Text className="text-sm" style={{ color: getFibColor(idx) }}>
-                        {level.label}
-                      </Text>
-                      <AnimatedNumber
-                        value={level.price}
-                        format={(v) => `$${v.toFixed(2)}`}
-                        style={{ fontSize: 16, fontWeight: '600' }}
-                        color={getFibColor(idx)}
-                      />
-                    </View>
-                  ))}
-                </View>
-              )}
-            </View>
-          </View>
-
-          {/* ORB Profit Targets - Only show when breakout has occurred */}
-          {(data.breakout_type === 'Bullish' || 
-            data.breakout_type === 'Bearish' || 
-            data.breakout_type === 'Confirmed Bullish' || 
-            data.breakout_type === 'Confirmed Bearish') && (
-            <View className="mb-6">
-              <Text className="text-gray-400 text-sm mb-4">Profit Targets</Text>
-              <View className="bg-gray-800/50 rounded-xl p-4">
-                {calculateORBTargets(orbHigh, orbLow, data.breakout_type).map((target, index) => (
-                  <View 
-                    key={target.level} 
-                    className={`flex-row justify-between items-center ${index < 2 ? 'mb-3' : ''}`}
-                  >
-                    <View className="flex-row items-center" style={{ gap: 12 }}>
-                      <View 
-                        className={`w-7 h-7 rounded-full items-center justify-center ${
-                          data.breakout_type.includes('Bullish') 
-                            ? 'bg-green-500/20' 
-                            : 'bg-red-500/20'
-                        }`}
-                      >
-                        <Text 
-                          className={`text-sm font-bold ${
-                            data.breakout_type.includes('Bullish')
-                              ? 'text-green-400'
-                              : 'text-red-400'
-                          }`}
-                        >
-                          {target.level}
-                        </Text>
-                      </View>
-                      <View>
-                        <Text className="text-gray-300 text-sm font-medium">{target.label}</Text>
-                        <Text className="text-gray-500 text-xs">{target.multiplier}× Range</Text>
-                      </View>
-                    </View>
-                    <AnimatedNumber
-                      value={target.price}
-                      format={(v) => `$${v.toFixed(2)}`}
-                      style={{ fontSize: 16, fontWeight: '600' }}
-                      color={data.breakout_type.includes('Bullish') ? '#10B981' : '#EF4444'}
-                    />
-                  </View>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {/* Additional Information */}
-          <View className="mb-6">
-            <Text className="text-gray-400 text-sm mb-4">Additional Information</Text>
-            <View className="bg-gray-800/50 rounded-xl p-4">
-              <View className="flex-row justify-between items-center mb-3">
-                <Text className="text-gray-400 text-sm">Opening Price</Text>
-                <AnimatedNumber
-                  value={data.opening_price}
-                  format={(v) => `$${v.toFixed(2)}`}
-                  style={{ fontSize: 16, fontWeight: '500' }}
-                  color="#D1D5DB"
-                />
-              </View>
-              {data.previous_close !== null && data.previous_close !== undefined && (
-                <View className="flex-row justify-between items-center mb-3">
-                  <Text className="text-gray-400 text-sm">Previous Close</Text>
-                  <AnimatedNumber
-                    value={data.previous_close}
-                    format={(v) => `$${v.toFixed(2)}`}
-                    style={{ fontSize: 16, fontWeight: '500' }}
-                    color="#D1D5DB"
-                  />
-                </View>
-              )}
-              <View className="flex-row justify-between items-center mb-3">
-                <Text className="text-gray-400 text-sm">Volume</Text>
-                <Text className="text-gray-300 text-base font-medium">
-                  {formatVolume(data.volume)}
+                <Text style={[styles.tabBtnText, { color: active ? colors.accent : colors.textTertiary }]}>
+                  {tab}
                 </Text>
-              </View>
-              <View className="flex-row justify-between items-center mb-3">
-                <Text className="text-gray-400 text-sm">Trade Date</Text>
-                <Text className="text-gray-300 text-base font-medium">
-                  {formatDate(data.trade_date)}
-                </Text>
-              </View>
-              {data.timestamp && (
-                <View className="flex-row justify-between items-center mb-3">
-                  <Text className="text-gray-400 text-sm">Time</Text>
-                  <Text className="text-gray-300 text-base font-medium">
-                    {formatTime(data.timestamp)}
-                  </Text>
-                </View>
-              )}
-              {data.data_source && (
-                <View className="flex-row justify-between items-center mb-3">
-                  <Text className="text-gray-400 text-sm">Data Source</Text>
-                  <Text className="text-gray-300 text-base font-medium">
-                    {data.data_source}
-                  </Text>
-                </View>
-              )}
-              <View className="flex-row justify-between items-center pt-3 border-t border-gray-700/50 mb-3">
-                <Text className="text-gray-400 text-sm">Status</Text>
-                <View className="flex-row items-center" style={{ gap: 8 }}>
-                  <View 
-                    className={`w-2 h-2 rounded-full ${
-                      data.monitoring_active ? 'bg-green-500' : 'bg-red-500'
-                    }`}
-                  />
-                  <Text className="text-gray-300 text-base font-medium">
-                    {data.monitoring_active ? 'Active' : 'Inactive'}
-                  </Text>
-                </View>
-              </View>
-              {(data.high_broken || data.low_broken) && (
-                <View className="pt-3 border-t border-gray-700/50">
-                  <Text className="text-gray-400 text-sm mb-2">Breakout Flags</Text>
-                  <View className="flex-row" style={{ gap: 16 }}>
-                    {data.high_broken && (
-                      <View className="flex-row items-center" style={{ gap: 8 }}>
-                        <View className="w-2 h-2 rounded-full bg-green-500" />
-                        <Text className="text-green-400 text-sm">High Broken</Text>
-                      </View>
-                    )}
-                    {data.low_broken && (
-                      <View className="flex-row items-center" style={{ gap: 8 }}>
-                        <View className="w-2 h-2 rounded-full bg-red-500" />
-                        <Text className="text-red-400 text-sm">Low Broken</Text>
-                      </View>
-                    )}
-                  </View>
-                </View>
-              )}
-            </View>
-          </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
 
-          {/* Options Data Display */}
-          {data.options_data && (
-            <View className="mb-6">
-              <Text className="text-gray-400 text-sm mb-4">Options Data</Text>
-              <View className="bg-gray-800/50 rounded-xl p-4">
-                {renderGenericJSONBData(data.options_data, breakoutStyle.color)}
-              </View>
-            </View>
-          )}
+        {/* Tab content */}
+        <View style={{ flex: 1 }}>
+          {activeTab === 'Overview' && <OverviewTab />}
+          {activeTab === 'Levels' && <LevelsTab />}
+          {activeTab === 'Details' && <DetailsTab />}
+        </View>
 
-          {/* Unfollow from ORB list - stop monitoring so orb is no longer calculated */}
-          {data.monitoring_active && (
-            <TouchableOpacity
-              onPress={handleUnfollow}
-              disabled={setMonitoringActive.isPending}
-              className="mb-4 rounded-xl p-4 flex-row items-center justify-center gap-2 border border-red-500/50 bg-red-500/10"
-            >
-              {setMonitoringActive.isPending ? (
-                <ActivityIndicator size="small" color="#EF4444" />
-              ) : (
-                <Ionicons name="remove-circle-outline" size={20} color="#EF4444" />
-              )}
-              <Text className="text-red-400 text-base font-semibold">
-                {setMonitoringActive.isPending ? 'Unfollowing…' : 'Unfollow from ORB list'}
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          {/* Navigation Button */}
-          {onNavigateToTicker && (
-            <TouchableOpacity
-              onPress={() => {
-                onNavigateToTicker(data.ticker);
-                onClose();
-              }}
-              className="bg-blue-600 rounded-xl p-4 flex-row items-center justify-center gap-2"
-            >
-              <Ionicons name="arrow-forward" size={20} color="#fff" />
-              <Text className="text-white text-base font-semibold">
-                View {data.ticker} Details
-              </Text>
-            </TouchableOpacity>
-          )}
-        </ScrollView>
       </SafeAreaView>
     </Modal>
   );
 };
 
+// ─── StatItem ─────────────────────────────────────────────────────────────────
+
+const StatItem = ({
+  label, value, valueColor, colors,
+}: {
+  label: string; value: string; valueColor?: string; colors: ReturnType<typeof useThemeColors>;
+}) => (
+  <View style={styles.statItem}>
+    <Text style={[styles.statValue, { color: valueColor ?? colors.text }]} numberOfLines={1}>{value}</Text>
+    <Text style={[styles.statLabel, { color: colors.textTertiary }]} numberOfLines={1}>{label}</Text>
+  </View>
+);
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  root: { flex: 1 },
+
+  dragHandle: {
+    width: 36, height: 4, borderRadius: 2,
+    alignSelf: 'center', marginTop: 10, marginBottom: 6,
+  },
+
+  header: {
+    flexDirection: 'row', alignItems: 'flex-start',
+    paddingHorizontal: 20, paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  ticker: { fontSize: 28, fontWeight: '800', letterSpacing: -0.5 },
+  price: { fontSize: 22, fontWeight: '700' },
+  pricePosition: { fontSize: 13, fontWeight: '500' },
+  closeBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center',
+    marginTop: 4,
+  },
+
+  // ORB Range Bar
+  rangeSection: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 },
+  rangeBar: {
+    height: 88, borderRadius: 12, overflow: 'hidden', position: 'relative',
+  },
+  rangeLine: {
+    position: 'absolute', top: 0, bottom: 0, width: 2,
+  },
+  fibLine: {
+    position: 'absolute', top: 0, bottom: 0, width: 1.5,
+  },
+  priceMarker: {
+    position: 'absolute', top: 0, bottom: 0, width: 3, borderRadius: 2,
+  },
+  priceBubbleWrap: {
+    position: 'absolute', top: 8, transform: [{ translateX: -32 }],
+  },
+  priceBubble: {
+    paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6,
+  },
+  priceBubbleText: {
+    fontSize: 11, fontWeight: '700', color: '#fff',
+  },
+  barLabelRow: {
+    position: 'relative', height: 36, marginTop: 4,
+  },
+  barLabelPin: {
+    position: 'absolute', top: 0, transform: [{ translateX: -18 }],
+    alignItems: 'center',
+  },
+  barLabelTop: { fontSize: 10, fontWeight: '600' },
+  barLabelBot: { fontSize: 10, fontWeight: '500' },
+
+  // Tabs
+  tabRow: {
+    flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth,
+    marginTop: 4,
+  },
+  tabBtn: {
+    flex: 1, paddingVertical: 11, alignItems: 'center',
+    borderBottomWidth: 2, borderBottomColor: 'transparent',
+  },
+  tabBtnText: { fontSize: 13, fontWeight: '600' },
+
+  // Tab content
+  tabContent: { padding: 16, gap: 12 },
+
+  // Suggestion card
+  suggestionCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 12,
+    padding: 14, borderRadius: 14, borderWidth: 1,
+  },
+  suggestionLeft: {
+    width: 36, height: 36, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  suggestionHeadline: { fontSize: 14, fontWeight: '700' },
+  suggestionContext: { fontSize: 12, fontWeight: '500', marginTop: 2 },
+  suggestionTarget: { fontSize: 12, fontWeight: '600', marginTop: 5 },
+
+  typeBadge: {
+    paddingHorizontal: 8, paddingVertical: 2,
+    borderRadius: 6, borderWidth: 1,
+  },
+  typeBadgeText: { fontSize: 11, fontWeight: '700' },
+
+  // Breakout row
+  breakoutRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderRadius: 12, borderWidth: 1,
+  },
+  breakoutLabel: { fontSize: 13, fontWeight: '600', flex: 1 },
+  breakoutPrice: { fontSize: 12, fontWeight: '500' },
+
+  dot: { width: 8, height: 8, borderRadius: 4 },
+
+  // Stats grid
+  statsGrid: {
+    flexDirection: 'row', flexWrap: 'wrap',
+    borderRadius: 14, borderWidth: 1, overflow: 'hidden',
+  },
+  statItem: {
+    width: '33.33%', paddingVertical: 12, paddingHorizontal: 14,
+    alignItems: 'flex-start',
+  },
+  statValue: { fontSize: 15, fontWeight: '700', marginBottom: 2 },
+  statLabel: { fontSize: 11, fontWeight: '500' },
+  statDividerV: { width: StyleSheet.hairlineWidth, marginVertical: 10 },
+  statDividerH: { width: '100%', height: StyleSheet.hairlineWidth },
+
+  // Gap row
+  gapRow: {
+    padding: 12, borderRadius: 12, borderWidth: 1,
+  },
+
+  // Cards (Levels + Details)
+  card: {
+    borderRadius: 14, borderWidth: 1, padding: 16, marginBottom: 0,
+  },
+  cardTitle: {
+    fontSize: 11, fontWeight: '600', textTransform: 'uppercase',
+    letterSpacing: 0.6, marginBottom: 12,
+  },
+  cardNote: {
+    fontSize: 12, fontWeight: '500', marginBottom: 8,
+  },
+  cardSectionDivider: {
+    height: 1, marginVertical: 14,
+  },
+
+  fibDot: { width: 8, height: 8, borderRadius: 4 },
+
+  // Rows
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  rowLabel: { fontSize: 13, fontWeight: '500' },
+  rowValue: { fontSize: 15, fontWeight: '600' },
+
+  // Action buttons
+  actionBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, paddingVertical: 13, borderRadius: 13, borderWidth: 1,
+  },
+  actionBtnText: { fontSize: 14, fontWeight: '600' },
+});

@@ -11,15 +11,22 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
+import { useTrackedContracts } from '@/hooks/queries/track/useTrackedContracts';
+import { useTrackContract } from '@/hooks/mutations/track/useTrackContract';
+import { useUntrackContract } from '@/hooks/mutations/track/useUntrackContract';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
+import type { TrackedOptionContract } from '@/common/types/options';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsContractDetailModal';
+import { TrackedContractsList } from '@/common/components/options/TrackedContractsList';
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
+import { useAuth } from '@/common/utils/context/auth/AuthContext';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type OptionSide = 'CALL' | 'PUT';
 type DatePreset = '1W' | '2W' | '1M' | '3M';
+type ScreenView = 'chain' | 'watchlist';
 
 type TableRow =
   | { type: 'contract'; data: OptionsContract; isITM: boolean }
@@ -188,14 +195,29 @@ const buildRows = (contracts: OptionsContract[], price: number, side: OptionSide
 
 const OptionsScreen = () => {
   const colors = useThemeColors();
+  const { authState: { user } } = useAuth();
   const { optionsTicker: activeTicker, setOptionsTicker } = useOptionsTicker();
+
+  // View toggle
+  const [view, setView] = useState<ScreenView>('chain');
+
+  // Chain state
   const [side, setSide] = useState<OptionSide>('CALL');
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
-  const [detailContract, setDetailContract] = useState<OptionsContract | null>(null);
   const [useMockData, setUseMockData] = useState(false);
   const [datePreset, setDatePreset] = useState<DatePreset>('1M');
   const [marketStatus, setMarketStatus] = useState(() => getMarketStatus());
   const prevTickerRef = useRef('');
+
+  // Detail modal
+  const [detailContract, setDetailContract] = useState<OptionsContract | null>(null);
+  const [detailCurrentPrice, setDetailCurrentPrice] = useState(0);
+  const [detailTrackedId, setDetailTrackedId] = useState<string | null>(null);
+
+  // Tracking hooks
+  const trackContract = useTrackContract();
+  const untrackContract = useUntrackContract();
+  const { data: trackedContracts } = useTrackedContracts();
 
   // Live countdown
   useEffect(() => {
@@ -246,24 +268,19 @@ const OptionsScreen = () => {
 
   const rows = useMemo(() => buildRows(filtered, currentPrice, side), [filtered, currentPrice, side]);
 
-  const handleSideSwitch = useCallback((s: OptionSide) => {
-    setSide(s);
-    setSelectedExpiry(null);
-  }, []);
+  // ── Tracking helpers ────────────────────────────────────────────────────────
 
-  const handleEnableMock = useCallback(() => {
-    setUseMockData(true);
-    if (!activeTicker) setOptionsTicker('AAPL');
-  }, [activeTicker, setOptionsTicker]);
+  const isContractTracked = useCallback(
+    (symbol: string) => trackedContracts?.some(t => t.contract_symbol === symbol) ?? false,
+    [trackedContracts],
+  );
 
-  const handleMockToggle = useCallback(() => {
-    setUseMockData(m => {
-      if (!m && !activeTicker) setOptionsTicker('AAPL');
-      return !m;
-    });
-  }, [activeTicker, setOptionsTicker]);
+  const getTrackedId = useCallback(
+    (symbol: string) => trackedContracts?.find(t => t.contract_symbol === symbol)?.id ?? null,
+    [trackedContracts],
+  );
 
-  const asOpportunity = (c: OptionsContract) => ({
+  const asOpportunity = useCallback((c: OptionsContract) => ({
     ask: c.ask,
     bid: c.bid,
     contractSymbol: c.symbol,
@@ -286,7 +303,118 @@ const OptionsScreen = () => {
     total_score: 0,
     vega: c.vega,
     volume: c.volume,
-  });
+  }), []);
+
+  // Convert a tracked contract's snapshot into an OptionsOpportunity for the detail modal
+  const trackedToOpportunity = useCallback((tc: TrackedOptionContract) => {
+    const snap = (tc.tracking_snapshot ?? {}) as Record<string, any>;
+    return {
+      ask: snap.ask ?? 0,
+      bid: snap.bid ?? 0,
+      contractSymbol: tc.contract_symbol,
+      delta: snap.delta ?? null,
+      dte: snap.dte ?? 0,
+      expirationDate: tc.expiration_date,
+      extrinsicValue: snap.extrinsicValue ?? 0,
+      gamma: snap.gamma ?? null,
+      impliedVolatility: snap.impliedVolatility ?? 0,
+      intrinsicValue: snap.intrinsicValue ?? 0,
+      mark: snap.mark ?? 0,
+      moneyness: snap.moneyness ?? 0,
+      openInterest: snap.openInterest ?? 0,
+      optionType: tc.option_type,
+      reasons: snap.reasons ?? '',
+      signal: (snap.signal ?? 'CONSIDER') as 'BUY' | 'CONSIDER' | 'AVOID',
+      spreadPct: snap.spreadPct ?? 0,
+      strike: tc.strike,
+      theta: snap.theta ?? null,
+      total_score: snap.total_score ?? 0,
+      vega: snap.vega ?? null,
+      volume: snap.volume ?? 0,
+    };
+  }, []);
+
+  // Open detail from chain row
+  const openChainDetail = useCallback((c: OptionsContract) => {
+    setDetailContract(c);
+    setDetailCurrentPrice(currentPrice);
+    setDetailTrackedId(getTrackedId(c.symbol));
+  }, [currentPrice, getTrackedId]);
+
+  // Open detail from watchlist card
+  const openWatchlistDetail = useCallback(
+    (tracked: TrackedOptionContract, live: OptionsContract | null, price: number) => {
+      setDetailContract(live ?? ({
+        ask: (tracked.tracking_snapshot as any)?.ask ?? 0,
+        bid: (tracked.tracking_snapshot as any)?.bid ?? 0,
+        delta: (tracked.tracking_snapshot as any)?.delta ?? null,
+        expiration: tracked.expiration_date,
+        gamma: (tracked.tracking_snapshot as any)?.gamma ?? null,
+        implied_volatility: (tracked.tracking_snapshot as any)?.impliedVolatility ?? null,
+        last_price: (tracked.tracking_snapshot as any)?.mark ?? null,
+        open_interest: (tracked.tracking_snapshot as any)?.openInterest ?? 0,
+        option_type: tracked.option_type,
+        rho: null,
+        strike: tracked.strike,
+        symbol: tracked.contract_symbol,
+        theta: (tracked.tracking_snapshot as any)?.theta ?? null,
+        ticker: tracked.ticker,
+        timestamp: tracked.created_at,
+        vega: (tracked.tracking_snapshot as any)?.vega ?? null,
+        volume: (tracked.tracking_snapshot as any)?.volume ?? 0,
+      } as OptionsContract));
+      setDetailCurrentPrice(price);
+      setDetailTrackedId(tracked.id);
+    },
+    [],
+  );
+
+  const handleTrack = useCallback((c: OptionsContract) => {
+    if (!user?.id) return;
+    trackContract.mutate({
+      userId: user.id,
+      ticker: activeTicker || c.ticker,
+      contractSymbol: c.symbol,
+      optionType: c.option_type,
+      strike: c.strike,
+      expirationDate: c.expiration,
+      trackingSnapshot: asOpportunity(c),
+      trackedFromSource: 'manual',
+    });
+  }, [user, activeTicker, trackContract, asOpportunity]);
+
+  const handleUntrack = useCallback((id: string) => {
+    untrackContract.mutate(id, {
+      onSuccess: () => {
+        setDetailContract(null);
+        setDetailTrackedId(null);
+      },
+    });
+  }, [untrackContract]);
+
+  const closeDetail = useCallback(() => {
+    setDetailContract(null);
+    setDetailTrackedId(null);
+  }, []);
+
+  // ── Chain render helpers ─────────────────────────────────────────────────────
+
+  const handleSideSwitch = useCallback((s: OptionSide) => {
+    setSide(s);
+    setSelectedExpiry(null);
+  }, []);
+
+  const handleEnableMock = useCallback(() => {
+    setUseMockData(true);
+    if (!activeTicker) setOptionsTicker('AAPL');
+  }, [activeTicker, setOptionsTicker]);
+
+  const handleMockToggle = useCallback(() => {
+    setUseMockData(m => {
+      if (!m && !activeTicker) setOptionsTicker('AAPL');
+      return !m;
+    });
+  }, [activeTicker, setOptionsTicker]);
 
   const renderRow = useCallback(
     ({ item }: { item: TableRow }) => {
@@ -304,9 +432,10 @@ const OptionsScreen = () => {
         );
       }
       const c = item.data;
+      const tracked = isContractTracked(c.symbol);
       return (
         <TouchableOpacity
-          onPress={() => setDetailContract(c)}
+          onPress={() => openChainDetail(c)}
           activeOpacity={0.7}
           style={[
             styles.contractRow,
@@ -316,6 +445,9 @@ const OptionsScreen = () => {
             },
           ]}
         >
+          {tracked && (
+            <View style={[styles.trackedDot, { backgroundColor: colors.accent }]} />
+          )}
           <Text numberOfLines={1} style={[styles.cell, { width: COL_WIDTHS.strike, color: colors.text, fontWeight: '600' }]}>
             ${c.strike.toFixed(1)}
           </Text>
@@ -337,12 +469,15 @@ const OptionsScreen = () => {
         </TouchableOpacity>
       );
     },
-    [colors],
+    [colors, isContractTracked, openChainDetail],
   );
 
   const showError = !useMockData && activeTicker && (error || (optionsData && !optionsData.success));
   const showOutsideHours = showError && !marketStatus.isOpen;
   const showGenericError = showError && marketStatus.isOpen;
+
+  // Watchlist badge count
+  const watchlistCount = trackedContracts?.length ?? 0;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
@@ -362,269 +497,332 @@ const OptionsScreen = () => {
             Options
           </Text>
           <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '500', marginTop: 2 }}>
-            {activeTicker && currentPrice > 0
+            {activeTicker && currentPrice > 0 && view === 'chain'
               ? `${activeTicker} · $${currentPrice.toFixed(2)}`
+              : view === 'watchlist'
+              ? `${watchlistCount} contract${watchlistCount !== 1 ? 's' : ''} tracked`
               : 'Enter a ticker in the search bar'}
           </Text>
         </View>
 
-        {/* Mock data toggle */}
-        <TouchableOpacity
-          onPress={handleMockToggle}
-          activeOpacity={0.75}
-          style={{
-            paddingHorizontal: 14,
-            paddingVertical: 8,
-            backgroundColor: useMockData ? colors.accent + '22' : colors.iconButton,
-            borderRadius: 12,
-            borderWidth: 1,
-            borderColor: useMockData ? colors.accent + '66' : colors.iconButtonBorder,
-            marginBottom: 2,
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 6,
-          }}
-        >
-          <Ionicons
-            name="flask-outline"
-            size={14}
-            color={useMockData ? colors.accent : colors.textSecondary}
-          />
-          <Text style={{ color: useMockData ? colors.accent : colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
-            Mock
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* ── Mock data banner ── */}
-      {useMockData && (
-        <View style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          backgroundColor: colors.warningBg,
-          paddingHorizontal: 16,
-          paddingVertical: 8,
-          gap: 6,
-        }}>
-          <Ionicons name="flask" size={13} color={colors.warning} />
-          <Text style={{ color: colors.warning, fontSize: 12, fontWeight: '600', flex: 1 }}>
-            Mock data — for demonstration only
-          </Text>
-          <TouchableOpacity onPress={() => setUseMockData(false)} hitSlop={8}>
-            <Ionicons name="close" size={14} color={colors.warning} />
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* ── Controls row: Calls/Puts toggle + date range presets ── */}
-      {activeTicker ? (
-        <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10, gap: 10 }}>
-          {/* Calls / Puts + expiry row */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-            {/* Pill toggle */}
-            <View style={{
-              flexDirection: 'row',
-              backgroundColor: colors.surface,
-              borderRadius: 100,
-              padding: 3,
-              borderWidth: 1,
-              borderColor: colors.border,
-            }}>
-              {(['CALL', 'PUT'] as const).map(s => (
-                <TouchableOpacity
-                  key={s}
-                  onPress={() => handleSideSwitch(s)}
-                  activeOpacity={0.8}
-                  style={{
-                    paddingHorizontal: 14,
-                    paddingVertical: 6,
-                    borderRadius: 100,
-                    backgroundColor: side === s ? colors.surfaceTertiary : 'transparent',
-                  }}
-                >
-                  <Text style={{
-                    fontSize: 13,
-                    fontWeight: '600',
-                    color: side === s
-                      ? (s === 'CALL' ? colors.success : colors.error)
-                      : colors.textSecondary,
-                  }}>
-                    {s === 'CALL' ? 'Calls' : 'Puts'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {/* Expiry chips */}
-            {expirations.length > 0 && (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: 6 }}
-                style={{ flex: 1 }}
-              >
-                {expirations.map(exp => {
-                  const active = selectedExpiry === exp;
-                  return (
-                    <TouchableOpacity
-                      key={exp}
-                      onPress={() => setSelectedExpiry(active ? null : exp)}
-                      activeOpacity={0.75}
-                      style={{
-                        paddingHorizontal: 10,
-                        paddingVertical: 5,
-                        borderRadius: 20,
-                        borderWidth: 1,
-                        borderColor: active ? colors.accent : colors.border,
-                        backgroundColor: active ? colors.accent + '1A' : 'transparent',
-                      }}
-                    >
-                      <Text style={{ fontSize: 11, fontWeight: '600', color: active ? colors.accent : colors.textSecondary }}>
-                        {formatExpiry(exp)}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            )}
-          </View>
-
-          {/* Date range presets */}
-          {!useMockData && (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '500', marginRight: 4 }}>Range:</Text>
-              {DATE_PRESETS.map(p => {
-                const active = datePreset === p.id;
-                return (
-                  <TouchableOpacity
-                    key={p.id}
-                    onPress={() => { setDatePreset(p.id); setSelectedExpiry(null); }}
-                    activeOpacity={0.75}
-                    style={{
-                      paddingHorizontal: 12,
-                      paddingVertical: 5,
-                      borderRadius: 20,
-                      borderWidth: 1,
-                      borderColor: active ? colors.accent : colors.border,
-                      backgroundColor: active ? colors.accent + '1A' : 'transparent',
-                    }}
-                  >
-                    <Text style={{ fontSize: 12, fontWeight: '600', color: active ? colors.accent : colors.textSecondary }}>
-                      {p.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+          {/* Mock toggle (chain only) */}
+          {view === 'chain' && (
+            <TouchableOpacity
+              onPress={handleMockToggle}
+              activeOpacity={0.75}
+              style={{
+                paddingHorizontal: 12,
+                paddingVertical: 7,
+                backgroundColor: useMockData ? colors.accent + '22' : colors.iconButton,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: useMockData ? colors.accent + '66' : colors.iconButtonBorder,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 5,
+              }}
+            >
+              <Ionicons
+                name="flask-outline"
+                size={14}
+                color={useMockData ? colors.accent : colors.textSecondary}
+              />
+              <Text style={{ color: useMockData ? colors.accent : colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
+                Mock
+              </Text>
+            </TouchableOpacity>
           )}
         </View>
-      ) : null}
+      </View>
 
-      {/* ── Column headers ── */}
-      {activeTicker && !showError ? (
-        <View style={[styles.colHeaderRow, { backgroundColor: colors.surface, borderBottomColor: colors.separator }]}>
-          <Text style={[styles.colHead, { width: COL_WIDTHS.strike, color: colors.textTertiary }]}>Strike</Text>
-          <Text style={[styles.colHead, { width: COL_WIDTHS.bid, color: colors.success }]}>Bid</Text>
-          <Text style={[styles.colHead, { width: COL_WIDTHS.ask, color: colors.error }]}>Ask</Text>
-          <Text style={[styles.colHead, { width: COL_WIDTHS.last, color: colors.textTertiary }]}>Last</Text>
-          <Text style={[styles.colHead, { width: COL_WIDTHS.oi, color: colors.textTertiary }]}>OI</Text>
-          <Text style={[styles.colHead, { flex: 1, color: colors.textTertiary }]}>Volume</Text>
-        </View>
-      ) : null}
+      {/* ── View toggle: Chain / Watchlist ── */}
+      <View style={[viewToggle.container, { borderBottomColor: colors.separator }]}>
+        {(['chain', 'watchlist'] as ScreenView[]).map(v => {
+          const active = view === v;
+          return (
+            <TouchableOpacity
+              key={v}
+              onPress={() => setView(v)}
+              activeOpacity={0.8}
+              style={viewToggle.tab}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons
+                  name={v === 'chain' ? 'layers-outline' : 'bookmark-outline'}
+                  size={14}
+                  color={active ? colors.accent : colors.textSecondary}
+                />
+                <Text style={{
+                  fontSize: 14, fontWeight: active ? '700' : '500',
+                  color: active ? colors.text : colors.textSecondary,
+                }}>
+                  {v === 'chain' ? 'Chain' : 'Watchlist'}
+                </Text>
+                {v === 'watchlist' && watchlistCount > 0 && (
+                  <View style={[viewToggle.badge, { backgroundColor: colors.accent }]}>
+                    <Text style={viewToggle.badgeText}>{watchlistCount > 99 ? '99+' : watchlistCount}</Text>
+                  </View>
+                )}
+              </View>
+              {active && <View style={[viewToggle.underline, { backgroundColor: colors.accent }]} />}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
 
-      {/* ── Content area ── */}
-
-      {!activeTicker ? (
-        <View style={styles.centered}>
-          <View style={[styles.iconCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Ionicons name="layers-outline" size={32} color={colors.textSecondary} />
-          </View>
-          <Text style={[styles.emptyTitle, { color: colors.text }]}>Options Chain</Text>
-          <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
-            Type a ticker in the search bar{'\n'}below to view the options chain
-          </Text>
-        </View>
-
-      ) : !useMockData && isLoading ? (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors.accent} />
-          <Text style={{ color: colors.textSecondary, fontSize: 14, marginTop: 12 }}>
-            Loading {activeTicker} options...
-          </Text>
-        </View>
-
-      ) : showOutsideHours ? (
-        <View style={styles.centered}>
-          <View style={[styles.iconCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Ionicons name="time-outline" size={32} color={colors.textSecondary} />
-          </View>
-          <Text style={[styles.emptyTitle, { color: colors.text }]}>Outside of Market Hours</Text>
-          <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
-            Options data is only available{'\n'}during market hours.
-          </Text>
-
-          <View style={[styles.countdownCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '500', marginBottom: 6 }}>
-              Market opens in
-            </Text>
-            <Text style={[styles.countdown, { color: colors.text }]}>
-              {formatCountdown(marketStatus.secondsUntilOpen)}
-            </Text>
-          </View>
-
-          <TouchableOpacity
-            onPress={handleEnableMock}
-            activeOpacity={0.8}
-            style={[styles.mockCta, { backgroundColor: colors.accent + '18', borderColor: colors.accent + '44' }]}
-          >
-            <Ionicons name="flask-outline" size={15} color={colors.accent} />
-            <Text style={{ color: colors.accent, fontSize: 14, fontWeight: '600' }}>
-              View Mock Data
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-      ) : showGenericError ? (
-        <View style={styles.centered}>
-          <Ionicons name="alert-circle-outline" size={44} color={colors.error} />
-          <Text style={[styles.emptyTitle, { color: colors.text }]}>Could not load options</Text>
-          <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
-            Check the ticker and try again
-          </Text>
-        </View>
-
-      ) : rows.length === 0 ? (
-        <View style={styles.centered}>
-          <Text style={{ color: colors.textSecondary, fontSize: 15 }}>No contracts found</Text>
-          <Text style={{ color: colors.textTertiary, fontSize: 13, marginTop: 4 }}>
-            Try selecting a different expiration or date range
-          </Text>
-        </View>
-
-      ) : (
-        <FlatList
-          data={rows}
-          renderItem={renderRow}
-          keyExtractor={(item, i) => item.type === 'separator' ? `sep-${i}` : item.data.symbol}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 200 }}
-          initialNumToRender={30}
-          maxToRenderPerBatch={20}
-          windowSize={10}
+      {/* ── Watchlist view ── */}
+      {view === 'watchlist' ? (
+        <TrackedContractsList
+          onContractPress={openWatchlistDetail}
+          activeTicker={activeTicker || undefined}
         />
+      ) : (
+        <>
+          {/* ── Mock data banner ── */}
+          {useMockData && (
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: colors.warningBg,
+              paddingHorizontal: 16,
+              paddingVertical: 8,
+              gap: 6,
+            }}>
+              <Ionicons name="flask" size={13} color={colors.warning} />
+              <Text style={{ color: colors.warning, fontSize: 12, fontWeight: '600', flex: 1 }}>
+                Mock data — for demonstration only
+              </Text>
+              <TouchableOpacity onPress={() => setUseMockData(false)} hitSlop={8}>
+                <Ionicons name="close" size={14} color={colors.warning} />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* ── Controls row ── */}
+          {activeTicker ? (
+            <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10, gap: 10 }}>
+              {/* Calls / Puts + expiry row */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                {/* Pill toggle */}
+                <View style={{
+                  flexDirection: 'row',
+                  backgroundColor: colors.surface,
+                  borderRadius: 100,
+                  padding: 3,
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                }}>
+                  {(['CALL', 'PUT'] as const).map(s => (
+                    <TouchableOpacity
+                      key={s}
+                      onPress={() => handleSideSwitch(s)}
+                      activeOpacity={0.8}
+                      style={{
+                        paddingHorizontal: 14,
+                        paddingVertical: 6,
+                        borderRadius: 100,
+                        backgroundColor: side === s ? colors.surfaceTertiary : 'transparent',
+                      }}
+                    >
+                      <Text style={{
+                        fontSize: 13,
+                        fontWeight: '600',
+                        color: side === s
+                          ? (s === 'CALL' ? colors.success : colors.error)
+                          : colors.textSecondary,
+                      }}>
+                        {s === 'CALL' ? 'Calls' : 'Puts'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {/* Expiry chips */}
+                {expirations.length > 0 && (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={{ gap: 6 }}
+                    style={{ flex: 1 }}
+                  >
+                    {expirations.map(exp => {
+                      const active = selectedExpiry === exp;
+                      return (
+                        <TouchableOpacity
+                          key={exp}
+                          onPress={() => setSelectedExpiry(active ? null : exp)}
+                          activeOpacity={0.75}
+                          style={{
+                            paddingHorizontal: 10,
+                            paddingVertical: 5,
+                            borderRadius: 20,
+                            borderWidth: 1,
+                            borderColor: active ? colors.accent : colors.border,
+                            backgroundColor: active ? colors.accent + '1A' : 'transparent',
+                          }}
+                        >
+                          <Text style={{ fontSize: 11, fontWeight: '600', color: active ? colors.accent : colors.textSecondary }}>
+                            {formatExpiry(exp)}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                )}
+              </View>
+
+              {/* Date range presets */}
+              {!useMockData && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '500', marginRight: 4 }}>Range:</Text>
+                  {DATE_PRESETS.map(p => {
+                    const active = datePreset === p.id;
+                    return (
+                      <TouchableOpacity
+                        key={p.id}
+                        onPress={() => { setDatePreset(p.id); setSelectedExpiry(null); }}
+                        activeOpacity={0.75}
+                        style={{
+                          paddingHorizontal: 12,
+                          paddingVertical: 5,
+                          borderRadius: 20,
+                          borderWidth: 1,
+                          borderColor: active ? colors.accent : colors.border,
+                          backgroundColor: active ? colors.accent + '1A' : 'transparent',
+                        }}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '600', color: active ? colors.accent : colors.textSecondary }}>
+                          {p.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+          ) : null}
+
+          {/* ── Column headers ── */}
+          {activeTicker && !showError ? (
+            <View style={[styles.colHeaderRow, { backgroundColor: colors.surface, borderBottomColor: colors.separator }]}>
+              <View style={{ width: 8 }} />
+              <Text style={[styles.colHead, { width: COL_WIDTHS.strike, color: colors.textTertiary }]}>Strike</Text>
+              <Text style={[styles.colHead, { width: COL_WIDTHS.bid, color: colors.success }]}>Bid</Text>
+              <Text style={[styles.colHead, { width: COL_WIDTHS.ask, color: colors.error }]}>Ask</Text>
+              <Text style={[styles.colHead, { width: COL_WIDTHS.last, color: colors.textTertiary }]}>Last</Text>
+              <Text style={[styles.colHead, { width: COL_WIDTHS.oi, color: colors.textTertiary }]}>OI</Text>
+              <Text style={[styles.colHead, { flex: 1, color: colors.textTertiary }]}>Volume</Text>
+            </View>
+          ) : null}
+
+          {/* ── Content area ── */}
+
+          {!activeTicker ? (
+            <View style={styles.centered}>
+              <View style={[styles.iconCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Ionicons name="layers-outline" size={32} color={colors.textSecondary} />
+              </View>
+              <Text style={[styles.emptyTitle, { color: colors.text }]}>Options Chain</Text>
+              <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+                Type a ticker in the search bar{'\n'}below to view the options chain
+              </Text>
+            </View>
+
+          ) : !useMockData && isLoading ? (
+            <View style={styles.centered}>
+              <ActivityIndicator size="large" color={colors.accent} />
+              <Text style={{ color: colors.textSecondary, fontSize: 14, marginTop: 12 }}>
+                Loading {activeTicker} options...
+              </Text>
+            </View>
+
+          ) : showOutsideHours ? (
+            <View style={styles.centered}>
+              <View style={[styles.iconCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Ionicons name="time-outline" size={32} color={colors.textSecondary} />
+              </View>
+              <Text style={[styles.emptyTitle, { color: colors.text }]}>Outside of Market Hours</Text>
+              <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+                Options data is only available{'\n'}during market hours.
+              </Text>
+
+              <View style={[styles.countdownCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '500', marginBottom: 6 }}>
+                  Market opens in
+                </Text>
+                <Text style={[styles.countdown, { color: colors.text }]}>
+                  {formatCountdown(marketStatus.secondsUntilOpen)}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                onPress={handleEnableMock}
+                activeOpacity={0.8}
+                style={[styles.mockCta, { backgroundColor: colors.accent + '18', borderColor: colors.accent + '44' }]}
+              >
+                <Ionicons name="flask-outline" size={15} color={colors.accent} />
+                <Text style={{ color: colors.accent, fontSize: 14, fontWeight: '600' }}>
+                  View Mock Data
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+          ) : showGenericError ? (
+            <View style={styles.centered}>
+              <Ionicons name="alert-circle-outline" size={44} color={colors.error} />
+              <Text style={[styles.emptyTitle, { color: colors.text }]}>Could not load options</Text>
+              <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+                Check the ticker and try again
+              </Text>
+            </View>
+
+          ) : rows.length === 0 ? (
+            <View style={styles.centered}>
+              <Text style={{ color: colors.textSecondary, fontSize: 15 }}>No contracts found</Text>
+              <Text style={{ color: colors.textTertiary, fontSize: 13, marginTop: 4 }}>
+                Try selecting a different expiration or date range
+              </Text>
+            </View>
+
+          ) : (
+            <FlatList
+              data={rows}
+              renderItem={renderRow}
+              keyExtractor={(item, i) => item.type === 'separator' ? `sep-${i}` : item.data.symbol}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingBottom: 200 }}
+              initialNumToRender={30}
+              maxToRenderPerBatch={20}
+              windowSize={10}
+            />
+          )}
+        </>
       )}
 
       {/* ── Detail modal ── */}
       {detailContract && (
         <OptionsContractDetailModal
           visible
-          onClose={() => setDetailContract(null)}
-          contract={asOpportunity(detailContract)}
-          ticker={activeTicker}
-          currentPrice={currentPrice}
-          isTracked={false}
-          onTrackContract={() => {}}
-          isTracking={false}
+          onClose={closeDetail}
+          contract={
+            // For watchlist-opened contracts, try the snapshot opportunity
+            detailTrackedId && !trackedContracts?.find(t => t.id === detailTrackedId)
+              ? asOpportunity(detailContract)
+              : (() => {
+                  const tracked = trackedContracts?.find(t => t.id === detailTrackedId);
+                  return tracked && !activeData
+                    ? trackedToOpportunity(tracked)
+                    : asOpportunity(detailContract);
+                })()
+          }
+          ticker={detailContract.ticker || activeTicker}
+          currentPrice={detailCurrentPrice}
+          isTracked={detailTrackedId !== null}
+          onTrackContract={() => handleTrack(detailContract)}
+          onUntrackContract={() => detailTrackedId && handleUntrack(detailTrackedId)}
+          isTracking={trackContract.isPending}
+          isUntracking={untrackContract.isPending}
         />
       )}
     </SafeAreaView>
@@ -634,6 +832,22 @@ const OptionsScreen = () => {
 export default OptionsScreen;
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
+
+const viewToggle = StyleSheet.create({
+  container: {
+    flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  tab: {
+    flex: 1, alignItems: 'center', paddingVertical: 12, position: 'relative',
+  },
+  underline: {
+    position: 'absolute', bottom: 0, left: '20%', right: '20%', height: 2, borderRadius: 2,
+  },
+  badge: {
+    minWidth: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4,
+  },
+  badgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+});
 
 const styles = StyleSheet.create({
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
@@ -661,8 +875,9 @@ const styles = StyleSheet.create({
   colHead: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
   contractRow: {
     flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth, alignItems: 'center',
   },
+  trackedDot: { width: 5, height: 5, borderRadius: 2.5, marginRight: 3 },
   cell: { fontSize: 13, textAlign: 'left' },
   separatorRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
