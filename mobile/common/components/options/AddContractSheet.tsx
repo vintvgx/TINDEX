@@ -52,7 +52,18 @@ export const AddContractSheet: React.FC<Props> = ({ visible, onClose, initialTic
 
   const t = ticker.trim().toUpperCase();
   const strikeNum = parseFloat(strike);
-  const isExpiryValid = /^\d{4}-\d{2}-\d{2}$/.test(expiry);
+  const isValidExpiryDate = (value: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const [y, m, d] = value.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return (
+      dt.getUTCFullYear() === y &&
+      dt.getUTCMonth() === m - 1 &&
+      dt.getUTCDate() === d
+    );
+  };
+
+  const isExpiryValid = isValidExpiryDate(expiry);
   const isStrikeValid = !isNaN(strikeNum) && strikeNum > 0;
   const canPreview = t.length >= 1 && isExpiryValid && isStrikeValid;
   const symbol = canPreview ? buildOCCSymbol(t, expiry, type, strikeNum) : '';
