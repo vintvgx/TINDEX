@@ -43,7 +43,7 @@ const MainContent: React.FC<MainContentType> = ({
     <ScrollView
       style={{ flex: 1 }}
       showsVerticalScrollIndicator={false}
-      contentContainerStyle={{ paddingBottom: 110, paddingTop: 4 }}
+      contentContainerStyle={{ paddingBottom: 170, paddingTop: 4 }}
       onScroll={handleScroll}
       scrollEventThrottle={16}
       refreshControl={

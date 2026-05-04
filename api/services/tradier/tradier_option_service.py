@@ -87,7 +87,7 @@ class TradierOptionService:
     async def get_options(
         self,
         ticker: str,
-        limit: int = 25,
+        limit: int = 100,
         strike_price_gte: Optional[float] = None,
         strike_price_lte: Optional[float] = None,
         expiration_date_gte: Optional[str] = None,
@@ -139,24 +139,24 @@ class TradierOptionService:
                     logger.error(f"Could not retrieve current price for: {ticker}")
                     raise ValueError(f"Could not retrieve current price for: {ticker}")
             
-            # Calculate default strike price range if not provided
+            # Strike range — when not provided, return all strikes (no filter)
             if strike_price_gte is None:
-                strike_price_gte = max(0.01, current_price - 10.0)
+                strike_price_gte = 0.01
             if strike_price_lte is None:
-                strike_price_lte = current_price + 10.0
-            
-            # Calculate default expiration dates if not provided
+                strike_price_lte = float('inf')
+
+            # Expiration date range — default to today through the next 30 days
             today = datetime.now().date()
-            
+
             if expiration_date_gte:
                 exp_gte_date = datetime.strptime(expiration_date_gte, '%Y-%m-%d').date()
             else:
-                exp_gte_date = today + timedelta(days=7)
-            
+                exp_gte_date = today
+
             if expiration_date_lte:
                 exp_lte_date = datetime.strptime(expiration_date_lte, '%Y-%m-%d').date()
             else:
-                exp_lte_date = today + timedelta(days=14)
+                exp_lte_date = today + timedelta(days=30)
             
             logger.info(
                 f"Fetching options for {ticker} using Tradier SDK with params: "

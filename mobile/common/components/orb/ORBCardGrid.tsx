@@ -98,7 +98,7 @@ export const ORBCardGrid: React.FC<ORBCardGridProps> = ({
           fullWidth={fullWidth}
         />
       )}
-      contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
+      contentContainerStyle={{ padding: 16, paddingBottom: 170 }}
       columnWrapperStyle={numColumns === 2 ? { justifyContent: 'space-between' } : undefined}
       showsVerticalScrollIndicator={false}
       ListFooterComponent={renderFooter}
