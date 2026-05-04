@@ -25,6 +25,10 @@ from services.utils.blog_generation_service import get_blog_service
 from services.tindex.orb_service import OrbService
 from services.alpaca.alpaca_streaming_service import AlpacaStreamingService
 from services.tradier.tradier_streaming_service import TradierStreamingService
+from services.alpaca.options_contract_monitor import (
+    get_options_contract_monitor,
+    reset_options_contract_monitor,
+)
 from services.portfolio.portfolio_service import (
     batch_fetch_current_prices,
     calculate_position_pnl,
@@ -34,11 +38,15 @@ from services.portfolio.portfolio_service import (
 ORB_SERVICE = None
 ORB_TASK = None
 
+OPTIONS_MONITOR_SERVICE = None
+OPTIONS_MONITOR_TASK = None
+
 """
-Thread safe locking used when initializing global variables to 
+Thread safe locking used when initializing global variables to
 ensure multiple instances are not made
 """
 orb_lock = threading.Lock()
+options_monitor_lock = threading.Lock()
 
 
 # Logger for the backend service
@@ -1092,6 +1100,90 @@ def get_orb_status():
         
         return jsonify({"running": False})
 
+
+# ── Options Contract Price Monitor ───────────────────────────────────────────
+
+@app.route("/contracts/monitor/start", methods=["POST"])
+def start_contracts_monitor():
+    """
+    Start the options contract price-monitoring service.
+
+    Polls Alpaca every 5 minutes during market hours (M–F 9:30–16:00 ET).
+    Contract list is reloaded from Supabase each poll cycle, so newly
+    tracked or removed contracts are picked up automatically.
+
+    Query Parameters:
+        debug (optional): 'true' to run one immediate poll even outside
+                          market hours (for testing).
+    """
+    global OPTIONS_MONITOR_SERVICE, OPTIONS_MONITOR_TASK
+
+    debug_mode = request.args.get("debug", "").lower() == "true"
+    try:
+        request_body = request.get_json(silent=True) or {}
+        debug_mode = debug_mode or request_body.get("debug", False)
+    except Exception:
+        pass
+
+    with options_monitor_lock:
+        if OPTIONS_MONITOR_SERVICE and OPTIONS_MONITOR_SERVICE.is_running:
+            return jsonify({"message": "Options contract monitor already running"})
+
+    OPTIONS_MONITOR_SERVICE = get_options_contract_monitor()
+
+    if debug_mode:
+        # In debug mode override is_market_hours so the first poll runs immediately
+        OPTIONS_MONITOR_SERVICE._is_market_hours = lambda: True
+
+    def run_monitor():
+        if OPTIONS_MONITOR_SERVICE is not None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(OPTIONS_MONITOR_SERVICE.start())
+
+    OPTIONS_MONITOR_TASK = threading.Thread(target=run_monitor, daemon=True)
+    OPTIONS_MONITOR_TASK.start()
+
+    message = "Options contract monitor started"
+    if debug_mode:
+        message += " (DEBUG MODE: market hours check bypassed)"
+
+    return jsonify({"success": True, "message": message, "debug_mode": debug_mode})
+
+
+@app.route("/contracts/monitor/stop", methods=["POST"])
+def stop_contracts_monitor():
+    """Stop the options contract price-monitoring service."""
+    global OPTIONS_MONITOR_SERVICE
+
+    with options_monitor_lock:
+        if OPTIONS_MONITOR_SERVICE and OPTIONS_MONITOR_SERVICE.is_running:
+            asyncio.run(OPTIONS_MONITOR_SERVICE.stop())
+            reset_options_contract_monitor()
+            OPTIONS_MONITOR_SERVICE = None
+            return jsonify({"success": True, "message": "Options contract monitor stopped"})
+
+    return jsonify({"message": "Options contract monitor not running"})
+
+
+@app.route("/contracts/monitor/status", methods=["GET"])
+def get_contracts_monitor_status():
+    """Return current status of the options contract price-monitoring service."""
+    with options_monitor_lock:
+        if (
+            OPTIONS_MONITOR_SERVICE
+            and hasattr(OPTIONS_MONITOR_SERVICE, "is_running")
+            and OPTIONS_MONITOR_SERVICE.is_running
+        ):
+            return jsonify({
+                "running": True,
+                "poll_interval_seconds": 300,
+                "market_hours_only": True,
+            })
+
+    return jsonify({"running": False})
+
+
 @app.route("/options/<ticker>", methods=["GET"])
 def get_options(ticker: str):
     """
@@ -1269,19 +1361,58 @@ def track_option():
         service.verify_user(user_id=user_id)
         
         # Prepare contract data
+        contract_symbol = data.get('contractSymbol', '')
+        tracking_snapshot = data.get('trackingSnapshot', {})
+
+        # Auto-fetch live snapshot from Alpaca when none was provided (e.g. manual adds)
+        if not tracking_snapshot and contract_symbol:
+            try:
+                from services.alpaca.alpaca_option_service import get_alpaca_option_service
+                alpaca_svc = get_alpaca_option_service()
+                raw = run_async(alpaca_svc.get_contract_snapshot(contract_symbol))
+                if raw:
+                    bid = raw.get('bid') or 0.0
+                    ask = raw.get('ask') or 0.0
+                    tracking_snapshot = {
+                        'ask': ask,
+                        'bid': bid,
+                        'contractSymbol': contract_symbol,
+                        'delta': raw.get('delta'),
+                        'dte': 0,
+                        'expirationDate': raw.get('expiration', data.get('expirationDate', '')),
+                        'extrinsicValue': 0,
+                        'gamma': raw.get('gamma'),
+                        'impliedVolatility': raw.get('implied_volatility') or 0,
+                        'intrinsicValue': 0,
+                        'lastPrice': raw.get('last_price'),
+                        'mark': (bid + ask) / 2 if (bid > 0 or ask > 0) else 0,
+                        'moneyness': 0,
+                        'openInterest': raw.get('open_interest') or 0,
+                        'optionType': raw.get('option_type', data.get('optionType', '').upper()),
+                        'reasons': '',
+                        'signal': 'CONSIDER',
+                        'spreadPct': ((ask - bid) / ask * 100) if ask > 0 else 0,
+                        'theta': raw.get('theta'),
+                        'total_score': 0,
+                        'vega': raw.get('vega'),
+                        'volume': raw.get('volume') or 0,
+                    }
+            except Exception as snap_err:
+                logger.warning(f"Could not auto-fetch snapshot for {contract_symbol}: {snap_err}")
+
         contract_data = {
             'ticker': ticker,
-            'contract_symbol': data.get('contractSymbol', ''),
+            'contract_symbol': contract_symbol,
             'option_type': data.get('optionType', '').upper(),
             'strike': data.get('strike'),
             'expiration_date': data.get('expirationDate'),
-            'tracking_snapshot': data.get('trackingSnapshot', {}),
+            'tracking_snapshot': tracking_snapshot,
             'tracked_from_source': data.get('trackedFromSource', 'manual'),
             'orb_breakout_id': data.get('orbBreakoutId'),
             'initial_analysis_score': data.get('initialAnalysisScore'),
             'tracking_reason': data.get('trackingReason'),
         }
-        
+
         # Track contract
         result = service.track_option_contract(user_id, contract_data)
         

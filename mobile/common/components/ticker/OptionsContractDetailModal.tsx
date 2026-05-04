@@ -135,7 +135,10 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
           {/* ── Pricing ── */}
           <Text style={[s.sectionTitle, { color: colors.text }]}>Pricing</Text>
           <View style={[s.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Row label="Mark" value={fc(contract.mark)} colors={colors} />
+            {contract.lastPrice != null && (
+              <Row label="Last Price" value={fc(contract.lastPrice)} colors={colors} />
+            )}
+            <Row label="Midpoint" value={fc(contract.mark)} colors={colors} />
             <Row label="Bid" value={fc(contract.bid)} colors={colors} />
             <Row label="Ask" value={fc(contract.ask)} colors={colors} />
             <View style={[r.row, { borderBottomWidth: 0 }]}>

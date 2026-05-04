@@ -50,12 +50,10 @@ export function useToggleORBFollow(ticker?: string) {
   return useMutation({
     mutationFn: async (orbEnabled: boolean) => {
       if (!user) throw new Error("User not authenticated");
-
       if (!ticker) throw new Error("Ticker not set");
 
       const normalizedTicker = ticker.toUpperCase();
 
-      // First, check if a follow record exists
       const { data: existingFollow } = await supabase
         .from("user_stock_follows")
         .select("*")
@@ -64,10 +62,7 @@ export function useToggleORBFollow(ticker?: string) {
         .single();
 
       if (existingFollow) {
-        console.debug(
-          `User ORB status for ${ticker} updated to: ${orbEnabled}`,
-        );
-        // Update existing record
+        console.debug(`User ORB status for ${ticker} updated to: ${orbEnabled}`);
         const { data, error } = await supabase
           .from("user_stock_follows")
           .update({
@@ -80,17 +75,33 @@ export function useToggleORBFollow(ticker?: string) {
           .single();
 
         if (error) throw error;
+
+        // When removing, clean up today's monitoring row so the card drops
+        // from the ORB grid immediately without waiting for the service.
+        if (!orbEnabled) {
+          const tradeDate = new Date().toISOString().split("T")[0];
+          const { error: deleteError } = await supabase
+            .from("orb_monitoring_state")
+            .delete()
+            .eq("ticker", normalizedTicker)
+            .eq("trade_date", tradeDate);
+          if (deleteError) {
+            console.error("Error removing ticker from orb_monitoring_state:", deleteError);
+          }
+        }
+
         return data;
       } else {
-        // Create new record
-        console.debug(`User following ORB of ${ticker}`);
+        // Only insert if actually following — no point inserting orb_enabled=false
+        if (!orbEnabled) return null;
 
+        console.debug(`User following ORB of ${ticker}`);
         const { data, error } = await supabase
           .from("user_stock_follows")
           .insert({
             user_id: user.id,
             ticker: normalizedTicker,
-            orb_enabled: orbEnabled,
+            orb_enabled: true,
             notification_enabled: true,
           })
           .select()
@@ -101,13 +112,10 @@ export function useToggleORBFollow(ticker?: string) {
       }
     },
     onSuccess: () => {
-      // Invalidate related queries
-      queryClient.invalidateQueries({
-        queryKey: ["followTickerORB", ticker, user?.id],
-      });
-      queryClient.invalidateQueries({
-        queryKey: ["userORBFollows", user?.id],
-      });
+      queryClient.invalidateQueries({ queryKey: ["followTickerORB", ticker, user?.id] });
+      queryClient.invalidateQueries({ queryKey: ["userORBFollows", user?.id] });
+      // Refresh the ORB grid so removals drop instantly and adds are reflected
+      queryClient.invalidateQueries({ queryKey: ["orb-monitoring-state"] });
     },
   });
 }

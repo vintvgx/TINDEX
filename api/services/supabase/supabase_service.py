@@ -916,6 +916,14 @@ class SupabaseService:
                 "User %s tracking option contract %s", user_id, contract_data.get("contract_symbol", "unknown")
             )
             
+            # Capture price at the moment of tracking so the monitor can
+            # compute percent-change without a separate lookup.
+            # Prefer an explicit tracked_entry_price; fall back to last_price.
+            entry_price = (
+                contract_data.get('tracked_entry_price')
+                or contract_data.get('last_price')
+            )
+
             # Prepare data for database
             data_dict = {
                 'user_id': user_id,
@@ -926,6 +934,7 @@ class SupabaseService:
                 'expiration_date': contract_data.get('expiration_date'),
                 'tracking_snapshot': contract_data.get('tracking_snapshot', {}),
                 'status': 'tracking',
+                'tracked_entry_price': entry_price,
                 'tracked_from_source': contract_data.get('tracked_from_source', 'manual'),
                 'orb_breakout_id': contract_data.get('orb_breakout_id'),
                 'initial_analysis_score': contract_data.get('initial_analysis_score'),

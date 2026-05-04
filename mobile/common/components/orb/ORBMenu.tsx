@@ -15,6 +15,7 @@ interface ORBMenuProps {
   onClose: () => void;
   gridLayout: ORBGridLayout;
   onGridLayoutChange: (layout: ORBGridLayout) => void;
+  onAddTicker: () => void;
   onViewWatchlists: () => void;
   onViewLogs: () => void;
   onToggleMockData: () => void;
@@ -30,6 +31,7 @@ export const ORBMenu: React.FC<ORBMenuProps> = ({
   onClose,
   gridLayout,
   onGridLayoutChange,
+  onAddTicker,
   onViewWatchlists,
   onViewLogs,
   onToggleMockData,
@@ -40,6 +42,16 @@ export const ORBMenu: React.FC<ORBMenuProps> = ({
   isServiceRunning,
 }) => {
   const menuItems = [
+    {
+      id: 'addTicker',
+      label: 'Add Ticker to ORB',
+      icon: 'add-circle-outline' as const,
+      onPress: () => {
+        onAddTicker();
+        onClose();
+      },
+      showDivider: true,
+    },
     {
       id: 'watchlists',
       label: 'View Watchlists',

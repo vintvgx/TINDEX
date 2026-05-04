@@ -134,6 +134,7 @@ export interface OptionsOpportunity {
   bid: number;
   contractSymbol: string;
   delta: number | null;
+  lastPrice?: number | null;
   dte: number;
   expirationDate: string;
   extrinsicValue: number;

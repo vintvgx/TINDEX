@@ -291,6 +291,7 @@ const OptionsScreen = () => {
     gamma: c.gamma,
     impliedVolatility: c.implied_volatility ?? 0,
     intrinsicValue: 0,
+    lastPrice: c.last_price ?? null,
     mark: (c.bid + c.ask) / 2,
     moneyness: 0,
     openInterest: c.open_interest,
@@ -308,24 +309,27 @@ const OptionsScreen = () => {
   // Convert a tracked contract's snapshot into an OptionsOpportunity for the detail modal
   const trackedToOpportunity = useCallback((tc: TrackedOptionContract) => {
     const snap = (tc.tracking_snapshot ?? {}) as Record<string, any>;
+    const bid = snap.bid ?? 0;
+    const ask = snap.ask ?? 0;
     return {
-      ask: snap.ask ?? 0,
-      bid: snap.bid ?? 0,
+      ask,
+      bid,
       contractSymbol: tc.contract_symbol,
       delta: snap.delta ?? null,
       dte: snap.dte ?? 0,
       expirationDate: tc.expiration_date,
       extrinsicValue: snap.extrinsicValue ?? 0,
       gamma: snap.gamma ?? null,
-      impliedVolatility: snap.impliedVolatility ?? 0,
+      impliedVolatility: snap.impliedVolatility ?? snap.implied_volatility ?? 0,
       intrinsicValue: snap.intrinsicValue ?? 0,
-      mark: snap.mark ?? 0,
+      lastPrice: snap.lastPrice ?? snap.last_price ?? null,
+      mark: snap.mark ?? (bid > 0 || ask > 0 ? (bid + ask) / 2 : 0),
       moneyness: snap.moneyness ?? 0,
-      openInterest: snap.openInterest ?? 0,
+      openInterest: snap.openInterest ?? snap.open_interest ?? 0,
       optionType: tc.option_type,
       reasons: snap.reasons ?? '',
       signal: (snap.signal ?? 'CONSIDER') as 'BUY' | 'CONSIDER' | 'AVOID',
-      spreadPct: snap.spreadPct ?? 0,
+      spreadPct: snap.spreadPct ?? (ask > 0 ? ((ask - bid) / ask) * 100 : 0),
       strike: tc.strike,
       theta: snap.theta ?? null,
       total_score: snap.total_score ?? 0,

@@ -201,6 +201,71 @@ class AlpacaOptionService:
             exp_lte=exp_lte,
         )
 
+    async def get_contract_prices_batch(
+        self, symbols: List[str]
+    ) -> Dict[str, Optional[float]]:
+        """
+        Fetch current prices for a list of OCC symbols with minimal API calls.
+
+        Groups symbols by underlying ticker so one OptionChainRequest is made
+        per ticker rather than one per contract.
+
+        Price priority: last trade price → mid of bid/ask → None.
+
+        Returns:
+            {symbol: price_float_or_None}
+        """
+        from collections import defaultdict
+
+        ticker_to_symbols: Dict[str, List[str]] = defaultdict(list)
+        for symbol in symbols:
+            ticker = ""
+            for ch in symbol:
+                if ch.isalpha():
+                    ticker += ch
+                else:
+                    break
+            if ticker:
+                ticker_to_symbols[ticker].append(symbol)
+
+        prices: Dict[str, Optional[float]] = {s: None for s in symbols}
+        loop = asyncio.get_event_loop()
+
+        for ticker, ticker_symbols in ticker_to_symbols.items():
+            try:
+                def fetch_chain(t=ticker):
+                    req = OptionChainRequest(underlying_symbol=t)
+                    return self.options_client.get_option_chain(req)
+
+                chain = await loop.run_in_executor(None, fetch_chain)
+
+                for symbol in ticker_symbols:
+                    snapshot = chain.get(symbol)
+                    if snapshot is None:
+                        continue
+
+                    # Last trade is the most reliable price
+                    last_trade = getattr(snapshot, "latest_trade", None)
+                    price = _safe_float(getattr(last_trade, "price", None)) if last_trade else None
+
+                    # Fall back to mid of bid/ask
+                    if price is None:
+                        latest_quote = getattr(snapshot, "latest_quote", None)
+                        if latest_quote:
+                            bid = _safe_float(getattr(latest_quote, "bid_price", None)) or 0.0
+                            ask = _safe_float(getattr(latest_quote, "ask_price", None)) or 0.0
+                            if bid > 0 and ask > 0:
+                                price = (bid + ask) / 2.0
+
+                    prices[symbol] = price
+
+            except Exception as e:
+                logger.error(f"Error fetching batch chain for {ticker}: {e}")
+
+        fetched = sum(1 for v in prices.values() if v is not None)
+        logger.info(f"Batch price fetch: {fetched}/{len(symbols)} prices retrieved")
+        return prices
+
     async def get_contract_snapshot(self, contract_symbol: str) -> Optional[Dict]:
         """
         Fetch a single contract snapshot by its OCC symbol.

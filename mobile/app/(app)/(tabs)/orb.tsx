@@ -8,6 +8,7 @@ import { ORBCardGrid } from '@/common/components/orb/ORBCardGrid';
 import { ORBDetailModal } from '@/common/components/orb/ORBDetailModal';
 import { WatchlistsModal } from '@/common/components/watchlist/WatchlistsModal';
 import { ORBMenu, type ORBGridLayout } from '@/common/components/orb/ORBMenu';
+import { AddORBTickerSheet } from '@/common/components/orb/AddORBTickerSheet';
 import { LogViewerModal } from '@/common/components/orb/LogViewerModal';
 import useBaseNavigation from '@/hooks/navigation/useBaseNavigation';
 import { useORBStatus } from '@/hooks/queries/orb/useORBStatus';
@@ -21,6 +22,7 @@ const ORBScreen = () => {
   const [watchlistsModalVisible, setWatchlistsModalVisible] = useState(false);
   const [logViewerVisible, setLogViewerVisible] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
+  const [addTickerSheetVisible, setAddTickerSheetVisible] = useState(false);
   const [useMockData, setUseMockData] = useState(false);
   const [useCalculationMockData, setUseCalculationMockData] = useState(false);
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
@@ -168,6 +170,7 @@ const ORBScreen = () => {
         onClose={() => setMenuVisible(false)}
         gridLayout={gridLayout}
         onGridLayoutChange={handleGridLayoutChange}
+        onAddTicker={() => setAddTickerSheetVisible(true)}
         onViewWatchlists={() => setWatchlistsModalVisible(true)}
         onViewLogs={() => setLogViewerVisible(true)}
         onToggleMockData={handleToggleMockData}
@@ -176,6 +179,11 @@ const ORBScreen = () => {
         isMockDataEnabled={useMockData}
         isCalculationMockDataEnabled={useCalculationMockData}
         isServiceRunning={isORBRunning}
+      />
+
+      <AddORBTickerSheet
+        visible={addTickerSheetVisible}
+        onClose={() => setAddTickerSheetVisible(false)}
       />
 
       <WatchlistsModal
