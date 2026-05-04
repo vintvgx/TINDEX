@@ -370,7 +370,7 @@ const OptionsScreen = () => {
   );
 
   const handleTrack = useCallback((c: OptionsContract) => {
-    if (!user?.id) return;
+    if (!user?.id || detailTrackedId) return;
     trackContract.mutate({
       userId: user.id,
       ticker: activeTicker || c.ticker,
@@ -380,8 +380,10 @@ const OptionsScreen = () => {
       expirationDate: c.expiration,
       trackingSnapshot: asOpportunity(c),
       trackedFromSource: 'manual',
+    }, {
+      onSuccess: tracked => setDetailTrackedId(tracked.id),
     });
-  }, [user, activeTicker, trackContract, asOpportunity]);
+  }, [user, activeTicker, trackContract, asOpportunity, detailTrackedId]);
 
   const handleUntrack = useCallback((id: string) => {
     untrackContract.mutate(id, {
