@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   SafeAreaView,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
@@ -190,6 +191,59 @@ const buildRows = (contracts: OptionsContract[], price: number, side: OptionSide
     ...sorted.filter(c => c.strike > price).map(c => ({ type: 'contract' as const, data: c, isITM: true })),
   ];
 };
+
+// ─── Chain loading skeleton ───────────────────────────────────────────────────
+
+const BOX_H = 12;
+const BOX_R = 4;
+
+const ChainSkeleton: React.FC<{ colors: ReturnType<typeof useThemeColors> }> = ({ colors }) => {
+  const pulse = useRef(new Animated.Value(0.3)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.9, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.3, duration: 700, useNativeDriver: true }),
+      ])
+    ).start();
+  }, [pulse]);
+
+  const bg = colors.border;
+
+  return (
+    <Animated.View style={{ opacity: pulse }}>
+      {Array.from({ length: 16 }).map((_, i) => {
+        const isITM = i >= 6 && i <= 9;
+        return (
+          <View key={i} style={[skeletonStyles.row, {
+            backgroundColor: isITM ? colors.surface : 'transparent',
+            borderBottomColor: colors.separator,
+          }]}>
+            <View style={{ width: 8 }} />
+            <View style={{ width: COL_WIDTHS.strike, height: BOX_H, borderRadius: BOX_R, backgroundColor: bg }} />
+            <View style={{ width: COL_WIDTHS.bid,    height: BOX_H, borderRadius: BOX_R, backgroundColor: bg }} />
+            <View style={{ width: COL_WIDTHS.ask,    height: BOX_H, borderRadius: BOX_R, backgroundColor: bg }} />
+            <View style={{ width: COL_WIDTHS.last,   height: BOX_H, borderRadius: BOX_R, backgroundColor: bg }} />
+            <View style={{ width: COL_WIDTHS.oi,     height: BOX_H, borderRadius: BOX_R, backgroundColor: bg }} />
+            <View style={{ flex: 1,                  height: BOX_H, borderRadius: BOX_R, backgroundColor: bg }} />
+          </View>
+        );
+      })}
+    </Animated.View>
+  );
+};
+
+const skeletonStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    gap: 4,
+  },
+});
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
@@ -736,12 +790,7 @@ const OptionsScreen = () => {
             </View>
 
           ) : !useMockData && isLoading ? (
-            <View style={styles.centered}>
-              <ActivityIndicator size="large" color={colors.accent} />
-              <Text style={{ color: colors.textSecondary, fontSize: 14, marginTop: 12 }}>
-                Loading {activeTicker} options...
-              </Text>
-            </View>
+            <ChainSkeleton colors={colors} />
 
           ) : showOutsideHours ? (
             <View style={styles.centered}>

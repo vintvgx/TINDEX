@@ -1366,6 +1366,7 @@ def track_option():
 
         # Auto-fetch live snapshot from Alpaca when none was provided (e.g. manual adds)
         if not tracking_snapshot and contract_symbol:
+            logger.info(f"[track-option] No snapshot provided for {contract_symbol} — attempting Alpaca auto-fetch")
             try:
                 from services.alpaca.alpaca_option_service import get_alpaca_option_service
                 alpaca_svc = get_alpaca_option_service()
@@ -1373,6 +1374,12 @@ def track_option():
                 if raw:
                     bid = raw.get('bid') or 0.0
                     ask = raw.get('ask') or 0.0
+                    has_greeks = any(raw.get(k) is not None for k in ('delta', 'gamma', 'theta', 'vega'))
+                    logger.info(
+                        f"[track-option] Alpaca snapshot OK for {contract_symbol}: "
+                        f"bid={bid}, ask={ask}, last={raw.get('last_price')}, "
+                        f"iv={raw.get('implied_volatility')}, greeks={'yes' if has_greeks else 'no (free tier?)'}"
+                    )
                     tracking_snapshot = {
                         'ask': ask,
                         'bid': bid,
@@ -1397,8 +1404,15 @@ def track_option():
                         'vega': raw.get('vega'),
                         'volume': raw.get('volume') or 0,
                     }
+                else:
+                    logger.warning(
+                        f"[track-option] Alpaca returned no snapshot for {contract_symbol} "
+                        f"(contract may be expired, invalid OCC symbol, or outside market hours)"
+                    )
             except Exception as snap_err:
-                logger.warning(f"Could not auto-fetch snapshot for {contract_symbol}: {snap_err}")
+                logger.warning(f"[track-option] Auto-fetch failed for {contract_symbol}: {snap_err}", exc_info=True)
+        elif tracking_snapshot:
+            logger.debug(f"[track-option] Client-provided snapshot for {contract_symbol}, skipping auto-fetch")
 
         contract_data = {
             'ticker': ticker,
