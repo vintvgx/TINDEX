@@ -25,6 +25,10 @@ from services.utils.blog_generation_service import get_blog_service
 from services.tindex.orb_service import OrbService
 from services.alpaca.alpaca_streaming_service import AlpacaStreamingService
 from services.tradier.tradier_streaming_service import TradierStreamingService
+from services.alpaca.options_contract_monitor import (
+    get_options_contract_monitor,
+    reset_options_contract_monitor,
+)
 from services.portfolio.portfolio_service import (
     batch_fetch_current_prices,
     calculate_position_pnl,
@@ -34,11 +38,15 @@ from services.portfolio.portfolio_service import (
 ORB_SERVICE = None
 ORB_TASK = None
 
+OPTIONS_MONITOR_SERVICE = None
+OPTIONS_MONITOR_TASK = None
+
 """
-Thread safe locking used when initializing global variables to 
+Thread safe locking used when initializing global variables to
 ensure multiple instances are not made
 """
 orb_lock = threading.Lock()
+options_monitor_lock = threading.Lock()
 
 
 # Logger for the backend service
@@ -1092,6 +1100,288 @@ def get_orb_status():
         
         return jsonify({"running": False})
 
+
+# ── Options Contract Price Monitor ───────────────────────────────────────────
+
+@app.route("/contracts/monitor/start", methods=["POST"])
+def start_contracts_monitor():
+    """
+    Start the options contract price-monitoring service.
+
+    Polls Alpaca every 5 minutes during market hours (M–F 9:30–16:00 ET).
+    Contract list is reloaded from Supabase each poll cycle, so newly
+    tracked or removed contracts are picked up automatically.
+
+    Query Parameters:
+        debug (optional): 'true' to run one immediate poll even outside
+                          market hours (for testing).
+    """
+    global OPTIONS_MONITOR_SERVICE, OPTIONS_MONITOR_TASK
+
+    debug_mode = request.args.get("debug", "").lower() == "true"
+    try:
+        request_body = request.get_json(silent=True) or {}
+        debug_mode = debug_mode or request_body.get("debug", False)
+    except Exception:
+        pass
+
+    with options_monitor_lock:
+        if OPTIONS_MONITOR_SERVICE and OPTIONS_MONITOR_SERVICE.is_running:
+            return jsonify({"message": "Options contract monitor already running"})
+
+    OPTIONS_MONITOR_SERVICE = get_options_contract_monitor()
+
+    if debug_mode:
+        # In debug mode override is_market_hours so the first poll runs immediately
+        OPTIONS_MONITOR_SERVICE._is_market_hours = lambda: True
+
+    def run_monitor():
+        if OPTIONS_MONITOR_SERVICE is not None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(OPTIONS_MONITOR_SERVICE.start())
+
+    OPTIONS_MONITOR_TASK = threading.Thread(target=run_monitor, daemon=True)
+    OPTIONS_MONITOR_TASK.start()
+
+    message = "Options contract monitor started"
+    if debug_mode:
+        message += " (DEBUG MODE: market hours check bypassed)"
+
+    return jsonify({"success": True, "message": message, "debug_mode": debug_mode})
+
+
+@app.route("/contracts/monitor/stop", methods=["POST"])
+def stop_contracts_monitor():
+    """Stop the options contract price-monitoring service."""
+    global OPTIONS_MONITOR_SERVICE
+
+    with options_monitor_lock:
+        if OPTIONS_MONITOR_SERVICE and OPTIONS_MONITOR_SERVICE.is_running:
+            asyncio.run(OPTIONS_MONITOR_SERVICE.stop())
+            reset_options_contract_monitor()
+            OPTIONS_MONITOR_SERVICE = None
+            return jsonify({"success": True, "message": "Options contract monitor stopped"})
+
+    return jsonify({"message": "Options contract monitor not running"})
+
+
+@app.route("/contracts/monitor/status", methods=["GET"])
+def get_contracts_monitor_status():
+    """Return current status of the options contract price-monitoring service."""
+    with options_monitor_lock:
+        if (
+            OPTIONS_MONITOR_SERVICE
+            and hasattr(OPTIONS_MONITOR_SERVICE, "is_running")
+            and OPTIONS_MONITOR_SERVICE.is_running
+        ):
+            return jsonify({
+                "running": True,
+                "poll_interval_seconds": 300,
+                "market_hours_only": True,
+            })
+
+    return jsonify({"running": False})
+
+
+# ── Unified service management ─────────────────────────────────────────────────
+#
+# SERVICE_REGISTRY maps service names → (start_fn, stop_fn, status_fn).
+# To expose a new background service via /services/*, add one entry here.
+
+def _svc_start_orb(debug: bool = False, provider: str = 'alpaca', **_) -> dict:
+    global ORB_SERVICE, ORB_TASK
+    with orb_lock:
+        if ORB_SERVICE and ORB_SERVICE.is_running:
+            return {"success": True, "message": "ORB already running", "was_running": True}
+    svc = get_orb_service(provider=provider)
+    ORB_SERVICE = svc
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(svc.start(debug_mode=debug))
+    ORB_TASK = threading.Thread(target=_run, daemon=True)
+    ORB_TASK.start()
+    msg = f"ORB monitoring started ({provider.upper()})"
+    if debug:
+        msg += " [debug]"
+    return {"success": True, "message": msg, "was_running": False}
+
+
+def _svc_stop_orb(**_) -> dict:
+    global ORB_SERVICE
+    with orb_lock:
+        if ORB_SERVICE and ORB_SERVICE.is_running:
+            asyncio.run(ORB_SERVICE.stop())
+            ORB_SERVICE = None
+            return {"success": True, "message": "ORB monitoring stopped"}
+    return {"success": True, "message": "ORB not running"}
+
+
+def _svc_status_orb() -> dict:
+    with orb_lock:
+        if ORB_SERVICE and getattr(ORB_SERVICE, 'is_running', False):
+            return {
+                "running": True,
+                "calculation_phase": getattr(ORB_SERVICE, 'calculation_phase', False),
+                "active_tickers": list(getattr(ORB_SERVICE, 'active_tickers', set())),
+                "orb_ranges_count": len(getattr(ORB_SERVICE, 'orb_ranges', {})),
+            }
+    return {"running": False}
+
+
+def _svc_start_contracts(debug: bool = False, **_) -> dict:
+    global OPTIONS_MONITOR_SERVICE, OPTIONS_MONITOR_TASK
+    with options_monitor_lock:
+        if OPTIONS_MONITOR_SERVICE and OPTIONS_MONITOR_SERVICE.is_running:
+            return {"success": True, "message": "Contracts monitor already running", "was_running": True}
+    svc = get_options_contract_monitor()
+    OPTIONS_MONITOR_SERVICE = svc
+    if debug:
+        svc._is_market_hours = lambda: True
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(svc.start())
+    OPTIONS_MONITOR_TASK = threading.Thread(target=_run, daemon=True)
+    OPTIONS_MONITOR_TASK.start()
+    msg = "Contracts monitor started"
+    if debug:
+        msg += " [debug]"
+    return {"success": True, "message": msg, "was_running": False}
+
+
+def _svc_stop_contracts(**_) -> dict:
+    global OPTIONS_MONITOR_SERVICE
+    with options_monitor_lock:
+        if OPTIONS_MONITOR_SERVICE and OPTIONS_MONITOR_SERVICE.is_running:
+            asyncio.run(OPTIONS_MONITOR_SERVICE.stop())
+            reset_options_contract_monitor()
+            OPTIONS_MONITOR_SERVICE = None
+            return {"success": True, "message": "Contracts monitor stopped"}
+    return {"success": True, "message": "Contracts monitor not running"}
+
+
+def _svc_status_contracts() -> dict:
+    with options_monitor_lock:
+        if OPTIONS_MONITOR_SERVICE and getattr(OPTIONS_MONITOR_SERVICE, 'is_running', False):
+            return {"running": True, "poll_interval_seconds": 300, "market_hours_only": True}
+    return {"running": False}
+
+
+SERVICE_REGISTRY: dict = {
+    "orb":       (_svc_start_orb,       _svc_stop_orb,       _svc_status_orb),
+    "contracts": (_svc_start_contracts, _svc_stop_contracts, _svc_status_contracts),
+}
+
+
+@app.route("/services/start", methods=["POST"])
+def start_services():
+    """
+    Start all registered background services (or a named subset).
+
+    Body (JSON, all optional):
+        services     list[str]  Names to start; omit to start every service.
+        debug        bool       Bypass market-hours check for testing.
+        provider     str        ORB data provider: "alpaca"|"tradier" (default "alpaca").
+        triggered_by str        Informational tag logged for audit (e.g. "supabase_cron").
+
+    Response:
+        {
+          "success": true,
+          "results": {
+            "orb":       { "success": true, "message": "...", "was_running": false },
+            "contracts": { "success": true, "message": "...", "was_running": false }
+          },
+          "errors": []
+        }
+    HTTP 200 = all started, 207 = partial failure.
+    """
+    body      = request.get_json(silent=True) or {}
+    debug     = bool(body.get("debug", False)) or (request.args.get("debug", "").lower() == "true")
+    provider  = body.get("provider", body.get("orb_provider", "alpaca")).lower()
+    requested = body.get("services", list(SERVICE_REGISTRY.keys()))
+
+    logger.info("[services/start] triggered_by=%s services=%s debug=%s",
+                body.get("triggered_by", "api"), requested, debug)
+
+    results: dict = {}
+    errors:  list = []
+
+    for name in requested:
+        if name not in SERVICE_REGISTRY:
+            results[name] = {"success": False, "message": f"Unknown service '{name}'"}
+            errors.append(name)
+            continue
+        start_fn, _, _ = SERVICE_REGISTRY[name]
+        try:
+            results[name] = start_fn(debug=debug, provider=provider)
+        except Exception as exc:
+            logger.error("[services/start] %s failed: %s", name, exc, exc_info=True)
+            results[name] = {"success": False, "message": str(exc)}
+            errors.append(name)
+
+    return jsonify({"success": not errors, "results": results, "errors": errors}), (207 if errors else 200)
+
+
+@app.route("/services/stop", methods=["POST"])
+def stop_services():
+    """
+    Stop all registered background services (or a named subset).
+
+    Body (JSON, optional):
+        services     list[str]  Names to stop; omit to stop every service.
+        triggered_by str        Informational tag.
+
+    Response: same shape as /services/start.
+    HTTP 200 = all stopped, 207 = partial failure.
+    """
+    body      = request.get_json(silent=True) or {}
+    requested = body.get("services", list(SERVICE_REGISTRY.keys()))
+
+    logger.info("[services/stop] triggered_by=%s services=%s",
+                body.get("triggered_by", "api"), requested)
+
+    results: dict = {}
+    errors:  list = []
+
+    for name in requested:
+        if name not in SERVICE_REGISTRY:
+            results[name] = {"success": False, "message": f"Unknown service '{name}'"}
+            errors.append(name)
+            continue
+        _, stop_fn, _ = SERVICE_REGISTRY[name]
+        try:
+            results[name] = stop_fn()
+        except Exception as exc:
+            logger.error("[services/stop] %s failed: %s", name, exc, exc_info=True)
+            results[name] = {"success": False, "message": str(exc)}
+            errors.append(name)
+
+    return jsonify({"success": not errors, "results": results, "errors": errors}), (207 if errors else 200)
+
+
+@app.route("/services/status", methods=["GET"])
+def get_services_status():
+    """
+    Return the combined status of all registered background services.
+
+    Response:
+        {
+          "orb":       { "running": true,  "calculation_phase": false, ... },
+          "contracts": { "running": false }
+        }
+    """
+    status: dict = {}
+    for name, (_, _, status_fn) in SERVICE_REGISTRY.items():
+        try:
+            status[name] = status_fn()
+        except Exception as exc:
+            logger.error("[services/status] %s error: %s", name, exc)
+            status[name] = {"running": False, "error": str(exc)}
+    return jsonify(status)
+
+
 @app.route("/options/<ticker>", methods=["GET"])
 def get_options(ticker: str):
     """
@@ -1269,19 +1559,72 @@ def track_option():
         service.verify_user(user_id=user_id)
         
         # Prepare contract data
+        contract_symbol = data.get('contractSymbol', '')
+        tracking_snapshot = data.get('trackingSnapshot', {})
+
+        # Auto-fetch live snapshot from Alpaca when none was provided (e.g. manual adds)
+        if not tracking_snapshot and contract_symbol:
+            logger.info(f"[track-option] No snapshot provided for {contract_symbol} — attempting Alpaca auto-fetch")
+            try:
+                from services.alpaca.alpaca_option_service import get_alpaca_option_service
+                alpaca_svc = get_alpaca_option_service()
+                raw = run_async(alpaca_svc.get_contract_snapshot(contract_symbol))
+                if raw:
+                    bid = raw.get('bid') or 0.0
+                    ask = raw.get('ask') or 0.0
+                    has_greeks = any(raw.get(k) is not None for k in ('delta', 'gamma', 'theta', 'vega'))
+                    logger.info(
+                        f"[track-option] Alpaca snapshot OK for {contract_symbol}: "
+                        f"bid={bid}, ask={ask}, last={raw.get('last_price')}, "
+                        f"iv={raw.get('implied_volatility')}, greeks={'yes' if has_greeks else 'no (free tier?)'}"
+                    )
+                    tracking_snapshot = {
+                        'ask': ask,
+                        'bid': bid,
+                        'contractSymbol': contract_symbol,
+                        'delta': raw.get('delta'),
+                        'dte': 0,
+                        'expirationDate': raw.get('expiration', data.get('expirationDate', '')),
+                        'extrinsicValue': 0,
+                        'gamma': raw.get('gamma'),
+                        'impliedVolatility': raw.get('implied_volatility') or 0,
+                        'intrinsicValue': 0,
+                        'lastPrice': raw.get('last_price'),
+                        'mark': (bid + ask) / 2 if (bid > 0 or ask > 0) else 0,
+                        'moneyness': 0,
+                        'openInterest': raw.get('open_interest') or 0,
+                        'optionType': raw.get('option_type', data.get('optionType', '').upper()),
+                        'reasons': '',
+                        'signal': 'CONSIDER',
+                        'spreadPct': ((ask - bid) / ask * 100) if ask > 0 else 0,
+                        'theta': raw.get('theta'),
+                        'total_score': 0,
+                        'vega': raw.get('vega'),
+                        'volume': raw.get('volume') or 0,
+                    }
+                else:
+                    logger.warning(
+                        f"[track-option] Alpaca returned no snapshot for {contract_symbol} "
+                        f"(contract may be expired, invalid OCC symbol, or outside market hours)"
+                    )
+            except Exception as snap_err:
+                logger.warning(f"[track-option] Auto-fetch failed for {contract_symbol}: {snap_err}", exc_info=True)
+        elif tracking_snapshot:
+            logger.debug(f"[track-option] Client-provided snapshot for {contract_symbol}, skipping auto-fetch")
+
         contract_data = {
             'ticker': ticker,
-            'contract_symbol': data.get('contractSymbol', ''),
+            'contract_symbol': contract_symbol,
             'option_type': data.get('optionType', '').upper(),
             'strike': data.get('strike'),
             'expiration_date': data.get('expirationDate'),
-            'tracking_snapshot': data.get('trackingSnapshot', {}),
+            'tracking_snapshot': tracking_snapshot,
             'tracked_from_source': data.get('trackedFromSource', 'manual'),
             'orb_breakout_id': data.get('orbBreakoutId'),
             'initial_analysis_score': data.get('initialAnalysisScore'),
             'tracking_reason': data.get('trackingReason'),
         }
-        
+
         # Track contract
         result = service.track_option_contract(user_id, contract_data)
         

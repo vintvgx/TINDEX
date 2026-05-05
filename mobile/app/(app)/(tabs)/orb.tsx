@@ -8,10 +8,11 @@ import { ORBCardGrid } from '@/common/components/orb/ORBCardGrid';
 import { ORBDetailModal } from '@/common/components/orb/ORBDetailModal';
 import { WatchlistsModal } from '@/common/components/watchlist/WatchlistsModal';
 import { ORBMenu, type ORBGridLayout } from '@/common/components/orb/ORBMenu';
+import { AddORBTickerSheet } from '@/common/components/orb/AddORBTickerSheet';
 import { LogViewerModal } from '@/common/components/orb/LogViewerModal';
 import useBaseNavigation from '@/hooks/navigation/useBaseNavigation';
-import { useORBStatus } from '@/hooks/queries/orb/useORBStatus';
-import { useStartORBMutation, useStopORBMutation } from '@/hooks/mutations/orb/useORBControl';
+import { useServicesStatus } from '@/hooks/queries/services/useServicesStatus';
+import { useStartServices, useStopServices } from '@/hooks/mutations/services/useServicesControl';
 import { useThemeColors } from '@/lib/useColorScheme';
 
 const ORB_GRID_LAYOUT_KEY = '@alethia/orb_grid_layout';
@@ -21,12 +22,21 @@ const ORBScreen = () => {
   const [watchlistsModalVisible, setWatchlistsModalVisible] = useState(false);
   const [logViewerVisible, setLogViewerVisible] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
+  const [addTickerSheetVisible, setAddTickerSheetVisible] = useState(false);
   const [useMockData, setUseMockData] = useState(false);
   const [useCalculationMockData, setUseCalculationMockData] = useState(false);
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [lastFetchTime, setLastFetchTime] = useState<Date | null>(null);
   const [gridLayout, setGridLayout] = useState<ORBGridLayout>('1x1');
+  const [serviceError, setServiceError] = useState<string | null>(null);
+
+  // Auto-dismiss error banner after 6 seconds
+  useEffect(() => {
+    if (!serviceError) return;
+    const t = setTimeout(() => setServiceError(null), 6000);
+    return () => clearTimeout(t);
+  }, [serviceError]);
 
   useEffect(() => {
     let mounted = true;
@@ -50,9 +60,13 @@ const ORBScreen = () => {
 
   const { data: orbData, isLoading: orbLoading } = useORBMonitoringState(useMockData, useCalculationMockData);
   const { rangesByTicker } = useORBRanges(useMockData || useCalculationMockData);
-  const { data: orbStatus } = useORBStatus();
-  const isORBRunning = orbStatus?.running ?? false;
-  const isCalculationPhase = orbStatus?.calculation_phase ?? false;
+
+  // Unified service status — shared cache with Options screen (React Query deduplicates)
+  const { data: servicesStatus } = useServicesStatus();
+  const isORBRunning         = servicesStatus?.orb?.running ?? false;
+  const isCalculationPhase   = servicesStatus?.orb?.calculation_phase ?? false;
+  const isContractsRunning   = servicesStatus?.contracts?.running ?? false;
+  const anyServiceRunning    = isORBRunning || isContractsRunning;
 
   const transformedORBData = useMemo(() => {
     if (!orbData) return [];
@@ -70,9 +84,9 @@ const ORBScreen = () => {
     return transformedORBData.find((item) => item.ticker === selectedTicker) || null;
   }, [selectedTicker, transformedORBData]);
 
-  const startMutation = useStartORBMutation();
-  const stopMutation = useStopORBMutation();
-  const { toTicker } = useBaseNavigation();
+  const startServices = useStartServices();
+  const stopServices  = useStopServices();
+  const { toTicker }  = useBaseNavigation();
 
   const handleCardPress = (data: ORBMonitoringState) => {
     setSelectedTicker(data.ticker);
@@ -91,17 +105,26 @@ const ORBScreen = () => {
     if (!useCalculationMockData) setUseMockData(false);
   };
 
-  const handleToggleService = () => {
-    if (isORBRunning) stopMutation.mutate();
-    else startMutation.mutate(false);
-  };
+  // Start or stop ALL registered services together
+  const handleToggleService = useCallback(() => {
+    if (anyServiceRunning) {
+      stopServices.mutate({}, {
+        onError: (err: Error) => setServiceError(`Stop failed: ${err.message}`),
+      });
+    } else {
+      startServices.mutate({}, {
+        onError: (err: Error) => setServiceError(`Start failed: ${err.message}`),
+      });
+    }
+  }, [anyServiceRunning, startServices, stopServices]);
 
-  const statusColor = isORBRunning ? colors.success : colors.error;
-  const statusLabel = isORBRunning ? (isCalculationPhase ? 'Calculating' : 'Running') : 'Inactive';
+  const orbStatusColor = isORBRunning ? colors.success : colors.error;
+  const orbStatusLabel = isORBRunning ? (isCalculationPhase ? 'Calculating' : 'Running') : 'Inactive';
+  const contractsStatusColor = isContractsRunning ? colors.success : colors.error;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-      {/* Header */}
+      {/* ── Header ── */}
       <View
         style={{
           paddingHorizontal: 24,
@@ -117,10 +140,18 @@ const ORBScreen = () => {
           <Text style={{ color: colors.text, fontSize: 36, fontWeight: '800', letterSpacing: -0.5 }}>
             ORB
           </Text>
+          {/* ORB service status */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
-            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: statusColor }} />
+            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: orbStatusColor }} />
             <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '500' }}>
-              {statusLabel}
+              ORB: {orbStatusLabel}
+            </Text>
+          </View>
+          {/* Contracts monitor status */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
+            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: contractsStatusColor }} />
+            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '500' }}>
+              Options Monitor: {isContractsRunning ? 'Active' : 'Inactive'}
             </Text>
           </View>
         </View>
@@ -143,7 +174,29 @@ const ORBScreen = () => {
         </TouchableOpacity>
       </View>
 
-      {/* ORB Card Grid */}
+      {/* ── Service error banner ── */}
+      {serviceError && (
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          backgroundColor: colors.error + '18',
+          borderBottomWidth: 1,
+          borderBottomColor: colors.error + '40',
+          paddingHorizontal: 16,
+          paddingVertical: 10,
+          gap: 8,
+        }}>
+          <Ionicons name="alert-circle-outline" size={16} color={colors.error} />
+          <Text style={{ color: colors.error, fontSize: 13, fontWeight: '500', flex: 1 }}>
+            {serviceError}
+          </Text>
+          <TouchableOpacity onPress={() => setServiceError(null)} hitSlop={8}>
+            <Ionicons name="close" size={16} color={colors.error} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ── ORB Card Grid ── */}
       <View style={{ flex: 1 }}>
         <ORBCardGrid
           data={transformedORBData || []}
@@ -168,6 +221,7 @@ const ORBScreen = () => {
         onClose={() => setMenuVisible(false)}
         gridLayout={gridLayout}
         onGridLayoutChange={handleGridLayoutChange}
+        onAddTicker={() => setAddTickerSheetVisible(true)}
         onViewWatchlists={() => setWatchlistsModalVisible(true)}
         onViewLogs={() => setLogViewerVisible(true)}
         onToggleMockData={handleToggleMockData}
@@ -175,7 +229,14 @@ const ORBScreen = () => {
         onToggleService={handleToggleService}
         isMockDataEnabled={useMockData}
         isCalculationMockDataEnabled={useCalculationMockData}
-        isServiceRunning={isORBRunning}
+        isORBRunning={isORBRunning}
+        isContractsRunning={isContractsRunning}
+        isServiceRunning={anyServiceRunning}
+      />
+
+      <AddORBTickerSheet
+        visible={addTickerSheetVisible}
+        onClose={() => setAddTickerSheetVisible(false)}
       />
 
       <WatchlistsModal

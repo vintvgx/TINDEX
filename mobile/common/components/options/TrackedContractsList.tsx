@@ -1,6 +1,6 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
-  View, Text, TouchableOpacity, FlatList, StyleSheet, ActivityIndicator,
+  View, Text, TouchableOpacity, FlatList, StyleSheet, ActivityIndicator, Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -19,6 +19,27 @@ const fmtExpiry = (d: string) => {
   } catch { return d; }
 };
 
+// ─── Animated price pulse (shown while live data loads) ───────────────────────
+
+const PricePulse: React.FC<{ colors: ReturnType<typeof useThemeColors> }> = ({ colors }) => {
+  const pulse = useRef(new Animated.Value(0.3)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.9, duration: 600, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.3, duration: 600, useNativeDriver: true }),
+      ])
+    ).start();
+  }, [pulse]);
+  return (
+    <Animated.View style={{
+      opacity: pulse,
+      width: 64, height: 18, borderRadius: 5,
+      backgroundColor: colors.border,
+    }} />
+  );
+};
+
 // ─── Per-contract live price card ─────────────────────────────────────────────
 // React Query deduplicates: all cards for the same ticker share one API request.
 
@@ -34,7 +55,7 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, onPress, onUntrac
   const today = toDateStr(new Date());
   const farDate = (() => { const d = new Date(); d.setFullYear(d.getFullYear() + 1); return toDateStr(d); })();
 
-  const { data: liveData } = useOptionsQuery(contract.ticker, {
+  const { data: liveData, isLoading: liveLoading } = useOptionsQuery(contract.ticker, {
     limit: 200,
     expiration_date_gte: today,
     expiration_date_lte: farDate,
@@ -109,9 +130,13 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, onPress, onUntrac
         <View style={cc.rightCol}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
             {isLive && <View style={[cc.liveDot, { backgroundColor: colors.success }]} />}
-            <Text style={[cc.price, { color: displayPrice != null ? colors.text : colors.textTertiary }]}>
-              {displayPrice != null ? `$${displayPrice.toFixed(2)}` : '—'}
-            </Text>
+            {liveLoading && displayPrice == null ? (
+              <PricePulse colors={colors} />
+            ) : (
+              <Text style={[cc.price, { color: displayPrice != null ? colors.text : colors.textTertiary }]}>
+                {displayPrice != null ? `$${displayPrice.toFixed(2)}` : '—'}
+              </Text>
+            )}
           </View>
           {pnl != null && pnlPct != null && (
             <Text style={[cc.pnl, { color: pnl >= 0 ? colors.success : colors.error }]}>

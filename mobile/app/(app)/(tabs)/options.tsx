@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   SafeAreaView,
+  Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
@@ -21,6 +22,7 @@ import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsCo
 import { TrackedContractsList } from '@/common/components/options/TrackedContractsList';
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
+import { useServicesStatus } from '@/hooks/queries/services/useServicesStatus';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -191,6 +193,59 @@ const buildRows = (contracts: OptionsContract[], price: number, side: OptionSide
   ];
 };
 
+// ─── Chain loading skeleton ───────────────────────────────────────────────────
+
+const BOX_H = 12;
+const BOX_R = 4;
+
+const ChainSkeleton: React.FC<{ colors: ReturnType<typeof useThemeColors> }> = ({ colors }) => {
+  const pulse = useRef(new Animated.Value(0.3)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.9, duration: 700, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.3, duration: 700, useNativeDriver: true }),
+      ])
+    ).start();
+  }, [pulse]);
+
+  const bg = colors.border;
+
+  return (
+    <Animated.View style={{ opacity: pulse }}>
+      {Array.from({ length: 16 }).map((_, i) => {
+        const isITM = i >= 6 && i <= 9;
+        return (
+          <View key={i} style={[skeletonStyles.row, {
+            backgroundColor: isITM ? colors.surface : 'transparent',
+            borderBottomColor: colors.separator,
+          }]}>
+            <View style={{ width: 8 }} />
+            <View style={{ width: COL_WIDTHS.strike, height: BOX_H, borderRadius: BOX_R, backgroundColor: bg }} />
+            <View style={{ width: COL_WIDTHS.bid,    height: BOX_H, borderRadius: BOX_R, backgroundColor: bg }} />
+            <View style={{ width: COL_WIDTHS.ask,    height: BOX_H, borderRadius: BOX_R, backgroundColor: bg }} />
+            <View style={{ width: COL_WIDTHS.last,   height: BOX_H, borderRadius: BOX_R, backgroundColor: bg }} />
+            <View style={{ width: COL_WIDTHS.oi,     height: BOX_H, borderRadius: BOX_R, backgroundColor: bg }} />
+            <View style={{ flex: 1,                  height: BOX_H, borderRadius: BOX_R, backgroundColor: bg }} />
+          </View>
+        );
+      })}
+    </Animated.View>
+  );
+};
+
+const skeletonStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    gap: 4,
+  },
+});
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 const OptionsScreen = () => {
@@ -213,6 +268,10 @@ const OptionsScreen = () => {
   const [detailContract, setDetailContract] = useState<OptionsContract | null>(null);
   const [detailCurrentPrice, setDetailCurrentPrice] = useState(0);
   const [detailTrackedId, setDetailTrackedId] = useState<string | null>(null);
+
+  // Service status (shared React Query cache — no extra network call if ORB screen is mounted)
+  const { data: servicesStatus } = useServicesStatus();
+  const isContractsRunning = servicesStatus?.contracts?.running ?? false;
 
   // Tracking hooks
   const trackContract = useTrackContract();
@@ -291,6 +350,7 @@ const OptionsScreen = () => {
     gamma: c.gamma,
     impliedVolatility: c.implied_volatility ?? 0,
     intrinsicValue: 0,
+    lastPrice: c.last_price ?? null,
     mark: (c.bid + c.ask) / 2,
     moneyness: 0,
     openInterest: c.open_interest,
@@ -308,24 +368,27 @@ const OptionsScreen = () => {
   // Convert a tracked contract's snapshot into an OptionsOpportunity for the detail modal
   const trackedToOpportunity = useCallback((tc: TrackedOptionContract) => {
     const snap = (tc.tracking_snapshot ?? {}) as Record<string, any>;
+    const bid = snap.bid ?? 0;
+    const ask = snap.ask ?? 0;
     return {
-      ask: snap.ask ?? 0,
-      bid: snap.bid ?? 0,
+      ask,
+      bid,
       contractSymbol: tc.contract_symbol,
       delta: snap.delta ?? null,
       dte: snap.dte ?? 0,
       expirationDate: tc.expiration_date,
       extrinsicValue: snap.extrinsicValue ?? 0,
       gamma: snap.gamma ?? null,
-      impliedVolatility: snap.impliedVolatility ?? 0,
+      impliedVolatility: snap.impliedVolatility ?? snap.implied_volatility ?? 0,
       intrinsicValue: snap.intrinsicValue ?? 0,
-      mark: snap.mark ?? 0,
+      lastPrice: snap.lastPrice ?? snap.last_price ?? null,
+      mark: snap.mark ?? (bid > 0 || ask > 0 ? (bid + ask) / 2 : 0),
       moneyness: snap.moneyness ?? 0,
-      openInterest: snap.openInterest ?? 0,
+      openInterest: snap.openInterest ?? snap.open_interest ?? 0,
       optionType: tc.option_type,
       reasons: snap.reasons ?? '',
       signal: (snap.signal ?? 'CONSIDER') as 'BUY' | 'CONSIDER' | 'AVOID',
-      spreadPct: snap.spreadPct ?? 0,
+      spreadPct: snap.spreadPct ?? (ask > 0 ? ((ask - bid) / ask) * 100 : 0),
       strike: tc.strike,
       theta: snap.theta ?? null,
       total_score: snap.total_score ?? 0,
@@ -508,6 +571,23 @@ const OptionsScreen = () => {
         </View>
 
         <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+          {/* Contracts monitor status pill (watchlist view only) */}
+          {view === 'watchlist' && (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: 5,
+              paddingHorizontal: 10, paddingVertical: 6,
+              backgroundColor: colors.surface, borderRadius: 10, borderWidth: 1,
+              borderColor: isContractsRunning ? colors.success + '55' : colors.border,
+            }}>
+              <View style={{
+                width: 6, height: 6, borderRadius: 3,
+                backgroundColor: isContractsRunning ? colors.success : colors.textTertiary,
+              }} />
+              <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '500' }}>
+                {isContractsRunning ? 'Monitor On' : 'Monitor Off'}
+              </Text>
+            </View>
+          )}
           {/* Mock toggle (chain only) */}
           {view === 'chain' && (
             <TouchableOpacity
@@ -732,12 +812,7 @@ const OptionsScreen = () => {
             </View>
 
           ) : !useMockData && isLoading ? (
-            <View style={styles.centered}>
-              <ActivityIndicator size="large" color={colors.accent} />
-              <Text style={{ color: colors.textSecondary, fontSize: 14, marginTop: 12 }}>
-                Loading {activeTicker} options...
-              </Text>
-            </View>
+            <ChainSkeleton colors={colors} />
 
           ) : showOutsideHours ? (
             <View style={styles.centered}>

@@ -14,7 +14,7 @@ export function useTickerSearch(ticker: string) {
     queryKey: ["search", ticker],
     queryFn: async (): Promise<TickerSearchResponse> => {
       try {
-        const apiUrl = `${RAILWAY_BASE_URL}/options/${ticker}`;
+        const apiUrl = `${RAILWAY_BASE_URL}/search/${ticker}`;
 
         const response = await fetch(apiUrl, {
           method: "POST",
