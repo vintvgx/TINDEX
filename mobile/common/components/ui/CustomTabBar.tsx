@@ -4,7 +4,7 @@ import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNotificationHistory } from '@/hooks/queries/notifications/useNotificationHistory';
-import { useORBStatus } from '@/hooks/queries/orb/useORBStatus';
+import { useServicesStatus } from '@/hooks/queries/services/useServicesStatus';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
@@ -23,8 +23,14 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
   const { unreadCount } = useNotificationHistory();
-  const { data: orbStatus } = useORBStatus();
-  const isORBRunning = orbStatus?.running ?? false;
+  const { data: servicesStatus } = useServicesStatus();
+  const isORBRunning       = servicesStatus?.orb?.running ?? false;
+  const isContractsRunning = servicesStatus?.contracts?.running ?? false;
+  const servicesDotColor = (isORBRunning && isContractsRunning)
+    ? colors.success
+    : (isORBRunning || isContractsRunning)
+      ? colors.warning
+      : colors.error;
   const [searchOpen, setSearchOpen] = useState(false);
   const { setOptionsTicker } = useOptionsTicker();
   const [optionsInput, setOptionsInput] = useState('');
@@ -101,20 +107,7 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
       case 'options':
         return <Ionicons name="layers-outline" size={20} color={color} />;
       case 'orb':
-        return (
-          <View style={styles.orbContainer}>
-            <Ionicons name="pulse-outline" size={20} color={color} />
-            <View
-              style={[
-                styles.statusDot,
-                {
-                  backgroundColor: isORBRunning ? '#30D158' : '#FF453A',
-                  borderColor: colors.tabBar,
-                },
-              ]}
-            />
-          </View>
-        );
+        return <Ionicons name="pulse-outline" size={20} color={color} />;
       case 'notifications':
         return (
           <View>
@@ -127,7 +120,17 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
           </View>
         );
       case 'profile':
-        return <Ionicons name="person-outline" size={20} color={color} />;
+        return (
+          <View style={styles.profileContainer}>
+            <Ionicons name="person-outline" size={20} color={color} />
+            <View
+              style={[
+                styles.statusDot,
+                { backgroundColor: servicesDotColor, borderColor: colors.tabBar },
+              ]}
+            />
+          </View>
+        );
       default:
         return null;
     }
@@ -273,7 +276,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
     marginTop: 2,
   },
-  orbContainer: {
+  profileContainer: {
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',

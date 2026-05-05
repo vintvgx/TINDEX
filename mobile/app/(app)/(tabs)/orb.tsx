@@ -14,6 +14,7 @@ import useBaseNavigation from '@/hooks/navigation/useBaseNavigation';
 import { useServicesStatus } from '@/hooks/queries/services/useServicesStatus';
 import { useStartServices, useStopServices } from '@/hooks/mutations/services/useServicesControl';
 import { useThemeColors } from '@/lib/useColorScheme';
+import { useToast } from '@/common/components/ui/Toast';
 
 const ORB_GRID_LAYOUT_KEY = '@alethia/orb_grid_layout';
 
@@ -29,14 +30,7 @@ const ORBScreen = () => {
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [lastFetchTime, setLastFetchTime] = useState<Date | null>(null);
   const [gridLayout, setGridLayout] = useState<ORBGridLayout>('1x1');
-  const [serviceError, setServiceError] = useState<string | null>(null);
-
-  // Auto-dismiss error banner after 6 seconds
-  useEffect(() => {
-    if (!serviceError) return;
-    const t = setTimeout(() => setServiceError(null), 6000);
-    return () => clearTimeout(t);
-  }, [serviceError]);
+  const toast = useToast();
 
   useEffect(() => {
     let mounted = true;
@@ -63,9 +57,8 @@ const ORBScreen = () => {
 
   // Unified service status — shared cache with Options screen (React Query deduplicates)
   const { data: servicesStatus } = useServicesStatus();
-  const isORBRunning         = servicesStatus?.orb?.running ?? false;
-  const isCalculationPhase   = servicesStatus?.orb?.calculation_phase ?? false;
-  const isContractsRunning   = servicesStatus?.contracts?.running ?? false;
+  const isORBRunning       = servicesStatus?.orb?.running ?? false;
+  const isContractsRunning = servicesStatus?.contracts?.running ?? false;
   const anyServiceRunning    = isORBRunning || isContractsRunning;
 
   const transformedORBData = useMemo(() => {
@@ -109,18 +102,16 @@ const ORBScreen = () => {
   const handleToggleService = useCallback(() => {
     if (anyServiceRunning) {
       stopServices.mutate({}, {
-        onError: (err: Error) => setServiceError(`Stop failed: ${err.message}`),
+        onSuccess: () => toast.success('All services stopped'),
+        onError: (err: Error) => toast.error(`Stop failed: ${err.message}`),
       });
     } else {
       startServices.mutate({}, {
-        onError: (err: Error) => setServiceError(`Start failed: ${err.message}`),
+        onSuccess: () => toast.success('All services started'),
+        onError: (err: Error) => toast.error(`Start failed: ${err.message}`),
       });
     }
-  }, [anyServiceRunning, startServices, stopServices]);
-
-  const orbStatusColor = isORBRunning ? colors.success : colors.error;
-  const orbStatusLabel = isORBRunning ? (isCalculationPhase ? 'Calculating' : 'Running') : 'Inactive';
-  const contractsStatusColor = isContractsRunning ? colors.success : colors.error;
+  }, [anyServiceRunning, startServices, stopServices, toast]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
@@ -136,25 +127,9 @@ const ORBScreen = () => {
           justifyContent: 'space-between',
         }}
       >
-        <View>
-          <Text style={{ color: colors.text, fontSize: 36, fontWeight: '800', letterSpacing: -0.5 }}>
-            ORB
-          </Text>
-          {/* ORB service status */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
-            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: orbStatusColor }} />
-            <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '500' }}>
-              ORB: {orbStatusLabel}
-            </Text>
-          </View>
-          {/* Contracts monitor status */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
-            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: contractsStatusColor }} />
-            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '500' }}>
-              Options Monitor: {isContractsRunning ? 'Active' : 'Inactive'}
-            </Text>
-          </View>
-        </View>
+        <Text style={{ color: colors.text, fontSize: 36, fontWeight: '800', letterSpacing: -0.5 }}>
+          ORB
+        </Text>
 
         <TouchableOpacity
           onPress={() => setMenuVisible(true)}
@@ -173,28 +148,6 @@ const ORBScreen = () => {
           <Ionicons name="ellipsis-horizontal" size={18} color={colors.text} />
         </TouchableOpacity>
       </View>
-
-      {/* ── Service error banner ── */}
-      {serviceError && (
-        <View style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          backgroundColor: colors.error + '18',
-          borderBottomWidth: 1,
-          borderBottomColor: colors.error + '40',
-          paddingHorizontal: 16,
-          paddingVertical: 10,
-          gap: 8,
-        }}>
-          <Ionicons name="alert-circle-outline" size={16} color={colors.error} />
-          <Text style={{ color: colors.error, fontSize: 13, fontWeight: '500', flex: 1 }}>
-            {serviceError}
-          </Text>
-          <TouchableOpacity onPress={() => setServiceError(null)} hitSlop={8}>
-            <Ionicons name="close" size={16} color={colors.error} />
-          </TouchableOpacity>
-        </View>
-      )}
 
       {/* ── ORB Card Grid ── */}
       <View style={{ flex: 1 }}>

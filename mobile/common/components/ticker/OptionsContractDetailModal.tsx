@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, Modal, StyleSheet, ActivityIndicator,
 } from 'react-native';
@@ -18,6 +18,10 @@ interface Props {
   onUntrackContract?: () => void;
   isTracking?: boolean;
   isUntracking?: boolean;
+  /** Price recorded in the tracking snapshot when the contract was first added to the watchlist */
+  trackedPrice?: number | null;
+  /** Actual live contract price at the time the modal was opened (mirrors the card's livePrice) */
+  liveContractPrice?: number | null;
 }
 
 const fc = (v: number) =>
@@ -46,9 +50,23 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
   visible, onClose, contract, ticker, currentPrice,
   isTracked = false, onTrackContract, onUntrackContract,
   isTracking = false, isUntracking = false,
+  trackedPrice = null,
+  liveContractPrice = null,
 }) => {
   const colors = useThemeColors();
+  const [greeksInfoOpen, setGreeksInfoOpen] = useState(false);
   if (!contract) return null;
+
+  // Change vs. the initial tracked price — use liveContractPrice so it
+  // mirrors the card exactly (null when no live data → change row hidden).
+  const trackedChange = liveContractPrice != null && trackedPrice != null
+    ? liveContractPrice - trackedPrice
+    : null;
+  const trackedChangePct = trackedChange != null && trackedPrice != null && trackedPrice > 0
+    ? (trackedChange / trackedPrice) * 100
+    : null;
+  const changeColor = trackedChange == null ? colors.text
+    : trackedChange >= 0 ? colors.success : colors.error;
 
   const isCall = contract.optionType === 'CALL';
   const typeColor = isCall ? colors.success : colors.error;
@@ -139,6 +157,20 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
               <Row label="Last Price" value={fc(contract.lastPrice)} colors={colors} />
             )}
             <Row label="Midpoint" value={fc(contract.mark)} colors={colors} />
+
+            {/* Tracked-price section — only shown when this contract is in the watchlist */}
+            {trackedPrice != null && (
+              <Row label="Tracked At" value={fc(trackedPrice)} colors={colors} />
+            )}
+            {trackedChange != null && trackedChangePct != null && (
+              <View style={[r.row, { borderBottomWidth: StyleSheet.hairlineWidth }]}>
+                <Text style={[r.label, { color: colors.textSecondary }]}>Change</Text>
+                <Text style={[r.value, { color: changeColor }]}>
+                  {trackedChange >= 0 ? '+' : ''}{fc(trackedChange)} ({trackedChange >= 0 ? '+' : ''}{trackedChangePct.toFixed(1)}%)
+                </Text>
+              </View>
+            )}
+
             <Row label="Bid" value={fc(contract.bid)} colors={colors} />
             <Row label="Ask" value={fc(contract.ask)} colors={colors} />
             <View style={[r.row, { borderBottomWidth: 0 }]}>
@@ -162,14 +194,71 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
           {/* ── Greeks ── */}
           {hasGreeks && (
             <>
-              <Text style={[s.sectionTitle, { color: colors.text }]}>Greeks</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, marginTop: 4 }}>
+                <Text style={[s.sectionTitle, { color: colors.text, marginBottom: 0, marginTop: 0 }]}>Greeks</Text>
+                <TouchableOpacity
+                  onPress={() => setGreeksInfoOpen(o => !o)}
+                  hitSlop={8}
+                  style={[s.infoBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
+                >
+                  <Ionicons
+                    name={greeksInfoOpen ? 'close-circle-outline' : 'information-circle-outline'}
+                    size={16}
+                    color={colors.textSecondary}
+                  />
+                  <Text style={[s.infoBtnText, { color: colors.textSecondary }]}>
+                    {greeksInfoOpen ? 'Hide' : 'What are Greeks?'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Greeks definitions panel */}
+              {greeksInfoOpen && (
+                <View style={[s.greeksInfo, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                  {[
+                    {
+                      symbol: 'Δ', name: 'Delta', def:
+                        'How much the option price changes for every $1 move in the stock. A delta of 0.50 means the option gains ~$0.50 when the stock rises $1. Calls are positive (0 to 1); puts are negative (−1 to 0).',
+                    },
+                    {
+                      symbol: 'Γ', name: 'Gamma', def:
+                        'How fast delta itself changes per $1 move. High gamma means your delta exposure can shift rapidly — the option becomes more or less sensitive quickly, especially near expiration.',
+                    },
+                    {
+                      symbol: 'Θ', name: 'Theta', def:
+                        'Daily time decay — how much value the option loses each day as expiration approaches. Negative for long options. An option with theta −0.05 loses ~$5 per contract per day all else equal.',
+                    },
+                    {
+                      symbol: 'V', name: 'Vega', def:
+                        'Sensitivity to implied volatility. A vega of 0.10 means the option gains/loses ~$0.10 for every 1% change in IV. Long options benefit from rising IV; short options benefit from falling IV.',
+                    },
+                  ].map((g, i, arr) => (
+                    <View
+                      key={g.name}
+                      style={[
+                        s.greeksRow,
+                        i < arr.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.separator },
+                      ]}
+                    >
+                      <View style={[s.greeksSymbol, { backgroundColor: colors.accent + '18', borderColor: colors.accent + '30' }]}>
+                        <Text style={[s.greeksSymbolText, { color: colors.accent }]}>{g.symbol}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[s.greeksName, { color: colors.text }]}>{g.name}</Text>
+                        <Text style={[s.greeksDef, { color: colors.textSecondary }]}>{g.def}</Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+
               <View style={[s.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                {contract.delta != null && <Row label="Delta" value={contract.delta.toFixed(4)} colors={colors} />}
-                {contract.gamma != null && <Row label="Gamma" value={contract.gamma.toFixed(4)} colors={colors} />}
-                {contract.theta != null && <Row label="Theta" value={contract.theta.toFixed(4)} colors={colors} />}
+                {contract.delta != null && <Row label="Delta (Δ)" value={contract.delta.toFixed(4)} colors={colors} />}
+                {contract.gamma != null && <Row label="Gamma (Γ)" value={contract.gamma.toFixed(4)} colors={colors} />}
+                {contract.theta != null && <Row label="Theta (Θ)" value={contract.theta.toFixed(4)} colors={colors} />}
                 {contract.vega != null && (
                   <View style={[r.row, { borderBottomWidth: 0 }]}>
-                    <Text style={[r.label, { color: colors.textSecondary }]}>Vega</Text>
+                    <Text style={[r.label, { color: colors.textSecondary }]}>Vega (V)</Text>
                     <Text style={[r.value, { color: colors.text }]}>{contract.vega.toFixed(4)}</Text>
                   </View>
                 )}
@@ -288,6 +377,26 @@ const s = StyleSheet.create({
   scoreNum: { fontSize: 36, fontWeight: '800' },
   sectionTitle: { fontSize: 15, fontWeight: '700', marginBottom: 8, marginTop: 4 },
   card: { borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, marginBottom: 18 },
+  infoBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: 20, borderWidth: 1,
+  },
+  infoBtnText: { fontSize: 12, fontWeight: '500' },
+  greeksInfo: {
+    borderRadius: 12, borderWidth: 1, marginBottom: 10, overflow: 'hidden',
+  },
+  greeksRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 12, padding: 12,
+  },
+  greeksSymbol: {
+    width: 32, height: 32, borderRadius: 8, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+    marginTop: 1,
+  },
+  greeksSymbolText: { fontSize: 16, fontWeight: '700' },
+  greeksName: { fontSize: 13, fontWeight: '700', marginBottom: 3 },
+  greeksDef: { fontSize: 12, lineHeight: 17 },
   bottomBar: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     paddingHorizontal: 16, paddingTop: 12, paddingBottom: 32, borderTopWidth: StyleSheet.hairlineWidth,

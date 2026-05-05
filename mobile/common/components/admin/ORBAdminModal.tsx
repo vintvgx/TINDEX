@@ -6,7 +6,6 @@ import {
   ScrollView,
   StatusBar,
   ActivityIndicator,
-  Alert,
   TouchableOpacity,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,14 +13,7 @@ import { Text } from '@/common/components/ui/text';
 import { useORBStatus } from '@/hooks/queries/orb/useORBStatus';
 import { useStartORBMutation, useStopORBMutation } from '@/hooks/mutations/orb/useORBControl';
 import { PortfolioViewModal } from './PortfolioViewModal';
-
-/**
- * Simple toast function using Alert (can be replaced with proper toast implementation)
- */
-const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
-  const title = type === 'success' ? 'Success' : type === 'error' ? 'Error' : 'Info';
-  Alert.alert(title, message);
-};
+import { useToast } from '@/common/components/ui/Toast';
 
 interface ORBAdminModalProps {
   visible: boolean;
@@ -51,6 +43,7 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
   const startMutation = useStartORBMutation();
   const stopMutation = useStopORBMutation();
   const [portfolioModalVisible, setPortfolioModalVisible] = useState(false);
+  const toast = useToast();
 
   const isRunning = status?.running ?? false;
   const isCalculationPhase = status?.calculation_phase ?? false;
@@ -67,28 +60,27 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
   };
 
   const handleStartServiceDebug = () => {
-    startMutation.mutate(true);
+    startMutation.mutate(true, {
+      onSuccess: () => toast.success('ORB service started (debug mode)'),
+      onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to start ORB service'),
+    });
   };
 
   const handleStartService = () => {
-    startMutation.mutate(false)
-  }
+    startMutation.mutate(false, {
+      onSuccess: () => toast.success('ORB service started'),
+      onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to start ORB service'),
+    });
+  };
 
   const handleStop = () => {
-    stopMutation.mutate();
+    stopMutation.mutate(undefined, {
+      onSuccess: () => toast.success('ORB service stopped'),
+      onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to stop ORB service'),
+    });
   };
 
   const isLoadingAction = startMutation.isPending || stopMutation.isPending;
-
-  // show alert if there is an error
-  useEffect(() => {
-    if (stopMutation.isError) {
-      const errorMessage = stopMutation.error instanceof Error 
-        ? stopMutation.error.message 
-        : 'Failed to stop ORB service';
-      showToast(errorMessage, 'error');
-    }
-  }, [stopMutation.isError, stopMutation.error]);
 
   return (
     <Modal

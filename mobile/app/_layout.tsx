@@ -28,6 +28,7 @@ import "@/global.css";
 import "@/common/services/LogService";
 
 import LoadingScreen from "@/common/components/LoadingScreen";
+import { ToastProvider } from "@/common/components/ui/Toast";
 
 // import { GluestackUIProvider } from "../components/ui/gluestack-ui-provider";
 // import LoadingScreen from "./components/LoadingScreen";
@@ -187,9 +188,11 @@ function AppContent() {
   }
 
   return (
-    <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-      <Slot />
-      <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
-    </ThemeProvider>
+    <ToastProvider>
+      <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+        <Slot />
+        <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
+      </ThemeProvider>
+    </ToastProvider>
   );
 }

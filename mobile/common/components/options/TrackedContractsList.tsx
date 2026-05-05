@@ -10,6 +10,7 @@ import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
 import type { TrackedOptionContract } from '@/common/types/options';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 import { AddContractSheet } from './AddContractSheet';
+import { useToast } from '@/common/components/ui/Toast';
 
 const toDateStr = (d: Date) => d.toISOString().split('T')[0];
 
@@ -79,6 +80,14 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, onPress, onUntrac
   const displayPrice = livePrice ?? snap?.mark ?? snap?.last_price ?? null;
   const isLive = livePrice !== null;
 
+  // Price recorded in the snapshot at the moment the contract was added to tracking
+  const trackedPrice: number | null = snap?.mark ?? snap?.last_price ?? null;
+  // Live change vs. the initial tracked price (only meaningful when we have fresh data)
+  const trackedChange = livePrice != null && trackedPrice != null ? livePrice - trackedPrice : null;
+  const trackedChangePct = trackedChange != null && trackedPrice != null && trackedPrice > 0
+    ? (trackedChange / trackedPrice) * 100
+    : null;
+
   const entry = contract.entry_price;
   const pnl = entry != null && livePrice != null ? livePrice - entry : null;
   const pnlPct = entry != null && entry > 0 && pnl != null ? (pnl / entry) * 100 : null;
@@ -128,6 +137,7 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, onPress, onUntrac
 
         {/* Right: price */}
         <View style={cc.rightCol}>
+          {/* Current price */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
             {isLive && <View style={[cc.liveDot, { backgroundColor: colors.success }]} />}
             {liveLoading && displayPrice == null ? (
@@ -138,11 +148,29 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, onPress, onUntrac
               </Text>
             )}
           </View>
-          {pnl != null && pnlPct != null && (
-            <Text style={[cc.pnl, { color: pnl >= 0 ? colors.success : colors.error }]}>
-              {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} ({pnlPct.toFixed(1)}%)
+
+          {/* Change from tracked price */}
+          {trackedChange != null && trackedChangePct != null ? (
+            <Text style={[cc.trackedChange, { color: trackedChange >= 0 ? colors.success : colors.error }]}>
+              {trackedChange >= 0 ? '+' : ''}${Math.abs(trackedChange).toFixed(2)} ({trackedChange >= 0 ? '+' : ''}{trackedChangePct.toFixed(1)}%)
+            </Text>
+          ) : null}
+
+          {/* Initial tracked price */}
+          {trackedPrice != null && (
+            <Text style={[cc.trackedFrom, { color: colors.textTertiary }]}>
+              from ${trackedPrice.toFixed(2)}
             </Text>
           )}
+
+          {/* Trade P&L (only when user has set an explicit entry price) */}
+          {pnl != null && pnlPct != null && (
+            <Text style={[cc.pnl, { color: pnl >= 0 ? colors.success : colors.error }]}>
+              P&L {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} ({pnlPct.toFixed(1)}%)
+            </Text>
+          )}
+
+          {/* Underlying stock price */}
           {liveData?.success && currentPrice > 0 && (
             <Text style={[cc.underlying, { color: colors.textTertiary }]}>
               {contract.ticker} ${currentPrice.toFixed(2)}
@@ -186,8 +214,10 @@ const cc = StyleSheet.create({
   rightCol: { alignItems: 'flex-end' },
   liveDot: { width: 6, height: 6, borderRadius: 3 },
   price: { fontSize: 18, fontWeight: '700' },
-  pnl: { fontSize: 12, fontWeight: '600', marginTop: 2 },
-  underlying: { fontSize: 11, marginTop: 3 },
+  trackedChange: { fontSize: 12, fontWeight: '700', marginTop: 3 },
+  trackedFrom: { fontSize: 11, fontWeight: '500', marginTop: 1 },
+  pnl: { fontSize: 11, fontWeight: '600', marginTop: 3 },
+  underlying: { fontSize: 11, marginTop: 2 },
   footer: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 14, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth,
@@ -209,8 +239,14 @@ export const TrackedContractsList: React.FC<Props> = ({ onContractPress, activeT
   const { data: contracts, isLoading, refetch } = useTrackedContracts();
   const { mutate: untrack, isPending: isUntracking, variables: untrackedId } = useUntrackContract();
   const [addOpen, setAddOpen] = useState(false);
+  const toast = useToast();
 
-  const handleUntrack = useCallback((id: string) => untrack(id), [untrack]);
+  const handleUntrack = useCallback((id: string) => {
+    untrack(id, {
+      onSuccess: () => toast.info('Contract removed from watchlist'),
+      onError: (err: Error) => toast.error(err.message),
+    });
+  }, [untrack, toast]);
 
   if (isLoading) {
     return (

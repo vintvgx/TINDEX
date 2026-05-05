@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useTrackContract } from '@/hooks/mutations/track/useTrackContract';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
+import { useToast } from '@/common/components/ui/Toast';
 
 // Build OCC option symbol: e.g. NVDA250501C00215000
 const buildOCCSymbol = (ticker: string, expiry: string, type: 'CALL' | 'PUT', strike: number) => {
@@ -33,6 +34,7 @@ export const AddContractSheet: React.FC<Props> = ({ visible, onClose, initialTic
   const colors = useThemeColors();
   const { authState: { user } } = useAuth();
   const { mutate, isPending } = useTrackContract();
+  const toast = useToast();
 
   const [ticker, setTicker] = useState(initialTicker);
   const [type, setType] = useState<'CALL' | 'PUT'>('CALL');
@@ -88,7 +90,10 @@ export const AddContractSheet: React.FC<Props> = ({ visible, onClose, initialTic
         trackingSnapshot: {},
         trackedFromSource: 'manual',
       },
-      { onSuccess: handleClose, onError: (e: Error) => setError(e.message) },
+      {
+        onSuccess: () => { toast.success(`Tracking ${symbol}`); handleClose(); },
+        onError: (e: Error) => { setError(e.message); toast.error(e.message); },
+      },
     );
   };
 
