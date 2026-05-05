@@ -254,7 +254,7 @@ const OptionsScreen = () => {
   const { optionsTicker: activeTicker, setOptionsTicker } = useOptionsTicker();
 
   // View toggle
-  const [view, setView] = useState<ScreenView>('chain');
+  const [view, setView] = useState<ScreenView>('watchlist');
 
   // Chain state
   const [side, setSide] = useState<OptionSide>('CALL');
@@ -268,6 +268,8 @@ const OptionsScreen = () => {
   const [detailContract, setDetailContract] = useState<OptionsContract | null>(null);
   const [detailCurrentPrice, setDetailCurrentPrice] = useState(0);
   const [detailTrackedId, setDetailTrackedId] = useState<string | null>(null);
+  const [detailTrackedPrice, setDetailTrackedPrice] = useState<number | null>(null);
+  const [detailLiveContractPrice, setDetailLiveContractPrice] = useState<number | null>(null);
 
   // Service status (shared React Query cache — no extra network call if ORB screen is mounted)
   const { data: servicesStatus } = useServicesStatus();
@@ -428,6 +430,11 @@ const OptionsScreen = () => {
       } as OptionsContract));
       setDetailCurrentPrice(price);
       setDetailTrackedId(tracked.id);
+      const snap = tracked.tracking_snapshot as any;
+      setDetailTrackedPrice(snap?.mark ?? snap?.last_price ?? null);
+      setDetailLiveContractPrice(
+        live ? (live.last_price ?? (live.bid + live.ask) / 2) : null,
+      );
     },
     [],
   );
@@ -453,6 +460,8 @@ const OptionsScreen = () => {
       onSuccess: () => {
         setDetailContract(null);
         setDetailTrackedId(null);
+        setDetailTrackedPrice(null);
+        setDetailLiveContractPrice(null);
       },
     });
   }, [untrackContract]);
@@ -460,6 +469,8 @@ const OptionsScreen = () => {
   const closeDetail = useCallback(() => {
     setDetailContract(null);
     setDetailTrackedId(null);
+    setDetailTrackedPrice(null);
+    setDetailLiveContractPrice(null);
   }, []);
 
   // ── Chain render helpers ─────────────────────────────────────────────────────
@@ -620,7 +631,7 @@ const OptionsScreen = () => {
 
       {/* ── View toggle: Chain / Watchlist ── */}
       <View style={[viewToggle.container, { borderBottomColor: colors.separator }]}>
-        {(['chain', 'watchlist'] as ScreenView[]).map(v => {
+        {(['watchlist', 'chain'] as ScreenView[]).map(v => {
           const active = view === v;
           return (
             <TouchableOpacity
@@ -900,6 +911,8 @@ const OptionsScreen = () => {
           onUntrackContract={() => detailTrackedId && handleUntrack(detailTrackedId)}
           isTracking={trackContract.isPending}
           isUntracking={untrackContract.isPending}
+          trackedPrice={detailTrackedId ? detailTrackedPrice : null}
+          liveContractPrice={detailTrackedId ? detailLiveContractPrice : null}
         />
       )}
     </SafeAreaView>

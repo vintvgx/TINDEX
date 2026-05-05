@@ -6,12 +6,14 @@ import { LogViewerModal } from '@/common/components/orb/LogViewerModal';
 import { ThemeToggle } from '@/common/components/ThemeToggle';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { Ionicons } from '@expo/vector-icons';
+import { useToast } from '@/common/components/ui/Toast';
 
 const ProfileScreen = () => {
   const { authState: { user } } = useAuth();
   const colors = useThemeColors();
   const [adminModalVisible, setAdminModalVisible] = useState(false);
   const [logViewerVisible, setLogViewerVisible] = useState(false);
+  const toast = useToast();
 
   const email = user?.email || 'User';
   const initials = email.substring(0, 2).toUpperCase();
@@ -19,6 +21,38 @@ const ProfileScreen = () => {
   const menuItems = [
     { icon: 'shield-outline' as const, label: 'Admin Panel', onPress: () => setAdminModalVisible(true) },
     { icon: 'document-text-outline' as const, label: 'View Logs', onPress: () => setLogViewerVisible(true) },
+  ];
+
+  const toastItems: Array<{
+    label: string;
+    color: string;
+    iconName: React.ComponentProps<typeof Ionicons>['name'];
+    onPress: () => void;
+  }> = [
+    {
+      label: 'Success',
+      color: colors.success,
+      iconName: 'checkmark-circle',
+      onPress: () => toast.success('Contract tracked successfully'),
+    },
+    {
+      label: 'Error',
+      color: colors.error,
+      iconName: 'alert-circle',
+      onPress: () => toast.error('Failed to connect to service'),
+    },
+    {
+      label: 'Warning',
+      color: colors.warning,
+      iconName: 'warning',
+      onPress: () => toast.warning('Market closes in 15 minutes'),
+    },
+    {
+      label: 'Info',
+      color: colors.accent,
+      iconName: 'information-circle',
+      onPress: () => toast.info('ORB calculation phase starting'),
+    },
   ];
 
   return (
@@ -127,6 +161,48 @@ const ProfileScreen = () => {
                   {item.label}
                 </Text>
                 <Ionicons name="chevron-forward" size={15} color={colors.textTertiary} />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Generate Toast section */}
+        <View style={{ paddingHorizontal: 20, marginBottom: 24 }}>
+          <Text
+            style={{
+              color: colors.textTertiary,
+              fontSize: 12,
+              fontWeight: '600',
+              textTransform: 'uppercase',
+              letterSpacing: 0.8,
+              marginBottom: 8,
+              paddingHorizontal: 4,
+            }}
+          >
+            Generate Toast
+          </Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+            {toastItems.map(item => (
+              <TouchableOpacity
+                key={item.label}
+                onPress={item.onPress}
+                activeOpacity={0.75}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 7,
+                  paddingHorizontal: 16,
+                  paddingVertical: 10,
+                  borderRadius: 12,
+                  backgroundColor: item.color + '18',
+                  borderWidth: 1,
+                  borderColor: item.color + '40',
+                }}
+              >
+                <Ionicons name={item.iconName} size={16} color={item.color} />
+                <Text style={{ color: item.color, fontSize: 13, fontWeight: '600' }}>
+                  {item.label}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
