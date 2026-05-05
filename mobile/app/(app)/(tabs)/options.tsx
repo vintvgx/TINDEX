@@ -22,6 +22,7 @@ import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsCo
 import { TrackedContractsList } from '@/common/components/options/TrackedContractsList';
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
+import { useServicesStatus } from '@/hooks/queries/services/useServicesStatus';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -267,6 +268,10 @@ const OptionsScreen = () => {
   const [detailContract, setDetailContract] = useState<OptionsContract | null>(null);
   const [detailCurrentPrice, setDetailCurrentPrice] = useState(0);
   const [detailTrackedId, setDetailTrackedId] = useState<string | null>(null);
+
+  // Service status (shared React Query cache — no extra network call if ORB screen is mounted)
+  const { data: servicesStatus } = useServicesStatus();
+  const isContractsRunning = servicesStatus?.contracts?.running ?? false;
 
   // Tracking hooks
   const trackContract = useTrackContract();
@@ -566,6 +571,23 @@ const OptionsScreen = () => {
         </View>
 
         <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+          {/* Contracts monitor status pill (watchlist view only) */}
+          {view === 'watchlist' && (
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', gap: 5,
+              paddingHorizontal: 10, paddingVertical: 6,
+              backgroundColor: colors.surface, borderRadius: 10, borderWidth: 1,
+              borderColor: isContractsRunning ? colors.success + '55' : colors.border,
+            }}>
+              <View style={{
+                width: 6, height: 6, borderRadius: 3,
+                backgroundColor: isContractsRunning ? colors.success : colors.textTertiary,
+              }} />
+              <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '500' }}>
+                {isContractsRunning ? 'Monitor On' : 'Monitor Off'}
+              </Text>
+            </View>
+          )}
           {/* Mock toggle (chain only) */}
           {view === 'chain' && (
             <TouchableOpacity

@@ -23,7 +23,12 @@ interface ORBMenuProps {
   onToggleService: () => void;
   isMockDataEnabled: boolean;
   isCalculationMockDataEnabled: boolean;
+  /** True if ANY service is running (used to determine Stop vs Start label) */
   isServiceRunning: boolean;
+  /** Granular ORB service state for the status indicator */
+  isORBRunning?: boolean;
+  /** Granular contracts monitor state for the status indicator */
+  isContractsRunning?: boolean;
 }
 
 export const ORBMenu: React.FC<ORBMenuProps> = ({
@@ -40,6 +45,8 @@ export const ORBMenu: React.FC<ORBMenuProps> = ({
   isMockDataEnabled,
   isCalculationMockDataEnabled,
   isServiceRunning,
+  isORBRunning = false,
+  isContractsRunning = false,
 }) => {
   const menuItems = [
     {
@@ -94,7 +101,7 @@ export const ORBMenu: React.FC<ORBMenuProps> = ({
     },
     {
       id: 'service',
-      label: isServiceRunning ? 'Stop Service' : 'Start Service',
+      label: isServiceRunning ? 'Stop All Services' : 'Start All Services',
       icon: isServiceRunning ? 'stop-circle-outline' : 'play-circle-outline' as const,
       onPress: () => {
         onToggleService();
@@ -246,15 +253,19 @@ export const ORBMenu: React.FC<ORBMenuProps> = ({
                       </View>
                     )}
                     {item.id === 'service' && (
-                      <View className="flex-row items-center mr-2">
-                        <View
-                          className={`w-2 h-2 rounded-full mr-2 ${
-                            isServiceRunning ? 'bg-green-500' : 'bg-gray-600'
-                          }`}
-                        />
-                        <Text className="text-gray-400 text-sm">
-                          {isServiceRunning ? 'Running' : 'Stopped'}
-                        </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginRight: 8 }}>
+                        <View style={{ alignItems: 'center', gap: 3 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: isORBRunning ? '#10B981' : '#4B5563' }} />
+                            <Text style={{ color: '#9CA3AF', fontSize: 11, fontWeight: '500' }}>ORB</Text>
+                          </View>
+                        </View>
+                        <View style={{ alignItems: 'center', gap: 3 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: isContractsRunning ? '#10B981' : '#4B5563' }} />
+                            <Text style={{ color: '#9CA3AF', fontSize: 11, fontWeight: '500' }}>Monitor</Text>
+                          </View>
+                        </View>
                       </View>
                     )}
                   </TouchableOpacity>

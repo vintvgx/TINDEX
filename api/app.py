@@ -1184,6 +1184,204 @@ def get_contracts_monitor_status():
     return jsonify({"running": False})
 
 
+# ── Unified service management ─────────────────────────────────────────────────
+#
+# SERVICE_REGISTRY maps service names → (start_fn, stop_fn, status_fn).
+# To expose a new background service via /services/*, add one entry here.
+
+def _svc_start_orb(debug: bool = False, provider: str = 'alpaca', **_) -> dict:
+    global ORB_SERVICE, ORB_TASK
+    with orb_lock:
+        if ORB_SERVICE and ORB_SERVICE.is_running:
+            return {"success": True, "message": "ORB already running", "was_running": True}
+    svc = get_orb_service(provider=provider)
+    ORB_SERVICE = svc
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(svc.start(debug_mode=debug))
+    ORB_TASK = threading.Thread(target=_run, daemon=True)
+    ORB_TASK.start()
+    msg = f"ORB monitoring started ({provider.upper()})"
+    if debug:
+        msg += " [debug]"
+    return {"success": True, "message": msg, "was_running": False}
+
+
+def _svc_stop_orb(**_) -> dict:
+    global ORB_SERVICE
+    with orb_lock:
+        if ORB_SERVICE and ORB_SERVICE.is_running:
+            asyncio.run(ORB_SERVICE.stop())
+            ORB_SERVICE = None
+            return {"success": True, "message": "ORB monitoring stopped"}
+    return {"success": True, "message": "ORB not running"}
+
+
+def _svc_status_orb() -> dict:
+    with orb_lock:
+        if ORB_SERVICE and getattr(ORB_SERVICE, 'is_running', False):
+            return {
+                "running": True,
+                "calculation_phase": getattr(ORB_SERVICE, 'calculation_phase', False),
+                "active_tickers": list(getattr(ORB_SERVICE, 'active_tickers', set())),
+                "orb_ranges_count": len(getattr(ORB_SERVICE, 'orb_ranges', {})),
+            }
+    return {"running": False}
+
+
+def _svc_start_contracts(debug: bool = False, **_) -> dict:
+    global OPTIONS_MONITOR_SERVICE, OPTIONS_MONITOR_TASK
+    with options_monitor_lock:
+        if OPTIONS_MONITOR_SERVICE and OPTIONS_MONITOR_SERVICE.is_running:
+            return {"success": True, "message": "Contracts monitor already running", "was_running": True}
+    svc = get_options_contract_monitor()
+    OPTIONS_MONITOR_SERVICE = svc
+    if debug:
+        svc._is_market_hours = lambda: True
+    def _run():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(svc.start())
+    OPTIONS_MONITOR_TASK = threading.Thread(target=_run, daemon=True)
+    OPTIONS_MONITOR_TASK.start()
+    msg = "Contracts monitor started"
+    if debug:
+        msg += " [debug]"
+    return {"success": True, "message": msg, "was_running": False}
+
+
+def _svc_stop_contracts(**_) -> dict:
+    global OPTIONS_MONITOR_SERVICE
+    with options_monitor_lock:
+        if OPTIONS_MONITOR_SERVICE and OPTIONS_MONITOR_SERVICE.is_running:
+            asyncio.run(OPTIONS_MONITOR_SERVICE.stop())
+            reset_options_contract_monitor()
+            OPTIONS_MONITOR_SERVICE = None
+            return {"success": True, "message": "Contracts monitor stopped"}
+    return {"success": True, "message": "Contracts monitor not running"}
+
+
+def _svc_status_contracts() -> dict:
+    with options_monitor_lock:
+        if OPTIONS_MONITOR_SERVICE and getattr(OPTIONS_MONITOR_SERVICE, 'is_running', False):
+            return {"running": True, "poll_interval_seconds": 300, "market_hours_only": True}
+    return {"running": False}
+
+
+SERVICE_REGISTRY: dict = {
+    "orb":       (_svc_start_orb,       _svc_stop_orb,       _svc_status_orb),
+    "contracts": (_svc_start_contracts, _svc_stop_contracts, _svc_status_contracts),
+}
+
+
+@app.route("/services/start", methods=["POST"])
+def start_services():
+    """
+    Start all registered background services (or a named subset).
+
+    Body (JSON, all optional):
+        services     list[str]  Names to start; omit to start every service.
+        debug        bool       Bypass market-hours check for testing.
+        provider     str        ORB data provider: "alpaca"|"tradier" (default "alpaca").
+        triggered_by str        Informational tag logged for audit (e.g. "supabase_cron").
+
+    Response:
+        {
+          "success": true,
+          "results": {
+            "orb":       { "success": true, "message": "...", "was_running": false },
+            "contracts": { "success": true, "message": "...", "was_running": false }
+          },
+          "errors": []
+        }
+    HTTP 200 = all started, 207 = partial failure.
+    """
+    body      = request.get_json(silent=True) or {}
+    debug     = bool(body.get("debug", False)) or (request.args.get("debug", "").lower() == "true")
+    provider  = body.get("provider", body.get("orb_provider", "alpaca")).lower()
+    requested = body.get("services", list(SERVICE_REGISTRY.keys()))
+
+    logger.info("[services/start] triggered_by=%s services=%s debug=%s",
+                body.get("triggered_by", "api"), requested, debug)
+
+    results: dict = {}
+    errors:  list = []
+
+    for name in requested:
+        if name not in SERVICE_REGISTRY:
+            results[name] = {"success": False, "message": f"Unknown service '{name}'"}
+            errors.append(name)
+            continue
+        start_fn, _, _ = SERVICE_REGISTRY[name]
+        try:
+            results[name] = start_fn(debug=debug, provider=provider)
+        except Exception as exc:
+            logger.error("[services/start] %s failed: %s", name, exc, exc_info=True)
+            results[name] = {"success": False, "message": str(exc)}
+            errors.append(name)
+
+    return jsonify({"success": not errors, "results": results, "errors": errors}), (207 if errors else 200)
+
+
+@app.route("/services/stop", methods=["POST"])
+def stop_services():
+    """
+    Stop all registered background services (or a named subset).
+
+    Body (JSON, optional):
+        services     list[str]  Names to stop; omit to stop every service.
+        triggered_by str        Informational tag.
+
+    Response: same shape as /services/start.
+    HTTP 200 = all stopped, 207 = partial failure.
+    """
+    body      = request.get_json(silent=True) or {}
+    requested = body.get("services", list(SERVICE_REGISTRY.keys()))
+
+    logger.info("[services/stop] triggered_by=%s services=%s",
+                body.get("triggered_by", "api"), requested)
+
+    results: dict = {}
+    errors:  list = []
+
+    for name in requested:
+        if name not in SERVICE_REGISTRY:
+            results[name] = {"success": False, "message": f"Unknown service '{name}'"}
+            errors.append(name)
+            continue
+        _, stop_fn, _ = SERVICE_REGISTRY[name]
+        try:
+            results[name] = stop_fn()
+        except Exception as exc:
+            logger.error("[services/stop] %s failed: %s", name, exc, exc_info=True)
+            results[name] = {"success": False, "message": str(exc)}
+            errors.append(name)
+
+    return jsonify({"success": not errors, "results": results, "errors": errors}), (207 if errors else 200)
+
+
+@app.route("/services/status", methods=["GET"])
+def get_services_status():
+    """
+    Return the combined status of all registered background services.
+
+    Response:
+        {
+          "orb":       { "running": true,  "calculation_phase": false, ... },
+          "contracts": { "running": false }
+        }
+    """
+    status: dict = {}
+    for name, (_, _, status_fn) in SERVICE_REGISTRY.items():
+        try:
+            status[name] = status_fn()
+        except Exception as exc:
+            logger.error("[services/status] %s error: %s", name, exc)
+            status[name] = {"running": False, "error": str(exc)}
+    return jsonify(status)
+
+
 @app.route("/options/<ticker>", methods=["GET"])
 def get_options(ticker: str):
     """
