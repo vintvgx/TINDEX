@@ -918,10 +918,14 @@ class SupabaseService:
             
             # Capture price at the moment of tracking so the monitor can
             # compute percent-change without a separate lookup.
-            # Prefer an explicit tracked_entry_price; fall back to last_price.
+            # Priority: explicit field → snapshot lastPrice → snapshot mark → snapshot ask
+            snapshot = contract_data.get('tracking_snapshot') or {}
             entry_price = (
                 contract_data.get('tracked_entry_price')
                 or contract_data.get('last_price')
+                or snapshot.get('lastPrice')
+                or snapshot.get('mark')
+                or snapshot.get('ask')
             )
 
             # Prepare data for database

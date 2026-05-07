@@ -154,17 +154,21 @@ function AppContent() {
           return;
         }
         
+        // Handle contract price alert notifications
+        if (data.type === 'contract_price_alert') {
+          router.push('/(app)/(tabs)/options');
+          return;
+        }
+
         // Handle different screen types
         if (data.screen === 'watchlists' && isValidWatchlistType(data.watchlistType)) {
           router.push({
             pathname: '/(app)/(tabs)/watchlists',
             params: {
-              selectedWatchlist: data.watchlistType, // ✅ Now type-safe
+              selectedWatchlist: data.watchlistType,
             },
           });
         }
-        // TODO : Add more handlers as needed
-        // else if (data.screen === 'ticker') { ... }
       });
 
     // Cleanup function
