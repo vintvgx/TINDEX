@@ -7,8 +7,10 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useTrackedContracts } from '@/hooks/queries/track/useTrackedContracts';
 import { useUntrackContract } from '@/hooks/mutations/track/useUntrackContract';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
+import { useContractScores } from '@/hooks/queries/agent/useContractScores';
 import type { TrackedOptionContract } from '@/common/types/options';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
+import type { ContractScore } from '@/common/types/agent';
 import { AddContractSheet } from './AddContractSheet';
 import { useToast } from '@/common/components/ui/Toast';
 
@@ -44,15 +46,32 @@ const PricePulse: React.FC<{ colors: ReturnType<typeof useThemeColors> }> = ({ c
 // ─── Per-contract live price card ─────────────────────────────────────────────
 // React Query deduplicates: all cards for the same ticker share one API request.
 
+const SIGNAL_COLORS: Record<string, string> = {
+  STRONG_BUY: '#00c853',
+  BUY: '#4caf50',
+  HOLD: '#ff9800',
+  SELL: '#f44336',
+  STRONG_SELL: '#b71c1c',
+};
+
+const SIGNAL_LABELS: Record<string, string> = {
+  STRONG_BUY: 'Strong Buy',
+  BUY: 'Buy',
+  HOLD: 'Hold',
+  SELL: 'Sell',
+  STRONG_SELL: 'Strong Sell',
+};
+
 interface ContractCardProps {
   contract: TrackedOptionContract;
+  aiScore?: ContractScore;
   onPress: (contract: TrackedOptionContract, live: OptionsContract | null, currentPrice: number) => void;
   onUntrack: () => void;
   isUntracking: boolean;
   colors: ReturnType<typeof useThemeColors>;
 }
 
-const ContractCard: React.FC<ContractCardProps> = ({ contract, onPress, onUntrack, isUntracking, colors }) => {
+const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress, onUntrack, isUntracking, colors }) => {
   const today = toDateStr(new Date());
   const farDate = (() => { const d = new Date(); d.setFullYear(d.getFullYear() + 1); return toDateStr(d); })();
 
@@ -179,6 +198,24 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, onPress, onUntrac
         </View>
       </View>
 
+      {/* AI score row (shown when score is available) */}
+      {aiScore ? (
+        <View style={[cc.aiRow, { borderTopColor: colors.separator, backgroundColor: colors.background + 'CC' }]}>
+          <Ionicons name="sparkles" size={11} color={SIGNAL_COLORS[aiScore.signal] ?? colors.accent} />
+          <View style={[cc.scoreBadge, { backgroundColor: (SIGNAL_COLORS[aiScore.signal] ?? colors.accent) + '20' }]}>
+            <Text style={[cc.scoreNum, { color: SIGNAL_COLORS[aiScore.signal] ?? colors.accent }]}>
+              {aiScore.score}/100
+            </Text>
+          </View>
+          <Text style={[cc.signalText, { color: SIGNAL_COLORS[aiScore.signal] ?? colors.accent }]}>
+            {SIGNAL_LABELS[aiScore.signal] ?? aiScore.signal}
+          </Text>
+          <Text style={[cc.reasoningText, { color: colors.textTertiary }]} numberOfLines={1}>
+            · {aiScore.reasoning}
+          </Text>
+        </View>
+      ) : null}
+
       {/* Footer row */}
       <View style={[cc.footer, { borderTopColor: colors.separator }]}>
         <View style={[cc.statusPill, { backgroundColor: colors.background }]}>
@@ -218,6 +255,15 @@ const cc = StyleSheet.create({
   trackedFrom: { fontSize: 11, fontWeight: '500', marginTop: 1 },
   pnl: { fontSize: 11, fontWeight: '600', marginTop: 3 },
   underlying: { fontSize: 11, marginTop: 2 },
+  aiRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 7,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  scoreBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  scoreNum: { fontSize: 11, fontWeight: '800' },
+  signalText: { fontSize: 11, fontWeight: '700' },
+  reasoningText: { fontSize: 11, flex: 1 },
   footer: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 14, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth,
@@ -238,6 +284,7 @@ export const TrackedContractsList: React.FC<Props> = ({ onContractPress, activeT
   const colors = useThemeColors();
   const { data: contracts, isLoading, refetch } = useTrackedContracts();
   const { mutate: untrack, isPending: isUntracking, variables: untrackedId } = useUntrackContract();
+  const { data: contractScores = [] } = useContractScores();
   const [addOpen, setAddOpen] = useState(false);
   const toast = useToast();
 
@@ -310,6 +357,7 @@ export const TrackedContractsList: React.FC<Props> = ({ onContractPress, activeT
         renderItem={({ item }) => (
           <ContractCard
             contract={item}
+            aiScore={contractScores.find(s => s.tracked_contract_id === item.id)}
             onPress={onContractPress}
             onUntrack={() => handleUntrack(item.id)}
             isUntracking={isUntracking && untrackedId === item.id}

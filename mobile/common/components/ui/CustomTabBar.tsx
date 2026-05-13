@@ -8,6 +8,8 @@ import { useServicesStatus } from '@/hooks/queries/services/useServicesStatus';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
+import { AgentModal } from '@/common/components/agent/AgentModal';
+import { useToast } from '@/common/components/ui/Toast';
 
 const VISIBLE_ROUTES = new Set(['feed', 'options', 'orb', 'notifications', 'profile']);
 
@@ -32,7 +34,9 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
       ? colors.warning
       : colors.error;
   const [searchOpen, setSearchOpen] = useState(false);
-  const { setOptionsTicker } = useOptionsTicker();
+  const [agentOpen, setAgentOpen] = useState(false);
+  const { setOptionsTicker, optionsTicker } = useOptionsTicker();
+  const toast = useToast();
   const [optionsInput, setOptionsInput] = useState('');
   const optionsInputRef = useRef<TextInput>(null);
   const currentRoute = state.routes[state.index]?.name;
@@ -146,10 +150,16 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
         pointerEvents="box-none"
         style={[styles.container, { paddingBottom: bottomPadding }]}
       >
-        {/* Search bar — animates up with keyboard, tab pill stays fixed */}
-        <Animated.View style={{ transform: [{ translateY: keyboardOffset }], width: '100%', alignItems: 'center' }}>
+        {/* Search bar + AI agent button — animate up together with keyboard */}
+        <Animated.View style={{
+          transform: [{ translateY: keyboardOffset }],
+          width: '88%',
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 8,
+        }}>
           {isOnOptionsTab ? (
-            <View style={[styles.searchBar, { backgroundColor: colors.tabBar, borderColor: colors.tabBarBorder }]}>
+            <View style={[styles.searchBar, { flex: 1, backgroundColor: colors.tabBar, borderColor: colors.tabBarBorder }]}>
               <Ionicons name="layers-outline" size={15} color={colors.tabBarInactive} style={{ marginRight: 9 }} />
               <TextInput
                 ref={optionsInputRef}
@@ -181,7 +191,7 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
             <TouchableOpacity
               onPress={() => setSearchOpen(true)}
               activeOpacity={0.82}
-              style={[styles.searchBar, { backgroundColor: colors.tabBar, borderColor: colors.tabBarBorder }]}
+              style={[styles.searchBar, { flex: 1, backgroundColor: colors.tabBar, borderColor: colors.tabBarBorder }]}
             >
               <Ionicons name="search" size={15} color={colors.tabBarInactive} style={{ marginRight: 9 }} />
               <Text style={[styles.searchPlaceholder, { color: colors.tabBarInactive }]}>
@@ -189,6 +199,15 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
               </Text>
             </TouchableOpacity>
           )}
+
+          {/* AI agent button */}
+          <TouchableOpacity
+            onPress={() => setAgentOpen(true)}
+            activeOpacity={0.82}
+            style={[styles.agentBtn, { backgroundColor: colors.tabBar, borderColor: colors.tabBarBorder }]}
+          >
+            <Ionicons name="sparkles" size={16} color={colors.accent} />
+          </TouchableOpacity>
         </Animated.View>
 
         {/* Tab pill */}
@@ -222,6 +241,13 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
       </View>
 
       <SearchBottomSheet visible={searchOpen} onClose={() => setSearchOpen(false)} />
+
+      <AgentModal
+        visible={agentOpen}
+        onClose={() => setAgentOpen(false)}
+        ticker={isOnOptionsTab && optionsTicker ? optionsTicker : undefined}
+        onError={(msg) => toast.error(msg)}
+      />
     </>
   );
 };
@@ -238,10 +264,22 @@ const styles = StyleSheet.create({
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    width: '88%',
     paddingHorizontal: 16,
     paddingVertical: 13,
     borderRadius: 22,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  agentBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },

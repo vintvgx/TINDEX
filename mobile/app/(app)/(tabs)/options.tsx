@@ -5,7 +5,6 @@ import {
   FlatList,
   ScrollView,
   TouchableOpacity,
-  ActivityIndicator,
   StyleSheet,
   SafeAreaView,
   Animated,
@@ -23,6 +22,8 @@ import { TrackedContractsList } from '@/common/components/options/TrackedContrac
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useServicesStatus } from '@/hooks/queries/services/useServicesStatus';
+import { useScoreContract } from '@/hooks/mutations/agent/useScoreContract';
+import { useToast } from '@/common/components/ui/Toast';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -278,7 +279,9 @@ const OptionsScreen = () => {
   // Tracking hooks
   const trackContract = useTrackContract();
   const untrackContract = useUntrackContract();
+  const scoreContract = useScoreContract();
   const { data: trackedContracts } = useTrackedContracts();
+  const toast = useToast();
 
   // Live countdown
   useEffect(() => {
@@ -451,9 +454,35 @@ const OptionsScreen = () => {
       trackingSnapshot: asOpportunity(c),
       trackedFromSource: 'manual',
     }, {
-      onSuccess: tracked => setDetailTrackedId(tracked.id),
+      onSuccess: tracked => {
+        setDetailTrackedId(tracked.id);
+        // Fire-and-forget AI scoring — tracking never fails because of it
+        scoreContract.mutate({
+          trackedContractId: tracked.id,
+          ticker: activeTicker || c.ticker,
+          contract: {
+            symbol: c.symbol,
+            optionType: c.option_type,
+            strike: c.strike,
+            expiration: c.expiration,
+            delta: c.delta,
+            gamma: c.gamma,
+            theta: c.theta,
+            vega: c.vega,
+            impliedVolatility: c.implied_volatility ?? undefined,
+            openInterest: c.open_interest,
+            volume: c.volume,
+            bid: c.bid,
+            ask: c.ask,
+            lastPrice: c.last_price,
+            currentStockPrice: currentPrice > 0 ? currentPrice : undefined,
+          },
+        }, {
+          onError: () => toast.warning('AI scoring unavailable — score will update once service is back.'),
+        });
+      },
     });
-  }, [user, activeTicker, trackContract, asOpportunity, detailTrackedId]);
+  }, [user, activeTicker, trackContract, scoreContract, asOpportunity, detailTrackedId, currentPrice, toast]);
 
   const handleUntrack = useCallback((id: string) => {
     untrackContract.mutate(id, {
