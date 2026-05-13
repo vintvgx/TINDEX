@@ -42,3 +42,6 @@ yarn-error.*
 app-example
 
 test.json
+
+# claude memory files
+/.claude
