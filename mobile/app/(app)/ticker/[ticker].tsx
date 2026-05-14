@@ -47,7 +47,6 @@ export default function TickerScreen() {
   const trackedContractSymbols = useMemo(() => new Set(trackedContracts.map((c) => c.contract_symbol)), [trackedContracts]);
 
   const stockData = tickerResponse?.data;
-  console.log("Stock data: ", prettyJSON(stockData?.historical_data))
   const { navigateBack } = useBaseNavigation();
 
   const handleORBState = () => followORB.mutate(!isFollowingORB?.orb_enabled);

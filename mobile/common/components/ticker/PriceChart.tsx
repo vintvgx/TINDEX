@@ -263,64 +263,75 @@ export const PriceChart: React.FC<Props> = ({
           );
         })}
 
-        {/* ── Crosshair vertical line (rendered before tooltip so tooltip paints over it) ── */}
-        {activeCoord && (
-          <Line
-            x1={activeCoord.x.toFixed(1)}
-            y1={plotTop}
-            x2={activeCoord.x.toFixed(1)}
-            y2={plotBottom}
-            stroke={colors.textTertiary}
-            strokeWidth={1}
-            strokeDasharray="3,3"
-          />
-        )}
+        {/* ── Crosshair: line drawn in two segments that physically skip the tooltip area ── */}
+        {activeCoord && activePoint && (() => {
+          const lineX = activeCoord.x.toFixed(1);
+          const gapTop = tooltipY - 2;
+          const gapBottom = tooltipY + tooltipH + 4;
+          return (
+            <G>
+              {/* Segment above tooltip (may be zero-height — renders nothing) */}
+              {plotTop < gapTop && (
+                <Line
+                  x1={lineX} y1={plotTop}
+                  x2={lineX} y2={gapTop}
+                  stroke={colors.textTertiary}
+                  strokeWidth={1}
+                  strokeDasharray="3,3"
+                />
+              )}
+              {/* Segment below tooltip */}
+              <Line
+                x1={lineX} y1={gapBottom}
+                x2={lineX} y2={plotBottom}
+                stroke={colors.textTertiary}
+                strokeWidth={1}
+                strokeDasharray="3,3"
+              />
 
-        {/* ── Crosshair dot + tooltip (painted last so they sit above everything) ── */}
-        {activeCoord && activePoint && (
-          <G>
-            {/* Dot on the price line */}
-            <Circle
-              cx={activeCoord.x.toFixed(1)}
-              cy={activeCoord.y.toFixed(1)}
-              r={4}
-              fill={lineColor}
-              stroke={colors.background}
-              strokeWidth={2}
-            />
+              {/* Dot on price line */}
+              <Circle
+                cx={lineX}
+                cy={activeCoord.y.toFixed(1)}
+                r={4}
+                fill={lineColor}
+                stroke={colors.background}
+                strokeWidth={2}
+              />
 
-            {/* Tooltip bubble */}
-            <Rect
-              x={tooltipX}
-              y={tooltipY}
-              width={tooltipW}
-              height={tooltipH}
-              rx={6}
-              fill={colors.surface}
-              stroke={colors.border}
-              strokeWidth={0.5}
-            />
-            <SvgText
-              x={tooltipX + tooltipW / 2}
-              y={tooltipY + 13}
-              fill={lineColor}
-              fontSize={12}
-              fontWeight="700"
-              textAnchor="middle"
-            >
-              ${activePoint.price.toFixed(2)}
-            </SvgText>
-            <SvgText
-              x={tooltipX + tooltipW / 2}
-              y={tooltipY + 27}
-              fill={colors.textTertiary}
-              fontSize={9}
-              textAnchor="middle"
-            >
-              {formatTooltipDate(activePoint.date)}
-            </SvgText>
-          </G>
-        )}
+              {/* Tooltip bubble */}
+              <Rect
+                x={tooltipX}
+                y={tooltipY}
+                width={tooltipW}
+                height={tooltipH}
+                rx={6}
+                fill={colors.surface}
+                stroke={colors.border}
+                strokeWidth={0.5}
+              />
+              <SvgText
+                x={tooltipX + tooltipW / 2}
+                y={tooltipY + 13}
+                fill={lineColor}
+                fontSize={12}
+                fontWeight="700"
+                textAnchor="middle"
+              >
+                {`$${activePoint.price.toFixed(2)}`}
+              </SvgText>
+              <SvgText
+                x={tooltipX + tooltipW / 2}
+                y={tooltipY + 27}
+                fill={colors.textTertiary}
+                fontSize={9}
+                textAnchor="middle"
+              >
+                {formatTooltipDate(activePoint.date)}
+              </SvgText>
+            </G>
+          );
+        })()}
       </Svg>
     </View>
   );

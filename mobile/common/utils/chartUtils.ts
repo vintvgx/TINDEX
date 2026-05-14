@@ -289,6 +289,104 @@ export function calcBollingerBands(
   return { upper, middle, lower };
 }
 
+// ─── EMA configuration & signal analysis ─────────────────────────────────────
+
+export const EMA_CONFIGS = [
+  { period: 10,  label: 'EMA 10',  color: '#f59e0b' },
+  { period: 20,  label: 'EMA 20',  color: '#38bdf8' },
+  { period: 50,  label: 'EMA 50',  color: '#a78bfa' },
+  { period: 200, label: 'EMA 200', color: '#f87171' },
+] as const;
+
+export type EMAPeriod = (typeof EMA_CONFIGS)[number]['period'];
+
+export interface EMAPerLine {
+  period: EMAPeriod;
+  label: string;
+  color: string;
+  value: number | null;   // latest computed EMA value (null = not enough data)
+  priceAbove: boolean | null;
+}
+
+export interface EMAAnalysis {
+  perEMA: EMAPerLine[];
+  shortTermBias: 'bullish' | 'bearish' | 'neutral'; // EMA 10 vs EMA 20
+  longTermBias: 'golden_cross' | 'death_cross' | 'neutral'; // EMA 50 vs EMA 200
+  signal: 'overbought' | 'bullish' | 'neutral' | 'bearish' | 'oversold';
+  score: number;
+  maxScore: number;
+}
+
+export function calcEMAAnalysis(prices: number[], selectedPeriods: number[]): EMAAnalysis {
+  if (!prices.length || !selectedPeriods.length) {
+    return { perEMA: [], shortTermBias: 'neutral', longTermBias: 'neutral', signal: 'neutral', score: 0, maxScore: 0 };
+  }
+
+  const currentPrice = prices[prices.length - 1];
+  const emaValues: Record<number, number | null> = {};
+
+  for (const period of selectedPeriods) {
+    const series = calcEMA(prices, period);
+    const last = series[series.length - 1];
+    emaValues[period] = isFinite(last) ? last : null;
+  }
+
+  const perEMA: EMAPerLine[] = EMA_CONFIGS
+    .filter(c => selectedPeriods.includes(c.period))
+    .map(c => {
+      const val = emaValues[c.period];
+      return { ...c, value: val, priceAbove: val !== null ? currentPrice > val : null };
+    });
+
+  // Base score: +1 for each EMA where price is above it
+  let score = 0;
+  for (const e of perEMA) {
+    if (e.priceAbove === true) score += 1;
+    else if (e.priceAbove === false) score -= 1;
+  }
+
+  // Short-term crossover bonus (EMA 10 vs EMA 20)
+  const e10 = emaValues[10];
+  const e20 = emaValues[20];
+  let shortTermBias: 'bullish' | 'bearish' | 'neutral' = 'neutral';
+  const hasST = selectedPeriods.includes(10) && selectedPeriods.includes(20);
+  if (hasST && e10 !== null && e20 !== null) {
+    if (e10 > e20) { score += 1; shortTermBias = 'bullish'; }
+    else if (e10 < e20) { score -= 1; shortTermBias = 'bearish'; }
+  }
+
+  // Long-term crossover bonus (golden/death cross)
+  const e50 = emaValues[50];
+  const e200 = emaValues[200];
+  let longTermBias: 'golden_cross' | 'death_cross' | 'neutral' = 'neutral';
+  const hasLT = selectedPeriods.includes(50) && selectedPeriods.includes(200);
+  if (hasLT && e50 !== null && e200 !== null) {
+    if (e50 > e200) { score += 2; longTermBias = 'golden_cross'; }
+    else if (e50 < e200) { score -= 2; longTermBias = 'death_cross'; }
+  }
+
+  let maxScore = selectedPeriods.length;
+  if (hasST) maxScore += 1;
+  if (hasLT) maxScore += 2;
+
+  let signal: EMAAnalysis['signal'];
+  if (maxScore === 0) {
+    signal = 'neutral';
+  } else if (score >= maxScore - 1) {
+    signal = 'overbought';
+  } else if (score > 0) {
+    signal = 'bullish';
+  } else if (score === 0) {
+    signal = 'neutral';
+  } else if (score <= -(maxScore - 1)) {
+    signal = 'oversold';
+  } else {
+    signal = 'bearish';
+  }
+
+  return { perEMA, shortTermBias, longTermBias, signal, score, maxScore };
+}
+
 // ─── Formatting ───────────────────────────────────────────────────────────────
 
 export function formatVolume(v: number): string {
