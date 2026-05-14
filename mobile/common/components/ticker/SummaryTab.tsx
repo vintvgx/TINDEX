@@ -1,259 +1,323 @@
-/**
- * Summary tab displayed within [ticker].tsx
- */
+import React, { useState, useMemo } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  Dimensions,
+  StyleSheet,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useThemeColors } from '@/lib/useColorScheme';
+import { PriceChart } from '@/common/components/ticker/PriceChart';
+import { ExpandedChartModal } from '@/common/components/ticker/ExpandedChartModal';
+import { filterByPeriod, formatVolume, type ChartPeriod } from '@/common/utils/chartUtils';
+import type { TickerData } from '@/common/types/blogPosts/ticker';
 
-import type React from "react";
-import { View, Text, Pressable, Dimensions } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { LineChart } from "react-native-chart-kit";
-import { AppStoreCard } from "@/common/components/ui/AppStoreCard";
-import type { TickerData } from "@/common/types/blogPosts/ticker";
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-const { width } = Dimensions.get("window");
+const PERIODS: ChartPeriod[] = ['1D', '1W', '1M', 'YTD', '1Y', '5Y', 'Max'];
 
-interface SummaryTabProps {
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+// Horizontal padding is 20 on each side from the ScrollView in [ticker].tsx
+const CHART_WIDTH = SCREEN_WIDTH - 40;
+
+// ─── Props ────────────────────────────────────────────────────────────────────
+
+interface Props {
   stockData: TickerData;
-  selectedPeriod: string;
-  onPeriodChange: (period: string) => void;
 }
 
-const periods = ["1D", "1W", "1M", "YTD", "1Y", "5Y", "Max"];
+// ─── Component ────────────────────────────────────────────────────────────────
 
-export const SummaryTab: React.FC<SummaryTabProps> = ({
-  stockData,
-  selectedPeriod,
-  onPeriodChange,
-}) => {
-  // Chart data from API
-  const chartData = stockData.historical_data
-    ? {
-        labels: stockData.historical_data.dates.map((date) =>
-          new Date(date).toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-          })
-        ),
-        datasets: [
-          {
-            data: stockData.historical_data.prices,
-            color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
-            strokeWidth: 2,
-          },
-        ],
-      }
-    : null;
+export const SummaryTab: React.FC<Props> = ({ stockData }) => {
+  const colors = useThemeColors();
+  const [period, setPeriod] = useState<ChartPeriod>('1M');
+  const [expandedVisible, setExpandedVisible] = useState(false);
+
+  // Filter historical data to the selected period
+  const chartResult = useMemo(() => {
+    const hist = stockData.historical_data;
+    if (!hist?.dates?.length || !hist?.prices?.length) {
+      return null;
+    }
+    return filterByPeriod(hist.dates, hist.prices, period);
+  }, [stockData.historical_data, period]);
+
+  const hasChartData = chartResult && chartResult.points.length >= 2;
+
+  // Formatted price change for the period
+  const periodChangeColor = chartResult
+    ? chartResult.isPositive
+      ? colors.success
+      : colors.error
+    : colors.textTertiary;
+
+  const periodChangeText = chartResult
+    ? `${chartResult.isPositive ? '+' : ''}${chartResult.priceChange.toFixed(2)} (${
+        chartResult.isPositive ? '+' : ''
+      }${chartResult.priceChangePct.toFixed(2)}%)`
+    : '';
 
   return (
     <>
-      {/* Chart Section */}
-      <View className="mb-8">
-        <AppStoreCard variant="featured">
-          <View className="p-6">
-            <Text className="text-white text-xl font-bold tracking-tight mb-6">
-              Price Chart
-            </Text>
-            {chartData ? (
-              <LineChart
-                data={chartData}
-                width={width - 70}
-                height={200}
-                chartConfig={{
-                  backgroundColor: "transparent",
-                  backgroundGradientFrom: "#1f2937",
-                  backgroundGradientTo: "#111827",
-                  decimalPlaces: 2,
-                  color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
-                  labelColor: (opacity = 1) =>
-                    `rgba(156, 163, 175, ${opacity})`,
-                  style: {
-                    borderRadius: 16,
-                  },
-                  propsForDots: {
-                    r: "0",
-                  },
-                }}
-                bezier
-                style={{
-                  marginVertical: 8,
-                  borderRadius: 16,
-                }}
-              />
-            ) : (
-              <View className="h-[200px] bg-gray-800/30 rounded-2xl flex items-center justify-center border border-gray-700/30">
-                <Ionicons name="bar-chart-outline" size={48} color="#6B7280" />
-                <Text className="text-gray-400 text-lg font-medium mt-4 text-center">
-                  No Chart Data Available
-                </Text>
-                <Text className="text-gray-500 text-sm text-center mt-2">
-                  Historical price data could not be loaded
-                </Text>
-              </View>
-            )}
-
-            {/* Period Buttons */}
-            <View className="flex-row justify-between mt-6">
-              {periods.map((period) => (
-                <Pressable
-                  key={period}
-                  onPress={() => onPeriodChange(period)}
-                  className={`px-3 py-2 rounded-lg ${
-                    selectedPeriod === period
-                      ? "bg-blue-500/20 border border-blue-400/30"
-                      : "bg-transparent"
-                  }`}>
-                  <Text
-                    className={`text-sm font-medium ${
-                      selectedPeriod === period
-                        ? "text-blue-400"
-                        : "text-gray-400"
-                    }`}>
-                    {period}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-        </AppStoreCard>
-      </View>
-
-      {/* Key Stats */}
-      <View className="mb-8">
-        <AppStoreCard variant="featured">
-          <View className="p-6">
-            <Text className="text-white text-xl font-bold tracking-tight mb-6">
-              Key Statistics
-            </Text>
-            <View className="flex-row flex-wrap justify-between">
-              {/* Day High */}
-              {stockData.day_high != null && (
-                <View className="w-[48%] mb-4">
-                  <Text className="text-gray-400 text-sm font-medium">
-                    Day High
-                  </Text>
-                  <Text className="text-white text-lg font-bold tracking-tight mt-1">
-                    ${stockData.day_high.toFixed(2)}
-                  </Text>
-                </View>
-              )}
-
-              {/* Day Low */}
-              {stockData.day_low != null && (
-                <View className="w-[48%] mb-4">
-                  <Text className="text-gray-400 text-sm font-medium">
-                    Day Low
-                  </Text>
-                  <Text className="text-white text-lg font-bold tracking-tight mt-1">
-                    ${stockData.day_low.toFixed(2)}
-                  </Text>
-                </View>
-              )}
-
-              {/* 52W High */}
-              {stockData.year_high != null && (
-                <View className="w-[48%] mb-4">
-                  <Text className="text-gray-400 text-sm font-medium">
-                    52W High
-                  </Text>
-                  <Text className="text-white text-lg font-bold tracking-tight mt-1">
-                    ${stockData.year_high.toFixed(2)}
-                  </Text>
-                </View>
-              )}
-
-              {/* 52W Low */}
-              {stockData.year_low != null && (
-                <View className="w-[48%] mb-4">
-                  <Text className="text-gray-400 text-sm font-medium">
-                    52W Low
-                  </Text>
-                  <Text className="text-white text-lg font-bold tracking-tight mt-1">
-                    ${stockData.year_low.toFixed(2)}
-                  </Text>
-                </View>
-              )}
-
-              {/* Volume */}
-              {stockData.volume != null && (
-                <View className="w-[48%] mb-4">
-                  <Text className="text-gray-400 text-sm font-medium">
-                    Volume
-                  </Text>
-                  <Text className="text-white text-lg font-bold tracking-tight mt-1">
-                    {stockData.volume.toLocaleString()}
-                  </Text>
-                </View>
-              )}
-
-              {/* Average Volume */}
-              {stockData.average_volume != null && (
-                <View className="w-[48%] mb-4">
-                  <Text className="text-gray-400 text-sm font-medium">
-                    Avg Volume
-                  </Text>
-                  <Text className="text-white text-lg font-bold tracking-tight mt-1">
-                    {stockData.average_volume.toLocaleString()}
-                  </Text>
-                </View>
-              )}
-            </View>
-          </View>
-        </AppStoreCard>
-      </View>
-
-      {/* About Section */}
-      <View className="mb-8">
-        <AppStoreCard variant="featured">
-          <View className="p-6">
-            <Text className="text-white text-xl font-bold tracking-tight mb-4">
-              About {stockData.ticker}
-            </Text>
-            
-            {/* Sector and Industry */}
-            <View className="flex-row items-center mb-4">
-              {stockData.sector && (
-                <View className="bg-blue-500/20 px-3 py-1 rounded-full mr-3 border border-blue-400/30">
-                  <Text className="text-blue-400 text-sm font-medium">
-                    {stockData.sector}
-                  </Text>
-                </View>
-              )}
-              {stockData.industry && (
-                <View className="bg-gray-700/60 px-3 py-1 rounded-full border border-gray-600/30">
-                  <Text className="text-gray-300 text-sm font-medium">
-                    {stockData.industry}
-                  </Text>
-                </View>
-              )}
-            </View>
-
-            {/* Description */}
-            {stockData.description && (
-              <Text className="text-gray-300 leading-7 mb-6 font-medium">
-                {stockData.description}
+      {/* ── Price Chart Card ── */}
+      <View style={[s.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        {/* Card header */}
+        <View style={s.cardHeader}>
+          <View>
+            <Text style={[s.cardTitle, { color: colors.text }]}>Price Chart</Text>
+            {periodChangeText ? (
+              <Text style={[s.periodChange, { color: periodChangeColor }]}>
+                {periodChangeText}
               </Text>
-            )}
-
-            {/* Action Buttons */}
-            <View className="flex-row justify-between">
-              <Pressable className="flex-1 bg-green-500/20 border border-green-400/30 rounded-2xl py-3 mr-2">
-                <Text className="text-green-400 font-bold text-center tracking-wide">
-                  Bull Case
-                </Text>
-              </Pressable>
-              <Pressable className="flex-1 bg-orange-500/20 border border-orange-400/30 rounded-2xl py-3 mx-1">
-                <Text className="text-orange-400 font-bold text-center tracking-wide">
-                  Bear Case
-                </Text>
-              </Pressable>
-              <Pressable className="flex-1 bg-purple-500/20 border border-purple-400/30 rounded-2xl py-3 ml-2">
-                <Text className="text-purple-400 font-bold text-center tracking-wide">
-                  Ask Claire
-                </Text>
-              </Pressable>
-            </View>
+            ) : null}
           </View>
-        </AppStoreCard>
+          {hasChartData && (
+            <TouchableOpacity
+              onPress={() => setExpandedVisible(true)}
+              activeOpacity={0.7}
+              style={[s.expandBtn, { backgroundColor: colors.iconButton, borderColor: colors.iconButtonBorder }]}
+            >
+              <Ionicons name="expand-outline" size={16} color={colors.text} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Chart */}
+        <View style={s.chartContainer}>
+          {hasChartData ? (
+            <PriceChart
+              points={chartResult.points}
+              period={period}
+              width={CHART_WIDTH - 32} // subtract card horizontal padding
+              isPositive={chartResult.isPositive}
+              // indicators={[]} — add EMA/RSI lines here in the future
+            />
+          ) : (
+            <View
+              style={[s.chartEmpty, { backgroundColor: colors.background, borderColor: colors.border }]}
+            >
+              <Ionicons name="bar-chart-outline" size={36} color={colors.textTertiary} />
+              <Text style={[s.chartEmptyTitle, { color: colors.textSecondary }]}>
+                No Chart Data
+              </Text>
+              <Text style={[s.chartEmptySubtitle, { color: colors.textTertiary }]}>
+                Historical price data is unavailable
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* Period selector */}
+        <View style={s.periodRow}>
+          {PERIODS.map(p => {
+            const active = period === p;
+            return (
+              <TouchableOpacity
+                key={p}
+                onPress={() => setPeriod(p)}
+                activeOpacity={0.75}
+                style={[
+                  s.periodBtn,
+                  active && { backgroundColor: colors.accent + '22', borderColor: colors.accent + '55' },
+                  !active && { borderColor: 'transparent' },
+                ]}
+              >
+                <Text
+                  style={[
+                    s.periodLabel,
+                    { color: active ? colors.accent : colors.textTertiary },
+                    active && { fontWeight: '700' },
+                  ]}
+                >
+                  {p}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
+
+      {/* ── Key Statistics ── */}
+      <View style={[s.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <Text style={[s.cardTitle, { color: colors.text }]}>Key Statistics</Text>
+        <View style={s.statsGrid}>
+          <StatItem label="Day High" value={stockData.day_high != null ? `$${stockData.day_high.toFixed(2)}` : '—'} colors={colors} />
+          <StatItem label="Day Low" value={stockData.day_low != null ? `$${stockData.day_low.toFixed(2)}` : '—'} colors={colors} />
+          <StatItem label="52W High" value={stockData.year_high != null ? `$${stockData.year_high.toFixed(2)}` : '—'} colors={colors} />
+          <StatItem label="52W Low" value={stockData.year_low != null ? `$${stockData.year_low.toFixed(2)}` : '—'} colors={colors} />
+          <StatItem label="Volume" value={stockData.volume != null ? formatVolume(stockData.volume) : '—'} colors={colors} />
+          <StatItem label="Avg Volume" value={stockData.average_volume != null ? formatVolume(stockData.average_volume) : '—'} colors={colors} />
+          {stockData.market_cap != null && (
+            <StatItem label="Market Cap" value={formatVolume(stockData.market_cap)} colors={colors} />
+          )}
+          {stockData.pe_ratio != null && (
+            <StatItem label="P/E Ratio" value={stockData.pe_ratio.toFixed(1)} colors={colors} />
+          )}
+        </View>
+      </View>
+
+      {/* ── About ── */}
+      <View style={[s.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <Text style={[s.cardTitle, { color: colors.text }]}>
+          About {stockData.ticker}
+        </Text>
+
+        {/* Sector / Industry chips */}
+        <View style={s.chipRow}>
+          {stockData.sector ? (
+            <View style={[s.chip, { backgroundColor: colors.accent + '18', borderColor: colors.accent + '40' }]}>
+              <Text style={[s.chipText, { color: colors.accent }]}>{stockData.sector}</Text>
+            </View>
+          ) : null}
+          {stockData.industry ? (
+            <View style={[s.chip, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <Text style={[s.chipText, { color: colors.textSecondary }]}>{stockData.industry}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {stockData.description ? (
+          <Text style={[s.description, { color: colors.textSecondary }]}>
+            {stockData.description}
+          </Text>
+        ) : null}
+      </View>
+
+      {/* ── Expanded chart modal ── */}
+      <ExpandedChartModal
+        visible={expandedVisible}
+        onClose={() => setExpandedVisible(false)}
+        stockData={stockData}
+        initialPeriod={period}
+      />
     </>
   );
 };
+
+// ─── Stat item ────────────────────────────────────────────────────────────────
+
+interface StatItemProps {
+  label: string;
+  value: string;
+  colors: ReturnType<typeof useThemeColors>;
+}
+
+const StatItem: React.FC<StatItemProps> = ({ label, value, colors }) => (
+  <View style={s.statItem}>
+    <Text style={[s.statLabel, { color: colors.textTertiary }]}>{label}</Text>
+    <Text style={[s.statValue, { color: colors.text }]}>{value}</Text>
+  </View>
+);
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+const s = StyleSheet.create({
+  card: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    marginBottom: 16,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  expandBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+  },
+  periodChange: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 3,
+  },
+  chartContainer: {
+    marginBottom: 12,
+  },
+  chartEmpty: {
+    height: 180,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  chartEmptyTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  chartEmptySubtitle: {
+    fontSize: 12,
+  },
+  periodRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 4,
+  },
+  periodBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    minWidth: 36,
+  },
+  periodLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 12,
+    gap: 4,
+  },
+  statItem: {
+    width: '48%',
+    marginBottom: 12,
+  },
+  statLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginBottom: 3,
+  },
+  statValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+    marginBottom: 12,
+  },
+  chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  chipText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  description: {
+    fontSize: 13,
+    lineHeight: 21,
+  },
+});

@@ -35,7 +35,7 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_opt
 
         # Get historical data
         try:
-            hist = ticker.history(period="1mo")
+            hist = ticker.history(period="5y")
         except Exception as e:
             logger.warning(f"Failed to get historical data for {topic}: {str(e)}")
             hist = pd.DataFrame()

@@ -27,6 +27,7 @@ import { useGenerateTickerUpdateMutation } from '@/hooks/mutations/ticker/useGen
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useTrackContract } from '@/hooks/mutations/track/useTrackContract';
 import { useThemeColors } from '@/lib/useColorScheme';
+import { prettyJSON } from '@/common/utils/strings/function';
 
 export default function TickerScreen() {
   const colors = useThemeColors();
@@ -37,7 +38,6 @@ export default function TickerScreen() {
   const followORB = useToggleORBFollow(ticker);
 
   const [activeTab, setActiveTab] = useState<'Summary' | 'Analytics' | 'Financials' | 'Options' | 'Updates'>('Summary');
-  const [selectedPeriod, setSelectedPeriod] = useState('1D');
 
   const { authState: { user } } = useAuth();
   const generateTickerUpdate = useGenerateTickerUpdateMutation();
@@ -47,6 +47,7 @@ export default function TickerScreen() {
   const trackedContractSymbols = useMemo(() => new Set(trackedContracts.map((c) => c.contract_symbol)), [trackedContracts]);
 
   const stockData = tickerResponse?.data;
+  console.log("Stock data: ", prettyJSON(stockData?.historical_data))
   const { navigateBack } = useBaseNavigation();
 
   const handleORBState = () => followORB.mutate(!isFollowingORB?.orb_enabled);
@@ -122,7 +123,7 @@ export default function TickerScreen() {
 
   const renderSummaryTab = () => (
     <ScrollView style={{ flex: 1, paddingHorizontal: 20 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24, paddingTop: 20 }}>
-      <SummaryTab stockData={stockData} selectedPeriod={selectedPeriod} onPeriodChange={setSelectedPeriod} />
+      <SummaryTab stockData={stockData} />
     </ScrollView>
   );
 
