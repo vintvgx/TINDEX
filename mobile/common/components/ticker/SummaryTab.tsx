@@ -34,14 +34,17 @@ export const SummaryTab: React.FC<Props> = ({ stockData }) => {
   const [period, setPeriod] = useState<ChartPeriod>('1M');
   const [expandedVisible, setExpandedVisible] = useState(false);
 
-  // Filter historical data to the selected period
+  // Filter historical data to the selected period.
+  // For 1D, prefer intraday_data (5-min bars) when available.
   const chartResult = useMemo(() => {
-    const hist = stockData.historical_data;
-    if (!hist?.dates?.length || !hist?.prices?.length) {
-      return null;
+    if (period === '1D' && stockData.intraday_data?.dates?.length) {
+      const { dates, prices } = stockData.intraday_data;
+      return filterByPeriod(dates, prices, period);
     }
+    const hist = stockData.historical_data;
+    if (!hist?.dates?.length || !hist?.prices?.length) return null;
     return filterByPeriod(hist.dates, hist.prices, period);
-  }, [stockData.historical_data, period]);
+  }, [stockData.historical_data, stockData.intraday_data, period]);
 
   const hasChartData = chartResult && chartResult.points.length >= 2;
 

@@ -263,20 +263,22 @@ export const PriceChart: React.FC<Props> = ({
           );
         })}
 
-        {/* ── Touch crosshair ── */}
+        {/* ── Crosshair vertical line (rendered before tooltip so tooltip paints over it) ── */}
+        {activeCoord && (
+          <Line
+            x1={activeCoord.x.toFixed(1)}
+            y1={plotTop}
+            x2={activeCoord.x.toFixed(1)}
+            y2={plotBottom}
+            stroke={colors.textTertiary}
+            strokeWidth={1}
+            strokeDasharray="3,3"
+          />
+        )}
+
+        {/* ── Crosshair dot + tooltip (painted last so they sit above everything) ── */}
         {activeCoord && activePoint && (
           <G>
-            {/* Vertical line */}
-            <Line
-              x1={activeCoord.x.toFixed(1)}
-              y1={plotTop}
-              x2={activeCoord.x.toFixed(1)}
-              y2={plotBottom}
-              stroke={colors.textTertiary}
-              strokeWidth={1}
-              strokeDasharray="3,3"
-            />
-
             {/* Dot on the price line */}
             <Circle
               cx={activeCoord.x.toFixed(1)}

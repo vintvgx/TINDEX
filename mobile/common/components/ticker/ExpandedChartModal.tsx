@@ -46,10 +46,14 @@ export const ExpandedChartModal: React.FC<Props> = ({
   const [period, setPeriod] = useState<ChartPeriod>(initialPeriod);
 
   const chartResult = useMemo(() => {
+    if (period === '1D' && stockData.intraday_data?.dates?.length) {
+      const { dates, prices } = stockData.intraday_data;
+      return filterByPeriod(dates, prices, period);
+    }
     const hist = stockData.historical_data;
     if (!hist?.dates?.length || !hist?.prices?.length) return null;
     return filterByPeriod(hist.dates, hist.prices, period);
-  }, [stockData.historical_data, period]);
+  }, [stockData.historical_data, stockData.intraday_data, period]);
 
   const periodChangeColor = chartResult
     ? chartResult.isPositive

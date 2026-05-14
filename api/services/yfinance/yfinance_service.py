@@ -33,12 +33,19 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_opt
             logger.warning(f"Failed to get basic info for {topic}: {str(e)}")
             info = {}
 
-        # Get historical data
+        # Get historical data (daily closes for 5Y)
         try:
             hist = ticker.history(period="5y")
         except Exception as e:
             logger.warning(f"Failed to get historical data for {topic}: {str(e)}")
             hist = pd.DataFrame()
+
+        # Get intraday data (5-minute bars, today only — used for 1D chart)
+        try:
+            intraday = ticker.history(period="1d", interval="5m")
+        except Exception as e:
+            logger.warning(f"Failed to get intraday data for {topic}: {str(e)}")
+            intraday = pd.DataFrame()
 
         # Get news and convert to JSON-serializable format
         try:
@@ -119,6 +126,23 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_opt
                 "volumes": (
                     hist["Volume"].tolist()
                     if not hist.empty and "Volume" in hist.columns
+                    else []
+                ),
+            },
+            "intraday_data": {
+                "dates": (
+                    intraday.index.strftime("%Y-%m-%dT%H:%M:%S").tolist()
+                    if not intraday.empty and hasattr(intraday.index, "strftime")
+                    else []
+                ),
+                "prices": (
+                    intraday["Close"].tolist()
+                    if not intraday.empty and "Close" in intraday.columns
+                    else []
+                ),
+                "volumes": (
+                    intraday["Volume"].tolist()
+                    if not intraday.empty and "Volume" in intraday.columns
                     else []
                 ),
             },

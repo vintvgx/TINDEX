@@ -88,7 +88,17 @@ export function filterByPeriod(
 
 // ─── Label helpers ────────────────────────────────────────────────────────────
 
+/** Returns true if the date string includes a time component (intraday data). */
+export function isIntradayDate(dateStr: string): boolean {
+  return dateStr.includes('T');
+}
+
 export function formatAxisLabel(dateStr: string, period: ChartPeriod): string {
+  if (period === '1D' && isIntradayDate(dateStr)) {
+    // Intraday — show HH:MM
+    const d = new Date(dateStr);
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
   const d = new Date(`${dateStr}T12:00:00`);
   switch (period) {
     case '1D':
@@ -108,8 +118,12 @@ export function formatAxisLabel(dateStr: string, period: ChartPeriod): string {
 }
 
 export function formatTooltipDate(dateStr: string): string {
+  if (isIntradayDate(dateStr)) {
+    const d = new Date(dateStr);
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
   const d = new Date(`${dateStr}T12:00:00`);
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 /** Return the indices within `count` items where x-axis labels should be shown. */

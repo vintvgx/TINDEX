@@ -24,6 +24,11 @@ export interface TickerData {
     prices: number[];
     volumes: number[];
   };
+  intraday_data?: {
+    dates: string[];   // ISO strings with time: "2026-05-13T09:30:00"
+    prices: number[];
+    volumes: number[];
+  };
   industry: string;
   logo_url?: string;
   market_cap: number;
