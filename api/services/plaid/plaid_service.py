@@ -25,12 +25,9 @@ from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUse
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from plaid.model.investments_holdings_get_request import InvestmentsHoldingsGetRequest
 from plaid.model.investments_transactions_get_request import InvestmentsTransactionsGetRequest
-from plaid.model.investments_transactions_get_request_options import InvestmentsTransactionsGetRequestOptions
 from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.country_code import CountryCode
 from plaid.model.products import Products
-from plaid.model.link_token_account_filters import LinkTokenAccountFilters
-from plaid.model.investments_filter import InvestmentsFilter
 
 logger = get_logger(__name__)
 
@@ -77,36 +74,20 @@ class PlaidService:
         self,
         user_id: str,
         redirect_uri: Optional[str] = None,
-        brokerage_only: bool = True,
     ) -> dict:
         """
-        Create a Plaid link token scoped to brokerage investment accounts.
-
-        Args:
-            user_id:        Supabase user UUID (used as Plaid client_user_id)
-            redirect_uri:   OAuth redirect URI for institutions that use OAuth
-            brokerage_only: When True restricts to brokerage subtype only;
-                            False allows all investment subtypes (IRA, 401k, etc.)
+        Create a Plaid link token scoped to investment accounts.
+        The investments product already restricts the user to investment accounts.
         """
         user = LinkTokenCreateRequestUser(client_user_id=user_id)
 
-        account_filters = None
-        if brokerage_only:
-            account_filters = LinkTokenAccountFilters(
-                investment=InvestmentsFilter(
-                    account_subtypes=["brokerage"]
-                )
-            )
-
-        kwargs: dict = dict(
-            products=[Products("investments")],
-            client_name="Alethia",
-            country_codes=[CountryCode("US")],
-            language="en",
-            user=user,
-        )
-        if account_filters:
-            kwargs["account_filters"] = account_filters
+        kwargs = {
+            "products": [Products("investments")],
+            "client_name": "Alethia",
+            "country_codes": [CountryCode("US")],
+            "language": "en",
+            "user": user,
+        }
         if redirect_uri:
             kwargs["redirect_uri"] = redirect_uri
 
@@ -205,8 +186,6 @@ class PlaidService:
         access_token: str,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        offset: int = 0,
-        count: int = 100,
     ) -> dict:
         """
         Retrieve investment transactions for a linked item.
@@ -226,15 +205,10 @@ class PlaidService:
         )
         end = date.fromisoformat(end_date) if end_date else today
 
-        options = InvestmentsTransactionsGetRequestOptions(
-            offset=offset,
-            count=min(count, 500),
-        )
         request = InvestmentsTransactionsGetRequest(
             access_token=access_token,
             start_date=start,
             end_date=end,
-            options=options,
         )
         response = self.client.investments_transactions_get(request)
 

@@ -1,6 +1,7 @@
 import { ActivityIndicator, Text, TouchableOpacity } from 'react-native';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useBrokerageConnect } from '@/hooks/mutations/plaid/useBrokerageConnect';
+import { useToast } from '@/common/components/ui/Toast';
 
 interface Props {
   onSuccess?: () => void;
@@ -8,17 +9,21 @@ interface Props {
 
 export function ConnectBrokerageButton({ onSuccess }: Props) {
   const colors = useThemeColors();
-  const { connect, isLinking, isExchanging } = useBrokerageConnect();
+  const toast = useToast();
+  const { connect, isLinking, isExchanging } = useBrokerageConnect({
+    onSuccess: () => {
+      toast.success('Brokerage connected successfully!');
+      onSuccess?.();
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || 'Failed to connect brokerage');
+    },
+  });
   const isLoading = isLinking || isExchanging;
-
-  async function handlePress() {
-    await connect();
-    onSuccess?.();
-  }
 
   return (
     <TouchableOpacity
-      onPress={handlePress}
+      onPress={() => { void connect(); }}
       disabled={isLoading}
       activeOpacity={0.7}
       style={{

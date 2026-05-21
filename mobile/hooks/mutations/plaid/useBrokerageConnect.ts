@@ -10,7 +10,12 @@ import { createLinkToken, exchangePublicToken } from '@/common/services/PlaidSer
 import { LINKED_ACCOUNTS_QUERY_KEY } from '@/hooks/queries/plaid/useLinkedAccounts';
 import { PLAID_HOLDINGS_QUERY_KEY } from '@/hooks/queries/plaid/usePlaidHoldings';
 
-export function useBrokerageConnect() {
+interface BrokerageConnectOptions {
+  onSuccess?: () => void;
+  onError?: (err: Error) => void;
+}
+
+export function useBrokerageConnect(options?: BrokerageConnectOptions) {
   const queryClient = useQueryClient();
   const [isLinking, setIsLinking] = useState(false);
 
@@ -20,9 +25,11 @@ export function useBrokerageConnect() {
       console.log('[BrokerageConnect] exchangePublicToken succeeded:', JSON.stringify(data));
       queryClient.invalidateQueries({ queryKey: [LINKED_ACCOUNTS_QUERY_KEY] });
       queryClient.invalidateQueries({ queryKey: [PLAID_HOLDINGS_QUERY_KEY] });
+      options?.onSuccess?.();
     },
     onError: (err) => {
       console.error('[BrokerageConnect] exchangePublicToken failed:', err);
+      options?.onError?.(err instanceof Error ? err : new Error(String(err)));
     },
   });
 
