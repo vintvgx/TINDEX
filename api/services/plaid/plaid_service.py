@@ -33,8 +33,8 @@ logger = get_logger(__name__)
 
 _PLAID_ENV_MAP = {
     "sandbox": plaid.Environment.Sandbox,
-    "development": plaid.Environment.Development,
-    "production": plaid.Environment.Production,
+    # "development": plaid.Environment.Development,
+    # "production": plaid.Environment.Production,
 }
 
 _instance: Optional["PlaidService"] = None
