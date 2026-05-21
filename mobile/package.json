@@ -1,7 +1,7 @@
 {
   "name": "mobile",
   "main": "expo-router/entry",
-  "version": "0.3.4",
+  "version": "0.3.6.1",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
@@ -67,6 +67,7 @@
     "react-native-screens": "~4.11.1",
     "react-native-svg": "15.11.2",
     "react-native-web": "~0.20.0",
+    "react-native-plaid-link-sdk": "^11.14.0",
     "react-native-webview": "13.13.5",
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7"

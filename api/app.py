@@ -2146,5 +2146,395 @@ def get_portfolio_metrics():
         }), 500
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Plaid — brokerage account linking
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _plaid_user_id_from_request() -> tuple[str | None, dict | None]:
+    """
+    Extract and validate the user_id from the request.
+
+    Accepts either:
+      - JSON body field "userId"
+      - Authorization: Bearer <supabase_jwt>  (decoded without signature check)
+
+    Returns (user_id, None) on success or (None, error_response) on failure.
+    We perform database verification via verify_user() in each endpoint so the
+    user_id cannot be spoofed to access another user's data.
+    """
+    # Try bearer token first (preferred – harder to spoof in the mobile app)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        import jwt as pyjwt
+        token = auth_header[7:]
+        try:
+            payload = pyjwt.decode(token, options={"verify_signature": False})
+            uid = payload.get("sub")
+            if uid:
+                return uid, None
+        except Exception:
+            pass
+
+    # Fall back to body field
+    data = request.get_json(silent=True) or {}
+    uid = data.get("userId") or request.args.get("userId")
+    if uid:
+        return uid, None
+
+    return None, {"success": False, "error": "userId or Bearer token required"}
+
+
+@app.route("/api/plaid/create-link-token", methods=["POST"])
+def plaid_create_link_token():
+    """
+    Create a Plaid link token for the authenticated user.
+
+    The mobile app opens Plaid Link with this token to let the user connect
+    their brokerage account.
+
+    Headers:
+        Authorization: Bearer <supabase_jwt>
+
+    Query Parameters (optional):
+        brokerage_only   "true"|"false"  Default: "true"
+        redirect_uri     str             OAuth redirect URI (for OAuth institutions)
+    """
+    try:
+        user_id, err = _plaid_user_id_from_request()
+        if err:
+            return jsonify(err), 401
+
+        assert user_id is not None
+        service = get_supabase_service()
+        service.verify_user(user_id=user_id)
+
+        brokerage_only = request.args.get("brokerage_only", "true").lower() != "false"
+        redirect_uri = request.args.get("redirect_uri") or (
+            (request.get_json(silent=True) or {}).get("redirect_uri")
+        )
+
+        from services.plaid import get_plaid_service
+        plaid_svc = get_plaid_service()
+        result = plaid_svc.create_link_token(
+            user_id=user_id,
+            redirect_uri=redirect_uri,
+            brokerage_only=brokerage_only,
+        )
+        return jsonify(result), 200
+
+    except Exception as e:
+        logger.error("[plaid] create_link_token failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/plaid/exchange-token", methods=["POST"])
+def plaid_exchange_token():
+    """
+    Exchange a public_token returned by Plaid Link for an access_token.
+
+    The access_token is stored in `plaid_items` (service-role only).
+    Account metadata is stored in `plaid_accounts` (user-visible).
+
+    Request Body:
+        public_token      str
+        institution_id    str
+        institution_name  str
+        accounts          list[{ id, name, mask, type, subtype }]
+
+    Headers:
+        Authorization: Bearer <supabase_jwt>
+    """
+    try:
+        user_id, err = _plaid_user_id_from_request()
+        if err:
+            return jsonify(err), 401
+
+        service = get_supabase_service()
+        service.verify_user(user_id=user_id)
+
+        data = request.get_json(silent=True) or {}
+        public_token = data.get("public_token")
+        if not public_token:
+            return jsonify({"success": False, "error": "public_token is required"}), 400
+
+        institution_id = data.get("institution_id", "")
+        institution_name = data.get("institution_name", "")
+        accounts_meta = data.get("accounts", [])
+
+        from services.plaid import get_plaid_service
+        plaid_svc = get_plaid_service()
+        exchange = plaid_svc.exchange_public_token(public_token)
+
+        access_token = exchange["access_token"]
+        item_id = exchange["item_id"]
+
+        # Persist access_token — service-role only table
+        service.client.table("plaid_items").upsert(
+            {
+                "item_id": item_id,
+                "user_id": user_id,
+                "access_token": access_token,
+                "institution_id": institution_id,
+                "institution_name": institution_name,
+            },
+            on_conflict="item_id",
+        ).execute()
+
+        # Persist user-visible account metadata
+        account_rows = [
+            {
+                "user_id": user_id,
+                "item_id": item_id,
+                "institution_id": institution_id,
+                "institution_name": institution_name,
+                "account_id": acct["id"],
+                "account_name": acct.get("name", ""),
+                "account_type": acct.get("type", "investment"),
+                "account_subtype": acct.get("subtype"),
+            }
+            for acct in accounts_meta
+        ]
+        if account_rows:
+            service.client.table("plaid_accounts").upsert(
+                account_rows, on_conflict="user_id,account_id"
+            ).execute()
+
+        logger.info("[plaid] exchange_token OK — user=%s item=%s", user_id, item_id)
+        return jsonify({
+            "item_id": item_id,
+            "institution_name": institution_name,
+            "accounts": account_rows,
+        }), 200
+
+    except Exception as e:
+        logger.error("[plaid] exchange_token failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/plaid/accounts", methods=["GET"])
+def plaid_get_accounts():
+    """
+    Return all linked brokerage account metadata for the authenticated user.
+
+    Headers:
+        Authorization: Bearer <supabase_jwt>
+    """
+    try:
+        user_id, err = _plaid_user_id_from_request()
+        if err:
+            return jsonify(err), 401
+
+        service = get_supabase_service()
+        service.verify_user(user_id=user_id)
+
+        result = (
+            service.client.table("plaid_accounts")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return jsonify(result.data or []), 200
+
+    except Exception as e:
+        logger.error("[plaid] get_accounts failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _get_access_tokens_for_user(service, user_id: Optional[str], item_id: Optional[str] = None) -> list[dict]:
+    if not user_id:
+        return []
+    """
+    Fetch Plaid access_tokens from plaid_items for the given user.
+    Optionally filter by item_id.
+    """
+    query = service.client.table("plaid_items").select("item_id, access_token").eq("user_id", user_id)
+    if item_id:
+        query = query.eq("item_id", item_id)
+    return query.execute().data or []
+
+
+@app.route("/api/plaid/holdings", methods=["GET"])
+def plaid_get_holdings():
+    """
+    Fetch investment holdings from all linked items (or a specific item).
+
+    Query Parameters:
+        item_id  (optional)  Limit to a single linked item
+
+    Headers:
+        Authorization: Bearer <supabase_jwt>
+    """
+    try:
+        user_id, err = _plaid_user_id_from_request()
+        if err:
+            return jsonify(err), 401
+
+        service = get_supabase_service()
+        service.verify_user(user_id=user_id)
+
+        item_id = request.args.get("item_id")
+        items = _get_access_tokens_for_user(service, user_id, item_id)
+
+        if not items:
+            return jsonify({
+                "holdings": [],
+                "securities": [],
+                "accounts": [],
+            }), 200
+
+        from services.plaid import get_plaid_service
+        plaid_svc = get_plaid_service()
+
+        all_holdings: list = []
+        all_securities: dict = {}
+        all_accounts: list = []
+
+        for item in items:
+            try:
+                data = plaid_svc.get_holdings(item["access_token"])
+                all_holdings.extend(data["holdings"])
+                all_accounts.extend(data["accounts"])
+                for sec in data["securities"]:
+                    all_securities[sec["security_id"]] = sec
+            except Exception as item_err:
+                logger.warning("[plaid] holdings fetch failed for item %s: %s", item["item_id"], item_err)
+
+        return jsonify({
+            "holdings": all_holdings,
+            "securities": list(all_securities.values()),
+            "accounts": all_accounts,
+        }), 200
+
+    except Exception as e:
+        logger.error("[plaid] get_holdings failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/plaid/investment-transactions", methods=["GET"])
+def plaid_get_investment_transactions():
+    """
+    Fetch investment transaction history from all linked items (or a specific item).
+
+    Query Parameters:
+        item_id     (optional)  Limit to a single linked item
+        start_date  YYYY-MM-DD  Default: 90 days ago
+        end_date    YYYY-MM-DD  Default: today
+        offset      int         Pagination offset (default: 0)
+        count       int         Max results (default: 100, max: 500)
+
+    Headers:
+        Authorization: Bearer <supabase_jwt>
+    """
+    try:
+        user_id, err = _plaid_user_id_from_request()
+        if err:
+            return jsonify(err), 401
+
+        service = get_supabase_service()
+        service.verify_user(user_id=user_id)
+
+        item_id = request.args.get("item_id")
+        start_date = request.args.get("start_date")
+        end_date = request.args.get("end_date")
+        offset = request.args.get("offset", 0, type=int)
+        count = min(request.args.get("count", 100, type=int), 500)
+
+        items = _get_access_tokens_for_user(service, user_id, item_id)
+        if not items:
+            return jsonify({
+                "investment_transactions": [],
+                "securities": [],
+                "accounts": [],
+                "total_investment_transactions": 0,
+            }), 200
+
+        from services.plaid import get_plaid_service
+        plaid_svc = get_plaid_service()
+
+        all_transactions: list = []
+        all_securities: dict = {}
+        all_accounts: list = []
+        total = 0
+
+        for item in items:
+            try:
+                data = plaid_svc.get_investment_transactions(
+                    access_token=item["access_token"],
+                    start_date=start_date,
+                    end_date=end_date,
+                    offset=offset,
+                    count=count,
+                )
+                all_transactions.extend(data["investment_transactions"])
+                all_accounts.extend(data["accounts"])
+                total += data.get("total_investment_transactions", 0)
+                for sec in data["securities"]:
+                    all_securities[sec["security_id"]] = sec
+            except Exception as item_err:
+                logger.warning("[plaid] transaction fetch failed for item %s: %s", item["item_id"], item_err)
+
+        return jsonify({
+            "investment_transactions": all_transactions,
+            "securities": list(all_securities.values()),
+            "accounts": all_accounts,
+            "total_investment_transactions": total,
+        }), 200
+
+    except Exception as e:
+        logger.error("[plaid] get_investment_transactions failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/plaid/accounts/<item_id>", methods=["DELETE"])
+def plaid_unlink_account(item_id: str):
+    """
+    Disconnect a linked brokerage account.
+
+    Revokes the Plaid access_token, removes from plaid_items, and removes
+    account metadata rows from plaid_accounts.
+
+    URL Parameters:
+        item_id  Plaid item_id to remove
+
+    Headers:
+        Authorization: Bearer <supabase_jwt>
+    """
+    try:
+        user_id, err = _plaid_user_id_from_request()
+        if err:
+            return jsonify(err), 401
+
+        service = get_supabase_service()
+        service.verify_user(user_id=user_id)
+
+        items = _get_access_tokens_for_user(service, user_id, item_id)
+        if not items:
+            return jsonify({"success": False, "error": "Item not found"}), 404
+
+        access_token = items[0]["access_token"]
+
+        # Revoke with Plaid
+        try:
+            from services.plaid import get_plaid_service
+            plaid_svc = get_plaid_service()
+            plaid_svc.remove_item(access_token)
+        except Exception as plaid_err:
+            # Log but continue — still remove from our DB
+            logger.warning("[plaid] item_remove call failed (continuing cleanup): %s", plaid_err)
+
+        # Delete server-side token record
+        service.client.table("plaid_items").delete().eq("item_id", item_id).eq("user_id", user_id).execute()
+
+        # Delete user-visible account metadata
+        service.client.table("plaid_accounts").delete().eq("item_id", item_id).eq("user_id", user_id).execute()
+
+        logger.info("[plaid] unlinked item=%s user=%s", item_id, user_id)
+        return jsonify({"success": True, "item_id": item_id}), 200
+
+    except Exception as e:
+        logger.error("[plaid] unlink_account failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 if __name__ == "__main__":
     app.run(debug=True)

@@ -11,10 +11,11 @@ import { useOptionsTicker } from '@/lib/optionsTickerContext';
 import { AgentModal } from '@/common/components/agent/AgentModal';
 import { useToast } from '@/common/components/ui/Toast';
 
-const VISIBLE_ROUTES = new Set(['feed', 'options', 'orb', 'notifications', 'profile']);
+const VISIBLE_ROUTES = new Set(['feed', 'portfolio', 'options', 'orb', 'notifications', 'profile']);
 
 const ROUTE_TITLES: Record<string, string> = {
   feed: 'Feed',
+  portfolio: 'Portfolio',
   options: 'Options',
   orb: 'ORB',
   notifications: 'Alerts',
@@ -108,6 +109,8 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
     switch (routeName) {
       case 'feed':
         return <Ionicons name="newspaper-outline" size={20} color={color} />;
+      case 'portfolio':
+        return <Ionicons name="wallet-outline" size={20} color={color} />;
       case 'options':
         return <Ionicons name="layers-outline" size={20} color={color} />;
       case 'orb':
@@ -309,9 +312,9 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   label: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '500',
-    letterSpacing: 0.2,
+    letterSpacing: 0.1,
     marginTop: 2,
   },
   profileContainer: {

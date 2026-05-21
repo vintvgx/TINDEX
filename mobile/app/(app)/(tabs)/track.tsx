@@ -14,6 +14,7 @@ import { addMonths, subMonths, startOfMonth, format, isSameMonth } from 'date-fn
 import { MonthCalendarBlock } from '@/common/components/track/MonthCalendarBlock';
 import { NewTradeModal, type NewTradePayload } from '@/common/components/track/NewTradeModal';
 import { PortfolioModalContent } from '@/common/components/track/PortfolioModal';
+import { LinkedAccountsSection } from '@/common/components/plaid/LinkedAccountsSection';
 import { useUpsertPortfolioPosition } from '@/hooks/mutations/portfolio/useUpsertPortfolioPosition';
 import { usePortfolioSummaryQuery } from '@/hooks/queries/track/usePortfolioSummary';
 import { usePortfolioWithPrices } from '@/hooks/queries/track/usePortfolioWithPrices';
@@ -230,6 +231,10 @@ const TrackScreen = () => {
         contentContainerStyle={{ paddingHorizontal: 20, paddingVertical: 20, paddingBottom: 110 }}
         showsVerticalScrollIndicator={false}
       >
+        <View style={{ marginBottom: 24 }}>
+          <LinkedAccountsSection />
+        </View>
+
         {calendarMonths.map((monthDate) => {
           const isCurrentMonth = isSameMonth(monthDate, today);
           const block = (

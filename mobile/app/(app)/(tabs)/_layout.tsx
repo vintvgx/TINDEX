@@ -11,6 +11,7 @@ export default function Layout() {
       tabBar={(props) => <CustomTabBar {...props} />}
     >
       <Tabs.Screen name="feed" options={{ title: 'Feed' }} />
+      <Tabs.Screen name="portfolio" options={{ title: 'Portfolio' }} />
       <Tabs.Screen name="track" options={{ href: null }} />
       <Tabs.Screen name="track-legacy" options={{ href: null }} />
       <Tabs.Screen name="options" options={{ title: 'Options' }} />
