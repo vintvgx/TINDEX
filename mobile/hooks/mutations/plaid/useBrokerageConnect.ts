@@ -16,25 +16,39 @@ export function useBrokerageConnect() {
 
   const exchangeMutation = useMutation({
     mutationFn: exchangePublicToken,
-    onSuccess: () => {
+    onSuccess: (data) => {
+      console.log('[BrokerageConnect] exchangePublicToken succeeded:', JSON.stringify(data));
       queryClient.invalidateQueries({ queryKey: [LINKED_ACCOUNTS_QUERY_KEY] });
       queryClient.invalidateQueries({ queryKey: [PLAID_HOLDINGS_QUERY_KEY] });
+    },
+    onError: (err) => {
+      console.error('[BrokerageConnect] exchangePublicToken failed:', err);
     },
   });
 
   const connect = useCallback(async () => {
+    console.log('[BrokerageConnect] connect() called');
     setIsLinking(true);
     try {
+      console.log('[BrokerageConnect] requesting link token from backend...');
       const { link_token } = await createLinkToken();
+      console.log('[BrokerageConnect] link token received, prefix =', link_token?.slice(0, 20));
 
-      // Step 1: configure the link token
+      console.log('[BrokerageConnect] calling create() with link token...');
       create({ token: link_token, noLoadingState: false });
 
-      // Step 2: open Link with callbacks
+      console.log('[BrokerageConnect] calling open() — Plaid Link UI should appear');
       open({
         onSuccess: (success: LinkSuccess) => {
-          setIsLinking(false);
           const { publicToken, metadata } = success;
+          console.log('[BrokerageConnect] onSuccess fired');
+          console.log('[BrokerageConnect]   publicToken prefix =', publicToken?.slice(0, 20));
+          console.log('[BrokerageConnect]   institution =', metadata.institution?.name, '(', metadata.institution?.id, ')');
+          console.log('[BrokerageConnect]   accounts =', JSON.stringify(metadata.accounts.map(a => ({
+            id: a.id, name: a.name, type: String(a.type), subtype: a.subtype ? String(a.subtype) : null,
+          }))));
+          setIsLinking(false);
+          console.log('[BrokerageConnect] calling exchangePublicToken...');
           exchangeMutation.mutate({
             public_token: publicToken,
             institution_id: metadata.institution?.id ?? '',
@@ -51,12 +65,17 @@ export function useBrokerageConnect() {
         onExit: (exit: LinkExit) => {
           setIsLinking(false);
           if (exit.error) {
-            console.error('[Plaid] Link exited with error:', exit.error);
+            console.error('[BrokerageConnect] onExit — error:', JSON.stringify(exit.error));
+            console.error('[BrokerageConnect] onExit — metadata:', JSON.stringify(exit.metadata));
+          } else {
+            console.log('[BrokerageConnect] onExit — user cancelled / closed Link (no error)');
+            console.log('[BrokerageConnect] onExit — metadata:', JSON.stringify(exit.metadata));
           }
         },
       });
     } catch (error) {
       setIsLinking(false);
+      console.error('[BrokerageConnect] caught error in connect():', error);
       throw error;
     }
   }, [exchangeMutation]);

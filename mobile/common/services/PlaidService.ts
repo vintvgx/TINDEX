@@ -10,8 +10,13 @@ import type {
 } from '@/common/types/plaid';
 
 async function authHeaders(): Promise<HeadersInit> {
+  console.log('[PlaidService] authHeaders: fetching Supabase session...');
   const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) throw new Error('Not authenticated');
+  if (!session?.access_token) {
+    console.error('[PlaidService] authHeaders: NO active session — user not authenticated');
+    throw new Error('Not authenticated');
+  }
+  console.log('[PlaidService] authHeaders: session OK, user_id =', session.user.id);
   return {
     Authorization: `Bearer ${session.access_token}`,
     'Content-Type': 'application/json',
@@ -19,32 +24,42 @@ async function authHeaders(): Promise<HeadersInit> {
 }
 
 export async function createLinkToken(): Promise<PlaidLinkTokenResponse> {
+  const url = `${RAILWAY_BASE_URL}/api/plaid/create-link-token`;
+  console.log('[PlaidService] createLinkToken: POST', url);
   const headers = await authHeaders();
-  const res = await fetch(`${RAILWAY_BASE_URL}/api/plaid/create-link-token`, {
-    method: 'POST',
-    headers,
-  });
+  const res = await fetch(url, { method: 'POST', headers });
+  console.log('[PlaidService] createLinkToken: status =', res.status);
   if (!res.ok) {
-    const err = await res.json().catch(() => ({})) as { message?: string };
-    throw new Error(err.message ?? `create-link-token failed: ${res.status}`);
+    const body = await res.text().catch(() => '(unreadable)');
+    console.error('[PlaidService] createLinkToken: FAILED — status', res.status, '| body:', body);
+    let message: string | undefined;
+    try { message = (JSON.parse(body) as { message?: string }).message; } catch { /* noop */ }
+    throw new Error(message ?? `create-link-token failed: ${res.status}`);
   }
-  return res.json() as Promise<PlaidLinkTokenResponse>;
+  const data = await res.json() as PlaidLinkTokenResponse;
+  console.log('[PlaidService] createLinkToken: success, token prefix =', data.link_token?.slice(0, 20));
+  return data;
 }
 
 export async function exchangePublicToken(
   payload: PlaidExchangeTokenRequest,
 ): Promise<PlaidExchangeTokenResponse> {
+  const url = `${RAILWAY_BASE_URL}/api/plaid/exchange-token`;
+  console.log('[PlaidService] exchangePublicToken: POST', url);
+  console.log('[PlaidService] exchangePublicToken: institution =', payload.institution_name, '| accounts =', payload.accounts.length);
   const headers = await authHeaders();
-  const res = await fetch(`${RAILWAY_BASE_URL}/api/plaid/exchange-token`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload),
-  });
+  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
+  console.log('[PlaidService] exchangePublicToken: status =', res.status);
   if (!res.ok) {
-    const err = await res.json().catch(() => ({})) as { message?: string };
-    throw new Error(err.message ?? `exchange-token failed: ${res.status}`);
+    const body = await res.text().catch(() => '(unreadable)');
+    console.error('[PlaidService] exchangePublicToken: FAILED — status', res.status, '| body:', body);
+    let message: string | undefined;
+    try { message = (JSON.parse(body) as { message?: string }).message; } catch { /* noop */ }
+    throw new Error(message ?? `exchange-token failed: ${res.status}`);
   }
-  return res.json() as Promise<PlaidExchangeTokenResponse>;
+  const data = await res.json() as PlaidExchangeTokenResponse;
+  console.log('[PlaidService] exchangePublicToken: success =', JSON.stringify(data));
+  return data;
 }
 
 export async function getLinkedAccounts(): Promise<PlaidLinkedAccount[]> {
