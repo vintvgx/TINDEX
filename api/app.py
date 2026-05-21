@@ -2147,6 +2147,35 @@ def get_portfolio_metrics():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Prices — generic batch price fetch (used by portfolio screen)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/prices/batch", methods=["POST"])
+def get_batch_prices():
+    """
+    Fetch the latest close price for a list of tickers via yfinance.
+
+    Request Body:
+        tickers  list[str]  Up to 50 ticker symbols
+
+    Response:
+        { "success": true, "prices": { "AAPL": 190.42, "TSLA": 250.00 } }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        raw = data.get("tickers", [])
+        if not isinstance(raw, list) or not raw:
+            return jsonify({"success": False, "error": "tickers list required"}), 400
+
+        tickers = list({t.strip().upper() for t in raw if isinstance(t, str) and t.strip()})[:50]
+        prices = batch_fetch_current_prices(tickers)
+        return jsonify({"success": True, "prices": prices or {}})
+    except Exception as e:
+        logger.error("[prices/batch] failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Plaid — brokerage account linking
 # ═══════════════════════════════════════════════════════════════════════════════
 

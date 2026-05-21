@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { usePlaidHoldings } from './usePlaidHoldings';
 import { useLinkedAccounts } from './useLinkedAccounts';
+import { useBatchPrices } from './useBatchPrices';
 import { parsePlaidOptionName, isOptionSecurity } from '@/common/utils/parsePlaidOptionName';
 import type { PlaidHolding, PlaidSecurity, PlaidAccountDetail } from '@/common/types/plaid';
 
@@ -9,8 +10,10 @@ export interface EnrichedHolding {
   security: PlaidSecurity;
   account: PlaidAccountDetail;
   isOption: boolean;
-  pnl: number | null;
-  pnlPct: number | null;
+  livePrice: number;
+  liveValue: number;
+  livePnl: number | null;
+  livePnlPct: number | null;
   parsedOption: ReturnType<typeof parsePlaidOptionName> | null;
 }
 
@@ -22,121 +25,118 @@ export interface AccountGroup {
 }
 
 export function usePlaidPortfolio() {
-  const holdingsQuery = usePlaidHoldings();
+  const { data: holdingsData, isLoading: holdingsLoading, error, refetch } = usePlaidHoldings();
   const { data: linkedAccounts } = useLinkedAccounts();
-  const data = holdingsQuery.data;
+
+  // Collect equity tickers for live price fetching
+  const equityTickers = useMemo<string[]>(() => {
+    if (!holdingsData) return [];
+    const secMap = new Map(holdingsData.securities.map(s => [s.security_id, s]));
+    const seen = new Set<string>();
+    const tickers: string[] = [];
+    for (const h of holdingsData.holdings) {
+      const sec = secMap.get(h.security_id);
+      if (sec && !isOptionSecurity(sec.type) && sec.ticker_symbol && !seen.has(sec.ticker_symbol)) {
+        seen.add(sec.ticker_symbol);
+        tickers.push(sec.ticker_symbol);
+      }
+    }
+    return tickers;
+  }, [holdingsData]);
+
+  const { data: livePrices, isLoading: pricesLoading } = useBatchPrices(equityTickers);
 
   const groups = useMemo<AccountGroup[]>(() => {
-    if (!data) return [];
+    if (!holdingsData) return [];
 
-    const securityMap = new Map<string, PlaidSecurity>(
-      data.securities.map((s) => [s.security_id, s]),
+    const secMap = new Map<string, PlaidSecurity>(
+      holdingsData.securities.map(s => [s.security_id, s]),
     );
-    const accountMap = new Map<string, PlaidAccountDetail>(
-      data.accounts.map((a) => [a.account_id, a]),
+    const acctMap = new Map<string, PlaidAccountDetail>(
+      holdingsData.accounts.map(a => [a.account_id, a]),
     );
-    const institutionMap = new Map<string, string>();
-    linkedAccounts?.forEach((la) => institutionMap.set(la.account_id, la.institution_name));
+    const instMap = new Map<string, string>();
+    linkedAccounts?.forEach(la => instMap.set(la.account_id, la.institution_name));
 
     const groupMap = new Map<string, AccountGroup>();
 
-    for (const holding of data.holdings) {
-      const security = securityMap.get(holding.security_id);
-      const account = accountMap.get(holding.account_id);
+    for (const holding of holdingsData.holdings) {
+      const security = secMap.get(holding.security_id);
+      const account = acctMap.get(holding.account_id);
       if (!security || !account) continue;
 
-      if (security.is_cash_equivalent) continue;
-
       const isOption = isOptionSecurity(security.type);
-      const pnl =
-        holding.cost_basis != null ? holding.institution_value - holding.cost_basis : null;
-      const pnlPct =
-        pnl != null && holding.cost_basis != null && holding.cost_basis > 0
-          ? (pnl / holding.cost_basis) * 100
+
+      const livePrice = !isOption && security.ticker_symbol && livePrices?.[security.ticker_symbol] != null
+        ? livePrices[security.ticker_symbol]
+        : holding.institution_price;
+
+      const liveValue = livePrice * holding.quantity;
+      const livePnl = holding.cost_basis != null ? liveValue - holding.cost_basis : null;
+      const livePnlPct =
+        livePnl != null && holding.cost_basis != null && holding.cost_basis > 0
+          ? (livePnl / holding.cost_basis) * 100
           : null;
-      const parsedOption =
-        isOption && security.name ? parsePlaidOptionName(security.name) : null;
 
       const enriched: EnrichedHolding = {
         holding,
         security,
         account,
         isOption,
-        pnl,
-        pnlPct,
-        parsedOption,
+        livePrice,
+        liveValue,
+        livePnl,
+        livePnlPct,
+        parsedOption: isOption && security.name ? parsePlaidOptionName(security.name) : null,
       };
 
       if (!groupMap.has(account.account_id)) {
         groupMap.set(account.account_id, {
           account,
-          institutionName: institutionMap.get(account.account_id) ?? 'Brokerage',
+          institutionName: instMap.get(account.account_id) ?? '',
           equities: [],
           options: [],
         });
       }
 
       const group = groupMap.get(account.account_id)!;
-      if (isOption) {
-        group.options.push(enriched);
-      } else {
-        group.equities.push(enriched);
-      }
+      if (isOption) group.options.push(enriched);
+      else group.equities.push(enriched);
     }
 
-    // Sort equities by institution_value descending
     for (const group of groupMap.values()) {
-      group.equities.sort((a, b) => b.holding.institution_value - a.holding.institution_value);
-      group.options.sort((a, b) => b.holding.institution_value - a.holding.institution_value);
+      group.equities.sort((a, b) => b.liveValue - a.liveValue);
     }
 
     return Array.from(groupMap.values());
-  }, [data, linkedAccounts]);
+  }, [holdingsData, linkedAccounts, livePrices]);
 
-  const totalHoldingsValue = useMemo(() => {
-    if (!data) return null;
-    return data.holdings
-      .filter((h) => {
-        const sec = data.securities.find((s) => s.security_id === h.security_id);
-        return !sec?.is_cash_equivalent;
-      })
-      .reduce((sum, h) => sum + h.institution_value, 0);
-  }, [data]);
+  const totalValue = useMemo(() => {
+    if (!groups.length) return null;
+    return groups.reduce(
+      (sum, g) => sum + [...g.equities, ...g.options].reduce((s, h) => s + h.liveValue, 0),
+      0,
+    );
+  }, [groups]);
 
   const totalPnl = useMemo(() => {
-    if (!data) return null;
+    if (!groups.length) return null;
     let total = 0;
     let hasAny = false;
-    for (const h of data.holdings) {
-      if (h.cost_basis != null) {
-        total += h.institution_value - h.cost_basis;
-        hasAny = true;
+    for (const g of groups) {
+      for (const h of [...g.equities, ...g.options]) {
+        if (h.livePnl != null) { total += h.livePnl; hasAny = true; }
       }
     }
     return hasAny ? total : null;
-  }, [data]);
-
-  const totalCostBasis = useMemo(() => {
-    if (!data) return null;
-    let total = 0;
-    let hasAny = false;
-    for (const h of data.holdings) {
-      if (h.cost_basis != null) {
-        total += h.cost_basis;
-        hasAny = true;
-      }
-    }
-    return hasAny ? total : null;
-  }, [data]);
+  }, [groups]);
 
   return {
     groups,
-    totalHoldingsValue,
+    totalValue,
     totalPnl,
-    totalCostBasis,
-    accounts: data?.accounts ?? [],
-    isLoading: holdingsQuery.isLoading,
-    error: holdingsQuery.error,
-    refetch: holdingsQuery.refetch,
+    isLoading: holdingsLoading || (pricesLoading && equityTickers.length > 0),
+    error,
+    refetch,
   };
 }

@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   create,
+  open,
   type LinkSuccess,
   type LinkExit,
 } from 'react-native-plaid-link-sdk';
@@ -26,9 +27,11 @@ export function useBrokerageConnect() {
     try {
       const { link_token } = await createLinkToken();
 
-      const handler = create({
-        token: link_token,
-        noLoadingState: false,
+      // Step 1: configure the link token
+      create({ token: link_token, noLoadingState: false });
+
+      // Step 2: open Link with callbacks
+      open({
         onSuccess: (success: LinkSuccess) => {
           setIsLinking(false);
           const { publicToken, metadata } = success;
@@ -36,12 +39,12 @@ export function useBrokerageConnect() {
             public_token: publicToken,
             institution_id: metadata.institution?.id ?? '',
             institution_name: metadata.institution?.name ?? '',
-            accounts: (metadata.accounts as Array<{ id: string; name: string; mask: string | null; type: string; subtype: string | null }>).map((a) => ({
+            accounts: metadata.accounts.map((a) => ({
               id: a.id,
-              name: a.name,
+              name: a.name ?? '',
               mask: a.mask ?? null,
-              type: a.type,
-              subtype: a.subtype ?? null,
+              type: String(a.type),
+              subtype: a.subtype ? String(a.subtype) : null,
             })),
           });
         },
@@ -52,8 +55,6 @@ export function useBrokerageConnect() {
           }
         },
       });
-
-      handler.open({ onEvent: () => {} });
     } catch (error) {
       setIsLinking(false);
       throw error;

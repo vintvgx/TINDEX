@@ -33,7 +33,6 @@ from plaid.model.country_code import CountryCode
 from plaid.model.products import Products
 from plaid.model.link_token_account_filters import LinkTokenAccountFilters
 from plaid.model.investments_filter import InvestmentsFilter
-from plaid.model.account_subtype import AccountSubtype
 
 logger = get_logger(__name__)
 
@@ -97,7 +96,7 @@ class PlaidService:
         if brokerage_only:
             account_filters = LinkTokenAccountFilters(
                 investment=InvestmentsFilter(
-                    account_subtypes=[AccountSubtype("brokerage")]
+                    account_subtypes=["brokerage"]
                 )
             )
 

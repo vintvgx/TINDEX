@@ -44,7 +44,7 @@ numpy==2.3.2
 packaging==25.0
 pandas==2.3.1
 peewee==3.18.2
-plaid-python==25.1.0
+plaid-python==39.2.0
 pillow==12.1.0
 platformdirs==4.3.8
 postgrest==1.1.1

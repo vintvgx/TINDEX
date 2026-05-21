@@ -17,7 +17,7 @@ export interface PortfolioPosition {
   updated_at: string;
 
   position_type: PositionType;
-  status: PortfolioStatus;
+  status: PortfolioStatus;``
   opened_at: string;
   closed_at: string | null;
   realized_pnl: number | null;
