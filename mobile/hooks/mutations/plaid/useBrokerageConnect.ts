@@ -10,6 +10,10 @@ import { createLinkToken, exchangePublicToken } from '@/common/services/PlaidSer
 import { LINKED_ACCOUNTS_QUERY_KEY } from '@/hooks/queries/plaid/useLinkedAccounts';
 import { PLAID_HOLDINGS_QUERY_KEY } from '@/hooks/queries/plaid/usePlaidHoldings';
 
+// Plaid-hosted redirect page — iOS ASWebAuthenticationSession intercepts this automatically.
+// Register this exact URL in Plaid dashboard → Team Settings → API → Allowed redirect URIs.
+const PLAID_REDIRECT_URI = 'https://cdn.plaid.com/link/v2/stable/link.html';
+
 interface BrokerageConnectOptions {
   onSuccess?: () => void;
   onError?: (err: Error) => void;
@@ -37,25 +41,18 @@ export function useBrokerageConnect(options?: BrokerageConnectOptions) {
     console.log('[BrokerageConnect] connect() called');
     setIsLinking(true);
     try {
-      console.log('[BrokerageConnect] requesting link token from backend...');
-      const { link_token } = await createLinkToken();
+      console.log('[BrokerageConnect] requesting link token...');
+      const { link_token } = await createLinkToken(PLAID_REDIRECT_URI);
       console.log('[BrokerageConnect] link token received, prefix =', link_token?.slice(0, 20));
 
-      console.log('[BrokerageConnect] calling create() with link token...');
       create({ token: link_token, noLoadingState: false });
+      console.log('[BrokerageConnect] calling open()...');
 
-      console.log('[BrokerageConnect] calling open() — Plaid Link UI should appear');
       open({
         onSuccess: (success: LinkSuccess) => {
           const { publicToken, metadata } = success;
-          console.log('[BrokerageConnect] onSuccess fired');
-          console.log('[BrokerageConnect]   publicToken prefix =', publicToken?.slice(0, 20));
-          console.log('[BrokerageConnect]   institution =', metadata.institution?.name, '(', metadata.institution?.id, ')');
-          console.log('[BrokerageConnect]   accounts =', JSON.stringify(metadata.accounts.map(a => ({
-            id: a.id, name: a.name, type: String(a.type), subtype: a.subtype ? String(a.subtype) : null,
-          }))));
+          console.log('[BrokerageConnect] onSuccess — institution =', metadata.institution?.name);
           setIsLinking(false);
-          console.log('[BrokerageConnect] calling exchangePublicToken...');
           exchangeMutation.mutate({
             public_token: publicToken,
             institution_id: metadata.institution?.id ?? '',
@@ -72,20 +69,21 @@ export function useBrokerageConnect(options?: BrokerageConnectOptions) {
         onExit: (exit: LinkExit) => {
           setIsLinking(false);
           if (exit.error) {
-            console.error('[BrokerageConnect] onExit — error:', JSON.stringify(exit.error));
-            console.error('[BrokerageConnect] onExit — metadata:', JSON.stringify(exit.metadata));
+            console.error('[BrokerageConnect] onExit error:', JSON.stringify(exit.error));
+            options?.onError?.(
+              new Error(exit.error.displayMessage ?? exit.error.errorCode ?? 'Link exited with error'),
+            );
           } else {
-            console.log('[BrokerageConnect] onExit — user cancelled / closed Link (no error)');
-            console.log('[BrokerageConnect] onExit — metadata:', JSON.stringify(exit.metadata));
+            console.log('[BrokerageConnect] onExit — user cancelled');
           }
         },
       });
     } catch (error) {
       setIsLinking(false);
-      console.error('[BrokerageConnect] caught error in connect():', error);
-      throw error;
+      console.error('[BrokerageConnect] error:', error);
+      options?.onError?.(error instanceof Error ? error : new Error(String(error)));
     }
-  }, [exchangeMutation]);
+  }, [exchangeMutation, options]);
 
   return {
     connect,
