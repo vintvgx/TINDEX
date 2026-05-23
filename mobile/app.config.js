@@ -18,6 +18,9 @@ export default {
       // bundleIdentifier: "com.communite.tindex",
       // dev
       bundleIdentifier: "com.communite.alethia",
+      associatedDomains: [
+        "applinks:alethia.app"
+      ],
       usesAppleSignIn: true,
       simulator: true,
       infoPlist: {

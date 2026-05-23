@@ -86,6 +86,7 @@ class PlaidService:
             "client_name": "Alethia",
             "country_codes": [CountryCode("US")],
             "language": "en",
+            "redirect_uri": "https://vintvgx.github.io/tindex-redirect/plaid-redirect/",
             "user": user,
         }
         if redirect_uri:

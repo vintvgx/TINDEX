@@ -25,7 +25,7 @@ async function authHeaders(): Promise<HeadersInit> {
 
 export async function createLinkToken(redirectUri?: string): Promise<PlaidLinkTokenResponse> {
   const url = `${RAILWAY_BASE_URL}/api/plaid/create-link-token`;
-  console.log('[PlaidService] createLinkToken: POST', url, 'redirect_uri =', redirectUri);
+  console.log('[PlaidService] createLinkToken: POST', url, '| redirect_uri =', redirectUri);
   const headers = await authHeaders();
   const res = await fetch(url, {
     method: 'POST',

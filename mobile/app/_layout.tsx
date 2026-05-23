@@ -18,6 +18,7 @@ import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { View, Text } from "react-native";
+import * as Linking from "expo-linking";
 import * as Notifications from "expo-notifications";
 import { router } from 'expo-router';
 
@@ -29,6 +30,7 @@ import "@/common/services/LogService";
 
 import LoadingScreen from "@/common/components/LoadingScreen";
 import { ToastProvider } from "@/common/components/ui/Toast";
+import { PlaidOAuthProvider, usePlaidOAuth } from "@/common/utils/context/PlaidOAuthContext";
 
 // import { GluestackUIProvider } from "../components/ui/gluestack-ui-provider";
 // import LoadingScreen from "./components/LoadingScreen";
@@ -91,7 +93,9 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <AppThemeProvider>
         <AuthProvider>
-          <AppContent />
+          <PlaidOAuthProvider>
+            <AppContent />
+          </PlaidOAuthProvider>
         </AuthProvider>
       </AppThemeProvider>
     </QueryClientProvider>
@@ -103,6 +107,26 @@ function AppContent() {
   const { authState } = useAuth();
   const { colorScheme } = useAppColorScheme();
   const { expoPushToken, isRegistering } = useNotifications();
+  const { setReceivedRedirectUri } = usePlaidOAuth();
+
+  // Listen for universal link redirect after Plaid OAuth (e.g. Robinhood)
+  useEffect(() => {
+    const handleUrl = ({ url }: { url: string }) => {
+      if (url.includes('plaid-redirect')) {
+        console.log('[Layout] Plaid OAuth redirect received:', url);
+        setReceivedRedirectUri(url);
+      }
+    };
+    const subscription = Linking.addEventListener('url', handleUrl);
+    // Cold-start: app opened directly from the redirect
+    void Linking.getInitialURL().then(url => {
+      if (url && url.includes('plaid-redirect')) {
+        console.log('[Layout] Plaid OAuth cold-start redirect:', url);
+        setReceivedRedirectUri(url);
+      }
+    });
+    return () => subscription.remove();
+  }, [setReceivedRedirectUri]);
 
   // Add ref for notification subscription
   const notificationResponseListener = useRef<Notifications.EventSubscription | null>(null);
