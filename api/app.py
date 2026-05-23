@@ -2225,7 +2225,6 @@ def plaid_create_link_token():
         Authorization: Bearer <supabase_jwt>
 
     Query Parameters (optional):
-        brokerage_only   "true"|"false"  Default: "true"
         redirect_uri     str             OAuth redirect URI (for OAuth institutions)
     """
     try:
@@ -2237,7 +2236,6 @@ def plaid_create_link_token():
         service = get_supabase_service()
         service.verify_user(user_id=user_id)
 
-        brokerage_only = request.args.get("brokerage_only", "true").lower() != "false"
         redirect_uri = request.args.get("redirect_uri") or (
             (request.get_json(silent=True) or {}).get("redirect_uri")
         )
@@ -2246,8 +2244,7 @@ def plaid_create_link_token():
         plaid_svc = get_plaid_service()
         result = plaid_svc.create_link_token(
             user_id=user_id,
-            redirect_uri=redirect_uri,
-            brokerage_only=brokerage_only,
+            redirect_uri=redirect_uri
         )
         return jsonify(result), 200
 
