@@ -87,7 +87,7 @@ class PlaidService:
             "country_codes": [CountryCode("US")],
             "language": "en",
             "redirect_uri": "https://vintvgx.github.io/tindex-redirect/plaid-redirect/",
-            "user": user,
+            "user":    user,
         }
         if redirect_uri:
             kwargs["redirect_uri"] = redirect_uri
