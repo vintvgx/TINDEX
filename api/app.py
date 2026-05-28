@@ -10,6 +10,7 @@ import threading
 from bs4 import BeautifulSoup
 
 from flask import Flask, jsonify, request # pylint: disable=import-error # type: ignore
+from flask_sock import Sock # pylint: disable=import-error # type: ignore
 
 import requests
 import aiohttp
@@ -54,6 +55,13 @@ logger = get_logger(__name__)
 
 # Creates a flask application
 app = Flask(__name__)
+
+# WebSocket support (flask-sock — no eventlet/gevent required)
+sock = Sock(app)
+
+# Start the live price broadcast loop
+from services.websocket.price_stream_service import price_stream
+price_stream.start()
 
 # Initialize the cache instance
 trending_cache = TrendingStocksCache()
@@ -2144,6 +2152,56 @@ def get_portfolio_metrics():
             "success": False,
             "error": f"Failed to get portfolio metrics: {str(e)}"
         }), 500
+
+
+# ── WebSocket: live price stream ───────────────────────────────────────────────
+@sock.route('/ws/prices')
+def ws_prices(ws):
+    """
+    WebSocket endpoint for live price streaming.
+
+    Client sends on connect:
+        { "tickers": ["AAPL", "NVDA", ...] }
+
+    Server sends every 5 seconds:
+        {
+            "type": "price_update",
+            "prices": { "AAPL": 192.34, "^VIX": 18.5, "SPY": 512.1, ... },
+            "vix": 18.5,
+            "spy": 512.1,
+            "sentiment": { "label": "Neutral", "color": "gray" }
+        }
+    """
+    import queue as _queue
+    client_queue = price_stream.add_client()
+    client_tickers: list[str] = []
+
+    try:
+        # First message must contain the ticker subscription list
+        raw = ws.receive(timeout=10)
+        if raw:
+            msg = json.loads(raw)
+            client_tickers = [t.upper() for t in msg.get("tickers", [])]
+            for ticker in client_tickers:
+                price_stream.subscribe(ticker)
+            logger.info("[WS] client subscribed to %d tickers", len(client_tickers))
+
+        # Stream until the client disconnects
+        while True:
+            try:
+                payload = client_queue.get(timeout=30)
+                ws.send(payload)
+            except _queue.Empty:
+                # Send a keepalive ping so the connection stays open
+                ws.send(json.dumps({"type": "ping"}))
+
+    except Exception as exc:
+        logger.debug("[WS] client disconnected: %s", exc)
+    finally:
+        price_stream.remove_client(client_queue)
+        for ticker in client_tickers:
+            price_stream.unsubscribe(ticker)
+        logger.info("[WS] client cleanup done")
 
 
 if __name__ == "__main__":
