@@ -11,6 +11,7 @@ interface ORBCardProps {
   onPress: () => void;
   orbRange?: GapTrendContext | null;
   fullWidth?: boolean;
+  livePrice?: number | null;
 }
 
 const formatPrice = (price: number | null | undefined): string => {
@@ -31,12 +32,13 @@ const getBreakoutColor = (breakoutType: string, colors: ReturnType<typeof useThe
   }
 };
 
-export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullWidth = false }) => {
+export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullWidth = false, livePrice }) => {
   const colors = useThemeColors();
 
   const orbHigh = data.orb_high ?? 0;
   const orbLow = data.orb_low ?? 0;
-  const currentPrice = data.current_price ?? 0;
+  // Prefer WebSocket live price; fall back to Supabase value
+  const currentPrice = livePrice ?? data.current_price ?? 0;
   const isAboveHigh = currentPrice > orbHigh;
   const isBelowLow = currentPrice < orbLow;
   const isInRange = !isAboveHigh && !isBelowLow && orbHigh - orbLow > 0;
@@ -106,7 +108,7 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' }}>
           <AnimatedNumber
-            value={data.current_price}
+            value={livePrice ?? data.current_price}
             format={(v) => `$${v.toFixed(2)}`}
             style={{ fontSize: 26, fontWeight: '800' }}
             color={priceColor}

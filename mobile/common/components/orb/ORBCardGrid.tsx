@@ -13,6 +13,7 @@ interface ORBCardGridProps {
   lastFetchTime?: Date | null;
   rangesByTicker?: Record<string, ORBRange>;
   gridLayout?: ORBGridLayout;
+  livePrices?: Record<string, number>;
 }
 
 const formatDateTime = (date: Date): string =>
@@ -33,6 +34,7 @@ export const ORBCardGrid: React.FC<ORBCardGridProps> = ({
   lastFetchTime,
   rangesByTicker,
   gridLayout = '2x2',
+  livePrices = {},
 }) => {
   const colors = useThemeColors();
 
@@ -96,6 +98,7 @@ export const ORBCardGrid: React.FC<ORBCardGridProps> = ({
           onPress={() => onCardPress(item)}
           orbRange={rangesByTicker?.[item.ticker]}
           fullWidth={fullWidth}
+          livePrice={livePrices[item.ticker] ?? null}
         />
       )}
       contentContainerStyle={{ padding: 16, paddingBottom: 170 }}

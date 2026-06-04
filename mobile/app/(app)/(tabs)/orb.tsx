@@ -1,5 +1,7 @@
 import { View, Text, SafeAreaView, TouchableOpacity } from 'react-native';
 import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useMarketStream } from '@/hooks/useMarketStream';
+import { MarketPulseStrip } from '@/common/components/orb/MarketPulseStrip';
 import * as SecureStore from 'expo-secure-store';
 import { Ionicons } from '@expo/vector-icons';
 import { useORBMonitoringState, ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
@@ -60,6 +62,14 @@ const ORBScreen = () => {
   const isORBRunning       = servicesStatus?.orb?.running ?? false;
   const isContractsRunning = servicesStatus?.contracts?.running ?? false;
   const anyServiceRunning    = isORBRunning || isContractsRunning;
+
+  // Extract tickers for live price streaming
+  const orbTickers = useMemo(
+    () => (orbData ?? []).map(item => item.ticker),
+    [orbData],
+  );
+
+  const { livePrices, vix, spy, sentiment, connected } = useMarketStream(orbTickers);
 
   const transformedORBData = useMemo(() => {
     if (!orbData) return [];
@@ -149,6 +159,16 @@ const ORBScreen = () => {
         </TouchableOpacity>
       </View>
 
+      {/* ── Market Pulse: VIX · Sentiment · Flow ── */}
+      <MarketPulseStrip
+        vix={vix}
+        spy={spy}
+        sentiment={sentiment}
+        orbData={transformedORBData}
+        livePrices={livePrices}
+        connected={connected}
+      />
+
       {/* ── ORB Card Grid ── */}
       <View style={{ flex: 1 }}>
         <ORBCardGrid
@@ -158,6 +178,7 @@ const ORBScreen = () => {
           lastFetchTime={lastFetchTime}
           rangesByTicker={rangesByTicker}
           gridLayout={gridLayout}
+          livePrices={livePrices}
         />
       </View>
 
