@@ -2204,5 +2204,75 @@ def ws_prices(ws):
         logger.info("[WS] client cleanup done")
 
 
+from services.unusual_whales.unusual_whales_service import get_unusual_whales_service
+
+
+@app.route("/flow-alerts", methods=["GET"])
+def get_global_flow_alerts():
+    """
+    Returns the latest global option flow alerts from Unusual Whales.
+
+    Query params:
+        limit (int, optional): Max number of alerts to return (default 50)
+
+    Returns:
+        {
+            "success": true,
+            "data": [...],          // array of FlowAlert objects
+            "available": true|false // false when API key is not configured
+        }
+    """
+    try:
+        limit = min(int(request.args.get("limit", 50)), 200)
+        service = get_unusual_whales_service()
+        alerts = service.get_flow_alerts(limit=limit)
+        return jsonify({
+            "success": True,
+            "data": alerts,
+            "available": service._available(),
+        })
+    except Exception as exc:
+        logger.error("[/flow-alerts] %s", exc)
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
+@app.route("/flow-alerts/<ticker>", methods=["GET"])
+def get_ticker_flow_alerts(ticker: str):
+    """
+    Returns option flow alerts for a specific ticker from Unusual Whales.
+
+    URL params:
+        ticker (str): Stock ticker symbol (e.g. 'AAPL')
+
+    Query params:
+        limit (int, optional): Max number of alerts to return (default 50)
+
+    Returns:
+        {
+            "success": true,
+            "ticker": "AAPL",
+            "data": [...],          // array of FlowAlert objects
+            "available": true|false
+        }
+    """
+    try:
+        ticker = ticker.strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({"success": False, "error": "Invalid ticker symbol"}), 400
+
+        limit = min(int(request.args.get("limit", 50)), 200)
+        service = get_unusual_whales_service()
+        alerts = service.get_ticker_flow_alerts(ticker, limit=limit)
+        return jsonify({
+            "success": True,
+            "ticker": ticker,
+            "data": alerts,
+            "available": service._available(),
+        })
+    except Exception as exc:
+        logger.error("[/flow-alerts/%s] %s", ticker, exc)
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
 if __name__ == "__main__":
     app.run(debug=True)
