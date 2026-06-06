@@ -3,6 +3,9 @@ APScheduler-based daily job manager.
 
 Trade days come from the engine config — frontend controls which days
 are active. When config changes, reschedule_jobs() rebuilds the cron jobs.
+
+ORB calc fires at 9:30 + orb_minutes + 1 minute so that all bars in the
+opening range window are complete before the engine fetches them.
 """
 
 import logging
@@ -35,6 +38,12 @@ def _days_to_cron(trade_days: list) -> str:
 
 
 def reschedule_jobs(engine):
+    """
+    Remove existing cron jobs and rebuild them from the engine's current config.
+
+    NOTE: Called by init_scheduler on startup and by strategy_routes after a
+    config update so that trade_days / orb_minutes changes take effect immediately.
+    """
     sched = get_scheduler()
     if not sched:
         logger.warning("[Scheduler] APScheduler not available — scheduling disabled")
@@ -51,11 +60,22 @@ def reschedule_jobs(engine):
         logger.info("[Scheduler] No trade days configured — no jobs scheduled")
         return
 
-    logger.info("[Scheduler] Scheduling jobs for: %s", days_cron)
+    # Fire ORB calc one minute after the last bar in the window is complete.
+    # orb_minutes=5  → bars 9:30-9:34, fetch at 9:36
+    # orb_minutes=10 → bars 9:30-9:39, fetch at 9:41
+    # orb_minutes=15 → bars 9:30-9:44, fetch at 9:46
+    orb_minutes     = engine.config.get("orb_minutes", 10)
+    orb_fire_minute = 30 + orb_minutes + 1          # always within hour 9 for ≤28 min windows
+    orb_fire_hour   = 9 + orb_fire_minute // 60
+    orb_fire_minute = orb_fire_minute % 60
+
+    logger.info("[Scheduler] Scheduling jobs — days=%s orb_calc=%d:%02d",
+                days_cron, orb_fire_hour, orb_fire_minute)
 
     sched.add_job(
         lambda: (engine.reset_session(), engine.calculate_orb()),
-        CronTrigger(day_of_week=days_cron, hour=9, minute=35, timezone=ET),
+        CronTrigger(day_of_week=days_cron, hour=orb_fire_hour,
+                    minute=orb_fire_minute, timezone=ET),
         id="job_orb_calc", replace_existing=True,
     )
 
@@ -73,6 +93,12 @@ def reschedule_jobs(engine):
 
 
 def _poll(engine):
+    """
+    Fetch the latest price and drive on_price_tick.
+    Early-returns if ORB hasn't been established yet (before 9:30+orb_minutes ET).
+
+    NOTE: Runs every minute from 9:00–15:59 ET on trade days.
+    """
     if not engine.orh:
         return
     price_data = engine.get_latest_price()
@@ -84,14 +110,30 @@ def _poll(engine):
 
 
 def _eod_reset(engine):
+    """
+    Hard-close any open position at end of day, log the forced exit, send
+    a push notification, then reset session state for the next trading day.
+
+    NOTE: Fires at 15:30 ET on trade days (after all per-ticker EOD closes).
+    """
     if engine.trade_taken and engine.contract_symbol:
         try:
             engine.trading_client.close_position(engine.contract_symbol)
+
+            qty_closed = engine.exit_manager.qty_remaining if engine.exit_manager else 0
             engine.logger.log_exit(
                 engine.contract_symbol, "EOD_HARD_CLOSE",
                 None,
-                engine.exit_manager.qty_remaining if engine.exit_manager else 0,
+                qty_closed,
                 engine.profile_key,
+            )
+            engine.notifier.notify_exit(
+                ticker=engine.ticker,
+                contract_symbol=engine.contract_symbol,
+                exit_reason="EOD_CLOSE",
+                pnl=0.0,      # exact P&L not available here; trade log will have it
+                qty=qty_closed,
+                profile_key=engine.profile_key,
             )
         except Exception as ex:
             logger.error("[Scheduler] EOD close failed: %s", ex)
@@ -99,6 +141,7 @@ def _eod_reset(engine):
 
 
 def init_scheduler(engine):
+    """Start the BackgroundScheduler and register jobs for the current engine config."""
     sched = get_scheduler()
     if not sched:
         logger.warning("[Scheduler] APScheduler not installed — manual start only")

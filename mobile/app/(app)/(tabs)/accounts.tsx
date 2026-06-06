@@ -7,7 +7,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
-import { useStrategyConfig } from '@/hooks/queries/strategy/useStrategyConfig';
 import { useUpdateStrategyConfig } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
 import { useToast } from '@/common/components/ui/Toast';
 
@@ -16,7 +15,6 @@ export default function AccountsScreen() {
   const toast  = useToast();
 
   const { data, isLoading, refetch, isRefetching } = useAlpacaBothAccounts();
-  const { data: config } = useStrategyConfig();
   const { mutate: updateConfig, isPending: switching } = useUpdateStrategyConfig();
 
   const handleSwitch = (toPaper: boolean) => {
@@ -215,7 +213,7 @@ const ComparisonCard = ({ paper, live, colors }: any) => {
 
   return (
     <View style={[styles.compCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <Text style={[styles.compTitle, { color: colors.tabBarInactive }]}>TODAY'S P&L COMPARISON</Text>
+      <Text style={[styles.compTitle, { color: colors.tabBarInactive }]}>{"TODAY'S P&L COMPARISON"}</Text>
       <View style={styles.compRow}>
         <CompStat label="Paper" value={paperPnl} colors={colors} />
         <View style={[styles.compDivider, { backgroundColor: colors.border }]} />

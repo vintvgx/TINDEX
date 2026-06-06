@@ -3,9 +3,19 @@ Four-layer sentiment filter stack.
 
 VIX ceiling is injected from the active profile so WOLF (25) and
 BULL DOG (35) have different tolerances.
+
+Macro events no longer block trading — they are returned as a flag so
+the engine can include a caution warning in the entry notification while
+still taking the trade (volatile macro days often produce the strongest
+ORB breakouts).
 """
 
+import os
+import logging
 import requests
+from datetime import date
+
+logger = logging.getLogger(__name__)
 
 VIX_MIN = 13.0
 
@@ -14,23 +24,58 @@ MACRO_KEYWORDS = [
     "GDP", "PCE", "Interest Rate Decision", "Jobs Report",
 ]
 
+_finnhub_client = None  # module-level singleton, created once on first use
+
+
+def _get_finnhub_client():
+    global _finnhub_client
+    if _finnhub_client is None:
+        key = os.getenv("FINNHUB_API_KEY")
+        if key:
+            try:
+                import finnhub  # pylint: disable=import-outside-toplevel
+                _finnhub_client = finnhub.Client(api_key=key)
+            except ImportError:
+                logger.warning("[SentimentFilter] finnhub-python not installed; macro check disabled")
+    return _finnhub_client
+
 
 class SentimentFilter:
 
     def check_all(self, ticker: str, vix_max: float = 30.0) -> dict:
+        """
+        Run VIX and premarket filters. Returns a result dict that always
+        contains a 'macro_event' bool — True means a high-impact US economic
+        event is scheduled today.  Macro events no longer cause 'trade: False';
+        the caller decides what to do with the flag (typically a push notification).
+        """
         vix = self._get_vix()
 
         if vix and vix < VIX_MIN:
-            return {"trade": False, "reason": f"VIX_TOO_LOW ({vix:.1f})", "vix": vix, "sentiment": "CALM"}
+            return {
+                "trade": False, "reason": f"VIX_TOO_LOW ({vix:.1f})",
+                "vix": vix, "sentiment": "CALM", "macro_event": False,
+            }
 
         if vix and vix > vix_max:
-            return {"trade": False, "reason": f"VIX_TOO_HIGH ({vix:.1f})", "vix": vix, "sentiment": "PANIC"}
+            return {
+                "trade": False, "reason": f"VIX_TOO_HIGH ({vix:.1f})",
+                "vix": vix, "sentiment": "PANIC", "macro_event": False,
+            }
 
-        if self._macro_event_today():
-            return {"trade": False, "reason": "MACRO_EVENT", "vix": vix, "sentiment": "MACRO_RISK"}
-
+        macro     = self._macro_event_today()
         sentiment = self._get_premarket_sentiment(ticker)
-        return {"trade": True, "reason": "ALL_FILTERS_PASS", "vix": vix, "sentiment": sentiment}
+
+        if macro:
+            logger.info("[SentimentFilter] Macro event today — trade proceeds with caution flag")
+
+        return {
+            "trade":       True,
+            "reason":      "ALL_FILTERS_PASS",
+            "vix":         vix,
+            "sentiment":   sentiment,
+            "macro_event": macro,
+        }
 
     def confirm_with_flow(self, ticker: str, direction: str,
                           unusual_whales_key: str = None) -> bool:
@@ -91,22 +136,28 @@ class SentimentFilter:
 
     def _macro_event_today(self) -> bool:
         """
-        Checks TradingEconomics calendar for high-importance US macro events today.
-        Fails open (returns False) so a missing API key never blocks trading.
+        Check Finnhub economic calendar for high-impact US macro events scheduled today.
+        Uses the finnhub-python library (FINNHUB_API_KEY env var required).
+        Fails open (returns False) so a missing key never blocks trading.
         """
-        try:
-            from datetime import date
-            today_str = date.today().isoformat()
-            resp = requests.get(
-                f"https://api.tradingeconomics.com/calendar/country/united states/date/{today_str}",
-                timeout=5,
-            )
-            if resp.status_code != 200:
-                return False
-            for event in resp.json():
-                if event.get("Importance", 0) >= 3:
-                    if any(kw.lower() in event.get("Event", "").lower() for kw in MACRO_KEYWORDS):
-                        return True
+        client = _get_finnhub_client()
+        if client is None:
             return False
-        except Exception:
+        try:
+            today_str = date.today().isoformat()
+            result    = client.economic_calendar()
+            for event in result.get("economicCalendar", []):
+                if event.get("country", "").upper() != "US":
+                    continue
+                # Finnhub time format: "YYYY-MM-DD HH:MM:SS"
+                if not event.get("time", "").startswith(today_str):
+                    continue
+                if event.get("impact", 0) < 3:
+                    continue
+                if any(kw.lower() in event.get("event", "").lower() for kw in MACRO_KEYWORDS):
+                    logger.info("[SentimentFilter] Macro event detected: %s", event.get("event"))
+                    return True
+            return False
+        except Exception as exc:
+            logger.debug("[SentimentFilter] macro_event_today failed: %s", exc)
             return False

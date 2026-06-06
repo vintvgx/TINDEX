@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, SafeAreaView, TouchableOpacity,
-  Switch, StyleSheet, ActivityIndicator,
+  StyleSheet, ActivityIndicator, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -15,8 +15,21 @@ import { ProfileCard } from '@/common/components/strategy/ProfileCard';
 import { TradeDaysSelector } from '@/common/components/strategy/TradeDaysSelector';
 import type { StrategyConfig, ProfileKey } from '@/common/types/strategy';
 
-const TICKERS = ['SPY', 'QQQ', 'IWM'];
+const TICKERS     = ['SPY', 'QQQ', 'IWM'];
 const ORB_MINUTES = [5, 10, 15] as const;
+
+type TradingMode = 'paper' | 'live' | 'off';
+
+function getMode(config: StrategyConfig): TradingMode {
+  if (!config.active) return 'off';
+  return config.paper_mode ? 'paper' : 'live';
+}
+
+const MODE_META: Record<TradingMode, { label: string; icon: string; color: string }> = {
+  paper: { label: 'Paper',  icon: 'document-text-outline', color: '#FF9F0A' },
+  live:  { label: 'Live',   icon: 'flash-outline',         color: '#30D158' },
+  off:   { label: 'Off',    icon: 'power-outline',         color: '#FF453A' },
+};
 
 export default function StrategyScreen() {
   const colors  = useThemeColors();
@@ -28,7 +41,8 @@ export default function StrategyScreen() {
   const { mutate: updateConfig, isPending: saving } = useUpdateStrategyConfig();
 
   const [localConfig, setLocalConfig] = useState<Partial<StrategyConfig>>({});
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirty]             = useState(false);
+  const [switchingMode, setSwitchingMode] = useState(false);
 
   useEffect(() => {
     if (config && !dirty) setLocalConfig(config);
@@ -55,6 +69,51 @@ export default function StrategyScreen() {
     });
   };
 
+  const applyMode = (newMode: TradingMode) => {
+    const modeConfig: Partial<StrategyConfig> =
+      newMode === 'off'  ? { active: false } :
+      newMode === 'live' ? { paper_mode: false, active: true } :
+                           { paper_mode: true,  active: true };
+
+    // Optimistic visual update
+    setLocalConfig(prev => ({ ...prev, ...modeConfig }));
+
+    setSwitchingMode(true);
+    updateConfig(modeConfig, {
+      onSuccess: () => {
+        const labels = { paper: 'Paper mode active', live: 'Live trading active', off: 'Trading disabled' };
+        toast.success(labels[newMode]);
+      },
+      onError: () => {
+        // Revert optimistic update
+        setLocalConfig(prev => {
+          const copy = { ...prev };
+          (Object.keys(modeConfig) as Array<keyof StrategyConfig>).forEach(k => delete copy[k]);
+          return copy;
+        });
+        toast.error('Failed to update trading mode');
+      },
+      onSettled: () => setSwitchingMode(false),
+    });
+  };
+
+  const handleModePress = (newMode: TradingMode) => {
+    if (newMode === getMode(merged)) return;   // no-op if already selected
+
+    if (newMode === 'live') {
+      Alert.alert(
+        'Switch to Live Trading',
+        'All future orders will use REAL MONEY.\n\nMake sure you have reviewed your position limits before proceeding.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Switch to Live', style: 'destructive', onPress: () => applyMode('live') },
+        ]
+      );
+    } else {
+      applyMode(newMode);
+    }
+  };
+
   if (configLoading || profilesLoading) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -62,6 +121,8 @@ export default function StrategyScreen() {
       </SafeAreaView>
     );
   }
+
+  const currentMode = getMode(merged);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -102,7 +163,50 @@ export default function StrategyScreen() {
           </View>
         )}
 
-        {/* Config section */}
+        {/* ── Trading Mode ─────────────────────────────────────────── */}
+        <SectionHeader title="Trading Mode" colors={colors} />
+
+        <View style={[styles.modeBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          {(Object.entries(MODE_META) as [TradingMode, typeof MODE_META[TradingMode]][]).map(([mode, meta]) => {
+            const active = currentMode === mode;
+            return (
+              <TouchableOpacity
+                key={mode}
+                onPress={() => handleModePress(mode)}
+                disabled={switchingMode}
+                activeOpacity={0.7}
+                style={[
+                  styles.modeBtn,
+                  active && { backgroundColor: meta.color + '1A', borderRadius: 10 },
+                ]}
+              >
+                {switchingMode && active
+                  ? <ActivityIndicator size="small" color={meta.color} />
+                  : <Ionicons name={meta.icon as any} size={18} color={active ? meta.color : colors.tabBarInactive} />
+                }
+                <Text style={[
+                  styles.modeBtnText,
+                  { color: active ? meta.color : colors.tabBarInactive,
+                    fontWeight: active ? '700' : '500' },
+                ]}>
+                  {meta.label}
+                </Text>
+                {active && <View style={[styles.modeDot, { backgroundColor: meta.color }]} />}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {currentMode === 'off' && (
+          <View style={[styles.offBanner, { borderColor: colors.error + '44', backgroundColor: colors.error + '0D' }]}>
+            <Ionicons name="warning-outline" size={14} color={colors.error} style={{ marginRight: 6 }} />
+            <Text style={[styles.offBannerText, { color: colors.error }]}>
+              Strategy is disabled — no trades will be taken until you switch to Paper or Live.
+            </Text>
+          </View>
+        )}
+
+        {/* ── Configuration ─────────────────────────────────────────── */}
         <SectionHeader title="Configuration" colors={colors} />
 
         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -153,30 +257,10 @@ export default function StrategyScreen() {
           </ConfigRow>
 
           {/* Trade days */}
-          <ConfigRow label="Trade Days" colors={colors}>
+          <ConfigRow label="Trade Days" colors={colors} last>
             <TradeDaysSelector
               selected={merged.trade_days ?? [0, 2, 4]}
               onChange={days => patch('trade_days', days)}
-            />
-          </ConfigRow>
-
-          {/* Paper mode */}
-          <ConfigRow label="Paper Trading" colors={colors} last>
-            <Switch
-              value={merged.paper_mode ?? true}
-              onValueChange={v => patch('paper_mode', v)}
-              trackColor={{ false: colors.error, true: colors.success }}
-            />
-          </ConfigRow>
-        </View>
-
-        {/* Strategy active toggle */}
-        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <ConfigRow label="Strategy Active" colors={colors} last>
-            <Switch
-              value={merged.active ?? true}
-              onValueChange={v => patch('active', v)}
-              trackColor={{ false: colors.border, true: colors.accent }}
             />
           </ConfigRow>
         </View>
@@ -224,23 +308,53 @@ const ConfigRow = ({ label, colors, children, last }: any) => (
 );
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  content:   { paddingHorizontal: 16, paddingTop: 8 },
-  header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
-  title:     { fontSize: 20, fontWeight: '700' },
-  accountCard: { flexDirection: 'row', justifyContent: 'space-between', borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 8 },
-  accountLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 2 },
+  container:    { flex: 1 },
+  content:      { paddingHorizontal: 16, paddingTop: 8 },
+  header:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  title:        { fontSize: 20, fontWeight: '700' },
+
+  accountCard:   { flexDirection: 'row', justifyContent: 'space-between', borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 8 },
+  accountLabel:  { fontSize: 10, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 2 },
   accountEquity: { fontSize: 22, fontWeight: '700' },
-  pnlCol: { alignItems: 'flex-end', justifyContent: 'center' },
-  pnlToday: { fontSize: 16, fontWeight: '700' },
-  pnlPctToday: { fontSize: 12, fontWeight: '500', marginTop: 2 },
+  pnlCol:        { alignItems: 'flex-end', justifyContent: 'center' },
+  pnlToday:      { fontSize: 16, fontWeight: '700' },
+  pnlPctToday:   { fontSize: 12, fontWeight: '500', marginTop: 2 },
+
+  modeBar:  {
+    flexDirection: 'row',
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 6,
+    marginBottom: 8,
+  },
+  modeBtn:  {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    gap: 4,
+    position: 'relative',
+  },
+  modeBtnText:  { fontSize: 12, fontWeight: '500' },
+  modeDot:      {
+    position: 'absolute',
+    top: 6,
+    right: 10,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+
+  offBanner:     { flexDirection: 'row', alignItems: 'flex-start', borderRadius: 10, borderWidth: 1, padding: 10, marginBottom: 4 },
+  offBannerText: { fontSize: 12, flex: 1, lineHeight: 17 },
+
   sectionHeader: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', marginTop: 16, marginBottom: 8 },
-  card: { borderRadius: 14, borderWidth: 1, overflow: 'hidden', marginBottom: 12 },
-  configRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 13 },
-  configLabel: { fontSize: 14, fontWeight: '500' },
-  chipRow: { flexDirection: 'row', gap: 6 },
-  chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1 },
-  chipText: { fontSize: 13, fontWeight: '600' },
-  saveBtn: { borderRadius: 12, padding: 14, alignItems: 'center', marginBottom: 12 },
-  saveBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  card:          { borderRadius: 14, borderWidth: 1, overflow: 'hidden', marginBottom: 12 },
+  configRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 13 },
+  configLabel:   { fontSize: 14, fontWeight: '500' },
+  chipRow:       { flexDirection: 'row', gap: 6 },
+  chip:          { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1 },
+  chipText:      { fontSize: 13, fontWeight: '600' },
+  saveBtn:       { borderRadius: 12, padding: 14, alignItems: 'center', marginBottom: 12 },
+  saveBtnText:   { color: '#fff', fontSize: 15, fontWeight: '700' },
 });

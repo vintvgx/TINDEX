@@ -22,13 +22,14 @@ from services.strategy.contract_selector import select_contract
 from services.strategy.exit_manager import ExitManager
 from services.strategy.sentiment import SentimentFilter
 from services.strategy.trade_logger import TradeLogger
+from services.strategy.notifier import StrategyNotifier
 
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
 STRATEGY_DEFAULTS = {
-    "ticker":      "SPY",
-    "orb_minutes": 5,
+    "ticker":      "IWM",
+    "orb_minutes": 10,
     "paper_mode":  True,
     "active":      True,
     "profile":     "THUNDER_CAT",
@@ -41,8 +42,8 @@ MIN_ORB_RANGE_PCT = 0.0015
 EOD_CLOSE_TIMES = {
     "SPY": "15:25",
     "QQQ": "15:25",
-    "IWM": "15:10",
-}
+    "IWM": "15:10"
+    }
 
 
 class ORBEngine:
@@ -65,8 +66,9 @@ class ORBEngine:
         self.data_client    = StockHistoricalDataClient(api_key, secret_key)
         self.option_client  = OptionHistoricalDataClient(api_key, secret_key)
 
-        self.sentiment = SentimentFilter()
-        self.logger    = TradeLogger()
+        self.sentiment  = SentimentFilter()
+        self.logger     = TradeLogger()
+        self.notifier   = StrategyNotifier(self.logger.client)
         logger.info("[ORBEngine] Config applied — profile=%s ticker=%s paper=%s days=%s",
                     self.profile_key, self.ticker, self.paper, self.trade_days)
 
@@ -75,18 +77,21 @@ class ORBEngine:
         self._apply_config()
 
     def _reset_session_state(self):
-        self.orh           = None
-        self.orl           = None
-        self.orb_range     = None
-        self.fib_levels    = {}
-        self.position      = None
-        self.contract_symbol = None
-        self.exit_manager  = None
-        self.trade_taken   = False
-        self.session_date  = None
-        self.session_skipped = False
-        self.skip_reason   = None
-        self.active_trade_id = None
+        self.orh              = None
+        self.orl              = None
+        self.orb_range        = None
+        self.fib_levels       = {}
+        self.position         = None
+        self.contract_symbol  = None
+        self.exit_manager     = None
+        self.trade_taken      = False
+        self.session_date     = None
+        self.session_skipped  = False
+        self.skip_reason      = None
+        self.active_trade_id  = None
+        self.trade_entry_time = None   # used by 30-min timer notification
+        self.timer_notified   = False  # ensures the 30-min update fires only once
+        self.macro_today      = False  # True when a high-impact macro event is scheduled today
 
     def reset_session(self):
         self._reset_session_state()
@@ -94,6 +99,13 @@ class ORBEngine:
     # ── Step 1: Called at 9:35 AM ET ──────────────────────────────────────────
 
     def calculate_orb(self) -> bool:
+        """
+        Fetch the opening-range bars, compute ORH/ORL/Fibonacci levels, and run
+        all sentiment filters (VIX, macro events, premarket gap).
+
+        NOTE: Called by the APScheduler cron job at 09:35 ET (scheduler.py).
+        Returns True when the session is cleared for trading; False when skipped.
+        """
         now_et = datetime.now(ET)
         self.session_date = now_et.date()
 
@@ -130,6 +142,10 @@ class ORBEngine:
             self._skip(result["reason"])
             return False
 
+        self.macro_today = result.get("macro_event", False)
+        if self.macro_today:
+            logger.info("[ORBEngine] Macro event today — proceeding with caution flag")
+
         self.logger.log_session(
             ticker=self.ticker,
             session_date=self.session_date,
@@ -139,13 +155,22 @@ class ORBEngine:
             sentiment=result["sentiment"],
             profile=self.profile_key,
         )
-        logger.info("[ORBEngine] ORB set — orh=%.2f orl=%.2f vix=%s sentiment=%s",
-                    self.orh, self.orl, result["vix"], result["sentiment"])
+        logger.info("[ORBEngine] ORB set — orh=%.2f orl=%.2f vix=%s sentiment=%s macro=%s",
+                    self.orh, self.orl, result["vix"], result["sentiment"], self.macro_today)
         return True
 
     # ── Step 2: Called every minute after ORB is set ──────────────────────────
 
     def on_price_tick(self, current_price: float, current_volume: float = None):
+        """
+        Main per-minute decision loop: checks breakout conditions before entry
+        or delegates to ExitManager once a position is open.
+
+        Also fires the 30-minute unrealised P&L push notification exactly once
+        after a trade is entered.
+
+        NOTE: Called by the APScheduler 1-minute interval job (_poll in scheduler.py).
+        """
         if self.session_skipped:
             return
 
@@ -165,6 +190,23 @@ class ORBEngine:
                 current_volume=current_volume,
             )
             self._handle_exit_action(action, current_price)
+
+            # 30-minute unrealised P&L notification (fires once per trade)
+            if (
+                not self.timer_notified
+                and self.trade_entry_time is not None
+                and (now_et - self.trade_entry_time).total_seconds() >= 1800 #TODO set this as a user variable to set instead of hardcoding 30mins
+            ):
+                entry_p = self.exit_manager.entry_premium
+                pnl     = (current_price - entry_p) * self.exit_manager.qty_remaining * 100
+                self.notifier.notify_timer_update(
+                    ticker=self.ticker,
+                    contract_symbol=self.contract_symbol,
+                    current_pnl=pnl,
+                    entry_premium=entry_p,
+                    current_premium=current_price,
+                )
+                self.timer_notified = True
             return
 
         if not self.trade_taken and self.orh and self.orl:
@@ -176,6 +218,14 @@ class ORBEngine:
     # ── Entry ──────────────────────────────────────────────────────────────────
 
     def _enter_trade(self, direction: str, trigger_price: float):
+        """
+        Run flow confirmation, select a contract, validate buying power, and
+        submit a market order via Alpaca.  Sets trade state and initialises
+        ExitManager on success.
+
+        NOTE: Called by on_price_tick when price closes above ORH (CALL) or
+        below ORL (PUT) for the first time in the session.
+        """
         uw_key = os.getenv("UNUSUAL_WHALES_KEY")
         if not self.sentiment.confirm_with_flow(self.ticker, direction, uw_key):
             logger.info("[ORBEngine] Flow confirmation failed for %s — skipping entry", direction)
@@ -194,21 +244,48 @@ class ORBEngine:
 
         if not contract:
             logger.warning("[ORBEngine] No suitable contract found — skipping entry")
+            self.notifier.notify_no_contract(self.ticker)
             return
 
         qty = self.profile["qty_contracts"]
+
+        # Capital guard: reduce qty if buying power is insufficient, skip if unaffordable
+        ask = contract["ask"]
+        acct = self.get_account_info()
+        if acct:
+            required = qty * ask * 100
+            buying_power = acct["buying_power"]
+            if required > buying_power:
+                affordable = int(buying_power / (ask * 100))
+                if affordable < 1:
+                    logger.warning(
+                        "[ORBEngine] Insufficient capital — need $%.0f, have $%.0f",
+                        required, buying_power,
+                    )
+                    self.notifier.notify_insufficient_capital(
+                        self.ticker, required, buying_power
+                    )
+                    return
+                logger.info(
+                    "[ORBEngine] Reducing qty %d→%d (buying_power=$%.0f, cost/contract=$%.0f)",
+                    qty, affordable, buying_power, ask * 100,
+                )
+                qty = affordable
+
         try:
             order = MarketOrderRequest(
                 symbol=contract["symbol"],
                 qty=qty,
                 side=OrderSide.BUY,
-                time_in_force=TimeInForce.DAY,
+                time_in_force=TimeInForce.DAY
             )
             self.trading_client.submit_order(order)
 
-            self.position        = direction
-            self.contract_symbol = contract["symbol"]
-            self.trade_taken     = True
+            self.position         = direction
+            self.contract_symbol  = contract["symbol"]
+            self.trade_taken      = True
+            self.trade_entry_time = datetime.now(ET)
+            self.timer_notified   = False
 
             eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:10")
             self.exit_manager = ExitManager(
@@ -231,6 +308,16 @@ class ORBEngine:
                 profile=self.profile_key,
                 qty=qty,
             )
+            self.notifier.notify_entry(
+                ticker=self.ticker,
+                direction=direction,
+                contract=contract,
+                qty=qty,
+                entry_premium=contract["ask"],
+                trade_id=self.active_trade_id,
+                profile_key=self.profile_key,
+                macro_event=self.macro_today,
+            )
             logger.info("[ORBEngine] Entered %s %s qty=%d @ %.2f",
                         direction, contract["symbol"], qty, contract["ask"])
         except Exception as e:
@@ -239,6 +326,13 @@ class ORBEngine:
     # ── Exit ───────────────────────────────────────────────────────────────────
 
     def _handle_exit_action(self, action: dict, current_price: float):
+        """
+        Execute a full or partial close based on the action dict returned by
+        ExitManager.evaluate().  Updates qty_remaining and logs the exit.
+
+        NOTE: Called by on_price_tick immediately after ExitManager.evaluate()
+        whenever a position is open.
+        """
         if not action or action["type"] == "HOLD":
             return
 
@@ -259,12 +353,24 @@ class ORBEngine:
                 self.trading_client.submit_order(order)
                 self.exit_manager.qty_remaining -= qty_to_close
 
+            exit_premium = action.get("current_premium") or current_price
+            entry_p = self.exit_manager.entry_premium if self.exit_manager else 0
+            pnl = (exit_premium - entry_p) * qty_to_close * 100
+
             self.logger.log_exit(
                 contract_symbol=self.contract_symbol,
                 exit_reason=action["type"],
-                exit_premium=action.get("current_premium"),
+                exit_premium=exit_premium,
                 qty_closed=qty_to_close,
                 profile=self.profile_key,
+            )
+            self.notifier.notify_exit(
+                ticker=self.ticker,
+                contract_symbol=self.contract_symbol,
+                exit_reason=action["type"],
+                pnl=pnl,
+                qty=qty_to_close,
+                profile_key=self.profile_key,
             )
             logger.info("[ORBEngine] Exit %s qty=%d reason=%s",
                         action["type"], qty_to_close, action.get("reason", ""))
@@ -272,14 +378,26 @@ class ORBEngine:
             logger.error("[ORBEngine] Exit failed: %s", e)
 
     def _skip(self, reason: str):
+        """
+        Mark the session as skipped with a reason code and persist to Supabase.
+
+        NOTE: Called by calculate_orb and on_price_tick whenever a filter or
+        time-limit condition prevents trading for the rest of the session.
+        """
         self.session_skipped = True
         self.skip_reason = reason
         self.logger.log_skip(self.ticker, reason, self.session_date, self.profile_key)
+        self.notifier.notify_skip(self.ticker, reason)
         logger.info("[ORBEngine] Session skipped: %s", reason)
 
     # ── Data helpers ───────────────────────────────────────────────────────────
 
     def _fetch_orb_bars(self, n_minutes: int):
+        """
+        Pull the first n_minutes of 1-minute bars starting at 09:30 ET.
+
+        NOTE: Called by calculate_orb to establish the opening range.
+        """
         now_et = datetime.now(ET)
         start  = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
         end    = start + timedelta(minutes=n_minutes)
@@ -296,6 +414,11 @@ class ORBEngine:
             return []
 
     def get_latest_price(self) -> dict | None:
+        """
+        Fetch the most recent 1-minute bar close and volume for self.ticker.
+
+        NOTE: Called by scheduler._poll every minute to drive on_price_tick.
+        """
         try:
             from alpaca.data.requests import StockLatestBarRequest
             req  = StockLatestBarRequest(symbol_or_symbols=self.ticker)
@@ -309,6 +432,12 @@ class ORBEngine:
             return None
 
     def _calculate_fib_levels(self) -> dict:
+        """
+        Compute Fibonacci extension targets from the ORB high/low.
+
+        NOTE: Called once by calculate_orb after ORH and ORL are established.
+        Levels are stored on the engine and passed to ExitManager and the trade log.
+        """
         r = self.orb_range
         return {
             "up_1.0":   self.orh + r * 1.0,
@@ -323,6 +452,13 @@ class ORBEngine:
         }
 
     def get_account_info(self) -> dict | None:
+        """
+        Return a snapshot of the active Alpaca account (equity, cash, buying
+        power, day-trade count, today's P&L).
+
+        NOTE: Called by strategy_routes.py /account endpoint and by _enter_trade
+        to validate buying power before order submission.
+        """
         try:
             acct = self.trading_client.get_account()
             return {
@@ -341,6 +477,11 @@ class ORBEngine:
             return None
 
     def session_state(self) -> dict:
+        """
+        Serialise the full in-memory session state for the /session API endpoint.
+
+        NOTE: Called by strategy_routes.py GET /strategy/session on demand.
+        """
         em = self.exit_manager
         return {
             "date":          str(self.session_date),
