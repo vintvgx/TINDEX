@@ -122,6 +122,49 @@ def get_account():
     return jsonify({"success": False, "error": "Could not fetch account data"}), 502
 
 
+@strategy_bp.route("/accounts/both", methods=["GET"])
+def get_both_accounts():
+    """
+    Returns paper and live Alpaca account data in a single call.
+    Each account is fetched independently — if one fails the other still returns.
+    """
+    import os
+    from alpaca.trading.client import TradingClient
+
+    api_key    = os.getenv("ALPACA_API_KEY")
+    secret_key = os.getenv("ALPACA_SECRET_KEY")
+
+    def _fetch(paper: bool) -> dict | None:
+        try:
+            client = TradingClient(api_key, secret_key, paper=paper)
+            acct = client.get_account()
+            equity     = float(acct.equity)
+            last_equity = float(acct.last_equity)
+            pnl_today  = equity - last_equity
+            return {
+                "equity":          equity,
+                "cash":            float(acct.cash),
+                "buying_power":    float(acct.buying_power),
+                "day_trade_count": acct.daytrade_count,
+                "pnl_today":       round(pnl_today, 2),
+                "pnl_today_pct":   round(pnl_today / last_equity * 100, 3) if last_equity > 0 else 0,
+                "paper_mode":      paper,
+                "available": True,
+            }
+        except Exception as e:
+            return {"available": False, "paper_mode": paper, "error": str(e)}
+
+    paper_data = _fetch(True)
+    live_data  = _fetch(False)
+
+    return jsonify({
+        "success": True,
+        "active_mode": _engine.paper,
+        "paper": paper_data,
+        "live":  live_data,
+    })
+
+
 # ── Trade history ──────────────────────────────────────────────────────────────
 
 @strategy_bp.route("/trades", methods=["GET"])

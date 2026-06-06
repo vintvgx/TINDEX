@@ -23,6 +23,7 @@ export default function Layout() {
       <Tabs.Screen name="strategy" options={{ href: null }} />
       <Tabs.Screen name="position" options={{ href: null }} />
       <Tabs.Screen name="tradelog" options={{ href: null }} />
+      <Tabs.Screen name="accounts" options={{ href: null }} />
     </Tabs>
     </OptionsTickerProvider>
   );

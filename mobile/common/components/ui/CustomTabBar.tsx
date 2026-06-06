@@ -48,6 +48,7 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
     {
       title: 'ORB Trading',
       items: [
+        { label: 'Accounts', icon: 'person-add-outline', route: '/(app)/(tabs)/accounts'},
         { label: 'Strategy Control', icon: 'settings-outline',   route: '/(app)/(tabs)/strategy' },
         { label: 'Live Position',    icon: 'trending-up-outline', route: '/(app)/(tabs)/position' },
         { label: 'Trade Log & Stats', icon: 'bar-chart-outline', route: '/(app)/(tabs)/tradelog' },
