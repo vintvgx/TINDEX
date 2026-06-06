@@ -2206,6 +2206,27 @@ def ws_prices(ws):
 
 from services.unusual_whales.unusual_whales_service import get_unusual_whales_service
 
+# ── ORB Strategy Engine ────────────────────────────────────────────────────────
+try:
+    from services.strategy.orb_engine import ORBEngine, STRATEGY_DEFAULTS
+    from services.strategy.trade_logger import TradeLogger as StrategyLogger
+    from services.strategy.scheduler import init_scheduler as init_strategy_scheduler
+    from routes.strategy_routes import strategy_bp, init_routes as init_strategy_routes
+
+    def _build_strategy_engine() -> ORBEngine:
+        svc_logger = StrategyLogger()
+        saved_config = svc_logger.load_config()
+        config = saved_config if saved_config else STRATEGY_DEFAULTS.copy()
+        return ORBEngine(config)
+
+    _strategy_engine = _build_strategy_engine()
+    app.register_blueprint(strategy_bp)
+    init_strategy_routes(_strategy_engine)
+    init_strategy_scheduler(_strategy_engine)
+    logger.info("[App] ORB strategy engine and scheduler initialised")
+except Exception as _strategy_init_err:
+    logger.warning("[App] ORB strategy engine init failed (non-fatal): %s", _strategy_init_err)
+
 
 @app.route("/flow-alerts", methods=["GET"])
 def get_global_flow_alerts():

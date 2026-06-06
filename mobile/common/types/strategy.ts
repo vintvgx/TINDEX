@@ -1,0 +1,153 @@
+export type ProfileKey = 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF';
+
+export interface ProfileThresholds {
+  qty_contracts: number;
+  max_loss_pct: number;
+  tp1_mult: number;
+  tp2_mult: number;
+  tp1_close_pct: number;
+  tp2_close_pct: number;
+  runner_trail_pct: number;
+  consol_exit: boolean;
+  consol_range_pct: number;
+  consol_bars: number;
+  volume_exit_threshold: number;
+  strike_offset_min: number;
+  strike_offset_max: number;
+  target_delta_min: number;
+  target_delta_max: number;
+  eod_buffer_minutes: number;
+  breakout_time_limit_min: number;
+  vix_max_override: number;
+}
+
+export interface StrategyProfile {
+  key: ProfileKey;
+  display_name: string;
+  emoji: string;
+  contracts: number;
+  max_loss_pct: number;   // integer percent, e.g. 35
+  tp1_pct: number;        // integer percent, e.g. 50
+  tp2_pct: number;        // integer percent, e.g. 100
+  runner: boolean;
+  risk_level: 'Low' | 'Medium' | 'High';
+  vix_max: number;
+  breakout_limit_min: number;
+  thresholds: ProfileThresholds;
+}
+
+export interface StrategyConfig {
+  ticker: string;         // 'SPY' | 'QQQ' | 'IWM'
+  orb_minutes: 5 | 10 | 15;
+  paper_mode: boolean;
+  active: boolean;
+  profile: ProfileKey;
+  trade_days: number[];   // 0=Mon ... 4=Fri
+}
+
+export interface FibLevels {
+  'up_1.0': number;
+  'up_1.618': number;
+  'up_2.618': number;
+  'dn_1.0': number;
+  'dn_1.618': number;
+  'dn_2.618': number;
+  mid: number;
+  orh: number;
+  orl: number;
+}
+
+export interface StrategyPosition {
+  active: boolean;
+  paper_mode: boolean;
+  ticker: string;
+  profile: ProfileKey;
+  direction?: 'CALL' | 'PUT';
+  contract?: string;
+  qty_remaining?: number;
+  qty_total?: number;
+  entry_premium?: number;
+  current_price?: number;
+  unrealized_pnl?: number;
+  unrealized_pnl_pct?: number;
+  hard_stop?: number;
+  tp1?: number;
+  tp2?: number;
+  tp1_hit?: boolean;
+  tp2_hit?: boolean;
+  be_stop_active?: boolean;
+  runner_trail?: number;
+  fib_levels?: FibLevels;
+}
+
+export interface ORBTrade {
+  id: string;
+  trade_date: string;
+  ticker: string;
+  profile: ProfileKey;
+  direction: 'CALL' | 'PUT';
+  contract_symbol: string;
+  strike: number;
+  expiry: string;
+  entry_premium: number;
+  exit_premium: number | null;
+  qty_entered: number;
+  qty_exited: number;
+  pnl: number | null;
+  pnl_pct: number | null;
+  entry_time: string;
+  exit_time: string | null;
+  exit_reason: string | null;
+  orh: number;
+  orl: number;
+  flow_confirmed: boolean;
+}
+
+export interface StrategyStats {
+  total_trades: number;
+  wins: number;
+  losses: number;
+  win_rate_pct: number;
+  total_pnl: number;
+  avg_winner: number;
+  avg_loser: number;
+  profile?: ProfileKey;
+}
+
+export interface AlpacaAccount {
+  equity: number;
+  cash: number;
+  buying_power: number;
+  day_trade_count: number;
+  pnl_today: number;
+  pnl_today_pct: number;
+  paper_mode: boolean;
+}
+
+export interface ORBSession {
+  date: string;
+  ticker: string;
+  profile: ProfileKey;
+  trade_days: number[];
+  paper_mode: boolean;
+  orh: number | null;
+  orl: number | null;
+  orb_range: number | null;
+  fib_levels: FibLevels | null;
+  trade_taken: boolean;
+  skip_reason: string | null;
+  position: 'CALL' | 'PUT' | null;
+  contract: string | null;
+  exit_state: {
+    entry_premium: number;
+    hard_stop: number;
+    tp1: number;
+    tp2: number;
+    runner_trail: number;
+    tp1_hit: boolean;
+    tp2_hit: boolean;
+    be_stop_active: boolean;
+    qty: number;
+    qty_remaining: number;
+  } | null;
+}

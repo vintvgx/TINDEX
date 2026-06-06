@@ -10,6 +10,7 @@ import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet'
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
 import { AgentModal } from '@/common/components/agent/AgentModal';
 import { useToast } from '@/common/components/ui/Toast';
+import { MenuModal, type MenuSection } from '@/common/components/ui/MenuModal';
 
 const VISIBLE_ROUTES = new Set(['feed', 'options', 'orb', 'notifications', 'profile']);
 
@@ -18,7 +19,7 @@ const ROUTE_TITLES: Record<string, string> = {
   options: 'Options',
   orb: 'ORB',
   notifications: 'Alerts',
-  profile: 'Profile',
+  profile: 'More',  // WeBull-style: profile tab becomes "More" menu trigger
 };
 
 export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) => {
@@ -35,6 +36,31 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
       : colors.error;
   const [searchOpen, setSearchOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const menuSections: MenuSection[] = [
+    {
+      title: 'Account',
+      items: [
+        { label: 'Profile & Settings', icon: 'person-outline', route: '/(app)/(tabs)/profile' },
+      ],
+    },
+    {
+      title: 'ORB Trading',
+      items: [
+        { label: 'Strategy Control', icon: 'settings-outline',   route: '/(app)/(tabs)/strategy' },
+        { label: 'Live Position',    icon: 'trending-up-outline', route: '/(app)/(tabs)/position' },
+        { label: 'Trade Log & Stats', icon: 'bar-chart-outline', route: '/(app)/(tabs)/tradelog' },
+      ],
+    },
+    {
+      title: 'Portfolio',
+      items: [
+        { label: 'Track Portfolio', icon: 'briefcase-outline',  route: '/(app)/(tabs)/track' },
+        { label: 'Watchlists',      icon: 'list-outline',       route: '/(app)/(tabs)/watchlists' },
+      ],
+    },
+  ];
   const { setOptionsTicker, optionsTicker } = useOptionsTicker();
   const toast = useToast();
   const [optionsInput, setOptionsInput] = useState('');
@@ -92,6 +118,11 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
 
   const handleTabPress = useCallback(
     (route: (typeof state.routes)[0], isFocused: boolean) => {
+      // Intercept profile tab to open the More menu instead of navigating
+      if (route.name === 'profile') {
+        setMenuOpen(true);
+        return;
+      }
       const event = navigation.emit({
         type: 'tabPress',
         target: route.key,
@@ -124,9 +155,10 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
           </View>
         );
       case 'profile':
+        // "More" tab: hamburger menu icon with services status dot
         return (
           <View style={styles.profileContainer}>
-            <Ionicons name="person-outline" size={20} color={color} />
+            <Ionicons name="menu-outline" size={22} color={color} />
             <View
               style={[
                 styles.statusDot,
@@ -247,6 +279,12 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
         onClose={() => setAgentOpen(false)}
         ticker={isOnOptionsTab && optionsTicker ? optionsTicker : undefined}
         onError={(msg) => toast.error(msg)}
+      />
+
+      <MenuModal
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        sections={menuSections}
       />
     </>
   );

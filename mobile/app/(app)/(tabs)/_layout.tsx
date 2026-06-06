@@ -19,6 +19,10 @@ export default function Layout() {
       <Tabs.Screen name="profile" options={{ title: 'Profile' }} />
       <Tabs.Screen name="search" options={{ href: null }} />
       <Tabs.Screen name="watchlists" options={{ href: null }} />
+      {/* Strategy screens — hidden from tab bar, accessible via More menu */}
+      <Tabs.Screen name="strategy" options={{ href: null }} />
+      <Tabs.Screen name="position" options={{ href: null }} />
+      <Tabs.Screen name="tradelog" options={{ href: null }} />
     </Tabs>
     </OptionsTickerProvider>
   );
