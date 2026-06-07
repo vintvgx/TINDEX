@@ -155,6 +155,23 @@ def get_strategy_position(strategy_id: str):
     return _engine_position_response(engine)
 
 
+# ── All positions ─────────────────────────────────────────────────────────────
+
+@strategy_bp.route("/positions", methods=["GET"])
+def get_all_positions():
+    """Return position data for every running engine."""
+    result = []
+    for sid, engine in _engines.items():
+        try:
+            pos = _engine_position_response(engine).get_json()
+            pos["strategy_id"] = sid
+            pos["strategy_name"] = getattr(engine, "strategy_name", "")
+            result.append(pos)
+        except Exception:
+            pass
+    return jsonify(result)
+
+
 # ── Profiles ───────────────────────────────────────────────────────────────────
 
 @strategy_bp.route("/profiles", methods=["GET"])
@@ -189,12 +206,11 @@ def get_both_accounts():
     import os
     from alpaca.trading.client import TradingClient
 
-    api_key    = os.getenv("ALPACA_API_KEY")
-    secret_key = os.getenv("ALPACA_SECRET_KEY")
-
     def _fetch(paper: bool) -> dict | None:
         try:
-            client = TradingClient(api_key, secret_key, paper=paper)
+            key    = os.getenv("ALPACA_PAPER_API_KEY" if paper else "ALPACA_LIVE_API_KEY")
+            secret = os.getenv("ALPACA_PAPER_SECRET_KEY" if paper else "ALPACA_LIVE_SECRET_KEY")
+            client = TradingClient(key, secret, paper=paper)
             acct = client.get_account()
             equity      = float(acct.equity)
             last_equity = float(acct.last_equity)

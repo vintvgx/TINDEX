@@ -46,8 +46,8 @@ class OptionStreamManager:
     """
 
     def __init__(self):
-        self._api_key = os.getenv("ALPACA_API_KEY", "")
-        self._secret  = os.getenv("ALPACA_SECRET_KEY", "")
+        self._api_key = os.getenv("ALPACA_LIVE_API_KEY", "")
+        self._secret  = os.getenv("ALPACA_LIVE_SECRET_KEY", "")
         self._stream: "OptionDataStream | None" = None
         self._thread: threading.Thread | None    = None
         self._callbacks: dict[str, list]         = {}   # symbol → [cb, ...]

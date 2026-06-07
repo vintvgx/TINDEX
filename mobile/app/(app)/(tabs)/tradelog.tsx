@@ -30,18 +30,18 @@ export default function TradeLogScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
 
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
-            <Ionicons name="arrow-back" size={22} color={colors.text} />
-          </TouchableOpacity>
-          <Text style={[styles.title, { color: colors.text }]}>Trade Log & Stats</Text>
-          <View style={{ width: 22 }} />
-        </View>
+      {/* Sticky header */}
+      <View style={[styles.header, { borderBottomColor: colors.border }]}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
+          <Ionicons name="arrow-back" size={22} color={colors.text} />
+        </TouchableOpacity>
+        <Text style={[styles.title, { color: colors.text }]}>Trade Log & Stats</Text>
+        <View style={{ width: 22 }} />
+      </View>
 
-        {/* Tab toggle */}
+      {/* Tab toggle (sticky) */}
+      <View style={[styles.tabToggleWrap, { backgroundColor: colors.background }]}>
         <View style={[styles.tabToggle, { backgroundColor: colors.card, borderColor: colors.border }]}>
           {(['log', 'stats'] as const).map(t => (
             <TouchableOpacity
@@ -55,6 +55,9 @@ export default function TradeLogScreen() {
             </TouchableOpacity>
           ))}
         </View>
+      </View>
+
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
 
         {/* Filter chips */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow}>
@@ -112,6 +115,7 @@ export default function TradeLogScreen() {
 
         <View style={{ height: 100 }} />
       </ScrollView>
+
     </SafeAreaView>
   );
 }
@@ -178,14 +182,15 @@ const StatItem = ({ label, value, color, colors }: { label: string; value: strin
 );
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  content:   { paddingHorizontal: 16, paddingTop: 8, gap: 10 },
-  header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
-  title:     { fontSize: 20, fontWeight: '700' },
-  tabToggle: { flexDirection: 'row', borderRadius: 10, borderWidth: 1, overflow: 'hidden' },
-  tabBtn:    { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 },
-  tabText:   { fontSize: 13, fontWeight: '600' },
-  filterRow: { marginBottom: 4 },
+  container:      { flex: 1 },
+  content:        { paddingHorizontal: 16, paddingTop: 8, gap: 10 },
+  header:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  title:          { fontSize: 20, fontWeight: '700' },
+  tabToggleWrap:  { paddingHorizontal: 16, paddingVertical: 10 },
+  tabToggle:      { flexDirection: 'row', borderRadius: 10, borderWidth: 1, overflow: 'hidden' },
+  tabBtn:         { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 },
+  tabText:        { fontSize: 13, fontWeight: '600' },
+  filterRow:      { marginBottom: 4 },
   filterChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1, marginRight: 8 },
   filterText: { fontSize: 13, fontWeight: '600' },
   empty:     { textAlign: 'center', marginTop: 40, fontSize: 14 },

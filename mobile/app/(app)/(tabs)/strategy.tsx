@@ -199,12 +199,19 @@ export default function StrategyScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
 
       {/* Header */}
-      <View style={[styles.header, { paddingHorizontal: 16 }]}>
+      <View style={[styles.header, { paddingHorizontal: 16, borderBottomColor: colors.border }]}>
         <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
         <Text style={[styles.title, { color: colors.text }]}>ORB Strategies</Text>
-        <View style={{ width: 22 }} />
+        <TouchableOpacity
+          onPress={openCreate}
+          hitSlop={8}
+          style={[styles.addBtn, { backgroundColor: colors.accent }]}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="add" size={20} color="#fff" />
+        </TouchableOpacity>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
@@ -256,17 +263,8 @@ export default function StrategyScreen() {
           </View>
         )}
 
-        <View style={{ height: 100 }} />
+        <View style={{ height: 40 }} />
       </ScrollView>
-
-      {/* FAB */}
-      <TouchableOpacity
-        onPress={openCreate}
-        style={[styles.fab, { backgroundColor: colors.accent }]}
-        activeOpacity={0.85}
-      >
-        <Ionicons name="add" size={28} color="#fff" />
-      </TouchableOpacity>
 
       {/* Strategy form modal */}
       <StrategyFormModal
@@ -641,8 +639,9 @@ const ConfigRow = ({ label, colors, children, last }: any) => (
 const styles = StyleSheet.create({
   container: { flex: 1 },
   content:   { paddingHorizontal: 16, paddingTop: 8 },
-  header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12 },
+  header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   title:     { fontSize: 20, fontWeight: '700' },
+  addBtn:    { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
 
   accountCard:   { flexDirection: 'row', justifyContent: 'space-between', borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 8 },
   accountLabel:  { fontSize: 10, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 2 },
@@ -698,22 +697,6 @@ const styles = StyleSheet.create({
   emptyCard:    { alignItems: 'center', borderRadius: 14, borderWidth: 1, padding: 32, gap: 8, marginBottom: 12 },
   emptyText:    { fontSize: 15, fontWeight: '600' },
   emptySubtext: { fontSize: 13 },
-
-  fab: {
-    position: 'absolute',
-    bottom: 32,
-    right: 24,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
-    elevation: 6,
-  },
 
   // ── Modal ──
   modalContainer: { flex: 1 },

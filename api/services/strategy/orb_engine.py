@@ -67,12 +67,14 @@ class ORBEngine:
         self.capital_limit  = self.config.get("capital_limit")   # None = full buying_power
         self.stream_manager = getattr(self, "_stream_manager_ref", None)
 
-        api_key    = os.getenv("ALPACA_API_KEY")
-        secret_key = os.getenv("ALPACA_SECRET_KEY")
+        trade_key    = os.getenv("ALPACA_PAPER_API_KEY" if self.paper else "ALPACA_LIVE_API_KEY")
+        trade_secret = os.getenv("ALPACA_PAPER_SECRET_KEY" if self.paper else "ALPACA_LIVE_SECRET_KEY")
+        data_key     = os.getenv("ALPACA_LIVE_API_KEY")
+        data_secret  = os.getenv("ALPACA_LIVE_SECRET_KEY")
 
-        self.trading_client = TradingClient(api_key, secret_key, paper=self.paper)
-        self.data_client    = StockHistoricalDataClient(api_key, secret_key)
-        self.option_client  = OptionHistoricalDataClient(api_key, secret_key)
+        self.trading_client = TradingClient(trade_key, trade_secret, paper=self.paper)
+        self.data_client    = StockHistoricalDataClient(data_key, data_secret)
+        self.option_client  = OptionHistoricalDataClient(data_key, data_secret)
 
         self.sentiment  = SentimentFilter()
         self.logger     = TradeLogger()
