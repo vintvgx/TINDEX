@@ -48,50 +48,53 @@ class ExitManager:
         if now_et >= self.eod_close_time:
             return self._action("CLOSE_ALL", self.qty_remaining, "EOD_CLOSE")
 
+        # Premium-based hard stop: close when option price drops to entry × (1 - max_loss_pct).
+        # This is the only hard stop — the underlying crossing back into the ORB range
+        # does NOT trigger an automatic exit; the option price itself must hit the threshold.
         if current_option_price <= self.hard_stop:
-            return self._action("CLOSE_ALL", self.qty_remaining, "STOP_LOSS")
-
-        if current_underlying_price:
-            if self.direction == "CALL" and current_underlying_price < self.orh:
-                return self._action("CLOSE_ALL", self.qty_remaining, "REVERSAL_REENTRY")
-            if self.direction == "PUT"  and current_underlying_price > self.orl:
-                return self._action("CLOSE_ALL", self.qty_remaining, "REVERSAL_REENTRY")
+            return self._action("CLOSE_ALL", self.qty_remaining, "HARD_STOP",
+                                current_option_price)
 
         self.price_buffer.append(current_underlying_price or current_option_price)
         if current_volume:
             self.volume_buffer.append(current_volume)
 
         if self.profile["consol_exit"] and self._is_consolidating():
-            return self._action("CLOSE_ALL", self.qty_remaining, "CONSOLIDATION")
+            return self._action("CLOSE_ALL", self.qty_remaining, "CONSOLIDATION",
+                                current_option_price)
 
         if self._is_low_volume() and not self.tp1_hit:
             qty_lv = max(1, self.qty_remaining // 2)
-            return self._action("CLOSE_PARTIAL", qty_lv, "LOW_VOLUME_EXIT")
+            return self._action("CLOSE_PARTIAL", qty_lv, "LOW_VOLUME_EXIT",
+                                current_option_price)
 
         if not self.tp1_hit and current_option_price >= self.tp1:
             self.tp1_hit        = True
             self.be_stop_active = True
-            self.hard_stop      = self.entry_premium
+            self.hard_stop      = self.entry_premium  # move stop to breakeven after TP1
             self.runner_trail   = current_option_price * (1 - self.profile["runner_trail_pct"])
             qty_tp1 = max(1, math.floor(self.qty_remaining * self.profile["tp1_close_pct"]))
-            return self._action("CLOSE_PARTIAL", qty_tp1, "TP1")
+            return self._action("CLOSE_PARTIAL", qty_tp1, "TP1", current_option_price)
 
         if self.tp1_hit and not self.tp2_hit and current_option_price >= self.tp2:
             self.tp2_hit = True
             if self.profile["tp2_close_pct"] >= 1.0:
-                return self._action("CLOSE_ALL", self.qty_remaining, "TP2_FULL_CLOSE")
+                return self._action("CLOSE_ALL", self.qty_remaining, "TP2_FULL_CLOSE",
+                                    current_option_price)
             qty_tp2 = max(1, math.floor(self.qty_remaining * self.profile["tp2_close_pct"]))
-            return self._action("CLOSE_PARTIAL", qty_tp2, "TP2")
+            return self._action("CLOSE_PARTIAL", qty_tp2, "TP2", current_option_price)
 
         if self.tp1_hit and self.qty_remaining > 0:
             new_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
             if new_trail > self.runner_trail:
                 self.runner_trail = new_trail
             if current_option_price <= self.runner_trail:
-                return self._action("CLOSE_ALL", self.qty_remaining, "RUNNER_TRAIL_STOP")
+                return self._action("CLOSE_ALL", self.qty_remaining, "RUNNER_TRAIL_STOP",
+                                    current_option_price)
 
         if self.be_stop_active and current_option_price <= self.entry_premium:
-            return self._action("CLOSE_ALL", self.qty_remaining, "BREAKEVEN_STOP")
+            return self._action("CLOSE_ALL", self.qty_remaining, "BREAKEVEN_STOP",
+                                self.entry_premium)
 
         return self._action("HOLD", 0, "")
 
@@ -113,9 +116,10 @@ class ExitManager:
         h, m = map(int, time_str.split(":"))
         return time(h, m)
 
-    def _action(self, action_type: str, qty: int, reason: str) -> dict:
+    def _action(self, action_type: str, qty: int, reason: str,
+                current_premium: float = None) -> dict:
         return {"type": action_type, "qty": qty, "reason": reason,
-                "current_premium": None}
+                "current_premium": current_premium}
 
     def to_dict(self) -> dict:
         return {

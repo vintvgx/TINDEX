@@ -37,9 +37,10 @@ def _days_to_cron(trade_days: list) -> str:
     return ",".join(DAY_MAP[d] for d in sorted(trade_days) if d in DAY_MAP)
 
 
-def reschedule_jobs(engine):
+def reschedule_jobs(engine, strategy_id: str = None):
     """
     Remove existing cron jobs and rebuild them from the engine's current config.
+    strategy_id is used as a prefix so multiple engines don't clash on job IDs.
 
     NOTE: Called by init_scheduler on startup and by strategy_routes after a
     config update so that trade_days / orb_minutes changes take effect immediately.
@@ -49,9 +50,11 @@ def reschedule_jobs(engine):
         logger.warning("[Scheduler] APScheduler not available — scheduling disabled")
         return
 
-    for job_id in ["job_orb_calc", "job_price_poll", "job_eod_reset"]:
+    sid = strategy_id or getattr(engine, "strategy_id", None) or "default"
+
+    for suffix in ("orb_calc", "price_poll", "eod_reset"):
         try:
-            sched.remove_job(job_id)
+            sched.remove_job(f"job_{sid}_{suffix}")
         except Exception:
             pass
 
@@ -69,26 +72,26 @@ def reschedule_jobs(engine):
     orb_fire_hour   = 9 + orb_fire_minute // 60
     orb_fire_minute = orb_fire_minute % 60
 
-    logger.info("[Scheduler] Scheduling jobs — days=%s orb_calc=%d:%02d",
-                days_cron, orb_fire_hour, orb_fire_minute)
+    logger.info("[Scheduler] Scheduling jobs — sid=%s days=%s orb_calc=%d:%02d",
+                sid, days_cron, orb_fire_hour, orb_fire_minute)
 
     sched.add_job(
         lambda: (engine.reset_session(), engine.calculate_orb()),
         CronTrigger(day_of_week=days_cron, hour=orb_fire_hour,
                     minute=orb_fire_minute, timezone=ET),
-        id="job_orb_calc", replace_existing=True,
+        id=f"job_{sid}_orb_calc", replace_existing=True,
     )
 
     sched.add_job(
         lambda: _poll(engine),
         CronTrigger(day_of_week=days_cron, hour="9-15", minute="*/1", timezone=ET),
-        id="job_price_poll", replace_existing=True,
+        id=f"job_{sid}_price_poll", replace_existing=True,
     )
 
     sched.add_job(
         lambda: _eod_reset(engine),
         CronTrigger(day_of_week=days_cron, hour=15, minute=30, timezone=ET),
-        id="job_eod_reset", replace_existing=True,
+        id=f"job_{sid}_eod_reset", replace_existing=True,
     )
 
 
@@ -106,6 +109,7 @@ def _poll(engine):
         engine.on_price_tick(
             current_price=price_data["underlying"],
             current_volume=price_data.get("volume"),
+            current_option_price=price_data.get("option_price"),
         )
 
 

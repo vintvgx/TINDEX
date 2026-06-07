@@ -7,25 +7,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
-import { useUpdateStrategyConfig } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
-import { useToast } from '@/common/components/ui/Toast';
 
 export default function AccountsScreen() {
   const colors = useThemeColors();
-  const toast  = useToast();
 
   const { data, isLoading, refetch, isRefetching } = useAlpacaBothAccounts();
-  const { mutate: updateConfig, isPending: switching } = useUpdateStrategyConfig();
-
-  const handleSwitch = (toPaper: boolean) => {
-    updateConfig({ paper_mode: toPaper }, {
-      onSuccess: () => {
-        toast.success(toPaper ? 'Switched to Paper Trading' : 'Switched to Live Trading');
-        refetch();
-      },
-      onError: () => toast.error('Failed to switch mode'),
-    });
-  };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -45,24 +31,6 @@ export default function AccountsScreen() {
           <View style={{ width: 22 }} />
         </View>
 
-        {/* Active mode indicator */}
-        {data && (
-          <View style={[styles.activeRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Ionicons
-              name="radio-button-on"
-              size={14}
-              color={data.active_mode ? '#FF9F0A' : colors.success}
-              style={{ marginRight: 6 }}
-            />
-            <Text style={[styles.activeLabel, { color: colors.text }]}>
-              Currently trading:{' '}
-              <Text style={{ color: data.active_mode ? '#FF9F0A' : colors.success, fontWeight: '700' }}>
-                {data.active_mode ? 'Paper' : 'Live'}
-              </Text>
-            </Text>
-          </View>
-        )}
-
         {isLoading ? (
           <ActivityIndicator color={colors.accent} style={{ marginTop: 60 }} />
         ) : (
@@ -73,9 +41,6 @@ export default function AccountsScreen() {
               subtitle="Simulated — no real money"
               accentColor="#FF9F0A"
               account={data?.paper}
-              isActive={data?.active_mode === true}
-              isSwitching={switching}
-              onActivate={() => handleSwitch(true)}
               colors={colors}
             />
 
@@ -85,9 +50,6 @@ export default function AccountsScreen() {
               subtitle="Real money — trade with caution"
               accentColor={colors.success}
               account={data?.live}
-              isActive={data?.active_mode === false}
-              isSwitching={switching}
-              onActivate={() => handleSwitch(false)}
               colors={colors}
             />
 
@@ -97,10 +59,8 @@ export default function AccountsScreen() {
             )}
 
             <Text style={[styles.disclaimer, { color: colors.tabBarInactive }]}>
-              Switching accounts takes effect immediately. The ORB engine will use the
-              newly selected account for all future orders. Any position currently open
-              in the prior account will not be managed automatically — close it manually
-              in the Alpaca dashboard before switching.
+              Paper and Live account data shown above. Trading mode (paper vs live) is
+              configured per-strategy in the ORB Strategy screen.
             </Text>
           </>
         )}
@@ -116,14 +76,11 @@ interface AccountCardProps {
   subtitle: string;
   accentColor: string;
   account?: { available: boolean; equity?: number; cash?: number; buying_power?: number; pnl_today?: number; pnl_today_pct?: number; day_trade_count?: number; error?: string };
-  isActive: boolean;
-  isSwitching: boolean;
-  onActivate: () => void;
   colors: any;
 }
 
 const AccountCard: React.FC<AccountCardProps> = ({
-  label, subtitle, accentColor, account, isActive, isSwitching, onActivate, colors,
+  label, subtitle, accentColor, account, colors,
 }) => {
   const unavailable = !account?.available;
   const pnl    = account?.pnl_today ?? 0;
@@ -131,42 +88,16 @@ const AccountCard: React.FC<AccountCardProps> = ({
   const pnlColor = pnl >= 0 ? colors.success : colors.error;
 
   return (
-    <View
-      style={[
-        styles.card,
-        {
-          backgroundColor: colors.card,
-          borderColor: isActive ? accentColor : colors.border,
-          borderWidth: isActive ? 2 : 1,
-        },
-      ]}
-    >
+    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       {/* Card header */}
       <View style={styles.cardHeader}>
         <View>
           <View style={styles.labelRow}>
             <View style={[styles.dot, { backgroundColor: accentColor }]} />
             <Text style={[styles.cardLabel, { color: colors.text }]}>{label}</Text>
-            {isActive && (
-              <View style={[styles.activeBadge, { backgroundColor: accentColor + '22', borderColor: accentColor }]}>
-                <Text style={[styles.activeBadgeText, { color: accentColor }]}>ACTIVE</Text>
-              </View>
-            )}
           </View>
           <Text style={[styles.cardSubtitle, { color: colors.tabBarInactive }]}>{subtitle}</Text>
         </View>
-
-        {!isActive && !unavailable && (
-          <TouchableOpacity
-            onPress={onActivate}
-            disabled={isSwitching}
-            style={[styles.switchBtn, { borderColor: accentColor }]}
-          >
-            <Text style={[styles.switchBtnText, { color: accentColor }]}>
-              {isSwitching ? 'Switching…' : 'Activate'}
-            </Text>
-          </TouchableOpacity>
-        )}
       </View>
 
       {unavailable ? (
@@ -247,20 +178,12 @@ const styles = StyleSheet.create({
   header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   title:     { fontSize: 20, fontWeight: '700' },
 
-  activeRow: { flexDirection: 'row', alignItems: 'center', borderRadius: 10, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10 },
-  activeLabel: { fontSize: 13 },
-
-  card:      { borderRadius: 16, padding: 16, gap: 10 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  labelRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3 },
-  dot:       { width: 9, height: 9, borderRadius: 5 },
-  cardLabel: { fontSize: 17, fontWeight: '700' },
-  activeBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, borderWidth: 1 },
-  activeBadgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
+  card:         { borderRadius: 16, padding: 16, gap: 10 },
+  cardHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  labelRow:     { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3 },
+  dot:          { width: 9, height: 9, borderRadius: 5 },
+  cardLabel:    { fontSize: 17, fontWeight: '700' },
   cardSubtitle: { fontSize: 12 },
-
-  switchBtn:      { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7 },
-  switchBtnText:  { fontSize: 12, fontWeight: '700' },
 
   unavailableRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 4 },
   unavailableText: { fontSize: 12, flex: 1 },

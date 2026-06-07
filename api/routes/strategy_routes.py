@@ -1,51 +1,158 @@
 """
 Flask blueprint for ORB strategy endpoints.
-All endpoints read from / write to the global ORBEngine instance
-that is initialized in app.py.
+
+Multi-strategy: _engines is a dict keyed by strategy UUID.
+Legacy single-engine endpoints (/strategy/config, /strategy/position, etc.)
+operate on the first engine for backwards compatibility with old clients.
 """
 
 from flask import Blueprint, jsonify, request
 from services.strategy.trade_logger import TradeLogger
 from services.strategy.profiles import PROFILES, describe_profile
 from services.strategy.scheduler import reschedule_jobs
+from services.strategy.orb_engine import ORBEngine, STRATEGY_DEFAULTS
 
 strategy_bp = Blueprint("strategy", __name__, url_prefix="/strategy")
 
-logger_svc = TradeLogger()
-_engine = None  # injected by init_routes()
+logger_svc    = TradeLogger()
+_engines:      dict[str, ORBEngine] = {}   # strategy_id -> ORBEngine
+_stream_manager = None                     # OptionStreamManager — set by init_routes
 
 
-def init_routes(orb_engine):
-    global _engine
-    _engine = orb_engine
+def init_routes(engines: dict[str, ORBEngine], stream_manager=None):
+    global _engines, _stream_manager
+    _engines        = engines
+    _stream_manager = stream_manager
 
 
-# ── Config ─────────────────────────────────────────────────────────────────────
-
-@strategy_bp.route("/config", methods=["GET"])
-def get_config():
-    return jsonify(_engine.config)
+def _first_engine() -> ORBEngine | None:
+    """Return the first engine, used by legacy single-engine endpoints."""
+    return next(iter(_engines.values()), None)
 
 
-@strategy_bp.route("/config", methods=["POST"])
-def update_config():
-    """
-    Frontend sends any subset of:
-      ticker, orb_minutes, paper_mode, active, profile, trade_days
-    """
+# ── Multi-strategy CRUD ────────────────────────────────────────────────────────
+
+@strategy_bp.route("/configs", methods=["GET"])
+def list_configs():
+    """Return all strategy configs enriched with live position status."""
+    result = []
+    configs = logger_svc.load_configs()
+    for cfg in configs:
+        sid = cfg["id"]
+        eng = _engines.get(sid)
+        result.append({
+            **cfg,
+            "has_position": bool(eng and eng.trade_taken and eng.contract_symbol),
+        })
+    return jsonify(result)
+
+
+@strategy_bp.route("/configs", methods=["POST"])
+def create_config():
+    """Create a new strategy and start its engine."""
     data = request.get_json() or {}
-    allowed = {"ticker", "orb_minutes", "paper_mode", "active", "profile", "trade_days"}
+    config = {**STRATEGY_DEFAULTS.copy(), **{
+        k: data[k] for k in (
+            "ticker", "orb_minutes", "paper_mode", "active",
+            "profile", "trade_days", "strategy_name", "capital_limit"
+        ) if k in data
+    }}
+    config.pop("id", None)   # force new UUID
+
+    saved = logger_svc.save_strategy_config(config)
+    if not saved:
+        return jsonify({"error": "Failed to save strategy"}), 500
+
+    sid = saved["id"]
+    saved_config = {**config, "id": sid}
+    engine = ORBEngine(saved_config, stream_manager=_stream_manager)
+    _engines[sid] = engine
+    reschedule_jobs(engine, strategy_id=sid)
+
+    return jsonify(saved), 201
+
+
+@strategy_bp.route("/configs/<strategy_id>", methods=["PATCH"])
+def update_config(strategy_id: str):
+    """Patch an existing strategy config and hot-reload its engine."""
+    data = request.get_json() or {}
+    if strategy_id not in _engines:
+        return jsonify({"error": "Strategy not found"}), 404
+
+    engine = _engines[strategy_id]
+    allowed = {"ticker", "orb_minutes", "paper_mode", "active",
+               "profile", "trade_days", "strategy_name", "capital_limit"}
     for key in allowed:
         if key in data:
-            _engine.config[key] = data[key]
+            engine.config[key] = data[key]
+    engine.config["id"] = strategy_id
 
-    _engine.reload_config(_engine.config)
+    engine.reload_config(engine.config)
+    reschedule_jobs(engine, strategy_id=strategy_id)
+    logger_svc.save_strategy_config(engine.config)
 
-    if "trade_days" in data or "profile" in data:
-        reschedule_jobs(_engine)
+    return jsonify({"status": "ok", "config": engine.config})
 
-    logger_svc.save_config(_engine.config)
-    return jsonify({"status": "ok", "config": _engine.config})
+
+@strategy_bp.route("/configs/<strategy_id>", methods=["DELETE"])
+def delete_config(strategy_id: str):
+    """Stop and remove a strategy."""
+    engine = _engines.pop(strategy_id, None)
+    if engine:
+        # Remove scheduler jobs for this strategy
+        from services.strategy.scheduler import get_scheduler
+        sched = get_scheduler()
+        if sched:
+            for suffix in ("orb_calc", "price_poll", "eod_reset"):
+                try:
+                    sched.remove_job(f"job_{strategy_id}_{suffix}")
+                except Exception:
+                    pass
+        if engine.trade_taken and engine.contract_symbol:
+            try:
+                engine.trading_client.close_position(engine.contract_symbol)
+            except Exception:
+                pass
+
+    logger_svc.delete_strategy_config(strategy_id)
+    return jsonify({"status": "ok"})
+
+
+@strategy_bp.route("/configs/<strategy_id>/reset-session", methods=["POST"])
+def reset_strategy_session(strategy_id: str):
+    engine = _engines.get(strategy_id)
+    if not engine:
+        return jsonify({"error": "Strategy not found"}), 404
+    engine.reset_session()
+    return jsonify({"status": "ok"})
+
+
+@strategy_bp.route("/configs/<strategy_id>/force-close", methods=["POST"])
+def force_close_strategy(strategy_id: str):
+    engine = _engines.get(strategy_id)
+    if not engine:
+        return jsonify({"error": "Strategy not found"}), 404
+    if not engine.trade_taken or not engine.contract_symbol:
+        return jsonify({"status": "ok", "message": "No active position"})
+    try:
+        engine.trading_client.close_position(engine.contract_symbol)
+        engine.logger.log_exit(
+            engine.contract_symbol, "MANUAL_CLOSE", None,
+            engine.exit_manager.qty_remaining if engine.exit_manager else 0,
+            engine.profile_key,
+        )
+        engine.reset_session()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@strategy_bp.route("/configs/<strategy_id>/position", methods=["GET"])
+def get_strategy_position(strategy_id: str):
+    engine = _engines.get(strategy_id)
+    if not engine:
+        return jsonify({"error": "Strategy not found"}), 404
+    return _engine_position_response(engine)
 
 
 # ── Profiles ───────────────────────────────────────────────────────────────────
@@ -63,60 +170,14 @@ def get_profile_detail(profile_key: str):
     return jsonify(describe_profile(key))
 
 
-# ── Live position ──────────────────────────────────────────────────────────────
-
-@strategy_bp.route("/position", methods=["GET"])
-def get_position():
-    if not _engine.trade_taken or not _engine.contract_symbol:
-        return jsonify({
-            "active":   False,
-            "ticker":   _engine.config["ticker"],
-            "profile":  _engine.profile_key,
-            "position": None,
-            "paper_mode": _engine.paper,
-        })
-
-    try:
-        pos = _engine.trading_client.get_open_position(_engine.contract_symbol)
-        em  = _engine.exit_manager
-        return jsonify({
-            "active":            True,
-            "ticker":            _engine.config["ticker"],
-            "profile":           _engine.profile_key,
-            "paper_mode":        _engine.paper,
-            "direction":         _engine.position,
-            "contract":          _engine.contract_symbol,
-            "qty_remaining":     em.qty_remaining if em else 0,
-            "qty_total":         em.qty if em else 0,
-            "entry_premium":     em.entry_premium if em else None,
-            "current_price":     float(pos.current_price),
-            "unrealized_pnl":    float(pos.unrealized_pl),
-            "unrealized_pnl_pct": float(pos.unrealized_plpc) * 100,
-            "hard_stop":         em.hard_stop if em else None,
-            "tp1":               em.tp1 if em else None,
-            "tp2":               em.tp2 if em else None,
-            "tp1_hit":           em.tp1_hit if em else False,
-            "tp2_hit":           em.tp2_hit if em else False,
-            "be_stop_active":    em.be_stop_active if em else False,
-            "runner_trail":      em.runner_trail if em else None,
-            "fib_levels":        _engine.fib_levels,
-        })
-    except Exception:
-        return jsonify({"active": False, "position": None, "paper_mode": _engine.paper})
-
-
-# ── Session ────────────────────────────────────────────────────────────────────
-
-@strategy_bp.route("/session", methods=["GET"])
-def get_session():
-    return jsonify(_engine.session_state())
-
-
-# ── Account (paper or live) ────────────────────────────────────────────────────
+# ── Account ────────────────────────────────────────────────────────────────────
 
 @strategy_bp.route("/account", methods=["GET"])
 def get_account():
-    info = _engine.get_account_info()
+    engine = _first_engine()
+    if not engine:
+        return jsonify({"success": False, "error": "No strategy configured"}), 404
+    info = engine.get_account_info()
     if info:
         return jsonify({"success": True, "data": info})
     return jsonify({"success": False, "error": "Could not fetch account data"}), 502
@@ -124,10 +185,7 @@ def get_account():
 
 @strategy_bp.route("/accounts/both", methods=["GET"])
 def get_both_accounts():
-    """
-    Returns paper and live Alpaca account data in a single call.
-    Each account is fetched independently — if one fails the other still returns.
-    """
+    """Returns paper and live Alpaca account data in a single call."""
     import os
     from alpaca.trading.client import TradingClient
 
@@ -138,9 +196,9 @@ def get_both_accounts():
         try:
             client = TradingClient(api_key, secret_key, paper=paper)
             acct = client.get_account()
-            equity     = float(acct.equity)
+            equity      = float(acct.equity)
             last_equity = float(acct.last_equity)
-            pnl_today  = equity - last_equity
+            pnl_today   = equity - last_equity
             return {
                 "equity":          equity,
                 "cash":            float(acct.cash),
@@ -149,23 +207,22 @@ def get_both_accounts():
                 "pnl_today":       round(pnl_today, 2),
                 "pnl_today_pct":   round(pnl_today / last_equity * 100, 3) if last_equity > 0 else 0,
                 "paper_mode":      paper,
-                "available": True,
+                "available":       True,
             }
         except Exception as e:
             return {"available": False, "paper_mode": paper, "error": str(e)}
 
-    paper_data = _fetch(True)
-    live_data  = _fetch(False)
-
+    engine    = _first_engine()
+    paper_mode = engine.paper if engine else True
     return jsonify({
-        "success": True,
-        "active_mode": _engine.paper,
-        "paper": paper_data,
-        "live":  live_data,
+        "success":     True,
+        "active_mode": paper_mode,
+        "paper":       _fetch(True),
+        "live":        _fetch(False),
     })
 
 
-# ── Trade history ──────────────────────────────────────────────────────────────
+# ── Trade history / Stats ──────────────────────────────────────────────────────
 
 @strategy_bp.route("/trades", methods=["GET"])
 def get_trade_history():
@@ -174,8 +231,6 @@ def get_trade_history():
     profile = request.args.get("profile", None)
     return jsonify(logger_svc.get_trades(limit=limit, ticker=ticker, profile=profile))
 
-
-# ── Stats ──────────────────────────────────────────────────────────────────────
 
 @strategy_bp.route("/stats", methods=["GET"])
 def get_stats():
@@ -188,28 +243,43 @@ def get_stats_by_profile():
     return jsonify(logger_svc.get_stats_by_profile())
 
 
-# ── Manual controls ────────────────────────────────────────────────────────────
-
-@strategy_bp.route("/reset-session", methods=["POST"])
-def reset_session():
-    _engine.reset_session()
-    return jsonify({"status": "ok", "message": "Session reset"})
 
 
-@strategy_bp.route("/force-close", methods=["POST"])
-def force_close():
-    """Emergency close of current position."""
-    if not _engine.trade_taken or not _engine.contract_symbol:
-        return jsonify({"status": "ok", "message": "No active position"})
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _engine_position_response(engine: ORBEngine):
+    if not engine.trade_taken or not engine.contract_symbol:
+        return jsonify({
+            "active":     False,
+            "ticker":     engine.config["ticker"],
+            "profile":    engine.profile_key,
+            "position":   None,
+            "paper_mode": engine.paper,
+        })
     try:
-        _engine.trading_client.close_position(_engine.contract_symbol)
-        _engine.logger.log_exit(
-            _engine.contract_symbol, "MANUAL_CLOSE",
-            None,
-            _engine.exit_manager.qty_remaining if _engine.exit_manager else 0,
-            _engine.profile_key,
-        )
-        _engine.reset_session()
-        return jsonify({"status": "ok", "message": "Position closed"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        pos = engine.trading_client.get_open_position(engine.contract_symbol)
+        em  = engine.exit_manager
+        return jsonify({
+            "active":              True,
+            "ticker":              engine.config["ticker"],
+            "profile":             engine.profile_key,
+            "paper_mode":          engine.paper,
+            "direction":           engine.position,
+            "contract":            engine.contract_symbol,
+            "qty_remaining":       em.qty_remaining if em else 0,
+            "qty_total":           em.qty if em else 0,
+            "entry_premium":       em.entry_premium if em else None,
+            "current_price":       float(pos.current_price),
+            "unrealized_pnl":      float(pos.unrealized_pl),
+            "unrealized_pnl_pct":  float(pos.unrealized_plpc) * 100,
+            "hard_stop":           em.hard_stop if em else None,
+            "tp1":                 em.tp1 if em else None,
+            "tp2":                 em.tp2 if em else None,
+            "tp1_hit":             em.tp1_hit if em else False,
+            "tp2_hit":             em.tp2_hit if em else False,
+            "be_stop_active":      em.be_stop_active if em else False,
+            "runner_trail":        em.runner_trail if em else None,
+            "fib_levels":          engine.fib_levels,
+        })
+    except Exception:
+        return jsonify({"active": False, "position": None, "paper_mode": engine.paper})

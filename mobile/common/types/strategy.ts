@@ -37,12 +37,16 @@ export interface StrategyProfile {
 }
 
 export interface StrategyConfig {
+  id: string;
+  strategy_name: string;
   ticker: string;         // 'SPY' | 'QQQ' | 'IWM'
   orb_minutes: 5 | 10 | 15;
   paper_mode: boolean;
   active: boolean;
   profile: ProfileKey;
   trade_days: number[];   // 0=Mon ... 4=Fri
+  capital_limit: number | null;
+  has_position?: boolean;
 }
 
 export interface FibLevels {
@@ -112,6 +116,20 @@ export interface StrategyStats {
   avg_winner: number;
   avg_loser: number;
   profile?: ProfileKey;
+}
+
+export interface LiveOptionPrice {
+  contract:      string;
+  mid_price:     number;
+  entry_premium: number;
+  pnl:           number;
+  pnl_pct:       number;
+  qty_remaining: number;
+  tp1_hit:       boolean;
+  tp2_hit:       boolean;
+  hard_stop:     number;
+  tp1:           number;
+  tp2:           number;
 }
 
 export interface AlpacaAccount {

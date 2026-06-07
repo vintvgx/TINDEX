@@ -161,6 +161,17 @@ class StrategyNotifier:
             },
         )
 
+    def notify_stream_failed(self, ticker: str, contract_symbol: str):
+        """Option stream could not be verified — trade skipped."""
+        self._dispatch(
+            title=f"{ticker} — Stream unavailable",
+            body=(
+                f"Could not stream real-time quotes for {contract_symbol}. "
+                "Trade skipped to avoid blind entry."
+            ),
+            data={"screen": "tradelog", "symbol": contract_symbol},
+        )
+
     def notify_re_entry(
         self,
         ticker: str,

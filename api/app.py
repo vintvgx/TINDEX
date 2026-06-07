@@ -2211,19 +2211,71 @@ try:
     from services.strategy.orb_engine import ORBEngine, STRATEGY_DEFAULTS
     from services.strategy.trade_logger import TradeLogger as StrategyLogger
     from services.strategy.scheduler import init_scheduler as init_strategy_scheduler
+    from services.strategy.option_stream import OptionStreamManager
     from routes.strategy_routes import strategy_bp, init_routes as init_strategy_routes
 
-    def _build_strategy_engine() -> ORBEngine:
-        svc_logger = StrategyLogger()
-        saved_config = svc_logger.load_config()
-        config = saved_config if saved_config else STRATEGY_DEFAULTS.copy()
-        return ORBEngine(config)
+    _option_stream_manager = OptionStreamManager()
 
-    _strategy_engine = _build_strategy_engine()
+    def _build_strategy_engines() -> dict:
+        svc_logger = StrategyLogger()
+        configs = svc_logger.load_configs()
+        if not configs:
+            # Bootstrap a single default engine when no configs exist yet
+            default = STRATEGY_DEFAULTS.copy()
+            saved = svc_logger.save_strategy_config(default)
+            if saved:
+                default["id"] = saved["id"]
+            configs = [default]
+        engines = {}
+        for cfg in configs:
+            try:
+                eng = ORBEngine(cfg, stream_manager=_option_stream_manager)
+                engines[cfg["id"]] = eng
+                init_strategy_scheduler(eng)
+            except Exception as _eng_err:
+                logger.warning("[App] Failed to start engine for config %s: %s",
+                               cfg.get("id"), _eng_err)
+        return engines
+
+    _strategy_engines = _build_strategy_engines()
     app.register_blueprint(strategy_bp)
-    init_strategy_routes(_strategy_engine)
-    init_strategy_scheduler(_strategy_engine)
-    logger.info("[App] ORB strategy engine and scheduler initialised")
+    init_strategy_routes(_strategy_engines, stream_manager=_option_stream_manager)
+    logger.info("[App] ORB strategy engines initialised (%d configs)", len(_strategy_engines))
+
+    @sock.route("/ws/strategy/<strategy_id>/live")
+    def ws_strategy_live(ws, strategy_id: str):
+        """
+        WebSocket endpoint for live option price + P&L streaming.
+
+        The client connects and receives JSON messages whenever the option
+        stream pushes a new quote for the active position:
+          { "type": "price_update", "contract": "...", "mid_price": 1.23,
+            "pnl": 38.00, "pnl_pct": 44.7, "qty_remaining": 3, ... }
+        Keepalive pings are sent every 30 s when no trade is active.
+        """
+        import queue as _queue
+        engine = _strategy_engines.get(strategy_id)
+        if not engine:
+            return
+
+        client_q = _queue.Queue(maxsize=50)
+        with engine._live_clients_lock:
+            engine._live_clients.append(client_q)
+
+        try:
+            while True:
+                try:
+                    msg = client_q.get(timeout=30)
+                    ws.send(msg)
+                except _queue.Empty:
+                    ws.send(json.dumps({"type": "ping"}))
+        except Exception as exc:
+            logger.debug("[WS/strategy] client disconnected: %s", exc)
+        finally:
+            with engine._live_clients_lock:
+                if client_q in engine._live_clients:
+                    engine._live_clients.remove(client_q)
+
 except Exception as _strategy_init_err:
     logger.warning("[App] ORB strategy engine init failed (non-fatal): %s", _strategy_init_err)
 

@@ -4,6 +4,7 @@ Reads config back from strategy_config table.
 """
 
 import os
+import uuid
 import logging
 from datetime import datetime, date
 from typing import Optional
@@ -21,30 +22,50 @@ class TradeLogger:
             raise ValueError("Supabase credentials not set")
         self.client: Client = create_client(url, key)
 
-    # ── Config persistence ──────────────────────────────────────────────────────
+    # ── Multi-strategy config (strategy_configs table) ──────────────────────────
 
-    def save_config(self, config: dict):
+    def load_configs(self) -> list[dict]:
+        """Return all rows from strategy_configs, ordered by created_at."""
         try:
-            self.client.table("strategy_config").upsert({
-                "id": 1,
-                "ticker":     config.get("ticker", "SPY"),
-                "orb_minutes": config.get("orb_minutes", 5),
-                "paper_mode": config.get("paper_mode", True),
-                "active":     config.get("active", True),
-                "profile":    config.get("profile", "THUNDER_CAT"),
-                "trade_days": config.get("trade_days", [0, 2, 4]),
-                "updated_at": datetime.utcnow().isoformat(),
-            }, on_conflict="id").execute()
+            res = self.client.table("strategy_configs").select("*").order("created_at").execute()
+            return res.data or []
         except Exception as e:
-            logger.error("[TradeLogger] save_config failed: %s", e)
+            logger.error("[TradeLogger] load_configs failed: %s", e)
+            return []
 
-    def load_config(self) -> dict | None:
+    def save_strategy_config(self, config: dict) -> dict | None:
+        """
+        Upsert a row in strategy_configs.  If config has an 'id' key the row is
+        updated; otherwise a new row is inserted and the returned dict includes
+        the generated UUID.
+        """
         try:
-            res = self.client.table("strategy_config").select("*").eq("id", 1).execute()
-            return res.data[0] if res.data else None
+            row = {
+                "ticker":          config.get("ticker", "IWM"),
+                "orb_minutes":     config.get("orb_minutes", 10),
+                "paper_mode":      config.get("paper_mode", True),
+                "active":          config.get("active", True),
+                "profile":         config.get("profile", "THUNDER_CAT"),
+                "trade_days":      config.get("trade_days", [0, 2, 4]),
+                "strategy_name":   config.get("strategy_name", ""),
+                "capital_limit":   config.get("capital_limit"),
+                "updated_at":      datetime.utcnow().isoformat(),
+            }
+            if "id" in config and config["id"]:
+                row["id"] = config["id"]
+            else:
+                row["id"] = str(uuid.uuid4())
+            res = self.client.table("strategy_configs").upsert(row, on_conflict="id").execute()
+            return res.data[0] if res.data else row
         except Exception as e:
-            logger.error("[TradeLogger] load_config failed: %s", e)
+            logger.error("[TradeLogger] save_strategy_config failed: %s", e)
             return None
+
+    def delete_strategy_config(self, strategy_id: str):
+        try:
+            self.client.table("strategy_configs").delete().eq("id", strategy_id).execute()
+        except Exception as e:
+            logger.error("[TradeLogger] delete_strategy_config failed: %s", e)
 
     # ── Session logging ─────────────────────────────────────────────────────────
 

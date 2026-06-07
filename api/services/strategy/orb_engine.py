@@ -28,12 +28,15 @@ logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
 STRATEGY_DEFAULTS = {
-    "ticker":      "IWM",
-    "orb_minutes": 10,
-    "paper_mode":  True,
-    "active":      True,
-    "profile":     "THUNDER_CAT",
-    "trade_days":  [0, 2, 4],
+    "ticker":        "IWM",
+    "orb_minutes":   10,
+    "paper_mode":    True,
+    "active":        True,
+    "profile":       "THUNDER_CAT",
+    "trade_days":    [0, 2, 4],
+    "strategy_name": "",
+    "capital_limit": None,   # None = use full buying_power
+    "id":            None,
 }
 
 VIX_MIN = 13.0
@@ -47,17 +50,22 @@ EOD_CLOSE_TIMES = {
 
 
 class ORBEngine:
-    def __init__(self, config: dict = None):
+    def __init__(self, config: dict = None, stream_manager=None):
         self.config = config or STRATEGY_DEFAULTS.copy()
+        self._stream_manager_ref = stream_manager
         self._apply_config()
         self._reset_session_state()
 
     def _apply_config(self):
-        self.ticker      = self.config["ticker"]
-        self.paper       = self.config.get("paper_mode", True)
-        self.profile_key = self.config.get("profile", "THUNDER_CAT")
-        self.profile     = get_profile(self.profile_key)
-        self.trade_days  = set(self.config.get("trade_days", [0, 2, 4]))
+        self.ticker         = self.config["ticker"]
+        self.paper          = self.config.get("paper_mode", True)
+        self.profile_key    = self.config.get("profile", "THUNDER_CAT")
+        self.profile        = get_profile(self.profile_key)
+        self.trade_days     = set(self.config.get("trade_days", [0, 2, 4]))
+        self.strategy_id    = self.config.get("id")
+        self.strategy_name  = self.config.get("strategy_name", "")
+        self.capital_limit  = self.config.get("capital_limit")   # None = full buying_power
+        self.stream_manager = getattr(self, "_stream_manager_ref", None)
 
         api_key    = os.getenv("ALPACA_API_KEY")
         secret_key = os.getenv("ALPACA_SECRET_KEY")
@@ -89,11 +97,18 @@ class ORBEngine:
         self.session_skipped  = False
         self.skip_reason      = None
         self.active_trade_id  = None
-        self.trade_entry_time = None   # used by 30-min timer notification
-        self.timer_notified   = False  # ensures the 30-min update fires only once
-        self.macro_today      = False  # True when a high-impact macro event is scheduled today
+        self.trade_entry_time        = None   # used by 30-min timer notification
+        self.timer_notified          = False  # ensures the 30-min update fires only once
+        self.macro_today             = False  # True when a high-impact macro event is scheduled today
+        self._current_option_price   = None   # latest mid-price from WebSocket stream
+        self._last_underlying_price  = None   # latest underlying price from periodic poll
+        # Fan-out queues for /ws/strategy/<id>/live WebSocket clients
+        self._live_clients: list     = []
+        self._live_clients_lock      = __import__("threading").Lock()
 
     def reset_session(self):
+        if self.stream_manager and self.contract_symbol:
+            self.stream_manager.unsubscribe(self.contract_symbol, self._on_stream_quote)
         self._reset_session_state()
 
     # ── Step 1: Called at 9:35 AM ET ──────────────────────────────────────────
@@ -161,50 +176,55 @@ class ORBEngine:
 
     # ── Step 2: Called every minute after ORB is set ──────────────────────────
 
-    def on_price_tick(self, current_price: float, current_volume: float = None):
+    def on_price_tick(self, current_price: float, current_volume: float = None,
+                     current_option_price: float = None):
         """
         Main per-minute decision loop: checks breakout conditions before entry
         or delegates to ExitManager once a position is open.
 
-        Also fires the 30-minute unrealised P&L push notification exactly once
-        after a trade is entered.
+        current_price         — underlying stock price (always available)
+        current_option_price  — live option mid-price (bid+ask)/2; None if fetch failed.
+                                ExitManager uses this for the premium-based hard stop.
 
-        NOTE: Called by the APScheduler 1-minute interval job (_poll in scheduler.py).
+        NOTE: Called by scheduler._poll every minute.
         """
         if self.session_skipped:
             return
 
         now_et = datetime.now(ET)
-        orb_close   = now_et.replace(hour=9, minute=30 + self.config["orb_minutes"], second=0)
-        limit_min   = self.profile.get("breakout_time_limit_min", 45)
-        deadline    = orb_close + timedelta(minutes=limit_min)
+        orb_close = now_et.replace(hour=9, minute=30 + self.config["orb_minutes"], second=0)
+        limit_min = self.profile.get("breakout_time_limit_min", 45)
+        deadline  = orb_close + timedelta(minutes=limit_min)
 
         if not self.trade_taken and now_et > deadline:
             self._skip("BREAKOUT_TIME_LIMIT_EXCEEDED")
             return
 
         if self.trade_taken and self.exit_manager:
+            # Use live option price for stop/TP checks; fall back to underlying only if
+            # the option quote couldn't be fetched (network error, etc.)
+            option_p = current_option_price if current_option_price is not None else current_price
             action = self.exit_manager.evaluate(
-                current_option_price=current_price,
+                current_option_price=option_p,
                 current_underlying_price=current_price,
                 current_volume=current_volume,
             )
-            self._handle_exit_action(action, current_price)
+            self._handle_exit_action(action, current_price, option_p)
 
-            # 30-minute unrealised P&L notification (fires once per trade)
+            # 30-minute P&L notification (fires once per trade)
             if (
                 not self.timer_notified
                 and self.trade_entry_time is not None
-                and (now_et - self.trade_entry_time).total_seconds() >= 1800 #TODO set this as a user variable to set instead of hardcoding 30mins
+                and (now_et - self.trade_entry_time).total_seconds() >= 1800
             ):
                 entry_p = self.exit_manager.entry_premium
-                pnl     = (current_price - entry_p) * self.exit_manager.qty_remaining * 100
+                pnl     = (option_p - entry_p) * self.exit_manager.qty_remaining * 100
                 self.notifier.notify_timer_update(
                     ticker=self.ticker,
                     contract_symbol=self.contract_symbol,
                     current_pnl=pnl,
                     entry_premium=entry_p,
-                    current_premium=current_price,
+                    current_premium=option_p,
                 )
                 self.timer_notified = True
             return
@@ -272,6 +292,18 @@ class ORBEngine:
                 )
                 qty = affordable
 
+        # Verify real-time stream BEFORE placing the order.
+        # If the symbol can't be streamed we refuse to enter — a trade without
+        # real-time pricing is effectively blind (stop-losses won't fire promptly).
+        if self.stream_manager:
+            symbol_to_verify = contract["symbol"]
+            logger.info("[ORBEngine] Verifying stream for %s ...", symbol_to_verify)
+            if not self.stream_manager.verify_stream(symbol_to_verify, timeout=8.0):
+                logger.warning("[ORBEngine] Stream unavailable for %s — trade skipped",
+                               symbol_to_verify)
+                self.notifier.notify_stream_failed(self.ticker, symbol_to_verify)
+                return
+
         try:
             order = MarketOrderRequest(
                 symbol=contract["symbol"],
@@ -318,6 +350,10 @@ class ORBEngine:
                 profile_key=self.profile_key,
                 macro_event=self.macro_today,
             )
+            # Subscribe to real-time option quotes now that the position is open
+            if self.stream_manager:
+                self.stream_manager.subscribe(contract["symbol"], self._on_stream_quote)
+
             logger.info("[ORBEngine] Entered %s %s qty=%d @ %.2f",
                         direction, contract["symbol"], qty, contract["ask"])
         except Exception as e:
@@ -325,24 +361,31 @@ class ORBEngine:
 
     # ── Exit ───────────────────────────────────────────────────────────────────
 
-    def _handle_exit_action(self, action: dict, current_price: float):
+    def _handle_exit_action(self, action: dict, current_price: float,
+                            current_option_price: float = None):
         """
         Execute a full or partial close based on the action dict returned by
         ExitManager.evaluate().  Updates qty_remaining and logs the exit.
 
-        NOTE: Called by on_price_tick immediately after ExitManager.evaluate()
-        whenever a position is open.
+        current_option_price is used for accurate P&L when available; falls back
+        to action["current_premium"] then current_price (underlying) as last resort.
+
+        NOTE: Called by on_price_tick immediately after ExitManager.evaluate().
         """
         if not action or action["type"] == "HOLD":
             return
 
         qty_to_close = action.get("qty", self.exit_manager.qty_remaining)
+        closing_all  = qty_to_close >= self.exit_manager.qty_remaining
         try:
-            if qty_to_close >= self.exit_manager.qty_remaining:
+            if closing_all:
                 self.trading_client.close_position(self.contract_symbol)
                 self.exit_manager.qty_remaining = 0
                 self.trade_taken = False
                 self.position    = None
+                # Unsubscribe from the option stream — position is fully closed
+                if self.stream_manager and self.contract_symbol:
+                    self.stream_manager.unsubscribe(self.contract_symbol, self._on_stream_quote)
             else:
                 order = MarketOrderRequest(
                     symbol=self.contract_symbol,
@@ -353,7 +396,11 @@ class ORBEngine:
                 self.trading_client.submit_order(order)
                 self.exit_manager.qty_remaining -= qty_to_close
 
-            exit_premium = action.get("current_premium") or current_price
+            # Prefer the action's own premium (set by ExitManager), then live option
+            # price, then underlying as a last fallback for P&L logging accuracy
+            exit_premium = (action.get("current_premium")
+                            or current_option_price
+                            or current_price)
             entry_p = self.exit_manager.entry_premium if self.exit_manager else 0
             pnl = (exit_premium - entry_p) * qty_to_close * 100
 
@@ -376,6 +423,51 @@ class ORBEngine:
                         action["type"], qty_to_close, action.get("reason", ""))
         except Exception as e:
             logger.error("[ORBEngine] Exit failed: %s", e)
+
+    def _on_stream_quote(self, mid: float):
+        """
+        Callback invoked by OptionStreamManager on every bid/ask update.
+
+        Drives exit logic with the real-time option price and fans out to
+        any connected /ws/strategy/<id>/live WebSocket clients.
+
+        NOTE: Called from the OptionDataStream background thread — must be
+        thread-safe and non-blocking.
+        """
+        import json as _json
+        self._current_option_price = mid
+
+        # Drive exit logic using the latest cached underlying price
+        underlying = self._last_underlying_price or mid
+        self.on_price_tick(current_price=underlying, current_option_price=mid)
+
+        # Push live P&L to any connected WebSocket clients
+        if not self.trade_taken or not self.exit_manager:
+            return
+        em = self.exit_manager
+        entry_p = em.entry_premium or 0
+        pnl     = (mid - entry_p) * em.qty_remaining * 100
+        pnl_pct = ((mid - entry_p) / entry_p * 100) if entry_p > 0 else 0
+        payload = _json.dumps({
+            "type":          "price_update",
+            "contract":      self.contract_symbol,
+            "mid_price":     round(mid, 4),
+            "entry_premium": round(entry_p, 4),
+            "pnl":           round(pnl, 2),
+            "pnl_pct":       round(pnl_pct, 2),
+            "qty_remaining": em.qty_remaining,
+            "tp1_hit":       em.tp1_hit,
+            "tp2_hit":       em.tp2_hit,
+            "hard_stop":     round(em.hard_stop, 4),
+            "tp1":           round(em.tp1, 4),
+            "tp2":           round(em.tp2, 4),
+        })
+        with self._live_clients_lock:
+            for q in list(self._live_clients):
+                try:
+                    q.put_nowait(payload)
+                except Exception:
+                    pass
 
     def _skip(self, reason: str):
         """
@@ -415,18 +507,42 @@ class ORBEngine:
 
     def get_latest_price(self) -> dict | None:
         """
-        Fetch the most recent 1-minute bar close and volume for self.ticker.
+        Fetch the most recent underlying bar to update _last_underlying_price.
+        When streaming is active, the option price comes from the WebSocket
+        stream (_current_option_price); otherwise it is fetched here as a fallback.
 
-        NOTE: Called by scheduler._poll every minute to drive on_price_tick.
+        NOTE: Called by scheduler._poll every minute. With active streaming the
+        option price from this method is ignored in favour of the stream value.
+        Returns {"underlying": float, "volume": float, "option_price": float|None}.
         """
         try:
             from alpaca.data.requests import StockLatestBarRequest
             req  = StockLatestBarRequest(symbol_or_symbols=self.ticker)
             bars = self.data_client.get_stock_latest_bar(req)
             bar  = bars.get(self.ticker)
-            if bar:
-                return {"underlying": bar.close, "volume": bar.volume}
-            return None
+            if not bar:
+                return None
+
+            self._last_underlying_price = bar.close
+            result: dict = {
+                "underlying":   bar.close,
+                "volume":       bar.volume,
+                "option_price": self._current_option_price,  # from stream if active
+            }
+
+            # Fallback REST fetch for option price when stream is unavailable
+            if self.contract_symbol and self._current_option_price is None:
+                try:
+                    from alpaca.data.requests import OptionLatestQuoteRequest
+                    oreq   = OptionLatestQuoteRequest(symbol_or_symbols=self.contract_symbol)
+                    quotes = self.option_client.get_option_latest_quote(oreq)
+                    quote  = quotes.get(self.contract_symbol)
+                    if quote and quote.ask_price and quote.bid_price:
+                        result["option_price"] = (quote.ask_price + quote.bid_price) / 2
+                except Exception as oe:
+                    logger.debug("[ORBEngine] option quote REST fallback failed: %s", oe)
+
+            return result
         except Exception as e:
             logger.warning("[ORBEngine] get_latest_price failed: %s", e)
             return None
