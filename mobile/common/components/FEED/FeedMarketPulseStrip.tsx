@@ -8,7 +8,9 @@
  * Price items:   Any ticker symbol — base set (SPY, QQQ, IWM) + every ticker
  *                currently tracked on the ORB screen
  *
- * Config stored in SecureStore as a JSON string[].
+ * Config is persisted to user_profiles.market_pulse_config (Supabase) so it
+ * survives device switches / reinstalls. SecureStore is used as a local cache
+ * for instant load on first render.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -22,6 +24,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
+import { useAuth } from '@/common/utils/context/auth/AuthContext';
+import { useUpdateProfileMutation } from '@/hooks/mutations/auth/useUpdateProfileMutation';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -57,17 +61,17 @@ function computeFlow(orbData: any[], livePrices: Record<string, number>) {
   return { label, up, down, color };
 }
 
-async function loadConfig(): Promise<string[]> {
+async function loadLocalConfig(): Promise<string[] | null> {
   try {
     const raw = await SecureStore.getItemAsync(CONFIG_KEY);
-    if (!raw) return DEFAULT_CONFIG;
+    if (!raw) return null;
     const parsed = JSON.parse(raw) as string[];
     if (Array.isArray(parsed) && parsed.length > 0) return parsed;
   } catch {}
-  return DEFAULT_CONFIG;
+  return null;
 }
 
-async function persistConfig(cfg: string[]) {
+async function cacheLocalConfig(cfg: string[]) {
   try { await SecureStore.setItemAsync(CONFIG_KEY, JSON.stringify(cfg)); } catch {}
 }
 
@@ -287,14 +291,43 @@ function ConfigSheet({
 
 export function FeedMarketPulseStrip() {
   const colors = useThemeColors();
+  const { authState: { user, profile } } = useAuth();
+  const updateProfile = useUpdateProfileMutation();
+
   const [config, setConfig]      = useState<string[]>(DEFAULT_CONFIG);
   const [draft, setDraft]        = useState<string[]>(DEFAULT_CONFIG);
   const [sheetVisible, setSheet] = useState(false);
+  const configLoadedRef          = useRef(false);
 
-  // Load persisted config on mount
+  // Load config: profile (Supabase) takes priority, SecureStore is the local cache.
+  // Profile is not available on first render (auth hydration), so we start with
+  // SecureStore and upgrade once the profile arrives.
   useEffect(() => {
-    loadConfig().then(cfg => { setConfig(cfg); setDraft(cfg); });
-  }, []);
+    if (configLoadedRef.current) return;
+
+    if (profile) {
+      // Profile loaded — use it as source of truth
+      const remote = profile.market_pulse_config;
+      if (Array.isArray(remote) && remote.length > 0) {
+        setConfig(remote);
+        setDraft(remote);
+        cacheLocalConfig(remote); // keep local cache in sync
+      } else {
+        // Profile has no config yet — check local cache, then default
+        loadLocalConfig().then(local => {
+          const resolved = (local ?? DEFAULT_CONFIG);
+          setConfig(resolved);
+          setDraft(resolved);
+        });
+      }
+      configLoadedRef.current = true;
+    } else {
+      // Profile not yet loaded — use local cache for instant display
+      loadLocalConfig().then(local => {
+        if (local) { setConfig(local); setDraft(local); }
+      });
+    }
+  }, [profile]);
 
   // ORB tickers from monitoring state (excludes mock data)
   const { data: orbData } = useORBMonitoringState(false, false);
@@ -361,8 +394,11 @@ export function FeedMarketPulseStrip() {
 
   const handleSave = useCallback(() => {
     setConfig(draft);
-    persistConfig(draft);
-  }, [draft]);
+    cacheLocalConfig(draft);
+    if (user?.id) {
+      updateProfile.mutate({ id: user.id, market_pulse_config: draft });
+    }
+  }, [draft, user, updateProfile]);
 
   // ── Render pills ────────────────────────────────────────────────────────
   function renderPill(key: string) {
