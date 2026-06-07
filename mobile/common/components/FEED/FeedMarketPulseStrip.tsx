@@ -85,25 +85,25 @@ function Pill({
   return (
     <View style={{
       backgroundColor: accentColor + '14',
-      borderRadius: 10,
+      borderRadius: 14,
       borderWidth: 1,
       borderColor: accentColor + '30',
-      paddingHorizontal: 10,
-      paddingVertical: 7,
-      minWidth: 68,
-      marginRight: 6,
+      paddingHorizontal: 14,
+      paddingVertical: 11,
+      minWidth: 96,
+      marginRight: 8,
     }}>
       <Text style={{
-        color: colors.textTertiary, fontSize: 9, fontWeight: '700',
-        textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 2,
+        color: colors.textTertiary, fontSize: 10, fontWeight: '700',
+        textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 4,
       }}>
         {label}
       </Text>
-      <Text style={{ color: accentColor, fontSize: 17, fontWeight: '800', letterSpacing: -0.5 }} numberOfLines={1}>
+      <Text style={{ color: accentColor, fontSize: 21, fontWeight: '800', letterSpacing: -0.5 }} numberOfLines={1}>
         {value}
       </Text>
       {sub != null && (
-        <Text style={{ color: accentColor + 'CC', fontSize: 10, fontWeight: '600', marginTop: 1 }} numberOfLines={1}>
+        <Text style={{ color: accentColor + 'CC', fontSize: 11, fontWeight: '600', marginTop: 3 }} numberOfLines={1}>
           {sub}
         </Text>
       )}
@@ -127,45 +127,42 @@ function ConfigSheet({
   // Keep a minimum of 1 item active
   const canRemove = (key: string) => draft.length > 1 || !draft.includes(key);
 
-  function ChipToggle({ itemKey, label, desc }: { itemKey: string; label: string; desc?: string }) {
+  function ChipToggle({ itemKey, label }: { itemKey: string; label: string }) {
     const active     = draft.includes(itemKey);
     const removable  = canRemove(itemKey);
-    const chipColor  = active ? colors.accent : colors.textTertiary;
 
     return (
       <Pressable
         onPress={() => { if (!active || removable) onToggle(itemKey); }}
         style={({ pressed }) => ({
+          width: '48%',
           flexDirection: 'row',
           alignItems: 'center',
-          gap: 8,
+          gap: 10,
           paddingHorizontal: 14,
-          paddingVertical: 10,
-          borderRadius: 12,
+          paddingVertical: 14,
+          borderRadius: 14,
           borderWidth: 1.5,
           borderColor: active ? colors.accent + '80' : colors.border,
           backgroundColor: active ? colors.accent + '12' : colors.surfaceSecondary,
           opacity: pressed ? 0.7 : 1,
-          marginBottom: 8,
-          marginRight: 8,
+          marginBottom: 10,
         })}
       >
         {active ? (
-          <Ionicons name="checkmark-circle" size={16} color={colors.accent} />
+          <Ionicons name="checkmark-circle" size={18} color={colors.accent} />
         ) : (
           <View style={{
-            width: 16, height: 16, borderRadius: 8,
+            width: 18, height: 18, borderRadius: 9,
             borderWidth: 1.5, borderColor: colors.border,
           }} />
         )}
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: active ? colors.text : colors.textSecondary, fontWeight: '600', fontSize: 14 }}>
-            {label}
-          </Text>
-          {desc && (
-            <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 1 }}>{desc}</Text>
-          )}
-        </View>
+        <Text
+          style={{ color: active ? colors.text : colors.textSecondary, fontWeight: '600', fontSize: 15 }}
+          numberOfLines={1}
+        >
+          {label}
+        </Text>
       </Pressable>
     );
   }
@@ -186,7 +183,7 @@ function ConfigSheet({
             borderTopLeftRadius: 24,
             borderTopRightRadius: 24,
             paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-            maxHeight: '80%',
+            height: '82%',
           }}>
             {/* Handle */}
             <View style={{ alignItems: 'center', paddingTop: 12, paddingBottom: 4 }}>
@@ -220,6 +217,7 @@ function ConfigSheet({
             </View>
 
             <ScrollView
+              style={{ flex: 1 }}
               contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 8 }}
               showsVerticalScrollIndicator={false}
             >
@@ -230,9 +228,9 @@ function ConfigSheet({
               }}>
                 Indicators
               </Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-                <ChipToggle itemKey="VIX"  label="VIX"  desc="Volatility index + sentiment" />
-                <ChipToggle itemKey="FLOW" label="Flow" desc="ORB ticker flow (↑↓ balance)" />
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+                <ChipToggle itemKey="VIX"  label="VIX" />
+                <ChipToggle itemKey="FLOW" label="Flow" />
               </View>
 
               {/* Section: Tickers */}
@@ -243,18 +241,10 @@ function ConfigSheet({
               }}>
                 Tickers
               </Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-                {allTickers.map(ticker => {
-                  const isOrb = orbTickers.includes(ticker) && !BASE_TICKERS.includes(ticker);
-                  return (
-                    <ChipToggle
-                      key={ticker}
-                      itemKey={ticker}
-                      label={ticker}
-                      desc={isOrb ? 'ORB tracked' : undefined}
-                    />
-                  );
-                })}
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+                {allTickers.map(ticker => (
+                  <ChipToggle key={ticker} itemKey={ticker} label={ticker} />
+                ))}
               </View>
 
               {!hasOrbTickers && (
@@ -462,7 +452,7 @@ export function FeedMarketPulseStrip() {
           paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6,
           flexDirection: 'row', alignItems: 'center', gap: 6,
         }}>
-          <Text style={{ color: colors.text, fontWeight: '700', fontSize: 13, flex: 1 }}>
+          <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15, flex: 1 }}>
             Market Pulse
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
@@ -490,7 +480,7 @@ export function FeedMarketPulseStrip() {
           horizontal
           showsHorizontalScrollIndicator={false}
           scrollEnabled
-          contentContainerStyle={{ paddingLeft: 14, paddingRight: 8, paddingBottom: 12 }}
+          contentContainerStyle={{ paddingLeft: 14, paddingRight: 8, paddingBottom: 14 }}
         >
           {config.map(key => renderPill(key))}
         </ScrollView>

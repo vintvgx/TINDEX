@@ -17,34 +17,34 @@ function PositionChip({ pos, colors }: { pos: PositionEntry; colors: any }) {
   return (
     <View style={{
       backgroundColor: colors.surfaceSecondary,
-      borderRadius: 12,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      marginRight: 8,
-      minWidth: 155,
+      borderRadius: 14,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      marginRight: 10,
+      minWidth: 200,
       borderWidth: 1,
       borderColor: dirColor + '33',
     }}>
       {/* top row: emoji + name + direction badge */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 4 }}>
-        <Text style={{ fontSize: 11 }}>{PROFILE_EMOJI[pos.profile] ?? '📊'}</Text>
-        <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '500', flex: 1 }} numberOfLines={1}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+        <Text style={{ fontSize: 13 }}>{PROFILE_EMOJI[pos.profile] ?? '📊'}</Text>
+        <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '500', flex: 1 }} numberOfLines={1}>
           {pos.strategy_name || pos.ticker}
         </Text>
-        <View style={{ backgroundColor: dirColor + '22', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 }}>
-          <Text style={{ color: dirColor, fontSize: 9, fontWeight: '800' }}>{pos.direction}</Text>
+        <View style={{ backgroundColor: dirColor + '22', borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2 }}>
+          <Text style={{ color: dirColor, fontSize: 10, fontWeight: '800' }}>{pos.direction}</Text>
         </View>
       </View>
 
       {/* contract */}
-      <Text style={{ color: colors.text, fontSize: 11, fontWeight: '600', marginBottom: 3 }} numberOfLines={1}>
+      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600', marginBottom: 6 }} numberOfLines={1}>
         {pos.contract}
       </Text>
 
       {/* P&L */}
-      <Text style={{ color: pnlColor, fontSize: 13, fontWeight: '800' }}>
+      <Text style={{ color: pnlColor, fontSize: 17, fontWeight: '800' }}>
         {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(2)}{' '}
-        <Text style={{ fontSize: 11, fontWeight: '600' }}>
+        <Text style={{ fontSize: 13, fontWeight: '600' }}>
           ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)
         </Text>
       </Text>
@@ -83,7 +83,7 @@ export function FeedPositionBanner() {
           width: 6, height: 6, borderRadius: 3,
           backgroundColor: active.length > 0 ? colors.success : colors.textTertiary,
         }} />
-        <Text style={{ color: colors.text, fontWeight: '700', fontSize: 13, flex: 1 }}>
+        <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15, flex: 1 }}>
           Live Positions
         </Text>
         {active.length > 0 && (
