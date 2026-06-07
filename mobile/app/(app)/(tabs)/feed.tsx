@@ -1,4 +1,6 @@
 import { MinimizedWatchlistComponent } from "@/common/components/FEED/cards/MinimizedWatchlistComponent";
+import { FeedPositionBanner } from "@/common/components/FEED/FeedPositionBanner";
+import { FeedMarketPulseStrip } from "@/common/components/FEED/FeedMarketPulseStrip";
 import { Header } from "@/common/components/FEED/Header";
 import MainContent from "@/common/components/FEED/MainContent";
 import { useThemeColors } from "@/lib/useColorScheme";
@@ -269,7 +271,7 @@ Risk: $2.30 per share`;
       {/* Header Component */}
       <Header onAddPress={handleAddPress} onPreviewPress={handlePreviewPress} />
 
-      {/* Unified Trending Stocks Component */}
+      {/* Trending stocks ticker */}
       <MinimizedWatchlistComponent
         watchlists={watchlistsData}
         isLoading={watchlistsLoading}
@@ -279,6 +281,12 @@ Risk: $2.30 per share`;
         profile={profile}
         onErrorOrNoDataChange={handleErrorOrNoDataChange}
       />
+
+      {/* Live positions — compact chips, or quiet empty state */}
+      <FeedPositionBanner />
+
+      {/* Market Pulse — long-press to configure visible items */}
+      <FeedMarketPulseStrip />
 
       {/* Main Content */}
       <MainContent

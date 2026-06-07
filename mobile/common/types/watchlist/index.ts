@@ -96,9 +96,10 @@ export interface WatchlistStock {
     timestamp: number;
     /** Object containing different watchlists */
     watchlists: {
-      gainers: WatchlistData;
+      trending:    WatchlistData;
+      gainers:     WatchlistData;
+      losers:      WatchlistData;
       most_active: WatchlistData;
-      trending: WatchlistData;
     };
   }
 

@@ -960,6 +960,30 @@ def get_yahoo_most_active():
             "error": f"Failed to fetch most active stocks: {str(e)}"
         }), 500
 
+@app.route("/yahoo/losers", methods=["GET"])
+def get_yahoo_losers():
+    """Get biggest losing stocks from Yahoo Finance."""
+    try:
+        limit = request.args.get('limit', default=25, type=int)
+        use_cache = request.args.get('use_cache', default='true').lower() == 'true'
+        if limit < 1 or limit > 100:
+            return jsonify({"success": False, "error": "Limit must be between 1 and 100"}), 400
+        cache_key = f"yahoo_losers_{limit}"
+        if use_cache:
+            cached_data = trending_cache.get(cache_key)
+            if cached_data:
+                return jsonify({**cached_data, "from_cache": True})
+        service = get_yahoo_watchlist_service()
+        result = service.get_losers(limit=limit)
+        if not result.get("success"):
+            return jsonify(result), 500
+        trending_cache.set(cache_key, result, TRENDING_STOCKS_CACHE_TTL)
+        return jsonify({**result, "from_cache": False})
+    except Exception as e:
+        logger.error("Failed to fetch Yahoo losers: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": f"Failed to fetch losers: {str(e)}"}), 500
+
+
 @app.route("/watchlist/all", methods=["GET"])
 def get_all_yahoo_watchlists():
     """

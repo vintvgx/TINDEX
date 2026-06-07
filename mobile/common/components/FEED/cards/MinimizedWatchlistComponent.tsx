@@ -2,11 +2,11 @@ import { WatchlistStock } from '@/common/types';
 import { UnifiedTrendingStocksProps } from '@/common/types/trending';
 import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { Ionicons } from '@expo/vector-icons';
 import type React from 'react';
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import Animated, {
+  cancelAnimation,
   configureReanimatedLogger,
   ReanimatedLogLevel,
   useAnimatedStyle,
@@ -17,9 +17,20 @@ import Animated, {
 
 configureReanimatedLogger({ level: ReanimatedLogLevel.warn, strict: false });
 
-const STOCK_ITEM_WIDTH = 180;
-const AUTO_SCROLL_DURATION = 3000;
-const AUTO_SCROLL_PAUSE_DURATION = 2000;
+const ITEM_WIDTH  = 180;
+const ITEM_GAP    = 8;
+const ITEM_STRIDE = ITEM_WIDTH + ITEM_GAP;
+// pixels/ms — controls scroll speed
+const SCROLL_SPEED_PX_MS = 0.06;
+
+type TabKey = 'trending' | 'gainers' | 'losers' | 'most_active';
+
+const TABS: { key: TabKey; label: string }[] = [
+  { key: 'trending',    label: 'Trending'  },
+  { key: 'gainers',     label: 'Gainers'   },
+  { key: 'losers',      label: 'Losers'    },
+  { key: 'most_active', label: 'Active'    },
+];
 
 const formatChange = (c: number | null | undefined): string => {
   if (c == null) return 'N/A';
@@ -36,77 +47,89 @@ export const MinimizedWatchlistComponent: React.FC<UnifiedTrendingStocksProps> =
   isLoading,
   error,
   isQueryClientReady,
-  openSetWatchlistModal,
-  profile,
+  openSetWatchlistModal: _openSetWatchlistModal,
+  profile: _profile,
   onErrorOrNoDataChange,
 }) => {
   const colors = useThemeColors();
-  const autoScrollX = useSharedValue(0);
-  const scrollViewRef = useRef<ScrollView>(null);
-  const [isUserScrolling, setIsUserScrolling] = useState(false);
-  const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
+  const translateX = useSharedValue(0);
   const { toTicker } = useBaseNavigation();
-  const userInteractionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ translateX: autoScrollX.value }] }));
-
-  const watchlistType = profile?.minimized_watchlist || 'trending';
-
-  const watchlistLabel = useMemo(() => {
-    const labels: Record<string, string> = {
-      gainers: 'Top Gainers',
-      trending: 'Trending',
-      most_active: 'Most Active',
-      favorites: 'Favorites',
-    };
-    return labels[watchlistType] ?? 'Trending';
-  }, [watchlistType]);
+  const [activeTab, setActiveTab] = useState<TabKey>('trending');
+  const isPausedRef = useRef(false);
 
   const watchlistData = useMemo<WatchlistStock[]>(() => {
     if (isLoading || !watchlists?.watchlists) return [];
-    switch (watchlistType) {
-      case 'gainers': return watchlists.watchlists.gainers?.data || [];
-      case 'trending': return watchlists.watchlists.trending?.data || [];
-      case 'most_active': return watchlists.watchlists.most_active?.data || [];
-      default: return watchlists.watchlists.trending?.data || [];
-    }
-  }, [watchlistType, watchlists, isLoading]);
+    return watchlists.watchlists[activeTab]?.data || [];
+  }, [activeTab, watchlists, isLoading]);
 
   useEffect(() => {
-    const hasNoData = !watchlistData || watchlistData.length === 0;
+    const hasNoData = watchlistData.length === 0;
     onErrorOrNoDataChange?.(!!error || hasNoData);
   }, [error, watchlistData, onErrorOrNoDataChange]);
 
+  // Start / restart the marquee whenever data or tab changes.
+  // Uses pure translateX — no ScrollView involved — so there's no
+  // competing scroll offset and the loop is seamless.
   useEffect(() => {
-    if (watchlistData.length > 0 && autoScrollEnabled && !isUserScrolling && isQueryClientReady && !isLoading) {
-      autoScrollX.value = withRepeat(
-        withTiming(-watchlistData.length * STOCK_ITEM_WIDTH, {
-          duration: AUTO_SCROLL_DURATION * watchlistData.length,
-        }),
-        -1,
-        false
-      );
-    } else {
-      autoScrollX.value = withTiming(autoScrollX.value, { duration: 0 });
+    cancelAnimation(translateX);
+    if (watchlistData.length === 0 || !isQueryClientReady || isLoading) {
+      translateX.value = 0;
+      return;
     }
-  }, [watchlistData, autoScrollEnabled, isUserScrolling, isQueryClientReady, isLoading, autoScrollX]);
+    const totalWidth = watchlistData.length * ITEM_STRIDE;
+    const duration   = totalWidth / SCROLL_SPEED_PX_MS;
+    translateX.value = 0;
+    translateX.value = withRepeat(
+      withTiming(-totalWidth, { duration }),
+      -1,
+      false,
+    );
+  }, [watchlistData, isQueryClientReady, isLoading, translateX]);
 
-  useEffect(() => () => { userInteractionTimeoutRef.current && clearTimeout(userInteractionTimeoutRef.current); }, []);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: translateX.value }],
+  }));
 
-  const handleScrollBeginDrag = () => {
-    setIsUserScrolling(true);
-    setAutoScrollEnabled(false);
-    userInteractionTimeoutRef.current && clearTimeout(userInteractionTimeoutRef.current);
+  const pauseScroll = () => {
+    if (!isPausedRef.current) {
+      isPausedRef.current = true;
+      cancelAnimation(translateX);
+    }
   };
 
-  const handleScrollEndDrag = () => {
-    userInteractionTimeoutRef.current = setTimeout(() => {
-      setIsUserScrolling(false);
-      setAutoScrollEnabled(true);
-    }, AUTO_SCROLL_PAUSE_DURATION);
+  const resumeScroll = () => {
+    if (isPausedRef.current) {
+      isPausedRef.current = false;
+      if (watchlistData.length === 0) return;
+      const totalWidth = watchlistData.length * ITEM_STRIDE;
+      const duration   = totalWidth / SCROLL_SPEED_PX_MS;
+      // Resume from current position to end, then loop from beginning
+      const remaining = Math.abs(totalWidth + translateX.value);
+      const remainingDuration = remaining / SCROLL_SPEED_PX_MS;
+      translateX.value = withRepeat(
+        withTiming(-totalWidth, { duration: remainingDuration }),
+        -1,
+        false,
+      );
+      // Re-trigger the full-loop effect after one pass
+      setTimeout(() => {
+        if (!isPausedRef.current) {
+          translateX.value = 0;
+          translateX.value = withRepeat(
+            withTiming(-totalWidth, { duration }),
+            -1,
+            false,
+          );
+        }
+      }, remainingDuration);
+    }
   };
 
-  const duplicatedStocks = [...watchlistData, ...watchlistData];
+  // Duplicated list for seamless loop (second copy is identical to first)
+  const displayStocks = useMemo(
+    () => [...watchlistData, ...watchlistData],
+    [watchlistData],
+  );
 
   const containerStyle = {
     marginHorizontal: 20,
@@ -121,29 +144,10 @@ export const MinimizedWatchlistComponent: React.FC<UnifiedTrendingStocksProps> =
   if (error) {
     return (
       <View style={containerStyle}>
-        <View style={{ padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <View style={{ padding: 16 }}>
           <Text style={{ color: colors.error, fontWeight: '600', fontSize: 14 }}>
             Failed to load market data
           </Text>
-          <Pressable onPress={openSetWatchlistModal}>
-            <Ionicons name="settings-outline" size={18} color={colors.textSecondary} />
-          </Pressable>
-        </View>
-      </View>
-    );
-  }
-
-  if (!watchlistData || watchlistData.length === 0) {
-    return (
-      <View style={containerStyle}>
-        <View style={{ padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <View>
-            <Text style={{ color: colors.text, fontWeight: '600', fontSize: 15 }}>Market Watch</Text>
-            <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 2 }}>No data available</Text>
-          </View>
-          <Pressable onPress={openSetWatchlistModal}>
-            <Ionicons name="settings-outline" size={18} color={colors.textSecondary} />
-          </Pressable>
         </View>
       </View>
     );
@@ -151,28 +155,36 @@ export const MinimizedWatchlistComponent: React.FC<UnifiedTrendingStocksProps> =
 
   return (
     <View style={containerStyle}>
-      {/* Header */}
-      <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View>
-          <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15 }}>Market Watch</Text>
-          <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 1 }}>{watchlistLabel}</Text>
-        </View>
-        <Pressable
-          onPress={openSetWatchlistModal}
-          style={{
-            width: 30,
-            height: 30,
-            borderRadius: 15,
-            backgroundColor: colors.iconButton,
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <Ionicons name="settings-outline" size={14} color={colors.textSecondary} />
-        </Pressable>
+      {/* Tab row */}
+      <View style={{ flexDirection: 'row', paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8, gap: 6 }}>
+        {TABS.map((tab) => {
+          const isActive = activeTab === tab.key;
+          return (
+            <Pressable
+              key={tab.key}
+              onPress={() => setActiveTab(tab.key)}
+              style={{
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+                borderRadius: 8,
+                backgroundColor: isActive ? colors.accent + '22' : colors.surfaceSecondary,
+                borderWidth: 1,
+                borderColor: isActive ? colors.accent + '66' : 'transparent',
+              }}
+            >
+              <Text style={{
+                fontSize: 11,
+                fontWeight: isActive ? '700' : '500',
+                color: isActive ? colors.accent : colors.textSecondary,
+              }}>
+                {tab.label}
+              </Text>
+            </Pressable>
+          );
+        })}
       </View>
 
-      {/* Scrolling ticker list */}
+      {/* Scrolling ticker */}
       <View style={{ height: 48, marginBottom: 12, overflow: 'hidden', justifyContent: 'center' }}>
         {!isQueryClientReady || isLoading ? (
           <View style={{ paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -181,51 +193,62 @@ export const MinimizedWatchlistComponent: React.FC<UnifiedTrendingStocksProps> =
               {!isQueryClientReady ? 'Initializing…' : 'Loading…'}
             </Text>
           </View>
+        ) : watchlistData.length === 0 ? (
+          <View style={{ paddingHorizontal: 16 }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 13 }}>No data available</Text>
+          </View>
         ) : (
-          <Animated.View style={{ width: '100%', height: '100%' }}>
-            <ScrollView
-              ref={scrollViewRef}
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ paddingRight: 16 }}
-              decelerationRate="fast"
-              style={{ flex: 1 }}
-              onScrollBeginDrag={handleScrollBeginDrag}
-              onScrollEndDrag={handleScrollEndDrag}
-              scrollEventThrottle={16}
+          <Pressable
+            onPressIn={pauseScroll}
+            onPressOut={resumeScroll}
+            style={{ flex: 1 }}
+          >
+            <Animated.View
+              style={[
+                { flexDirection: 'row', alignItems: 'center', paddingLeft: 16 },
+                animatedStyle,
+              ]}
             >
-              <Animated.View style={[{ flexDirection: 'row', alignItems: 'center', paddingLeft: 16 }, animatedStyle]}>
-                {duplicatedStocks.map((stock, index) => {
-                  const changeVal = stock.change_percent ?? stock.change ?? null;
-                  const isPos = changeVal != null && changeVal >= 0;
-                  return (
-                    <Pressable key={`${stock.ticker}-${index}`} onPress={() => toTicker(stock.ticker)}>
-                      <View
-                        style={{
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          backgroundColor: colors.surfaceSecondary,
-                          borderRadius: 12,
-                          paddingHorizontal: 12,
-                          paddingVertical: 8,
-                          marginRight: 8,
-                          minWidth: STOCK_ITEM_WIDTH,
-                          gap: 8,
-                        }}
-                      >
-                        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: isPos ? colors.success : colors.error }} />
-                        <Text style={{ color: colors.text, fontWeight: '700', fontSize: 13 }}>{stock.ticker}</Text>
-                        <Text style={{ color: colors.textSecondary, fontWeight: '500', fontSize: 13 }}>{formatPrice(stock.price)}</Text>
-                        <Text style={{ color: isPos ? colors.success : colors.error, fontWeight: '600', fontSize: 12 }}>
-                          {formatChange(changeVal)}
-                        </Text>
-                      </View>
-                    </Pressable>
-                  );
-                })}
-              </Animated.View>
-            </ScrollView>
-          </Animated.View>
+              {displayStocks.map((stock, index) => {
+                const changeVal = stock.change_percent ?? stock.change ?? null;
+                const isPos = changeVal != null && changeVal >= 0;
+                return (
+                  <Pressable
+                    key={`${stock.ticker}-${index}`}
+                    onPress={() => toTicker(stock.ticker)}
+                  >
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: colors.surfaceSecondary,
+                        borderRadius: 12,
+                        paddingHorizontal: 12,
+                        paddingVertical: 8,
+                        marginRight: ITEM_GAP,
+                        width: ITEM_WIDTH,
+                        gap: 8,
+                      }}
+                    >
+                      <View style={{
+                        width: 6, height: 6, borderRadius: 3,
+                        backgroundColor: isPos ? colors.success : colors.error,
+                      }} />
+                      <Text style={{ color: colors.text, fontWeight: '700', fontSize: 13 }}>
+                        {stock.ticker}
+                      </Text>
+                      <Text style={{ color: colors.textSecondary, fontWeight: '500', fontSize: 12 }}>
+                        {formatPrice(stock.price)}
+                      </Text>
+                      <Text style={{ color: isPos ? colors.success : colors.error, fontWeight: '600', fontSize: 11, marginLeft: 'auto' }}>
+                        {formatChange(changeVal)}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </Animated.View>
+          </Pressable>
         )}
       </View>
     </View>
