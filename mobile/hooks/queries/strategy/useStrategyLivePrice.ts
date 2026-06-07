@@ -38,6 +38,7 @@ export function useStrategyLivePrice(
   const wsRef                     = useRef<WebSocket | null>(null);
   const reconnectTimer            = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef                = useRef(true);
+  const shouldReconnectRef        = useRef(true);
 
   const wsUrl = strategyId
     ? RAILWAY_BASE_URL.replace(/^https?/, (s) => (s === 'https' ? 'wss' : 'ws'))
@@ -47,6 +48,7 @@ export function useStrategyLivePrice(
   const connect = useCallback(() => {
     if (!wsUrl || !mountedRef.current) return;
 
+    shouldReconnectRef.current = true;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -68,9 +70,9 @@ export function useStrategyLivePrice(
     ws.onclose = () => {
       if (!mountedRef.current) return;
       setConnected(false);
-      // Reconnect after 3 seconds
+      if (!shouldReconnectRef.current || !enabled) return;
       reconnectTimer.current = setTimeout(() => {
-        if (mountedRef.current && enabled) connect();
+        if (mountedRef.current && enabled && shouldReconnectRef.current) connect();
       }, 3000);
     };
 
@@ -80,7 +82,11 @@ export function useStrategyLivePrice(
   }, [wsUrl, enabled]);
 
   const disconnect = useCallback(() => {
-    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    shouldReconnectRef.current = false;
+    if (reconnectTimer.current) {
+      clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
     wsRef.current?.close();
     wsRef.current = null;
     setConnected(false);

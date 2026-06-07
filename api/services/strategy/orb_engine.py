@@ -111,6 +111,7 @@ class ORBEngine:
         self.macro_today             = False  # True when a high-impact macro event is scheduled today
         self._current_option_price   = None   # latest mid-price from WebSocket stream
         self._last_underlying_price  = None   # latest underlying price from periodic poll
+        self.session_vwap            = None   # intraday VWAP computed at ORB calc time
         # Fan-out queues for /ws/strategy/<id>/live WebSocket clients
         self._live_clients: list     = []
         self._live_clients_lock      = __import__("threading").Lock()
@@ -151,6 +152,10 @@ class ORBEngine:
         self.orb_range = self.orh - self.orl
         mid = (self.orh + self.orl) / 2
 
+        # Compute intraday VWAP from bars fetched so far.  Uses the same ORB bars
+        # as a proxy; a price tick above this level favours CALLs, below favours PUTs.
+        self.session_vwap = self._compute_vwap(bars)
+
         if self.orb_range / mid < MIN_ORB_RANGE_PCT:
             self._skip("ORB_RANGE_TOO_TIGHT")
             return False
@@ -178,6 +183,7 @@ class ORBEngine:
             vix=result["vix"],
             sentiment=result["sentiment"],
             profile=self.profile_key,
+            strategy_id=self.strategy_id,
         )
         logger.info("[ORBEngine] ORB set — orh=%.2f orl=%.2f vix=%s sentiment=%s macro=%s",
                     self.orh, self.orl, result["vix"], result["sentiment"], self.macro_today)
@@ -210,15 +216,18 @@ class ORBEngine:
             return
 
         if self.trade_taken and self.exit_manager:
-            # Use live option price for stop/TP checks; fall back to underlying only if
-            # the option quote couldn't be fetched (network error, etc.)
-            option_p = current_option_price if current_option_price is not None else current_price
+            if current_option_price is None:
+                logger.warning(
+                    "[ORBEngine] Skipping exit evaluation for %s — option price unavailable",
+                    self.ticker,
+                )
+                return
             action = self.exit_manager.evaluate(
-                current_option_price=option_p,
+                current_option_price=current_option_price,
                 current_underlying_price=current_price,
                 current_volume=current_volume,
             )
-            self._handle_exit_action(action, current_price, option_p)
+            self._handle_exit_action(action, current_price, current_option_price)
 
             # 30-minute P&L notification (fires once per trade)
             if (
@@ -227,13 +236,13 @@ class ORBEngine:
                 and (now_et - self.trade_entry_time).total_seconds() >= 1800
             ):
                 entry_p = self.exit_manager.entry_premium
-                pnl     = (option_p - entry_p) * self.exit_manager.qty_remaining * 100
+                pnl     = (current_option_price - entry_p) * self.exit_manager.qty_remaining * 100
                 self.notifier.notify_timer_update(
                     ticker=self.ticker,
                     contract_symbol=self.contract_symbol,
                     current_pnl=pnl,
                     entry_premium=entry_p,
-                    current_premium=option_p,
+                    current_premium=current_option_price,
                 )
                 self.timer_notified = True
             return
@@ -260,6 +269,19 @@ class ORBEngine:
             logger.info("[ORBEngine] Flow confirmation failed for %s — skipping entry", direction)
             return
 
+        # VWAP soft confirmation (log only — does not block entry)
+        if self.session_vwap is not None:
+            vwap_confirmed = (
+                (direction == "CALL" and trigger_price > self.session_vwap) or
+                (direction == "PUT"  and trigger_price < self.session_vwap)
+            )
+            if not vwap_confirmed:
+                logger.warning(
+                    "[ORBEngine] VWAP misalignment: %s %s price=%.2f vwap=%.2f"
+                    " — proceeding anyway",
+                    self.ticker, direction, trigger_price, self.session_vwap,
+                )
+
         contract = select_contract(
             ticker=self.ticker,
             direction=direction,
@@ -269,6 +291,7 @@ class ORBEngine:
             fib_levels=self.fib_levels,
             data_client=self.option_client,
             profile=self.profile,
+            vwap=self.session_vwap,
         )
 
         if not contract:
@@ -419,6 +442,7 @@ class ORBEngine:
                 exit_premium=exit_premium,
                 qty_closed=qty_to_close,
                 profile=self.profile_key,
+                strategy_id=self.strategy_id,
             )
             self.notifier.notify_exit(
                 ticker=self.ticker,
@@ -487,11 +511,25 @@ class ORBEngine:
         """
         self.session_skipped = True
         self.skip_reason = reason
-        self.logger.log_skip(self.ticker, reason, self.session_date, self.profile_key)
+        self.logger.log_skip(self.ticker, reason, self.session_date, self.profile_key,
+                             strategy_id=self.strategy_id)
         self.notifier.notify_skip(self.ticker, reason)
         logger.info("[ORBEngine] Session skipped: %s", reason)
 
     # ── Data helpers ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _compute_vwap(bars) -> float | None:
+        """
+        VWAP = Σ(close × volume) / Σ(volume) over the provided bars.
+        Returns None when bars are empty or total volume is zero.
+        """
+        try:
+            total_pv = sum(b.close * b.volume for b in bars if b.volume)
+            total_v  = sum(b.volume           for b in bars if b.volume)
+            return round(total_pv / total_v, 4) if total_v > 0 else None
+        except Exception:
+            return None
 
     def _fetch_orb_bars(self, n_minutes: int):
         """

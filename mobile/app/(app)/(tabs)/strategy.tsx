@@ -46,8 +46,8 @@ function getMode(config: Pick<StrategyConfig, 'active' | 'paper_mode'>): Trading
 }
 
 function modeToConfig(mode: TradingMode): Partial<StrategyConfig> {
-  if (mode === 'off')   return { active: false };
-  if (mode === 'live')  return { active: true, paper_mode: false };
+  if (mode === 'off')  return { active: false, paper_mode: false };
+  if (mode === 'live') return { active: true, paper_mode: false };
   return { active: true, paper_mode: true };
 }
 

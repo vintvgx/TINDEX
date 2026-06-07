@@ -51,8 +51,9 @@ class OptionStreamManager:
         self._stream: "OptionDataStream | None" = None
         self._thread: threading.Thread | None    = None
         self._callbacks: dict[str, list]         = {}   # symbol → [cb, ...]
-        self._lock    = threading.Lock()
-        self._started = False
+        self._lock       = threading.Lock()
+        self._start_lock = threading.Lock()
+        self._started    = False
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -88,8 +89,9 @@ class OptionStreamManager:
                     pass
                 if not cbs:
                     self._callbacks.pop(symbol, None)
+                should_unsub = symbol not in self._callbacks
 
-        if symbol not in self._callbacks and self._stream:
+        if should_unsub and self._stream:
             try:
                 self._stream.unsubscribe_quotes(symbol)
                 logger.info("[OptionStream] Unsubscribed %s", symbol)
@@ -141,18 +143,21 @@ class OptionStreamManager:
     def _ensure_started(self):
         if self._started:
             return
-        try:
-            self._stream = OptionDataStream(self._api_key, self._secret)
-            self._thread = threading.Thread(
-                target=self._stream.run,
-                daemon=True,
-                name="OptionDataStream",
-            )
-            self._thread.start()
-            self._started = True
-            logger.info("[OptionStream] WebSocket thread started")
-        except Exception as ex:
-            logger.error("[OptionStream] Failed to start: %s", ex)
+        with self._start_lock:
+            if self._started:
+                return
+            try:
+                self._stream = OptionDataStream(self._api_key, self._secret)
+                self._thread = threading.Thread(
+                    target=self._stream.run,
+                    daemon=True,
+                    name="OptionDataStream",
+                )
+                self._thread.start()
+                self._started = True
+                logger.info("[OptionStream] WebSocket thread started")
+            except Exception as ex:
+                logger.error("[OptionStream] Failed to start: %s", ex)
 
     def _make_handler(self, symbol: str):
         """Return an async quote handler that fans out to all registered callbacks."""

@@ -72,10 +72,12 @@ class TradeLogger:
     # ── Session logging ─────────────────────────────────────────────────────────
 
     def log_session(self, ticker: str, session_date, orh: float, orl: float,
-                    orb_range: float, vix: float, sentiment: str, profile: str):
+                    orb_range: float, vix: float, sentiment: str, profile: str,
+                    strategy_id: str = None):
         try:
             self.client.table("orb_session").upsert({
                 "session_date": str(session_date),
+                "strategy_id": strategy_id,
                 "ticker":      ticker,
                 "profile":     profile,
                 "orh":         orh,
@@ -84,19 +86,21 @@ class TradeLogger:
                 "vix":         vix,
                 "sentiment":   sentiment,
                 "trade_taken": False,
-            }, on_conflict="session_date").execute()
+            }, on_conflict="session_date,strategy_id").execute()
         except Exception as e:
             logger.error("[TradeLogger] log_session failed: %s", e)
 
-    def log_skip(self, ticker: str, reason: str, session_date, profile: str):
+    def log_skip(self, ticker: str, reason: str, session_date, profile: str,
+                 strategy_id: str = None):
         try:
             self.client.table("orb_session").upsert({
                 "session_date": str(session_date),
+                "strategy_id": strategy_id,
                 "ticker":      ticker,
                 "profile":     profile,
                 "trade_taken": False,
                 "skip_reason": reason,
-            }, on_conflict="session_date").execute()
+            }, on_conflict="session_date,strategy_id").execute()
         except Exception as e:
             logger.error("[TradeLogger] log_skip failed: %s", e)
 
@@ -131,7 +135,8 @@ class TradeLogger:
             return None
 
     def log_exit(self, contract_symbol: str, exit_reason: str,
-                 exit_premium: Optional[float], qty_closed: int, profile: str):
+                 exit_premium: Optional[float], qty_closed: int, profile: str,
+                 strategy_id: str = None):
         try:
             res = (
                 self.client.table("orb_trades")
@@ -159,9 +164,12 @@ class TradeLogger:
                 "exit_reason":  exit_reason,
             }).eq("id", row["id"]).execute()
 
-            self.client.table("orb_session").update({"trade_taken": True}).eq(
+            q = self.client.table("orb_session").update({"trade_taken": True}).eq(
                 "session_date", str(date.today())
-            ).execute()
+            )
+            if strategy_id:
+                q = q.eq("strategy_id", strategy_id)
+            q.execute()
         except Exception as e:
             logger.error("[TradeLogger] log_exit failed: %s", e)
 

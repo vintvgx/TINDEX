@@ -51,7 +51,8 @@ CREATE INDEX IF NOT EXISTS idx_orb_trades_ticker  ON orb_trades (ticker);
 -- Daily session metadata
 CREATE TABLE IF NOT EXISTS orb_session (
     id           SERIAL      PRIMARY KEY,
-    session_date DATE        NOT NULL UNIQUE,
+    session_date DATE        NOT NULL,
+    strategy_id  TEXT,
     ticker       TEXT,
     profile      TEXT,
     orh          FLOAT,
@@ -61,7 +62,8 @@ CREATE TABLE IF NOT EXISTS orb_session (
     sentiment    TEXT,
     trade_taken  BOOLEAN     DEFAULT FALSE,
     skip_reason  TEXT,
-    created_at   TIMESTAMPTZ DEFAULT NOW()
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (session_date, strategy_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_orb_session_date ON orb_session (session_date DESC);

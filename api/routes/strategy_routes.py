@@ -54,7 +54,8 @@ def create_config():
     config = {**STRATEGY_DEFAULTS.copy(), **{
         k: data[k] for k in (
             "ticker", "orb_minutes", "paper_mode", "active",
-            "profile", "trade_days", "strategy_name", "capital_limit"
+            "profile", "trade_days", "strategy_name", "capital_limit",
+            "bypass_breakout_window", "custom_thresholds",
         ) if k in data
     }}
     config.pop("id", None)   # force new UUID
@@ -81,7 +82,8 @@ def update_config(strategy_id: str):
 
     engine = _engines[strategy_id]
     allowed = {"ticker", "orb_minutes", "paper_mode", "active",
-               "profile", "trade_days", "strategy_name", "capital_limit"}
+               "profile", "trade_days", "strategy_name", "capital_limit",
+               "bypass_breakout_window", "custom_thresholds"}
     for key in allowed:
         if key in data:
             engine.config[key] = data[key]
@@ -112,8 +114,11 @@ def delete_config(strategy_id: str):
             try:
                 engine.trading_client.close_position(engine.contract_symbol)
             except Exception:
-                pass
-
+                return jsonify({
+                "status": "error",
+                "message": "Cannot delete strategy with active position that failed to close"
+            }), 409
+                
     logger_svc.delete_strategy_config(strategy_id)
     return jsonify({"status": "ok"})
 
@@ -140,6 +145,7 @@ def force_close_strategy(strategy_id: str):
             engine.contract_symbol, "MANUAL_CLOSE", None,
             engine.exit_manager.qty_remaining if engine.exit_manager else 0,
             engine.profile_key,
+            strategy_id=engine.strategy_id,
         )
         engine.reset_session()
         return jsonify({"status": "ok"})
