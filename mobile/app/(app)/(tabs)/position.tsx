@@ -1,0 +1,291 @@
+import React, { useState } from 'react';
+import {
+  View, Text, ScrollView, SafeAreaView,
+  ActivityIndicator, TouchableOpacity, StyleSheet,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
+import { useThemeColors } from '@/lib/useColorScheme';
+import { useToast } from '@/common/components/ui/Toast';
+import { useStrategyPositions } from '@/hooks/queries/strategy/useStrategyPosition';
+import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
+import { useAlpacaAccount } from '@/hooks/queries/strategy/useAlpacaAccount';
+import { useForceClosePosition } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
+import { PositionCard } from '@/common/components/strategy/PositionCard';
+import type { FibLevels } from '@/common/types/strategy';
+
+const MOCK_POSITIONS: PositionEntry[] = [
+  {
+    strategy_id:    'mock-1',
+    strategy_name:  'IWM Bull Dog M/W/F',
+    active:         true,
+    paper_mode:     true,
+    ticker:         'IWM',
+    profile:        'BULL_DOG',
+    direction:      'CALL',
+    contract:       'IWM250107C00215000',
+    qty_remaining:  2,
+    qty_total:      3,
+    entry_premium:  1.45,
+    current_price:  2.18,
+    unrealized_pnl: 146.00,
+    unrealized_pnl_pct: 50.3,
+    hard_stop:      0.94,
+    tp1:            2.175,
+    tp2:            2.90,
+    tp1_hit:        true,
+    tp2_hit:        false,
+    be_stop_active: true,
+    runner_trail:   1.90,
+    fib_levels: {
+      'up_1.0': 215.50, 'up_1.618': 216.32, 'up_2.618': 217.80,
+      'dn_1.0': 213.50, 'dn_1.618': 212.68, 'dn_2.618': 211.20,
+      mid: 214.50, orh: 215.00, orl: 214.00,
+    } as FibLevels,
+  },
+];
+
+export default function PositionScreen() {
+  const colors = useThemeColors();
+  const toast  = useToast();
+  const [showMock, setShowMock] = useState(false);
+
+  const { data: livePositions = [], isLoading } = useStrategyPositions();
+  const { data: account } = useAlpacaAccount();
+  const { mutate: forceClose } = useForceClosePosition();
+
+  const positions   = showMock ? MOCK_POSITIONS : livePositions;
+  const activeCount = positions.filter(p => p.active).length;
+
+  const handleForceClose = (strategyId: string) => {
+    forceClose(strategyId, {
+      onSuccess: () => toast.success('Position closed'),
+      onError:   () => toast.error('Close failed — check Alpaca manually'),
+    });
+  };
+
+  return (
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+
+      {/* ── Sticky header ── */}
+      <View style={[styles.header, { borderBottomColor: colors.border }]}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.headerSide}>
+          <Ionicons name="arrow-back" size={22} color={colors.text} />
+        </TouchableOpacity>
+
+        <View style={styles.headerCenter}>
+          <Text style={[styles.title, { color: colors.text }]}>Live Positions</Text>
+          {activeCount > 0 && (
+            <View style={[styles.activeBadge, { backgroundColor: colors.success + '22' }]}>
+              <View style={[styles.liveDot, { backgroundColor: colors.success }]} />
+              <Text style={[styles.activeBadgeText, { color: colors.success }]}>
+                {activeCount} active
+              </Text>
+            </View>
+          )}
+        </View>
+
+        <TouchableOpacity
+          onPress={() => setShowMock(v => !v)}
+          hitSlop={12}
+          style={[styles.headerSide, styles.headerSideRight,
+            showMock && { backgroundColor: colors.accent + '22', borderRadius: 8 },
+          ]}
+        >
+          <Ionicons
+            name={showMock ? 'flask' : 'flask-outline'}
+            size={20}
+            color={showMock ? colors.accent : colors.tabBarInactive}
+          />
+        </TouchableOpacity>
+      </View>
+
+      {/* ── Account bar (sticky) ── */}
+      {account && (
+        <View style={[styles.accountBar, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+          <AccountStat
+            label={account.paper_mode ? 'Paper Equity' : 'Live Equity'}
+            value={`$${account.equity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+            colors={colors}
+          />
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <AccountStat
+            label="Today P&L"
+            value={`${account.pnl_today >= 0 ? '+' : ''}$${account.pnl_today.toFixed(2)}`}
+            color={account.pnl_today >= 0 ? colors.success : colors.error}
+            colors={colors}
+          />
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <AccountStat
+            label="Day Trades"
+            value={String(account.day_trade_count)}
+            colors={colors}
+          />
+        </View>
+      )}
+
+      {/* ── Mock banner ── */}
+      {showMock && (
+        <View style={[styles.mockBanner, { backgroundColor: colors.accent + '15', borderBottomColor: colors.accent + '44' }]}>
+          <Ionicons name="flask" size={12} color={colors.accent} />
+          <Text style={[styles.mockBannerText, { color: colors.accent }]}>Preview mode — mock data</Text>
+        </View>
+      )}
+
+      {/* ── Scrollable content ── */}
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+        {isLoading && !showMock ? (
+          <ActivityIndicator color={colors.accent} style={{ marginTop: 60 }} />
+        ) : activeCount === 0 ? (
+          <View style={styles.emptyState}>
+            <Ionicons name="pulse-outline" size={52} color={colors.tabBarInactive} style={{ opacity: 0.4 }} />
+            <Text style={[styles.emptyTitle, { color: colors.tabBarInactive }]}>No Live Positions</Text>
+            <Text style={[styles.emptySubtitle, { color: colors.tabBarInactive }]}>
+              Active trade positions will appear here in real time
+            </Text>
+            <TouchableOpacity
+              onPress={() => setShowMock(true)}
+              style={[styles.mockPreviewBtn, { borderColor: colors.accent + 'AA' }]}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="flask-outline" size={14} color={colors.accent} />
+              <Text style={[styles.mockPreviewText, { color: colors.accent }]}>Preview with mock data</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          positions
+            .filter(p => p.active)
+            .map(pos => (
+              <View key={pos.strategy_id} style={styles.positionBlock}>
+
+                {/* Strategy label row */}
+                <View style={styles.stratLabelRow}>
+                  <Text style={[styles.stratTicker, { color: colors.text }]}>{pos.ticker}</Text>
+                  {pos.strategy_name ? (
+                    <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>{pos.strategy_name}</Text>
+                  ) : null}
+                  {pos.paper_mode && (
+                    <View style={[styles.paperBadge, { backgroundColor: '#FF9F0A22' }]}>
+                      <Text style={[styles.paperBadgeText, { color: '#FF9F0A' }]}>PAPER</Text>
+                    </View>
+                  )}
+                </View>
+
+                <PositionCard
+                  position={pos}
+                  onForceClose={pos.active && !showMock ? () => handleForceClose(pos.strategy_id) : undefined}
+                />
+
+                {/* Fib levels */}
+                {pos.fib_levels && (
+                  <View style={[styles.fibCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    <Text style={[styles.fibTitle, { color: colors.tabBarInactive }]}>Fibonacci Levels</Text>
+                    <View style={styles.fibGrid}>
+                      {Object.entries(pos.fib_levels)
+                        .filter(([k]) => !['orh', 'orl', 'mid'].includes(k))
+                        .map(([key, val]) => (
+                          <View key={key} style={styles.fibItem}>
+                            <Text style={[styles.fibKey, { color: colors.tabBarInactive }]}>
+                              {key.replace('_', ' ').replace('up', '↑').replace('dn', '↓')}
+                            </Text>
+                            <Text style={[styles.fibVal, { color: colors.text }]}>
+                              ${(val as number).toFixed(2)}
+                            </Text>
+                          </View>
+                        ))}
+                    </View>
+                  </View>
+                )}
+              </View>
+            ))
+        )}
+        <View style={{ height: 100 }} />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const AccountStat = ({ label, value, color, colors }: any) => (
+  <View style={styles.accountStat}>
+    <Text style={[styles.acctLabel, { color: colors.tabBarInactive }]}>{label}</Text>
+    <Text style={[styles.acctValue, { color: color ?? colors.text }]}>{value}</Text>
+  </View>
+);
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+
+  // ── Header ──
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  headerSide:      { width: 36, alignItems: 'flex-start', justifyContent: 'center' },
+  headerSideRight: { alignItems: 'flex-end', padding: 6 },
+  headerCenter:    { flex: 1, alignItems: 'center', gap: 4 },
+  title:           { fontSize: 18, fontWeight: '700' },
+  activeBadge:     { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
+  activeBadgeText: { fontSize: 11, fontWeight: '600' },
+  liveDot:         { width: 6, height: 6, borderRadius: 3 },
+
+  // ── Account bar ──
+  accountBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  accountStat: { alignItems: 'center', flex: 1 },
+  acctLabel:   { fontSize: 10, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
+  acctValue:   { fontSize: 14, fontWeight: '700' },
+  divider:     { width: StyleSheet.hairlineWidth, height: 28 },
+
+  // ── Mock banner ──
+  mockBanner:     { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 6, borderBottomWidth: 1 },
+  mockBannerText: { fontSize: 12, fontWeight: '600' },
+
+  // ── Scroll content ──
+  content: { paddingHorizontal: 16, paddingTop: 16 },
+
+  // ── Empty state ──
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 80,
+    gap: 10,
+  },
+  emptyTitle:    { fontSize: 17, fontWeight: '600', marginTop: 8 },
+  emptySubtitle: { fontSize: 13, textAlign: 'center', maxWidth: 260, lineHeight: 18 },
+  mockPreviewBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  mockPreviewText: { fontSize: 13, fontWeight: '600' },
+
+  // ── Position blocks ──
+  positionBlock: { marginBottom: 20 },
+  stratLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  stratTicker:   { fontSize: 18, fontWeight: '700' },
+  stratName:     { fontSize: 13, flex: 1 },
+  paperBadge:    { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
+  paperBadgeText:{ fontSize: 10, fontWeight: '700' },
+
+  // ── Fib card ──
+  fibCard:  { borderRadius: 12, borderWidth: 1, padding: 12, marginTop: 8 },
+  fibTitle: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 10 },
+  fibGrid:  { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  fibItem:  { width: '30%', marginBottom: 4 },
+  fibKey:   { fontSize: 11, marginBottom: 1 },
+  fibVal:   { fontSize: 12, fontWeight: '600' },
+});

@@ -49,13 +49,13 @@ class AlpacaStreamingService(StockStreamingService):
         """Initialize Alpaca streaming service with credentials."""
         super().__init__()
         
-        self.alpaca_api_key = os.getenv("ALPACA_API_KEY")
-        self.alpaca_secret_key = os.getenv("ALPACA_SECRET_KEY")
-        
+        self.alpaca_api_key = os.getenv("ALPACA_LIVE_API_KEY")
+        self.alpaca_secret_key = os.getenv("ALPACA_LIVE_SECRET_KEY")
+
         if not self.alpaca_api_key:
-            raise ValueError("ALPACA_API_KEY not defined")
+            raise ValueError("ALPACA_LIVE_API_KEY not defined")
         if not self.alpaca_secret_key:
-            raise ValueError("ALPACA_SECRET_KEY not defined")
+            raise ValueError("ALPACA_LIVE_SECRET_KEY not defined")
         
         self._stock_stream: Optional[StockDataStream] = None
         self._stream_task: Optional[asyncio.Task] = None

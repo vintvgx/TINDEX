@@ -35,14 +35,14 @@ class AlpacaService:
 
     def __init__(self):
         """Initialize Alpaca client with environment variables"""
-        self.alpaca_api_key = os.getenv("ALPACA_API_KEY")
-        self.alpaca_secret_key = os.getenv("ALPACA_SECRET_KEY")
+        self.alpaca_api_key = os.getenv("ALPACA_LIVE_API_KEY")
+        self.alpaca_secret_key = os.getenv("ALPACA_LIVE_SECRET_KEY")
 
         if not self.alpaca_api_key:
-            raise ValueError("ALPACA_API_KEY not defined")
+            raise ValueError("ALPACA_LIVE_API_KEY not defined")
 
         if not self.alpaca_secret_key:
-            raise ValueError("ALPACA_SECRET_KEY not defined")
+            raise ValueError("ALPACA_LIVE_SECRET_KEY not defined")
 
         # Supabase setup
         self.supabase_url = os.getenv("SUPABASE_URL")
