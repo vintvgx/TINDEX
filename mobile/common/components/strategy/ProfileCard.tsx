@@ -14,6 +14,7 @@ const BORDER_COLORS: Record<ProfileKey, string> = {
   BULL_DOG:    '#FF6B35',
   THUNDER_CAT: '#4A9EFF',
   WOLF:        '#4CAF84',
+  CUSTOM:      '#A855F7',
 };
 
 export const ProfileCard: React.FC<Props> = ({ profile, selected, onSelect }) => {

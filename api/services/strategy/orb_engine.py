@@ -28,15 +28,17 @@ logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
 STRATEGY_DEFAULTS = {
-    "ticker":        "IWM",
-    "orb_minutes":   10,
-    "paper_mode":    True,
-    "active":        True,
-    "profile":       "THUNDER_CAT",
-    "trade_days":    [0, 2, 4],
-    "strategy_name": "",
-    "capital_limit": None,   # None = use full buying_power
-    "id":            None,
+    "ticker":                  "IWM",
+    "orb_minutes":             10,
+    "paper_mode":              True,
+    "active":                  True,
+    "profile":                 "THUNDER_CAT",
+    "trade_days":              [0, 2, 4],
+    "strategy_name":           "",
+    "capital_limit":           None,
+    "bypass_breakout_window":  False,
+    "custom_thresholds":       None,
+    "id":                      None,
 }
 
 VIX_MIN = 13.0
@@ -60,12 +62,17 @@ class ORBEngine:
         self.ticker         = self.config["ticker"]
         self.paper          = self.config.get("paper_mode", True)
         self.profile_key    = self.config.get("profile", "THUNDER_CAT")
-        self.profile        = get_profile(self.profile_key)
         self.trade_days     = set(self.config.get("trade_days", [0, 2, 4]))
-        self.strategy_id    = self.config.get("id")
-        self.strategy_name  = self.config.get("strategy_name", "")
-        self.capital_limit  = self.config.get("capital_limit")   # None = full buying_power
-        self.stream_manager = getattr(self, "_stream_manager_ref", None)
+        self.strategy_id             = self.config.get("id")
+        self.strategy_name           = self.config.get("strategy_name", "")
+        self.capital_limit           = self.config.get("capital_limit")
+        self.bypass_breakout_window  = self.config.get("bypass_breakout_window", False)
+        custom_thresholds            = self.config.get("custom_thresholds")
+        self.stream_manager          = getattr(self, "_stream_manager_ref", None)
+
+        # For CUSTOM profile, pass stored thresholds to get_profile so it merges them
+        # over the CUSTOM_DEFAULTS baseline. Other profiles ignore custom_thresholds.
+        self.profile = get_profile(self.profile_key, custom_thresholds)
 
         trade_key    = os.getenv("ALPACA_PAPER_API_KEY" if self.paper else "ALPACA_LIVE_API_KEY")
         trade_secret = os.getenv("ALPACA_PAPER_SECRET_KEY" if self.paper else "ALPACA_LIVE_SECRET_KEY")
@@ -198,7 +205,7 @@ class ORBEngine:
         limit_min = self.profile.get("breakout_time_limit_min", 45)
         deadline  = orb_close + timedelta(minutes=limit_min)
 
-        if not self.trade_taken and now_et > deadline:
+        if not self.trade_taken and not self.bypass_breakout_window and now_et > deadline:
             self._skip("BREAKOUT_TIME_LIMIT_EXCEEDED")
             return
 

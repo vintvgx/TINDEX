@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, SafeAreaView, TouchableOpacity,
   StyleSheet, ActivityIndicator, Alert, Modal, TextInput,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -10,14 +10,15 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useToast } from '@/common/components/ui/Toast';
 import { useStrategyConfigs } from '@/hooks/queries/strategy/useStrategyConfigs';
 import { useStrategyProfiles } from '@/hooks/queries/strategy/useStrategyProfiles';
-import { useAlpacaAccount } from '@/hooks/queries/strategy/useAlpacaAccount';
+import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useCreateStrategyConfig } from '@/hooks/mutations/strategy/useCreateStrategyConfig';
 import { useUpdateStrategyConfig } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
 import { useDeleteStrategyConfig } from '@/hooks/mutations/strategy/useDeleteStrategyConfig';
 import { TradeDaysSelector } from '@/common/components/strategy/TradeDaysSelector';
 import { ProfileCard } from '@/common/components/strategy/ProfileCard';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
-import type { StrategyConfig, ProfileKey, StrategyProfile } from '@/common/types/strategy';
+import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/components/strategy/CustomThresholdsEditor';
+import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds } from '@/common/types/strategy';
 
 const TICKERS     = ['SPY', 'QQQ', 'IWM'] as const;
 const ORB_MINUTES = [5, 10, 15] as const;
@@ -34,6 +35,7 @@ const PROFILE_COLORS: Record<ProfileKey, string> = {
   BULL_DOG:    '#FF6B35',
   THUNDER_CAT: '#4A9EFF',
   WOLF:        '#4CAF84',
+  CUSTOM:      '#A855F7',
 };
 
 const DAY_LABELS = ['M', 'T', 'W', 'T', 'F'];
@@ -50,34 +52,40 @@ function modeToConfig(mode: TradingMode): Partial<StrategyConfig> {
 }
 
 type FormState = {
-  strategy_name: string;
-  ticker: typeof TICKERS[number];
-  orb_minutes: typeof ORB_MINUTES[number];
-  trade_days: number[];
-  profile: ProfileKey;
-  mode: TradingMode;
-  capital_limit: string;  // string for TextInput, parsed to number|null on save
+  strategy_name:          string;
+  ticker:                 typeof TICKERS[number];
+  orb_minutes:            typeof ORB_MINUTES[number];
+  trade_days:             number[];
+  profile:                ProfileKey;
+  mode:                   TradingMode;
+  capital_limit:          string;
+  bypass_breakout_window: boolean;
+  custom_thresholds:      CustomThresholds;
 };
 
 const DEFAULT_FORM: FormState = {
-  strategy_name: '',
-  ticker:        'IWM',
-  orb_minutes:   10,
-  trade_days:    [0, 2, 4],
-  profile:       'THUNDER_CAT',
-  mode:          'paper',
-  capital_limit: '',
+  strategy_name:          '',
+  ticker:                 'IWM',
+  orb_minutes:            10,
+  trade_days:             [0, 2, 4],
+  profile:                'THUNDER_CAT',
+  mode:                   'paper',
+  capital_limit:          '',
+  bypass_breakout_window: false,
+  custom_thresholds:      DEFAULT_CUSTOM_THRESHOLDS,
 };
 
 function configToForm(cfg: StrategyConfig): FormState {
   return {
-    strategy_name: cfg.strategy_name ?? '',
-    ticker:        cfg.ticker as any,
-    orb_minutes:   cfg.orb_minutes as any,
-    trade_days:    cfg.trade_days ?? [0, 2, 4],
-    profile:       cfg.profile,
-    mode:          getMode(cfg),
-    capital_limit: cfg.capital_limit != null ? String(cfg.capital_limit) : '',
+    strategy_name:          cfg.strategy_name ?? '',
+    ticker:                 cfg.ticker as any,
+    orb_minutes:            cfg.orb_minutes as any,
+    trade_days:             cfg.trade_days ?? [0, 2, 4],
+    profile:                cfg.profile,
+    mode:                   getMode(cfg),
+    capital_limit:          cfg.capital_limit != null ? String(cfg.capital_limit) : '',
+    bypass_breakout_window: cfg.bypass_breakout_window ?? false,
+    custom_thresholds:      cfg.custom_thresholds ?? DEFAULT_CUSTOM_THRESHOLDS,
   };
 }
 
@@ -89,7 +97,7 @@ export default function StrategyScreen() {
 
   const { data: configs,  isLoading: configsLoading  } = useStrategyConfigs();
   const { data: profiles, isLoading: profilesLoading } = useStrategyProfiles();
-  const { data: account } = useAlpacaAccount(!!(configs && configs.length > 0));
+  const { data: accounts } = useAlpacaBothAccounts(!!(configs && configs.length > 0));
 
   const { mutate: createConfig } = useCreateStrategyConfig();
   const { mutate: updateConfig } = useUpdateStrategyConfig();
@@ -162,12 +170,14 @@ export default function StrategyScreen() {
     }
 
     const payload = {
-      strategy_name: form.strategy_name.trim(),
-      ticker:        form.ticker,
-      orb_minutes:   form.orb_minutes,
-      trade_days:    form.trade_days,
-      profile:       form.profile,
-      capital_limit: capitalNum,
+      strategy_name:          form.strategy_name.trim(),
+      ticker:                 form.ticker,
+      orb_minutes:            form.orb_minutes,
+      trade_days:             form.trade_days,
+      profile:                form.profile,
+      capital_limit:          capitalNum,
+      bypass_breakout_window: form.bypass_breakout_window,
+      custom_thresholds:      form.profile === 'CUSTOM' ? form.custom_thresholds : null,
       ...modeToConfig(form.mode),
     };
 
@@ -216,25 +226,22 @@ export default function StrategyScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
 
-        {/* Account banner */}
-        {account && (
+        {/* Account banner — paper + live side by side */}
+        {accounts && (
           <View style={[styles.accountCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View>
-              <Text style={[styles.accountLabel, { color: colors.tabBarInactive }]}>
-                {account.paper_mode ? 'PAPER ACCOUNT' : 'LIVE ACCOUNT'}
-              </Text>
-              <Text style={[styles.accountEquity, { color: colors.text }]}>
-                ${account.equity.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-              </Text>
-            </View>
-            <View style={styles.pnlCol}>
-              <Text style={[styles.pnlToday, { color: account.pnl_today >= 0 ? colors.success : colors.error }]}>
-                {account.pnl_today >= 0 ? '+' : ''}${account.pnl_today.toFixed(2)}
-              </Text>
-              <Text style={[styles.pnlPctToday, { color: account.pnl_today >= 0 ? colors.success : colors.error }]}>
-                {account.pnl_today_pct.toFixed(2)}% today
-              </Text>
-            </View>
+            <AccountBannerSide
+              label="PAPER"
+              accentColor="#FF9F0A"
+              account={accounts.paper}
+              colors={colors}
+            />
+            <View style={[styles.accountDivider, { backgroundColor: colors.border }]} />
+            <AccountBannerSide
+              label="LIVE"
+              accentColor={colors.success}
+              account={accounts.live}
+              colors={colors}
+            />
           </View>
         )}
 
@@ -329,7 +336,7 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
           </View>
         </View>
 
-        {/* Row 2: profile + orb window + days */}
+        {/* Row 2: profile + orb window + days + optional bypass badge */}
         <View style={styles.stratMeta}>
           <MetaChip label={config.profile.replace('_', ' ')} color={profileColor} />
           <MetaChip label={`ORB ${config.orb_minutes}m`} color={colors.accent} />
@@ -337,6 +344,9 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
             label={activeDays.map(d => DAY_LABELS[d]).join('/')}
             color={colors.tabBarInactive}
           />
+          {config.bypass_breakout_window && (
+            <MetaChip label="No Window" color="#FF9F0A" />
+          )}
         </View>
 
         {/* Row 3: capital limit */}
@@ -427,6 +437,41 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
           <Ionicons name="trash-outline" size={18} color={colors.error} />
         </TouchableOpacity>
       </View>
+    </View>
+  );
+}
+
+interface AccountBannerSideProps {
+  label: string;
+  accentColor: string;
+  account?: { available: boolean; equity?: number; pnl_today?: number; pnl_today_pct?: number; error?: string };
+  colors: any;
+}
+
+function AccountBannerSide({ label, accentColor, account, colors }: AccountBannerSideProps) {
+  const unavailable = !account?.available;
+  const pnl    = account?.pnl_today ?? 0;
+  const pnlPct = account?.pnl_today_pct ?? 0;
+  const pnlColor = pnl >= 0 ? colors.success : colors.error;
+
+  return (
+    <View style={styles.accountSide}>
+      <View style={styles.accountSideLabel}>
+        <View style={[styles.accountDot, { backgroundColor: accentColor }]} />
+        <Text style={[styles.accountLabel, { color: colors.tabBarInactive }]}>{label}</Text>
+      </View>
+      {unavailable ? (
+        <Text style={[styles.accountUnavail, { color: colors.tabBarInactive }]}>—</Text>
+      ) : (
+        <>
+          <Text style={[styles.accountEquity, { color: colors.text }]}>
+            ${(account?.equity ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          </Text>
+          <Text style={[styles.pnlToday, { color: pnlColor }]}>
+            {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+          </Text>
+        </>
+      )}
     </View>
   );
 }
@@ -600,6 +645,25 @@ function StrategyFormModal({
             Leave blank to use your full available buying power for this strategy.
           </Text>
 
+          {/* Breakout window */}
+          <SectionHeader title="Breakout Window" colors={colors} />
+          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[styles.configRow, { borderBottomWidth: 0 }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.configLabel, { color: colors.text }]}>Bypass Time Limit</Text>
+                <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>
+                  Allow entry at any time after ORB, ignoring the breakout window
+                </Text>
+              </View>
+              <Switch
+                value={form.bypass_breakout_window}
+                onValueChange={v => onPatch('bypass_breakout_window', v)}
+                thumbColor={form.bypass_breakout_window ? '#FF9F0A' : '#ccc'}
+                trackColor={{ true: '#FF9F0A55', false: colors.border }}
+              />
+            </View>
+          </View>
+
           {/* Profile picker */}
           <SectionHeader title="Trading Profile" colors={colors} />
           {profiles.map(p => (
@@ -610,6 +674,41 @@ function StrategyFormModal({
               onSelect={key => onPatch('profile', key)}
             />
           ))}
+
+          {/* Custom profile card */}
+          <TouchableOpacity
+            onPress={() => onPatch('profile', 'CUSTOM')}
+            activeOpacity={0.8}
+            style={[
+              styles.customProfileCard,
+              {
+                backgroundColor: colors.card,
+                borderColor: form.profile === 'CUSTOM' ? '#A855F7' : colors.border,
+                borderWidth: form.profile === 'CUSTOM' ? 2 : 1,
+              },
+            ]}
+          >
+            {form.profile === 'CUSTOM' && (
+              <View style={[styles.customActiveBadge, { backgroundColor: '#A855F7' }]}>
+                <Ionicons name="checkmark" size={10} color="#fff" />
+              </View>
+            )}
+            <Text style={styles.customProfileEmoji}>⚙️</Text>
+            <Text style={[styles.customProfileName, { color: colors.text }]}>Custom</Text>
+            <Text style={[styles.customProfileSub, { color: '#A855F7' }]}>Custom Risk</Text>
+            <Text style={[styles.customProfileDesc, { color: colors.tabBarInactive }]}>
+              Set every parameter yourself — contracts, take-profit targets, timing, and more.
+            </Text>
+          </TouchableOpacity>
+
+          {/* Custom thresholds editor — only shown when CUSTOM is selected */}
+          {form.profile === 'CUSTOM' && (
+            <CustomThresholdsEditor
+              thresholds={form.custom_thresholds}
+              onChange={t => onPatch('custom_thresholds', t)}
+              colors={colors}
+            />
+          )}
 
           <View style={{ height: 60 }} />
         </ScrollView>
@@ -643,12 +742,15 @@ const styles = StyleSheet.create({
   title:     { fontSize: 20, fontWeight: '700' },
   addBtn:    { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
 
-  accountCard:   { flexDirection: 'row', justifyContent: 'space-between', borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 8 },
-  accountLabel:  { fontSize: 10, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 2 },
-  accountEquity: { fontSize: 22, fontWeight: '700' },
-  pnlCol:        { alignItems: 'flex-end', justifyContent: 'center' },
-  pnlToday:      { fontSize: 16, fontWeight: '700' },
-  pnlPctToday:   { fontSize: 12, fontWeight: '500', marginTop: 2 },
+  accountCard:      { flexDirection: 'row', borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 8 },
+  accountSide:      { flex: 1, gap: 3 },
+  accountSideLabel: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 2 },
+  accountDot:       { width: 7, height: 7, borderRadius: 4 },
+  accountDivider:   { width: StyleSheet.hairlineWidth, marginHorizontal: 14 },
+  accountLabel:     { fontSize: 10, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
+  accountEquity:    { fontSize: 18, fontWeight: '700' },
+  accountUnavail:   { fontSize: 18, fontWeight: '700' },
+  pnlToday:         { fontSize: 12, fontWeight: '600' },
 
   sectionHeader: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', marginTop: 16, marginBottom: 8, color: '#888' },
 
@@ -697,6 +799,23 @@ const styles = StyleSheet.create({
   emptyCard:    { alignItems: 'center', borderRadius: 14, borderWidth: 1, padding: 32, gap: 8, marginBottom: 12 },
   emptyText:    { fontSize: 15, fontWeight: '600' },
   emptySubtext: { fontSize: 13 },
+
+  // ── Custom profile card ──
+  customProfileCard: {
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+    position: 'relative',
+  },
+  customActiveBadge: {
+    position: 'absolute', top: 10, right: 10,
+    width: 20, height: 20, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  customProfileEmoji: { fontSize: 28, marginBottom: 4 },
+  customProfileName:  { fontSize: 16, fontWeight: '700', marginBottom: 2 },
+  customProfileSub:   { fontSize: 12, fontWeight: '600', marginBottom: 8 },
+  customProfileDesc:  { fontSize: 12, lineHeight: 17 },
 
   // ── Modal ──
   modalContainer: { flex: 1 },

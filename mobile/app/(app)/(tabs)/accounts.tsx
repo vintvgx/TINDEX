@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, SafeAreaView, TouchableOpacity,
   ActivityIndicator, StyleSheet, RefreshControl,
@@ -10,27 +10,39 @@ import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccount
 
 export default function AccountsScreen() {
   const colors = useThemeColors();
+  const [manualRefreshing, setManualRefreshing] = useState(false);
 
-  const { data, isLoading, refetch, isRefetching } = useAlpacaBothAccounts();
+  const { data, isLoading, refetch } = useAlpacaBothAccounts();
+
+  const handlePullRefresh = useCallback(async () => {
+    setManualRefreshing(true);
+    await refetch();
+    setManualRefreshing(false);
+  }, [refetch]);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+
+      {/* Sticky header */}
+      <View style={[styles.header, { borderBottomColor: colors.border }]}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
+          <Ionicons name="arrow-back" size={22} color={colors.text} />
+        </TouchableOpacity>
+        <Text style={[styles.title, { color: colors.text }]}>Trading Accounts</Text>
+        <View style={{ width: 22 }} />
+      </View>
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
         refreshControl={
-          <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.accent} />
+          <RefreshControl
+            refreshing={manualRefreshing}
+            onRefresh={handlePullRefresh}
+            tintColor={colors.accent}
+          />
         }
       >
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
-            <Ionicons name="arrow-back" size={22} color={colors.text} />
-          </TouchableOpacity>
-          <Text style={[styles.title, { color: colors.text }]}>Trading Accounts</Text>
-          <View style={{ width: 22 }} />
-        </View>
-
         {isLoading ? (
           <ActivityIndicator color={colors.accent} style={{ marginTop: 60 }} />
         ) : (
@@ -174,8 +186,8 @@ const Stat = ({ label, value, colors }: { label: string; value: string; colors: 
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content:   { paddingHorizontal: 16, paddingTop: 8, gap: 12 },
-  header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  content:   { paddingHorizontal: 16, paddingTop: 16, gap: 12 },
+  header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   title:     { fontSize: 20, fontWeight: '700' },
 
   card:         { borderRadius: 16, padding: 16, gap: 10 },

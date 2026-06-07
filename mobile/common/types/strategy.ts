@@ -1,4 +1,25 @@
-export type ProfileKey = 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF';
+export type ProfileKey = 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'CUSTOM';
+
+export interface CustomThresholds {
+  qty_contracts:           number;
+  max_loss_pct:            number;
+  tp1_mult:                number;
+  tp2_mult:                number;
+  tp1_close_pct:           number;
+  tp2_close_pct:           number;
+  runner_trail_pct:        number;
+  consol_exit:             boolean;
+  consol_range_pct:        number;
+  consol_bars:             number;
+  volume_exit_threshold:   number;
+  strike_offset_min:       number;
+  strike_offset_max:       number;
+  target_delta_min:        number;
+  target_delta_max:        number;
+  eod_buffer_minutes:      number;
+  breakout_time_limit_min: number;
+  vix_max_override:        number;
+}
 
 export interface ProfileThresholds {
   qty_contracts: number;
@@ -39,13 +60,15 @@ export interface StrategyProfile {
 export interface StrategyConfig {
   id: string;
   strategy_name: string;
-  ticker: string;         // 'SPY' | 'QQQ' | 'IWM'
+  ticker: string;
   orb_minutes: 5 | 10 | 15;
   paper_mode: boolean;
   active: boolean;
   profile: ProfileKey;
-  trade_days: number[];   // 0=Mon ... 4=Fri
+  trade_days: number[];
   capital_limit: number | null;
+  bypass_breakout_window: boolean;
+  custom_thresholds: CustomThresholds | null;
   has_position?: boolean;
 }
 

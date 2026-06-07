@@ -8,6 +8,7 @@ const PROFILE_EMOJI: Record<ProfileKey, string> = {
   BULL_DOG:    '🐂',
   THUNDER_CAT: '🐱',
   WOLF:        '🐺',
+  CUSTOM:      '⚙️',
 };
 
 interface Props {

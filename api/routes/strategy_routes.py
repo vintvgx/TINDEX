@@ -176,7 +176,23 @@ def get_all_positions():
 
 @strategy_bp.route("/profiles", methods=["GET"])
 def get_profiles():
-    return jsonify([describe_profile(k) for k in PROFILES.keys()])
+    from services.strategy.profiles import CUSTOM_DEFAULTS
+    profiles = [describe_profile(k) for k in PROFILES.keys()]
+    profiles.append({
+        "key": "CUSTOM",
+        "display_name": "Custom",
+        "emoji": "⚙️",
+        "contracts": CUSTOM_DEFAULTS["qty_contracts"],
+        "max_loss_pct": int(CUSTOM_DEFAULTS["max_loss_pct"] * 100),
+        "tp1_pct": int((CUSTOM_DEFAULTS["tp1_mult"] - 1) * 100),
+        "tp2_pct": int((CUSTOM_DEFAULTS["tp2_mult"] - 1) * 100),
+        "runner": CUSTOM_DEFAULTS["tp2_close_pct"] < 1.0,
+        "risk_level": "Custom",
+        "vix_max": CUSTOM_DEFAULTS["vix_max_override"],
+        "breakout_limit_min": CUSTOM_DEFAULTS["breakout_time_limit_min"],
+        "thresholds": CUSTOM_DEFAULTS,
+    })
+    return jsonify(profiles)
 
 
 @strategy_bp.route("/profiles/<profile_key>", methods=["GET"])
