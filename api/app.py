@@ -2197,34 +2197,55 @@ def ws_prices(ws):
         }
     """
     import queue as _queue
-    client_queue = price_stream.add_client()
+    import threading as _threading
+
+    client_queue   = price_stream.add_client()
+    tickers_lock   = _threading.Lock()
     client_tickers: list[str] = []
 
-    try:
-        # First message must contain the ticker subscription list
-        raw = ws.receive(timeout=10)
-        if raw:
-            msg = json.loads(raw)
-            client_tickers = [t.upper() for t in msg.get("tickers", [])]
-            for ticker in client_tickers:
-                price_stream.subscribe(ticker)
-            logger.info("[WS] client subscribed to %d tickers", len(client_tickers))
+    def _apply_tickers(new_tickers: list[str]):
+        nonlocal client_tickers
+        with tickers_lock:
+            for t in client_tickers:
+                price_stream.unsubscribe(t)
+            client_tickers = [t.upper() for t in new_tickers]
+            for t in client_tickers:
+                price_stream.subscribe(t)
+        logger.info("[WS] subscribed to %d tickers: %s", len(client_tickers), client_tickers)
 
+    def _reader():
+        """Read incoming messages on a background thread so the send loop is never blocked."""
+        while True:
+            try:
+                raw = ws.receive(timeout=60)
+                if raw is None:
+                    break
+                msg = json.loads(raw)
+                if "tickers" in msg:
+                    _apply_tickers(msg["tickers"])
+            except Exception:
+                break
+
+    reader_thread = _threading.Thread(target=_reader, daemon=True, name="ws-price-reader")
+    reader_thread.start()
+
+    try:
         # Stream until the client disconnects
         while True:
             try:
                 payload = client_queue.get(timeout=30)
                 ws.send(payload)
             except _queue.Empty:
-                # Send a keepalive ping so the connection stays open
+                # Keepalive ping so the connection stays open
                 ws.send(json.dumps({"type": "ping"}))
 
     except Exception as exc:
         logger.debug("[WS] client disconnected: %s", exc)
     finally:
         price_stream.remove_client(client_queue)
-        for ticker in client_tickers:
-            price_stream.unsubscribe(ticker)
+        with tickers_lock:
+            for ticker in client_tickers:
+                price_stream.unsubscribe(ticker)
         logger.info("[WS] client cleanup done")
 
 

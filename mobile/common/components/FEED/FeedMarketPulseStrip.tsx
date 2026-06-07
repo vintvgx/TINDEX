@@ -1,18 +1,20 @@
 /**
  * FeedMarketPulseStrip
  *
- * Self-contained market-data strip for the Feed screen.
- * Long-press opens a config sheet to toggle which items are shown.
- * Config is persisted in SecureStore per device.
+ * Configurable market-data strip for the Feed screen.
+ * Long-press anywhere on the strip → bottom sheet to toggle visible items.
  *
- * Configurable items: VIX · SPY · QQQ · IWM · Flow
- * Default:            VIX · SPY · Flow
+ * Special items: VIX (volatility index + sentiment) · Flow (ORB ticker flow)
+ * Price items:   Any ticker symbol — base set (SPY, QQQ, IWM) + every ticker
+ *                currently tracked on the ORB screen
+ *
+ * Config stored in SecureStore as a JSON string[].
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, Pressable, Modal, ScrollView,
-  Switch, TouchableOpacity, Platform,
+  Modal, Platform, Pressable, ScrollView,
+  Text, TouchableOpacity, View,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import * as SecureStore from 'expo-secure-store';
@@ -21,28 +23,15 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type StripItemKey = 'VIX' | 'SPY' | 'QQQ' | 'IWM' | 'FLOW';
-
-interface StripItemMeta {
-  key:   StripItemKey;
-  label: string;
-  desc:  string;
-}
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const CONFIG_KEY     = '@alethia/feed_pulse_strip_config';
-const DEFAULT_CONFIG: StripItemKey[] = ['VIX', 'SPY', 'FLOW'];
+const CONFIG_KEY = '@alethia/feed_pulse_strip_v2';
 
-const ALL_ITEMS: StripItemMeta[] = [
-  { key: 'VIX',  label: 'VIX',  desc: 'CBOE Volatility Index'  },
-  { key: 'SPY',  label: 'SPY',  desc: 'S&P 500 ETF'            },
-  { key: 'QQQ',  label: 'QQQ',  desc: 'Nasdaq-100 ETF'         },
-  { key: 'IWM',  label: 'IWM',  desc: 'Russell 2000 ETF'       },
-  { key: 'FLOW', label: 'Flow', desc: 'ORB tracked-ticker flow' },
-];
+// Always-available base tickers (shown even without ORB monitoring)
+const BASE_TICKERS = ['SPY', 'QQQ', 'IWM'];
+
+// Default strip: VIX + SPY + Flow
+const DEFAULT_CONFIG: string[] = ['VIX', 'SPY', 'FLOW'];
 
 const SENTIMENT_HEX: Record<string, string> = {
   green:  '#30D158',
@@ -68,20 +57,18 @@ function computeFlow(orbData: any[], livePrices: Record<string, number>) {
   return { label, up, down, color };
 }
 
-async function loadConfig(): Promise<StripItemKey[]> {
+async function loadConfig(): Promise<string[]> {
   try {
     const raw = await SecureStore.getItemAsync(CONFIG_KEY);
     if (!raw) return DEFAULT_CONFIG;
-    const parsed = JSON.parse(raw) as StripItemKey[];
+    const parsed = JSON.parse(raw) as string[];
     if (Array.isArray(parsed) && parsed.length > 0) return parsed;
   } catch {}
   return DEFAULT_CONFIG;
 }
 
-async function saveConfig(cfg: StripItemKey[]) {
-  try {
-    await SecureStore.setItemAsync(CONFIG_KEY, JSON.stringify(cfg));
-  } catch {}
+async function persistConfig(cfg: string[]) {
+  try { await SecureStore.setItemAsync(CONFIG_KEY, JSON.stringify(cfg)); } catch {}
 }
 
 // ─── Pill ─────────────────────────────────────────────────────────────────────
@@ -89,11 +76,7 @@ async function saveConfig(cfg: StripItemKey[]) {
 function Pill({
   label, value, sub, accentColor, colors,
 }: {
-  label: string;
-  value: string;
-  sub?: string;
-  accentColor: string;
-  colors: any;
+  label: string; value: string; sub?: string; accentColor: string; colors: any;
 }) {
   return (
     <View style={{
@@ -103,13 +86,16 @@ function Pill({
       borderColor: accentColor + '30',
       paddingHorizontal: 10,
       paddingVertical: 7,
-      minWidth: 72,
+      minWidth: 68,
       marginRight: 6,
     }}>
-      <Text style={{ color: colors.textTertiary, fontSize: 9, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 2 }}>
+      <Text style={{
+        color: colors.textTertiary, fontSize: 9, fontWeight: '700',
+        textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 2,
+      }}>
         {label}
       </Text>
-      <Text style={{ color: accentColor, fontSize: 18, fontWeight: '800', letterSpacing: -0.5 }} numberOfLines={1}>
+      <Text style={{ color: accentColor, fontSize: 17, fontWeight: '800', letterSpacing: -0.5 }} numberOfLines={1}>
         {value}
       </Text>
       {sub != null && (
@@ -124,122 +110,171 @@ function Pill({
 // ─── Config Sheet ─────────────────────────────────────────────────────────────
 
 function ConfigSheet({
-  visible,
-  current,
-  onClose,
-  onSave,
-  colors,
+  visible, draft, orbTickers, onToggle, onSave, onClose, colors,
 }: {
-  visible:  boolean;
-  current:  StripItemKey[];
-  onClose:  () => void;
-  onSave:   (cfg: StripItemKey[]) => void;
-  colors:   any;
+  visible:    boolean;
+  draft:      string[];
+  orbTickers: string[];
+  onToggle:   (key: string) => void;
+  onSave:     () => void;
+  onClose:    () => void;
+  colors:     any;
 }) {
-  const [draft, setDraft] = useState<StripItemKey[]>(current);
+  // Keep a minimum of 1 item active
+  const canRemove = (key: string) => draft.length > 1 || !draft.includes(key);
 
-  useEffect(() => {
-    if (visible) setDraft(current);
-  }, [visible, current]);
+  function ChipToggle({ itemKey, label, desc }: { itemKey: string; label: string; desc?: string }) {
+    const active     = draft.includes(itemKey);
+    const removable  = canRemove(itemKey);
+    const chipColor  = active ? colors.accent : colors.textTertiary;
 
-  const toggle = (key: StripItemKey) => {
-    if (draft.includes(key)) {
-      // Always keep at least one item active
-      if (draft.length <= 1) return;
-      setDraft(prev => prev.filter(k => k !== key));
-    } else {
-      setDraft(prev => [...prev, key]);
-    }
-  };
+    return (
+      <Pressable
+        onPress={() => { if (!active || removable) onToggle(itemKey); }}
+        style={({ pressed }) => ({
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 8,
+          paddingHorizontal: 14,
+          paddingVertical: 10,
+          borderRadius: 12,
+          borderWidth: 1.5,
+          borderColor: active ? colors.accent + '80' : colors.border,
+          backgroundColor: active ? colors.accent + '12' : colors.surfaceSecondary,
+          opacity: pressed ? 0.7 : 1,
+          marginBottom: 8,
+          marginRight: 8,
+        })}
+      >
+        {active ? (
+          <Ionicons name="checkmark-circle" size={16} color={colors.accent} />
+        ) : (
+          <View style={{
+            width: 16, height: 16, borderRadius: 8,
+            borderWidth: 1.5, borderColor: colors.border,
+          }} />
+        )}
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: active ? colors.text : colors.textSecondary, fontWeight: '600', fontSize: 14 }}>
+            {label}
+          </Text>
+          {desc && (
+            <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 1 }}>{desc}</Text>
+          )}
+        </View>
+      </Pressable>
+    );
+  }
 
-  // Preserve the canonical ordering (ALL_ITEMS order)
-  const ordered = ALL_ITEMS.map(i => i.key).filter(k => draft.includes(k));
+  const hasOrbTickers = orbTickers.length > 0;
+  // All ticker options: base set + any ORB tickers not already in base
+  const allTickers = [...new Set([...BASE_TICKERS, ...orbTickers])];
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable
         style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}
         onPress={onClose}
       >
-        {/* Sheet — stop press propagation so tapping inside doesn't close */}
         <Pressable onPress={e => e.stopPropagation()}>
           <View style={{
             backgroundColor: colors.surface,
-            borderTopLeftRadius: 20,
-            borderTopRightRadius: 20,
-            paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+            borderTopLeftRadius: 24,
+            borderTopRightRadius: 24,
+            paddingBottom: Platform.OS === 'ios' ? 40 : 24,
+            maxHeight: '80%',
           }}>
             {/* Handle */}
-            <View style={{ alignItems: 'center', paddingTop: 10, paddingBottom: 6 }}>
+            <View style={{ alignItems: 'center', paddingTop: 12, paddingBottom: 4 }}>
               <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: colors.border }} />
             </View>
 
-            {/* Title */}
-            <View style={{ paddingHorizontal: 20, paddingBottom: 12, flexDirection: 'row', alignItems: 'center' }}>
-              <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700', flex: 1 }}>
-                Customize Market Strip
-              </Text>
-              <TouchableOpacity onPress={onClose}>
-                <Ionicons name="close" size={20} color={colors.textSecondary} />
+            {/* Header */}
+            <View style={{
+              paddingHorizontal: 20, paddingVertical: 14,
+              flexDirection: 'row', alignItems: 'center',
+              borderBottomWidth: 1, borderBottomColor: colors.separator,
+            }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700' }}>
+                  Customize Market Pulse
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 2 }}>
+                  Long-press the strip to re-open this menu
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={onClose}
+                style={{
+                  width: 30, height: 30, borderRadius: 15,
+                  backgroundColor: colors.surfaceSecondary,
+                  alignItems: 'center', justifyContent: 'center',
+                }}
+              >
+                <Ionicons name="close" size={16} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
-            <View style={{ height: 1, backgroundColor: colors.separator, marginBottom: 4 }} />
+            <ScrollView
+              contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 18, paddingBottom: 8 }}
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Section: Indicators */}
+              <Text style={{
+                color: colors.textTertiary, fontSize: 11, fontWeight: '700',
+                textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10,
+              }}>
+                Indicators
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                <ChipToggle itemKey="VIX"  label="VIX"  desc="Volatility index + sentiment" />
+                <ChipToggle itemKey="FLOW" label="Flow" desc="ORB ticker flow (↑↓ balance)" />
+              </View>
 
-            {/* Toggle rows */}
-            {ALL_ITEMS.map(item => {
-              const enabled    = draft.includes(item.key);
-              const isLastOne  = enabled && draft.length <= 1;
-              return (
-                <View
-                  key={item.key}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    paddingHorizontal: 20,
-                    paddingVertical: 13,
-                    borderBottomWidth: 1,
-                    borderBottomColor: colors.separator,
-                    opacity: isLastOne ? 0.5 : 1,
-                  }}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: colors.text, fontWeight: '600', fontSize: 15 }}>
-                      {item.label}
-                    </Text>
-                    <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 1 }}>
-                      {item.desc}
-                    </Text>
-                  </View>
-                  <Switch
-                    value={enabled}
-                    onValueChange={() => toggle(item.key)}
-                    disabled={isLastOne}
-                    trackColor={{ false: colors.border, true: colors.accent + '80' }}
-                    thumbColor={enabled ? colors.accent : colors.textTertiary}
-                    ios_backgroundColor={colors.border}
-                  />
-                </View>
-              );
-            })}
+              {/* Section: Tickers */}
+              <Text style={{
+                color: colors.textTertiary, fontSize: 11, fontWeight: '700',
+                textTransform: 'uppercase', letterSpacing: 0.8,
+                marginTop: 8, marginBottom: 10,
+              }}>
+                Tickers
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+                {allTickers.map(ticker => {
+                  const isOrb = orbTickers.includes(ticker) && !BASE_TICKERS.includes(ticker);
+                  return (
+                    <ChipToggle
+                      key={ticker}
+                      itemKey={ticker}
+                      label={ticker}
+                      desc={isOrb ? 'ORB tracked' : undefined}
+                    />
+                  );
+                })}
+              </View>
+
+              {!hasOrbTickers && (
+                <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 4, marginBottom: 8 }}>
+                  Add tickers to your ORB screen to see them here.
+                </Text>
+              )}
+            </ScrollView>
 
             {/* Save */}
             <TouchableOpacity
-              onPress={() => { onSave(ordered); onClose(); }}
+              onPress={() => { onSave(); onClose(); }}
               style={{
-                margin: 20,
+                marginHorizontal: 20,
+                marginTop: 4,
                 backgroundColor: colors.accent,
-                borderRadius: 12,
+                borderRadius: 14,
                 paddingVertical: 14,
                 alignItems: 'center',
               }}
             >
-              <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>Save</Text>
+              <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>
+                Save Changes
+              </Text>
             </TouchableOpacity>
           </View>
         </Pressable>
@@ -252,42 +287,129 @@ function ConfigSheet({
 
 export function FeedMarketPulseStrip() {
   const colors = useThemeColors();
-  const [config, setConfig]         = useState<StripItemKey[]>(DEFAULT_CONFIG);
-  const [sheetVisible, setSheet]    = useState(false);
-  const configRef                   = useRef<StripItemKey[]>(DEFAULT_CONFIG);
+  const [config, setConfig]      = useState<string[]>(DEFAULT_CONFIG);
+  const [draft, setDraft]        = useState<string[]>(DEFAULT_CONFIG);
+  const [sheetVisible, setSheet] = useState(false);
 
   // Load persisted config on mount
   useEffect(() => {
-    loadConfig().then(cfg => { setConfig(cfg); configRef.current = cfg; });
+    loadConfig().then(cfg => { setConfig(cfg); setDraft(cfg); });
   }, []);
 
-  // Extra price tickers needed for QQQ / IWM when enabled
-  const extraTickers = useMemo(
-    () => (['QQQ', 'IWM'] as const).filter(t => config.includes(t)),
+  // ORB tickers from monitoring state (excludes mock data)
+  const { data: orbData } = useORBMonitoringState(false, false);
+  const orbTickers = useMemo(
+    () => [...new Set((orbData ?? []).map((d: any) => d.ticker as string))],
+    [orbData],
+  );
+
+  // Tickers to subscribe to the live price stream:
+  // - All non-special items in config (VIX and FLOW are not tickers)
+  const streamTickers = useMemo(
+    () => config.filter(k => k !== 'VIX' && k !== 'FLOW'),
     [config],
   );
 
-  const { data: orbData } = useORBMonitoringState(false, false);
-  const { livePrices, vix, spy, sentiment, connected } = useMarketStream(extraTickers);
-
-  const sentimentColor = sentiment ? (SENTIMENT_HEX[sentiment.color] ?? colors.textSecondary) : colors.textSecondary;
+  const { livePrices, vix, spy, sentiment, connected } = useMarketStream(streamTickers);
+  const sentimentColor = sentiment
+    ? (SENTIMENT_HEX[sentiment.color] ?? colors.textSecondary)
+    : colors.textSecondary;
   const flow = computeFlow(orbData ?? [], livePrices);
 
-  const handleLongPress = useCallback(async () => {
+  // ── ORB position lookup: O(1) by ticker ─────────────────────────────────
+  const orbMap = useMemo(() => {
+    const m = new Map<string, { high: number | null; low: number | null }>();
+    for (const item of (orbData ?? [])) {
+      m.set(item.ticker as string, {
+        high: (item as any).orb_high ?? null,
+        low:  (item as any).orb_low  ?? null,
+      });
+    }
+    return m;
+  }, [orbData]);
+
+  const getOrbColor = useCallback((ticker: string, price: number | null): string => {
+    const orb = orbMap.get(ticker);
+    if (!orb || price == null || (orb.high == null && orb.low == null)) return colors.accent;
+    if (orb.high != null && price > orb.high) return '#30D158'; // above range — green
+    if (orb.low  != null && price < orb.low)  return '#FF453A'; // below range — red
+    return '#FFD60A'; // inside range — yellow
+  }, [orbMap, colors.accent]);
+
+  const getOrbSub = useCallback((ticker: string, price: number | null): string | undefined => {
+    const orb = orbMap.get(ticker);
+    if (!orb || price == null || (orb.high == null && orb.low == null)) return undefined;
+    if (orb.high != null && price > orb.high) return '↑ Above ORB';
+    if (orb.low  != null && price < orb.low)  return '↓ Below ORB';
+    return '◉ In Range';
+  }, [orbMap]);
+
+  // ── Config sheet ────────────────────────────────────────────────────────
+  const openSheet = useCallback(async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setDraft(config); // reset draft to committed config
     setSheet(true);
+  }, [config]);
+
+  const handleToggle = useCallback((key: string) => {
+    setDraft(prev =>
+      prev.includes(key)
+        ? (prev.length > 1 ? prev.filter(k => k !== key) : prev)
+        : [...prev, key],
+    );
   }, []);
 
-  const handleSave = useCallback((newCfg: StripItemKey[]) => {
-    setConfig(newCfg);
-    configRef.current = newCfg;
-    saveConfig(newCfg);
-  }, []);
+  const handleSave = useCallback(() => {
+    setConfig(draft);
+    persistConfig(draft);
+  }, [draft]);
+
+  // ── Render pills ────────────────────────────────────────────────────────
+  function renderPill(key: string) {
+    if (key === 'VIX') {
+      return (
+        <Pill
+          key="VIX"
+          label="VIX"
+          value={vix != null ? vix.toFixed(2) : '—'}
+          sub={sentiment?.label ?? '—'}
+          accentColor={sentimentColor}
+          colors={colors}
+        />
+      );
+    }
+    if (key === 'FLOW') {
+      return (
+        <Pill
+          key="FLOW"
+          label="Flow"
+          value={flow.label}
+          sub={flow.up + flow.down > 0 ? `${flow.up}↑ · ${flow.down}↓` : undefined}
+          accentColor={flow.color}
+          colors={colors}
+        />
+      );
+    }
+    // Ticker pill — SPY comes from the dedicated `spy` field; everything else from livePrices
+    const price = key === 'SPY' ? spy : (livePrices[key] ?? null);
+    const orbColor = getOrbColor(key, price);
+    const orbSub   = getOrbSub(key, price);
+    return (
+      <Pill
+        key={key}
+        label={key}
+        value={price != null ? `$${price.toFixed(2)}` : '—'}
+        sub={orbSub}
+        accentColor={orbColor}
+        colors={colors}
+      />
+    );
+  }
 
   return (
     <>
       <Pressable
-        onLongPress={handleLongPress}
+        onLongPress={openSheet}
         delayLongPress={400}
         style={{
           marginHorizontal: 20,
@@ -299,19 +421,14 @@ export function FeedMarketPulseStrip() {
           overflow: 'hidden',
         }}
       >
-        {/* Header row */}
+        {/* Header */}
         <View style={{
-          paddingHorizontal: 14,
-          paddingTop: 10,
-          paddingBottom: 6,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 6,
+          paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6,
+          flexDirection: 'row', alignItems: 'center', gap: 6,
         }}>
           <Text style={{ color: colors.text, fontWeight: '700', fontSize: 13, flex: 1 }}>
             Market Pulse
           </Text>
-          {/* Live dot */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
             <View style={{
               width: 6, height: 6, borderRadius: 3,
@@ -321,90 +438,35 @@ export function FeedMarketPulseStrip() {
               {connected ? 'LIVE' : 'OFF'}
             </Text>
           </View>
-          {/* Long-press hint */}
-          <Ionicons name="ellipsis-horizontal" size={14} color={colors.textTertiary} />
+          {/* Visual hint that long-press opens config */}
+          <View style={{
+            flexDirection: 'row', alignItems: 'center', gap: 3,
+            backgroundColor: colors.surfaceSecondary, borderRadius: 6,
+            paddingHorizontal: 6, paddingVertical: 3,
+          }}>
+            <Ionicons name="settings-outline" size={10} color={colors.textTertiary} />
+            <Text style={{ color: colors.textTertiary, fontSize: 9, fontWeight: '600' }}>Hold</Text>
+          </View>
         </View>
 
-        {/* Pills */}
+        {/* Pills row */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          scrollEnabled={false}
+          scrollEnabled
           contentContainerStyle={{ paddingLeft: 14, paddingRight: 8, paddingBottom: 12 }}
         >
-          {config.map(key => {
-            switch (key) {
-              case 'VIX':
-                return (
-                  <Pill
-                    key="VIX"
-                    label="VIX"
-                    value={vix != null ? vix.toFixed(2) : '—'}
-                    sub={sentiment?.label ?? '—'}
-                    accentColor={sentimentColor}
-                    colors={colors}
-                  />
-                );
-              case 'SPY':
-                return (
-                  <Pill
-                    key="SPY"
-                    label="SPY"
-                    value={spy != null ? `$${spy.toFixed(2)}` : '—'}
-                    sub="S&P 500"
-                    accentColor={colors.accent}
-                    colors={colors}
-                  />
-                );
-              case 'QQQ': {
-                const qqq = livePrices['QQQ'];
-                return (
-                  <Pill
-                    key="QQQ"
-                    label="QQQ"
-                    value={qqq != null ? `$${qqq.toFixed(2)}` : '—'}
-                    sub="Nasdaq-100"
-                    accentColor={colors.accent}
-                    colors={colors}
-                  />
-                );
-              }
-              case 'IWM': {
-                const iwm = livePrices['IWM'];
-                return (
-                  <Pill
-                    key="IWM"
-                    label="IWM"
-                    value={iwm != null ? `$${iwm.toFixed(2)}` : '—'}
-                    sub="Russell 2K"
-                    accentColor={colors.accent}
-                    colors={colors}
-                  />
-                );
-              }
-              case 'FLOW':
-                return (
-                  <Pill
-                    key="FLOW"
-                    label="Flow"
-                    value={flow.label}
-                    sub={flow.up + flow.down > 0 ? `${flow.up}↑ · ${flow.down}↓` : undefined}
-                    accentColor={flow.color}
-                    colors={colors}
-                  />
-                );
-              default:
-                return null;
-            }
-          })}
+          {config.map(key => renderPill(key))}
         </ScrollView>
       </Pressable>
 
       <ConfigSheet
         visible={sheetVisible}
-        current={config}
-        onClose={() => setSheet(false)}
+        draft={draft}
+        orbTickers={orbTickers}
+        onToggle={handleToggle}
         onSave={handleSave}
+        onClose={() => setSheet(false)}
         colors={colors}
       />
     </>

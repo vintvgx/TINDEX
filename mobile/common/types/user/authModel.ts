@@ -79,6 +79,7 @@ export interface UserProfile {
     | "most_active"
     | "favorites"
     | null;
+  market_pulse_config?: string[] | null;
 
   // Algorithm Improvement Data
   user_interests?: string[] | null; // Array of stock sectors/industries

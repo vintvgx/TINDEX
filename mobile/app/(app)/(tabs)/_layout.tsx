@@ -6,7 +6,7 @@ export default function Layout() {
   return (
     <OptionsTickerProvider>
     <Tabs
-      initialRouteName="orb"
+      initialRouteName="feed"
       screenOptions={{ headerShown: false }}
       tabBar={(props) => <CustomTabBar {...props} />}
     >
