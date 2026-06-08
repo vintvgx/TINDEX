@@ -33,7 +33,6 @@ def batch_fetch_current_prices(tickers: list[str]) -> dict[str, float]:
         data = yf.download(
             tickers,
             period="5d",
-            group_by="ticker" if len(tickers) > 1 else None,
             progress=False,
             threads=False,
             auto_adjust=True,
@@ -46,16 +45,17 @@ def batch_fetch_current_prices(tickers: list[str]) -> dict[str, float]:
         prices: dict[str, float] = {}
 
         if len(tickers) == 1:
-            # Single ticker: flat columns ["Close", ...] or MultiIndex (ticker, "Close")
+            # Single ticker: flat columns ["Close", ...] or MultiIndex ("Close", ticker)
             close_series = _get_close_series_single(data, tickers[0])
             if close_series is not None:
                 last = close_series.iloc[-1]
                 if last is not None and not pd.isna(last):
                     prices[tickers[0]] = float(last)
         else:
+            # yfinance >= 0.2.x returns MultiIndex columns ordered (Price, Ticker)
             for ticker in tickers:
                 try:
-                    close_series = data[ticker]["Close"]
+                    close_series = data["Close"][ticker]
                     last = close_series.iloc[-1]
                     if last is not None and not pd.isna(last):
                         prices[ticker] = float(last)
@@ -77,7 +77,7 @@ def _get_close_series_single(data: pd.DataFrame, ticker: str):
         return data["Close"]
     if isinstance(data.columns, pd.MultiIndex):
         try:
-            return data[ticker]["Close"]
+            return data["Close"][ticker]
         except (KeyError, TypeError):
             pass
     return None

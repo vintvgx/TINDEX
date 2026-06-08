@@ -33,6 +33,14 @@ class StrategyNotifier:
         self._sb = supabase_client
 
     # ── Public event methods ────────────────────────────────────────────────────
+    def notify_start(self, provider: str):
+        """ORB service and strategy engine confirmed running."""
+        self._dispatch(
+            title="ORB Service + Engine started",
+            body=f"Monitoring active via {provider.upper()} streaming.",
+            data={"screen": "tradelog"},
+        )
+
     def notify_skip(self, ticker: str, reason: str):
         """Session skipped before ORB could be evaluated."""
         readable = {

@@ -1080,11 +1080,23 @@ def start_orb_monitoring():
         
         ORB_TASK = threading.Thread(target=run_orb, daemon=True)
         ORB_TASK.start()
-        
-        message = f"ORB monitoring started with {provider.upper()} streaming"
+
+        # Ensure strategy engines and their schedulers are live
+        try:
+            from services.strategy.scheduler import init_scheduler as _init_sched
+            _engines = globals().get("_strategy_engines") or {}
+            for _eng in _engines.values():
+                _init_sched(_eng)
+            if _engines:
+                first_eng = next(iter(_engines.values()))
+                first_eng.notifier.notify_start(provider)
+        except Exception as _e:
+            logger.warning("[ORB Start] Engine check failed: %s", _e)
+
+        message = "ORB Service + Engine started"
         if debug_mode:
             message += " (DEBUG MODE: Market hours check bypassed)"
-        
+
         return jsonify({
             "success": True,
             "message": message,
@@ -1234,7 +1246,20 @@ def _svc_start_orb(debug: bool = False, provider: str = 'alpaca', **_) -> dict:
         loop.run_until_complete(svc.start(debug_mode=debug))
     ORB_TASK = threading.Thread(target=_run, daemon=True)
     ORB_TASK.start()
-    msg = f"ORB monitoring started ({provider.upper()})"
+
+    # Ensure strategy engines and their schedulers are live
+    try:
+        from services.strategy.scheduler import init_scheduler as _init_sched
+        _engines = globals().get("_strategy_engines") or {}
+        for _eng in _engines.values():
+            _init_sched(_eng)
+        if _engines:
+            first_eng = next(iter(_engines.values()))
+            first_eng.notifier.notify_start(provider)
+    except Exception as _e:
+        logger.warning("[ORB Start] Engine check failed: %s", _e)
+
+    msg = "ORB Service + Engine started"
     if debug:
         msg += " [debug]"
     return {"success": True, "message": msg, "was_running": False}

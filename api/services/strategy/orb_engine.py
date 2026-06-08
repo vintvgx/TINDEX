@@ -108,6 +108,8 @@ class ORBEngine:
         self.active_trade_id  = None
         self.trade_entry_time        = None   # used by 30-min timer notification
         self.timer_notified          = False  # ensures the 30-min update fires only once
+        self._breakout_pending_direction = None  # "CALL" | "PUT" | None while waiting for 3-min confirm
+        self._breakout_first_seen        = None  # datetime when breakout was first detected
         self.macro_today             = False  # True when a high-impact macro event is scheduled today
         self._current_option_price   = None   # latest mid-price from WebSocket stream
         self._last_underlying_price  = None   # latest underlying price from periodic poll
@@ -251,9 +253,24 @@ class ORBEngine:
 
         if not self.trade_taken and self.orh and self.orl:
             if current_price > self.orh:
-                self._enter_trade("CALL", current_price)
+                if self._breakout_pending_direction != "CALL":
+                    self._breakout_pending_direction = "CALL"
+                    self._breakout_first_seen = now_et
+                    logger.info("[ORBEngine] %s broke above ORH — waiting 3-min confirmation", self.ticker)
+                elif (now_et - self._breakout_first_seen).total_seconds() >= 180:
+                    self._enter_trade("CALL", current_price)
             elif current_price < self.orl:
-                self._enter_trade("PUT",  current_price)
+                if self._breakout_pending_direction != "PUT":
+                    self._breakout_pending_direction = "PUT"
+                    self._breakout_first_seen = now_et
+                    logger.info("[ORBEngine] %s broke below ORL — waiting 3-min confirmation", self.ticker)
+                elif (now_et - self._breakout_first_seen).total_seconds() >= 180:
+                    self._enter_trade("PUT", current_price)
+            else:
+                if self._breakout_pending_direction:
+                    logger.info("[ORBEngine] %s breakout reverted — resetting confirmation timer", self.ticker)
+                self._breakout_pending_direction = None
+                self._breakout_first_seen = None
 
     # ── Entry ──────────────────────────────────────────────────────────────────
 
