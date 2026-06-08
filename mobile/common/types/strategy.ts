@@ -57,6 +57,8 @@ export interface StrategyProfile {
   thresholds: ProfileThresholds;
 }
 
+export type OtmFibLevel = '1.0' | '1.618' | '2.618';
+
 export interface StrategyConfig {
   id: string;
   strategy_name: string;
@@ -69,6 +71,8 @@ export interface StrategyConfig {
   capital_limit: number | null;
   bypass_breakout_window: boolean;
   custom_thresholds: CustomThresholds | null;
+  budget_otm_mode: boolean;
+  otm_fib_level: OtmFibLevel;
   has_position?: boolean;
 }
 

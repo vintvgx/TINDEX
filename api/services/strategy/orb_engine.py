@@ -38,6 +38,8 @@ STRATEGY_DEFAULTS = {
     "capital_limit":           None,
     "bypass_breakout_window":  False,
     "custom_thresholds":       None,
+    "budget_otm_mode":         False,
+    "otm_fib_level":           "1.0",
     "id":                      None,
 }
 
@@ -67,6 +69,8 @@ class ORBEngine:
         self.strategy_name           = self.config.get("strategy_name", "")
         self.capital_limit           = self.config.get("capital_limit")
         self.bypass_breakout_window  = self.config.get("bypass_breakout_window", False)
+        self.budget_otm_mode         = self.config.get("budget_otm_mode", False)
+        self.otm_fib_level           = self.config.get("otm_fib_level", "1.0")
         custom_thresholds            = self.config.get("custom_thresholds")
         self.stream_manager          = getattr(self, "_stream_manager_ref", None)
 
@@ -302,6 +306,7 @@ class ORBEngine:
             return
 
         qty = self.profile["qty_contracts"]
+        effective_profile = self.profile  # may be replaced by budget OTM override
 
         # Capital guard: reduce qty if buying power is insufficient, skip if unaffordable
         ask = contract["ask"]
@@ -312,19 +317,60 @@ class ORBEngine:
             if required > buying_power:
                 affordable = int(buying_power / (ask * 100))
                 if affordable < 1:
-                    logger.warning(
-                        "[ORBEngine] Insufficient capital — need $%.0f, have $%.0f",
-                        required, buying_power,
+                    if self.budget_otm_mode:
+                        # Retry with a cheaper OTM contract anchored to a fib extension
+                        import copy
+                        budget_max_ask = buying_power / 100  # max premium for 1 contract
+                        logger.info(
+                            "[ORBEngine] Budget OTM retry — fib=%s max_ask=%.2f",
+                            self.otm_fib_level, budget_max_ask,
+                        )
+                        contract = select_contract(
+                            ticker=self.ticker,
+                            direction=direction,
+                            trigger_price=trigger_price,
+                            orh=self.orh,
+                            orl=self.orl,
+                            fib_levels=self.fib_levels,
+                            data_client=self.option_client,
+                            profile=self.profile,
+                            vwap=self.session_vwap,
+                            budget_mode=True,
+                            budget_max_ask=budget_max_ask,
+                            budget_fib_level=self.otm_fib_level,
+                        )
+                        if not contract:
+                            logger.warning("[ORBEngine] Budget OTM: no affordable contract — skipping")
+                            self.notifier.notify_insufficient_capital(
+                                self.ticker, required, buying_power
+                            )
+                            return
+                        ask = contract["ask"]
+                        qty = max(1, int(buying_power / (ask * 100)))
+                        # Tighter hard stop for deeper OTM — faster premium decay
+                        _OTM_STOP = {"1.0": 0.45, "1.618": 0.55, "2.618": 0.65}
+                        effective_profile = copy.copy(self.profile)
+                        effective_profile["max_loss_pct"] = _OTM_STOP.get(self.otm_fib_level, 0.45)
+                        logger.info(
+                            "[ORBEngine] Budget OTM — %s ask=%.2f qty=%d stop=%.0f%%",
+                            contract["symbol"], ask, qty,
+                            effective_profile["max_loss_pct"] * 100,
+                        )
+                    else:
+                        logger.warning(
+                            "[ORBEngine] Insufficient capital — need $%.0f, have $%.0f",
+                            required, buying_power,
+                        )
+                        self.notifier.notify_insufficient_capital(
+                            self.ticker, required, buying_power
+                        )
+                        return
+                else:
+                    logger.info(
+                        "[ORBEngine] Reducing qty %d→%d (buying_power=$%.0f, cost/contract=$%.0f)",
+                        qty, affordable, buying_power, ask * 100,
                     )
-                    self.notifier.notify_insufficient_capital(
-                        self.ticker, required, buying_power
-                    )
-                    return
-                logger.info(
-                    "[ORBEngine] Reducing qty %d→%d (buying_power=$%.0f, cost/contract=$%.0f)",
-                    qty, affordable, buying_power, ask * 100,
-                )
-                qty = affordable
+                    qty = affordable
 
         # Verify real-time stream BEFORE placing the order.
         # If the symbol can't be streamed we refuse to enter — a trade without
@@ -360,7 +406,7 @@ class ORBEngine:
                 fib_levels=self.fib_levels,
                 direction=direction,
                 eod_close_time=eod_time,
-                profile=self.profile,
+                profile=effective_profile,
             )
 
             self.active_trade_id = self.logger.log_entry(

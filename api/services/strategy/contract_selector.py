@@ -2,18 +2,27 @@
 0DTE contract selection.
 
 Filter pipeline (hard — fail → discard):
-  1. Strike offset inside profile's [offset_min, offset_max] window
-  2. Open interest ≥ oi_min  (profile override → ticker default → global fallback)
+  1. Strike: offset inside profile's [offset_min, offset_max] window
+             (budget mode: within _BUDGET_STRIKE_TOLERANCE of the fib extension anchor)
+  2. Open interest ≥ oi_min  (profile override → ticker default → global fallback;
+             budget mode uses a lower floor)
   3. Greeks present — contracts without delta are rejected on 0DTE
   4. Delta inside profile's [delta_min, delta_max] range
+             (budget mode: overridden by _BUDGET_DELTA_RANGES[fib_level])
   5. Ask > 0
   6. Bid/ask spread % ≤ max_spread_pct (profile override → default 0.25)
+  6b. Budget mode only: ask ≤ budget_max_ask
 
 Scoring (lower = better — determines which survivor is selected):
-  • Delta distance from profile midpoint  (weight 1.0)
-  • Offset distance from profile midpoint (weight 0.5)
-  • Spread %                              (weight 0.3)
-  • VWAP misalignment penalty            (weight 0.05 when price/direction disagree)
+  Standard mode:
+    • Delta distance from profile midpoint  (weight 1.0)
+    • Offset distance from profile midpoint (weight 0.5)
+    • Spread %                              (weight 0.3)
+    • VWAP misalignment penalty            (weight 0.05 when price/direction disagree)
+  Budget mode:
+    • Distance from fib anchor strike      (weight 1.0)
+    • Ask price fraction of budget cap     (weight 0.5)
+    • Spread %                              (weight 0.3)
 
 VWAP signal (soft — not a hard block):
   CALL favoured when trigger_price > session VWAP  (price above average, buyers in control)
@@ -28,8 +37,10 @@ Note on trigger_price vs breakout_level:
   anchor clean and reproducible.
 
 Note on fib_levels:
-  Passed in for future use — e.g. favouring a strike that sits near the 1.0
-  extension (natural TP1 target).  Not yet used in scoring.
+  In standard mode, passed in for future use.
+  In budget mode, the fib extension matching budget_fib_level is used as the
+  strike anchor — targeting a strike that becomes near-ATM exactly when the
+  underlying reaches the TP1 / TP2 / extension zone.
 """
 
 import logging
@@ -45,6 +56,15 @@ _DEFAULT_OI_MIN = 75
 # Default max spread fraction (ask - bid) / ask when profile omits "max_spread_pct"
 _DEFAULT_MAX_SPREAD_PCT = 0.25
 
+# Budget OTM mode: delta ranges per fib level (lower delta = further OTM)
+_BUDGET_DELTA_RANGES = {
+    "1.0":   (0.14, 0.26),
+    "1.618": (0.08, 0.17),
+    "2.618": (0.03, 0.09),
+}
+_BUDGET_OI_MIN           = 25    # lower liquidity floor acceptable for cheap OTM
+_BUDGET_STRIKE_TOLERANCE = 0.75  # |strike - fib_anchor| ≤ this to pass filter
+
 
 def select_contract(
     ticker: str,
@@ -56,6 +76,9 @@ def select_contract(
     data_client,
     profile: dict,
     vwap: Optional[float] = None,
+    budget_mode: bool = False,
+    budget_max_ask: Optional[float] = None,
+    budget_fib_level: str = "1.0",
 ) -> dict | None:
     today          = date.today()
     option_type    = "call" if direction == "CALL" else "put"
@@ -65,8 +88,22 @@ def select_contract(
     offset_max   = profile["strike_offset_max"]
     delta_min    = profile["target_delta_min"]
     delta_max    = profile["target_delta_max"]
-    oi_min       = profile.get("oi_min",          _TICKER_OI_MIN.get(ticker.upper(), _DEFAULT_OI_MIN))
-    max_spread   = profile.get("max_spread_pct",  _DEFAULT_MAX_SPREAD_PCT)
+    oi_min       = profile.get("oi_min",         _TICKER_OI_MIN.get(ticker.upper(), _DEFAULT_OI_MIN))
+    max_spread   = profile.get("max_spread_pct", _DEFAULT_MAX_SPREAD_PCT)
+
+    # ── Budget mode: override thresholds with fib-anchored OTM parameters ─────
+    if budget_mode:
+        fib_dir_key         = f"up_{budget_fib_level}" if direction == "CALL" else f"dn_{budget_fib_level}"
+        fib_anchor          = fib_levels.get(fib_dir_key, breakout_level)
+        budget_delta_range  = _BUDGET_DELTA_RANGES.get(budget_fib_level, (0.08, 0.22))
+        effective_delta_min = budget_delta_range[0]
+        effective_delta_max = budget_delta_range[1]
+        effective_oi_min    = _BUDGET_OI_MIN
+    else:
+        fib_anchor          = None
+        effective_delta_min = delta_min
+        effective_delta_max = delta_max
+        effective_oi_min    = oi_min
 
     # ── VWAP soft confirmation ─────────────────────────────────────────────────
     # Logs misalignment; applies a small scoring penalty — does NOT block entry.
@@ -98,12 +135,16 @@ def select_contract(
         strike = contract.strike_price
         offset = abs(strike - breakout_level)
 
-        # 1. Strike offset window
-        if offset < offset_min or offset > offset_max:
-            continue
+        # 1. Strike filter: fib proximity in budget mode, offset window otherwise
+        if budget_mode:
+            if fib_anchor is not None and abs(strike - fib_anchor) > _BUDGET_STRIKE_TOLERANCE:
+                continue
+        else:
+            if offset < offset_min or offset > offset_max:
+                continue
 
         # 2. Open interest liquidity floor
-        if (contract.open_interest or 0) < oi_min:
+        if (contract.open_interest or 0) < effective_oi_min:
             continue
 
         # 3. Greeks required — no-delta contracts are unreliable on 0DTE
@@ -116,8 +157,8 @@ def select_contract(
             continue
         delta = abs(raw_delta)
 
-        # 4. Delta range
-        if not (delta_min <= delta <= delta_max):
+        # 4. Delta range (effective range accounts for budget mode override)
+        if not (effective_delta_min <= delta <= effective_delta_max):
             continue
 
         # 5. Valid ask
@@ -139,6 +180,10 @@ def select_contract(
             )
             continue
 
+        # 6b. Budget mode: reject contracts above the per-contract price cap
+        if budget_mode and budget_max_ask is not None and ask_f > budget_max_ask:
+            continue
+
         candidates.append({
             "symbol":     symbol,
             "strike":     strike,
@@ -152,34 +197,52 @@ def select_contract(
         })
 
     if not candidates:
-        logger.warning(
-            "[ContractSelector] No valid contracts for %s %s "
-            "(offset %.2f–%.2f, delta %.2f–%.2f, oi≥%d, spread≤%.0f%%)",
-            ticker, direction,
-            offset_min, offset_max, delta_min, delta_max,
-            oi_min, max_spread * 100,
-        )
+        if budget_mode:
+            logger.warning(
+                "[ContractSelector] No budget OTM contracts for %s %s "
+                "(fib=%s anchor=%.2f delta %.2f–%.2f max_ask=%s oi≥%d)",
+                ticker, direction, budget_fib_level,
+                fib_anchor or 0, effective_delta_min, effective_delta_max,
+                f"${budget_max_ask:.2f}" if budget_max_ask else "—", effective_oi_min,
+            )
+        else:
+            logger.warning(
+                "[ContractSelector] No valid contracts for %s %s "
+                "(offset %.2f–%.2f, delta %.2f–%.2f, oi≥%d, spread≤%.0f%%)",
+                ticker, direction,
+                offset_min, offset_max, delta_min, delta_max,
+                oi_min, max_spread * 100,
+            )
         return None
 
-    # ── Profile-targeted scorer ────────────────────────────────────────────────
-    # Midpoints derived from profile bounds so each profile scores toward its
-    # own sweet spot: Bull Dog → lower delta / further OTM, Wolf → near ATM.
-    target_delta  = (delta_min + delta_max) / 2
-    target_offset = (offset_min + offset_max) / 2
-    vwap_penalty  = 0.05 if vwap_aligned is False else 0.0
+    # ── Scorer ─────────────────────────────────────────────────────────────────
+    if budget_mode and fib_anchor is not None:
+        # Budget mode: prefer strike nearest the fib anchor, then cheapest
+        budget_cap = budget_max_ask or 1.0
 
-    def _score(c: dict) -> float:
-        d_score = abs(c["delta"]      - target_delta)
-        o_score = abs(c["offset"]     - target_offset)
-        s_score = c["spread_pct"]
-        return d_score + o_score * 0.5 + s_score * 0.3 + vwap_penalty
+        def _score(c: dict) -> float:
+            fib_dist  = abs(c["strike"] - fib_anchor)
+            ask_score = c["ask"] / budget_cap
+            return fib_dist + ask_score * 0.5 + c["spread_pct"] * 0.3
+
+    else:
+        # Standard mode: profile-targeted — each profile scores toward its sweet spot
+        target_delta  = (delta_min + delta_max) / 2
+        target_offset = (offset_min + offset_max) / 2
+        vwap_penalty  = 0.05 if vwap_aligned is False else 0.0
+
+        def _score(c: dict) -> float:
+            d_score = abs(c["delta"]      - target_delta)
+            o_score = abs(c["offset"]     - target_offset)
+            s_score = c["spread_pct"]
+            return d_score + o_score * 0.5 + s_score * 0.3 + vwap_penalty
 
     candidates.sort(key=_score)
     best = candidates[0]
     logger.info(
         "[ContractSelector] Selected %s strike=%.2f delta=%.3f ask=%.2f "
-        "spread=%.0f%% oi=%d vwap_aligned=%s",
+        "spread=%.0f%% oi=%d vwap_aligned=%s budget=%s",
         best["symbol"], best["strike"], best["delta"],
-        best["ask"], best["spread_pct"] * 100, best["oi"], vwap_aligned,
+        best["ask"], best["spread_pct"] * 100, best["oi"], vwap_aligned, budget_mode,
     )
     return best

@@ -19,7 +19,7 @@ import { ProfileCard } from '@/common/components/strategy/ProfileCard';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/components/strategy/CustomThresholdsEditor';
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
-import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds } from '@/common/types/strategy';
+import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel } from '@/common/types/strategy';
 
 const TICKERS     = ['SPY', 'QQQ', 'IWM'] as const;
 const ORB_MINUTES = [5, 10, 15] as const;
@@ -62,6 +62,8 @@ type FormState = {
   capital_limit:          string;
   bypass_breakout_window: boolean;
   custom_thresholds:      CustomThresholds;
+  budget_otm_mode:        boolean;
+  otm_fib_level:          OtmFibLevel;
 };
 
 const DEFAULT_FORM: FormState = {
@@ -74,6 +76,8 @@ const DEFAULT_FORM: FormState = {
   capital_limit:          '',
   bypass_breakout_window: false,
   custom_thresholds:      DEFAULT_CUSTOM_THRESHOLDS,
+  budget_otm_mode:        false,
+  otm_fib_level:          '1.0',
 };
 
 function configToForm(cfg: StrategyConfig): FormState {
@@ -87,6 +91,8 @@ function configToForm(cfg: StrategyConfig): FormState {
     capital_limit:          cfg.capital_limit != null ? String(cfg.capital_limit) : '',
     bypass_breakout_window: cfg.bypass_breakout_window ?? false,
     custom_thresholds:      cfg.custom_thresholds ?? DEFAULT_CUSTOM_THRESHOLDS,
+    budget_otm_mode:        cfg.budget_otm_mode ?? false,
+    otm_fib_level:          cfg.otm_fib_level ?? '1.0',
   };
 }
 
@@ -180,6 +186,8 @@ export default function StrategyScreen() {
       capital_limit:          capitalNum,
       bypass_breakout_window: form.bypass_breakout_window,
       custom_thresholds:      form.profile === 'CUSTOM' ? form.custom_thresholds : null,
+      budget_otm_mode:        form.budget_otm_mode,
+      otm_fib_level:          form.otm_fib_level,
       ...modeToConfig(form.mode),
     };
 
@@ -676,6 +684,70 @@ function StrategyFormModal({
             Leave blank to use your full available buying power for this strategy.
           </Text>
 
+          {/* Budget OTM Mode */}
+          <SectionHeader title="Budget OTM Mode" colors={colors} />
+          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[
+              styles.configRow,
+              form.budget_otm_mode
+                ? { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }
+                : { borderBottomWidth: 0 },
+            ]}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.configLabel, { color: colors.text }]}>Enable Budget Mode</Text>
+                <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>
+                  Target a cheaper OTM contract when capital is too low for the standard strike
+                </Text>
+              </View>
+              <Switch
+                value={form.budget_otm_mode}
+                onValueChange={v => onPatch('budget_otm_mode', v)}
+                thumbColor={form.budget_otm_mode ? '#4A9EFF' : '#ccc'}
+                trackColor={{ true: '#4A9EFF55', false: colors.border }}
+              />
+            </View>
+
+            {form.budget_otm_mode && (
+              <View style={styles.budgetBody}>
+                <Text style={[styles.hint, { color: colors.tabBarInactive, marginBottom: 12, marginTop: 0 }]}>
+                  Strike is anchored to a Fibonacci extension of the ORB range. The option approaches ATM when the underlying reaches that level.
+                </Text>
+
+                {/* Fib level chips */}
+                <View style={styles.fibChipRow}>
+                  {(['1.0', '1.618', '2.618'] as OtmFibLevel[]).map(level => {
+                    const selected = form.otm_fib_level === level;
+                    return (
+                      <TouchableOpacity
+                        key={level}
+                        onPress={() => onPatch('otm_fib_level', level)}
+                        activeOpacity={0.7}
+                        style={[
+                          styles.fibChip,
+                          selected
+                            ? { borderColor: '#4A9EFF', backgroundColor: '#4A9EFF22' }
+                            : { borderColor: colors.border, backgroundColor: colors.background },
+                        ]}
+                      >
+                        <Text style={[styles.fibChipLabel, { color: selected ? '#4A9EFF' : colors.text }]}>
+                          {level}×
+                        </Text>
+                        <Text style={[styles.fibChipSub, { color: selected ? '#4A9EFF' : colors.tabBarInactive }]}>
+                          Fib
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                <OtmRiskGuide level={form.otm_fib_level} colors={colors} />
+              </View>
+            )}
+          </View>
+          <Text style={[styles.hint, { color: colors.tabBarInactive }]}>
+            Only activates if your capital limit cannot afford 1 standard contract.
+          </Text>
+
           {/* Breakout window */}
           <SectionHeader title="Breakout Window" colors={colors} />
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -747,6 +819,88 @@ function StrategyFormModal({
     </Modal>
   );
 }
+
+// ── OTM Risk Guide ─────────────────────────────────────────────────────────────
+
+const OTM_GUIDE: Record<OtmFibLevel, {
+  risk: string; riskColor: string; delta: string; premium: string;
+  stop: string; atmAt: string; typicalWin: string; bigMove: string; desc: string;
+}> = {
+  '1.0': {
+    risk:       'Medium',
+    riskColor:  '#FF9F0A',
+    delta:      '0.14 – 0.26',
+    premium:    '$0.20 – $0.60',
+    stop:       '45%',
+    atmAt:      'TP1 zone  (1× ORB range)',
+    typicalWin: '+80 – 120%',
+    bigMove:    '+250%+',
+    desc:       'Nearest budget strike. Reacts meaningfully to a standard TP1-sized move.',
+  },
+  '1.618': {
+    risk:       'High',
+    riskColor:  '#FF6B35',
+    delta:      '0.08 – 0.17',
+    premium:    '$0.08 – $0.25',
+    stop:       '55%',
+    atmAt:      'TP2 zone  (1.618× ORB range)',
+    typicalWin: '+120 – 200%',
+    bigMove:    '+500%+',
+    desc:       'Golden ratio extension. Cheap premium with a large % gain if TP2 is hit.',
+  },
+  '2.618': {
+    risk:       'Very High',
+    riskColor:  '#FF453A',
+    delta:      '0.03 – 0.09',
+    premium:    '$0.03 – $0.10',
+    stop:       '65%',
+    atmAt:      'Beyond TP2  (2.618× ORB range)',
+    typicalWin: '+200 – 400%',
+    bigMove:    '+1000%+',
+    desc:       'Very deep OTM. Near-zero delta; requires a strong breakout to pay off.',
+  },
+};
+
+function OtmRiskGuide({ level, colors }: { level: OtmFibLevel; colors: any }) {
+  const g = OTM_GUIDE[level];
+  const rows: [string, string][] = [
+    ['Delta range',     g.delta],
+    ['Est. premium',    g.premium],
+    ['Hard stop',       g.stop],
+    ['Near ATM at',     g.atmAt],
+    ['Typical winner',  g.typicalWin],
+    ['Big move',        g.bigMove],
+  ];
+  return (
+    <View style={[otmGuideStyles.card, { borderColor: g.riskColor + '66' }]}>
+      <View style={otmGuideStyles.header}>
+        <Text style={[otmGuideStyles.title, { color: colors.text }]}>{level}× Fib — Risk Guide</Text>
+        <View style={[otmGuideStyles.badge, { backgroundColor: g.riskColor + '22' }]}>
+          <Text style={[otmGuideStyles.badgeText, { color: g.riskColor }]}>{g.risk}</Text>
+        </View>
+      </View>
+      <Text style={[otmGuideStyles.desc, { color: colors.tabBarInactive }]}>{g.desc}</Text>
+      {rows.map(([label, value]) => (
+        <View key={label} style={otmGuideStyles.row}>
+          <Text style={[otmGuideStyles.rowLabel, { color: colors.tabBarInactive }]}>{label}</Text>
+          <Text style={[otmGuideStyles.rowValue, { color: colors.text }]}>{value}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+const otmGuideStyles = StyleSheet.create({
+  card:      { borderRadius: 10, borderWidth: 1, padding: 12, marginTop: 8 },
+  header:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  title:     { fontSize: 13, fontWeight: '700' },
+  badge:     { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  badgeText: { fontSize: 11, fontWeight: '700' },
+  desc:      { fontSize: 12, lineHeight: 16, marginBottom: 10 },
+  row:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 3 },
+  rowLabel:  { fontSize: 12 },
+  rowValue:  { fontSize: 12, fontWeight: '600' },
+});
 
 // ── Small helpers ──────────────────────────────────────────────────────────────
 
@@ -847,6 +1001,13 @@ const styles = StyleSheet.create({
   customProfileName:  { fontSize: 16, fontWeight: '700', marginBottom: 2 },
   customProfileSub:   { fontSize: 12, fontWeight: '600', marginBottom: 8 },
   customProfileDesc:  { fontSize: 12, lineHeight: 17 },
+
+  // ── Budget OTM ──
+  budgetBody:   { paddingHorizontal: 14, paddingBottom: 14, paddingTop: 8 },
+  fibChipRow:   { flexDirection: 'row', gap: 8, marginBottom: 4 },
+  fibChip:      { flex: 1, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10 },
+  fibChipLabel: { fontSize: 16, fontWeight: '700' },
+  fibChipSub:   { fontSize: 10, fontWeight: '500', marginTop: 1 },
 
   // ── Simulation button ──
   simBtn:      { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 12 },
