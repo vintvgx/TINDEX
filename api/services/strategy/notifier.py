@@ -33,6 +33,14 @@ class StrategyNotifier:
         self._sb = supabase_client
 
     # ── Public event methods ────────────────────────────────────────────────────
+    def notify_flow_blocked(self, ticker: str, direction: str):
+        """Entry blocked by Unusual Whales flow confirmation."""
+        self._dispatch(
+            title=f"{ticker} — Flow mismatch",
+            body=f"Breakout detected ({direction}) but options flow disagrees. Entry skipped.",
+            data={"screen": "tradelog"},
+        )
+
     def notify_start(self, provider: str):
         """ORB service and strategy engine confirmed running."""
         self._dispatch(

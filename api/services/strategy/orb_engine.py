@@ -285,7 +285,9 @@ class ORBEngine:
         """
         uw_key = os.getenv("UNUSUAL_WHALES_KEY")
         if not self.sentiment.confirm_with_flow(self.ticker, direction, uw_key):
-            logger.info("[ORBEngine] Flow confirmation failed for %s — skipping entry", direction)
+            logger.info("[ORBEngine] Flow confirmation failed for %s %s — skipping entry",
+                        self.ticker, direction)
+            self.notifier.notify_flow_blocked(self.ticker, direction)
             return
 
         # VWAP soft confirmation (log only — does not block entry)
@@ -665,19 +667,24 @@ class ORBEngine:
         NOTE: Called by strategy_routes.py GET /strategy/session on demand.
         """
         em = self.exit_manager
+        bfs = self._breakout_first_seen
         return {
-            "date":          str(self.session_date),
-            "ticker":        self.ticker,
-            "profile":       self.profile_key,
-            "trade_days":    list(self.trade_days),
-            "paper_mode":    self.paper,
-            "orh":           self.orh,
-            "orl":           self.orl,
-            "orb_range":     self.orb_range,
-            "fib_levels":    self.fib_levels,
-            "trade_taken":   self.trade_taken,
-            "skip_reason":   self.skip_reason,
-            "position":      self.position,
-            "contract":      self.contract_symbol,
-            "exit_state":    em.to_dict() if em else None,
+            "date":                       str(self.session_date),
+            "ticker":                     self.ticker,
+            "profile":                    self.profile_key,
+            "trade_days":                 list(self.trade_days),
+            "paper_mode":                 self.paper,
+            "orh":                        self.orh,
+            "orl":                        self.orl,
+            "orb_range":                  self.orb_range,
+            "fib_levels":                 self.fib_levels,
+            "trade_taken":                self.trade_taken,
+            "session_skipped":            self.session_skipped,
+            "skip_reason":                self.skip_reason,
+            "position":                   self.position,
+            "contract":                   self.contract_symbol,
+            "exit_state":                 em.to_dict() if em else None,
+            "breakout_pending_direction": self._breakout_pending_direction,
+            "breakout_first_seen":        bfs.isoformat() if bfs else None,
+            "breakout_seconds_elapsed":   round((datetime.now(ET) - bfs).total_seconds()) if bfs else None,
         }
