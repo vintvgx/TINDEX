@@ -18,6 +18,7 @@ import { TradeDaysSelector } from '@/common/components/strategy/TradeDaysSelecto
 import { ProfileCard } from '@/common/components/strategy/ProfileCard';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/components/strategy/CustomThresholdsEditor';
+import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds } from '@/common/types/strategy';
 
 const TICKERS     = ['SPY', 'QQQ', 'IWM'] as const;
@@ -103,10 +104,11 @@ export default function StrategyScreen() {
   const { mutate: updateConfig } = useUpdateStrategyConfig();
   const { mutate: deleteConfig } = useDeleteStrategyConfig();
 
-  const [modalVisible, setModalVisible]  = useState(false);
-  const [editingConfig, setEditingConfig] = useState<StrategyConfig | null>(null);
-  const [form, setForm]                  = useState<FormState>(DEFAULT_FORM);
-  const [saving, setSaving]              = useState(false);
+  const [modalVisible, setModalVisible]       = useState(false);
+  const [simulationVisible, setSimulationVisible] = useState(false);
+  const [editingConfig, setEditingConfig]     = useState<StrategyConfig | null>(null);
+  const [form, setForm]                       = useState<FormState>(DEFAULT_FORM);
+  const [saving, setSaving]                   = useState(false);
 
   const openCreate = () => {
     setEditingConfig(null);
@@ -270,6 +272,29 @@ export default function StrategyScreen() {
           </View>
         )}
 
+        {/* Run Simulation */}
+        {configs && configs.length > 0 && (
+          <>
+            <SectionHeader title="Testing" colors={colors} />
+            <TouchableOpacity
+              onPress={() => setSimulationVisible(true)}
+              activeOpacity={0.8}
+              style={[styles.simBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+            >
+              <View style={[styles.simIconWrap, { backgroundColor: '#4A9EFF22' }]}>
+                <Ionicons name="flask-outline" size={20} color="#4A9EFF" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.simBtnTitle, { color: colors.text }]}>Run Simulation</Text>
+                <Text style={[styles.simBtnSub, { color: colors.tabBarInactive }]}>
+                  Test notifications & live price updates without real orders
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={colors.tabBarInactive} />
+            </TouchableOpacity>
+          </>
+        )}
+
         <View style={{ height: 40 }} />
       </ScrollView>
 
@@ -285,6 +310,12 @@ export default function StrategyScreen() {
         onPatch={patchForm}
         onModeSelect={handleModeSelect}
         onSave={handleSave}
+      />
+
+      <SimulationModal
+        visible={simulationVisible}
+        onClose={() => setSimulationVisible(false)}
+        strategyId={configs?.[0]?.id}
       />
     </SafeAreaView>
   );
@@ -816,6 +847,12 @@ const styles = StyleSheet.create({
   customProfileName:  { fontSize: 16, fontWeight: '700', marginBottom: 2 },
   customProfileSub:   { fontSize: 12, fontWeight: '600', marginBottom: 8 },
   customProfileDesc:  { fontSize: 12, lineHeight: 17 },
+
+  // ── Simulation button ──
+  simBtn:      { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 12 },
+  simIconWrap: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  simBtnTitle: { fontSize: 15, fontWeight: '600', marginBottom: 2 },
+  simBtnSub:   { fontSize: 12 },
 
   // ── Modal ──
   modalContainer: { flex: 1 },

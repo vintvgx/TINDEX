@@ -284,6 +284,49 @@ def get_stats_by_profile():
     return jsonify(logger_svc.get_stats_by_profile())
 
 
+# ── Simulation ─────────────────────────────────────────────────────────────────
+
+@strategy_bp.route("/simulate", methods=["POST"])
+def run_simulation():
+    """
+    POST { "scenario": "profit"|"loss", "strategy_id": "<uuid>" (optional) }
+
+    Starts a 10-tick synthetic session (6 s/tick, ~60 s total) that fires
+    real Expo push notifications and WebSocket fan-outs to any client
+    connected on /ws/strategy/<id>/live.  No Alpaca orders, no Supabase writes.
+    """
+    from services.strategy.simulation import SimulationRunner
+
+    data        = request.get_json() or {}
+    scenario    = data.get("scenario", "profit")
+    strategy_id = data.get("strategy_id")
+
+    if scenario not in ("profit", "loss"):
+        return jsonify({"error": "scenario must be 'profit' or 'loss'"}), 400
+
+    engine = _engines.get(strategy_id) if strategy_id else _first_engine()
+    if not engine:
+        return jsonify({
+            "error": "No strategy engine running — add a strategy first",
+        }), 404
+
+    active_sid = strategy_id or next(iter(_engines))
+    runner = SimulationRunner(engine)
+    if not runner.start(scenario):
+        return jsonify({"error": "A simulation is already running"}), 409
+
+    return jsonify({
+        "status":           "started",
+        "scenario":         scenario,
+        "strategy_id":      active_sid,
+        "duration_seconds": 60,
+        "ticks":            10,
+        "ticker":           "IWM",
+        "entry_premium":    1.50,
+        "profile":          "THUNDER_CAT",
+    }), 202
+
+
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
