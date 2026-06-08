@@ -960,6 +960,30 @@ def get_yahoo_most_active():
             "error": f"Failed to fetch most active stocks: {str(e)}"
         }), 500
 
+@app.route("/yahoo/losers", methods=["GET"])
+def get_yahoo_losers():
+    """Get biggest losing stocks from Yahoo Finance."""
+    try:
+        limit = request.args.get('limit', default=25, type=int)
+        use_cache = request.args.get('use_cache', default='true').lower() == 'true'
+        if limit < 1 or limit > 100:
+            return jsonify({"success": False, "error": "Limit must be between 1 and 100"}), 400
+        cache_key = f"yahoo_losers_{limit}"
+        if use_cache:
+            cached_data = trending_cache.get(cache_key)
+            if cached_data:
+                return jsonify({**cached_data, "from_cache": True})
+        service = get_yahoo_watchlist_service()
+        result = service.get_losers(limit=limit)
+        if not result.get("success"):
+            return jsonify(result), 500
+        trending_cache.set(cache_key, result, TRENDING_STOCKS_CACHE_TTL)
+        return jsonify({**result, "from_cache": False})
+    except Exception as e:
+        logger.error("Failed to fetch Yahoo losers: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": f"Failed to fetch losers: {str(e)}"}), 500
+
+
 @app.route("/watchlist/all", methods=["GET"])
 def get_all_yahoo_watchlists():
     """
@@ -2173,34 +2197,55 @@ def ws_prices(ws):
         }
     """
     import queue as _queue
-    client_queue = price_stream.add_client()
+    import threading as _threading
+
+    client_queue   = price_stream.add_client()
+    tickers_lock   = _threading.Lock()
     client_tickers: list[str] = []
 
-    try:
-        # First message must contain the ticker subscription list
-        raw = ws.receive(timeout=10)
-        if raw:
-            msg = json.loads(raw)
-            client_tickers = [t.upper() for t in msg.get("tickers", [])]
-            for ticker in client_tickers:
-                price_stream.subscribe(ticker)
-            logger.info("[WS] client subscribed to %d tickers", len(client_tickers))
+    def _apply_tickers(new_tickers: list[str]):
+        nonlocal client_tickers
+        with tickers_lock:
+            for t in client_tickers:
+                price_stream.unsubscribe(t)
+            client_tickers = [t.upper() for t in new_tickers]
+            for t in client_tickers:
+                price_stream.subscribe(t)
+        logger.info("[WS] subscribed to %d tickers: %s", len(client_tickers), client_tickers)
 
+    def _reader():
+        """Read incoming messages on a background thread so the send loop is never blocked."""
+        while True:
+            try:
+                raw = ws.receive(timeout=60)
+                if raw is None:
+                    break
+                msg = json.loads(raw)
+                if "tickers" in msg:
+                    _apply_tickers(msg["tickers"])
+            except Exception:
+                break
+
+    reader_thread = _threading.Thread(target=_reader, daemon=True, name="ws-price-reader")
+    reader_thread.start()
+
+    try:
         # Stream until the client disconnects
         while True:
             try:
                 payload = client_queue.get(timeout=30)
                 ws.send(payload)
             except _queue.Empty:
-                # Send a keepalive ping so the connection stays open
+                # Keepalive ping so the connection stays open
                 ws.send(json.dumps({"type": "ping"}))
 
     except Exception as exc:
         logger.debug("[WS] client disconnected: %s", exc)
     finally:
         price_stream.remove_client(client_queue)
-        for ticker in client_tickers:
-            price_stream.unsubscribe(ticker)
+        with tickers_lock:
+            for ticker in client_tickers:
+                price_stream.unsubscribe(ticker)
         logger.info("[WS] client cleanup done")
 
 

@@ -601,7 +601,7 @@ const OptionsScreen = () => {
       }}>
         <View>
           <Text style={{ color: colors.text, fontSize: 36, fontWeight: '800', letterSpacing: -0.5 }}>
-            Options
+            Contracts
           </Text>
           <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '500', marginTop: 2 }}>
             {activeTicker && currentPrice > 0 && view === 'chain'

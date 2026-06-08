@@ -78,9 +78,11 @@ class OptionStreamManager:
         Remove a specific callback (or ALL callbacks) for a symbol.
         When no callbacks remain the server subscription is cancelled.
         """
+        should_unsub = False
         with self._lock:
             if callback is None:
                 self._callbacks.pop(symbol, None)
+                should_unsub = True
             else:
                 cbs = self._callbacks.get(symbol, [])
                 try:

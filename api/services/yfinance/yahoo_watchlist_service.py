@@ -530,42 +530,122 @@ class YahooWatchlistService:
                 "error": str(e)
             }
 
-    def get_trending(self, limit: int = 25) -> Dict:
+    def get_trending(self, limit: int = 20) -> Dict:
         """
-        Get trending stocks from Yahoo Finance.
-        
-        Args:
-            limit: Maximum number of stocks to return (default: 25)
-            
-        Returns:
-            Dict with success status and list of trending stocks
+        Get trending stocks using Yahoo Finance JSON API (crumb-based auth).
+
+        Uses the same 3-step flow as the PowerShell reference script:
+          1. Hit finance.yahoo.com to seed session cookies
+          2. Fetch the crumb token from query2
+          3. Resolve trending symbols, then fetch full quote data
+        Falls back to HTML scraping if the API flow fails.
         """
         try:
-            url = f"{self.base_url}/markets/stocks/trending/"
-            soup = self._fetch_page(url)
-            
-            if not soup:
-                return {
-                    "success": False,
-                    "error": "Failed to fetch trending page"
-                }
-            
-            stocks = self._parse_stock_table(soup, limit)
-            
+            self._rate_limit()
+            init_resp = self.session.get(
+                f"{self.base_url}/",
+                headers=self._get_headers(),
+                timeout=15,
+            )
+            init_resp.raise_for_status()
+
+            self._rate_limit()
+            crumb_resp = self.session.get(
+                "https://query2.finance.yahoo.com/v1/test/getcrumb",
+                headers=self._get_headers(),
+                timeout=10,
+            )
+            crumb = crumb_resp.text.strip().strip('"')
+
+            if not crumb:
+                raise ValueError("Empty crumb returned")
+
+            self._rate_limit()
+            trending_resp = self.session.get(
+                f"https://query1.finance.yahoo.com/v1/finance/trending/US"
+                f"?lang=en-US&region=US&count={limit}&crumb={crumb}",
+                headers=self._get_headers(),
+                timeout=10,
+            )
+            trending_resp.raise_for_status()
+            results = trending_resp.json().get("finance", {}).get("result", [])
+            symbols = [q["symbol"] for q in (results[0].get("quotes", []) if results else []) if q.get("symbol")]
+
+            if not symbols:
+                raise ValueError("No trending symbols in API response")
+
+            self._rate_limit()
+            quote_resp = self.session.get(
+                f"https://query1.finance.yahoo.com/v7/finance/quote"
+                f"?symbols={','.join(symbols)}&lang=en-US&region=US&crumb={crumb}",
+                headers=self._get_headers(),
+                timeout=10,
+            )
+            quote_resp.raise_for_status()
+            raw_quotes = quote_resp.json().get("quoteResponse", {}).get("result", [])
+
+            stocks = []
+            for q in raw_quotes:
+                mc_raw = q.get("marketCap")
+                wk_chg_raw = q.get("fiftyTwoWeekChangePercent")
+                stocks.append({
+                    "ticker":        q.get("symbol", ""),
+                    "company":       q.get("shortName") or q.get("longName", ""),
+                    "price":         q.get("regularMarketPrice"),
+                    "change":        q.get("regularMarketChange"),
+                    "change_percent": q.get("regularMarketChangePercent"),
+                    "volume":        q.get("regularMarketVolume"),
+                    "avg_volume":    q.get("averageDailyVolume3Month"),
+                    "market_cap":    round(mc_raw / 1e9, 3) if mc_raw else None,
+                    "pe_ratio":      q.get("trailingPE"),
+                    "week_change":   round(wk_chg_raw * 100, 2) if wk_chg_raw else None,
+                    "week_range":    f"{q.get('fiftyTwoWeekLow', '')} - {q.get('fiftyTwoWeekHigh', '')}",
+                })
+
+            logger.info("[YahooWatchlist] Fetched %d trending stocks via JSON API", len(stocks))
             return {
-                "success": True,
+                "success":        True,
                 "watchlist_type": "trending",
-                "data": stocks,
-                "count": len(stocks),
-                "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)
+                "data":           stocks,
+                "count":          len(stocks),
+                "timestamp":      int(datetime.now(timezone.utc).timestamp() * 1000),
             }
-            
+
         except Exception as e:
-            logger.error(f"Error fetching trending stocks: {str(e)}")
+            logger.warning("[YahooWatchlist] JSON API trending failed (%s) — falling back to scraper", e)
+            try:
+                url = f"{self.base_url}/markets/stocks/trending/"
+                soup = self._fetch_page(url)
+                if not soup:
+                    return {"success": False, "error": "Failed to fetch trending page"}
+                stocks = self._parse_stock_table(soup, limit)
+                return {
+                    "success": True, "watchlist_type": "trending",
+                    "data": stocks, "count": len(stocks),
+                    "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+                }
+            except Exception as fallback_e:
+                logger.error("[YahooWatchlist] Trending fallback also failed: %s", fallback_e)
+                return {"success": False, "error": str(fallback_e)}
+
+    def get_losers(self, limit: int = 25) -> Dict:
+        """Get biggest losing stocks from Yahoo Finance."""
+        try:
+            url = f"{self.base_url}/markets/stocks/losers/"
+            soup = self._fetch_page(url)
+            if not soup:
+                return {"success": False, "error": "Failed to fetch losers page"}
+            stocks = self._parse_stock_table(soup, limit)
             return {
-                "success": False,
-                "error": str(e)
+                "success":        True,
+                "watchlist_type": "losers",
+                "data":           stocks,
+                "count":          len(stocks),
+                "timestamp":      int(datetime.now(timezone.utc).timestamp() * 1000),
             }
+        except Exception as e:
+            logger.error("Error fetching losers: %s", e)
+            return {"success": False, "error": str(e)}
 
     def get_most_active(self, limit: int = 25) -> Dict:
         """
@@ -664,8 +744,9 @@ class YahooWatchlistService:
         return {
             "success": True,
             "watchlists": {
-                "gainers": self.get_gainers(limit),
-                "trending": self.get_trending(limit),
+                "trending":   self.get_trending(limit),
+                "gainers":    self.get_gainers(limit),
+                "losers":     self.get_losers(limit),
                 "most_active": self.get_most_active(limit),
             },
             "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000)

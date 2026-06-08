@@ -13,6 +13,7 @@ import {
 import { ThemeProvider as AppThemeProvider } from "@/lib/ThemeContext";
 import { useAppColorScheme } from "@/lib/useColorScheme";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useFonts } from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
@@ -29,6 +30,11 @@ import "@/common/services/LogService";
 
 import LoadingScreen from "@/common/components/LoadingScreen";
 import { ToastProvider } from "@/common/components/ui/Toast";
+import { FONT_ASSETS } from "@/lib/typography";
+import { applyGlobalFont } from "@/lib/applyGlobalFont";
+
+// Install Space Grotesk as the app-wide default for every <Text>/<TextInput>.
+applyGlobalFont();
 
 // import { GluestackUIProvider } from "../components/ui/gluestack-ui-provider";
 // import LoadingScreen from "./components/LoadingScreen";
@@ -74,6 +80,7 @@ export default function RootLayout() {
 
   const [fontsLoaded] = useFonts({
     SpaceMono: require("../assets/fonts/SpaceMono-Regular.ttf"),
+    ...FONT_ASSETS,
   });
 
   useEffect(() => {
@@ -88,13 +95,15 @@ export default function RootLayout() {
 
   // Render the AuthProvider, once font is loaded
   return (
-    <QueryClientProvider client={queryClient}>
-      <AppThemeProvider>
-        <AuthProvider>
-          <AppContent />
-        </AuthProvider>
-      </AppThemeProvider>
-    </QueryClientProvider>
+    <SafeAreaProvider>
+      <QueryClientProvider client={queryClient}>
+        <AppThemeProvider>
+          <AuthProvider>
+            <AppContent />
+          </AuthProvider>
+        </AppThemeProvider>
+      </QueryClientProvider>
+    </SafeAreaProvider>
   );
 }
 

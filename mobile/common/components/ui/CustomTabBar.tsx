@@ -3,65 +3,25 @@ import { View, Text, TextInput, TouchableOpacity, Pressable, StyleSheet, Animate
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNotificationHistory } from '@/hooks/queries/notifications/useNotificationHistory';
-import { useServicesStatus } from '@/hooks/queries/services/useServicesStatus';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
 import { AgentModal } from '@/common/components/agent/AgentModal';
 import { useToast } from '@/common/components/ui/Toast';
-import { MenuModal, type MenuSection } from '@/common/components/ui/MenuModal';
 
-const VISIBLE_ROUTES = new Set(['feed', 'options', 'orb', 'notifications', 'profile']);
+const VISIBLE_ROUTE_ORDER = ['feed', 'orb', 'options'] as const;
 
 const ROUTE_TITLES: Record<string, string> = {
-  feed: 'Feed',
-  options: 'Options',
+  feed: 'Home',
   orb: 'ORB',
-  notifications: 'Alerts',
-  profile: 'More',  // WeBull-style: profile tab becomes "More" menu trigger
+  options: 'Contracts',
 };
 
 export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) => {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
-  const { unreadCount } = useNotificationHistory();
-  const { data: servicesStatus } = useServicesStatus();
-  const isORBRunning       = servicesStatus?.orb?.running ?? false;
-  const isContractsRunning = servicesStatus?.contracts?.running ?? false;
-  const servicesDotColor = (isORBRunning && isContractsRunning)
-    ? colors.success
-    : (isORBRunning || isContractsRunning)
-      ? colors.warning
-      : colors.error;
   const [searchOpen, setSearchOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-
-  const menuSections: MenuSection[] = [
-    {
-      title: 'Account',
-      items: [
-        { label: 'Profile & Settings', icon: 'person-outline', route: '/(app)/(tabs)/profile' },
-      ],
-    },
-    {
-      title: 'ORB Trading',
-      items: [
-        { label: 'Accounts', icon: 'person-add-outline', route: '/(app)/(tabs)/accounts'},
-        { label: 'Strategy Control', icon: 'settings-outline',   route: '/(app)/(tabs)/strategy' },
-        { label: 'Live Position',    icon: 'trending-up-outline', route: '/(app)/(tabs)/position' },
-        { label: 'Trade Log & Stats', icon: 'bar-chart-outline', route: '/(app)/(tabs)/tradelog' },
-      ],
-    },
-    {
-      title: 'Portfolio',
-      items: [
-        { label: 'Track Portfolio', icon: 'briefcase-outline',  route: '/(app)/(tabs)/track' },
-        { label: 'Watchlists',      icon: 'list-outline',       route: '/(app)/(tabs)/watchlists' },
-      ],
-    },
-  ];
   const { setOptionsTicker, optionsTicker } = useOptionsTicker();
   const toast = useToast();
   const [optionsInput, setOptionsInput] = useState('');
@@ -70,14 +30,15 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
   const isOnOptionsTab = currentRoute === 'options';
   const keyboardOffset = useRef(new Animated.Value(0)).current;
   const [keyboardVisible, setKeyboardVisible] = useState(false);
-  // Keep a ref so the keyboard listener always sees the latest value without re-subscribing
   const bottomPaddingRef = useRef(0);
 
-  const TAB_PILL_HEIGHT = 68; // matches styles.tabBar height
-  const CONTAINER_GAP = 8;   // matches styles.container gap
-  const SEARCH_BAR_MARGIN = 8; // gap between search bar bottom and keyboard top
+  const TAB_PILL_HEIGHT = 68;
+  const CONTAINER_GAP = 8;
+  const SEARCH_BAR_MARGIN = 8;
 
-  const visibleRoutes = state.routes.filter(r => VISIBLE_ROUTES.has(r.name));
+  const visibleRoutes = VISIBLE_ROUTE_ORDER
+    .map(name => state.routes.find(r => r.name === name))
+    .filter((route): route is (typeof state.routes)[number] => Boolean(route));
   const bottomPadding = Math.max(insets.bottom, 16);
 
   useEffect(() => {
@@ -90,9 +51,7 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
 
     const onShow = Keyboard.addListener(showEvent, e => {
       setKeyboardVisible(true);
-      // The search bar's bottom edge sits this far above the screen bottom naturally
       const searchBarBaseOffset = bottomPaddingRef.current + TAB_PILL_HEIGHT + CONTAINER_GAP;
-      // Only translate enough to clear the keyboard by SEARCH_BAR_MARGIN
       const toValue = -(e.endCoordinates.height - searchBarBaseOffset + SEARCH_BAR_MARGIN);
       Animated.spring(keyboardOffset, {
         toValue,
@@ -119,11 +78,6 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
 
   const handleTabPress = useCallback(
     (route: (typeof state.routes)[0], isFocused: boolean) => {
-      // Intercept profile tab to open the More menu instead of navigating
-      if (route.name === 'profile') {
-        setMenuOpen(true);
-        return;
-      }
       const event = navigation.emit({
         type: 'tabPress',
         target: route.key,
@@ -139,35 +93,11 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
   const getIcon = (routeName: string, color: string) => {
     switch (routeName) {
       case 'feed':
-        return <Ionicons name="newspaper-outline" size={20} color={color} />;
+        return <Ionicons name="home-outline" size={20} color={color} />;
       case 'options':
         return <Ionicons name="layers-outline" size={20} color={color} />;
       case 'orb':
         return <Ionicons name="pulse-outline" size={20} color={color} />;
-      case 'notifications':
-        return (
-          <View>
-            <Ionicons name="notifications-outline" size={20} color={color} />
-            {unreadCount > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
-              </View>
-            )}
-          </View>
-        );
-      case 'profile':
-        // "More" tab: hamburger menu icon with services status dot
-        return (
-          <View style={styles.profileContainer}>
-            <Ionicons name="menu-outline" size={22} color={color} />
-            <View
-              style={[
-                styles.statusDot,
-                { backgroundColor: servicesDotColor, borderColor: colors.tabBar },
-              ]}
-            />
-          </View>
-        );
       default:
         return null;
     }
@@ -175,7 +105,6 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
 
   return (
     <>
-      {/* Transparent overlay — catches taps outside the search bar when keyboard is open */}
       {keyboardVisible && (
         <Pressable style={StyleSheet.absoluteFillObject} onPress={Keyboard.dismiss} />
       )}
@@ -183,7 +112,6 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
         pointerEvents="box-none"
         style={[styles.container, { paddingBottom: bottomPadding }]}
       >
-        {/* Search bar + AI agent button — animate up together with keyboard */}
         <Animated.View style={{
           transform: [{ translateY: keyboardOffset }],
           width: '88%',
@@ -233,7 +161,6 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
             </TouchableOpacity>
           )}
 
-          {/* AI agent button */}
           <TouchableOpacity
             onPress={() => setAgentOpen(true)}
             activeOpacity={0.82}
@@ -243,7 +170,6 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
           </TouchableOpacity>
         </Animated.View>
 
-        {/* Tab pill */}
         <View
           style={[
             styles.tabBar,
@@ -280,12 +206,6 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
         onClose={() => setAgentOpen(false)}
         ticker={isOnOptionsTab && optionsTicker ? optionsTicker : undefined}
         onError={(msg) => toast.error(msg)}
-      />
-
-      <MenuModal
-        visible={menuOpen}
-        onClose={() => setMenuOpen(false)}
-        sections={menuSections}
       />
     </>
   );
@@ -352,36 +272,5 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     letterSpacing: 0.2,
     marginTop: 2,
-  },
-  profileContainer: {
-    position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  statusDot: {
-    position: 'absolute',
-    top: -1,
-    right: -6,
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    borderWidth: 1.5,
-  },
-  badge: {
-    position: 'absolute',
-    top: -4,
-    right: -8,
-    backgroundColor: '#FF453A',
-    borderRadius: 8,
-    minWidth: 16,
-    height: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 3,
-  },
-  badgeText: {
-    color: '#fff',
-    fontSize: 9,
-    fontWeight: '700',
   },
 });

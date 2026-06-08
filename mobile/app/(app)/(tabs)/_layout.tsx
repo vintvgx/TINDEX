@@ -1,30 +1,78 @@
 import { Tabs } from 'expo-router';
+import { View } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
+import { SafeAreaInsetsContext, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CustomTabBar } from '@/common/components/ui/CustomTabBar';
+import { TickerTape } from '@/common/components/ui/TickerTape';
+import { AppHeader } from '@/common/components/ui/AppHeader';
+import { DrawerMenu } from '@/common/components/ui/DrawerMenu';
 import { OptionsTickerProvider } from '@/lib/optionsTickerContext';
+import { DrawerProvider } from '@/lib/DrawerContext';
+import { useThemeColors } from '@/lib/useColorScheme';
+
+/**
+ * Global app shell: dark ticker tape → app header (☰ | logo | bell) → the tab
+ * navigator → the left drawer overlay. The tape/header own the top safe-area
+ * inset, so we override the inset context to `top: 0` / `bottom: 0` for the
+ * navigator subtree — per-screen SafeAreaViews sit flush under the header and
+ * above the floating tab bar (which owns the home-indicator inset).
+ */
+function Shell() {
+  const colors = useThemeColors();
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <TickerTape />
+      <AppHeader />
+
+      <View style={{ flex: 1 }}>
+        <SafeAreaInsetsContext.Provider
+          value={{ top: 0, bottom: 0, left: insets.left, right: insets.right }}
+        >
+          <Tabs
+            initialRouteName="feed"
+            screenOptions={{
+              headerShown: false,
+              tabBarStyle: {
+                position: 'absolute',
+                backgroundColor: 'transparent',
+                borderTopWidth: 0,
+                elevation: 0,
+              },
+            }}
+            tabBar={(props) => <CustomTabBar {...props} />}
+          >
+            <Tabs.Screen name="feed" options={{ title: 'Home' }} />
+            <Tabs.Screen name="track" options={{ href: null }} />
+            <Tabs.Screen name="track-legacy" options={{ href: null }} />
+            <Tabs.Screen name="orb" options={{ title: 'ORB' }} />
+            <Tabs.Screen name="options" options={{ title: 'Contracts' }} />
+            <Tabs.Screen name="notifications" options={{ href: null }} />
+            <Tabs.Screen name="profile" options={{ href: null }} />
+            <Tabs.Screen name="search" options={{ href: null }} />
+            <Tabs.Screen name="watchlists" options={{ href: null }} />
+            {/* Strategy screens — hidden from tab bar, accessible via the drawer */}
+            <Tabs.Screen name="strategy" options={{ href: null }} />
+            <Tabs.Screen name="position" options={{ href: null }} />
+            <Tabs.Screen name="tradelog" options={{ href: null }} />
+            <Tabs.Screen name="accounts" options={{ href: null }} />
+          </Tabs>
+        </SafeAreaInsetsContext.Provider>
+      </View>
+
+      <DrawerMenu />
+      <StatusBar style="light" />
+    </View>
+  );
+}
 
 export default function Layout() {
   return (
     <OptionsTickerProvider>
-    <Tabs
-      initialRouteName="orb"
-      screenOptions={{ headerShown: false }}
-      tabBar={(props) => <CustomTabBar {...props} />}
-    >
-      <Tabs.Screen name="feed" options={{ title: 'Feed' }} />
-      <Tabs.Screen name="track" options={{ href: null }} />
-      <Tabs.Screen name="track-legacy" options={{ href: null }} />
-      <Tabs.Screen name="options" options={{ title: 'Options' }} />
-      <Tabs.Screen name="orb" options={{ title: 'ORB' }} />
-      <Tabs.Screen name="notifications" options={{ title: 'Alerts' }} />
-      <Tabs.Screen name="profile" options={{ title: 'Profile' }} />
-      <Tabs.Screen name="search" options={{ href: null }} />
-      <Tabs.Screen name="watchlists" options={{ href: null }} />
-      {/* Strategy screens — hidden from tab bar, accessible via More menu */}
-      <Tabs.Screen name="strategy" options={{ href: null }} />
-      <Tabs.Screen name="position" options={{ href: null }} />
-      <Tabs.Screen name="tradelog" options={{ href: null }} />
-      <Tabs.Screen name="accounts" options={{ href: null }} />
-    </Tabs>
+      <DrawerProvider>
+        <Shell />
+      </DrawerProvider>
     </OptionsTickerProvider>
   );
 }
