@@ -1,19 +1,19 @@
 export default {
   expo: {
-    name: "alethia",
+    name: "Tindex",
     slug: "alethia",
-    version: "0.3.6",
+    version: "0.3.8",
     orientation: "portrait",
-    icon: "./assets/logo/tindex_logo.png",
+    icon: "./assets/logo/tindex_spark.png",
     scheme: "mobile",
     userInterfaceStyle: "automatic",
     newArchEnabled: true,
     notification: {
-      icon: "./assets/logo/tindex_logo.png",
+      icon: "./assets/logo/tindex_spark.png",
     },
     ios: {
       supportsTablet: true,
-      icon: "./assets/logo/tindex_logo.png",
+      icon: "./assets/logo/tindex_spark.png",
       // preview
       // bundleIdentifier: "com.communite.tindex",
       // dev
@@ -50,7 +50,7 @@ export default {
       [
         "expo-splash-screen",
         {
-          image: "./assets/logo/tindex_logo.png",
+          image: "./assets/logo/tindex_spark.png",
           imageWidth: 200,
           resizeMode: "contain",
           backgroundColor: "#000000"

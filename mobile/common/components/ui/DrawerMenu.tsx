@@ -1,10 +1,3 @@
-/**
- * DrawerMenu — left slide-in navigation drawer (CollectPure-style).
- *
- * Header: wordmark + search. Body: every app view grouped into rounded
- * containers. Footer: Login (signed-out) or profile + Sign Out (signed-in).
- * Open/close state comes from DrawerContext; the AppHeader hamburger drives it.
- */
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, Pressable, Modal, Animated, ScrollView,
@@ -22,12 +15,15 @@ import { useAppColorScheme } from '@/lib/useColorScheme';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
-const PANEL_WIDTH = Math.min(SCREEN_WIDTH * 0.84, 360);
+const PANEL_WIDTH = Math.min(SCREEN_WIDTH * 0.86, 380);
+const H_PADDING = 24;
 
 interface NavItem {
   label: string;
   route: string;
+  onClick?: () => void;
 }
+
 interface NavSection {
   title?: string;
   items: NavItem[];
@@ -35,6 +31,7 @@ interface NavSection {
 
 const SECTIONS: NavSection[] = [
   {
+    title: 'Menu',
     items: [
       { label: 'Home', route: '/(app)/(tabs)/feed' },
       { label: 'ORB Monitor', route: '/(app)/(tabs)/orb' },
@@ -47,14 +44,14 @@ const SECTIONS: NavSection[] = [
   {
     title: 'ORB Trading',
     items: [
+      { label: 'Accounts', route: '/(app)/(tabs)/accounts' },
       { label: 'Strategy Control', route: '/(app)/(tabs)/strategy' },
       { label: 'Live Position', route: '/(app)/(tabs)/position' },
-      { label: 'Trade Log & Stats', route: '/(app)/(tabs)/tradelog' },
-      { label: 'Accounts', route: '/(app)/(tabs)/accounts' },
+      { label: 'Trade Log', route: '/(app)/(tabs)/tradelog' },
     ],
   },
   {
-    title: 'Account',
+    title: 'Settings',
     items: [
       { label: 'Profile & Settings', route: '/(app)/(tabs)/profile' },
     ],
@@ -110,13 +107,14 @@ export function DrawerMenu() {
     }, 180);
   };
 
-  const displayName =
-    profile?.full_name || profile?.username || user?.email || 'Account';
+  const displayName = profile?.full_name || profile?.username || user?.email || 'Account';
+  const initials = displayName.slice(0, 2).toUpperCase();
 
   return (
     <>
       <Modal visible={mounted} transparent animationType="none" onRequestClose={closeDrawer}>
         <StatusBar style={isDarkColorScheme ? 'light' : 'dark'} />
+
         <Animated.View style={[styles.backdrop, { opacity: fade }]}>
           <Pressable style={StyleSheet.absoluteFill} onPress={closeDrawer} />
         </Animated.View>
@@ -127,12 +125,13 @@ export function DrawerMenu() {
             {
               width: PANEL_WIDTH,
               backgroundColor: colors.background,
-              paddingTop: insets.top + 12,
+              paddingTop: insets.top + 24,
               paddingBottom: insets.bottom + 16,
               transform: [{ translateX: slide }],
             },
           ]}
         >
+          {/* ── Header ─────────────────────────────────────────── */}
           <View style={styles.panelHeader}>
             <Text style={[styles.logoText, { color: colors.text }]}>tindex</Text>
             <Pressable
@@ -144,26 +143,50 @@ export function DrawerMenu() {
             </Pressable>
           </View>
 
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
+          {/* ── Profile strip ──────────────────────────────────── */}
+          {isAuthenticated && (
+            <Pressable
+              onPress={() => go('/(app)/(tabs)/profile')}
+              style={[styles.profileStrip, { backgroundColor: colors.surface, borderColor: colors.border }]}
+            >
+              <View style={[styles.avatar, { backgroundColor: '#4A9EFF22' }]}>
+                <Text style={[styles.avatarText, { color: '#4A9EFF' }]}>{initials}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.profileName, { color: colors.text }]} numberOfLines={1}>
+                  {displayName}
+                </Text>
+                {user?.email && (
+                  <Text style={[styles.profileEmail, { color: colors.textTertiary }]} numberOfLines={1}>
+                    {user.email}
+                  </Text>
+                )}
+              </View>
+            </Pressable>
+          )}
+
+          {/* ── Nav sections ───────────────────────────────────── */}
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.scrollContent}
+          >
             {SECTIONS.map((section, si) => (
-              <View key={si} style={{ marginBottom: 18 }}>
+              <View key={si} style={styles.section}>
                 {section.title && (
                   <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
                     {section.title}
                   </Text>
                 )}
-                <View style={[styles.group, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                  {section.items.map((item, ii) => (
+                {/* In each section's group, add the border color from theme: */}
+                <View style={styles.group}>
+                  {section.items.map((item, idx) => (
                     <Pressable
                       key={item.route}
                       onPress={() => go(item.route)}
                       style={({ pressed }) => [
                         styles.row,
-                        ii < section.items.length - 1 && {
-                          borderBottomWidth: StyleSheet.hairlineWidth,
-                          borderBottomColor: colors.separator,
-                        },
-                        pressed && { backgroundColor: colors.surfaceSecondary },
+                        idx === section.items.length - 1 && styles.rowLast,
+                        { backgroundColor: pressed ? colors.surface : 'transparent' },
                       ]}
                     >
                       <Text style={[styles.rowLabel, { color: colors.text }]}>{item.label}</Text>
@@ -173,36 +196,51 @@ export function DrawerMenu() {
               </View>
             ))}
 
-            <Pressable
-              onPress={toggleColorScheme}
-              style={({ pressed }) => [
-                styles.group,
-                styles.row,
-                { backgroundColor: colors.surface, borderColor: colors.border, marginBottom: 18 },
-                pressed && { opacity: 0.7 },
-              ]}
-            >
-              <Text style={[styles.rowLabel, { color: colors.text }]}>
-                {isDarkColorScheme ? 'Light Mode' : 'Dark Mode'}
-              </Text>
-            </Pressable>
           </ScrollView>
 
-          <View style={[styles.group, { backgroundColor: colors.surface, borderColor: colors.border, marginBottom: 0 }]}>
-            {isAuthenticated ? (
-              <Pressable onPress={handleSignOut} style={styles.row}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.rowLabel, { color: colors.error }]}>Sign Out</Text>
-                  <Text style={[styles.rowSub, { color: colors.textTertiary }]} numberOfLines={1}>
-                    {displayName}
-                  </Text>
-                </View>
+          {/* ── Footer: sign out + theme toggle ────────────────── */}
+          <View style={[styles.footer, { borderTopColor: colors.border }]}>
+            <View style={styles.footerRow}>
+              {isAuthenticated ? (
+                <Pressable
+                  onPress={handleSignOut}
+                  style={({ pressed }) => [
+                    styles.footerBtn,
+                    { backgroundColor: colors.surface, borderColor: colors.border },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                >
+                  <Text style={[styles.footerLabel, { color: '#FF453A' }]}>Sign Out</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  onPress={() => go('/(public)/auth')}
+                  style={({ pressed }) => [
+                    styles.footerBtn,
+                    { backgroundColor: colors.surface, borderColor: colors.border },
+                    pressed && { opacity: 0.7 },
+                  ]}
+                >
+                  <Text style={[styles.footerLabel, { color: colors.text }]}>Login</Text>
+                </Pressable>
+              )}
+
+              <Pressable
+                onPress={toggleColorScheme}
+                hitSlop={8}
+                style={({ pressed }) => [
+                  styles.themeBtn,
+                  { backgroundColor: colors.surface, borderColor: colors.border },
+                  pressed && { opacity: 0.7 },
+                ]}
+              >
+                <Ionicons
+                  name={isDarkColorScheme ? 'sunny-outline' : 'moon-outline'}
+                  size={20}
+                  color={colors.text}
+                />
               </Pressable>
-            ) : (
-              <Pressable onPress={() => go('/(public)/auth')} style={styles.row}>
-                <Text style={[styles.rowLabel, { color: colors.text }]}>Login</Text>
-              </Pressable>
-            )}
+            </View>
           </View>
         </Animated.View>
       </Modal>
@@ -215,52 +253,117 @@ export function DrawerMenu() {
 const styles = StyleSheet.create({
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   panel: {
     position: 'absolute',
     top: 0,
     left: 0,
     bottom: 0,
-    paddingHorizontal: 20,
     shadowColor: '#000',
-    shadowOffset: { width: 4, height: 0 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-    elevation: 16,
+    shadowOffset: { width: 6, height: 0 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 20,
   },
+
+  // ── Header ──
   panelHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 22,
+    paddingHorizontal: H_PADDING,
+    marginBottom: 28,
   },
-  logoText: { fontSize: 24, fontWeight: '700', letterSpacing: -0.6 },
+  logoText: { fontSize: 28, fontWeight: '800', letterSpacing: -0.8 },
   searchBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
   },
+
+  // ── Profile strip ──
+  profileStrip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    marginHorizontal: H_PADDING,
+    marginBottom: 28,
+  },
+  avatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: { fontSize: 16, fontWeight: '700' },
+  profileName: { fontSize: 16, fontWeight: '600', marginBottom: 3 },
+  profileEmail: { fontSize: 13, lineHeight: 18 },
+
+  // ── Sections ──
+  scrollContent: {
+    paddingHorizontal: H_PADDING,
+    paddingTop: 4,
+    paddingBottom: 12,
+  },
+  section: { marginBottom: 32 },
   sectionTitle: {
     fontSize: 12,
-    fontWeight: '600',
-    letterSpacing: 0.6,
+    fontWeight: '700',
+    letterSpacing: 1,
     textTransform: 'uppercase',
-    marginBottom: 10,
+    marginBottom: 14,
     marginLeft: 4,
   },
   group: {
-    borderRadius: 14,
-    borderWidth: 1,
-    overflow: 'hidden',
+    // padding: 5,
+    paddingLeft: 10,
+    gap: 5
   },
   row: {
-    paddingHorizontal: 18,
-    paddingVertical: 16,
+    paddingVertical:   20,
+    paddingHorizontal: 10,
+    borderBottomWidth: 4,
+    borderBottomColor: 'rgba(128,128,128,0.25)',
+  },
+  rowLast: {
+    borderBottomWidth: 0,
   },
   rowLabel: { fontSize: 17, fontWeight: '500', letterSpacing: -0.2 },
-  rowSub: { fontSize: 13, marginTop: 4 },
+
+  // ── Footer ──
+  footer: {
+    paddingHorizontal: H_PADDING,
+    paddingTop: 16,
+    marginTop: 4,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  footerRow: {
+    flexDirection:  'row',
+    alignItems:     'center',
+    justifyContent: 'space-between',
+  },
+  footerBtn: {
+    borderRadius:      14,
+    borderWidth:       1,
+    paddingVertical:   16,
+    paddingHorizontal: 18,
+    alignItems:        'center',
+  },
+  footerLabel: { fontSize: 16, fontWeight: '600', letterSpacing: -0.2 },
+  themeBtn: {
+    width:          52,
+    height:         52,
+    borderRadius:   14,
+    borderWidth:    1,
+    alignItems:     'center',
+    justifyContent: 'center',
+  },
 });
