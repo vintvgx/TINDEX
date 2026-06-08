@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 
-export type SimScenario = 'profit' | 'loss';
+export type SimScenario = 'profit' | 'loss' | 'reversal';
 
 export interface SimulationResult {
   status:           string;

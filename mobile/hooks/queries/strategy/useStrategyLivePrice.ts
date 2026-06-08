@@ -90,6 +90,7 @@ export function useStrategyLivePrice(
     wsRef.current?.close();
     wsRef.current = null;
     setConnected(false);
+    setData(null);
   }, []);
 
   useEffect(() => {

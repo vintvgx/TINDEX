@@ -22,12 +22,12 @@ interface Props {
   strategyId: string | undefined;
 }
 
-type Phase = 'pick' | 'running' | 'done';
+type Phase   = 'pick' | 'running' | 'done';
+type SimLeg  = 'call' | 'put';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const TOTAL_TICKS    = 10;
-const TOTAL_SECONDS  = TOTAL_TICKS * 6; // 60 s
+const SECONDS_PER_TICK = 6;
 
 const PROFIT_PREVIEW = [
   { min: 'Min 3',  desc: 'TP1 hit → 3 contracts closed @ $2.25 (+50%)' },
@@ -43,6 +43,14 @@ const LOSS_PREVIEW = [
   { min: 'Min 4',   desc: 'Hard stop hit → full close @ $0.95 (−35%)' },
 ];
 
+const REVERSAL_PREVIEW = [
+  { min: 'Min 1–3', desc: 'CALL entered, price declines toward stop' },
+  { min: 'Min 4',   desc: 'Hard stop triggered — CALL exits at −$330' },
+  { min: 'Min 4',   desc: 'Reversal detected → PUT entered @ $1.50' },
+  { min: 'Min 7',   desc: 'TP1 hit on PUT — 3 contracts closed (+50%)' },
+  { min: 'Min 16',  desc: 'Runner trail stop fires — Net P&L: +$480' },
+];
+
 // ── SimulationModal ────────────────────────────────────────────────────────────
 
 export function SimulationModal({ visible, onClose, strategyId }: Props) {
@@ -55,6 +63,15 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
   const [events, setEvents]           = useState<SimEvent[]>([]);
   const [elapsed, setElapsed]         = useState(0);
   const [currentTick, setCurrentTick] = useState(0);
+  const [totalTicks, setTotalTicks]   = useState(10);
+
+  // Reversal-specific state
+  const [simLeg, setSimLeg]       = useState<SimLeg>('call');
+  const [callPnl, setCallPnl]     = useState<number>(0);
+
+  // Snapshot of live data for the current run — cleared on every new start
+  // so stale data from the previous run never leaks into the UI.
+  const [displayLive, setDisplayLive] = useState<any>(null);
 
   const timerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevLive  = useRef<any>(null);
@@ -64,6 +81,13 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
     liveStratId,
     phase === 'running',
   );
+
+  // ── Sync live → displayLive (current run only) ─────────────────────────────
+
+  useEffect(() => {
+    if (!live || phase !== 'running') return;
+    setDisplayLive(live);
+  }, [live, phase]);
 
   // ── Watch incoming WS messages ─────────────────────────────────────────────
 
@@ -75,20 +99,44 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
     if (msg.sim_tick != null && msg.sim_tick !== currentTick) {
       setCurrentTick(msg.sim_tick);
     }
+    if (msg.sim_total != null) {
+      setTotalTicks(msg.sim_total);
+    }
+
+    // Track reversal leg transitions
+    if (msg.sim_leg != null) {
+      if (msg.sim_leg === 'put' && simLeg !== 'put') {
+        setSimLeg('put');
+        // call_pnl comes embedded in the first PUT-leg message
+        if (msg.call_pnl != null) setCallPnl(msg.call_pnl);
+      } else if (msg.sim_leg === 'call' && simLeg !== 'call') {
+        setSimLeg('call');
+      }
+    }
 
     // Detect flag transitions → event log entries
     const prev = prevLive.current;
     if (!prev?.tp1_hit && live.tp1_hit) {
-      addEvent(msg.sim_tick ?? 3, 'TP1 hit — partial close (3 contracts)', colors.success);
+      const legLabel = scenario === 'reversal' ? ' (PUT)' : '';
+      addEvent(msg.sim_tick ?? 3, `TP1 hit — partial close 3 contracts${legLabel}`, colors.success);
     }
     if (!prev?.tp2_hit && live.tp2_hit) {
-      addEvent(msg.sim_tick ?? 6, 'TP2 hit — partial close (1 contract)', colors.success);
-    }
-    if (prev && prev.qty_remaining > 0 && live.qty_remaining === 0 && !live.tp1_hit) {
-      addEvent(msg.sim_tick ?? 4, 'Hard stop hit — fully closed', colors.error);
+      const legLabel = scenario === 'reversal' ? ' (PUT)' : '';
+      addEvent(msg.sim_tick ?? 6, `TP2 hit — partial close 1 contract${legLabel}`, colors.success);
     }
     if (prev && prev.qty_remaining > 0 && live.qty_remaining === 0 && live.tp2_hit) {
       addEvent(msg.sim_tick ?? 10, 'Runner trail stop — fully closed', '#FFD60A');
+    }
+    if (prev && prev.qty_remaining > 0 && live.qty_remaining === 0 && !live.tp1_hit) {
+      const isReversalCall = scenario === 'reversal' && msg.sim_leg === 'call';
+      addEvent(
+        msg.sim_tick ?? 4,
+        isReversalCall ? 'CALL hard stop — reversal signal sent' : 'Hard stop hit — fully closed',
+        colors.error,
+      );
+      if (isReversalCall) {
+        addEvent(msg.sim_tick ?? 4, 'PUT entered @ $1.50 — reversal trade live', '#FFD60A');
+      }
     }
 
     prevLive.current = { ...live };
@@ -98,11 +146,12 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
 
   useEffect(() => {
     if (phase !== 'running' || !live) return;
-    const msg = live as any;
-    const finished = msg.sim_tick >= TOTAL_TICKS || live.qty_remaining === 0;
-    if (!finished) return;
+    const msg   = live as any;
+    const isEnd = msg.sim_tick >= msg.sim_total && msg.sim_leg !== 'call';
+    const allClosed = live.qty_remaining === 0;
+    if (!isEnd && !allClosed) return;
+    if (doneTimer.current) return;
 
-    if (doneTimer.current) return; // already scheduled
     doneTimer.current = setTimeout(() => {
       setPhase('done');
       if (timerRef.current) clearInterval(timerRef.current);
@@ -119,13 +168,28 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
   // ── Start ──────────────────────────────────────────────────────────────────
 
   const handleStart = useCallback((chosen: SimScenario) => {
+    // Clear all state from any previous run before starting
+    if (timerRef.current)  clearInterval(timerRef.current);
+    if (doneTimer.current) clearTimeout(doneTimer.current);
+    timerRef.current  = null;
+    doneTimer.current = null;
+
     setScenario(chosen);
     setPhase('running');
     setCurrentTick(0);
+    setTotalTicks(chosen === 'loss' ? 4 : 10);
     setElapsed(0);
-    prevLive.current   = null;
-    doneTimer.current  = null;
-    setEvents([{ tick: 0, label: 'Trade entered — IWM 221C @ $1.50', color: colors.accent }]);
+    setDisplayLive(null);    // clear stale data from previous run
+    setSimLeg('call');
+    setCallPnl(0);
+    prevLive.current = null;
+    setEvents([{
+      tick:  0,
+      label: chosen === 'reversal'
+        ? 'CALL entered — IWM 221C @ $1.50'
+        : 'Trade entered — IWM 221C @ $1.50',
+      color: colors.accent,
+    }]);
 
     runSim(
       { scenario: chosen, strategy_id: strategyId },
@@ -133,7 +197,7 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
         onSuccess: (res) => {
           setLiveStratId(res.strategy_id);
           timerRef.current = setInterval(() =>
-            setElapsed(e => Math.min(e + 1, TOTAL_SECONDS)), 1000);
+            setElapsed(e => e + 1), 1000);
         },
         onError: () => setPhase('pick'),
       },
@@ -147,18 +211,24 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
     if (doneTimer.current) clearTimeout(doneTimer.current);
     timerRef.current  = null;
     doneTimer.current = null;
+
     setPhase('pick');
     setScenario(null);
     setEvents([]);
     setElapsed(0);
     setCurrentTick(0);
+    setTotalTicks(10);
+    setDisplayLive(null);
+    setSimLeg('call');
+    setCallPnl(0);
     prevLive.current = null;
     onClose();
   };
 
-  const pnlColor = live
-    ? (live.pnl >= 0 ? colors.success : colors.error)
-    : colors.textSecondary;
+  const pnl      = displayLive?.pnl ?? 0;
+  const netPnl   = scenario === 'reversal' && simLeg === 'put' ? callPnl + pnl : pnl;
+  const pnlColor = pnl >= 0 ? colors.success : colors.error;
+  const netColor = netPnl >= 0 ? colors.success : colors.error;
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -187,7 +257,7 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
                 Run Simulation
               </Text>
               <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
-                10 simulated minutes · real push notifications · live P&L
+                Compressed minutes · real push notifications · live P&L
               </Text>
             </View>
             <TouchableOpacity
@@ -215,7 +285,7 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
                 <ScenarioCard
                   emoji="📈"
                   title="Profitable Trade"
-                  subtitle="+$785 simulated P&L"
+                  subtitle="+$810 simulated P&L"
                   accentColor={colors.success}
                   items={PROFIT_PREVIEW}
                   disabled={isPending}
@@ -234,6 +304,17 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
                   onPress={() => handleStart('loss')}
                 />
 
+                <ScenarioCard
+                  emoji="🔄"
+                  title="Call Fails → Reversal PUT"
+                  subtitle="Net +$480 (−$330 CALL + $810 PUT)"
+                  accentColor="#FF9F0A"
+                  items={REVERSAL_PREVIEW}
+                  disabled={isPending}
+                  colors={colors}
+                  onPress={() => handleStart('reversal')}
+                />
+
                 <Text style={{
                   color: colors.textTertiary, fontSize: 12,
                   textAlign: 'center', marginTop: 10,
@@ -248,46 +329,51 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
             {(phase === 'running' || phase === 'done') && (
               <>
                 {/* Status row */}
-                <View style={{
-                  flexDirection: 'row', alignItems: 'center',
-                  gap: 8, marginBottom: 16,
-                }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 }}>
                   {phase === 'running' ? (
                     <ActivityIndicator size="small" color={colors.accent} />
                   ) : (
-                    <View style={{
-                      width: 8, height: 8, borderRadius: 4,
-                      backgroundColor: colors.textTertiary,
-                    }} />
+                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors.textTertiary }} />
                   )}
                   <Text style={{ color: colors.text, fontWeight: '700', fontSize: 15, flex: 1 }}>
                     {phase === 'done'
-                      ? `${scenario === 'profit' ? 'Profitable' : 'Loss'} Simulation Complete`
-                      : `${scenario === 'profit' ? '📈 Profitable' : '📉 Loss'} Trade Running…`
+                      ? `${scenarioLabel(scenario!)} Complete`
+                      : `${scenarioLabel(scenario!)} Running…`
                     }
                   </Text>
                   {phase === 'running' && (
                     <Text style={{ color: colors.textTertiary, fontSize: 12 }}>
-                      {elapsed}s / {TOTAL_SECONDS}s
+                      {elapsed}s
                     </Text>
                   )}
                 </View>
 
-                {/* ── Tick timeline ─────────────────────────────────────── */}
+                {/* Reversal leg badge */}
+                {scenario === 'reversal' && phase === 'running' && (
+                  <View style={{
+                    flexDirection: 'row', gap: 8, marginBottom: 12,
+                  }}>
+                    <LegBadge label="CALL" active={simLeg === 'call'} done={simLeg === 'put'} colors={colors} />
+                    <LegBadge label="PUT"  active={simLeg === 'put'}  done={false}             colors={colors} />
+                  </View>
+                )}
+
+                {/* Tick timeline */}
                 <TickTimeline
                   currentTick={currentTick}
+                  totalTicks={totalTicks}
                   scenario={scenario!}
+                  simLeg={scenario === 'reversal' ? simLeg : undefined}
                   colors={colors}
                 />
 
-                {/* ── Live P&L card ──────────────────────────────────────── */}
-                {live ? (
+                {/* Live P&L card */}
+                {displayLive ? (
                   <View style={{
                     backgroundColor: colors.surfaceSecondary,
                     borderRadius: 16, padding: 16, marginTop: 14, marginBottom: 14,
                     borderWidth: 1.5, borderColor: pnlColor + '40',
                   }}>
-                    {/* SIM badge */}
                     <View style={{
                       position: 'absolute', top: 10, right: 10,
                       backgroundColor: colors.accent + '22',
@@ -296,26 +382,51 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
                       <Text style={{ color: colors.accent, fontSize: 9, fontWeight: '800' }}>SIM</Text>
                     </View>
 
-                    {/* Main stats */}
+                    {/* Current leg stats */}
                     <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginBottom: 14 }}>
-                      <Stat label="Price"   value={`$${live.mid_price.toFixed(2)}`}  color={colors.text} />
-                      <Stat label="P&L"     value={`${live.pnl >= 0 ? '+' : ''}$${live.pnl.toFixed(2)}`}   color={pnlColor} />
-                      <Stat label="Change"  value={`${live.pnl_pct >= 0 ? '+' : ''}${live.pnl_pct.toFixed(0)}%`} color={pnlColor} />
-                      <Stat label="Qty"     value={String(live.qty_remaining)}        color={colors.text} />
+                      <Stat label="Price"  value={`$${displayLive.mid_price.toFixed(2)}`}                           color={colors.text} />
+                      <Stat label="P&L"    value={`${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`}                      color={pnlColor} />
+                      <Stat label="Change" value={`${displayLive.pnl_pct >= 0 ? '+' : ''}${displayLive.pnl_pct.toFixed(0)}%`} color={pnlColor} />
+                      <Stat label="Qty"    value={String(displayLive.qty_remaining)}                                 color={colors.text} />
                     </View>
+
+                    {/* Net P&L row for reversal */}
+                    {scenario === 'reversal' && simLeg === 'put' && (
+                      <View style={{
+                        flexDirection: 'row', justifyContent: 'space-between',
+                        borderTopWidth: 1, borderTopColor: colors.border,
+                        paddingTop: 10, marginBottom: 12,
+                      }}>
+                        <View style={{ alignItems: 'center', flex: 1 }}>
+                          <Text style={{ color: colors.textTertiary, fontSize: 10, fontWeight: '600', marginBottom: 3 }}>CALL P&L</Text>
+                          <Text style={{ color: colors.error, fontSize: 14, fontWeight: '700' }}>
+                            ${callPnl.toFixed(2)}
+                          </Text>
+                        </View>
+                        <View style={{ alignItems: 'center', flex: 1 }}>
+                          <Text style={{ color: colors.textTertiary, fontSize: 10, fontWeight: '600', marginBottom: 3 }}>PUT P&L</Text>
+                          <Text style={{ color: pnlColor, fontSize: 14, fontWeight: '700' }}>
+                            {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                          </Text>
+                        </View>
+                        <View style={{ alignItems: 'center', flex: 1 }}>
+                          <Text style={{ color: colors.textTertiary, fontSize: 10, fontWeight: '600', marginBottom: 3 }}>NET</Text>
+                          <Text style={{ color: netColor, fontSize: 14, fontWeight: '800' }}>
+                            {netPnl >= 0 ? '+' : ''}${netPnl.toFixed(2)}
+                          </Text>
+                        </View>
+                      </View>
+                    )}
 
                     {/* Level pills */}
                     <View style={{ flexDirection: 'row', gap: 6 }}>
-                      <LevelPill label="TP1"  value={`$${live.tp1.toFixed(2)}`} hit={live.tp1_hit}  colors={colors} />
-                      <LevelPill label="TP2"  value={`$${live.tp2.toFixed(2)}`} hit={live.tp2_hit}  colors={colors} />
-                      <LevelPill label="STOP" value={`$${live.hard_stop.toFixed(2)}`} isStop colors={colors} />
+                      <LevelPill label="TP1"  value={`$${displayLive.tp1.toFixed(2)}`}       hit={displayLive.tp1_hit}  colors={colors} />
+                      <LevelPill label="TP2"  value={`$${displayLive.tp2.toFixed(2)}`}       hit={displayLive.tp2_hit}  colors={colors} />
+                      <LevelPill label="STOP" value={`$${displayLive.hard_stop.toFixed(2)}`} isStop                     colors={colors} />
                     </View>
                   </View>
                 ) : phase === 'running' && (
-                  <View style={{
-                    alignItems: 'center', paddingVertical: 28,
-                    gap: 10, marginBottom: 14,
-                  }}>
+                  <View style={{ alignItems: 'center', paddingVertical: 28, gap: 10, marginBottom: 14 }}>
                     <ActivityIndicator color={colors.accent} />
                     <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
                       Waiting for first tick…
@@ -323,7 +434,7 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
                   </View>
                 )}
 
-                {/* ── Event log ─────────────────────────────────────────── */}
+                {/* Event log */}
                 {events.length > 0 && (
                   <View style={{ marginBottom: 12 }}>
                     <ScenarioLabel colors={colors} text="Event Log" />
@@ -337,14 +448,8 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
                           borderBottomColor: colors.separator,
                         }}
                       >
-                        <View style={{
-                          width: 8, height: 8, borderRadius: 4,
-                          backgroundColor: ev.color,
-                        }} />
-                        <Text style={{
-                          color: colors.textTertiary, fontSize: 11,
-                          fontWeight: '700', width: 42,
-                        }}>
+                        <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: ev.color }} />
+                        <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '700', width: 42 }}>
                           {ev.tick === 0 ? 'Entry' : `Min ${ev.tick}`}
                         </Text>
                         <Text style={{ color: colors.text, fontSize: 13, flex: 1 }}>
@@ -352,6 +457,25 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
                         </Text>
                       </View>
                     ))}
+                  </View>
+                )}
+
+                {/* Final net P&L summary on done for reversal */}
+                {phase === 'done' && scenario === 'reversal' && (
+                  <View style={{
+                    backgroundColor: (netPnl >= 0 ? colors.success : colors.error) + '18',
+                    borderRadius: 14, padding: 14, marginBottom: 12,
+                    borderWidth: 1, borderColor: (netPnl >= 0 ? colors.success : colors.error) + '40',
+                  }}>
+                    <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '700', marginBottom: 6 }}>
+                      REVERSAL NET P&L
+                    </Text>
+                    <Text style={{ color: netColor, fontSize: 26, fontWeight: '800' }}>
+                      {netPnl >= 0 ? '+' : ''}${netPnl.toFixed(2)}
+                    </Text>
+                    <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>
+                      CALL: ${callPnl.toFixed(2)}  ·  PUT: {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                    </Text>
                   </View>
                 )}
 
@@ -374,6 +498,15 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
       </View>
     </Modal>
   );
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function scenarioLabel(s: SimScenario): string {
+  if (s === 'profit')   return '📈 Profitable';
+  if (s === 'loss')     return '📉 Loss';
+  if (s === 'reversal') return '🔄 Reversal';
+  return '';
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
@@ -423,13 +556,10 @@ function ScenarioCard({
             {subtitle}
           </Text>
         </View>
-        <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
       </View>
       {items.map(({ min, desc }) => (
         <View key={min} style={{ flexDirection: 'row', gap: 8, marginBottom: 5 }}>
-          <Text style={{
-            color: accentColor, fontSize: 11, fontWeight: '700', width: 48,
-          }}>
+          <Text style={{ color: accentColor, fontSize: 11, fontWeight: '700', width: 52 }}>
             {min}
           </Text>
           <Text style={{ color: colors.textSecondary, fontSize: 12, flex: 1 }}>
@@ -441,29 +571,58 @@ function ScenarioCard({
   );
 }
 
+function LegBadge({
+  label, active, done, colors,
+}: { label: string; active: boolean; done: boolean; colors: any }) {
+  const color = label === 'CALL' ? colors.error : colors.success;
+  return (
+    <View style={{
+      flex: 1, alignItems: 'center', paddingVertical: 6, borderRadius: 10,
+      backgroundColor: (active || done) ? color + '18' : colors.surfaceSecondary,
+      borderWidth: 1,
+      borderColor: active ? color : colors.border,
+    }}>
+      <Text style={{ color: active ? color : colors.textTertiary, fontSize: 12, fontWeight: '700' }}>
+        {label} {done ? '✓' : active ? '●' : ''}
+      </Text>
+    </View>
+  );
+}
+
 function TickTimeline({
-  currentTick, scenario, colors,
-}: { currentTick: number; scenario: SimScenario; colors: any }) {
-  const eventTicks = scenario === 'profit' ? [3, 5, 6, 9, 10] : [4];
-  const barColor   = scenario === 'profit' ? colors.success : colors.error;
+  currentTick, totalTicks, scenario, simLeg, colors,
+}: {
+  currentTick: number;
+  totalTicks:  number;
+  scenario:    SimScenario;
+  simLeg?:     SimLeg;
+  colors:      any;
+}) {
+  const isLoss   = scenario === 'loss' || (scenario === 'reversal' && simLeg === 'call');
+  const barColor = isLoss ? colors.error : colors.success;
+
+  const eventTicks = (() => {
+    if (scenario === 'profit') return [3, 5, 6, 10];
+    if (scenario === 'loss')   return [4];
+    if (scenario === 'reversal') {
+      return simLeg === 'call' ? [4] : [3, 5, 6, 10];
+    }
+    return [];
+  })();
 
   return (
-    <View>
+    <View style={{ marginBottom: 4 }}>
       {/* Dot row */}
       <View style={{ flexDirection: 'row', alignItems: 'flex-end', marginBottom: 4 }}>
-        {Array.from({ length: TOTAL_TICKS }, (_, i) => {
-          const tick     = i + 1;
-          const isPast   = tick <= currentTick;
+        {Array.from({ length: totalTicks }, (_, i) => {
+          const tick      = i + 1;
+          const isPast    = tick <= currentTick;
           const isCurrent = tick === currentTick;
-          const isEvent  = eventTicks.includes(tick);
-          const dotColor = isPast ? barColor : colors.border;
-
+          const isEvent   = eventTicks.includes(tick);
           return (
             <View key={tick} style={{ flex: 1, alignItems: 'center' }}>
               {isEvent && (
-                <Text style={{
-                  color: colors.textTertiary, fontSize: 8, marginBottom: 2,
-                }}>
+                <Text style={{ color: colors.textTertiary, fontSize: 8, marginBottom: 2 }}>
                   {tick}m
                 </Text>
               )}
@@ -471,22 +630,20 @@ function TickTimeline({
                 width:  isCurrent ? 11 : (isEvent ? 9 : 6),
                 height: isCurrent ? 11 : (isEvent ? 9 : 6),
                 borderRadius: 6,
-                backgroundColor: isCurrent ? '#FFD60A' : dotColor,
+                backgroundColor: isCurrent ? '#FFD60A' : (isPast ? barColor : colors.border),
               }} />
             </View>
           );
         })}
       </View>
-
       {/* Progress bar */}
       <View style={{
-        height: 3, borderRadius: 2,
-        backgroundColor: colors.border,
+        height: 3, borderRadius: 2, backgroundColor: colors.border,
         overflow: 'hidden', marginBottom: 16,
       }}>
         <View style={{
           height: '100%', borderRadius: 2,
-          width: `${(currentTick / TOTAL_TICKS) * 100}%`,
+          width: `${(currentTick / totalTicks) * 100}%`,
           backgroundColor: barColor,
         }} />
       </View>

@@ -301,8 +301,8 @@ def run_simulation():
     scenario    = data.get("scenario", "profit")
     strategy_id = data.get("strategy_id")
 
-    if scenario not in ("profit", "loss"):
-        return jsonify({"error": "scenario must be 'profit' or 'loss'"}), 400
+    if scenario not in ("profit", "loss", "reversal"):
+        return jsonify({"error": "scenario must be 'profit', 'loss', or 'reversal'"}), 400
 
     engine = _engines.get(strategy_id) if strategy_id else _first_engine()
     if not engine:
@@ -315,12 +315,14 @@ def run_simulation():
     if not runner.start(scenario):
         return jsonify({"error": "A simulation is already running"}), 409
 
+    duration = 90 if scenario == "reversal" else 60
+    ticks    = 14 if scenario == "reversal" else 10
     return jsonify({
         "status":           "started",
         "scenario":         scenario,
         "strategy_id":      active_sid,
-        "duration_seconds": 60,
-        "ticks":            10,
+        "duration_seconds": duration,
+        "ticks":            ticks,
         "ticker":           "IWM",
         "entry_premium":    1.50,
         "profile":          "THUNDER_CAT",
