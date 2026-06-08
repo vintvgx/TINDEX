@@ -138,11 +138,12 @@ class TradeLogger:
                  exit_premium: Optional[float], qty_closed: int, profile: str,
                  strategy_id: str = None):
         try:
+            # Fetch the open trade — do NOT filter by exit_time so that partial
+            # exits after TP1 (which already set exit_time) are still found.
             res = (
                 self.client.table("orb_trades")
-                .select("id, entry_premium, qty_entered, qty_exited")
+                .select("id, entry_premium, qty_entered, qty_exited, pnl")
                 .eq("contract_symbol", contract_symbol)
-                .is_("exit_time", "null")
                 .order("entry_time", desc=True)
                 .limit(1)
                 .execute()
@@ -151,18 +152,29 @@ class TradeLogger:
                 return
 
             row = res.data[0]
-            entry_p = row["entry_premium"] or 0
-            pnl = ((exit_premium or 0) - entry_p) * qty_closed * 100
-            pnl_pct = ((exit_premium or 0) - entry_p) / entry_p * 100 if entry_p else 0
+            entry_p      = row["entry_premium"] or 0
+            exit_p       = exit_premium or 0
+            this_pnl     = (exit_p - entry_p) * qty_closed * 100
+            total_pnl    = (row.get("pnl") or 0) + this_pnl
+            qty_after    = row["qty_exited"] + qty_closed
+            is_fully_closed = qty_after >= row["qty_entered"]
+            # pnl_pct is relative to total entry cost so it stays meaningful
+            total_cost = entry_p * row["qty_entered"] * 100
+            total_pnl_pct = (total_pnl / total_cost * 100) if total_cost else 0
 
-            self.client.table("orb_trades").update({
-                "exit_premium": exit_premium,
-                "qty_exited":   row["qty_exited"] + qty_closed,
-                "pnl":          round(pnl, 2),
-                "pnl_pct":      round(pnl_pct, 2),
-                "exit_time":    datetime.utcnow().isoformat(),
+            update: dict = {
+                "exit_premium": exit_p if exit_premium is not None else None,
+                "qty_exited":   qty_after,
+                "pnl":          round(total_pnl, 2),
+                "pnl_pct":      round(total_pnl_pct, 2),
                 "exit_reason":  exit_reason,
-            }).eq("id", row["id"]).execute()
+            }
+            # Only stamp exit_time when the position is fully closed so that
+            # subsequent partial exit calls can still find the row.
+            if is_fully_closed:
+                update["exit_time"] = datetime.utcnow().isoformat()
+
+            self.client.table("orb_trades").update(update).eq("id", row["id"]).execute()
 
             q = self.client.table("orb_session").update({"trade_taken": True}).eq(
                 "session_date", str(date.today())

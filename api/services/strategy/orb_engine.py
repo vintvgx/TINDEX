@@ -207,7 +207,9 @@ class ORBEngine:
             return
 
         now_et = datetime.now(ET)
-        orb_close = now_et.replace(hour=9, minute=30 + self.config["orb_minutes"], second=0)
+        total_min = 9 * 60 + 30 + self.config["orb_minutes"]
+        orb_close = now_et.replace(hour=total_min // 60, minute=total_min % 60, second=0,
+                                   microsecond=0)
         limit_min = self.profile.get("breakout_time_limit_min", 45)
         deadline  = orb_close + timedelta(minutes=limit_min)
 
@@ -438,7 +440,7 @@ class ORBEngine:
 
             self.logger.log_exit(
                 contract_symbol=self.contract_symbol,
-                exit_reason=action["type"],
+                exit_reason=action["reason"],
                 exit_premium=exit_premium,
                 qty_closed=qty_to_close,
                 profile=self.profile_key,
@@ -447,7 +449,7 @@ class ORBEngine:
             self.notifier.notify_exit(
                 ticker=self.ticker,
                 contract_symbol=self.contract_symbol,
-                exit_reason=action["type"],
+                exit_reason=action["reason"],
                 pnl=pnl,
                 qty=qty_to_close,
                 profile_key=self.profile_key,

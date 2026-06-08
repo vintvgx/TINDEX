@@ -114,14 +114,18 @@ class StrategyNotifier:
         emoji = "✅" if pnl >= 0 else "🛑"
 
         labels = {
-            "HARD_STOP":    "Stopped out",
-            "TP1":          "TP1 hit — partial close",
-            "TP2":          "TP2 hit",
-            "RUNNER_TRAIL": "Runner trailing stop",
-            "EOD_CLOSE":    "EOD close",
-            "BREAKEVEN_STOP": "Breakeven stop hit",
-            "CONSOLIDATION": "Consolidation exit",
-            "FORCE_CLOSE":  "Force-closed",
+            "HARD_STOP":          "Stopped out",
+            "TP1":                "TP1 hit — partial close",
+            "TP2":                "TP2 hit — partial close",
+            "TP2_FULL_CLOSE":     "TP2 hit — full close",
+            "RUNNER_TRAIL_STOP":  "Runner trailing stop",
+            "EOD_CLOSE":          "EOD close",
+            "EOD_HARD_CLOSE":     "EOD hard close",
+            "BREAKEVEN_STOP":     "Breakeven stop hit",
+            "CONSOLIDATION":      "Consolidation exit",
+            "LOW_VOLUME_EXIT":    "Low-volume exit",
+            "MANUAL_CLOSE":       "Manually closed",
+            "FORCE_CLOSE":        "Force-closed",
         }
         label = labels.get(exit_reason, exit_reason)
 

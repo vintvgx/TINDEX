@@ -110,10 +110,11 @@ def select_contract(
         if not contract.greeks:
             logger.debug("[ContractSelector] Skipping %s — no greeks", symbol)
             continue
-        delta = abs(contract.greeks.delta)
-        if delta is None:
+        raw_delta = contract.greeks.delta
+        if raw_delta is None:
             logger.debug("[ContractSelector] Skipping %s — delta is None", symbol)
             continue
+        delta = abs(raw_delta)
 
         # 4. Delta range
         if not (delta_min <= delta <= delta_max):

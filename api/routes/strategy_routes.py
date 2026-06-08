@@ -99,9 +99,20 @@ def update_config(strategy_id: str):
 @strategy_bp.route("/configs/<strategy_id>", methods=["DELETE"])
 def delete_config(strategy_id: str):
     """Stop and remove a strategy."""
-    engine = _engines.pop(strategy_id, None)
+    engine = _engines.get(strategy_id)
+    if engine and engine.trade_taken and engine.contract_symbol:
+        # Refuse to delete until the open position is closed — prevents orphaned orders
+        try:
+            engine.trading_client.close_position(engine.contract_symbol)
+        except Exception as e:
+            return jsonify({
+                "status": "error",
+                "message": f"Cannot delete strategy with active position that failed to close: {e}",
+            }), 409
+
+    # Safe to remove now — position is closed (or never existed)
+    _engines.pop(strategy_id, None)
     if engine:
-        # Remove scheduler jobs for this strategy
         from services.strategy.scheduler import get_scheduler
         sched = get_scheduler()
         if sched:
@@ -110,15 +121,7 @@ def delete_config(strategy_id: str):
                     sched.remove_job(f"job_{strategy_id}_{suffix}")
                 except Exception:
                     pass
-        if engine.trade_taken and engine.contract_symbol:
-            try:
-                engine.trading_client.close_position(engine.contract_symbol)
-            except Exception:
-                return jsonify({
-                "status": "error",
-                "message": "Cannot delete strategy with active position that failed to close"
-            }), 409
-                
+
     logger_svc.delete_strategy_config(strategy_id)
     return jsonify({"status": "ok"})
 
