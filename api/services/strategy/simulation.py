@@ -110,7 +110,7 @@ class SimulationRunner:
                 qty            = SIM_QTY,
                 fib_levels     = _fib(),
                 direction      = SIM_DIRECTION,
-                eod_close_time = "15:25",
+                eod_close_time = "23:59",  # never trigger EOD during simulation
                 profile        = profile,
             )
             contract = {
