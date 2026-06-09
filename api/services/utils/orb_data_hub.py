@@ -69,6 +69,10 @@ class OrbDataHub:
         self._recent_bars: dict[str, deque] = {}
         self._status: dict[str, OrbStatus] = {}
         self._max_recent = max_recent_bars
+        # Whether OrbService (the bar feed) is currently running. Engines depend on
+        # it for price data, so they stay silent / keep the session armed when it
+        # is False (e.g. right after a redeploy, before the service has started).
+        self._service_running = False
 
     # ── Subscription ─────────────────────────────────────────────────────────
 
@@ -152,6 +156,18 @@ class OrbDataHub:
     def get_status(self, ticker: str) -> Optional[OrbStatus]:
         with self._lock:
             return self._status.get(ticker)
+
+    # ── Service liveness ──────────────────────────────────────────────────────
+
+    def set_service_running(self, running: bool) -> None:
+        """OrbService reports its run state here so engines can gate on it."""
+        with self._lock:
+            self._service_running = running
+        logger.info("[OrbDataHub] service_running set to %s", running)
+
+    def is_service_running(self) -> bool:
+        with self._lock:
+            return self._service_running
 
 
 _hub_singleton: Optional[OrbDataHub] = None

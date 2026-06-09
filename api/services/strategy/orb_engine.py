@@ -164,6 +164,18 @@ class ORBEngine:
         """
         now_et = datetime.now(ET)
         self.session_date = now_et.date()
+
+        # The OrbService bar feed must be running or there is no price data. If it
+        # isn't (e.g. right after a redeploy, before the service has started),
+        # return WITHOUT skipping or notifying so the session stays armed and
+        # re-runs once the service comes up (init_scheduler late-start recovery).
+        if not self._hub.is_service_running():
+            logger.info("[ORBEngine] calculate_orb deferred — ORB service not running (%s)",
+                        self.ticker)
+            self.debug.emit("WARN", "calculate_orb deferred — ORB service not running "
+                                    "(no price feed); session stays armed")
+            return False
+
         self.debug.emit("INFO", f"calculate_orb start — {self.ticker} "
                                 f"orb_minutes={self.config['orb_minutes']}")
 
@@ -802,6 +814,11 @@ class ORBEngine:
                 except Exception:
                     pass
 
+    # Skip reasons that are data/lifecycle artifacts (no price feed) rather than a
+    # real "we had data but chose not to trade" decision. These never notify — they
+    # spam the user on every redeploy after the ORB window.
+    _SILENT_SKIP_REASONS = frozenset({"NO_DATA"})
+
     def _skip(self, reason: str):
         """
         Mark the session as skipped with a reason code and persist to Supabase.
@@ -813,7 +830,16 @@ class ORBEngine:
         self.skip_reason = reason
         self.logger.log_skip(self.ticker, reason, self.session_date, self.profile_key,
                              strategy_id=self.strategy_id)
-        self.notifier.notify_skip(self.ticker, reason)
+        # Suppress the push when (a) the bar feed is down — the skip is an artifact of
+        # the outage, not a trading decision — or (b) the reason is a data/lifecycle
+        # artifact (NO_DATA). Otherwise notify as normal.
+        if not self._hub.is_service_running():
+            logger.info("[ORBEngine] Suppressing skip notification (%s) — service not running",
+                        reason)
+        elif reason in self._SILENT_SKIP_REASONS:
+            logger.info("[ORBEngine] Suppressing skip notification (%s) — data artifact", reason)
+        else:
+            self.notifier.notify_skip(self.ticker, reason)
         logger.info("[ORBEngine] Session skipped: %s", reason)
         self.debug.emit("WARN", f"Session skipped: {reason}")
 

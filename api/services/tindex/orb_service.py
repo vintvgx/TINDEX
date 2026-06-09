@@ -2304,6 +2304,8 @@ class OrbService:
             self.is_running = True
             self._debug_mode = debug_mode
             self._bars_received_count = 0
+            # Tell the strategy engines the bar feed is live so they may trade.
+            self._hub.set_service_running(True)
             
             logger.info("=" * 60)
             logger.info("ORB MONITORING SERVICE STARTING")
@@ -2393,9 +2395,11 @@ class OrbService:
         logger.info("STOPPING ORB MONITORING SERVICE")
         logger.info(f"Total bars received this session: {self._bars_received_count}")
         logger.info("=" * 60)
-        
+
         self.is_running = False
-        
+        # Engines must stop acting/notifying once the bar feed is gone.
+        self._hub.set_service_running(False)
+
         # Cancel all confirmation timers
         for ticker, timer_task in list(self._confirmation_timers.items()):
             timer_task.cancel()
