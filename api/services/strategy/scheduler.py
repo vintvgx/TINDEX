@@ -9,6 +9,8 @@ opening range window are complete before the engine fetches them.
 """
 
 import logging
+import threading
+from datetime import datetime
 import pytz
 
 try:
@@ -155,4 +157,21 @@ def init_scheduler(engine):
         sched.start()
     reschedule_jobs(engine)
     logger.info("[Scheduler] Started with engine profile=%s", engine.profile_key)
+
+    # Late-start recovery: if the server started after the orb_calc cron fired today,
+    # the job won't fire again until tomorrow. Trigger calculate_orb immediately so the
+    # engine can still trade the remainder of the session.
+    now_et = datetime.now(ET)
+    if now_et.weekday() in engine.trade_days and not engine.orh and not engine.session_skipped:
+        orb_minutes     = engine.config.get("orb_minutes", 10)
+        orb_fire_min    = 30 + orb_minutes + 1
+        orb_fire_hour   = 9 + orb_fire_min // 60
+        orb_fire_min    = orb_fire_min % 60
+        orb_calc_dt     = now_et.replace(hour=orb_fire_hour, minute=orb_fire_min,
+                                         second=0, microsecond=0)
+        eod_dt          = now_et.replace(hour=15, minute=30, second=0, microsecond=0)
+        if orb_calc_dt <= now_et <= eod_dt:
+            logger.info("[Scheduler] Late start — triggering calculate_orb now for %s", engine.ticker)
+            threading.Thread(target=engine.calculate_orb, daemon=True).start()
+
     return sched

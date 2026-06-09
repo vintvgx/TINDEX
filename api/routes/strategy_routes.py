@@ -166,6 +166,20 @@ def get_strategy_position(strategy_id: str):
     return _engine_position_response(engine)
 
 
+@strategy_bp.route("/debug", methods=["GET"])
+def debug_all_engines():
+    """Full session state for every engine — use to diagnose silent entry failures."""
+    return jsonify({sid: eng.session_state() for sid, eng in _engines.items()})
+
+
+@strategy_bp.route("/configs/<strategy_id>/debug", methods=["GET"])
+def debug_engine(strategy_id: str):
+    engine = _engines.get(strategy_id)
+    if not engine:
+        return jsonify({"error": "Strategy not found"}), 404
+    return jsonify(engine.session_state())
+
+
 # ── All positions ─────────────────────────────────────────────────────────────
 
 @strategy_bp.route("/positions", methods=["GET"])
