@@ -73,7 +73,52 @@ export interface StrategyConfig {
   custom_thresholds: CustomThresholds | null;
   budget_otm_mode: boolean;
   otm_fib_level: OtmFibLevel;
+  debug_mode: boolean;
   has_position?: boolean;
+}
+
+export type DebugLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
+
+export interface DebugLogEntry {
+  id: number;
+  ts: string;
+  level: DebugLevel;
+  message: string;
+  data: Record<string, unknown> | null;
+  strategy_id: string;
+  ticker: string;
+  strategy_name: string;
+}
+
+export interface DebugLogsResponse {
+  debug_enabled: boolean;
+  logs: DebugLogEntry[];
+}
+
+export interface Contract0DTE {
+  symbol: string;
+  strike: number;
+  delta: number | null;
+  bid: number;
+  ask: number;
+  mid: number;
+  spread_pct: number | null;
+  oi: number;
+}
+
+export interface ContractsResponse {
+  ticker: string;
+  direction: 'CALL' | 'PUT';
+  underlying: number | null;
+  contracts: Contract0DTE[];
+}
+
+export interface ImmediateTradeRequest {
+  strategyId: string;
+  direction: 'CALL' | 'PUT';
+  contract_symbol: string;
+  qty?: number;
+  profile?: ProfileKey;
 }
 
 export interface FibLevels {

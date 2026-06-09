@@ -19,6 +19,7 @@ import { ProfileCard } from '@/common/components/strategy/ProfileCard';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/components/strategy/CustomThresholdsEditor';
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
+import { ImmediateTradeModal } from '@/common/components/strategy/ImmediateTradeModal';
 import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel } from '@/common/types/strategy';
 
 const TICKERS     = ['SPY', 'QQQ', 'IWM'] as const;
@@ -112,6 +113,7 @@ export default function StrategyScreen() {
 
   const [modalVisible, setModalVisible]       = useState(false);
   const [simulationVisible, setSimulationVisible] = useState(false);
+  const [immediateConfig, setImmediateConfig] = useState<StrategyConfig | null>(null);
   const [editingConfig, setEditingConfig]     = useState<StrategyConfig | null>(null);
   const [form, setForm]                       = useState<FormState>(DEFAULT_FORM);
   const [saving, setSaving]                   = useState(false);
@@ -266,6 +268,7 @@ export default function StrategyScreen() {
               colors={colors}
               onEdit={() => openEdit(cfg)}
               onDelete={() => handleDelete(cfg)}
+              onImmediate={() => setImmediateConfig(cfg)}
             />
           ))
         ) : (
@@ -325,6 +328,13 @@ export default function StrategyScreen() {
         onClose={() => setSimulationVisible(false)}
         strategyId={configs?.[0]?.id}
       />
+
+      <ImmediateTradeModal
+        visible={!!immediateConfig}
+        config={immediateConfig}
+        colors={colors}
+        onClose={() => setImmediateConfig(null)}
+      />
     </SafeAreaView>
   );
 }
@@ -336,9 +346,10 @@ interface StrategyCardProps {
   colors: any;
   onEdit: () => void;
   onDelete: () => void;
+  onImmediate: () => void;
 }
 
-function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
+function StrategyCard({ config, colors, onEdit, onDelete, onImmediate }: StrategyCardProps) {
   const mode         = getMode(config);
   const modeMeta     = MODE_META[mode];
   const profileColor = PROFILE_COLORS[config.profile] ?? colors.accent;
@@ -469,6 +480,9 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
 
       {/* Actions */}
       <View style={styles.stratActions}>
+        <TouchableOpacity onPress={onImmediate} hitSlop={8} style={styles.actionBtn}>
+          <Ionicons name="flash" size={18} color="#F59E0B" />
+        </TouchableOpacity>
         <TouchableOpacity onPress={onEdit} hitSlop={8} style={styles.actionBtn}>
           <Ionicons name="pencil-outline" size={18} color={colors.accent} />
         </TouchableOpacity>

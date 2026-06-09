@@ -1612,6 +1612,14 @@ class OrbService:
                         f"[BREAKOUT CONFIRMED] {ticker} breakout confirmed after 3 minutes. "
                         f"Price: ${current_price:.2f}, ORB High: ${orb_high:.2f}, ORB Low: ${orb_low:.2f}"
                     )
+
+                    # Invoke the strategy engine: a confirmed 3-min breakout is the
+                    # sole entry trigger. Engines subscribed to this ticker enter the
+                    # trade using their own ORB/fib; the hub keeps streaming bars for
+                    # exit management. Runs regardless of user follows.
+                    direction = "CALL" if breakout_type == "above" else "PUT"
+                    self._hub.publish_breakout_confirmed(ticker, direction, float(current_price))
+
                     breakout_type_display = "Confirmed Bullish" if breakout_type == "above" else "Confirmed Bearish"
                     trade_date = self.get_current_et_time().date()
                     # Update cache state (NO DATABASE CALL)

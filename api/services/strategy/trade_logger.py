@@ -53,6 +53,7 @@ class TradeLogger:
                 "custom_thresholds":      config.get("custom_thresholds"),
                 "budget_otm_mode":        config.get("budget_otm_mode", False),
                 "otm_fib_level":          config.get("otm_fib_level", "1.0"),
+                "debug_mode":             config.get("debug_mode", False),
                 "updated_at":             datetime.utcnow().isoformat(),
             }
             if "id" in config and config["id"]:

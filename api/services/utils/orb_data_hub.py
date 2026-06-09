@@ -63,6 +63,9 @@ class OrbDataHub:
         self._lock = threading.RLock()
         self._bar_subs: dict[str, list[Callable[[OrbBar], None]]] = defaultdict(list)
         self._orb_subs: dict[str, list[Callable[[OrbStatus], None]]] = defaultdict(list)
+        # Confirmed-breakout subscribers: OrbService publishes here once a breakout
+        # survives its 3-minute confirmation, and the engine enters the trade.
+        self._breakout_subs: dict[str, list[Callable[[str, float], None]]] = defaultdict(list)
         self._recent_bars: dict[str, deque] = {}
         self._status: dict[str, OrbStatus] = {}
         self._max_recent = max_recent_bars
@@ -80,10 +83,17 @@ class OrbDataHub:
             if cb not in self._orb_subs[ticker]:
                 self._orb_subs[ticker].append(cb)
 
-    def unsubscribe(self, ticker: str, cb: Callable) -> None:
-        """Remove a callback from both bar and ORB subscriptions for a ticker."""
+    def subscribe_breakout(self, ticker: str, cb: Callable[[str, float], None]) -> None:
+        """Register a confirmed-breakout callback: cb(direction, price)."""
         with self._lock:
-            for registry in (self._bar_subs, self._orb_subs):
+            if cb not in self._breakout_subs[ticker]:
+                self._breakout_subs[ticker].append(cb)
+        logger.info("[OrbDataHub] breakout subscriber added for %s", ticker)
+
+    def unsubscribe(self, ticker: str, cb: Callable) -> None:
+        """Remove a callback from bar, ORB, and breakout subscriptions for a ticker."""
+        with self._lock:
+            for registry in (self._bar_subs, self._orb_subs, self._breakout_subs):
                 if cb in registry.get(ticker, []):
                     registry[ticker].remove(cb)
         logger.info("[OrbDataHub] subscriber removed for %s", ticker)
@@ -115,6 +125,22 @@ class OrbDataHub:
             except Exception as e:
                 logger.error("[OrbDataHub] ORB subscriber error for %s: %s",
                              status.ticker, e, exc_info=True)
+
+    def publish_breakout_confirmed(self, ticker: str, direction: str, price: float) -> None:
+        """
+        Announce a confirmed (3-min-survived) breakout to engines listening on
+        this ticker. direction is "CALL" | "PUT"; price is the confirming tick.
+        """
+        with self._lock:
+            listeners = list(self._breakout_subs.get(ticker, ()))
+        logger.info("[OrbDataHub] breakout confirmed %s %s @ %.2f → %d listener(s)",
+                    ticker, direction, price, len(listeners))
+        for cb in listeners:
+            try:
+                cb(direction, price)
+            except Exception as e:
+                logger.error("[OrbDataHub] breakout subscriber error for %s: %s",
+                             ticker, e, exc_info=True)
 
     # ── Queries (called by ORBEngine) ────────────────────────────────────────
 

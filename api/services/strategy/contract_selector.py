@@ -66,6 +66,59 @@ _BUDGET_OI_MIN           = 25    # lower liquidity floor acceptable for cheap OT
 _BUDGET_STRIKE_TOLERANCE = 0.75  # |strike - fib_anchor| ≤ this to pass filter
 
 
+def fetch_0dte_chain(ticker: str, option_type: str, data_client,
+                     limit: int = 40) -> list[dict]:
+    """
+    Return the raw 0DTE option chain for a ticker/side as a clean, sorted list for
+    the manual "Immediate Trade" picker. Unlike select_contract this applies NO
+    hard filters — it surfaces every strike with a live quote so the user chooses.
+
+    option_type — "call" | "put".
+    Returns [{symbol, strike, delta, bid, ask, mid, spread_pct, oi}] sorted by strike.
+    """
+    today = date.today()
+    try:
+        from alpaca.data.requests import OptionChainRequest
+        chain = data_client.get_option_chain(OptionChainRequest(
+            underlying_symbol=ticker,
+            expiration_date=today,
+            type=option_type,
+        ))
+    except Exception as exc:
+        logger.error("[ContractSelector] 0DTE chain fetch failed for %s: %s", ticker, exc)
+        return []
+
+    rows = []
+    for symbol, contract in chain.items():
+        q = contract.latest_quote
+        if not q:
+            continue
+        ask = float(q.ask_price) if q.ask_price else 0.0
+        bid = float(q.bid_price) if q.bid_price else 0.0
+        if ask <= 0:
+            continue
+        delta = None
+        if contract.greeks and contract.greeks.delta is not None:
+            delta = round(abs(contract.greeks.delta), 3)
+        rows.append({
+            "symbol":     symbol,
+            "strike":     contract.strike_price,
+            "delta":      delta,
+            "bid":        round(bid, 2),
+            "ask":        round(ask, 2),
+            "mid":        round((ask + bid) / 2, 2),
+            "spread_pct": round((ask - bid) / ask, 3) if ask > 0 else None,
+            "oi":         contract.open_interest or 0,
+        })
+
+    rows.sort(key=lambda r: r["strike"])
+    if limit and len(rows) > limit:
+        # Keep the strikes nearest the money (middle of the sorted list).
+        start = max(0, (len(rows) - limit) // 2)
+        rows = rows[start:start + limit]
+    return rows
+
+
 def select_contract(
     ticker: str,
     direction: str,

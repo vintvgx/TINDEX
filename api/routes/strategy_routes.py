@@ -60,7 +60,7 @@ def create_config():
             "ticker", "orb_minutes", "paper_mode", "active",
             "profile", "trade_days", "strategy_name", "capital_limit",
             "bypass_breakout_window", "custom_thresholds",
-            "budget_otm_mode", "otm_fib_level",
+            "budget_otm_mode", "otm_fib_level", "debug_mode",
         ) if k in data
     }}
     config.pop("id", None)   # force new UUID
@@ -89,7 +89,7 @@ def update_config(strategy_id: str):
     allowed = {"ticker", "orb_minutes", "paper_mode", "active",
                "profile", "trade_days", "strategy_name", "capital_limit",
                "bypass_breakout_window", "custom_thresholds",
-               "budget_otm_mode", "otm_fib_level"}
+               "budget_otm_mode", "otm_fib_level", "debug_mode"}
     for key in allowed:
         if key in data:
             engine.config[key] = data[key]
@@ -187,6 +187,102 @@ def debug_engine(strategy_id: str):
     if not engine:
         return jsonify({"error": "Strategy not found"}), 404
     return jsonify(engine.session_state())
+
+
+# ── Debug logs (frontend Debug tab) ─────────────────────────────────────────────
+
+@strategy_bp.route("/debug-logs", methods=["GET"])
+def get_debug_logs():
+    """
+    Merge every engine's in-memory debug buffer into one time-ordered stream so the
+    Trade Log & Stats → Debug tab can show all ORB strategy logic. Each row is tagged
+    with strategy_id + ticker. Use ?since=<id> to fetch only newer rows per strategy.
+    """
+    try:
+        since = int(request.args.get("since", 0))
+    except (TypeError, ValueError):
+        since = 0
+    rows = []
+    any_debug_on = False
+    for sid, engine in _engines.items():
+        if getattr(engine, "debug_enabled", False):
+            any_debug_on = True
+        buf = getattr(engine, "debug", None)
+        if not buf:
+            continue
+        for rec in buf.snapshot(since_id=since):
+            rows.append({
+                **rec,
+                "strategy_id":   sid,
+                "ticker":        getattr(engine, "ticker", ""),
+                "strategy_name": getattr(engine, "strategy_name", ""),
+            })
+    rows.sort(key=lambda r: r["ts"])
+    return jsonify({"debug_enabled": any_debug_on, "logs": rows[-1000:]})
+
+
+@strategy_bp.route("/debug-logs/clear", methods=["POST"])
+def clear_debug_logs():
+    """Clear every engine's debug buffer."""
+    for engine in _engines.values():
+        buf = getattr(engine, "debug", None)
+        if buf:
+            buf.clear()
+    return jsonify({"status": "ok"})
+
+
+# ── Immediate / conviction trade ────────────────────────────────────────────────
+
+@strategy_bp.route("/configs/<strategy_id>/contracts", methods=["GET"])
+def list_0dte_contracts(strategy_id: str):
+    """
+    Return the live 0DTE option chain for the strategy's ticker so the user can pick
+    a contract for an immediate trade. ?direction=CALL|PUT (default CALL).
+    """
+    engine = _engines.get(strategy_id)
+    if not engine:
+        return jsonify({"error": "Strategy not found"}), 404
+    direction = (request.args.get("direction", "CALL") or "CALL").upper()
+    option_type = "call" if direction == "CALL" else "put"
+    from services.strategy.contract_selector import fetch_0dte_chain
+    contracts = fetch_0dte_chain(engine.ticker, option_type, engine.option_client)
+    underlying = getattr(engine, "_last_underlying_price", None)
+    if underlying is None:
+        status = engine._hub.get_status(engine.ticker)
+        underlying = status.last_price if status else None
+    return jsonify({
+        "ticker":     engine.ticker,
+        "direction":  direction,
+        "underlying": underlying,
+        "contracts":  contracts,
+    })
+
+
+@strategy_bp.route("/configs/<strategy_id>/immediate-trade", methods=["POST"])
+def immediate_trade(strategy_id: str):
+    """
+    Submit a manual conviction trade for a user-chosen 0DTE contract, skipping the
+    breakout wait / sentiment / flow filters. Body:
+      {direction: "CALL"|"PUT", contract_symbol, qty?, profile?}
+    """
+    engine = _engines.get(strategy_id)
+    if not engine:
+        return jsonify({"error": "Strategy not found"}), 404
+    data = request.get_json() or {}
+    contract_symbol = data.get("contract_symbol")
+    direction = data.get("direction")
+    if not contract_symbol or not direction:
+        return jsonify({"status": "error",
+                        "message": "direction and contract_symbol are required"}), 400
+
+    result = engine.submit_manual_trade(
+        direction=direction,
+        contract_symbol=contract_symbol,
+        qty=data.get("qty"),
+        profile_key=data.get("profile"),
+    )
+    code = 200 if result.get("status") == "ok" else 409
+    return jsonify(result), code
 
 
 # ── All positions ─────────────────────────────────────────────────────────────

@@ -1,13 +1,26 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator, Switch } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
+import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
 import { useStrategyStats, useStrategyStatsByProfile } from '@/hooks/queries/strategy/useStrategyStats';
-import type { ProfileKey, ORBTrade, StrategyStats } from '@/common/types/strategy';
+import { useStrategyDebugLogs } from '@/hooks/queries/strategy/useStrategyDebugLogs';
+import { useStrategyConfigs } from '@/hooks/queries/strategy/useStrategyConfigs';
+import { useUpdateStrategyConfig } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
+import type { ProfileKey, ORBTrade, StrategyStats, DebugLogEntry, DebugLevel } from '@/common/types/strategy';
 
 type Filter = 'ALL' | ProfileKey;
+type Tab = 'log' | 'stats' | 'debug';
+
+const DEBUG_COLORS: Record<DebugLevel, string> = {
+  ERROR:   '#EF4444',
+  WARN:    '#F59E0B',
+  INFO:    '#3B82F6',
+  DEBUG:   '#8B5CF6',
+  SUCCESS: '#22C55E',
+};
 
 const FILTERS: { label: string; value: Filter }[] = [
   { label: 'All', value: 'ALL' },
@@ -19,7 +32,7 @@ const FILTERS: { label: string; value: Filter }[] = [
 export default function TradeLogScreen() {
   const colors = useThemeColors();
   const [filter, setFilter] = useState<Filter>('ALL');
-  const [tab, setTab] = useState<'log' | 'stats'>('log');
+  const [tab, setTab] = useState<Tab>('log');
 
   const { data: trades, isLoading: tradesLoading } = useStrategyTrades({
     profile: filter,
@@ -43,20 +56,23 @@ export default function TradeLogScreen() {
       {/* Tab toggle (sticky) */}
       <View style={[styles.tabToggleWrap, { backgroundColor: colors.background }]}>
         <View style={[styles.tabToggle, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          {(['log', 'stats'] as const).map(t => (
+          {(['log', 'stats', 'debug'] as const).map(t => (
             <TouchableOpacity
               key={t}
               onPress={() => setTab(t)}
               style={[styles.tabBtn, tab === t && { backgroundColor: colors.accent }]}
             >
               <Text style={[styles.tabText, { color: tab === t ? '#fff' : colors.tabBarInactive }]}>
-                {t === 'log' ? 'Trade Log' : 'Stats'}
+                {t === 'log' ? 'Trade Log' : t === 'stats' ? 'Stats' : 'Debug'}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
       </View>
 
+      {tab === 'debug' ? (
+        <DebugLogPanel colors={colors} />
+      ) : (
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
 
         {/* Filter chips */}
@@ -115,6 +131,7 @@ export default function TradeLogScreen() {
 
         <View style={{ height: 100 }} />
       </ScrollView>
+      )}
 
     </SafeAreaView>
   );
@@ -181,6 +198,118 @@ const StatItem = ({ label, value, color, colors }: { label: string; value: strin
   </View>
 );
 
+// ── Debug log panel ──────────────────────────────────────────────────────────────
+
+const DEBUG_FILTERS: ('ALL' | DebugLevel)[] = ['ALL', 'ERROR', 'WARN', 'SUCCESS', 'INFO', 'DEBUG'];
+
+const formatLogTime = (iso: string): string => {
+  const d = new Date(iso);
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+};
+
+function DebugLogPanel({ colors }: { colors: any }) {
+  const [levelFilter, setLevelFilter] = useState<'ALL' | DebugLevel>('ALL');
+  const { data, isLoading } = useStrategyDebugLogs(true);
+  const { data: configs } = useStrategyConfigs();
+  const { mutate: updateConfig } = useUpdateStrategyConfig();
+
+  const debugOn = !!configs?.some(c => c.debug_mode);
+
+  const toggleDebug = (value: boolean) => {
+    (configs ?? []).forEach(c => {
+      if (c.debug_mode !== value) updateConfig({ id: c.id, debug_mode: value });
+    });
+  };
+
+  const clearLogs = async () => {
+    try {
+      await fetch(`${RAILWAY_BASE_URL}/strategy/debug-logs/clear`, { method: 'POST' });
+    } catch {
+      /* best-effort */
+    }
+  };
+
+  const logs = useMemo(() => {
+    const all = data?.logs ?? [];
+    const filtered = levelFilter === 'ALL' ? all : all.filter(l => l.level === levelFilter);
+    return [...filtered].reverse(); // newest first
+  }, [data?.logs, levelFilter]);
+
+  return (
+    <View style={{ flex: 1 }}>
+      {/* Controls */}
+      <View style={[styles.debugControls, { borderBottomColor: colors.border }]}>
+        <View style={styles.debugToggleRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.debugToggleLabel, { color: colors.text }]}>Debug Mode</Text>
+            <Text style={[styles.debugToggleHint, { color: colors.tabBarInactive }]}>
+              {debugOn ? 'Logging every ORB decision' : 'Off — toggle to capture strategy logic'}
+            </Text>
+          </View>
+          <Switch value={debugOn} onValueChange={toggleDebug} />
+          <TouchableOpacity onPress={clearLogs} style={[styles.debugClearBtn, { borderColor: colors.border }]} hitSlop={8}>
+            <Ionicons name="trash-outline" size={16} color={colors.error} />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 10 }}>
+          {DEBUG_FILTERS.map(lvl => {
+            const active = levelFilter === lvl;
+            const tint = lvl === 'ALL' ? colors.accent : DEBUG_COLORS[lvl];
+            return (
+              <TouchableOpacity
+                key={lvl}
+                onPress={() => setLevelFilter(lvl)}
+                style={[styles.debugChip, { borderColor: active ? tint : colors.border, backgroundColor: active ? tint + '22' : 'transparent' }]}
+              >
+                <Text style={[styles.debugChipText, { color: active ? tint : colors.tabBarInactive }]}>
+                  {lvl === 'ALL' ? 'All' : lvl}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
+
+      <ScrollView contentContainerStyle={styles.debugList} showsVerticalScrollIndicator={false}>
+        {isLoading && !data ? (
+          <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
+        ) : logs.length === 0 ? (
+          <Text style={[styles.empty, { color: colors.tabBarInactive }]}>
+            {debugOn ? 'No debug events yet' : 'Enable Debug Mode to capture strategy logic'}
+          </Text>
+        ) : (
+          logs.map(log => <DebugRow key={`${log.strategy_id}-${log.id}`} log={log} colors={colors} />)
+        )}
+        <View style={{ height: 100 }} />
+      </ScrollView>
+    </View>
+  );
+}
+
+const DebugRow = ({ log, colors }: { log: DebugLogEntry; colors: any }) => {
+  const tint = DEBUG_COLORS[log.level] ?? colors.tabBarInactive;
+  return (
+    <View style={[styles.debugRow, { backgroundColor: colors.card, borderLeftColor: tint }]}>
+      <View style={styles.debugRowHeader}>
+        <Text style={[styles.debugLevel, { color: tint }]}>{log.level}</Text>
+        {!!log.ticker && (
+          <View style={[styles.debugTickerBadge, { backgroundColor: tint + '22' }]}>
+            <Text style={[styles.debugTickerText, { color: tint }]}>{log.ticker}</Text>
+          </View>
+        )}
+        <Text style={[styles.debugTime, { color: colors.tabBarInactive }]}>{formatLogTime(log.ts)}</Text>
+      </View>
+      <Text style={[styles.debugMsg, { color: colors.text }]} selectable>{log.message}</Text>
+      {log.data && (
+        <Text style={[styles.debugData, { color: colors.tabBarInactive }]} selectable>
+          {JSON.stringify(log.data)}
+        </Text>
+      )}
+    </View>
+  );
+};
+
 const styles = StyleSheet.create({
   container:      { flex: 1 },
   content:        { paddingHorizontal: 16, paddingTop: 8, gap: 10 },
@@ -214,4 +343,22 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: 10, marginBottom: 2 },
   statValue: { fontSize: 14, fontWeight: '700' },
   byProfileTitle: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 8 },
+
+  // Debug tab
+  debugControls:    { paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth },
+  debugToggleRow:   { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  debugToggleLabel: { fontSize: 14, fontWeight: '700' },
+  debugToggleHint:  { fontSize: 11, marginTop: 1 },
+  debugClearBtn:    { width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  debugChip:        { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, marginRight: 8 },
+  debugChipText:    { fontSize: 12, fontWeight: '600' },
+  debugList:        { paddingHorizontal: 16, paddingTop: 10, gap: 6 },
+  debugRow:         { borderRadius: 8, borderLeftWidth: 3, padding: 10 },
+  debugRowHeader:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3 },
+  debugLevel:       { fontSize: 10, fontWeight: '800' },
+  debugTickerBadge: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 },
+  debugTickerText:  { fontSize: 10, fontWeight: '700' },
+  debugTime:        { fontSize: 10, marginLeft: 'auto' },
+  debugMsg:         { fontSize: 12, fontFamily: 'monospace' },
+  debugData:        { fontSize: 10, fontFamily: 'monospace', marginTop: 4 },
 });
