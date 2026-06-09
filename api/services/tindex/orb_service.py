@@ -2311,10 +2311,13 @@ class OrbService:
             
             # Warm cache from database
             await self._state_cache.load_from_database(self.get_current_et_time().date())
-            
-            # Send service started notification
-            await self.send_service_status_notification("started")
-            
+
+            # NOTE: The "started" push is intentionally not sent here. The strategy
+            # engine sends a single combined "ORB Service + Engine started"
+            # notification (StrategyNotifier.notify_start) from the start endpoint,
+            # so emitting one here too would double-notify. The "stopped"
+            # notification is still sent from stop().
+
             # Check market hours first
             if not debug_mode and not self.is_market_hours():
                 logger.info("Outside market hours - entering wait loop")
