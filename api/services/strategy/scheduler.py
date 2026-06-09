@@ -59,6 +59,8 @@ def reschedule_jobs(engine, strategy_id: str = None):
             sched.remove_job(f"job_{sid}_{suffix}")
         except Exception:
             pass
+    # NOTE: "price_poll" is retained in the removal list above to clean up any
+    # legacy job from before the hub migration; it is no longer (re)created.
 
     days_cron = _days_to_cron(list(engine.trade_days))
     if not days_cron:
@@ -84,35 +86,14 @@ def reschedule_jobs(engine, strategy_id: str = None):
         id=f"job_{sid}_orb_calc", replace_existing=True,
     )
 
-    sched.add_job(
-        lambda: _poll(engine),
-        CronTrigger(day_of_week=days_cron, hour="9-15", minute="*/1", timezone=ET),
-        id=f"job_{sid}_price_poll", replace_existing=True,
-    )
+    # Per-minute price polling is gone: underlying bars are pushed from OrbService
+    # via the hub (engine.on_bar → on_price_tick). No price_poll job is scheduled.
 
     sched.add_job(
         lambda: _eod_reset(engine),
         CronTrigger(day_of_week=days_cron, hour=15, minute=30, timezone=ET),
         id=f"job_{sid}_eod_reset", replace_existing=True,
     )
-
-
-def _poll(engine):
-    """
-    Fetch the latest price and drive on_price_tick.
-    Early-returns if ORB hasn't been established yet (before 9:30+orb_minutes ET).
-
-    NOTE: Runs every minute from 9:00–15:59 ET on trade days.
-    """
-    if not engine.orh:
-        return
-    price_data = engine.get_latest_price()
-    if price_data:
-        engine.on_price_tick(
-            current_price=price_data["underlying"],
-            current_volume=price_data.get("volume"),
-            current_option_price=price_data.get("option_price"),
-        )
 
 
 def _eod_reset(engine):

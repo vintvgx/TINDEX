@@ -6,11 +6,15 @@ Legacy single-engine endpoints (/strategy/config, /strategy/position, etc.)
 operate on the first engine for backwards compatibility with old clients.
 """
 
+import logging
+
 from flask import Blueprint, jsonify, request
 from services.strategy.trade_logger import TradeLogger
 from services.strategy.profiles import PROFILES, describe_profile
 from services.strategy.scheduler import reschedule_jobs
 from services.strategy.orb_engine import ORBEngine, STRATEGY_DEFAULTS
+
+logger = logging.getLogger(__name__)
 
 strategy_bp = Blueprint("strategy", __name__, url_prefix="/strategy")
 
@@ -115,6 +119,11 @@ def delete_config(strategy_id: str):
     # Safe to remove now — position is closed (or never existed)
     _engines.pop(strategy_id, None)
     if engine:
+        # Detach from the hub bar feed so no stale callback is retained.
+        try:
+            engine.unsubscribe_data()
+        except Exception as e:
+            logger.warning("[strategy] unsubscribe_data failed for %s: %s", strategy_id, e)
         from services.strategy.scheduler import get_scheduler
         sched = get_scheduler()
         if sched:

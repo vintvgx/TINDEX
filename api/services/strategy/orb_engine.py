@@ -7,15 +7,14 @@ POSTs to /strategy/config. Paper vs live trading is set by paper_mode in config.
 
 import os
 import logging
+import threading
 import pytz
 from datetime import datetime, timedelta
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.data.historical import StockHistoricalDataClient, OptionHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.historical import OptionHistoricalDataClient
 
 from services.strategy.profiles import get_profile
 from services.strategy.contract_selector import select_contract
@@ -23,6 +22,7 @@ from services.strategy.exit_manager import ExitManager
 from services.strategy.sentiment import SentimentFilter
 from services.strategy.trade_logger import TradeLogger
 from services.strategy.notifier import StrategyNotifier
+from services.utils.orb_data_hub import get_orb_data_hub, OrbBar
 
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
@@ -54,9 +54,15 @@ EOD_CLOSE_TIMES = {
 
 
 class ORBEngine:
-    def __init__(self, config: dict = None, stream_manager=None):
+    def __init__(self, config: dict = None, stream_manager=None, hub=None):
         self.config = config or STRATEGY_DEFAULTS.copy()
         self._stream_manager_ref = stream_manager
+        # ORB data hub — bars + ORB status are pushed here by OrbService.
+        self._hub = hub or get_orb_data_hub()
+        self._subscribed_ticker = None        # ticker currently subscribed on the hub
+        # Serializes on_price_tick across its callers (hub bar thread, option-stream
+        # thread) so a pushed bar and a quote can't interleave a double entry.
+        self._tick_lock = threading.Lock()
         self._apply_config()
         self._reset_session_state()
 
@@ -84,12 +90,21 @@ class ORBEngine:
         data_secret  = os.getenv("ALPACA_LIVE_SECRET_KEY")
 
         self.trading_client = TradingClient(trade_key, trade_secret, paper=self.paper)
-        self.data_client    = StockHistoricalDataClient(data_key, data_secret)
         self.option_client  = OptionHistoricalDataClient(data_key, data_secret)
 
         self.sentiment  = SentimentFilter()
         self.logger     = TradeLogger()
         self.notifier   = StrategyNotifier(self.logger.client)
+
+        # Subscribe to the hub bar feed for this ticker (re-subscribe on ticker change).
+        # Underlying bars + opening-range data now come from OrbService via the hub
+        # instead of being fetched directly from Alpaca.
+        if self._subscribed_ticker != self.ticker:
+            if self._subscribed_ticker is not None:
+                self._hub.unsubscribe(self._subscribed_ticker, self.on_bar)
+            self._hub.subscribe_bar(self.ticker, self.on_bar)
+            self._subscribed_ticker = self.ticker
+
         logger.info("[ORBEngine] Config applied — profile=%s ticker=%s paper=%s days=%s",
                     self.profile_key, self.ticker, self.paper, self.trade_days)
 
@@ -148,7 +163,7 @@ class ORBEngine:
             self._skip("STRATEGY_DISABLED")
             return False
 
-        bars = self._fetch_orb_bars(self.config["orb_minutes"])
+        bars = self._collect_orb_window_bars(self.config["orb_minutes"])
         if not bars:
             self._skip("NO_DATA")
             return False
@@ -200,15 +215,21 @@ class ORBEngine:
     def on_price_tick(self, current_price: float, current_volume: float = None,
                      current_option_price: float = None):
         """
-        Main per-minute decision loop: checks breakout conditions before entry
-        or delegates to ExitManager once a position is open.
+        Main decision loop: checks breakout conditions before entry or delegates
+        to ExitManager once a position is open.
 
         current_price         — underlying stock price (always available)
         current_option_price  — live option mid-price (bid+ask)/2; None if fetch failed.
                                 ExitManager uses this for the premium-based hard stop.
 
-        NOTE: Called by scheduler._poll every minute.
+        NOTE: Called from on_bar (hub bar push) and from _on_stream_quote (option
+        stream thread). The lock serializes these callers to prevent a double entry.
         """
+        with self._tick_lock:
+            self._process_tick(current_price, current_volume, current_option_price)
+
+    def _process_tick(self, current_price: float, current_volume: float = None,
+                      current_option_price: float = None):
         if self.session_skipped:
             return
 
@@ -598,68 +619,88 @@ class ORBEngine:
         except Exception:
             return None
 
-    def _fetch_orb_bars(self, n_minutes: int):
+    def on_bar(self, bar: OrbBar):
         """
-        Pull the first n_minutes of 1-minute bars starting at 09:30 ET.
+        Hub callback: a new underlying bar arrived for this ticker.
 
-        NOTE: Called by calculate_orb to establish the opening range.
+        Caches the latest underlying price and, once the opening range is set,
+        drives the per-bar decision loop. The option price comes from the live
+        stream (_current_option_price) or a REST fallback so exits can evaluate
+        even without an active option stream.
+
+        NOTE: Invoked on the OrbService asyncio-loop thread. on_price_tick is
+        thread-safe (self._tick_lock).
+        """
+        if bar.close is None:
+            return
+        self._last_underlying_price = bar.close
+
+        # Only act once the ORB is established and the session isn't skipped.
+        # getattr guards the brief __init__ window before _reset_session_state runs.
+        if not getattr(self, "orh", None) or getattr(self, "session_skipped", False):
+            return
+
+        self.on_price_tick(
+            current_price=bar.close,
+            current_volume=bar.volume,
+            current_option_price=self._get_option_price(),
+        )
+
+    def _collect_orb_window_bars(self, n_minutes: int):
+        """
+        Build the opening-range bars from the hub's recent-bar buffer: the first
+        n_minutes of bars from 09:30 ET. The service streams these bars; the engine
+        windows them per its own orb_minutes (no separate data fetch).
+
+        NOTE: Called by calculate_orb. Returns [] when no in-window bars are
+        available (e.g. a server restart after the window), yielding NO_DATA.
         """
         now_et = datetime.now(ET)
         start  = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
         end    = start + timedelta(minutes=n_minutes)
-        try:
-            req  = StockBarsRequest(
-                symbol_or_symbols=self.ticker,
-                timeframe=TimeFrame.Minute,
-                start=start, end=end,
-            )
-            bars = self.data_client.get_stock_bars(req)
-            return bars[self.ticker]
-        except Exception as e:
-            logger.error("[ORBEngine] Bar fetch failed: %s", e)
-            return []
+        bars = []
+        for b in self._hub.get_recent_bars(self.ticker):
+            ts = b.ts
+            if ts.tzinfo is None:
+                ts = ET.localize(ts)
+            else:
+                ts = ts.astimezone(ET)
+            if start <= ts < end and b.high is not None and b.low is not None:
+                bars.append(b)
+        if not bars:
+            logger.warning("[ORBEngine] No hub bars in ORB window for %s (%s–%s)",
+                           self.ticker, start.time(), end.time())
+        return bars
 
-    def get_latest_price(self) -> dict | None:
+    def _get_option_price(self) -> float | None:
         """
-        Fetch the most recent underlying bar to update _last_underlying_price.
-        When streaming is active, the option price comes from the WebSocket
-        stream (_current_option_price); otherwise it is fetched here as a fallback.
-
-        NOTE: Called by scheduler._poll every minute. With active streaming the
-        option price from this method is ignored in favour of the stream value.
-        Returns {"underlying": float, "volume": float, "option_price": float|None}.
+        Return the current option mid-price: prefer the live stream value, else a
+        REST quote fallback when a position is open and the stream is unavailable.
         """
-        try:
-            from alpaca.data.requests import StockLatestBarRequest
-            req  = StockLatestBarRequest(symbol_or_symbols=self.ticker)
-            bars = self.data_client.get_stock_latest_bar(req)
-            bar  = bars.get(self.ticker)
-            if not bar:
-                return None
-
-            self._last_underlying_price = bar.close
-            result: dict = {
-                "underlying":   bar.close,
-                "volume":       bar.volume,
-                "option_price": self._current_option_price,  # from stream if active
-            }
-
-            # Fallback REST fetch for option price when stream is unavailable
-            if self.contract_symbol and self._current_option_price is None:
-                try:
-                    from alpaca.data.requests import OptionLatestQuoteRequest
-                    oreq   = OptionLatestQuoteRequest(symbol_or_symbols=self.contract_symbol)
-                    quotes = self.option_client.get_option_latest_quote(oreq)
-                    quote  = quotes.get(self.contract_symbol)
-                    if quote and quote.ask_price and quote.bid_price:
-                        result["option_price"] = (quote.ask_price + quote.bid_price) / 2
-                except Exception as oe:
-                    logger.debug("[ORBEngine] option quote REST fallback failed: %s", oe)
-
-            return result
-        except Exception as e:
-            logger.warning("[ORBEngine] get_latest_price failed: %s", e)
+        if self._current_option_price is not None:
+            return self._current_option_price
+        if not self.contract_symbol:
             return None
+        try:
+            from alpaca.data.requests import OptionLatestQuoteRequest
+            oreq   = OptionLatestQuoteRequest(symbol_or_symbols=self.contract_symbol)
+            quotes = self.option_client.get_option_latest_quote(oreq)
+            quote  = quotes.get(self.contract_symbol)
+            if quote and quote.ask_price and quote.bid_price:
+                return (quote.ask_price + quote.bid_price) / 2
+        except Exception as oe:
+            logger.debug("[ORBEngine] option quote REST fallback failed: %s", oe)
+        return None
+
+    def unsubscribe_data(self):
+        """
+        Detach this engine from the hub bar feed. Called when the strategy is
+        deleted so the hub doesn't retain a stale callback (and the engine can
+        be garbage-collected).
+        """
+        if self._subscribed_ticker is not None:
+            self._hub.unsubscribe(self._subscribed_ticker, self.on_bar)
+            self._subscribed_ticker = None
 
     def _calculate_fib_levels(self) -> dict:
         """

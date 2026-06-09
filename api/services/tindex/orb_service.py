@@ -38,10 +38,16 @@ from alpaca.data.models import Bar
 from services.utils.stock_streaming_base import StockStreamingService, StockBar
 from services.utils.breakout_confirmation import BreakoutConfirmation
 from services.utils.monitoring_state_cache import MonitoringStateCache, MonitoringState
+from services.utils.orb_data_hub import get_orb_data_hub, OrbBar, OrbStatus
 from services.gap_analysis_service import get_gap_analysis_service, compute_gap_context
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Tickers the strategy engines always need streamed, regardless of user follows.
+# These are integral to the ORB trading engine, so the service hardcodes them as
+# always-followed and publishes their bars/ORB status to the engines via the hub.
+STRATEGY_CORE_TICKERS = frozenset({"SPY", "QQQ", "IWM"})
 
 
 class OrbService:
@@ -87,7 +93,11 @@ class OrbService:
             raise ValueError("Supabase credentials not defined")
         
         self.supabase: Client = create_client(self.supabase_url, self.supabase_key)
-        
+
+        # ORB data hub: publishes bars + ORB status to the strategy engines.
+        # Single coupling point so the engines never re-fetch market data.
+        self._hub = get_orb_data_hub()
+
         # Initialize monitoring state cache
         self._state_cache = MonitoringStateCache(
             supabase=self.supabase,
@@ -177,12 +187,16 @@ class OrbService:
                 .execute()
             )
             
-            tickers = {row["ticker"] for row in response.data}
+            # Always include the strategy engine core tickers (SPY/QQQ/IWM) so the
+            # service streams them and publishes their data to the engines even when
+            # no user follows them.
+            tickers = {row["ticker"] for row in response.data} | set(STRATEGY_CORE_TICKERS)
             logger.info(f"Loaded {len(tickers)} tickers for ORB monitoring: {list(tickers)}")
             return tickers
         except Exception as e:
             logger.error(f"Error loading followed stocks: {e}")
-            return set()
+            # Still return the core tickers so engines keep receiving data on DB errors.
+            return set(STRATEGY_CORE_TICKERS)
     
     async def fetch_orb_range_historical(self, ticker: str) -> Optional[Dict]:
         """
@@ -814,6 +828,66 @@ class OrbService:
             "indicators": indicators
         }
     
+    def _publish_bar_to_hub(self, stock_bar: StockBar):
+        """
+        Convert a StockBar to the provider-neutral OrbBar and publish it on the
+        hub for the strategy engines. Uses the real bar timestamp when present
+        (converted to ET) so engines align their opening-range window correctly;
+        falls back to arrival time otherwise. Never raises into the bar pipeline.
+        """
+        try:
+            ts = stock_bar.timestamp
+            if ts is not None:
+                ts = ts.astimezone(self.et_timezone) if ts.tzinfo else self.et_timezone.localize(ts)
+            else:
+                ts = self.get_current_et_time()
+
+            self._hub.publish_bar(OrbBar(
+                ticker=stock_bar.symbol,
+                ts=ts,
+                open=float(stock_bar.open) if stock_bar.open is not None else None,
+                high=float(stock_bar.high) if stock_bar.high is not None else None,
+                low=float(stock_bar.low) if stock_bar.low is not None else None,
+                close=float(stock_bar.close) if stock_bar.close is not None else None,
+                volume=int(stock_bar.volume),
+            ))
+        except Exception as e:
+            logger.error(f"Error publishing bar to hub for {stock_bar.symbol}: {e}")
+
+    def _publish_orb_status_to_hub(self, ticker: str, breakout: str = "none",
+                                   last_price: Optional[float] = None):
+        """
+        Publish an ORB status snapshot for a ticker (informational/diagnostics).
+        Engines derive their own ORH/ORL from bars; this exposes the service's
+        view (and breakout state) via hub.get_status() for observability.
+        """
+        try:
+            data = self.orb_ranges.get(ticker, {})
+            orb_high = data.get("high")
+            orb_low = data.get("low")
+            orb_high_f = float(orb_high) if orb_high is not None else None
+            orb_low_f = float(orb_low) if orb_low is not None else None
+            opening = data.get("open")
+            opening_f = float(opening) if opening is not None else None
+            phase = "calculating" if self.calculation_phase else (
+                "ready" if orb_high_f is not None else "pre_open"
+            )
+            self._hub.publish_orb_status(OrbStatus(
+                ticker=ticker,
+                session_date=self.get_current_et_time().date(),
+                orh=orb_high_f,
+                orl=orb_low_f,
+                orb_range=(orb_high_f - orb_low_f) if (orb_high_f is not None and orb_low_f is not None) else None,
+                vwap=self._calculate_vwap_from_bars(self._bar_history.get(ticker, [])),
+                opening_price=opening_f,
+                phase=phase,
+                breakout=breakout,
+                last_price=last_price,
+                updated_at=self.get_current_et_time(),
+            ))
+        except Exception as e:
+            logger.error(f"Error publishing ORB status to hub for {ticker}: {e}")
+
     async def handle_bar(self, stock_bar: StockBar):
         """
         Handle incoming bar data from streaming service.
@@ -838,7 +912,11 @@ class OrbService:
                 f"[BAR #{self._bars_received_count}] {ticker}: "
                 f"O={bar_open} H={bar_high} L={bar_low} C={bar_close} V={bar_volume}"
             )
-        
+
+        # Publish the raw bar to the hub so the strategy engines receive it.
+        # Engines window their own ORB from these bars (no second data feed).
+        self._publish_bar_to_hub(stock_bar)
+
         if self.calculation_phase:
             # During ORB calculation, track the TRUE high and low from bar data
             # Require high, low, and close for valid ORB calculation
@@ -1213,6 +1291,9 @@ class OrbService:
                 timestamp=self.get_current_et_time().isoformat(),
             )
             
+            # Publish the breakout state to the hub (informational for engines).
+            self._publish_orb_status_to_hub(ticker, breakout=breakout_type, last_price=breakout_price)
+
             # Send initial notification with enhanced breakout data
             await self.send_notifications(
                 ticker,
@@ -2157,6 +2238,9 @@ class OrbService:
                     
                     for ticker, data in self.orb_ranges.items():
                         await self.save_orb_range(ticker, data)
+                        # Publish finalized ORB status to the hub (engines use bars,
+                        # this is for observability + late-start diagnostics).
+                        self._publish_orb_status_to_hub(ticker)
                         logger.info(
                             f"  {ticker}: High={data['high']}, Low={data['low']}, "
                             f"Open={data.get('open', 'N/A')}, Volume={data.get('volume', 0)}"
