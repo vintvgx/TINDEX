@@ -66,6 +66,18 @@ _BUDGET_OI_MIN           = 25    # lower liquidity floor acceptable for cheap OT
 _BUDGET_STRIKE_TOLERANCE = 0.75  # |strike - fib_anchor| ≤ this to pass filter
 
 
+def _parse_occ_strike(symbol: str) -> Optional[float]:
+    """
+    Parse the strike from an OCC option symbol. Format:
+    <ROOT><YYMMDD><C|P><strike × 1000, 8 digits>, e.g. IWM260610C00200000 → 200.0.
+    Returns None when the trailing 8 digits aren't numeric.
+    """
+    try:
+        return int(symbol[-8:]) / 1000.0
+    except (ValueError, IndexError):
+        return None
+
+
 def fetch_0dte_chain(ticker: str, option_type: str, data_client,
                      limit: int = 40) -> list[dict]:
     """
@@ -93,6 +105,10 @@ def fetch_0dte_chain(ticker: str, option_type: str, data_client,
         feed=OptionsFeed.INDICATIVE,
     ))
 
+    # NOTE: get_option_chain returns {symbol: OptionsSnapshot}. A snapshot only
+    # carries latest_quote / latest_trade / greeks / implied_volatility — strike and
+    # expiry live in the OCC symbol (parse them), and open interest is NOT available
+    # from this endpoint, so it is reported as None.
     rows = []
     for symbol, contract in chain.items():
         q = contract.latest_quote
@@ -102,18 +118,21 @@ def fetch_0dte_chain(ticker: str, option_type: str, data_client,
         bid = float(q.bid_price) if q.bid_price else 0.0
         if ask <= 0:
             continue
+        strike = _parse_occ_strike(symbol)
+        if strike is None:
+            continue
         delta = None
         if contract.greeks and contract.greeks.delta is not None:
             delta = round(abs(contract.greeks.delta), 3)
         rows.append({
             "symbol":     symbol,
-            "strike":     contract.strike_price,
+            "strike":     strike,
             "delta":      delta,
             "bid":        round(bid, 2),
             "ask":        round(ask, 2),
             "mid":        round((ask + bid) / 2, 2),
             "spread_pct": round((ask - bid) / ask, 3) if ask > 0 else None,
-            "oi":         contract.open_interest or 0,
+            "oi":         None,
         })
 
     rows.sort(key=lambda r: r["strike"])
@@ -176,21 +195,31 @@ def select_contract(
             )
 
     # ── Fetch option chain ─────────────────────────────────────────────────────
+    # INDICATIVE feed so the chain returns without an OPRA real-time entitlement;
+    # the actual entry still passes verify_stream (real-time option WS) + a market order.
     try:
         from alpaca.data.requests import OptionChainRequest
+        from alpaca.data.enums import OptionsFeed
         chain = data_client.get_option_chain(OptionChainRequest(
             underlying_symbol=ticker,
             expiration_date=today,
             type=option_type,
+            feed=OptionsFeed.INDICATIVE,
         ))
     except Exception as exc:
         logger.error("[ContractSelector] Chain fetch failed: %s", exc)
         return None
 
     # ── Hard filters ───────────────────────────────────────────────────────────
+    # NOTE: get_option_chain returns {symbol: OptionsSnapshot}; strike is parsed from
+    # the OCC symbol and open interest is NOT available from this endpoint. The OI
+    # liquidity floor is therefore dropped — the bid/ask spread filter (#5) is the
+    # remaining liquidity proxy.
     candidates = []
     for symbol, contract in chain.items():
-        strike = contract.strike_price
+        strike = _parse_occ_strike(symbol)
+        if strike is None:
+            continue
         offset = abs(strike - breakout_level)
 
         # 1. Strike filter: fib proximity in budget mode, offset window otherwise
@@ -201,11 +230,7 @@ def select_contract(
             if offset < offset_min or offset > offset_max:
                 continue
 
-        # 2. Open interest liquidity floor
-        if (contract.open_interest or 0) < effective_oi_min:
-            continue
-
-        # 3. Greeks required — no-delta contracts are unreliable on 0DTE
+        # 2. Greeks required — no-delta contracts are unreliable on 0DTE
         if not contract.greeks:
             logger.debug("[ContractSelector] Skipping %s — no greeks", symbol)
             continue
@@ -215,11 +240,11 @@ def select_contract(
             continue
         delta = abs(raw_delta)
 
-        # 4. Delta range (effective range accounts for budget mode override)
+        # 3. Delta range (effective range accounts for budget mode override)
         if not (effective_delta_min <= delta <= effective_delta_max):
             continue
 
-        # 5. Valid ask
+        # 4. Valid ask
         if not contract.latest_quote:
             continue
         ask = contract.latest_quote.ask_price
@@ -227,7 +252,7 @@ def select_contract(
         if not ask or float(ask) <= 0:
             continue
 
-        # 6. Spread quality
+        # 5. Spread quality (the remaining liquidity proxy now that OI is unavailable)
         ask_f      = float(ask)
         bid_f      = float(bid or 0)
         spread_pct = (ask_f - bid_f) / ask_f
@@ -238,7 +263,7 @@ def select_contract(
             )
             continue
 
-        # 6b. Budget mode: reject contracts above the per-contract price cap
+        # 5b. Budget mode: reject contracts above the per-contract price cap
         if budget_mode and budget_max_ask is not None and ask_f > budget_max_ask:
             continue
 
@@ -250,7 +275,7 @@ def select_contract(
             "ask":        ask_f,
             "bid":        bid_f,
             "spread_pct": round(spread_pct, 3),
-            "oi":         contract.open_interest or 0,
+            "oi":         None,
             "offset":     offset,
         })
 
@@ -258,18 +283,18 @@ def select_contract(
         if budget_mode:
             logger.warning(
                 "[ContractSelector] No budget OTM contracts for %s %s "
-                "(fib=%s anchor=%.2f delta %.2f–%.2f max_ask=%s oi≥%d)",
+                "(fib=%s anchor=%.2f delta %.2f–%.2f max_ask=%s)",
                 ticker, direction, budget_fib_level,
                 fib_anchor or 0, effective_delta_min, effective_delta_max,
-                f"${budget_max_ask:.2f}" if budget_max_ask else "—", effective_oi_min,
+                f"${budget_max_ask:.2f}" if budget_max_ask else "—",
             )
         else:
             logger.warning(
                 "[ContractSelector] No valid contracts for %s %s "
-                "(offset %.2f–%.2f, delta %.2f–%.2f, oi≥%d, spread≤%.0f%%)",
+                "(offset %.2f–%.2f, delta %.2f–%.2f, spread≤%.0f%%)",
                 ticker, direction,
                 offset_min, offset_max, delta_min, delta_max,
-                oi_min, max_spread * 100,
+                max_spread * 100,
             )
         return None
 

@@ -75,7 +75,7 @@ export default {
       [
         "expo-notifications",
         {
-          icon: "./assets/icons/notification_icon.png",
+          icon: "./assets/icons/tindex_spark.png",
           color: "#ffffff",
           sounds: ["./assets/sounds/notification_sound.wav"],
         }

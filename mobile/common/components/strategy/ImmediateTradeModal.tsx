@@ -207,7 +207,7 @@ const ContractRow = ({ contract, selected, onSelect, colors }: {
     <View style={{ flex: 1 }}>
       <Text style={[styles.contractStrike, { color: colors.text }]}>${contract.strike}</Text>
       <Text style={[styles.contractMeta, { color: colors.tabBarInactive }]}>
-        Δ {contract.delta ?? '—'} · OI {contract.oi}
+        Δ {contract.delta ?? '—'} · OI {contract.oi ?? '—'}
       </Text>
     </View>
     <View style={{ alignItems: 'flex-end' }}>

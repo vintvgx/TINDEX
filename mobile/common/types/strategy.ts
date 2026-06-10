@@ -102,7 +102,7 @@ export interface Contract0DTE {
   ask: number;
   mid: number;
   spread_pct: number | null;
-  oi: number;
+  oi: number | null;
 }
 
 export interface ContractsResponse {
