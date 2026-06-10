@@ -28,9 +28,12 @@ from services.utils.orb_data_hub import get_orb_data_hub, OrbBar
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
+# Opening-range window is fixed at 09:30–09:45 ET to stay consistent with
+# OrbService, which computes the ORB over the same 15-minute window.
+ORB_WINDOW_MINUTES = 15
+
 STRATEGY_DEFAULTS = {
     "ticker":                  "IWM",
-    "orb_minutes":             10,
     "paper_mode":              True,
     "active":                  True,
     "profile":                 "THUNDER_CAT",
@@ -177,7 +180,7 @@ class ORBEngine:
             return False
 
         self.debug.emit("INFO", f"calculate_orb start — {self.ticker} "
-                                f"orb_minutes={self.config['orb_minutes']}")
+                                f"window=09:30–09:45 ({ORB_WINDOW_MINUTES}m)")
 
         if now_et.weekday() not in self.trade_days:
             self._skip("NOT_TRADE_DAY")
@@ -187,7 +190,7 @@ class ORBEngine:
             self._skip("STRATEGY_DISABLED")
             return False
 
-        bars = self._collect_orb_window_bars(self.config["orb_minutes"])
+        bars = self._collect_orb_window_bars(ORB_WINDOW_MINUTES)
         if not bars:
             self._skip("NO_DATA")
             return False
@@ -265,7 +268,7 @@ class ORBEngine:
             return
 
         now_et = datetime.now(ET)
-        total_min = 9 * 60 + 30 + self.config["orb_minutes"]
+        total_min = 9 * 60 + 30 + ORB_WINDOW_MINUTES
         orb_close = now_et.replace(hour=total_min // 60, minute=total_min % 60, second=0,
                                    microsecond=0)
         limit_min = self.profile.get("breakout_time_limit_min", 45)
@@ -348,7 +351,7 @@ class ORBEngine:
                 return
 
             # Honor the post-ORB time limit unless bypassed.
-            total_min = 9 * 60 + 30 + self.config["orb_minutes"]
+            total_min = 9 * 60 + 30 + ORB_WINDOW_MINUTES
             orb_close = now_et.replace(hour=total_min // 60, minute=total_min % 60,
                                        second=0, microsecond=0)
             limit_min = self.profile.get("breakout_time_limit_min", 45)
@@ -889,7 +892,7 @@ class ORBEngine:
         """
         Build the opening-range bars from the hub's recent-bar buffer: the first
         n_minutes of bars from 09:30 ET. The service streams these bars; the engine
-        windows them per its own orb_minutes (no separate data fetch).
+        windows them over the fixed 09:30–09:45 ORB window (no separate data fetch).
 
         NOTE: Called by calculate_orb. Returns [] when no in-window bars are
         available (e.g. a server restart after the window), yielding NO_DATA.

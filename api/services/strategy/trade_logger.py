@@ -42,7 +42,6 @@ class TradeLogger:
         try:
             row = {
                 "ticker":                 config.get("ticker", "IWM"),
-                "orb_minutes":            config.get("orb_minutes", 10),
                 "paper_mode":             config.get("paper_mode", True),
                 "active":                 config.get("active", True),
                 "profile":                config.get("profile", "THUNDER_CAT"),

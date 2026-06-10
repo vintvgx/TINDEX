@@ -80,10 +80,19 @@ class SentimentFilter:
     def confirm_with_flow(self, ticker: str, direction: str,
                           unusual_whales_key: str = None) -> bool:
         """
-        Cross-checks trade direction against recent Unusual Whales options flow.
-        Returns True (allow trade) if flow supports direction or if data unavailable.
+        Cross-check trade direction against recent Unusual Whales options flow.
+
+        Policy — FAILS OPEN. Only a successful flow read that genuinely contradicts
+        the trade direction blocks the trade (returns False). Any access/availability
+        problem bypasses the check and allows the trade (returns True): missing API
+        key, non-200 response (auth / rate-limit / outage), network error, or empty
+        data. This keeps the strategy tradeable before an Unusual Whales key is
+        provisioned and resilient to API outages, while still vetoing a trade that
+        fights a clear, readable flow once a key is present.
         """
         if not unusual_whales_key:
+            logger.info("[SentimentFilter] Flow check bypassed for %s %s — no Unusual Whales key",
+                        ticker, direction)
             return True
         try:
             url = "https://api.unusualwhales.com/api/option-contracts/flow"
@@ -91,20 +100,31 @@ class SentimentFilter:
             params = {"ticker": ticker, "limit": 50}
             resp = requests.get(url, headers=headers, params=params, timeout=5)
             if resp.status_code != 200:
+                logger.warning("[SentimentFilter] Flow check bypassed for %s %s — Unusual Whales "
+                               "API returned HTTP %s (access/availability issue, not a flow signal)",
+                               ticker, direction, resp.status_code)
                 return True
             data = resp.json().get("data", [])
             call_p = sum(float(c.get("premium", 0)) for c in data if c.get("type") == "call")
             put_p  = sum(float(c.get("premium", 0)) for c in data if c.get("type") == "put")
             total  = call_p + put_p
             if total == 0:
+                logger.info("[SentimentFilter] Flow check bypassed for %s %s — no flow data returned",
+                            ticker, direction)
                 return True
             call_pct = call_p / total
             if direction == "CALL" and call_pct < 0.35:
+                logger.info("[SentimentFilter] Flow BLOCKS %s CALL — call premium %.0f%% < 35%% threshold",
+                            ticker, call_pct * 100)
                 return False
             if direction == "PUT"  and call_pct > 0.65:
+                logger.info("[SentimentFilter] Flow BLOCKS %s PUT — call premium %.0f%% > 65%% threshold",
+                            ticker, call_pct * 100)
                 return False
             return True
-        except Exception:
+        except Exception as exc:
+            logger.warning("[SentimentFilter] Flow check bypassed for %s %s — request failed: %s "
+                           "(access/availability issue, not a flow signal)", ticker, direction, exc)
             return True
 
     def _get_vix(self) -> float | None:

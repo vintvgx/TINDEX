@@ -17,13 +17,14 @@ import { useDeleteStrategyConfig } from '@/hooks/mutations/strategy/useDeleteStr
 import { TradeDaysSelector } from '@/common/components/strategy/TradeDaysSelector';
 import { ProfileCard } from '@/common/components/strategy/ProfileCard';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/components/strategy/CustomThresholdsEditor';
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import { ImmediateTradeModal } from '@/common/components/strategy/ImmediateTradeModal';
 import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel } from '@/common/types/strategy';
 
-const TICKERS     = ['SPY', 'QQQ', 'IWM'] as const;
-const ORB_MINUTES = [5, 10, 15] as const;
+// Fallback tickers shown when no orb_monitoring_state rows are available yet.
+const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
 
 type TradingMode = 'paper' | 'live' | 'off';
 
@@ -55,8 +56,7 @@ function modeToConfig(mode: TradingMode): Partial<StrategyConfig> {
 
 type FormState = {
   strategy_name:          string;
-  ticker:                 typeof TICKERS[number];
-  orb_minutes:            typeof ORB_MINUTES[number];
+  ticker:                 string;
   trade_days:             number[];
   profile:                ProfileKey;
   mode:                   TradingMode;
@@ -70,7 +70,6 @@ type FormState = {
 const DEFAULT_FORM: FormState = {
   strategy_name:          '',
   ticker:                 'IWM',
-  orb_minutes:            10,
   trade_days:             [0, 2, 4],
   profile:                'THUNDER_CAT',
   mode:                   'paper',
@@ -84,8 +83,7 @@ const DEFAULT_FORM: FormState = {
 function configToForm(cfg: StrategyConfig): FormState {
   return {
     strategy_name:          cfg.strategy_name ?? '',
-    ticker:                 cfg.ticker as any,
-    orb_minutes:            cfg.orb_minutes as any,
+    ticker:                 cfg.ticker,
     trade_days:             cfg.trade_days ?? [0, 2, 4],
     profile:                cfg.profile,
     mode:                   getMode(cfg),
@@ -106,6 +104,17 @@ export default function StrategyScreen() {
   const { data: configs,  isLoading: configsLoading  } = useStrategyConfigs();
   const { data: profiles, isLoading: profilesLoading } = useStrategyProfiles();
   const { data: accounts } = useAlpacaBothAccounts(!!(configs && configs.length > 0));
+  const { data: monitoringState } = useORBMonitoringState();
+
+  // Unique, sorted tickers from orb_monitoring_state — any followed ticker can run
+  // a strategy. Falls back to the core ETFs before the state has loaded.
+  const tickerOptions = React.useMemo(() => {
+    const tickers = (monitoringState ?? [])
+      .map(s => s.ticker)
+      .filter((t): t is string => !!t);
+    const unique = Array.from(new Set(tickers.length ? tickers : FALLBACK_TICKERS));
+    return unique.sort();
+  }, [monitoringState]);
 
   const { mutate: createConfig } = useCreateStrategyConfig();
   const { mutate: updateConfig } = useUpdateStrategyConfig();
@@ -182,7 +191,6 @@ export default function StrategyScreen() {
     const payload = {
       strategy_name:          form.strategy_name.trim(),
       ticker:                 form.ticker,
-      orb_minutes:            form.orb_minutes,
       trade_days:             form.trade_days,
       profile:                form.profile,
       capital_limit:          capitalNum,
@@ -315,6 +323,7 @@ export default function StrategyScreen() {
         isEditing={!!editingConfig}
         form={form}
         profiles={profiles ?? []}
+        tickerOptions={tickerOptions}
         saving={saving}
         colors={colors}
         onClose={() => setModalVisible(false)}
@@ -386,10 +395,9 @@ function StrategyCard({ config, colors, onEdit, onDelete, onImmediate }: Strateg
           </View>
         </View>
 
-        {/* Row 2: profile + orb window + days + optional bypass badge */}
+        {/* Row 2: profile + days + optional bypass badge */}
         <View style={styles.stratMeta}>
           <MetaChip label={config.profile.replace('_', ' ')} color={profileColor} />
-          <MetaChip label={`ORB ${config.orb_minutes}m`} color={colors.accent} />
           <MetaChip
             label={activeDays.map(d => DAY_LABELS[d]).join('/')}
             color={colors.tabBarInactive}
@@ -542,6 +550,7 @@ interface FormModalProps {
   isEditing: boolean;
   form: FormState;
   profiles: StrategyProfile[];
+  tickerOptions: string[];
   saving: boolean;
   colors: any;
   onClose: () => void;
@@ -551,9 +560,10 @@ interface FormModalProps {
 }
 
 function StrategyFormModal({
-  visible, isEditing, form, profiles, saving, colors,
+  visible, isEditing, form, profiles, tickerOptions, saving, colors,
   onClose, onPatch, onModeSelect, onSave,
 }: FormModalProps) {
+  const [tickerOpen, setTickerOpen] = useState(false);
   return (
     <Modal
       visible={visible}
@@ -627,47 +637,50 @@ function StrategyFormModal({
           {/* Configuration */}
           <SectionHeader title="Configuration" colors={colors} />
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {/* Ticker */}
+            {/* Ticker — dropdown of all followed (orb_monitoring_state) tickers */}
             <ConfigRow label="Ticker" colors={colors}>
-              <View style={styles.chipRow}>
-                {TICKERS.map(t => (
-                  <TouchableOpacity
-                    key={t}
-                    onPress={() => onPatch('ticker', t)}
-                    style={[
-                      styles.chip,
-                      { backgroundColor: form.ticker === t ? colors.accent : colors.border,
-                        borderColor: form.ticker === t ? colors.accent : colors.border },
-                    ]}
-                  >
-                    <Text style={[styles.chipText, { color: form.ticker === t ? '#fff' : colors.text }]}>
-                      {t}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
+              <TouchableOpacity
+                onPress={() => setTickerOpen(o => !o)}
+                activeOpacity={0.7}
+                style={[styles.tickerSelect, { backgroundColor: colors.border, borderColor: colors.border }]}
+              >
+                <Text style={[styles.tickerSelectText, { color: colors.text }]}>{form.ticker}</Text>
+                <Ionicons
+                  name={tickerOpen ? 'chevron-up' : 'chevron-down'}
+                  size={16}
+                  color={colors.tabBarInactive}
+                />
+              </TouchableOpacity>
             </ConfigRow>
 
-            {/* ORB window */}
-            <ConfigRow label="ORB Window" colors={colors}>
-              <View style={styles.chipRow}>
-                {ORB_MINUTES.map(m => (
-                  <TouchableOpacity
-                    key={m}
-                    onPress={() => onPatch('orb_minutes', m)}
-                    style={[
-                      styles.chip,
-                      { backgroundColor: form.orb_minutes === m ? colors.accent : colors.border,
-                        borderColor: form.orb_minutes === m ? colors.accent : colors.border },
-                    ]}
-                  >
-                    <Text style={[styles.chipText, { color: form.orb_minutes === m ? '#fff' : colors.text }]}>
-                      {m}m
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+            {/* Ticker dropdown list */}
+            {tickerOpen && (
+              <View style={[styles.tickerMenu, { borderTopColor: colors.border }]}>
+                {tickerOptions.map(t => {
+                  const selected = form.ticker === t;
+                  return (
+                    <TouchableOpacity
+                      key={t}
+                      onPress={() => { onPatch('ticker', t); setTickerOpen(false); }}
+                      activeOpacity={0.7}
+                      style={[
+                        styles.tickerMenuItem,
+                        selected && { backgroundColor: colors.accent + '1A' },
+                      ]}
+                    >
+                      <Text style={[
+                        styles.tickerMenuItemText,
+                        { color: selected ? colors.accent : colors.text,
+                          fontWeight: selected ? '700' : '500' },
+                      ]}>
+                        {t}
+                      </Text>
+                      {selected && <Ionicons name="checkmark" size={16} color={colors.accent} />}
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
-            </ConfigRow>
+            )}
 
             {/* Trade days */}
             <ConfigRow label="Trade Days" colors={colors} last>
@@ -1062,4 +1075,10 @@ const styles = StyleSheet.create({
   chipRow:    { flexDirection: 'row', gap: 6 },
   chip:       { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1 },
   chipText:   { fontSize: 13, fontWeight: '600' },
+
+  tickerSelect:     { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, minWidth: 90, justifyContent: 'space-between' },
+  tickerSelectText: { fontSize: 13, fontWeight: '700' },
+  tickerMenu:       { borderTopWidth: StyleSheet.hairlineWidth },
+  tickerMenuItem:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12 },
+  tickerMenuItemText: { fontSize: 14 },
 });

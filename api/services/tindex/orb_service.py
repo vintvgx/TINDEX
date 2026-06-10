@@ -918,6 +918,21 @@ class OrbService:
         self._publish_bar_to_hub(stock_bar)
 
         if self.calculation_phase:
+            # ORB is the 09:30–09:45 window ONLY. The stream connects at 09:15 (warm-up)
+            # and may deliver pre-market bars; those are published to the hub above for
+            # observability but must NOT widen the ORB or set the opening price. Skip any
+            # bar timestamped before 09:30 ET so the service ORB matches the engine's
+            # fixed 09:30–09:45 window exactly (ORB_WINDOW_MINUTES in orb_engine.py).
+            bar_ts = stock_bar.timestamp
+            if bar_ts is not None:
+                bar_ts = (bar_ts.astimezone(self.et_timezone)
+                          if bar_ts.tzinfo else self.et_timezone.localize(bar_ts))
+            else:
+                bar_ts = self.get_current_et_time()
+            if bar_ts.time() < time(9, 30):
+                logger.debug(f"[ORB CALC] Skipping pre-09:30 bar for {ticker} (ts={bar_ts.time()})")
+                return
+
             # During ORB calculation, track the TRUE high and low from bar data
             # Require high, low, and close for valid ORB calculation
             # Price fields (high/low/close/open) are now optional (Decimal | None)

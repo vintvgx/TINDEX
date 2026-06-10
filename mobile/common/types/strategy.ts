@@ -63,7 +63,6 @@ export interface StrategyConfig {
   id: string;
   strategy_name: string;
   ticker: string;
-  orb_minutes: 5 | 10 | 15;
   paper_mode: boolean;
   active: boolean;
   profile: ProfileKey;

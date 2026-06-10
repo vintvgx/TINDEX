@@ -4,14 +4,17 @@ APScheduler-based daily job manager.
 Trade days come from the engine config — frontend controls which days
 are active. When config changes, reschedule_jobs() rebuilds the cron jobs.
 
-ORB calc fires at 9:30 + orb_minutes + 1 minute so that all bars in the
-opening range window are complete before the engine fetches them.
+ORB calc fires at 9:46 (9:30 + 15-minute window + 1 minute) so that all bars in
+the fixed 09:30–09:45 opening-range window are complete before the engine fetches
+them. The window is fixed to stay consistent with OrbService.
 """
 
 import logging
 import threading
 from datetime import datetime
 import pytz
+
+from services.strategy.orb_engine import ORB_WINDOW_MINUTES
 
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
@@ -45,7 +48,7 @@ def reschedule_jobs(engine, strategy_id: str = None):
     strategy_id is used as a prefix so multiple engines don't clash on job IDs.
 
     NOTE: Called by init_scheduler on startup and by strategy_routes after a
-    config update so that trade_days / orb_minutes changes take effect immediately.
+    config update so that trade_days changes take effect immediately.
     """
     sched = get_scheduler()
     if not sched:
@@ -67,12 +70,9 @@ def reschedule_jobs(engine, strategy_id: str = None):
         logger.info("[Scheduler] No trade days configured — no jobs scheduled")
         return
 
-    # Fire ORB calc one minute after the last bar in the window is complete.
-    # orb_minutes=5  → bars 9:30-9:34, fetch at 9:36
-    # orb_minutes=10 → bars 9:30-9:39, fetch at 9:41
-    # orb_minutes=15 → bars 9:30-9:44, fetch at 9:46
-    orb_minutes     = engine.config.get("orb_minutes", 10)
-    orb_fire_minute = 30 + orb_minutes + 1          # always within hour 9 for ≤28 min windows
+    # Fire ORB calc one minute after the last bar in the fixed 09:30–09:45 window
+    # is complete: bars 9:30-9:44, fetch at 9:46.
+    orb_fire_minute = 30 + ORB_WINDOW_MINUTES + 1   # always within hour 9
     orb_fire_hour   = 9 + orb_fire_minute // 60
     orb_fire_minute = orb_fire_minute % 60
 
@@ -144,8 +144,7 @@ def init_scheduler(engine):
     # engine can still trade the remainder of the session.
     now_et = datetime.now(ET)
     if now_et.weekday() in engine.trade_days and not engine.orh and not engine.session_skipped:
-        orb_minutes     = engine.config.get("orb_minutes", 10)
-        orb_fire_min    = 30 + orb_minutes + 1
+        orb_fire_min    = 30 + ORB_WINDOW_MINUTES + 1
         orb_fire_hour   = 9 + orb_fire_min // 60
         orb_fire_min    = orb_fire_min % 60
         orb_calc_dt     = now_et.replace(hour=orb_fire_hour, minute=orb_fire_min,

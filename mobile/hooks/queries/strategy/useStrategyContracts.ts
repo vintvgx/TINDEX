@@ -17,8 +17,13 @@ export function useStrategyContracts(
       const res = await fetch(
         `${RAILWAY_BASE_URL}/strategy/configs/${strategyId}/contracts?direction=${direction}`,
       );
-      if (!res.ok) throw new Error('Failed to fetch contracts');
-      return res.json();
+      const body = await res.json().catch(() => null);
+      // The route returns a descriptive `error` (e.g. an Alpaca feed/entitlement
+      // issue) alongside an empty contract list — surface it instead of a generic msg.
+      if (!res.ok) {
+        throw new Error(body?.error || `Failed to fetch contracts (HTTP ${res.status})`);
+      }
+      return body as ContractsResponse;
     },
     enabled: enabled && !!strategyId,
     staleTime: 10_000,

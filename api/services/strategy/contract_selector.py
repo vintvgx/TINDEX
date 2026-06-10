@@ -75,18 +75,23 @@ def fetch_0dte_chain(ticker: str, option_type: str, data_client,
 
     option_type — "call" | "put".
     Returns [{symbol, strike, delta, bid, ask, mid, spread_pct, oi}] sorted by strike.
+
+    Uses the INDICATIVE options feed so the chain is returned regardless of whether
+    the Alpaca account holds an OPRA real-time subscription (the OPRA default returns
+    nothing/errors without that entitlement). The picker only needs strikes to choose
+    from — the real order still passes verify_stream (real-time option WS) before it
+    is submitted, so indicative pricing here is not safety-critical. Raises on a
+    hard fetch failure so the caller can surface the reason instead of an empty list.
     """
     today = date.today()
-    try:
-        from alpaca.data.requests import OptionChainRequest
-        chain = data_client.get_option_chain(OptionChainRequest(
-            underlying_symbol=ticker,
-            expiration_date=today,
-            type=option_type,
-        ))
-    except Exception as exc:
-        logger.error("[ContractSelector] 0DTE chain fetch failed for %s: %s", ticker, exc)
-        return []
+    from alpaca.data.requests import OptionChainRequest
+    from alpaca.data.enums import OptionsFeed
+    chain = data_client.get_option_chain(OptionChainRequest(
+        underlying_symbol=ticker,
+        expiration_date=today,
+        type=option_type,
+        feed=OptionsFeed.INDICATIVE,
+    ))
 
     rows = []
     for symbol, contract in chain.items():

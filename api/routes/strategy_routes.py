@@ -57,7 +57,7 @@ def create_config():
     data = request.get_json() or {}
     config = {**STRATEGY_DEFAULTS.copy(), **{
         k: data[k] for k in (
-            "ticker", "orb_minutes", "paper_mode", "active",
+            "ticker", "paper_mode", "active",
             "profile", "trade_days", "strategy_name", "capital_limit",
             "bypass_breakout_window", "custom_thresholds",
             "budget_otm_mode", "otm_fib_level", "debug_mode",
@@ -86,7 +86,7 @@ def update_config(strategy_id: str):
         return jsonify({"error": "Strategy not found"}), 404
 
     engine = _engines[strategy_id]
-    allowed = {"ticker", "orb_minutes", "paper_mode", "active",
+    allowed = {"ticker", "paper_mode", "active",
                "profile", "trade_days", "strategy_name", "capital_limit",
                "bypass_breakout_window", "custom_thresholds",
                "budget_otm_mode", "otm_fib_level", "debug_mode"}
@@ -245,7 +245,16 @@ def list_0dte_contracts(strategy_id: str):
     direction = (request.args.get("direction", "CALL") or "CALL").upper()
     option_type = "call" if direction == "CALL" else "put"
     from services.strategy.contract_selector import fetch_0dte_chain
-    contracts = fetch_0dte_chain(engine.ticker, option_type, engine.option_client)
+    try:
+        contracts = fetch_0dte_chain(engine.ticker, option_type, engine.option_client)
+    except Exception as exc:
+        logger.error("[strategy] 0DTE chain fetch failed for %s: %s", engine.ticker, exc)
+        return jsonify({
+            "error":   f"Failed to fetch 0DTE chain for {engine.ticker}: {exc}",
+            "ticker":  engine.ticker,
+            "direction": direction,
+            "contracts": [],
+        }), 502
     underlying = getattr(engine, "_last_underlying_price", None)
     if underlying is None:
         status = engine._hub.get_status(engine.ticker)
