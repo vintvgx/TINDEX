@@ -128,6 +128,28 @@ def _eod_reset(engine):
     engine.reset_session()
 
 
+def schedule_eod_close(engine):
+    """
+    Schedule ONLY a 15:30 ET hard-close (mon–fri) for an engine that has no ORB
+    trade-day schedule — e.g. an immediate-trade engine. Ensures any open 0DTE
+    position is flattened at end of day even though the engine never auto-trades.
+    """
+    sched = get_scheduler()
+    if not sched:
+        logger.warning("[Scheduler] APScheduler not available — EOD close not scheduled")
+        return
+    if not sched.running:
+        sched.start()
+    sid = getattr(engine, "strategy_id", None) or "immediate"
+    job_id = f"job_{sid}_eod_reset"
+    sched.add_job(
+        lambda: _eod_reset(engine),
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=30, timezone=ET),
+        id=job_id, replace_existing=True,
+    )
+    logger.info("[Scheduler] EOD-only hard-close scheduled for %s (%s)", sid, engine.ticker)
+
+
 def init_scheduler(engine):
     """Start the BackgroundScheduler and register jobs for the current engine config."""
     sched = get_scheduler()

@@ -204,11 +204,11 @@ export const AddContractSheet: React.FC<Props> = ({ visible, onClose, initialTic
               style={[s.addBtn, { backgroundColor: colors.accent, opacity: isPending || !canPreview ? 0.45 : 1 }]}
             >
               {isPending
-                ? <ActivityIndicator color="#fff" />
+                ? <ActivityIndicator color={colors.accentForeground} />
                 : (
                   <>
-                    <Ionicons name="add-circle" size={20} color="#fff" />
-                    <Text style={s.addBtnText}>Add to Watchlist</Text>
+                    <Ionicons name="add-circle" size={20} color={colors.accentForeground} />
+                    <Text style={[s.addBtnText, { color: colors.accentForeground }]}>Add to Watchlist</Text>
                   </>
                 )}
             </TouchableOpacity>

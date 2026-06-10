@@ -4,14 +4,15 @@
 Filter pipeline (hard — fail → discard):
   1. Strike: offset inside profile's [offset_min, offset_max] window
              (budget mode: within _BUDGET_STRIKE_TOLERANCE of the fib extension anchor)
-  2. Open interest ≥ oi_min  (profile override → ticker default → global fallback;
-             budget mode uses a lower floor)
-  3. Greeks present — contracts without delta are rejected on 0DTE
-  4. Delta inside profile's [delta_min, delta_max] range
+  2. Greeks present — contracts without delta are rejected on 0DTE
+  3. Delta inside profile's [delta_min, delta_max] range
              (budget mode: overridden by _BUDGET_DELTA_RANGES[fib_level])
-  5. Ask > 0
-  6. Bid/ask spread % ≤ max_spread_pct (profile override → default 0.25)
-  6b. Budget mode only: ask ≤ budget_max_ask
+  4. Ask > 0
+  5. Bid/ask spread % ≤ max_spread_pct (profile override → default 0.25)
+  5b. Budget mode only: ask ≤ budget_max_ask
+
+  (Open interest is NOT filtered — it isn't returned by the option-chain snapshot;
+   the bid/ask spread filter is the remaining liquidity proxy.)
 
 Scoring (lower = better — determines which survivor is selected):
   Standard mode:
@@ -49,10 +50,6 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Per-ticker OI floor (used when profile does not define "oi_min")
-_TICKER_OI_MIN = {"SPY": 200, "QQQ": 200, "IWM": 100}
-_DEFAULT_OI_MIN = 75
-
 # Default max spread fraction (ask - bid) / ask when profile omits "max_spread_pct"
 _DEFAULT_MAX_SPREAD_PCT = 0.25
 
@@ -62,7 +59,6 @@ _BUDGET_DELTA_RANGES = {
     "1.618": (0.08, 0.17),
     "2.618": (0.03, 0.09),
 }
-_BUDGET_OI_MIN           = 25    # lower liquidity floor acceptable for cheap OTM
 _BUDGET_STRIKE_TOLERANCE = 0.75  # |strike - fib_anchor| ≤ this to pass filter
 
 
@@ -76,71 +72,6 @@ def _parse_occ_strike(symbol: str) -> Optional[float]:
         return int(symbol[-8:]) / 1000.0
     except (ValueError, IndexError):
         return None
-
-
-def fetch_0dte_chain(ticker: str, option_type: str, data_client,
-                     limit: int = 40) -> list[dict]:
-    """
-    Return the raw 0DTE option chain for a ticker/side as a clean, sorted list for
-    the manual "Immediate Trade" picker. Unlike select_contract this applies NO
-    hard filters — it surfaces every strike with a live quote so the user chooses.
-
-    option_type — "call" | "put".
-    Returns [{symbol, strike, delta, bid, ask, mid, spread_pct, oi}] sorted by strike.
-
-    Uses the INDICATIVE options feed so the chain is returned regardless of whether
-    the Alpaca account holds an OPRA real-time subscription (the OPRA default returns
-    nothing/errors without that entitlement). The picker only needs strikes to choose
-    from — the real order still passes verify_stream (real-time option WS) before it
-    is submitted, so indicative pricing here is not safety-critical. Raises on a
-    hard fetch failure so the caller can surface the reason instead of an empty list.
-    """
-    today = date.today()
-    from alpaca.data.requests import OptionChainRequest
-    from alpaca.data.enums import OptionsFeed
-    chain = data_client.get_option_chain(OptionChainRequest(
-        underlying_symbol=ticker,
-        expiration_date=today,
-        type=option_type,
-        feed=OptionsFeed.INDICATIVE,
-    ))
-
-    # NOTE: get_option_chain returns {symbol: OptionsSnapshot}. A snapshot only
-    # carries latest_quote / latest_trade / greeks / implied_volatility — strike and
-    # expiry live in the OCC symbol (parse them), and open interest is NOT available
-    # from this endpoint, so it is reported as None.
-    rows = []
-    for symbol, contract in chain.items():
-        q = contract.latest_quote
-        if not q:
-            continue
-        ask = float(q.ask_price) if q.ask_price else 0.0
-        bid = float(q.bid_price) if q.bid_price else 0.0
-        if ask <= 0:
-            continue
-        strike = _parse_occ_strike(symbol)
-        if strike is None:
-            continue
-        delta = None
-        if contract.greeks and contract.greeks.delta is not None:
-            delta = round(abs(contract.greeks.delta), 3)
-        rows.append({
-            "symbol":     symbol,
-            "strike":     strike,
-            "delta":      delta,
-            "bid":        round(bid, 2),
-            "ask":        round(ask, 2),
-            "mid":        round((ask + bid) / 2, 2),
-            "spread_pct": round((ask - bid) / ask, 3) if ask > 0 else None,
-            "oi":         None,
-        })
-
-    rows.sort(key=lambda r: r["strike"])
-    if limit and len(rows) > limit:
-        # Keep the strikes nearest the money (middle of the sorted list).
-        start = max(0, (len(rows) - limit) // 2)
-        rows = rows[start:start + limit]
-    return rows
 
 
 def select_contract(
@@ -165,22 +96,21 @@ def select_contract(
     offset_max   = profile["strike_offset_max"]
     delta_min    = profile["target_delta_min"]
     delta_max    = profile["target_delta_max"]
-    oi_min       = profile.get("oi_min",         _TICKER_OI_MIN.get(ticker.upper(), _DEFAULT_OI_MIN))
     max_spread   = profile.get("max_spread_pct", _DEFAULT_MAX_SPREAD_PCT)
 
     # ── Budget mode: override thresholds with fib-anchored OTM parameters ─────
+    # (Open-interest floors are no longer applied — OI isn't available from the
+    # option-chain snapshot; the bid/ask spread filter is the liquidity proxy.)
     if budget_mode:
         fib_dir_key         = f"up_{budget_fib_level}" if direction == "CALL" else f"dn_{budget_fib_level}"
         fib_anchor          = fib_levels.get(fib_dir_key, breakout_level)
         budget_delta_range  = _BUDGET_DELTA_RANGES.get(budget_fib_level, (0.08, 0.22))
         effective_delta_min = budget_delta_range[0]
         effective_delta_max = budget_delta_range[1]
-        effective_oi_min    = _BUDGET_OI_MIN
     else:
         fib_anchor          = None
         effective_delta_min = delta_min
         effective_delta_max = delta_max
-        effective_oi_min    = oi_min
 
     # ── VWAP soft confirmation ─────────────────────────────────────────────────
     # Logs misalignment; applies a small scoring penalty — does NOT block entry.
@@ -210,93 +140,100 @@ def select_contract(
         logger.error("[ContractSelector] Chain fetch failed: %s", exc)
         return None
 
-    # ── Hard filters ───────────────────────────────────────────────────────────
+    # ── Filters ──────────────────────────────────────────────────────────────────
     # NOTE: get_option_chain returns {symbol: OptionsSnapshot}; strike is parsed from
-    # the OCC symbol and open interest is NOT available from this endpoint. The OI
-    # liquidity floor is therefore dropped — the bid/ask spread filter (#5) is the
-    # remaining liquidity proxy.
+    # the OCC symbol, open interest is NOT available from this endpoint, and the
+    # INDICATIVE feed frequently omits greeks. We therefore:
+    #   • build `candidates` from the PREFERRED filters (strike window/fib + spread,
+    #     and delta range ONLY when a delta is present — never reject for missing greeks)
+    #   • build `all_valid` from EVERY live-quoted strike, as a guaranteed fallback so a
+    #     confirmed breakout always gets a tradeable, near-the-money contract.
     candidates = []
+    all_valid  = []
     for symbol, contract in chain.items():
         strike = _parse_occ_strike(symbol)
         if strike is None:
             continue
+
+        # Valid live ask is the one true requirement (can't buy without an offer).
+        q = getattr(contract, "latest_quote", None)
+        ask = getattr(q, "ask_price", None) if q else None
+        if not ask or float(ask) <= 0:
+            continue
+        ask_f = float(ask)
+        bid_f = float(getattr(q, "bid_price", 0) or 0)
+        spread_pct = (ask_f - bid_f) / ask_f if ask_f > 0 else 1.0
         offset = abs(strike - breakout_level)
 
-        # 1. Strike filter: fib proximity in budget mode, offset window otherwise
+        raw_delta = contract.greeks.delta if getattr(contract, "greeks", None) else None
+        delta = abs(raw_delta) if raw_delta is not None else None
+
+        row = {
+            "symbol":     symbol,
+            "strike":     strike,
+            "expiry":     str(today),
+            "delta":      delta if delta is not None else 0.0,
+            "ask":        ask_f,
+            "bid":        bid_f,
+            "spread_pct": round(spread_pct, 3),
+            "oi":         None,
+            "offset":     offset,
+        }
+        all_valid.append(row)
+
+        # ── Preferred (strict) filters ──
+        # 1. Strike: fib proximity in budget mode, offset window otherwise
         if budget_mode:
             if fib_anchor is not None and abs(strike - fib_anchor) > _BUDGET_STRIKE_TOLERANCE:
                 continue
         else:
             if offset < offset_min or offset > offset_max:
                 continue
-
-        # 2. Greeks required — no-delta contracts are unreliable on 0DTE
-        if not contract.greeks:
-            logger.debug("[ContractSelector] Skipping %s — no greeks", symbol)
+        # 2. Delta range — enforced only when greeks are present (indicative feed omits them)
+        if delta is not None and not (effective_delta_min <= delta <= effective_delta_max):
             continue
-        raw_delta = contract.greeks.delta
-        if raw_delta is None:
-            logger.debug("[ContractSelector] Skipping %s — delta is None", symbol)
-            continue
-        delta = abs(raw_delta)
-
-        # 3. Delta range (effective range accounts for budget mode override)
-        if not (effective_delta_min <= delta <= effective_delta_max):
-            continue
-
-        # 4. Valid ask
-        if not contract.latest_quote:
-            continue
-        ask = contract.latest_quote.ask_price
-        bid = contract.latest_quote.bid_price
-        if not ask or float(ask) <= 0:
-            continue
-
-        # 5. Spread quality (the remaining liquidity proxy now that OI is unavailable)
-        ask_f      = float(ask)
-        bid_f      = float(bid or 0)
-        spread_pct = (ask_f - bid_f) / ask_f
+        # 3. Spread quality (liquidity proxy)
         if spread_pct > max_spread:
-            logger.debug(
-                "[ContractSelector] Skipping %s — spread %.0f%% > max %.0f%%",
-                symbol, spread_pct * 100, max_spread * 100,
-            )
             continue
-
-        # 5b. Budget mode: reject contracts above the per-contract price cap
+        # 3b. Budget mode: reject contracts above the per-contract price cap
         if budget_mode and budget_max_ask is not None and ask_f > budget_max_ask:
             continue
 
-        candidates.append({
-            "symbol":     symbol,
-            "strike":     strike,
-            "expiry":     str(today),
-            "delta":      delta,
-            "ask":        ask_f,
-            "bid":        bid_f,
-            "spread_pct": round(spread_pct, 3),
-            "oi":         None,
-            "offset":     offset,
-        })
+        candidates.append(row)
 
+    # ── Fallback when nothing passed the preferred filters ───────────────────────
     if not candidates:
-        if budget_mode:
-            logger.warning(
-                "[ContractSelector] No budget OTM contracts for %s %s "
-                "(fib=%s anchor=%.2f delta %.2f–%.2f max_ask=%s)",
-                ticker, direction, budget_fib_level,
-                fib_anchor or 0, effective_delta_min, effective_delta_max,
-                f"${budget_max_ask:.2f}" if budget_max_ask else "—",
-            )
+        if not all_valid:
+            logger.warning("[ContractSelector] No live-quoted contracts for %s %s — cannot enter",
+                           ticker, direction)
+            return None
+
+        if budget_mode and budget_max_ask is not None:
+            affordable = [c for c in all_valid if c["ask"] <= budget_max_ask]
+            if not affordable:
+                logger.warning("[ContractSelector] Budget OTM: no affordable contract ≤ $%.2f for %s",
+                               budget_max_ask, ticker)
+                return None
+            anchor = fib_anchor if fib_anchor is not None else breakout_level
+            affordable.sort(key=lambda c: (abs(c["strike"] - anchor), c["spread_pct"]))
+            best = affordable[0]
         else:
-            logger.warning(
-                "[ContractSelector] No valid contracts for %s %s "
-                "(offset %.2f–%.2f, delta %.2f–%.2f, spread≤%.0f%%)",
-                ticker, direction,
-                offset_min, offset_max, delta_min, delta_max,
-                max_spread * 100,
-            )
-        return None
+            # Prefer the OTM side of the breakout in the trade direction, nearest the
+            # money; fall back to nearest overall. Capital is sized downstream.
+            directional = [c for c in all_valid
+                           if (c["strike"] >= breakout_level if direction == "CALL"
+                               else c["strike"] <= breakout_level)]
+            pool = directional or all_valid
+            pool.sort(key=lambda c: (abs(c["strike"] - breakout_level), c["spread_pct"]))
+            best = pool[0]
+
+        logger.warning(
+            "[ContractSelector] No contract passed strict filters for %s %s — fallback to "
+            "nearest-the-money %s (strike=%.2f ask=%.2f spread=%.0f%% delta=%s)",
+            ticker, direction, best["symbol"], best["strike"], best["ask"],
+            best["spread_pct"] * 100, best["delta"] or "n/a",
+        )
+        return best
 
     # ── Scorer ─────────────────────────────────────────────────────────────────
     if budget_mode and fib_anchor is not None:

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator, Switch } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -8,7 +8,7 @@ import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
 import { useStrategyStats, useStrategyStatsByProfile } from '@/hooks/queries/strategy/useStrategyStats';
 import { useStrategyDebugLogs } from '@/hooks/queries/strategy/useStrategyDebugLogs';
 import { useStrategyConfigs } from '@/hooks/queries/strategy/useStrategyConfigs';
-import { useUpdateStrategyConfig } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
+import { useSetStrategyDebugMode } from '@/hooks/mutations/strategy/useSetStrategyDebugMode';
 import type { ProfileKey, ORBTrade, StrategyStats, DebugLogEntry, DebugLevel } from '@/common/types/strategy';
 
 type Filter = 'ALL' | ProfileKey;
@@ -211,14 +211,21 @@ function DebugLogPanel({ colors }: { colors: any }) {
   const [levelFilter, setLevelFilter] = useState<'ALL' | DebugLevel>('ALL');
   const { data, isLoading } = useStrategyDebugLogs(true);
   const { data: configs } = useStrategyConfigs();
-  const { mutate: updateConfig } = useUpdateStrategyConfig();
+  const { mutate: setDebugMode } = useSetStrategyDebugMode();
 
-  const debugOn = !!configs?.some(c => c.debug_mode);
+  // Live engine state is the source of truth; `optimistic` flips the switch
+  // instantly on tap and is cleared once the server poll catches up.
+  const serverDebugOn = data?.debug_enabled ?? !!configs?.some(c => c.debug_mode);
+  const [optimistic, setOptimistic] = useState<boolean | null>(null);
+  const debugOn = optimistic ?? serverDebugOn;
+
+  useEffect(() => {
+    if (optimistic !== null && serverDebugOn === optimistic) setOptimistic(null);
+  }, [serverDebugOn, optimistic]);
 
   const toggleDebug = (value: boolean) => {
-    (configs ?? []).forEach(c => {
-      if (c.debug_mode !== value) updateConfig({ id: c.id, debug_mode: value });
-    });
+    setOptimistic(value);
+    setDebugMode(value);
   };
 
   const clearLogs = async () => {

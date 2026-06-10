@@ -17,7 +17,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import OptionHistoricalDataClient
 
 from services.strategy.profiles import get_profile
-from services.strategy.contract_selector import select_contract, fetch_0dte_chain
+from services.strategy.contract_selector import select_contract
 from services.strategy.exit_manager import ExitManager
 from services.strategy.sentiment import SentimentFilter
 from services.strategy.trade_logger import TradeLogger

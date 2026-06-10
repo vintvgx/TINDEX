@@ -5,7 +5,6 @@ import {
   KeyboardAvoidingView, Platform, Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useToast } from '@/common/components/ui/Toast';
 import { useStrategyConfigs } from '@/hooks/queries/strategy/useStrategyConfigs';
@@ -20,8 +19,9 @@ import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePr
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/components/strategy/CustomThresholdsEditor';
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
-import { ImmediateTradeModal } from '@/common/components/strategy/ImmediateTradeModal';
-import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel } from '@/common/types/strategy';
+import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
+import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
+import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, ImmediatePosition } from '@/common/types/strategy';
 
 // Fallback tickers shown when no orb_monitoring_state rows are available yet.
 const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
@@ -105,6 +105,7 @@ export default function StrategyScreen() {
   const { data: profiles, isLoading: profilesLoading } = useStrategyProfiles();
   const { data: accounts } = useAlpacaBothAccounts(!!(configs && configs.length > 0));
   const { data: monitoringState } = useORBMonitoringState();
+  const { data: immediatePositions } = useImmediatePositions();
 
   // Unique, sorted tickers from orb_monitoring_state — any followed ticker can run
   // a strategy. Falls back to the core ETFs before the state has loaded.
@@ -122,7 +123,6 @@ export default function StrategyScreen() {
 
   const [modalVisible, setModalVisible]       = useState(false);
   const [simulationVisible, setSimulationVisible] = useState(false);
-  const [immediateConfig, setImmediateConfig] = useState<StrategyConfig | null>(null);
   const [editingConfig, setEditingConfig]     = useState<StrategyConfig | null>(null);
   const [form, setForm]                       = useState<FormState>(DEFAULT_FORM);
   const [saving, setSaving]                   = useState(false);
@@ -230,9 +230,7 @@ export default function StrategyScreen() {
 
       {/* Header */}
       <View style={[styles.header, { paddingHorizontal: 16, borderBottomColor: colors.border }]}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
-          <Ionicons name="arrow-back" size={22} color={colors.text} />
-        </TouchableOpacity>
+        <View style={{ width: 22 }} />
         <Text style={[styles.title, { color: colors.text }]}>ORB Strategies</Text>
         <TouchableOpacity
           onPress={openCreate}
@@ -240,7 +238,7 @@ export default function StrategyScreen() {
           style={[styles.addBtn, { backgroundColor: colors.accent }]}
           activeOpacity={0.8}
         >
-          <Ionicons name="add" size={20} color="#fff" />
+          <Ionicons name="add" size={20} color={colors.iconButton} />
         </TouchableOpacity>
       </View>
 
@@ -276,7 +274,6 @@ export default function StrategyScreen() {
               colors={colors}
               onEdit={() => openEdit(cfg)}
               onDelete={() => handleDelete(cfg)}
-              onImmediate={() => setImmediateConfig(cfg)}
             />
           ))
         ) : (
@@ -289,6 +286,16 @@ export default function StrategyScreen() {
               Tap + to add your first strategy
             </Text>
           </View>
+        )}
+
+        {/* Immediate Trades — open conviction positions (any ticker) */}
+        {immediatePositions && immediatePositions.length > 0 && (
+          <>
+            <SectionHeader title={`Immediate Trades (${immediatePositions.length})`} colors={colors} />
+            {immediatePositions.map(pos => (
+              <ImmediatePositionCard key={pos.strategy_id} position={pos} colors={colors} />
+            ))}
+          </>
         )}
 
         {/* Run Simulation */}
@@ -337,13 +344,6 @@ export default function StrategyScreen() {
         onClose={() => setSimulationVisible(false)}
         strategyId={configs?.[0]?.id}
       />
-
-      <ImmediateTradeModal
-        visible={!!immediateConfig}
-        config={immediateConfig}
-        colors={colors}
-        onClose={() => setImmediateConfig(null)}
-      />
     </SafeAreaView>
   );
 }
@@ -355,10 +355,9 @@ interface StrategyCardProps {
   colors: any;
   onEdit: () => void;
   onDelete: () => void;
-  onImmediate: () => void;
 }
 
-function StrategyCard({ config, colors, onEdit, onDelete, onImmediate }: StrategyCardProps) {
+function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
   const mode         = getMode(config);
   const modeMeta     = MODE_META[mode];
   const profileColor = PROFILE_COLORS[config.profile] ?? colors.accent;
@@ -488,15 +487,104 @@ function StrategyCard({ config, colors, onEdit, onDelete, onImmediate }: Strateg
 
       {/* Actions */}
       <View style={styles.stratActions}>
-        <TouchableOpacity onPress={onImmediate} hitSlop={8} style={styles.actionBtn}>
-          <Ionicons name="flash" size={18} color="#F59E0B" />
-        </TouchableOpacity>
         <TouchableOpacity onPress={onEdit} hitSlop={8} style={styles.actionBtn}>
           <Ionicons name="pencil-outline" size={18} color={colors.accent} />
         </TouchableOpacity>
         <TouchableOpacity onPress={onDelete} hitSlop={8} style={styles.actionBtn}>
           <Ionicons name="trash-outline" size={18} color={colors.error} />
         </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+// ── ImmediatePositionCard ────────────────────────────────────────────────────────
+
+function ImmediatePositionCard({ position, colors }: { position: ImmediatePosition; colors: any }) {
+  // Live P&L over the WS (immediate engines are now reachable by the live endpoint).
+  const { data: live, connected } = useStrategyLivePrice(position.strategy_id, true);
+
+  const pnl    = live?.pnl     ?? position.pnl     ?? 0;
+  const pnlPct = live?.pnl_pct ?? position.pnl_pct ?? 0;
+  const mid    = live?.mid_price ?? position.mid_price;
+  const qty    = live?.qty_remaining ?? position.qty_remaining;
+  const tp1    = live?.tp1_hit ?? position.tp1_hit;
+  const tp2    = live?.tp2_hit ?? position.tp2_hit;
+
+  const dirColor  = position.direction === 'CALL' ? colors.success : colors.error;
+  const pnlColor  = pnl >= 0 ? colors.success : colors.error;
+  const modeColor = position.paper_mode ? '#FF9F0A' : colors.success;
+
+  return (
+    <View style={[styles.stratCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={[styles.stratAccent, { backgroundColor: dirColor }]} />
+      <View style={styles.stratBody}>
+        <View style={styles.stratRow}>
+          <View style={styles.stratTitleGroup}>
+            <Text style={[styles.stratTicker, { color: colors.text }]}>
+              {position.ticker} <Text style={{ color: dirColor }}>{position.direction}</Text>
+            </Text>
+            <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>{position.contract}</Text>
+          </View>
+          <View style={[styles.modeBadge, { backgroundColor: modeColor + '22' }]}>
+            <View style={[styles.modeDot, { backgroundColor: modeColor }]} />
+            <Text style={[styles.modeBadgeText, { color: modeColor }]}>
+              {position.paper_mode ? 'Paper' : 'Live'}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.stratMeta}>
+          <MetaChip label={position.profile.replace('_', ' ')} color={PROFILE_COLORS[position.profile] ?? colors.accent} />
+          <MetaChip label="Immediate" color="#F59E0B" />
+        </View>
+
+        <View style={[styles.livePnlCard, { backgroundColor: colors.background, borderColor: colors.border }]}>
+          <View style={styles.liveHeader}>
+            <View style={[styles.modeDot, { backgroundColor: connected ? colors.success : colors.tabBarInactive }]} />
+            <Text style={[styles.liveLabel, { color: colors.tabBarInactive }]}>
+              {connected ? 'LIVE' : 'CONNECTING'}
+            </Text>
+          </View>
+          <View style={styles.liveStats}>
+            <View style={styles.liveStat}>
+              <Text style={[styles.liveStatLabel, { color: colors.tabBarInactive }]}>Price</Text>
+              <Text style={[styles.liveStatValue, { color: colors.text }]}>
+                {mid != null ? `$${mid.toFixed(2)}` : '—'}
+              </Text>
+            </View>
+            <View style={styles.liveStat}>
+              <Text style={[styles.liveStatLabel, { color: colors.tabBarInactive }]}>P&L</Text>
+              <Text style={[styles.liveStatValue, { color: pnlColor }]}>
+                {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+              </Text>
+            </View>
+            <View style={styles.liveStat}>
+              <Text style={[styles.liveStatLabel, { color: colors.tabBarInactive }]}>Chg</Text>
+              <Text style={[styles.liveStatValue, { color: pnlColor }]}>
+                {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
+              </Text>
+            </View>
+            <View style={styles.liveStat}>
+              <Text style={[styles.liveStatLabel, { color: colors.tabBarInactive }]}>Qty</Text>
+              <Text style={[styles.liveStatValue, { color: colors.text }]}>{qty}</Text>
+            </View>
+          </View>
+          {(tp1 || tp2) && (
+            <View style={styles.tpRow}>
+              {tp1 && (
+                <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}>
+                  <Text style={[styles.tpBadgeText, { color: colors.success }]}>TP1 ✓</Text>
+                </View>
+              )}
+              {tp2 && (
+                <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}>
+                  <Text style={[styles.tpBadgeText, { color: colors.success }]}>TP2 ✓</Text>
+                </View>
+              )}
+            </View>
+          )}
+        </View>
       </View>
     </View>
   );
@@ -564,6 +652,12 @@ function StrategyFormModal({
   onClose, onPatch, onModeSelect, onSave,
 }: FormModalProps) {
   const [tickerOpen, setTickerOpen] = useState(false);
+  // Create mode shows two tabs: build a Strategy, or place an Immediate trade.
+  // Editing is strategy-only (no tabs).
+  const [tab, setTab] = useState<'strategy' | 'immediate'>('strategy');
+  React.useEffect(() => { if (visible) setTab('strategy'); }, [visible]);
+
+  const showImmediate = !isEditing && tab === 'immediate';
   return (
     <Modal
       visible={visible}
@@ -577,20 +671,47 @@ function StrategyFormModal({
       >
         {/* Modal header */}
         <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
-          <TouchableOpacity onPress={onClose} hitSlop={12}>
+          <TouchableOpacity onPress={onClose} hitSlop={12} style={{ width: 56 }}>
             <Text style={[styles.modalCancel, { color: colors.accent }]}>Cancel</Text>
           </TouchableOpacity>
-          <Text style={[styles.modalTitle, { color: colors.text }]}>
-            {isEditing ? 'Edit Strategy' : 'New Strategy'}
-          </Text>
-          <TouchableOpacity onPress={onSave} disabled={saving} hitSlop={12}>
-            {saving
-              ? <ActivityIndicator size="small" color={colors.accent} />
-              : <Text style={[styles.modalSave, { color: colors.accent }]}>Save</Text>
-            }
-          </TouchableOpacity>
+
+          {isEditing ? (
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Edit Strategy</Text>
+          ) : (
+            <View style={[styles.modalTabs, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {(['strategy', 'immediate'] as const).map(t => {
+                const active = tab === t;
+                return (
+                  <TouchableOpacity
+                    key={t}
+                    onPress={() => setTab(t)}
+                    activeOpacity={0.8}
+                    style={[styles.modalTabBtn, active && { backgroundColor: colors.accent }]}
+                  >
+                    <Text style={[styles.modalTabText, { color: active ? colors.iconButton : colors.tabBarInactive }]}>
+                      {t === 'strategy' ? 'Strategy' : 'Immediate'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
+          {showImmediate ? (
+            <View style={{ width: 56 }} />
+          ) : (
+            <TouchableOpacity onPress={onSave} disabled={saving} hitSlop={12} style={{ width: 56, alignItems: 'flex-end' }}>
+              {saving
+                ? <ActivityIndicator size="small" color={colors.accent} />
+                : <Text style={[styles.modalSave, { color: colors.accent }]}>Save</Text>
+              }
+            </TouchableOpacity>
+          )}
         </View>
 
+        {showImmediate ? (
+          <ImmediateTradePanel colors={colors} tickerOptions={tickerOptions} visible={visible} onClose={onClose} />
+        ) : (
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.modalContent}
@@ -842,6 +963,7 @@ function StrategyFormModal({
 
           <View style={{ height: 60 }} />
         </ScrollView>
+        )}
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -1053,6 +1175,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   modalTitle:  { fontSize: 17, fontWeight: '600' },
+  modalTabs:   { flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3 },
+  modalTabBtn: { paddingHorizontal: 16, paddingVertical: 6, borderRadius: 8 },
+  modalTabText:{ fontSize: 13, fontWeight: '700' },
   modalCancel: { fontSize: 15 },
   modalSave:   { fontSize: 15, fontWeight: '700' },
   modalContent:{ paddingHorizontal: 16, paddingTop: 8 },

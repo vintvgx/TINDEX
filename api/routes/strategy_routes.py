@@ -11,7 +11,7 @@ import logging
 from flask import Blueprint, jsonify, request
 from services.strategy.trade_logger import TradeLogger
 from services.strategy.profiles import PROFILES, describe_profile
-from services.strategy.scheduler import reschedule_jobs
+from services.strategy.scheduler import reschedule_jobs, schedule_eod_close
 from services.strategy.orb_engine import ORBEngine, STRATEGY_DEFAULTS
 
 logger = logging.getLogger(__name__)
@@ -22,16 +22,71 @@ logger_svc    = TradeLogger()
 _engines:      dict[str, ORBEngine] = {}   # strategy_id -> ORBEngine
 _stream_manager = None                     # OptionStreamManager — set by init_routes
 
+# Immediate-trade engines for ad-hoc, any-ticker conviction trades that aren't tied
+# to a saved strategy. Keyed by "TICKER:paper|live"; created lazily on first trade.
+# They never auto-trade (active=False, no trade_days) but DO manage exits + EOD close.
+_immediate_engines: dict[str, ORBEngine] = {}
+
+# Global debug switch. Stays ON until explicitly turned off; newly-created immediate
+# engines inherit it so their decision logs show up in the Debug tab too.
+_debug_all = False
+
 
 def init_routes(engines: dict[str, ORBEngine], stream_manager=None):
-    global _engines, _stream_manager
+    global _engines, _stream_manager, _debug_all
     _engines        = engines
     _stream_manager = stream_manager
+    # Restore the global debug switch from persisted config so it stays ON across
+    # restarts (and new immediate engines inherit it).
+    _debug_all = any(e.config.get("debug_mode") for e in engines.values())
+
+
+def _all_engines():
+    """Every live engine — saved strategies + ad-hoc immediate-trade engines."""
+    yield from _engines.items()
+    for eng in _immediate_engines.values():
+        yield getattr(eng, "strategy_id", None) or "immediate", eng
 
 
 def _first_engine() -> ORBEngine | None:
     """Return the first engine, used by legacy single-engine endpoints."""
     return next(iter(_engines.values()), None)
+
+
+def _immediate_key(ticker: str, paper_mode: bool) -> str:
+    # Hyphen (not ':') so the synthetic engine id is clean in the live-WS URL path.
+    return f"{ticker.upper()}-{'paper' if paper_mode else 'live'}"
+
+
+def get_immediate_engine(strategy_id: str) -> ORBEngine | None:
+    """Look up an immediate engine by its synthetic id (used by the live-P&L WS)."""
+    for eng in _immediate_engines.values():
+        if getattr(eng, "strategy_id", None) == strategy_id:
+            return eng
+    return None
+
+
+def _get_or_create_immediate_engine(ticker: str, paper_mode: bool) -> ORBEngine:
+    """Return the immediate engine for (ticker, paper/live), creating it on first use."""
+    key = _immediate_key(ticker, paper_mode)
+    eng = _immediate_engines.get(key)
+    if eng is None:
+        cfg = {
+            **STRATEGY_DEFAULTS.copy(),
+            "ticker":        ticker.upper(),
+            "paper_mode":    paper_mode,
+            "active":        False,            # never auto-trades
+            "trade_days":    [],               # no ORB schedule
+            "strategy_name": f"Immediate {ticker.upper()}",
+            "id":            f"immediate-{key}",
+            "debug_mode":    _debug_all,
+        }
+        eng = ORBEngine(cfg, stream_manager=_stream_manager)
+        eng.debug_enabled = _debug_all         # inherit the global debug switch
+        _immediate_engines[key] = eng
+        schedule_eod_close(eng)                # EOD backstop so 0DTE positions flatten
+        logger.info("[strategy] Created immediate engine %s", key)
+    return eng
 
 
 # ── Multi-strategy CRUD ────────────────────────────────────────────────────────
@@ -203,8 +258,8 @@ def get_debug_logs():
     except (TypeError, ValueError):
         since = 0
     rows = []
-    any_debug_on = False
-    for sid, engine in _engines.items():
+    any_debug_on = _debug_all
+    for sid, engine in _all_engines():
         if getattr(engine, "debug_enabled", False):
             any_debug_on = True
         buf = getattr(engine, "debug", None)
@@ -223,49 +278,43 @@ def get_debug_logs():
 
 @strategy_bp.route("/debug-logs/clear", methods=["POST"])
 def clear_debug_logs():
-    """Clear every engine's debug buffer."""
-    for engine in _engines.values():
+    """Clear every engine's debug buffer (saved + immediate)."""
+    for _sid, engine in _all_engines():
         buf = getattr(engine, "debug", None)
         if buf:
             buf.clear()
     return jsonify({"status": "ok"})
 
 
+@strategy_bp.route("/debug-mode", methods=["POST"])
+def set_debug_mode():
+    """
+    Global debug switch. Turns engine decision-logging ON/OFF for EVERY engine
+    (saved strategies + ad-hoc immediate engines) and keeps it that way — new
+    immediate engines inherit the flag. Persists debug_mode on saved configs so it
+    survives a restart. Body: {enabled: bool}.
+    """
+    global _debug_all
+    data = request.get_json() or {}
+    enabled = bool(data.get("enabled", True))
+    _debug_all = enabled
+
+    for _sid, engine in _all_engines():
+        engine.debug_enabled = enabled
+        engine.config["debug_mode"] = enabled
+
+    # Persist on saved strategies only (immediate engines have no DB row).
+    for sid in _engines:
+        try:
+            logger_svc.save_strategy_config(_engines[sid].config)
+        except Exception as e:
+            logger.warning("[strategy] debug-mode persist failed for %s: %s", sid, e)
+
+    logger.info("[strategy] Debug mode set to %s for all engines", enabled)
+    return jsonify({"status": "ok", "debug_enabled": enabled})
+
+
 # ── Immediate / conviction trade ────────────────────────────────────────────────
-
-@strategy_bp.route("/configs/<strategy_id>/contracts", methods=["GET"])
-def list_0dte_contracts(strategy_id: str):
-    """
-    Return the live 0DTE option chain for the strategy's ticker so the user can pick
-    a contract for an immediate trade. ?direction=CALL|PUT (default CALL).
-    """
-    engine = _engines.get(strategy_id)
-    if not engine:
-        return jsonify({"error": "Strategy not found"}), 404
-    direction = (request.args.get("direction", "CALL") or "CALL").upper()
-    option_type = "call" if direction == "CALL" else "put"
-    from services.strategy.contract_selector import fetch_0dte_chain
-    try:
-        contracts = fetch_0dte_chain(engine.ticker, option_type, engine.option_client)
-    except Exception as exc:
-        logger.error("[strategy] 0DTE chain fetch failed for %s: %s", engine.ticker, exc)
-        return jsonify({
-            "error":   f"Failed to fetch 0DTE chain for {engine.ticker}: {exc}",
-            "ticker":  engine.ticker,
-            "direction": direction,
-            "contracts": [],
-        }), 502
-    underlying = getattr(engine, "_last_underlying_price", None)
-    if underlying is None:
-        status = engine._hub.get_status(engine.ticker)
-        underlying = status.last_price if status else None
-    return jsonify({
-        "ticker":     engine.ticker,
-        "direction":  direction,
-        "underlying": underlying,
-        "contracts":  contracts,
-    })
-
 
 @strategy_bp.route("/configs/<strategy_id>/immediate-trade", methods=["POST"])
 def immediate_trade(strategy_id: str):
@@ -292,6 +341,72 @@ def immediate_trade(strategy_id: str):
     )
     code = 200 if result.get("status") == "ok" else 409
     return jsonify(result), code
+
+
+@strategy_bp.route("/immediate-trade", methods=["POST"])
+def immediate_trade_by_ticker():
+    """
+    Submit an immediate / conviction trade for ANY ticker, independent of a saved
+    strategy. A dedicated immediate engine for (ticker, paper/live) is created on
+    demand and manages the exits (TP/SL/EOD). Body:
+      {ticker, direction: "CALL"|"PUT", contract_symbol, qty?, profile?, paper_mode?}
+    """
+    data            = request.get_json() or {}
+    ticker          = (data.get("ticker") or "").upper()
+    contract_symbol = data.get("contract_symbol")
+    direction       = data.get("direction")
+    paper_mode      = bool(data.get("paper_mode", True))
+    if not ticker or not contract_symbol or not direction:
+        return jsonify({"status": "error",
+                        "message": "ticker, direction and contract_symbol are required"}), 400
+
+    engine = _get_or_create_immediate_engine(ticker, paper_mode)
+    result = engine.submit_manual_trade(
+        direction=direction,
+        contract_symbol=contract_symbol,
+        qty=data.get("qty"),
+        profile_key=data.get("profile"),
+    )
+    # Surface the engine id so the client can stream live P&L over the WS.
+    result["strategy_id"] = engine.strategy_id
+    code = 200 if result.get("status") == "ok" else 409
+    return jsonify(result), code
+
+
+@strategy_bp.route("/immediate-positions", methods=["GET"])
+def immediate_positions():
+    """
+    Open positions across all immediate-trade engines, for the "Immediate Trades"
+    section. Live P&L is computed from the latest streamed option mid-price.
+    """
+    out = []
+    for eng in _immediate_engines.values():
+        if not eng.trade_taken or not eng.contract_symbol:
+            continue
+        em      = eng.exit_manager
+        entry_p = em.entry_premium if em else None
+        qty_rem = em.qty_remaining if em else 0
+        mid     = getattr(eng, "_current_option_price", None)
+        pnl = pnl_pct = None
+        if mid is not None and entry_p:
+            pnl     = round((mid - entry_p) * qty_rem * 100, 2)
+            pnl_pct = round(((mid - entry_p) / entry_p * 100) if entry_p > 0 else 0, 2)
+        out.append({
+            "strategy_id":   eng.strategy_id,
+            "ticker":        eng.ticker,
+            "paper_mode":    eng.paper,
+            "direction":     eng.position,
+            "contract":      eng.contract_symbol,
+            "profile":       eng.profile_key,
+            "qty_remaining": qty_rem,
+            "entry_premium": entry_p,
+            "mid_price":     round(mid, 4) if mid is not None else None,
+            "pnl":           pnl,
+            "pnl_pct":       pnl_pct,
+            "tp1_hit":       em.tp1_hit if em else False,
+            "tp2_hit":       em.tp2_hit if em else False,
+        })
+    return jsonify({"positions": out})
 
 
 # ── All positions ─────────────────────────────────────────────────────────────

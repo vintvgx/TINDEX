@@ -94,30 +94,31 @@ export interface DebugLogsResponse {
   logs: DebugLogEntry[];
 }
 
-export interface Contract0DTE {
-  symbol: string;
-  strike: number;
-  delta: number | null;
-  bid: number;
-  ask: number;
-  mid: number;
-  spread_pct: number | null;
-  oi: number | null;
-}
-
-export interface ContractsResponse {
+/** Ticker-based immediate trade (not tied to a saved strategy). */
+export interface ImmediateTradeByTickerRequest {
   ticker: string;
-  direction: 'CALL' | 'PUT';
-  underlying: number | null;
-  contracts: Contract0DTE[];
-}
-
-export interface ImmediateTradeRequest {
-  strategyId: string;
   direction: 'CALL' | 'PUT';
   contract_symbol: string;
   qty?: number;
   profile?: ProfileKey;
+  paper_mode: boolean;
+}
+
+/** An open position from a ticker-based immediate trade engine. */
+export interface ImmediatePosition {
+  strategy_id: string;
+  ticker: string;
+  paper_mode: boolean;
+  direction: 'CALL' | 'PUT';
+  contract: string;
+  profile: ProfileKey;
+  qty_remaining: number;
+  entry_premium: number | null;
+  mid_price: number | null;
+  pnl: number | null;
+  pnl_pct: number | null;
+  tp1_hit: boolean;
+  tp2_hit: boolean;
 }
 
 export interface FibLevels {
