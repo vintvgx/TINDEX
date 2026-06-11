@@ -1,18 +1,24 @@
 import { useQuery } from '@tanstack/react-query';
-import { RAILWAY_BASE_URL } from '@/lib/railway.config';
-import type { DebugLogsResponse } from '@/common/types/strategy';
+import { supabase } from '@/lib/supabase/supabase';
+import type { DebugLogEntry } from '@/common/types/strategy';
 
 /**
- * Poll the merged ORB engine debug log. Only active (refetching) while `enabled`
- * is true — i.e. while the Debug tab is open — so it costs nothing otherwise.
+ * Read the persisted ORB engine debug log straight from Supabase (orb_debug_logs).
+ * Debug logging is always on; this polls every 2s while the Debug tab is open.
+ * Reading from Supabase (not the Railway API) keeps it responsive even when the
+ * trade server is busy. Returns rows oldest-first (the panel reverses for display).
  */
 export function useStrategyDebugLogs(enabled: boolean) {
-  return useQuery<DebugLogsResponse>({
+  return useQuery<DebugLogEntry[]>({
     queryKey: ['strategy-debug-logs'],
     queryFn: async () => {
-      const res = await fetch(`${RAILWAY_BASE_URL}/strategy/debug-logs`);
-      if (!res.ok) throw new Error('Failed to fetch debug logs');
-      return res.json();
+      const { data, error } = await supabase
+        .from('orb_debug_logs')
+        .select('*')
+        .order('ts', { ascending: false })
+        .limit(500);
+      if (error) throw error;
+      return ((data ?? []) as DebugLogEntry[]).reverse();
     },
     enabled,
     refetchInterval: enabled ? 2000 : false,

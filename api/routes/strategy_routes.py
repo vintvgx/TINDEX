@@ -66,6 +66,11 @@ def get_immediate_engine(strategy_id: str) -> ORBEngine | None:
     return None
 
 
+def _resolve_any_engine(strategy_id: str) -> ORBEngine | None:
+    """Find an engine by id across saved strategies AND immediate-trade engines."""
+    return _engines.get(strategy_id) or get_immediate_engine(strategy_id)
+
+
 def _get_or_create_immediate_engine(ticker: str, paper_mode: bool) -> ORBEngine:
     """Return the immediate engine for (ticker, paper/live), creating it on first use."""
     key = _immediate_key(ticker, paper_mode)
@@ -222,6 +227,23 @@ def force_close_strategy(strategy_id: str):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@strategy_bp.route("/positions/<strategy_id>/sell", methods=["POST"])
+def sell_position(strategy_id: str):
+    """
+    Manually sell contracts of an open position. Works for both saved strategies
+    and ad-hoc immediate-trade engines (resolved by id). Body: {qty?} — omit qty
+    to sell the entire remaining position.
+    """
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        return jsonify({"status": "error", "message": "Position not found"}), 404
+    data = request.get_json() or {}
+    qty = data.get("qty")
+    result = engine.submit_manual_exit(int(qty) if qty is not None else None)
+    code = 200 if result.get("status") == "ok" else 409
+    return jsonify(result), code
+
+
 @strategy_bp.route("/configs/<strategy_id>/position", methods=["GET"])
 def get_strategy_position(strategy_id: str):
     engine = _engines.get(strategy_id)
@@ -278,11 +300,15 @@ def get_debug_logs():
 
 @strategy_bp.route("/debug-logs/clear", methods=["POST"])
 def clear_debug_logs():
-    """Clear every engine's debug buffer (saved + immediate)."""
+    """Clear every engine's in-memory buffer AND purge the persisted Supabase log."""
     for _sid, engine in _all_engines():
         buf = getattr(engine, "debug", None)
         if buf:
             buf.clear()
+    try:
+        logger_svc.client.table("orb_debug_logs").delete().neq("id", -1).execute()
+    except Exception as e:
+        logger.warning("[strategy] failed to purge orb_debug_logs: %s", e)
     return jsonify({"status": "ok"})
 
 

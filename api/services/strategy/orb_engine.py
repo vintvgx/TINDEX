@@ -118,8 +118,12 @@ class ORBEngine:
             self._hub.subscribe_breakout(self.ticker, self.on_breakout_confirmed)
             self._subscribed_ticker = self.ticker
 
-        logger.info("[ORBEngine] Config applied — profile=%s ticker=%s paper=%s days=%s debug=%s",
-                    self.profile_key, self.ticker, self.paper, self.trade_days, self.debug_enabled)
+        # Tag every persisted debug row with this engine's identity.
+        self.debug.set_context(strategy_id=self.strategy_id, ticker=self.ticker,
+                               strategy_name=self.strategy_name)
+
+        logger.info("[ORBEngine] Config applied — profile=%s ticker=%s paper=%s days=%s",
+                    self.profile_key, self.ticker, self.paper, self.trade_days)
         self.debug.emit("INFO", f"Config applied — {self.ticker} {self.profile_key} "
                                 f"paper={self.paper} days={sorted(self.trade_days)}")
 
@@ -771,6 +775,50 @@ class ORBEngine:
         except Exception as e:
             logger.error("[ORBEngine] Exit failed: %s", e)
             self.debug.emit("ERROR", f"Exit failed: {e}")
+
+    def submit_manual_exit(self, qty: int | None = None) -> dict:
+        """
+        Manually sell `qty` contracts of the open position right now (default: all
+        remaining). Reuses the same close path as automated exits — partial sells
+        submit a SELL order and decrement qty_remaining; a full sell closes the
+        position, unsubscribes the option stream, and resets the session.
+
+        Called by POST /strategy/positions/<id>/sell. Returns
+        {"status": "ok"|"error", "message", "qty_sold"?, "qty_remaining"?}.
+        """
+        with self._tick_lock:
+            if not self.trade_taken or not self.contract_symbol or not self.exit_manager:
+                return {"status": "error", "message": "No active position to sell"}
+
+            remaining_before = self.exit_manager.qty_remaining
+            if remaining_before <= 0:
+                return {"status": "error", "message": "Position is already closed"}
+
+            want = remaining_before if qty is None else int(qty)
+            want = max(1, min(want, remaining_before))
+            contract = self.contract_symbol
+
+            self.debug.emit("INFO", f"Manual exit requested — sell {want}/{remaining_before} "
+                                    f"of {contract}")
+            action = {"type": "MANUAL_SELL", "reason": "MANUAL_EXIT", "qty": want}
+            self._handle_exit_action(action, self._last_underlying_price or 0.0,
+                                     self._get_option_price())
+
+            still_open    = bool(self.trade_taken and self.exit_manager)
+            new_remaining = self.exit_manager.qty_remaining if self.exit_manager else 0
+            # _handle_exit_action swallows order errors; detect a no-op as a failure.
+            if still_open and new_remaining == remaining_before:
+                return {"status": "error", "message": "Sell order failed — check server logs"}
+
+            closed_all = not still_open
+            if closed_all:
+                self.reset_session()
+            return {
+                "status":        "ok",
+                "message":       f"Sold {want} contract(s) of {contract}",
+                "qty_sold":      want,
+                "qty_remaining": 0 if closed_all else new_remaining,
+            }
 
     def _on_stream_quote(self, mid: float):
         """

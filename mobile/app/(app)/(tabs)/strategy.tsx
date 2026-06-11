@@ -20,6 +20,7 @@ import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState
 import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/components/strategy/CustomThresholdsEditor';
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
+import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, ImmediatePosition } from '@/common/types/strategy';
 
@@ -367,6 +368,7 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
     config.id,
     config.has_position === true,
   );
+  const [exitOpen, setExitOpen] = useState(false);
 
   const pnlColor = live
     ? (live.pnl >= 0 ? colors.success : colors.error)
@@ -481,6 +483,16 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
                 )}
               </View>
             )}
+
+            {/* Manual exit */}
+            <TouchableOpacity
+              onPress={() => setExitOpen(true)}
+              activeOpacity={0.8}
+              style={[styles.exitBtn, { borderColor: colors.error + '55', backgroundColor: colors.error + '14' }]}
+            >
+              <Ionicons name="exit-outline" size={16} color={colors.error} />
+              <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
+            </TouchableOpacity>
           </View>
         )}
       </View>
@@ -494,6 +506,17 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
           <Ionicons name="trash-outline" size={18} color={colors.error} />
         </TouchableOpacity>
       </View>
+
+      <ExitTradeModal
+        visible={exitOpen}
+        colors={colors}
+        strategyId={config.id}
+        ticker={config.ticker}
+        contract={live?.contract}
+        qtyRemaining={live?.qty_remaining ?? 1}
+        paperMode={config.paper_mode}
+        onClose={() => setExitOpen(false)}
+      />
     </View>
   );
 }
@@ -503,6 +526,7 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
 function ImmediatePositionCard({ position, colors }: { position: ImmediatePosition; colors: any }) {
   // Live P&L over the WS (immediate engines are now reachable by the live endpoint).
   const { data: live, connected } = useStrategyLivePrice(position.strategy_id, true);
+  const [exitOpen, setExitOpen] = useState(false);
 
   const pnl    = live?.pnl     ?? position.pnl     ?? 0;
   const pnlPct = live?.pnl_pct ?? position.pnl_pct ?? 0;
@@ -584,8 +608,29 @@ function ImmediatePositionCard({ position, colors }: { position: ImmediatePositi
               )}
             </View>
           )}
+
+          {/* Manual exit */}
+          <TouchableOpacity
+            onPress={() => setExitOpen(true)}
+            activeOpacity={0.8}
+            style={[styles.exitBtn, { borderColor: colors.error + '55', backgroundColor: colors.error + '14' }]}
+          >
+            <Ionicons name="exit-outline" size={16} color={colors.error} />
+            <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
+          </TouchableOpacity>
         </View>
       </View>
+
+      <ExitTradeModal
+        visible={exitOpen}
+        colors={colors}
+        strategyId={position.strategy_id}
+        ticker={position.ticker}
+        contract={position.contract}
+        qtyRemaining={qty}
+        paperMode={position.paper_mode}
+        onClose={() => setExitOpen(false)}
+      />
     </View>
   );
 }
@@ -1126,6 +1171,8 @@ const styles = StyleSheet.create({
   tpRow:          { flexDirection: 'row', gap: 6, marginTop: 8 },
   tpBadge:        { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   tpBadgeText:    { fontSize: 11, fontWeight: '700' },
+  exitBtn:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 10, paddingVertical: 9, borderRadius: 9, borderWidth: 1 },
+  exitBtnText:    { fontSize: 13, fontWeight: '700' },
 
   stratActions: { justifyContent: 'center', gap: 12, paddingHorizontal: 10 },
   actionBtn:    { padding: 4 },

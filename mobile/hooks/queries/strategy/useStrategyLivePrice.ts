@@ -37,6 +37,8 @@ export function useStrategyLivePrice(
   const [connected, setConnected] = useState(false);
   const wsRef                     = useRef<WebSocket | null>(null);
   const reconnectTimer            = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openTimer                 = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const attemptsRef               = useRef(0);
   const mountedRef                = useRef(true);
   const shouldReconnectRef        = useRef(true);
 
@@ -52,7 +54,17 @@ export function useStrategyLivePrice(
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
+    // Connect watchdog: if the handshake doesn't complete promptly (e.g. the
+    // server has no free thread to serve the upgrade), drop it and let onclose
+    // schedule a backed-off retry — never leave the socket hanging.
+    if (openTimer.current) clearTimeout(openTimer.current);
+    openTimer.current = setTimeout(() => {
+      if (mountedRef.current && ws.readyState !== WebSocket.OPEN) ws.close();
+    }, 8000);
+
     ws.onopen = () => {
+      if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
+      attemptsRef.current = 0;            // reset backoff on a healthy connection
       if (mountedRef.current) setConnected(true);
     };
 
@@ -63,17 +75,21 @@ export function useStrategyLivePrice(
           setData(msg as LivePriceData);
         }
       } catch {
-        // ignore malformed frames
+        // ignore malformed frames (e.g. keepalive pings)
       }
     };
 
     ws.onclose = () => {
+      if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
       if (!mountedRef.current) return;
       setConnected(false);
       if (!shouldReconnectRef.current || !enabled) return;
+      // Capped exponential backoff so failed connects don't storm the server.
+      const delay = Math.min(2000 * 1.6 ** attemptsRef.current, 20000);
+      attemptsRef.current += 1;
       reconnectTimer.current = setTimeout(() => {
         if (mountedRef.current && enabled && shouldReconnectRef.current) connect();
-      }, 3000);
+      }, delay);
     };
 
     ws.onerror = () => {
@@ -87,6 +103,11 @@ export function useStrategyLivePrice(
       clearTimeout(reconnectTimer.current);
       reconnectTimer.current = null;
     }
+    if (openTimer.current) {
+      clearTimeout(openTimer.current);
+      openTimer.current = null;
+    }
+    attemptsRef.current = 0;
     wsRef.current?.close();
     wsRef.current = null;
     setConnected(false);
@@ -102,7 +123,9 @@ export function useStrategyLivePrice(
       mountedRef.current = false;
       disconnect();
     };
-  }, [wsUrl, enabled]);
+    // connect is memoized on [wsUrl, enabled]; disconnect is stable — so this
+    // re-runs exactly when the target socket changes (no reconnect storm).
+  }, [connect, disconnect, enabled, wsUrl]);
 
   return { data, connected, disconnect };
 }

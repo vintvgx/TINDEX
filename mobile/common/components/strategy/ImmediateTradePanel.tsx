@@ -112,6 +112,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   const { data, isLoading, error } = useOptionsQuery(
     visible && ticker ? ticker : '',
     { limit: 100, expiration_date_gte: today, expiration_date_lte: today },
+    4000,   // near real-time: refresh the 0DTE chain every 4s
   );
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();

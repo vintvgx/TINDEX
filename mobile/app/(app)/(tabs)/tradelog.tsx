@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator, Switch } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -7,8 +7,6 @@ import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
 import { useStrategyStats, useStrategyStatsByProfile } from '@/hooks/queries/strategy/useStrategyStats';
 import { useStrategyDebugLogs } from '@/hooks/queries/strategy/useStrategyDebugLogs';
-import { useStrategyConfigs } from '@/hooks/queries/strategy/useStrategyConfigs';
-import { useSetStrategyDebugMode } from '@/hooks/mutations/strategy/useSetStrategyDebugMode';
 import type { ProfileKey, ORBTrade, StrategyStats, DebugLogEntry, DebugLevel } from '@/common/types/strategy';
 
 type Filter = 'ALL' | ProfileKey;
@@ -210,23 +208,6 @@ const formatLogTime = (iso: string): string => {
 function DebugLogPanel({ colors }: { colors: any }) {
   const [levelFilter, setLevelFilter] = useState<'ALL' | DebugLevel>('ALL');
   const { data, isLoading } = useStrategyDebugLogs(true);
-  const { data: configs } = useStrategyConfigs();
-  const { mutate: setDebugMode } = useSetStrategyDebugMode();
-
-  // Live engine state is the source of truth; `optimistic` flips the switch
-  // instantly on tap and is cleared once the server poll catches up.
-  const serverDebugOn = data?.debug_enabled ?? !!configs?.some(c => c.debug_mode);
-  const [optimistic, setOptimistic] = useState<boolean | null>(null);
-  const debugOn = optimistic ?? serverDebugOn;
-
-  useEffect(() => {
-    if (optimistic !== null && serverDebugOn === optimistic) setOptimistic(null);
-  }, [serverDebugOn, optimistic]);
-
-  const toggleDebug = (value: boolean) => {
-    setOptimistic(value);
-    setDebugMode(value);
-  };
 
   const clearLogs = async () => {
     try {
@@ -237,10 +218,10 @@ function DebugLogPanel({ colors }: { colors: any }) {
   };
 
   const logs = useMemo(() => {
-    const all = data?.logs ?? [];
+    const all = data ?? [];
     const filtered = levelFilter === 'ALL' ? all : all.filter(l => l.level === levelFilter);
     return [...filtered].reverse(); // newest first
-  }, [data?.logs, levelFilter]);
+  }, [data, levelFilter]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -248,12 +229,11 @@ function DebugLogPanel({ colors }: { colors: any }) {
       <View style={[styles.debugControls, { borderBottomColor: colors.border }]}>
         <View style={styles.debugToggleRow}>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.debugToggleLabel, { color: colors.text }]}>Debug Mode</Text>
+            <Text style={[styles.debugToggleLabel, { color: colors.text }]}>Engine Debug Log</Text>
             <Text style={[styles.debugToggleHint, { color: colors.tabBarInactive }]}>
-              {debugOn ? 'Logging every ORB decision' : 'Off — toggle to capture strategy logic'}
+              Always on · persisted · live
             </Text>
           </View>
-          <Switch value={debugOn} onValueChange={toggleDebug} />
           <TouchableOpacity onPress={clearLogs} style={[styles.debugClearBtn, { borderColor: colors.border }]} hitSlop={8}>
             <Ionicons name="trash-outline" size={16} color={colors.error} />
           </TouchableOpacity>
@@ -282,9 +262,7 @@ function DebugLogPanel({ colors }: { colors: any }) {
         {isLoading && !data ? (
           <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
         ) : logs.length === 0 ? (
-          <Text style={[styles.empty, { color: colors.tabBarInactive }]}>
-            {debugOn ? 'No debug events yet' : 'Enable Debug Mode to capture strategy logic'}
-          </Text>
+          <Text style={[styles.empty, { color: colors.tabBarInactive }]}>No debug events yet</Text>
         ) : (
           logs.map(log => <DebugRow key={`${log.strategy_id}-${log.id}`} log={log} colors={colors} />)
         )}
