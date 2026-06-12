@@ -215,12 +215,27 @@ def force_close_strategy(strategy_id: str):
         return jsonify({"status": "ok", "message": "No active position"})
     try:
         engine.trading_client.close_position(engine.contract_symbol)
+        em          = engine.exit_manager
+        qty         = em.qty_remaining if em else 0
+        exit_price  = engine._get_option_price()
+        entry_p     = em.entry_premium if em else 0
+        pnl         = ((exit_price or 0) - entry_p) * qty * 100
         engine.logger.log_exit(
-            engine.contract_symbol, "MANUAL_CLOSE", None,
-            engine.exit_manager.qty_remaining if engine.exit_manager else 0,
-            engine.profile_key,
+            engine.contract_symbol, "MANUAL_CLOSE", exit_price,
+            qty, engine.profile_key,
             strategy_id=engine.strategy_id,
         )
+        engine.notifier.notify_exit(
+            ticker=engine.ticker,
+            contract_symbol=engine.contract_symbol,
+            exit_reason="MANUAL_CLOSE",
+            pnl=pnl,
+            qty=qty,
+            profile_key=engine.profile_key,
+        )
+        engine.debug.emit("SUCCESS",
+            f"Force-closed {engine.contract_symbol} qty={qty} "
+            f"exit=${(exit_price or 0):.2f} pnl=${pnl:.2f}")
         engine.reset_session()
         return jsonify({"status": "ok"})
     except Exception as e:
@@ -271,31 +286,39 @@ def debug_engine(strategy_id: str):
 @strategy_bp.route("/debug-logs", methods=["GET"])
 def get_debug_logs():
     """
-    Merge every engine's in-memory debug buffer into one time-ordered stream so the
-    Trade Log & Stats → Debug tab can show all ORB strategy logic. Each row is tagged
-    with strategy_id + ticker. Use ?since=<id> to fetch only newer rows per strategy.
+    Return persisted ORB engine debug logs from Supabase (service-role key bypasses
+    RLS so the frontend receives rows regardless of auth state). Falls back to the
+    in-memory buffers if the DB read fails, to handle startup before the first write.
     """
+    limit = min(int(request.args.get("limit", 500)), 1000)
+    rows: list = []
     try:
-        since = int(request.args.get("since", 0))
-    except (TypeError, ValueError):
-        since = 0
-    rows = []
-    any_debug_on = _debug_all
-    for sid, engine in _all_engines():
-        if getattr(engine, "debug_enabled", False):
-            any_debug_on = True
-        buf = getattr(engine, "debug", None)
-        if not buf:
-            continue
-        for rec in buf.snapshot(since_id=since):
-            rows.append({
-                **rec,
-                "strategy_id":   sid,
-                "ticker":        getattr(engine, "ticker", ""),
-                "strategy_name": getattr(engine, "strategy_name", ""),
-            })
-    rows.sort(key=lambda r: r["ts"])
-    return jsonify({"debug_enabled": any_debug_on, "logs": rows[-1000:]})
+        res = logger_svc.client.table("orb_debug_logs") \
+            .select("id,ts,level,message,data,strategy_id,ticker,strategy_name") \
+            .order("ts", desc=False) \
+            .limit(limit) \
+            .execute()
+        rows = res.data or []
+    except Exception as e:
+        logger.warning("[strategy] debug-logs DB read failed — falling back to memory: %s", e)
+        for sid, engine in _all_engines():
+            buf = getattr(engine, "debug", None)
+            if not buf:
+                continue
+            for rec in buf.snapshot(since_id=0):
+                rows.append({
+                    **rec,
+                    "strategy_id":   sid,
+                    "ticker":        getattr(engine, "ticker", ""),
+                    "strategy_name": getattr(engine, "strategy_name", ""),
+                })
+        rows.sort(key=lambda r: r["ts"])
+        rows = rows[-limit:]
+
+    any_debug_on = _debug_all or any(
+        getattr(eng, "debug_enabled", False) for _, eng in _all_engines()
+    )
+    return jsonify({"debug_enabled": any_debug_on, "logs": rows})
 
 
 @strategy_bp.route("/debug-logs/clear", methods=["POST"])

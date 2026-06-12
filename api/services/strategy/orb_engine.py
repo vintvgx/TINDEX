@@ -150,6 +150,7 @@ class ORBEngine:
         self._current_option_price   = None   # latest mid-price from WebSocket stream
         self._last_underlying_price  = None   # latest underlying price from periodic poll
         self.session_vwap            = None   # intraday VWAP computed at ORB calc time
+        self.vix                     = None   # VIX at session open, set in calculate_orb
         # Fan-out queues for /ws/strategy/<id>/live WebSocket clients
         self._live_clients: list     = []
         self._live_clients_lock      = __import__("threading").Lock()
@@ -230,12 +231,13 @@ class ORBEngine:
             logger.info("[ORBEngine] Macro event today — proceeding with caution flag")
             self.debug.emit("WARN", "Macro event today — proceeding with caution flag")
 
+        self.vix = result.get("vix")
         self.logger.log_session(
             ticker=self.ticker,
             session_date=self.session_date,
             orh=self.orh, orl=self.orl,
             orb_range=self.orb_range,
-            vix=result["vix"],
+            vix=self.vix,
             sentiment=result["sentiment"],
             profile=self.profile_key,
             strategy_id=self.strategy_id,
@@ -518,13 +520,17 @@ class ORBEngine:
         path (submit_manual_trade). Assumes capital/stream checks already passed.
         """
         try:
-            order = MarketOrderRequest(
+            order_req = MarketOrderRequest(
                 symbol=contract["symbol"],
                 qty=qty,
                 side=OrderSide.BUY,
                 time_in_force=TimeInForce.DAY
             )
-            self.trading_client.submit_order(order)
+            submitted = self.trading_client.submit_order(order_req)
+
+            # Prefer the actual fill price over the pre-order ask so that all
+            # TP/SL levels are anchored to what was actually paid.
+            entry_premium = self._resolve_entry_premium(submitted, contract["ask"])
 
             self.position         = direction
             self.contract_symbol  = contract["symbol"]
@@ -535,7 +541,7 @@ class ORBEngine:
 
             eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:10")
             self.exit_manager = ExitManager(
-                entry_premium=contract["ask"],
+                entry_premium=entry_premium,
                 qty=qty,
                 fib_levels=fib_levels,
                 direction=direction,
@@ -547,19 +553,22 @@ class ORBEngine:
                 ticker=self.ticker,
                 direction=direction,
                 contract=contract,
-                entry_premium=contract["ask"],
+                entry_premium=entry_premium,
                 orh=fib_levels.get("orh"), orl=fib_levels.get("orl"),
                 fib_levels=fib_levels,
                 session_date=self.session_date,
                 profile=self.profile_key,
                 qty=qty,
+                underlying_price_entry=self._last_underlying_price,
+                vix_at_entry=self.vix,
+                strategy_id=self.strategy_id,
             )
             self.notifier.notify_entry(
                 ticker=self.ticker,
                 direction=direction,
                 contract=contract,
                 qty=qty,
-                entry_premium=contract["ask"],
+                entry_premium=entry_premium,
                 trade_id=self.active_trade_id,
                 profile_key=self.profile_key,
                 macro_event=self.macro_today,
@@ -569,9 +578,9 @@ class ORBEngine:
                 self.stream_manager.subscribe(contract["symbol"], self._on_stream_quote)
 
             logger.info("[ORBEngine] Entered %s %s qty=%d @ %.2f (manual=%s)",
-                        direction, contract["symbol"], qty, contract["ask"], manual)
+                        direction, contract["symbol"], qty, entry_premium, manual)
             self.debug.emit("SUCCESS", f"{'MANUAL ' if manual else ''}ENTERED {direction} "
-                                       f"{contract['symbol']} qty={qty} @ {contract['ask']:.2f}")
+                                       f"{contract['symbol']} qty={qty} @ {entry_premium:.2f}")
         except Exception as e:
             logger.error("[ORBEngine] Order failed: %s", e)
             self.debug.emit("ERROR", f"Order submission failed: {e}")
@@ -608,10 +617,13 @@ class ORBEngine:
                                 f"qty={qty} profile={profile_key or self.profile_key}")
 
         # Resolve the chosen contract's live quote + metadata.
+        self.debug.emit("INFO", f"Fetching live quote for {contract_symbol} ...")
         contract = self._resolve_contract(contract_symbol, direction)
         if not contract:
             self.debug.emit("ERROR", f"Manual trade blocked — could not price {contract_symbol}")
             return {"status": "error", "message": f"Could not fetch a quote for {contract_symbol}"}
+        self.debug.emit("INFO", f"Contract priced — {contract['symbol']} "
+                                f"ask=${contract['ask']:.2f} bid=${contract['bid']:.2f}")
 
         # Use the engine's ORB/fib if armed, else synthesize from the underlying so
         # ExitManager (premium-based) has the orh/orl + fib targets it expects.
@@ -635,13 +647,20 @@ class ORBEngine:
                     return {"status": "error", "message": msg}
                 self.debug.emit("WARN", f"Manual trade — reducing qty {qty}→{affordable} (capital)")
                 qty = affordable
+            else:
+                self.debug.emit("INFO",
+                    f"Capital OK — ask=${ask:.2f} qty={qty} cost=${required:.0f} "
+                    f"buying_power=${buying_power:.0f}")
 
         # Verify the option can be streamed (same blind-trade guard as auto entry).
         if self.stream_manager:
+            self.debug.emit("INFO",
+                f"Verifying stream for {contract['symbol']} (timeout=8s) ...")
             if not self.stream_manager.verify_stream(contract["symbol"], timeout=8.0):
                 msg = f"Real-time stream unavailable for {contract['symbol']}"
                 self.debug.emit("ERROR", f"Manual trade blocked — {msg}")
                 return {"status": "error", "message": msg}
+            self.debug.emit("INFO", f"Stream verified for {contract['symbol']}")
 
         try:
             self._execute_entry(direction, contract, qty, effective_profile, fib_levels,
@@ -650,6 +669,30 @@ class ORBEngine:
             return {"status": "error", "message": f"Order submission failed: {e}"}
         return {"status": "ok", "message": f"Entered {direction} {contract['symbol']} qty={qty}",
                 "contract": contract["symbol"], "qty": qty, "trade_id": self.active_trade_id}
+
+    def _resolve_entry_premium(self, order, ask_fallback: float) -> float:
+        """
+        Return the best entry premium to anchor TP/SL to.
+
+        Alpaca fills market options orders immediately (paper + live). The
+        submitted Order object often already has `filled_avg_price`. If not (the
+        order is still pending at API-return time), we poll once with a short
+        delay, then fall back to the pre-order ask so the trade is never blocked.
+        """
+        import time as _time
+        try:
+            fp = getattr(order, "filled_avg_price", None)
+            if fp and float(fp) > 0:
+                return float(fp)
+            # Give Alpaca up to ~1 s to fill (options market orders are near-instant).
+            _time.sleep(0.5)
+            refreshed = self.trading_client.get_order_by_id(str(order.id))
+            fp = getattr(refreshed, "filled_avg_price", None)
+            if fp and float(fp) > 0:
+                return float(fp)
+        except Exception as e:
+            logger.debug("[ORBEngine] _resolve_entry_premium fallback: %s", e)
+        return ask_fallback
 
     def _resolve_contract(self, contract_symbol: str, direction: str) -> dict | None:
         """
@@ -725,6 +768,14 @@ class ORBEngine:
 
         qty_to_close = action.get("qty", self.exit_manager.qty_remaining)
         closing_all  = qty_to_close >= self.exit_manager.qty_remaining
+        em       = self.exit_manager
+        opt_str  = f"${current_option_price:.2f}" if current_option_price is not None else "N/A"
+        self.debug.emit("INFO",
+            f"Exit triggered — {action['type']} reason={action.get('reason','')} "
+            f"qty={qty_to_close} option_price={opt_str} "
+            f"entry=${em.entry_premium:.2f} hard_stop=${em.hard_stop:.2f} "
+            f"tp1=${em.tp1:.2f} tp2=${em.tp2:.2f}",
+            {"action": action})
         try:
             if closing_all:
                 self.trading_client.close_position(self.contract_symbol)
@@ -759,6 +810,7 @@ class ORBEngine:
                 qty_closed=qty_to_close,
                 profile=self.profile_key,
                 strategy_id=self.strategy_id,
+                underlying_price_exit=current_price,
             )
             self.notifier.notify_exit(
                 ticker=self.ticker,

@@ -79,14 +79,14 @@ export interface StrategyConfig {
 export type DebugLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
 
 export interface DebugLogEntry {
-  id: number;
+  id: string;   // UUID from Supabase
   ts: string;
   level: DebugLevel;
   message: string;
   data: Record<string, unknown> | null;
-  strategy_id: string;
-  ticker: string;
-  strategy_name: string;
+  strategy_id: string | null;
+  ticker: string | null;
+  strategy_name: string | null;
 }
 
 export interface DebugLogsResponse {
@@ -158,6 +158,7 @@ export interface StrategyPosition {
 
 export interface ORBTrade {
   id: string;
+  strategy_id: string | null;
   trade_date: string;
   ticker: string;
   profile: ProfileKey;
@@ -176,7 +177,11 @@ export interface ORBTrade {
   exit_reason: string | null;
   orh: number;
   orl: number;
+  vix_at_entry: number | null;
+  underlying_price_entry: number | null;
+  underlying_price_exit: number | null;
   flow_confirmed: boolean;
+  fib_targets?: Record<string, number> | null;
 }
 
 export interface StrategyStats {

@@ -110,24 +110,30 @@ class TradeLogger:
 
     def log_entry(self, ticker: str, direction: str, contract: dict,
                   entry_premium: float, orh: float, orl: float,
-                  fib_levels: dict, session_date, profile: str, qty: int) -> Optional[str]:
+                  fib_levels: dict, session_date, profile: str, qty: int,
+                  underlying_price_entry: Optional[float] = None,
+                  vix_at_entry: Optional[float] = None,
+                  strategy_id: Optional[str] = None) -> Optional[str]:
         try:
             res = self.client.table("orb_trades").insert({
-                "trade_date":     str(session_date),
-                "ticker":         ticker,
-                "profile":        profile,
-                "direction":      direction,
-                "contract_symbol": contract["symbol"],
-                "strike":         contract["strike"],
-                "expiry":         str(contract["expiry"]),
-                "entry_premium":  entry_premium,
-                "qty_entered":    qty,
-                "qty_exited":     0,
-                "entry_time":     datetime.utcnow().isoformat(),
-                "orh":            orh,
-                "orl":            orl,
-                "fib_targets":    fib_levels,
-                "flow_confirmed": True,
+                "trade_date":             str(session_date),
+                "ticker":                 ticker,
+                "profile":                profile,
+                "direction":              direction,
+                "contract_symbol":        contract["symbol"],
+                "strike":                 contract["strike"],
+                "expiry":                 str(contract["expiry"]),
+                "entry_premium":          entry_premium,
+                "qty_entered":            qty,
+                "qty_exited":             0,
+                "entry_time":             datetime.utcnow().isoformat(),
+                "orh":                    orh,
+                "orl":                    orl,
+                "fib_targets":            fib_levels,
+                "flow_confirmed":         True,
+                "underlying_price_entry": underlying_price_entry,
+                "vix_at_entry":           vix_at_entry,
+                "strategy_id":            strategy_id,
             }).execute()
             if res.data:
                 return res.data[0]["id"]
@@ -138,7 +144,8 @@ class TradeLogger:
 
     def log_exit(self, contract_symbol: str, exit_reason: str,
                  exit_premium: Optional[float], qty_closed: int, profile: str,
-                 strategy_id: str = None):
+                 strategy_id: str = None,
+                 underlying_price_exit: Optional[float] = None):
         try:
             # Fetch the open trade — do NOT filter by exit_time so that partial
             # exits after TP1 (which already set exit_time) are still found.
@@ -165,11 +172,12 @@ class TradeLogger:
             total_pnl_pct = (total_pnl / total_cost * 100) if total_cost else 0
 
             update: dict = {
-                "exit_premium": exit_p if exit_premium is not None else None,
-                "qty_exited":   qty_after,
-                "pnl":          round(total_pnl, 2),
-                "pnl_pct":      round(total_pnl_pct, 2),
-                "exit_reason":  exit_reason,
+                "exit_premium":          exit_p if exit_premium is not None else None,
+                "qty_exited":            qty_after,
+                "pnl":                   round(total_pnl, 2),
+                "pnl_pct":               round(total_pnl_pct, 2),
+                "exit_reason":           exit_reason,
+                "underlying_price_exit": underlying_price_exit,
             }
             # Only stamp exit_time when the position is fully closed so that
             # subsequent partial exit calls can still find the row.

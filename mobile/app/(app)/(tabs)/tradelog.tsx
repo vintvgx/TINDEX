@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { useMemo, useState } from 'react';
+import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -8,6 +8,11 @@ import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
 import { useStrategyStats, useStrategyStatsByProfile } from '@/hooks/queries/strategy/useStrategyStats';
 import { useStrategyDebugLogs } from '@/hooks/queries/strategy/useStrategyDebugLogs';
 import type { ProfileKey, ORBTrade, StrategyStats, DebugLogEntry, DebugLevel } from '@/common/types/strategy';
+import { formatContractSymbol } from '@/lib/formatContract';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 type Filter = 'ALL' | ProfileKey;
 type Tab = 'log' | 'stats' | 'debug';
@@ -29,8 +34,9 @@ const FILTERS: { label: string; value: Filter }[] = [
 
 export default function TradeLogScreen() {
   const colors = useThemeColors();
-  const [filter, setFilter] = useState<Filter>('ALL');
-  const [tab, setTab] = useState<Tab>('log');
+  const [filter, setFilter]     = useState<Filter>('ALL');
+  const [tab, setTab]           = useState<Tab>('log');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const { data: trades, isLoading: tradesLoading } = useStrategyTrades({
     profile: filter,
@@ -60,7 +66,7 @@ export default function TradeLogScreen() {
               onPress={() => setTab(t)}
               style={[styles.tabBtn, tab === t && { backgroundColor: colors.accent }]}
             >
-              <Text style={[styles.tabText, { color: tab === t ? '#fff' : colors.tabBarInactive }]}>
+              <Text style={[styles.tabText, { color: tab === t ? colors.accentForeground : colors.tabBarInactive }]}>
                 {t === 'log' ? 'Trade Log' : t === 'stats' ? 'Stats' : 'Debug'}
               </Text>
             </TouchableOpacity>
@@ -103,7 +109,13 @@ export default function TradeLogScreen() {
                 <Text style={[styles.empty, { color: colors.tabBarInactive }]}>No trades yet</Text>
               )}
               {trades?.map(trade => (
-                <TradeRow key={trade.id} trade={trade} colors={colors} />
+                <TradeRow
+                  key={trade.id}
+                  trade={trade}
+                  colors={colors}
+                  expanded={expandedId === trade.id}
+                  onToggle={() => setExpandedId(id => id === trade.id ? null : trade.id)}
+                />
               ))}
             </>
           )
@@ -135,43 +147,222 @@ export default function TradeLogScreen() {
   );
 }
 
-const TradeRow = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
-  const pnl      = trade.pnl ?? 0;
-  const pnlColor = pnl >= 0 ? colors.success : colors.error;
-  const profileEmoji = trade.profile === 'BULL_DOG' ? '🐂' : trade.profile === 'WOLF' ? '🐺' : '🐱';
+// ── Trade detail helpers ──────────────────────────────────────────────────────
+
+const EXIT_REASON_LABELS: Record<string, string> = {
+  HARD_STOP:         'Hard Stop',
+  TP1:               'TP1 Hit — Partial Close',
+  TP2:               'TP2 Hit — Partial Close',
+  TP2_FULL_CLOSE:    'TP2 Hit — Full Close',
+  RUNNER_TRAIL_STOP: 'Runner Trailing Stop',
+  EOD_CLOSE:         'EOD Close',
+  EOD_HARD_CLOSE:    'EOD Hard Close',
+  BREAKEVEN_STOP:    'Breakeven Stop',
+  CONSOLIDATION:     'Consolidation Exit',
+  LOW_VOLUME_EXIT:   'Low Volume Exit',
+  MANUAL_CLOSE:      'Manually Closed',
+  FORCE_CLOSE:       'Force Closed',
+  MANUAL_EXIT:       'Manual Exit',
+};
+
+const fmtEt = (iso: string): string => {
+  try {
+    return new Date(iso).toLocaleString('en-US', {
+      timeZone: 'America/New_York',
+      month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }) + ' ET';
+  } catch { return iso; }
+};
+
+const fmtDuration = (entry: string, exit: string | null): string => {
+  if (!exit) return 'Still open';
+  const ms  = new Date(exit).getTime() - new Date(entry).getTime();
+  const min = Math.round(ms / 60_000);
+  if (min < 60) return `${min}m`;
+  return `${Math.floor(min / 60)}h ${min % 60}m`;
+};
+
+// ── TradeDetail ───────────────────────────────────────────────────────────────
+
+const DetailRow = ({ label, value, colors, valueColor, mono }: {
+  label: string; value: string; colors: any; valueColor?: string; mono?: boolean;
+}) => (
+  <View style={styles.detailRow}>
+    <Text style={[styles.detailLabel, { color: colors.tabBarInactive }]}>{label}</Text>
+    <Text
+      style={[styles.detailValue, { color: valueColor ?? colors.text },
+              mono && { fontFamily: 'monospace' }]}
+      selectable
+    >
+      {value}
+    </Text>
+  </View>
+);
+
+const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
+  const orbRef  = trade.direction === 'CALL' ? trade.orh : trade.orl;
+  const dirWord = trade.direction === 'CALL' ? 'above ORH' : 'below ORL';
+  const exitLabel = trade.exit_reason
+    ? (EXIT_REASON_LABELS[trade.exit_reason] ?? trade.exit_reason)
+    : 'Open — position not yet closed';
+  const duration = fmtDuration(trade.entry_time, trade.exit_time);
+
+  // Entry stop-loss price is entry_premium × (1 − ~35%). We don't store max_loss_pct
+  // per trade, but we can show a note if the exit was HARD_STOP.
+  const stopHit = trade.exit_reason === 'HARD_STOP';
+
+  const pnlColor = trade.pnl == null
+    ? undefined
+    : trade.pnl >= 0 ? colors.success : colors.error;
 
   return (
-    <View style={[styles.tradeRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={styles.tradeLeft}>
-        <Text style={[styles.tradeDate, { color: colors.tabBarInactive }]}>{trade.trade_date}</Text>
-        <Text style={[styles.tradeTicker, { color: colors.text }]}>
-          {profileEmoji} {trade.ticker}
-        </Text>
-        <View style={styles.tradeBadges}>
-          <View style={[styles.dirBadge, { backgroundColor: trade.direction === 'CALL' ? colors.success + '22' : colors.error + '22' }]}>
-            <Text style={[styles.dirText, { color: trade.direction === 'CALL' ? colors.success : colors.error }]}>
-              {trade.direction}
-            </Text>
-          </View>
-        </View>
-        {trade.exit_reason && (
-          <Text style={[styles.exitReason, { color: colors.tabBarInactive }]}>{trade.exit_reason}</Text>
-        )}
-      </View>
-      <View style={styles.tradeRight}>
-        <Text style={[styles.tradePnl, { color: pnlColor }]}>
-          {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
-        </Text>
-        {trade.pnl_pct != null && (
-          <Text style={[styles.tradePnlPct, { color: pnlColor }]}>
-            {trade.pnl_pct.toFixed(1)}%
-          </Text>
-        )}
-        <Text style={[styles.tradeEntry, { color: colors.tabBarInactive }]}>
-          ${trade.entry_premium?.toFixed(2)} → {trade.exit_premium ? `$${trade.exit_premium.toFixed(2)}` : '—'}
-        </Text>
-      </View>
+    <View style={[styles.detailSection, { borderTopColor: colors.border }]}>
+      {/* Entry signal */}
+      <Text style={[styles.detailSectionHeader, { color: colors.tabBarInactive }]}>ENTRY SIGNAL</Text>
+      <DetailRow
+        label={`${trade.direction} Breakout`}
+        value={`Price closed ${dirWord} $${orbRef?.toFixed(2) ?? '—'}`}
+        colors={colors}
+      />
+      <DetailRow
+        label="Flow Confirmed"
+        value={trade.flow_confirmed ? '✓ Yes' : '✗ No'}
+        valueColor={trade.flow_confirmed ? colors.success : colors.error}
+        colors={colors}
+      />
+      <DetailRow label="ORH"              value={`$${trade.orh?.toFixed(2) ?? '—'}`}                       colors={colors} />
+      <DetailRow label="ORL"              value={`$${trade.orl?.toFixed(2) ?? '—'}`}                       colors={colors} />
+      <DetailRow label="Underlying Entry" value={trade.underlying_price_entry != null ? `$${trade.underlying_price_entry.toFixed(2)}` : '—'} colors={colors} />
+      {trade.vix_at_entry != null && (
+        <DetailRow label="VIX" value={trade.vix_at_entry.toFixed(2)} colors={colors} />
+      )}
+
+      {/* Contract */}
+      <Text style={[styles.detailSectionHeader, { color: colors.tabBarInactive, marginTop: 8 }]}>CONTRACT</Text>
+      <DetailRow label="Contract" value={formatContractSymbol(trade.contract_symbol)} colors={colors} />
+      <DetailRow label="Symbol"   value={trade.contract_symbol} colors={colors} mono />
+      <DetailRow label="Strike" value={`$${trade.strike?.toFixed(2) ?? '—'}`} colors={colors} />
+      <DetailRow label="Expiry" value={trade.expiry ?? '—'} colors={colors} />
+
+      {/* Timing & P&L */}
+      <Text style={[styles.detailSectionHeader, { color: colors.tabBarInactive, marginTop: 8 }]}>TRADE HISTORY</Text>
+      <DetailRow label="Entered"           value={fmtEt(trade.entry_time)}                                  colors={colors} />
+      <DetailRow label="Exited"            value={trade.exit_time ? fmtEt(trade.exit_time) : '—'}           colors={colors} />
+      <DetailRow label="Duration"          value={duration}                                                  colors={colors} />
+      <DetailRow label="Entry Premium"     value={`$${trade.entry_premium?.toFixed(2) ?? '—'}`}             colors={colors} />
+      <DetailRow
+        label="Exit Premium"
+        value={trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—'}
+        valueColor={
+          trade.exit_premium == null ? undefined
+          : trade.exit_premium >= trade.entry_premium ? colors.success : colors.error
+        }
+        colors={colors}
+      />
+      <DetailRow
+        label="Underlying Exit"
+        value={trade.underlying_price_exit != null ? `$${trade.underlying_price_exit.toFixed(2)}` : '—'}
+        colors={colors}
+      />
+      <DetailRow
+        label="P&L"
+        value={trade.pnl != null ? `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)}` : '—'}
+        valueColor={pnlColor}
+        colors={colors}
+      />
+      <DetailRow
+        label="P&L %"
+        value={trade.pnl_pct != null ? `${trade.pnl_pct >= 0 ? '+' : ''}${trade.pnl_pct.toFixed(1)}%` : '—'}
+        valueColor={pnlColor}
+        colors={colors}
+      />
+      <DetailRow
+        label="Exit Reason"
+        value={exitLabel}
+        valueColor={stopHit ? colors.error : undefined}
+        colors={colors}
+      />
+      <DetailRow label="Qty"
+        value={`${trade.qty_entered} entered · ${trade.qty_exited} exited`}
+        colors={colors}
+      />
     </View>
+  );
+};
+
+// ── TradeRow ──────────────────────────────────────────────────────────────────
+
+const TradeRow = ({
+  trade, colors, expanded, onToggle,
+}: {
+  trade: ORBTrade; colors: any; expanded: boolean; onToggle: () => void;
+}) => {
+  const pnl          = trade.pnl ?? 0;
+  const pnlColor     = pnl > 0 ? colors.success : pnl < 0 ? colors.error : colors.tabBarInactive;
+  const profileEmoji = trade.profile === 'BULL_DOG' ? '🐂' : trade.profile === 'WOLF' ? '🐺' : '🐱';
+
+  const handlePress = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    onToggle();
+  };
+
+  return (
+    <TouchableOpacity
+      onPress={handlePress}
+      activeOpacity={0.85}
+      style={[styles.tradeRow, { backgroundColor: colors.card, borderColor: colors.border }]}
+    >
+      <View style={styles.tradeRowMain}>
+        <View style={styles.tradeLeft}>
+          <Text style={[styles.tradeDate, { color: colors.tabBarInactive }]}>{trade.trade_date}</Text>
+          <Text style={[styles.tradeTicker, { color: colors.text }]}>
+            {profileEmoji} {trade.ticker}
+          </Text>
+          <Text style={[styles.tradeContract, { color: colors.tabBarInactive }]}>
+            {formatContractSymbol(trade.contract_symbol)}
+          </Text>
+          <View style={styles.tradeBadges}>
+            <View style={[styles.dirBadge, {
+              backgroundColor: trade.direction === 'CALL' ? colors.success + '22' : colors.error + '22',
+            }]}>
+              <Text style={[styles.dirText, {
+                color: trade.direction === 'CALL' ? colors.success : colors.error,
+              }]}>
+                {trade.direction}
+              </Text>
+            </View>
+          </View>
+          {trade.exit_reason && !expanded && (
+            <Text style={[styles.exitReason, { color: colors.tabBarInactive }]}>
+              {EXIT_REASON_LABELS[trade.exit_reason] ?? trade.exit_reason}
+            </Text>
+          )}
+        </View>
+        <View style={styles.tradeRight}>
+          <Text style={[styles.tradePnl, { color: pnlColor }]}>
+            {pnl > 0 ? '+' : ''}${pnl.toFixed(2)}
+          </Text>
+          {trade.pnl_pct != null && (
+            <Text style={[styles.tradePnlPct, { color: pnlColor }]}>
+              {trade.pnl_pct > 0 ? '+' : ''}{trade.pnl_pct.toFixed(1)}%
+            </Text>
+          )}
+          <Text style={[styles.tradeEntry, { color: colors.tabBarInactive }]}>
+            ${trade.entry_premium?.toFixed(2)} → {trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—'}
+          </Text>
+          <Ionicons
+            name={expanded ? 'chevron-up' : 'chevron-down'}
+            size={14}
+            color={colors.tabBarInactive}
+            style={{ marginTop: 4 }}
+          />
+        </View>
+      </View>
+
+      {expanded && <TradeDetail trade={trade} colors={colors} />}
+    </TouchableOpacity>
   );
 };
 
@@ -264,7 +455,7 @@ function DebugLogPanel({ colors }: { colors: any }) {
         ) : logs.length === 0 ? (
           <Text style={[styles.empty, { color: colors.tabBarInactive }]}>No debug events yet</Text>
         ) : (
-          logs.map(log => <DebugRow key={`${log.strategy_id}-${log.id}`} log={log} colors={colors} />)
+          logs.map(log => <DebugRow key={String(log.id)} log={log} colors={colors} />)
         )}
         <View style={{ height: 100 }} />
       </ScrollView>
@@ -308,10 +499,12 @@ const styles = StyleSheet.create({
   filterChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1, marginRight: 8 },
   filterText: { fontSize: 13, fontWeight: '600' },
   empty:     { textAlign: 'center', marginTop: 40, fontSize: 14 },
-  tradeRow:  { flexDirection: 'row', justifyContent: 'space-between', borderRadius: 12, borderWidth: 1, padding: 12 },
+  tradeRow:     { borderRadius: 12, borderWidth: 1, padding: 12 },
+  tradeRowMain: { flexDirection: 'row', justifyContent: 'space-between' },
   tradeLeft: { flex: 1, gap: 3 },
-  tradeDate: { fontSize: 11 },
-  tradeTicker: { fontSize: 15, fontWeight: '700' },
+  tradeDate:     { fontSize: 11 },
+  tradeTicker:   { fontSize: 15, fontWeight: '700' },
+  tradeContract: { fontSize: 11, marginTop: 1 },
   tradeBadges: { flexDirection: 'row', gap: 6 },
   dirBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
   dirText:  { fontSize: 11, fontWeight: '700' },
@@ -320,6 +513,13 @@ const styles = StyleSheet.create({
   tradePnl:  { fontSize: 17, fontWeight: '700' },
   tradePnlPct: { fontSize: 12, fontWeight: '600' },
   tradeEntry: { fontSize: 10 },
+
+  // Trade detail expansion
+  detailSection:       { marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, gap: 5 },
+  detailSectionHeader: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 2 },
+  detailRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 },
+  detailLabel: { fontSize: 11, fontWeight: '600', flex: 1 },
+  detailValue: { fontSize: 11, flex: 2, textAlign: 'right' },
   statsCard: { borderRadius: 14, borderWidth: 1, padding: 14 },
   statsCardCompact: { padding: 10 },
   statsLabel: { fontSize: 14, fontWeight: '700', marginBottom: 10 },

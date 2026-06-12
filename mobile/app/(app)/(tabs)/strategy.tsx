@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, SafeAreaView, TouchableOpacity,
   StyleSheet, ActivityIndicator, Alert, Modal, TextInput,
-  KeyboardAvoidingView, Platform, Switch,
+  KeyboardAvoidingView, Platform, Switch, UIManager, LayoutAnimation,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -22,7 +22,12 @@ import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
-import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, ImmediatePosition } from '@/common/types/strategy';
+import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, ImmediatePosition, LiveOptionPrice } from '@/common/types/strategy';
+import { formatContractSymbolShort } from '@/lib/formatContract';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // Fallback tickers shown when no orb_monitoring_state rows are available yet.
 const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
@@ -368,7 +373,13 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
     config.id,
     config.has_position === true,
   );
-  const [exitOpen, setExitOpen] = useState(false);
+  const [exitOpen, setExitOpen]   = useState(false);
+  const [expanded, setExpanded]   = useState(false);
+
+  const toggleExpanded = useCallback(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpanded(v => !v);
+  }, []);
 
   const pnlColor = live
     ? (live.pnl >= 0 ? colors.success : colors.error)
@@ -418,8 +429,8 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
         {/* Live position panel */}
         {config.has_position && (
           <View style={[styles.livePnlCard, { backgroundColor: colors.background, borderColor: colors.border }]}>
-            {/* Stream indicator */}
-            <View style={styles.liveHeader}>
+            {/* Tappable header row */}
+            <TouchableOpacity onPress={toggleExpanded} activeOpacity={0.7} style={styles.liveHeader}>
               <View style={[styles.modeDot, {
                 backgroundColor: streaming ? colors.success : colors.tabBarInactive,
               }]} />
@@ -428,35 +439,37 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
               </Text>
               {live && (
                 <Text style={[styles.liveContract, { color: colors.tabBarInactive }]}>
-                  {live.contract}
+                  {formatContractSymbolShort(live.contract)}
                 </Text>
               )}
-            </View>
+              <Ionicons
+                name={expanded ? 'chevron-up' : 'chevron-down'}
+                size={14}
+                color={colors.tabBarInactive}
+                style={{ marginLeft: 'auto' }}
+              />
+            </TouchableOpacity>
 
             {live ? (
               <View style={styles.liveStats}>
-                {/* Option price */}
                 <View style={styles.liveStat}>
                   <Text style={[styles.liveStatLabel, { color: colors.tabBarInactive }]}>Price</Text>
                   <Text style={[styles.liveStatValue, { color: colors.text }]}>
                     ${live.mid_price.toFixed(2)}
                   </Text>
                 </View>
-                {/* P&L */}
                 <View style={styles.liveStat}>
                   <Text style={[styles.liveStatLabel, { color: colors.tabBarInactive }]}>P&L</Text>
                   <Text style={[styles.liveStatValue, { color: pnlColor }]}>
                     {live.pnl >= 0 ? '+' : ''}${live.pnl.toFixed(2)}
                   </Text>
                 </View>
-                {/* P&L % */}
                 <View style={styles.liveStat}>
                   <Text style={[styles.liveStatLabel, { color: colors.tabBarInactive }]}>Chg</Text>
                   <Text style={[styles.liveStatValue, { color: pnlColor }]}>
                     {live.pnl_pct >= 0 ? '+' : ''}{live.pnl_pct.toFixed(1)}%
                   </Text>
                 </View>
-                {/* Qty remaining */}
                 <View style={styles.liveStat}>
                   <Text style={[styles.liveStatLabel, { color: colors.tabBarInactive }]}>Qty</Text>
                   <Text style={[styles.liveStatValue, { color: colors.text }]}>
@@ -482,6 +495,11 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
                   </View>
                 )}
               </View>
+            )}
+
+            {/* Expanded detail */}
+            {expanded && live && (
+              <LivePositionDetail live={live} colors={colors} />
             )}
 
             {/* Manual exit */}
@@ -524,9 +542,14 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
 // ── ImmediatePositionCard ────────────────────────────────────────────────────────
 
 function ImmediatePositionCard({ position, colors }: { position: ImmediatePosition; colors: any }) {
-  // Live P&L over the WS (immediate engines are now reachable by the live endpoint).
   const { data: live, connected } = useStrategyLivePrice(position.strategy_id, true);
-  const [exitOpen, setExitOpen] = useState(false);
+  const [exitOpen, setExitOpen]   = useState(false);
+  const [expanded, setExpanded]   = useState(false);
+
+  const toggleExpanded = useCallback(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpanded(v => !v);
+  }, []);
 
   const pnl    = live?.pnl     ?? position.pnl     ?? 0;
   const pnlPct = live?.pnl_pct ?? position.pnl_pct ?? 0;
@@ -548,7 +571,7 @@ function ImmediatePositionCard({ position, colors }: { position: ImmediatePositi
             <Text style={[styles.stratTicker, { color: colors.text }]}>
               {position.ticker} <Text style={{ color: dirColor }}>{position.direction}</Text>
             </Text>
-            <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>{position.contract}</Text>
+            <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>{formatContractSymbolShort(position.contract)}</Text>
           </View>
           <View style={[styles.modeBadge, { backgroundColor: modeColor + '22' }]}>
             <View style={[styles.modeDot, { backgroundColor: modeColor }]} />
@@ -564,12 +587,18 @@ function ImmediatePositionCard({ position, colors }: { position: ImmediatePositi
         </View>
 
         <View style={[styles.livePnlCard, { backgroundColor: colors.background, borderColor: colors.border }]}>
-          <View style={styles.liveHeader}>
+          <TouchableOpacity onPress={toggleExpanded} activeOpacity={0.7} style={styles.liveHeader}>
             <View style={[styles.modeDot, { backgroundColor: connected ? colors.success : colors.tabBarInactive }]} />
             <Text style={[styles.liveLabel, { color: colors.tabBarInactive }]}>
               {connected ? 'LIVE' : 'CONNECTING'}
             </Text>
-          </View>
+            <Ionicons
+              name={expanded ? 'chevron-up' : 'chevron-down'}
+              size={14}
+              color={colors.tabBarInactive}
+              style={{ marginLeft: 'auto' }}
+            />
+          </TouchableOpacity>
           <View style={styles.liveStats}>
             <View style={styles.liveStat}>
               <Text style={[styles.liveStatLabel, { color: colors.tabBarInactive }]}>Price</Text>
@@ -609,6 +638,11 @@ function ImmediatePositionCard({ position, colors }: { position: ImmediatePositi
             </View>
           )}
 
+          {/* Expanded detail */}
+          {expanded && live && (
+            <LivePositionDetail live={live} colors={colors} />
+          )}
+
           {/* Manual exit */}
           <TouchableOpacity
             onPress={() => setExitOpen(true)}
@@ -634,6 +668,67 @@ function ImmediatePositionCard({ position, colors }: { position: ImmediatePositi
     </View>
   );
 }
+
+// ── LivePositionDetail ─────────────────────────────────────────────────────────
+
+function LivePositionDetail({ live, colors }: { live: LiveOptionPrice; colors: any }) {
+  return (
+    <View style={[styles.liveDetail, { borderTopColor: colors.border }]}>
+      <LiveDetailRow
+        label="Entry"
+        value={`$${live.entry_premium.toFixed(2)}`}
+        colors={colors}
+      />
+      <LiveDetailRow
+        label="Hard Stop"
+        value={`$${live.hard_stop.toFixed(2)}`}
+        valueColor={colors.error}
+        colors={colors}
+      />
+      <LiveDetailRow
+        label="TP1"
+        value={`$${live.tp1.toFixed(2)}`}
+        badge={live.tp1_hit ? 'Hit' : undefined}
+        badgeColor={colors.success}
+        colors={colors}
+      />
+      <LiveDetailRow
+        label="TP2"
+        value={`$${live.tp2.toFixed(2)}`}
+        badge={live.tp2_hit ? 'Hit' : undefined}
+        badgeColor={colors.success}
+        colors={colors}
+      />
+    </View>
+  );
+}
+
+function LiveDetailRow({
+  label, value, valueColor, badge, badgeColor, colors,
+}: {
+  label: string;
+  value: string;
+  valueColor?: string;
+  badge?: string;
+  badgeColor?: string;
+  colors: any;
+}) {
+  return (
+    <View style={styles.liveDetailRow}>
+      <Text style={[styles.liveDetailLabel, { color: colors.tabBarInactive }]}>{label}</Text>
+      <View style={styles.liveDetailRight}>
+        <Text style={[styles.liveDetailValue, { color: valueColor ?? colors.text }]}>{value}</Text>
+        {badge && (
+          <View style={[styles.liveDetailBadge, { backgroundColor: (badgeColor ?? colors.accent) + '22' }]}>
+            <Text style={[styles.liveDetailBadgeText, { color: badgeColor ?? colors.accent }]}>{badge}</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
+// ── AccountBannerSide ──────────────────────────────────────────────────────────
 
 interface AccountBannerSideProps {
   label: string;
@@ -1173,6 +1268,14 @@ const styles = StyleSheet.create({
   tpBadgeText:    { fontSize: 11, fontWeight: '700' },
   exitBtn:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 10, paddingVertical: 9, borderRadius: 9, borderWidth: 1 },
   exitBtnText:    { fontSize: 13, fontWeight: '700' },
+
+  liveDetail:          { marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, gap: 8 },
+  liveDetailRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  liveDetailLabel:     { fontSize: 12, fontWeight: '500' },
+  liveDetailRight:     { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  liveDetailValue:     { fontSize: 13, fontWeight: '700' },
+  liveDetailBadge:     { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5 },
+  liveDetailBadgeText: { fontSize: 10, fontWeight: '700' },
 
   stratActions: { justifyContent: 'center', gap: 12, paddingHorizontal: 10 },
   actionBtn:    { padding: 4 },
