@@ -79,6 +79,23 @@ class StrategyNotifier:
             data={"screen": "tradelog"},
         )
 
+    def notify_session_armed(self, ticker: str, orh: float, orl: float, profile_key: str):
+        """ORB calculated — engine is now watching for a breakout."""
+        orb_range = round(orh - orl, 2)
+        self._dispatch(
+            title=f"{ticker} — Watching for breakout  [{profile_key}]",
+            body=f"ORH ${orh:.2f}  ORL ${orl:.2f}  Range ${orb_range:.2f}",
+            data={"screen": "strategy"},
+        )
+
+    def notify_no_trade_eod(self, ticker: str, profile_key: str, orh: float, orl: float):
+        """Session closed at EOD with no entry taken."""
+        self._dispatch(
+            title=f"{ticker} — No trade today  [{profile_key}]",
+            body=f"Watched ORH ${orh:.2f} / ORL ${orl:.2f} — no breakout triggered.",
+            data={"screen": "tradelog"},
+        )
+
     def notify_skip(self, ticker: str, reason: str):
         """Session skipped before ORB could be evaluated."""
         readable = {

@@ -125,6 +125,14 @@ def _eod_reset(engine):
             )
         except Exception as ex:
             logger.error("[Scheduler] EOD close failed: %s", ex)
+    elif engine.orh and not engine.session_skipped:
+        # Session was armed and watched all day but no breakout fired — notify user.
+        engine.notifier.notify_no_trade_eod(
+            ticker=engine.ticker,
+            profile_key=engine.profile_key,
+            orh=engine.orh,
+            orl=engine.orl,
+        )
     engine.reset_session()
 
 

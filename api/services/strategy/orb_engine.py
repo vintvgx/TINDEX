@@ -248,6 +248,12 @@ class ORBEngine:
                                    f"ORL={self.orl:.2f} VWAP={self.session_vwap}",
                         {"vix": result["vix"], "sentiment": result["sentiment"],
                          "fib_levels": {k: round(v, 2) for k, v in self.fib_levels.items()}})
+        self.notifier.notify_session_armed(
+            ticker=self.ticker,
+            orh=self.orh,
+            orl=self.orl,
+            profile_key=self.profile_key,
+        )
         return True
 
     # ── Step 2: Called every minute after ORB is set ──────────────────────────
@@ -432,6 +438,28 @@ class ORBEngine:
         # Capital guard: reduce qty if buying power is insufficient, skip if unaffordable
         ask = contract["ask"]
         acct = self.get_account_info()
+
+        # Enforce user-configured capital_limit — cap qty to what the limit allows.
+        # This is independent of account buying power; it lets the user ring-fence
+        # a fixed dollar amount per strategy regardless of total account size.
+        if self.capital_limit is not None and ask > 0:
+            cap_qty = int(self.capital_limit / (ask * 100))
+            if cap_qty < 1:
+                self.debug.emit("ERROR",
+                    f"Entry blocked — capital_limit=${self.capital_limit} too low for "
+                    f"1 contract at ask=${ask:.2f} (need ${ask*100:.0f})")
+                self.notifier.notify_insufficient_capital(
+                    self.ticker,
+                    ask * 100,          # cost for 1 contract
+                    self.capital_limit,
+                )
+                return
+            if cap_qty < qty:
+                self.debug.emit("INFO",
+                    f"Qty capped by capital_limit: {qty}→{cap_qty} "
+                    f"(limit=${self.capital_limit}, ask=${ask:.2f})")
+                qty = cap_qty
+
         if acct:
             required = qty * ask * 100
             buying_power = acct["buying_power"]
