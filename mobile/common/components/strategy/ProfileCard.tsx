@@ -14,6 +14,8 @@ const BORDER_COLORS: Record<ProfileKey, string> = {
   BULL_DOG:    '#FF6B35',
   THUNDER_CAT: '#4A9EFF',
   WOLF:        '#4CAF84',
+  TREND_RIDER: '#A855F7',
+  RETESTER:    '#06B6D4',
   CUSTOM:      '#A855F7',
 };
 

@@ -104,9 +104,12 @@ def list_configs():
     for cfg in configs:
         sid = cfg["id"]
         eng = _engines.get(sid)
+        has_pos = bool(eng and eng.trade_taken and eng.contract_symbol)
         result.append({
             **cfg,
-            "has_position": bool(eng and eng.trade_taken and eng.contract_symbol),
+            "has_position":  has_pos,
+            "qty_remaining": (eng.exit_manager.qty_remaining
+                              if has_pos and eng and eng.exit_manager else None),
         })
     return jsonify(result)
 
@@ -142,8 +145,18 @@ def create_config():
 def update_config(strategy_id: str):
     """Patch an existing strategy config and hot-reload its engine."""
     data = request.get_json() or {}
+
+    # If the engine is missing (e.g. server just restarted), rebuild it from
+    # Supabase so we can still apply the patch rather than failing with 404.
     if strategy_id not in _engines:
-        return jsonify({"error": "Strategy not found"}), 404
+        configs = logger_svc.load_configs()
+        base = next((c for c in configs if c.get("id") == strategy_id), None)
+        if not base:
+            return jsonify({"error": "Strategy not found"}), 404
+        engine = ORBEngine(base, stream_manager=_stream_manager)
+        _engines[strategy_id] = engine
+        reschedule_jobs(engine, strategy_id=strategy_id)
+        logger.info("[strategy] Rebuilt missing engine for %s during PATCH", strategy_id)
 
     engine = _engines[strategy_id]
     allowed = {"ticker", "paper_mode", "active",
@@ -157,7 +170,10 @@ def update_config(strategy_id: str):
 
     engine.reload_config(engine.config)
     reschedule_jobs(engine, strategy_id=strategy_id)
-    logger_svc.save_strategy_config(engine.config)
+
+    saved = logger_svc.save_strategy_config(engine.config)
+    if not saved:
+        return jsonify({"error": "Config updated in memory but failed to persist to database"}), 500
 
     return jsonify({"status": "ok", "config": engine.config})
 
@@ -479,8 +495,12 @@ def get_all_positions():
 
 @strategy_bp.route("/profiles", methods=["GET"])
 def get_profiles():
-    from services.strategy.profiles import CUSTOM_DEFAULTS
-    profiles = [describe_profile(k) for k in PROFILES.keys()]
+    from services.strategy.profiles import CUSTOM_DEFAULTS, PROFILES
+    profiles = []
+    for k in PROFILES.keys():
+        desc = describe_profile(k)
+        desc["entry_mode"] = PROFILES[k].get("entry_mode", "BREAK")
+        profiles.append(desc)
     profiles.append({
         "key": "CUSTOM",
         "display_name": "Custom",
@@ -494,6 +514,7 @@ def get_profiles():
         "vix_max": CUSTOM_DEFAULTS["vix_max_override"],
         "breakout_limit_min": CUSTOM_DEFAULTS["breakout_time_limit_min"],
         "thresholds": CUSTOM_DEFAULTS,
+        "entry_mode": "BREAK",
     })
     return jsonify(profiles)
 
@@ -576,6 +597,15 @@ def get_stats():
 @strategy_bp.route("/stats/by-profile", methods=["GET"])
 def get_stats_by_profile():
     return jsonify(logger_svc.get_stats_by_profile())
+
+
+@strategy_bp.route("/performance", methods=["GET"])
+def get_performance():
+    """
+    Returns a 0-100 performance rating for the overall system and per-strategy/profile.
+    Score components: Win Rate (25) · Profit Factor (35) · Reward:Risk (25) · Sample Size (15)
+    """
+    return jsonify(logger_svc.get_performance())
 
 
 # ── Simulation ─────────────────────────────────────────────────────────────────

@@ -69,6 +69,51 @@ PROFILES = {
         "breakout_time_limit_min": 35,
         "vix_max_override": 25,
     },
+    # ─── TREND RIDER — Hold for the full move ────────────────────────────────────
+    "TREND_RIDER": {
+        "qty_contracts": 2,
+        "max_loss_pct": 0.38,
+        "tp1_mult": 1.60,
+        "tp2_mult": 2.50,
+        "tp1_close_pct": 0.15,
+        "tp2_close_pct": 0.35,
+        "runner_trail_pct": 0.18,
+        "consol_exit": False,
+        "consol_range_pct": 0.0010,
+        "consol_bars": 8,
+        "volume_exit_threshold": 0.10,
+        "strike_offset_min": 0.50,
+        "strike_offset_max": 2.00,
+        "target_delta_min": 0.30,
+        "target_delta_max": 0.48,
+        "eod_buffer_minutes": 15,
+        "breakout_time_limit_min": 90,
+        "vix_max_override": 21,
+        "entry_mode": "BREAK",
+    },
+    # ─── RETESTER — Wait for price to return to the breakout level ───────────────
+    "RETESTER": {
+        "qty_contracts": 4,
+        "max_loss_pct": 0.30,
+        "tp1_mult": 1.50,
+        "tp2_mult": 2.00,
+        "tp1_close_pct": 0.55,
+        "tp2_close_pct": 0.35,
+        "runner_trail_pct": 0.15,
+        "consol_exit": True,
+        "consol_range_pct": 0.0008,
+        "consol_bars": 4,
+        "volume_exit_threshold": 0.20,
+        "strike_offset_min": 0.50,
+        "strike_offset_max": 2.00,
+        "target_delta_min": 0.38,
+        "target_delta_max": 0.55,
+        "eod_buffer_minutes": 25,
+        "breakout_time_limit_min": 90,
+        "vix_max_override": 28,
+        "entry_mode": "RETEST",
+        "retest_window_min": 60,
+    },
 }
 
 CUSTOM_DEFAULTS = {
@@ -96,6 +141,8 @@ _DISPLAY_NAMES = {
     "BULL_DOG":    "Bull Dog",
     "THUNDER_CAT": "Thunder Cat",
     "WOLF":        "Wolf",
+    "TREND_RIDER": "Trend Rider",
+    "RETESTER":    "Retester",
     "CUSTOM":      "Custom",
 }
 
@@ -103,6 +150,8 @@ _EMOJIS = {
     "BULL_DOG":    "🐂",
     "THUNDER_CAT": "🐱",
     "WOLF":        "🐺",
+    "TREND_RIDER": "🚀",
+    "RETESTER":    "🎯",
     "CUSTOM":      "⚙️",
 }
 
@@ -119,7 +168,8 @@ def get_profile(name: str, custom_thresholds: dict = None) -> dict:
 def describe_profile(key: str, custom_thresholds: dict = None) -> dict:
     k = key.upper().replace(" ", "_")
     p = get_profile(k, custom_thresholds)
-    risk = {"BULL_DOG": "High", "THUNDER_CAT": "Medium", "WOLF": "Low"}.get(k, "Custom")
+    risk = {"BULL_DOG": "High", "THUNDER_CAT": "Medium", "WOLF": "Low",
+            "TREND_RIDER": "Medium-High", "RETESTER": "Medium"}.get(k, "Custom")
     return {
         "key": k,
         "display_name": _DISPLAY_NAMES.get(k, k),

@@ -19,6 +19,7 @@ import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePr
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/components/strategy/CustomThresholdsEditor';
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
+import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
@@ -44,6 +45,8 @@ const PROFILE_COLORS: Record<ProfileKey, string> = {
   BULL_DOG:    '#FF6B35',
   THUNDER_CAT: '#4A9EFF',
   WOLF:        '#4CAF84',
+  TREND_RIDER: '#A855F7',
+  RETESTER:    '#06B6D4',
   CUSTOM:      '#A855F7',
 };
 
@@ -132,6 +135,7 @@ export default function StrategyScreen() {
   const [editingConfig, setEditingConfig]     = useState<StrategyConfig | null>(null);
   const [form, setForm]                       = useState<FormState>(DEFAULT_FORM);
   const [saving, setSaving]                   = useState(false);
+  const [guideVisible, setGuideVisible]       = useState(false);
 
   const openCreate = () => {
     setEditingConfig(null);
@@ -236,7 +240,14 @@ export default function StrategyScreen() {
 
       {/* Header */}
       <View style={[styles.header, { paddingHorizontal: 16, borderBottomColor: colors.border }]}>
-        <View style={{ width: 22 }} />
+        <TouchableOpacity
+          onPress={() => setGuideVisible(true)}
+          hitSlop={8}
+          style={[styles.guideBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="book-outline" size={17} color={colors.accent} />
+        </TouchableOpacity>
         <Text style={[styles.title, { color: colors.text }]}>ORB Strategies</Text>
         <TouchableOpacity
           onPress={openCreate}
@@ -349,6 +360,12 @@ export default function StrategyScreen() {
         visible={simulationVisible}
         onClose={() => setSimulationVisible(false)}
         strategyId={configs?.[0]?.id}
+      />
+
+      <ProfileGuideModal
+        visible={guideVisible}
+        onClose={() => setGuideVisible(false)}
+        colors={colors}
       />
     </SafeAreaView>
   );
@@ -531,7 +548,7 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
         strategyId={config.id}
         ticker={config.ticker}
         contract={live?.contract}
-        qtyRemaining={live?.qty_remaining ?? 1}
+        qtyRemaining={live?.qty_remaining ?? config.qty_remaining ?? 1}
         paperMode={config.paper_mode}
         onClose={() => setExitOpen(false)}
       />
@@ -750,7 +767,7 @@ function AccountBannerSide({ label, accentColor, account, colors }: AccountBanne
         <Text style={[styles.accountLabel, { color: colors.tabBarInactive }]}>{label}</Text>
       </View>
       {unavailable ? (
-        <Text style={[styles.accountUnavail, { color: colors.tabBarInactive }]}>—</Text>
+        <Text style={[styles.accountUnavailable, { color: colors.tabBarInactive }]}>—</Text>
       ) : (
         <>
           <Text style={[styles.accountEquity, { color: colors.text }]}>
@@ -791,9 +808,8 @@ function StrategyFormModal({
   visible, isEditing, form, profiles, tickerOptions, saving, colors,
   onClose, onPatch, onModeSelect, onSave,
 }: FormModalProps) {
-  const [tickerOpen, setTickerOpen] = useState(false);
-  // Create mode shows two tabs: build a Strategy, or place an Immediate trade.
-  // Editing is strategy-only (no tabs).
+  const [tickerOpen, setTickerOpen]     = useState(false);
+  const [scrollEnabled, setScrollEnabled] = useState(true);
   const [tab, setTab] = useState<'strategy' | 'immediate'>('strategy');
   React.useEffect(() => { if (visible) setTab('strategy'); }, [visible]);
 
@@ -856,6 +872,7 @@ function StrategyFormModal({
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.modalContent}
           keyboardShouldPersistTaps="handled"
+          scrollEnabled={scrollEnabled}
         >
           {/* Strategy name */}
           <SectionHeader title="Strategy Name" colors={colors} />
@@ -1098,6 +1115,8 @@ function StrategyFormModal({
               thresholds={form.custom_thresholds}
               onChange={t => onPatch('custom_thresholds', t)}
               colors={colors}
+              onDragStart={() => setScrollEnabled(false)}
+              onDragEnd={() => setScrollEnabled(true)}
             />
           )}
 
@@ -1215,6 +1234,7 @@ const styles = StyleSheet.create({
   header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   title:     { fontSize: 20, fontWeight: '700' },
   addBtn:    { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  guideBtn:  { width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 
   accountCard:      { flexDirection: 'row', borderRadius: 14, borderWidth: 1, padding: 14, marginBottom: 8 },
   accountSide:      { flex: 1, gap: 3 },
@@ -1223,7 +1243,7 @@ const styles = StyleSheet.create({
   accountDivider:   { width: StyleSheet.hairlineWidth, marginHorizontal: 14 },
   accountLabel:     { fontSize: 10, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
   accountEquity:    { fontSize: 18, fontWeight: '700' },
-  accountUnavail:   { fontSize: 18, fontWeight: '700' },
+  accountUnavailable: { fontSize: 18, fontWeight: '700' },
   pnlToday:         { fontSize: 12, fontWeight: '600' },
 
   sectionHeader: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', marginTop: 16, marginBottom: 8, color: '#888' },

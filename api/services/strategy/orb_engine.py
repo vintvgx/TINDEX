@@ -151,6 +151,13 @@ class ORBEngine:
         self._last_underlying_price  = None   # latest underlying price from periodic poll
         self.session_vwap            = None   # intraday VWAP computed at ORB calc time
         self.vix                     = None   # VIX at session open, set in calculate_orb
+        # Retest-entry state (used when profile entry_mode == "RETEST")
+        self._awaiting_retest      = False
+        self._retest_direction     = None
+        self._retest_level         = None   # ORH for CALL, ORL for PUT
+        self._retest_max_dist      = 0.0    # max extension past level (confirms real breakout)
+        self._retest_trigger_price = None
+        self._retest_deadline      = None
         # Fan-out queues for /ws/strategy/<id>/live WebSocket clients
         self._live_clients: list     = []
         self._live_clients_lock      = __import__("threading").Lock()
@@ -290,6 +297,11 @@ class ORBEngine:
             self._skip("BREAKOUT_TIME_LIMIT_EXCEEDED")
             return
 
+        # Service-driven retest watch — only active when entry_mode == "RETEST"
+        if self._awaiting_retest:
+            self._check_retest(current_price, now_et)
+            return
+
         # NOTE: Breakout *entry* detection no longer lives here. Entries are driven
         # solely by OrbService's confirmed 3-min breakout via on_breakout_confirmed.
         # This loop now only manages exits once a position is open (below) and the
@@ -373,11 +385,108 @@ class ORBEngine:
                 self._skip("BREAKOUT_TIME_LIMIT_EXCEEDED")
                 return
 
-            logger.info("[ORBEngine] Confirmed %s breakout for %s @ %.2f — entering",
-                        direction, self.ticker, price)
-            self.debug.emit("INFO", f"Entry conditions clear — running entry pipeline for "
-                                    f"{direction}")
-            self._enter_trade(direction, price)
+            entry_mode = self.profile.get("entry_mode", "BREAK")
+            if entry_mode == "RETEST":
+                self._start_retest_watch(direction, price, now_et, deadline)
+            else:
+                logger.info("[ORBEngine] Confirmed %s breakout for %s @ %.2f — entering",
+                            direction, self.ticker, price)
+                self.debug.emit("INFO", f"Entry conditions clear — running entry pipeline for "
+                                        f"{direction}")
+                self._enter_trade(direction, price)
+
+    def _start_retest_watch(self, direction: str, breakout_price: float,
+                             now_et, deadline):
+        """
+        Called instead of _enter_trade when entry_mode == "RETEST".
+        Arms the retest watcher: we wait for price to return to the ORB
+        level (ORH for CALLs, ORL for PUTs) after extending past it.
+        """
+        level             = self.orh if direction == "CALL" else self.orl
+        window_min        = self.profile.get("retest_window_min", 60)
+        retest_deadline   = min(deadline, now_et + timedelta(minutes=window_min))
+
+        self._awaiting_retest      = True
+        self._retest_direction     = direction
+        self._retest_level         = level
+        self._retest_max_dist      = 0.0
+        self._retest_trigger_price = breakout_price
+        self._retest_deadline      = retest_deadline
+
+        self.debug.emit("INFO",
+            f"RETEST armed: watching for {direction} retest of {level:.2f} "
+            f"(breakout @ {breakout_price:.2f}) "
+            f"until {retest_deadline.strftime('%H:%M ET')}")
+        self.notifier.notify_retest_watching(
+            ticker=self.ticker,
+            direction=direction,
+            level=level,
+            breakout_price=breakout_price,
+            profile_key=self.profile_key,
+        )
+
+    def _check_retest(self, current_price: float, now_et):
+        """
+        Called each tick while _awaiting_retest is True.
+        Cancels on timeout or invalidation; enters on confirmed retest hold.
+        """
+        direction = self._retest_direction
+        level     = self._retest_level
+
+        # Track max extension past the level
+        dist = (current_price - level) if direction == "CALL" else (level - current_price)
+        if dist > self._retest_max_dist:
+            self._retest_max_dist = dist
+
+        # Invalidation: price closed significantly through the level the wrong way
+        INVALID_PCT = 0.0015   # 0.15%
+        if direction == "CALL" and current_price < level * (1 - INVALID_PCT):
+            self.debug.emit("WARN",
+                f"RETEST invalidated — price {current_price:.2f} fell through ORH {level:.2f}")
+            self._cancel_retest("RETEST_INVALIDATED")
+            return
+        if direction == "PUT" and current_price > level * (1 + INVALID_PCT):
+            self.debug.emit("WARN",
+                f"RETEST invalidated — price {current_price:.2f} rose through ORL {level:.2f}")
+            self._cancel_retest("RETEST_INVALIDATED")
+            return
+
+        # Timeout
+        if now_et > self._retest_deadline:
+            self.debug.emit("WARN", "RETEST timed out — no retest within window")
+            self._cancel_retest("RETEST_TIMEOUT")
+            return
+
+        # Need enough extension to confirm it was a real breakout (not just a tick)
+        MIN_EXT_PCT = 0.0008   # 0.08% past the level
+        if self._retest_max_dist < level * MIN_EXT_PCT:
+            return  # not extended far enough yet
+
+        # Check if price has pulled back to the retest zone
+        ZONE_PCT = 0.0012      # within 0.12% of the level
+        near_level = abs(current_price - level) / level <= ZONE_PCT
+
+        # Still must be on the correct side (don't enter if it has crossed through)
+        correct_side = (
+            (direction == "CALL" and current_price >= level * (1 - 0.0005)) or
+            (direction == "PUT"  and current_price <= level * (1 + 0.0005))
+        )
+
+        if near_level and correct_side:
+            self.debug.emit("SUCCESS",
+                f"RETEST confirmed: {direction} price {current_price:.2f} "
+                f"held level {level:.2f} after extending {self._retest_max_dist:.3f}")
+            self._awaiting_retest = False
+            self._enter_trade(direction, current_price)
+
+    def _cancel_retest(self, reason: str):
+        """Reset retest watch state and skip the session."""
+        self._awaiting_retest  = False
+        self._retest_direction = None
+        self._retest_level     = None
+        self._retest_max_dist  = 0.0
+        self._retest_deadline  = None
+        self._skip(reason)
 
     # ── Entry ──────────────────────────────────────────────────────────────────
 
@@ -804,35 +913,46 @@ class ORBEngine:
             f"entry=${em.entry_premium:.2f} hard_stop=${em.hard_stop:.2f} "
             f"tp1=${em.tp1:.2f} tp2=${em.tp2:.2f}",
             {"action": action})
+        # ── Step 1: Submit the Alpaca order ──────────────────────────────────────
+        # Keep separate from logging so a close_position failure (e.g. option
+        # already expired) does NOT suppress the exit record in Supabase.
+        contract_snapshot = self.contract_symbol  # capture before any reset
+        order_ok = False
         try:
             if closing_all:
-                self.trading_client.close_position(self.contract_symbol)
+                self.trading_client.close_position(contract_snapshot)
                 self.exit_manager.qty_remaining = 0
                 self.trade_taken = False
                 self.position    = None
-                # Unsubscribe from the option stream — position is fully closed
-                if self.stream_manager and self.contract_symbol:
-                    self.stream_manager.unsubscribe(self.contract_symbol, self._on_stream_quote)
+                if self.stream_manager and contract_snapshot:
+                    self.stream_manager.unsubscribe(contract_snapshot, self._on_stream_quote)
             else:
                 order = MarketOrderRequest(
-                    symbol=self.contract_symbol,
+                    symbol=contract_snapshot,
                     qty=qty_to_close,
                     side=OrderSide.SELL,
                     time_in_force=TimeInForce.DAY,
                 )
                 self.trading_client.submit_order(order)
                 self.exit_manager.qty_remaining -= qty_to_close
+            order_ok = True
+        except Exception as e:
+            logger.error("[ORBEngine] Exit order failed: %s", e)
+            self.debug.emit("ERROR", f"Exit order failed: {e}")
 
-            # Prefer the action's own premium (set by ExitManager), then live option
-            # price, then underlying as a last fallback for P&L logging accuracy
-            exit_premium = (action.get("current_premium")
-                            or current_option_price
-                            or current_price)
-            entry_p = self.exit_manager.entry_premium if self.exit_manager else 0
-            pnl = (exit_premium - entry_p) * qty_to_close * 100
+        if not order_ok:
+            return
 
+        # ── Step 2: Log and notify — always runs when the order succeeded ────────
+        exit_premium = (action.get("current_premium")
+                        or current_option_price
+                        or current_price)
+        entry_p = em.entry_premium if em else 0
+        pnl = (exit_premium - entry_p) * qty_to_close * 100
+
+        try:
             self.logger.log_exit(
-                contract_symbol=self.contract_symbol,
+                contract_symbol=contract_snapshot,
                 exit_reason=action["reason"],
                 exit_premium=exit_premium,
                 qty_closed=qty_to_close,
@@ -842,7 +962,7 @@ class ORBEngine:
             )
             self.notifier.notify_exit(
                 ticker=self.ticker,
-                contract_symbol=self.contract_symbol,
+                contract_symbol=contract_snapshot,
                 exit_reason=action["reason"],
                 pnl=pnl,
                 qty=qty_to_close,
@@ -853,8 +973,8 @@ class ORBEngine:
             self.debug.emit("SUCCESS", f"Exit {action['type']} qty={qty_to_close} "
                                        f"reason={action.get('reason', '')} pnl=${pnl:.2f}")
         except Exception as e:
-            logger.error("[ORBEngine] Exit failed: %s", e)
-            self.debug.emit("ERROR", f"Exit failed: {e}")
+            logger.error("[ORBEngine] Exit log/notify failed: %s", e)
+            self.debug.emit("ERROR", f"Exit log/notify failed: {e}")
 
     def submit_manual_exit(self, qty: int | None = None) -> dict:
         """

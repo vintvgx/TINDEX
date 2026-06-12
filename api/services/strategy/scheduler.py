@@ -104,12 +104,21 @@ def _eod_reset(engine):
     NOTE: Fires at 15:30 ET on trade days (after all per-ticker EOD closes).
     """
     if engine.trade_taken and engine.contract_symbol:
-        try:
-            engine.trading_client.close_position(engine.contract_symbol)
+        contract_symbol = engine.contract_symbol
+        qty_closed = engine.exit_manager.qty_remaining if engine.exit_manager else 0
 
-            qty_closed = engine.exit_manager.qty_remaining if engine.exit_manager else 0
+        # Close the Alpaca position first; 0DTE options often expire worthless at
+        # market close, so close_position may throw "position not found" — that's
+        # expected and must NOT prevent the exit from being logged.
+        try:
+            engine.trading_client.close_position(contract_symbol)
+        except Exception as ex:
+            logger.warning("[Scheduler] EOD close_position failed (likely expired): %s", ex)
+
+        # Always log and notify — even if close_position above threw.
+        try:
             engine.logger.log_exit(
-                engine.contract_symbol, "EOD_HARD_CLOSE",
+                contract_symbol, "EOD_HARD_CLOSE",
                 None,
                 qty_closed,
                 engine.profile_key,
@@ -117,14 +126,14 @@ def _eod_reset(engine):
             )
             engine.notifier.notify_exit(
                 ticker=engine.ticker,
-                contract_symbol=engine.contract_symbol,
+                contract_symbol=contract_symbol,
                 exit_reason="EOD_CLOSE",
-                pnl=0.0,      # exact P&L not available here; trade log will have it
+                pnl=0.0,
                 qty=qty_closed,
                 profile_key=engine.profile_key,
             )
         except Exception as ex:
-            logger.error("[Scheduler] EOD close failed: %s", ex)
+            logger.error("[Scheduler] EOD log/notify failed: %s", ex)
     elif engine.orh and not engine.session_skipped:
         # Session was armed and watched all day but no breakout fired — notify user.
         engine.notifier.notify_no_trade_eod(

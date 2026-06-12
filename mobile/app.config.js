@@ -2,7 +2,7 @@ export default {
   expo: {
     name: "Tindex",
     slug: "alethia",
-    version: "0.3.8",
+    version: "0.3.10",
     orientation: "portrait",
     icon: "./assets/logo/tindex_spark.png",
     scheme: "mobile",
@@ -47,6 +47,17 @@ export default {
     plugins: [
       "expo-router",
       "expo-web-browser",
+      [
+        "expo-build-properties",
+        {
+          ios: {
+            extraPods: [
+              { name: "GoogleUtilities",  modular_headers: true },
+              { name: "RecaptchaInterop", modular_headers: true }
+            ]
+          }
+        }
+      ],
       [
         "expo-splash-screen",
         {

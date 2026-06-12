@@ -5,9 +5,9 @@ import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
-import { useStrategyStats, useStrategyStatsByProfile } from '@/hooks/queries/strategy/useStrategyStats';
+import { useStrategyStats, useStrategyStatsByProfile, useStrategyPerformance } from '@/hooks/queries/strategy/useStrategyStats';
 import { useStrategyDebugLogs } from '@/hooks/queries/strategy/useStrategyDebugLogs';
-import type { ProfileKey, ORBTrade, StrategyStats, DebugLogEntry, DebugLevel } from '@/common/types/strategy';
+import type { ProfileKey, ORBTrade, StrategyStats, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel } from '@/common/types/strategy';
 import { formatContractSymbol } from '@/lib/formatContract';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -42,8 +42,9 @@ export default function TradeLogScreen() {
     profile: filter,
     limit: 50,
   });
-  const { data: stats,   isLoading: statsLoading }  = useStrategyStats(filter);
-  const { data: byProfile } = useStrategyStatsByProfile();
+  const { data: stats,       isLoading: statsLoading }  = useStrategyStats(filter);
+  const { data: byProfile }                             = useStrategyStatsByProfile();
+  const { data: performance }                           = useStrategyPerformance();
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -124,6 +125,7 @@ export default function TradeLogScreen() {
             <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
           ) : (
             <>
+              {performance && <RatingCard performance={performance} colors={colors} />}
               {stats && <StatsPanel stats={stats} label={filter === 'ALL' ? 'All Profiles' : filter} colors={colors} />}
               {byProfile && (
                 <>
@@ -301,7 +303,11 @@ const TradeRow = ({
 }) => {
   const pnl          = trade.pnl ?? 0;
   const pnlColor     = pnl > 0 ? colors.success : pnl < 0 ? colors.error : colors.tabBarInactive;
-  const profileEmoji = trade.profile === 'BULL_DOG' ? '🐂' : trade.profile === 'WOLF' ? '🐺' : '🐱';
+  const profileEmoji = trade.profile === 'BULL_DOG' ? '🐂'
+    : trade.profile === 'WOLF'        ? '🐺'
+    : trade.profile === 'TREND_RIDER' ? '🚀'
+    : trade.profile === 'RETESTER'    ? '🎯'
+    : '🐱';
 
   const handlePress = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -365,6 +371,108 @@ const TradeRow = ({
     </TouchableOpacity>
   );
 };
+
+// ── RatingCard ─────────────────────────────────────────────────────────────────
+
+const GRADE_COLOR = (grade: string, colors: any): string => {
+  if (grade === 'A') return colors.success;
+  if (grade === 'B') return '#3B82F6';
+  if (grade === 'C') return '#F59E0B';
+  if (grade === 'D' || grade === 'F') return colors.error;
+  return colors.tabBarInactive;
+};
+
+const BreakdownBar = ({ item, colors }: { item: RatingBreakdownItem; colors: any }) => {
+  const pct = item.max > 0 ? item.score / item.max : 0;
+  return (
+    <View style={styles.breakdownRow}>
+      <Text style={[styles.breakdownLabel, { color: colors.tabBarInactive }]}>{item.label}</Text>
+      <View style={[styles.breakdownTrack, { backgroundColor: colors.border }]}>
+        <View style={[styles.breakdownFill, { width: `${Math.round(pct * 100)}%`, backgroundColor: colors.accent }]} />
+      </View>
+      <Text style={[styles.breakdownScore, { color: colors.text }]}>
+        {item.score}/{item.max}
+      </Text>
+    </View>
+  );
+};
+
+function RatingCard({ performance, colors }: { performance: StrategyPerformance; colors: any }) {
+  const overall = performance.overall;
+  const gradeColor = GRADE_COLOR(overall.grade, colors);
+
+  return (
+    <View style={[styles.ratingCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      {/* Header row */}
+      <View style={styles.ratingHeader}>
+        <View>
+          <Text style={[styles.ratingTitle, { color: colors.text }]}>System Rating</Text>
+          <Text style={[styles.ratingSubtitle, { color: colors.tabBarInactive }]}>
+            {overall.total_trades} trade{overall.total_trades !== 1 ? 's' : ''} · {overall.label}
+          </Text>
+        </View>
+        <View style={[styles.ratingScoreBadge, { borderColor: gradeColor }]}>
+          <Text style={[styles.ratingScore, { color: gradeColor }]}>{overall.score}</Text>
+          <Text style={[styles.ratingGrade, { color: gradeColor }]}>{overall.grade}</Text>
+        </View>
+      </View>
+
+      {/* Score breakdown bars */}
+      <View style={styles.breakdownList}>
+        {Object.values(overall.breakdown).map((item) => (
+          <BreakdownBar key={item.label} item={item} colors={colors} />
+        ))}
+      </View>
+
+      {/* Key metrics row */}
+      <View style={[styles.ratingMetrics, { borderTopColor: colors.border }]}>
+        <View style={styles.ratingMetricItem}>
+          <Text style={[styles.ratingMetricVal, { color: overall.win_rate_pct >= 55 ? colors.success : colors.error }]}>
+            {overall.win_rate_pct}%
+          </Text>
+          <Text style={[styles.ratingMetricLabel, { color: colors.tabBarInactive }]}>Win Rate</Text>
+        </View>
+        <View style={styles.ratingMetricItem}>
+          <Text style={[styles.ratingMetricVal, { color: overall.profit_factor >= 1.5 ? colors.success : colors.error }]}>
+            {overall.profit_factor}x
+          </Text>
+          <Text style={[styles.ratingMetricLabel, { color: colors.tabBarInactive }]}>Prof. Factor</Text>
+        </View>
+        <View style={styles.ratingMetricItem}>
+          <Text style={[styles.ratingMetricVal, { color: overall.total_pnl >= 0 ? colors.success : colors.error }]}>
+            {overall.total_pnl >= 0 ? '+' : ''}${overall.total_pnl}
+          </Text>
+          <Text style={[styles.ratingMetricLabel, { color: colors.tabBarInactive }]}>Total P&L</Text>
+        </View>
+      </View>
+
+      {/* Per-strategy ratings */}
+      {performance.by_strategy.length > 0 && (
+        <>
+          <Text style={[styles.byProfileTitle, { color: colors.tabBarInactive, marginTop: 12 }]}>
+            STRATEGY RATINGS
+          </Text>
+          {performance.by_strategy.map((s) => (
+            <View key={s.strategy_id} style={[styles.stratRatingRow, { borderTopColor: colors.border }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.stratRatingName, { color: colors.text }]} numberOfLines={1}>
+                  {s.strategy_name || s.ticker}
+                </Text>
+                <Text style={[styles.stratRatingMeta, { color: colors.tabBarInactive }]}>
+                  {s.ticker} · {s.total_trades} trades · {s.win_rate_pct}% WR
+                </Text>
+              </View>
+              <View style={[styles.stratRatingBadge, { borderColor: GRADE_COLOR(s.grade, colors) }]}>
+                <Text style={[styles.stratRatingScore, { color: GRADE_COLOR(s.grade, colors) }]}>{s.score}</Text>
+                <Text style={[styles.stratRatingGrade, { color: GRADE_COLOR(s.grade, colors) }]}>{s.grade}</Text>
+              </View>
+            </View>
+          ))}
+        </>
+      )}
+    </View>
+  );
+}
 
 const StatsPanel = ({ stats, label, colors, compact = false }: { stats: StrategyStats; label: string; colors: any; compact?: boolean }) => (
   <View style={[styles.statsCard, { backgroundColor: colors.card, borderColor: colors.border }, compact && styles.statsCardCompact]}>
@@ -528,6 +636,31 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: 10, marginBottom: 2 },
   statValue: { fontSize: 14, fontWeight: '700' },
   byProfileTitle: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 8 },
+
+  // Rating card
+  ratingCard:         { borderRadius: 14, borderWidth: 1, padding: 16 },
+  ratingHeader:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 },
+  ratingTitle:        { fontSize: 15, fontWeight: '700' },
+  ratingSubtitle:     { fontSize: 11, marginTop: 2 },
+  ratingScoreBadge:   { width: 60, height: 60, borderRadius: 30, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  ratingScore:        { fontSize: 20, fontWeight: '800', lineHeight: 22 },
+  ratingGrade:        { fontSize: 11, fontWeight: '700' },
+  breakdownList:      { gap: 8 },
+  breakdownRow:       { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  breakdownLabel:     { fontSize: 11, width: 110 },
+  breakdownTrack:     { flex: 1, height: 6, borderRadius: 3, overflow: 'hidden' },
+  breakdownFill:      { height: '100%', borderRadius: 3 },
+  breakdownScore:     { fontSize: 11, fontWeight: '600', width: 34, textAlign: 'right' },
+  ratingMetrics:      { flexDirection: 'row', justifyContent: 'space-around', marginTop: 14, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  ratingMetricItem:   { alignItems: 'center' },
+  ratingMetricVal:    { fontSize: 15, fontWeight: '700' },
+  ratingMetricLabel:  { fontSize: 10, marginTop: 2 },
+  stratRatingRow:     { flexDirection: 'row', alignItems: 'center', paddingTop: 10, marginTop: 6, borderTopWidth: StyleSheet.hairlineWidth, gap: 10 },
+  stratRatingName:    { fontSize: 13, fontWeight: '600' },
+  stratRatingMeta:    { fontSize: 10, marginTop: 2 },
+  stratRatingBadge:   { width: 44, height: 44, borderRadius: 22, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  stratRatingScore:   { fontSize: 14, fontWeight: '800', lineHeight: 16 },
+  stratRatingGrade:   { fontSize: 10, fontWeight: '700' },
 
   // Debug tab
   debugControls:    { paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth },

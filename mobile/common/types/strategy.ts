@@ -1,4 +1,4 @@
-export type ProfileKey = 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'CUSTOM';
+export type ProfileKey = 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'TREND_RIDER' | 'RETESTER' | 'CUSTOM';
 
 export interface CustomThresholds {
   qty_contracts:           number;
@@ -51,10 +51,11 @@ export interface StrategyProfile {
   tp1_pct: number;        // integer percent, e.g. 50
   tp2_pct: number;        // integer percent, e.g. 100
   runner: boolean;
-  risk_level: 'Low' | 'Medium' | 'High';
+  risk_level: 'Low' | 'Medium' | 'High' | 'Medium-High' | 'Custom';
   vix_max: number;
   breakout_limit_min: number;
   thresholds: ProfileThresholds;
+  entry_mode?: 'BREAK' | 'RETEST';
 }
 
 export type OtmFibLevel = '1.0' | '1.618' | '2.618';
@@ -74,6 +75,7 @@ export interface StrategyConfig {
   otm_fib_level: OtmFibLevel;
   debug_mode: boolean;
   has_position?: boolean;
+  qty_remaining?: number | null;
 }
 
 export type DebugLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
@@ -193,6 +195,34 @@ export interface StrategyStats {
   avg_winner: number;
   avg_loser: number;
   profile?: ProfileKey;
+}
+
+export interface RatingBreakdownItem {
+  score: number;
+  max: number;
+  value: number;
+  label: string;
+}
+
+export interface RatingResult {
+  score: number;
+  grade: string;
+  label: string;
+  profit_factor: number;
+  breakdown: Record<string, RatingBreakdownItem>;
+}
+
+export interface StrategyRating extends StrategyStats, RatingResult {}
+
+export interface StrategyPerformance {
+  overall: StrategyRating;
+  by_strategy: Array<StrategyRating & {
+    strategy_id: string;
+    strategy_name: string;
+    ticker: string;
+    profile: ProfileKey;
+  }>;
+  by_profile: Array<StrategyRating & { profile: ProfileKey }>;
 }
 
 export interface LiveOptionPrice {

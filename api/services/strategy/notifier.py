@@ -88,6 +88,19 @@ class StrategyNotifier:
             data={"screen": "strategy"},
         )
 
+    def notify_retest_watching(self, ticker: str, direction: str, level: float,
+                                breakout_price: float, profile_key: str):
+        """Fired when the Retester profile detects a breakout and arms the retest watch."""
+        dir_emoji = "📈" if direction == "CALL" else "📉"
+        level_label = "ORH" if direction == "CALL" else "ORL"
+        self._dispatch(
+            title=f"{dir_emoji} {ticker} Retest Watch Armed",
+            body=(f"Breakout @ ${breakout_price:.2f} — waiting for {level_label} "
+                  f"retest at ${level:.2f}"),
+            data={"type": "retest_watching", "ticker": ticker,
+                  "profile": profile_key, "level": level},
+        )
+
     def notify_no_trade_eod(self, ticker: str, profile_key: str, orh: float, orl: float):
         """Session closed at EOD with no entry taken."""
         self._dispatch(
