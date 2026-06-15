@@ -95,6 +95,38 @@ PROFILES = {
         "vix_max_override": 25,
         "entry_mode": "BREAK",
     },
+    # ─── REVERSAL — Enter the opposite contract after a scored failed breakout ───
+    # Requires the engine to subscribe to the hub's reversal channel (not the
+    # regular breakout channel). OrbService scores each bar after a confirmed
+    # breakout and publishes a reversal signal when confidence reaches 3/5.
+    "REVERSAL": {
+        # Sizing: always use smart contracts (enforced in engine), floor at 2.
+        # TP1 closes 50 % (1 of the 2 minimum contracts); the second runs.
+        # use_tp2 is False: after TP1 only the runner trail + breakeven stop apply.
+        "qty_contracts":          2,
+        "force_smart_qty":        True,   # engine ignores config smart_contracts flag
+        "min_smart_qty":          2,      # smart_qty result is floored here
+        "use_tp2":                False,  # skip TP2; runner trail manages the rest
+        "max_loss_pct":           0.35,
+        "tp1_mult":               1.55,
+        "tp2_mult":               2.30,   # kept for profile completeness, never hit
+        "tp1_close_pct":          0.50,
+        "tp2_close_pct":          0.00,   # irrelevant (use_tp2=False)
+        "runner_trail_pct":       0.14,
+        "consol_exit":            False,
+        "volume_exit":            False,
+        "consol_range_pct":       0.0008,
+        "consol_bars":            4,
+        "volume_exit_threshold":  0.20,
+        "strike_offset_min":      0.50,
+        "strike_offset_max":      2.00,
+        "target_delta_min":       0.38,
+        "target_delta_max":       0.58,
+        "eod_buffer_minutes":     25,
+        "breakout_time_limit_min": 240,   # reversals can happen well after the open
+        "vix_max_override":       45,
+        "entry_mode":             "BREAK",
+    },
     # ─── RETESTER — Wait for price to return to the breakout level ───────────────
     "RETESTER": {
         "qty_contracts": 4,
@@ -170,6 +202,7 @@ _DISPLAY_NAMES = {
     "WOLF":        "Wolf",
     "TREND_RIDER": "Trend Rider",
     "RETESTER":    "Retester",
+    "REVERSAL":    "Reversal",
     "CUSTOM":      "Custom",
 }
 
@@ -179,6 +212,7 @@ _EMOJIS = {
     "WOLF":        "🐺",
     "TREND_RIDER": "🚀",
     "RETESTER":    "🎯",
+    "REVERSAL":    "🔄",
     "CUSTOM":      "⚙️",
 }
 
@@ -200,8 +234,17 @@ def get_profile(name: str, custom_thresholds: dict = None) -> dict:
 def describe_profile(key: str, custom_thresholds: dict = None) -> dict:
     k = key.upper().replace(" ", "_")
     p = get_profile(k, custom_thresholds)
-    risk = {"BULL_DOG": "High", "THUNDER_CAT": "Medium", "WOLF": "Low",
-            "TREND_RIDER": "Medium-High", "RETESTER": "Medium"}.get(k, "Custom")
+    risk = {
+        "BULL_DOG":    "High",
+        "THUNDER_CAT": "Medium",
+        "WOLF":        "Low",
+        "TREND_RIDER": "Medium-High",
+        "RETESTER":    "Medium",
+        "REVERSAL":    "Medium-High",
+    }.get(k, "Custom")
+    # A runner exists when TP2 is disabled (remaining contracts trail) OR when
+    # TP2 only closes a fraction (tp2_close_pct < 1.0).
+    has_runner = (not p.get("use_tp2", True)) or p["tp2_close_pct"] < 1.0
     return {
         "key": k,
         "display_name": _DISPLAY_NAMES.get(k, k),
@@ -210,7 +253,8 @@ def describe_profile(key: str, custom_thresholds: dict = None) -> dict:
         "max_loss_pct": int(p["max_loss_pct"] * 100),
         "tp1_pct": int((p["tp1_mult"] - 1) * 100),
         "tp2_pct": int((p["tp2_mult"] - 1) * 100),
-        "runner": p["tp2_close_pct"] < 1.0,
+        "runner": has_runner,
+        "use_tp2": p.get("use_tp2", True),
         "risk_level": risk,
         "vix_max": p["vix_max_override"],
         "breakout_limit_min": p["breakout_time_limit_min"],

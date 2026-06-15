@@ -176,6 +176,40 @@ const PROFILES: ProfileGuide[] = [
     isNew: true,
   },
   {
+    key: 'REVERSAL',
+    emoji: '🔄',
+    name: 'Reversal',
+    color: '#FF453A',
+    tagline: 'Fades the failed breakout. Enters the opposite direction.',
+    entryMode: 'BREAK',
+    risk: 'Medium-High',
+    riskColor: '#FF6B35',
+    contracts: 2,
+    stop: 35,
+    tp1: 55,
+    tp2: 130,
+    tp1Close: 50,
+    tp2Close: 0,
+    runnerPct: 50,
+    vixMax: 45,
+    window: 240,
+    concept: 'After a confirmed breakout, scores every bar for signs of failure: price closing back through ORH/ORL, consecutive wrong-side closes, weak extension from the level, momentum dying (lower highs / higher lows), and volume surges. When 3 of 5 signals fire, enters the OPPOSITE contract. Smart contracts enforces a minimum of 2 — one exits at TP1, the second runs with a breakeven stop.',
+    pros: [
+      'Catches failed breakouts that trap traders on the wrong side',
+      'Smart minimum of 2 contracts — structured TP1 + runner every trade',
+      'Runner managed by breakeven stop after TP1 — risk-free after first profit',
+    ],
+    cons: [
+      'Requires a prior confirmed breakout to arm — can\'t trade in isolation',
+      'Higher VIX tolerance means some entries in wilder conditions',
+      'Score threshold of 3/5 can delay entry vs immediate-entry profiles',
+    ],
+    bestFor: 'Days where ORB breakouts fail within 5-10 bars, IWM on low-conviction macro days, when you see a breakout with weak extension',
+    avoid: 'Strong trend days — a confirmed breakout with momentum rarely reverses cleanly',
+    badge: 'Counter-Trend',
+    isNew: true,
+  },
+  {
     key: 'CUSTOM',
     emoji: '⚙️',
     name: 'Custom',
@@ -237,7 +271,7 @@ interface ProfileGuide {
 }
 
 export function ProfileGuideModal({ visible, onClose, colors }: ProfileGuideModalProps) {
-  const [selected, setSelected] = useState<ProfileGuide>(PROFILES[1]); // Thunder Cat default
+  const [selected, setSelected] = useState<ProfileGuide>(PROFILES[3]); // Trend Rider default
 
   return (
     <Modal

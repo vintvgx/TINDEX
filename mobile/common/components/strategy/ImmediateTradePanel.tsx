@@ -21,11 +21,12 @@ interface Props {
 }
 
 const PROFILE_OPTIONS: { key: ProfileKey; label: string }[] = [
+  { key: 'TREND_RIDER', label: '🚀 Trend Rider' },
+  { key: 'RETESTER',    label: '🎯 Retester' },
+  { key: 'REVERSAL',    label: '🔄 Reversal' },
   { key: 'BULL_DOG',    label: '🐂 Bull Dog' },
   { key: 'THUNDER_CAT', label: '🐱 Thunder Cat' },
   { key: 'WOLF',        label: '🐺 Wolf' },
-  { key: 'TREND_RIDER', label: '🚀 Trend Rider' },
-  { key: 'RETESTER',    label: '🎯 Retester' },
 ];
 
 const COL = { strike: 70, bid: 56, ask: 56, last: 56, oi: 64 };
@@ -101,7 +102,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   const [tickerOpen, setTickerOpen] = useState(false);
   const [paperMode, setPaperMode] = useState(true);
   const [side, setSide]         = useState<OptionSide>('CALL');
-  const [profile, setProfile]   = useState<ProfileKey>('THUNDER_CAT');
+  const [profile, setProfile]   = useState<ProfileKey>('TREND_RIDER');
   const [selected, setSelected] = useState<OptionsContract | null>(null);
   const [qty, setQty]           = useState(1);
   const [consolExit, setConsolExit] = useState(false);

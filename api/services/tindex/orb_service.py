@@ -148,13 +148,21 @@ class OrbService:
         # Track bar handling tasks for proper cleanup
         self._bar_tasks: Set[asyncio.Task] = set()
         
-        # Reversal tracking: {ticker: {"detected_at": datetime, "bars_since": int, "original_breakout_type": str}}
-        # Tracks when reversals were detected so we can clear them after a period
-        self._reversal_tracking: Dict[str, Dict] = {}
-        
-        # Reversal display duration settings
-        # Alpaca provides 1-minute bars, so 5 bars ≈ 5 minutes
-        self._reversal_display_bars = 5  # Clear reversal after 5 bars have been processed (5 minutes)
+        # Reversal scoring state: populated after a breakout is confirmed (3-min timer).
+        # Each bar after confirmation updates the score; when score >= threshold the
+        # reversal entry signal is published to the hub.
+        # {ticker: {
+        #   "direction": "CALL"|"PUT",    original breakout direction
+        #   "score": int,                 current total score (len of signals_hit)
+        #   "signals_hit": set[str],      unique signal names that have fired
+        #   "max_extension": float,       max distance past ORH/ORL since confirmed
+        #   "consec_wrong_side": int,     consecutive bars closing on wrong side of level
+        #   "bars_counted": int,          bars evaluated since confirmation
+        #   "fired": bool,                True after entry published (prevents re-fire)
+        # }}
+        self._rev_state: Dict[str, Dict] = {}
+        # Minimum composite score (out of 5) required to fire a reversal entry.
+        self._reversal_fire_threshold = 3
     
     def get_current_et_time(self) -> datetime:
         """Get current time in ET timezone"""
@@ -726,107 +734,193 @@ class OrbService:
         if len(self._bar_history[ticker]) > self._max_bar_history:
             self._bar_history[ticker] = self._bar_history[ticker][-self._max_bar_history:]
     
-    def _detect_reversal(
-        self, 
-        ticker: str, 
-        current_bar: StockBar, 
-        breakout_type: str,
+    def _score_reversal(
+        self,
+        ticker: str,
+        current_bar: StockBar,
+        original_direction: str,  # "CALL" (breakout above ORH) or "PUT" (breakout below ORL)
         orb_high: Decimal,
         orb_low: Decimal,
-        range_midpoint: float
     ) -> Dict:
         """
-        Detect reversal after a breakout.
-        
-        Reversal conditions (ALL must be met):
-        1. Price must return within ORB range after breakout
-        2. Price must move beyond range_midpoint (range_size / 2) in the opposite direction
-        
-        Note: VWAP is NOT used because Alpaca returns VWAP from IEX, which doesn't match
-        NYSE/Nasdaq prices accurately.
-        
-        Args:
-            ticker: Stock ticker symbol
-            current_bar: Current bar data
-            breakout_type: "above" or "below" (original breakout direction)
-            orb_high: ORB high level
-            orb_low: ORB low level
-            range_midpoint: ORB range size / 2 (average of range size)
-            
-        Returns:
-            Dict with reversal detection result:
-            {
-                "is_reversal": bool,
-                "confidence": "HIGH" | "MEDIUM" | "LOW",
-                "indicators": list of indicator signals
-            }
+        Score the current bar's contribution to a potential reversal.
+
+        State is accumulated in self._rev_state[ticker] across consecutive bars.
+        Each of 6 distinct signals can fire at most once per breakout episode
+        (tracked in signals_hit set), so no single dimension can dominate the score.
+        Effective score = len(signals_hit) - penalty.  Fire when effective_score >= threshold (3).
+
+        Signals (+score):
+          level_violated    — bar closes on wrong side of ORH (CALL) / ORL (PUT)
+          sustained_press   — 2+ consecutive closes on wrong side
+          weak_extension    — max extension past key level < 0.25% after ≥3 bars
+          momentum_shift    — lower high (CALL→PUT) / higher low (PUT→CALL) while wrong-side
+          volume_surge      — current bar volume > 1.5× 5-bar avg
+          deep_violation    — close ≥ 0.3% past key level (strong conviction bar)
+
+        Penalties (-score, recalculated each bar):
+          bounce_penalty    — price recovers ≥ 0.3% from worst wrong-side close
+          recovery_bars     — 2+ consecutive wrong-side closes moving back toward key
+
+        Returns {"score": int, "signals": list[str], "fire": bool}
         """
-        if ticker not in self._bar_history or len(self._bar_history[ticker]) < 2:
-            return {"is_reversal": False, "confidence": "LOW", "indicators": []}
-        
-        # Validate that current_bar.close is not None before converting to float
-        # Price fields (close) are now optional (Decimal | None)
+        state = self._rev_state.get(ticker)
+        if state is None or state.get("fired"):
+            return {"score": 0, "signals": [], "fire": False}
+
         if current_bar.close is None:
-            logger.warning(f"Reversal detection skipped for {ticker}: current_bar.close is None")
-            return {"is_reversal": False, "confidence": "LOW", "indicators": []}
-        
+            return {"score": state["score"], "signals": list(state["signals_hit"]), "fire": False}
+
         current_close = float(current_bar.close)
-        
-        indicators = []
-        is_reversal = False
-        confidence = "LOW"
-        
-        orb_high_float = float(orb_high)
-        orb_low_float = float(orb_low)
-        orb_midpoint = (orb_high_float + orb_low_float) / 2.0
-        
-        # Condition 1: Price must return within ORB range
-        price_within_orb = orb_low_float <= current_close <= orb_high_float
-        
-        if not price_within_orb:
-            return {"is_reversal": False, "confidence": "LOW", "indicators": []}
-        
-        indicators.append(f"Price re-entered ORB (${current_close:.2f} within ${orb_low_float:.2f}-${orb_high_float:.2f})")
-        
-        # Condition 2: Price must move beyond range_midpoint in opposite direction
-        if breakout_type == "above":
-            # Bullish breakout - reversal if price goes below (orb_midpoint - range_midpoint/2)
-            # This means price moved at least range_midpoint below the midpoint
-            reversal_threshold = orb_midpoint - (range_midpoint / 2.0)
-            if current_close < reversal_threshold:
-                is_reversal = True
-                distance_below = orb_midpoint - current_close
-                if distance_below >= range_midpoint:
-                    confidence = "HIGH"
-                    indicators.append(f"Price moved {distance_below:.2f} below midpoint (threshold: {range_midpoint:.2f})")
-                elif distance_below >= range_midpoint * 0.7:
-                    confidence = "MEDIUM"
-                    indicators.append(f"Price moved {distance_below:.2f} below midpoint (threshold: {range_midpoint:.2f})")
-                else:
-                    confidence = "LOW"
-                    indicators.append(f"Price moved {distance_below:.2f} below midpoint (threshold: {range_midpoint:.2f})")
+        orh = float(orb_high)
+        orl = float(orb_low)
+        key_level = orh if original_direction == "CALL" else orl
+
+        # Track max extension past the key level since the breakout was confirmed.
+        extension = (current_close - key_level) if original_direction == "CALL" else (key_level - current_close)
+        if extension > state["max_extension"]:
+            state["max_extension"] = extension
+
+        state["bars_counted"] += 1
+        signals_hit: set = state["signals_hit"]
+
+        # Determine if this bar closed on the wrong side of the key level
+        wrong_side = (
+            (original_direction == "CALL" and current_close < key_level) or
+            (original_direction == "PUT"  and current_close > key_level)
+        )
+
+        # ── Signal 1: Level violated ─────────────────────────────────────────────
+        if wrong_side:
+            state["consec_wrong_side"] += 1
+            if "level_violated" not in signals_hit:
+                signals_hit.add("level_violated")
+                logger.debug(
+                    "[REV %s] +level_violated: close %.2f %s key %.2f",
+                    ticker, current_close,
+                    "below ORH" if original_direction == "CALL" else "above ORL",
+                    key_level,
+                )
         else:
-            # Bearish breakout - reversal if price goes above (orb_midpoint + range_midpoint/2)
-            # This means price moved at least range_midpoint above the midpoint
-            reversal_threshold = orb_midpoint + (range_midpoint / 2.0)
-            if current_close > reversal_threshold:
-                is_reversal = True
-                distance_above = current_close - orb_midpoint
-                if distance_above >= range_midpoint:
-                    confidence = "HIGH"
-                    indicators.append(f"Price moved {distance_above:.2f} above midpoint (threshold: {range_midpoint:.2f})")
-                elif distance_above >= range_midpoint * 0.7:
-                    confidence = "MEDIUM"
-                    indicators.append(f"Price moved {distance_above:.2f} above midpoint (threshold: {range_midpoint:.2f})")
-                else:
-                    confidence = "LOW"
-                    indicators.append(f"Price moved {distance_above:.2f} above midpoint (threshold: {range_midpoint:.2f})")
-        
-        return {
-            "is_reversal": is_reversal,
-            "confidence": confidence,
-            "indicators": indicators
-        }
+            state["consec_wrong_side"] = 0
+
+        # ── Signal 2: Sustained pressure (2+ consecutive wrong-side closes) ──────
+        if state["consec_wrong_side"] >= 2 and "sustained_press" not in signals_hit:
+            signals_hit.add("sustained_press")
+            logger.debug(
+                "[REV %s] +sustained_press: %d consecutive closes on wrong side",
+                ticker, state["consec_wrong_side"],
+            )
+
+        # ── Signal 3: Weak extension (confirmed breakout barely moved) ────────────
+        if (
+            state["bars_counted"] >= 3
+            and state["max_extension"] < key_level * 0.0025
+            and "weak_extension" not in signals_hit
+        ):
+            signals_hit.add("weak_extension")
+            logger.debug(
+                "[REV %s] +weak_extension: max extension %.4f (< 0.25%% of %.2f)",
+                ticker, state["max_extension"], key_level,
+            )
+
+        # ── Signal 4: Momentum shift (lower high / higher low while wrong-side) ──
+        bar_history = self._bar_history.get(ticker, [])
+        if len(bar_history) >= 2 and wrong_side and "momentum_shift" not in signals_hit:
+            prev_bar = bar_history[-2]  # bar_history[-1] is current (already appended)
+            if original_direction == "CALL":
+                if (prev_bar.high is not None and current_bar.high is not None
+                        and float(current_bar.high) <= float(prev_bar.high)):
+                    signals_hit.add("momentum_shift")
+                    logger.debug(
+                        "[REV %s] +momentum_shift: lower high %.2f ≤ %.2f",
+                        ticker, float(current_bar.high), float(prev_bar.high),
+                    )
+            else:
+                if (prev_bar.low is not None and current_bar.low is not None
+                        and float(current_bar.low) >= float(prev_bar.low)):
+                    signals_hit.add("momentum_shift")
+                    logger.debug(
+                        "[REV %s] +momentum_shift: higher low %.2f ≥ %.2f",
+                        ticker, float(current_bar.low), float(prev_bar.low),
+                    )
+
+        # ── Signal 5: Volume surge ────────────────────────────────────────────────
+        if len(bar_history) >= 5 and "volume_surge" not in signals_hit:
+            recent_vols = [b.volume for b in bar_history[-6:-1] if b.volume]
+            if recent_vols:
+                avg_vol = sum(recent_vols) / len(recent_vols)
+                if avg_vol > 0 and current_bar.volume > avg_vol * 1.5:
+                    signals_hit.add("volume_surge")
+                    logger.debug(
+                        "[REV %s] +volume_surge: %d vs avg %.0f",
+                        ticker, current_bar.volume, avg_vol,
+                    )
+
+        # ── Signal 6: Deep violation (close ≥ 0.3% past key level) ──────────────
+        if wrong_side and "deep_violation" not in signals_hit:
+            violation = (
+                (key_level - current_close) if original_direction == "CALL"
+                else (current_close - key_level)
+            )
+            if violation >= key_level * 0.003:
+                signals_hit.add("deep_violation")
+                logger.debug(
+                    "[REV %s] +deep_violation: %.2f is %.3f%% past key %.2f",
+                    ticker, current_close, (violation / key_level) * 100, key_level,
+                )
+
+        # ── Track worst wrong-side close ──────────────────────────────────────────
+        if wrong_side:
+            if state["worst_wrong_close"] is None:
+                state["worst_wrong_close"] = current_close
+            elif original_direction == "CALL":
+                state["worst_wrong_close"] = min(state["worst_wrong_close"], current_close)
+            else:
+                state["worst_wrong_close"] = max(state["worst_wrong_close"], current_close)
+
+        # ── Track consecutive recovering closes (wrong-side bars moving back toward key) ──
+        if wrong_side and state["prev_wrong_close"] is not None:
+            recovering = (
+                (original_direction == "CALL" and current_close > state["prev_wrong_close"]) or
+                (original_direction == "PUT"  and current_close < state["prev_wrong_close"])
+            )
+            state["consec_recovery"] = state["consec_recovery"] + 1 if recovering else 0
+        elif not wrong_side:
+            state["consec_recovery"] = 0
+
+        if wrong_side:
+            state["prev_wrong_close"] = current_close
+
+        # ── Penalty: reduce effective score when price shows recovery intent ───────
+        # Recalculated fresh each bar so score auto-heals if reversal resumes.
+        penalty = 0
+
+        if wrong_side and state["worst_wrong_close"] is not None:
+            worst = state["worst_wrong_close"]
+            bounce_pct = (
+                (current_close - worst) / worst if original_direction == "CALL"
+                else (worst - current_close) / worst
+            ) if worst > 0 else 0
+            if bounce_pct >= 0.003:
+                penalty += 1
+                logger.debug(
+                    "[REV %s] penalty +1 (bounce): %.2f%% recovery from worst %.2f",
+                    ticker, bounce_pct * 100, worst,
+                )
+
+        if state["consec_recovery"] >= 2:
+            penalty += 1
+            logger.debug(
+                "[REV %s] penalty +1 (recovery bars): %d consecutive closes recovering",
+                ticker, state["consec_recovery"],
+            )
+
+        effective_score = max(len(signals_hit) - penalty, 0)
+        state["score"] = effective_score
+        fire = effective_score >= self._reversal_fire_threshold
+
+        return {"score": effective_score, "signals": list(signals_hit), "fire": fire}
     
     def _publish_bar_to_hub(self, stock_bar: StockBar):
         """
@@ -1082,9 +1176,7 @@ class OrbService:
             
             # PRIORITY 1: Check if price is currently Bullish (above ORH) or Bearish (below ORL)
             # This takes priority over reversal detection
-            orb_range_size = float(orb_high - orb_low)
-            range_midpoint = orb_range_size / 2.0  # Average of range size
-            
+
             # Determine current bullish/bearish status based on price position
             is_above_orb_high = current_price > float(orb_high)
             is_below_orb_low = current_price < float(orb_low)
@@ -1152,50 +1244,81 @@ class OrbService:
                     timestamp=self.get_current_et_time().isoformat(),
                 )
             
-            # PRIORITY 2: Check for reversals if a breakout has already occurred
-            # IMPORTANT: Only check for reversals if there was an actual breakout (ORH or ORL broken)
-            if state["high_broken"] or state["low_broken"]:
-                # First, check if we should clear an existing reversal
-                await self._check_and_clear_reversal(ticker, trade_date, orb_high, orb_low, bar_close)
-                
-                # Determine original breakout type
-                original_breakout_type = "above" if state["high_broken"] else "below"
-                
-                # Only check for new reversals if we're not already showing a reversal
-                # (to avoid constantly re-triggering on price fluctuations)
-                # Get current state from cache (NO DATABASE CALL)
-                current_cache_state = self._state_cache.get_state(ticker, trade_date)
-                current_breakout_type = current_cache_state.breakout_type if current_cache_state else None
-                
-                # Only check for reversal if not already in reversal state
-                if current_breakout_type != "reversal":
-                    # Check for reversal (only if price returned within ORB AND moved beyond range_midpoint)
-                    reversal_result = self._detect_reversal(
+            # PRIORITY 2: Reversal scoring — runs every bar once a breakout was
+            # confirmed (rev_state is populated by _wait_for_confirmation).
+            if ticker in self._rev_state and not self._rev_state[ticker].get("fired"):
+                rev = self._rev_state[ticker]
+                original_direction = rev["direction"]
+
+                # If price has re-broken above ORH (CALL) or below ORL (PUT), the
+                # original breakout is resuming — reset all scoring state.
+                if original_direction == "CALL" and current_price > float(orb_high):
+                    rev["signals_hit"].clear()
+                    rev["consec_wrong_side"] = 0
+                    rev["score"] = 0
+                    rev["worst_wrong_close"] = None
+                    rev["prev_wrong_close"]  = None
+                    rev["consec_recovery"]   = 0
+                    logger.debug("[REV] %s price re-broke above ORH — reversal state reset", ticker)
+                elif original_direction == "PUT" and current_price < float(orb_low):
+                    rev["signals_hit"].clear()
+                    rev["consec_wrong_side"] = 0
+                    rev["score"] = 0
+                    rev["worst_wrong_close"] = None
+                    rev["prev_wrong_close"]  = None
+                    rev["consec_recovery"]   = 0
+                    logger.debug("[REV] %s price re-broke below ORL — reversal state reset", ticker)
+                else:
+                    result = self._score_reversal(
                         ticker=ticker,
                         current_bar=stock_bar,
-                        breakout_type=original_breakout_type,
+                        original_direction=original_direction,
                         orb_high=orb_high,
                         orb_low=orb_low,
-                        range_midpoint=range_midpoint
                     )
-                    
-                    if reversal_result["is_reversal"]:
-                        # Only record if reversal hasn't already been recorded
+
+                    if result["fire"]:
+                        reversal_direction = "PUT" if original_direction == "CALL" else "CALL"
+                        rev["fired"] = True  # prevent re-fire before state is cleaned up
+
+                        # Publish to hub FIRST — trade timing is critical.
+                        self._hub.publish_reversal_confirmed(
+                            ticker, reversal_direction, current_price, result["score"]
+                        )
+
+                        # Record notification + DB (async; runs after hub publish).
                         try:
                             await self.record_reversal(
                                 ticker=ticker,
-                                original_breakout_type=original_breakout_type,
+                                original_breakout_type="above" if original_direction == "CALL" else "below",
                                 price=bar_close,
-                                reversal_result=reversal_result,
+                                reversal_result={
+                                    "confidence": (
+                                        "HIGH" if result["score"] >= 4 else
+                                        "MEDIUM" if result["score"] == 3 else "LOW"
+                                    ),
+                                    "indicators": result["signals"],
+                                },
                                 orb_high=orb_high,
-                                orb_low=orb_low
+                                orb_low=orb_low,
                             )
                         except Exception as e:
-                            logger.exception(f"Error recording reversal for {ticker}: {e}")
-                else:
-                    # We're in reversal state - update the bar count
-                    if ticker in self._reversal_tracking:
-                        self._reversal_tracking[ticker]["bars_since"] += 1
+                            logger.exception("Error recording reversal for %s: %s", ticker, e)
+
+                        # Reset breakout flags so a fresh breakout can be detected later.
+                        if ticker in self.monitoring_state:
+                            self.monitoring_state[ticker]["high_broken"] = False
+                            self.monitoring_state[ticker]["low_broken"] = False
+                        self._state_cache.update_state(
+                            ticker=ticker,
+                            trade_date=trade_date,
+                            breakout_type="none",
+                            high_broken=False,
+                            low_broken=False,
+                            current_price=current_price,
+                            timestamp=self.get_current_et_time().isoformat(),
+                        )
+                        self._rev_state.pop(ticker, None)
     
     async def record_breakout(self, ticker: str, breakout_type: str, price: Decimal, bar_data: Optional[StockBar] = None):
         """
@@ -1290,10 +1413,10 @@ class OrbService:
             else:
                 self.monitoring_state[ticker]["low_broken"] = True
             
-            # Clear any existing reversal tracking when a new breakout occurs
-            if ticker in self._reversal_tracking:
-                logger.debug(f"Clearing reversal tracking for {ticker} due to new breakout")
-                del self._reversal_tracking[ticker]
+            # Clear any stale reversal scoring state when a new breakout occurs.
+            if ticker in self._rev_state:
+                logger.debug("Clearing reversal scoring state for %s due to new breakout", ticker)
+                del self._rev_state[ticker]
             
             # Update cache state (NO DATABASE CALL)
             self._state_cache.set_breakout(
@@ -1360,7 +1483,7 @@ class OrbService:
             ticker: Stock ticker symbol
             original_breakout_type: "above" or "below" (original breakout direction)
             price: Current price when reversal detected
-            reversal_result: Result from _detect_reversal method
+            reversal_result: Result from _score_reversal method
             orb_high: ORB high level
             orb_low: ORB low level
         """
@@ -1388,7 +1511,7 @@ class OrbService:
                 "orb_low": orb_low_float,
                 "detection_metadata": {
                     "bars_analyzed": len(self._bar_history.get(ticker, [])),
-                    "reversal_detection_method": "range_midpoint",
+                    "reversal_detection_method": "multi_bar_score",
                     "indicators_count": len(indicators)
                 }
             }
@@ -1418,95 +1541,12 @@ class OrbService:
                 orb_high=orb_high_float,
                 orb_low=orb_low_float
             )
-            
-            # Reset state to "none" and clear breakout flags so reversal is no longer tracked.
-            # Next reversal will only trigger after a fresh breakout (price goes above ORH or below ORL again).
-            self._state_cache.update_state(
-                ticker=ticker,
-                trade_date=trade_date,
-                breakout_type="none",
-                high_broken=False,
-                low_broken=False,
-                reversal_data=None,
-                current_price=price_float,
-                timestamp=self.get_current_et_time().isoformat(),
-            )
-            if ticker in self.monitoring_state:
-                self.monitoring_state[ticker]["high_broken"] = False
-                self.monitoring_state[ticker]["low_broken"] = False
-            if ticker in self._reversal_tracking:
-                del self._reversal_tracking[ticker]
-            logger.debug(
-                f"[REVERSAL] {ticker} state reset to none; next reversal requires a new breakout (above ORH or below ORL)."
-            )
+            # State reset (breakout flags, cache, _rev_state) is handled by the
+            # caller (handle_bar) after this coroutine returns, so it happens
+            # atomically with the hub publish rather than here.
             
         except Exception as e:
             logger.error(f"Error recording reversal for {ticker}: {e}", exc_info=True)
-    
-    async def _check_and_clear_reversal(
-        self,
-        ticker: str,
-        trade_date,
-        orb_high: Decimal,
-        orb_low: Decimal,
-        current_price: Decimal
-    ):
-        """
-        Check if a reversal should be cleared based on bar count.
-        
-        Reversals are automatically cleared after 5 bars have been processed.
-        Alpaca provides 1-minute bars, so 5 bars ≈ 5 minutes.
-        
-        When cleared, the breakout_type is set to "none" (only if it was "reversal").
-        
-        Args:
-            ticker: Stock ticker symbol
-            trade_date: Current trade date
-            orb_high: ORB high level
-            orb_low: ORB low level
-            current_price: Current price
-        """
-        if ticker not in self._reversal_tracking:
-            return  # No reversal to clear
-        
-        try:
-            reversal_info = self._reversal_tracking[ticker]
-            bars_since = reversal_info["bars_since"]
-            
-            # Check if enough bars have passed (5 bars ≈ 5 minutes for 1-minute bars)
-            bars_exceeded = bars_since >= self._reversal_display_bars
-            
-            if bars_exceeded:
-                # Get current state from cache (NO DATABASE CALL)
-                current_cache_state = self._state_cache.get_state(ticker, trade_date)
-                current_breakout_type = current_cache_state.breakout_type if current_cache_state else None
-                
-                # Only clear if current type is "reversal"
-                if current_breakout_type == "reversal":
-                    # Clear the reversal and set breakout_type to "none"
-                    logger.info(
-                        f"[REVERSAL CLEARED] {ticker} reversal cleared after {bars_since} bars "
-                        f"(≈{bars_since} minutes). Setting breakout_type to 'none'."
-                    )
-                    
-                    # Update cache state to set breakout_type to "none" (NO DATABASE CALL)
-                    self._state_cache.clear_reversal(
-                        ticker=ticker,
-                        trade_date=trade_date,
-                        current_price=float(current_price),
-                        timestamp=self.get_current_et_time().isoformat(),
-                    )
-                else:
-                    logger.debug(
-                        f"[REVERSAL CLEAR] {ticker} reversal tracking cleared but breakout_type "
-                        f"was '{current_breakout_type}', not 'reversal'. Skipping update."
-                    )
-                
-                # Remove from tracking regardless
-                del self._reversal_tracking[ticker]
-                
-        except Exception as e:
-            logger.error(f"Error checking/clearing reversal for {ticker}: {e}", exc_info=True)
     
     async def send_reversal_notification(
         self,
@@ -1634,6 +1674,23 @@ class OrbService:
                     # exit management. Runs regardless of user follows.
                     direction = "CALL" if breakout_type == "above" else "PUT"
                     self._hub.publish_breakout_confirmed(ticker, direction, float(current_price))
+
+                    # Arm reversal scoring for this ticker. Per-bar scoring starts on
+                    # the next bar via handle_bar → _score_reversal. Clears any stale
+                    # state from a previous breakout on the same day.
+                    self._rev_state[ticker] = {
+                        "direction":          direction,
+                        "score":              0,
+                        "signals_hit":        set(),
+                        "max_extension":      0.0,
+                        "consec_wrong_side":  0,
+                        "bars_counted":       0,
+                        "fired":              False,
+                        "worst_wrong_close":  None,
+                        "prev_wrong_close":   None,
+                        "consec_recovery":    0,
+                    }
+                    logger.info("[REV] %s reversal scoring armed (original=%s)", ticker, direction)
 
                     breakout_type_display = "Confirmed Bullish" if breakout_type == "above" else "Confirmed Bearish"
                     trade_date = self.get_current_et_time().date()

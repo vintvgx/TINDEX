@@ -1,4 +1,4 @@
-export type ProfileKey = 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'TREND_RIDER' | 'RETESTER' | 'CUSTOM';
+export type ProfileKey = 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'TREND_RIDER' | 'RETESTER' | 'REVERSAL' | 'CUSTOM';
 
 export interface CustomThresholds {
   qty_contracts:           number;
@@ -53,6 +53,7 @@ export interface StrategyProfile {
   tp1_pct: number;        // integer percent, e.g. 50
   tp2_pct: number;        // integer percent, e.g. 100
   runner: boolean;
+  use_tp2: boolean;
   risk_level: 'Low' | 'Medium' | 'High' | 'Medium-High' | 'Custom';
   vix_max: number;
   breakout_limit_min: number;

@@ -67,6 +67,7 @@ class ORBEngine:
         # ORB data hub — bars + ORB status are pushed here by OrbService.
         self._hub = hub or get_orb_data_hub()
         self._subscribed_ticker = None        # ticker currently subscribed on the hub
+        self._subscription_type = None        # "breakout" | "reversal" — tracks active channel
         # Serializes on_price_tick across its callers (hub bar thread, option-stream
         # thread, hub breakout thread) so concurrent callers can't interleave a
         # double entry.
@@ -115,17 +116,25 @@ class ORBEngine:
         self.logger     = TradeLogger()
         self.notifier   = StrategyNotifier(self.logger.client)
 
-        # Subscribe to the hub bar feed for this ticker (re-subscribe on ticker change).
-        # Underlying bars + opening-range data now come from OrbService via the hub
-        # instead of being fetched directly from Alpaca.
-        if self._subscribed_ticker != self.ticker:
+        # Subscribe to the hub bar feed for this ticker (re-subscribe on ticker or
+        # profile-type change). REVERSAL-profile engines listen on the reversal
+        # channel; all others listen on the regular breakout channel.
+        is_reversal_profile = self.profile_key == "REVERSAL"
+        new_sub_type = "reversal" if is_reversal_profile else "breakout"
+        if self._subscribed_ticker != self.ticker or self._subscription_type != new_sub_type:
             if self._subscribed_ticker is not None:
                 self._hub.unsubscribe(self._subscribed_ticker, self.on_bar)
-                self._hub.unsubscribe(self._subscribed_ticker, self.on_breakout_confirmed)
+                if self._subscription_type == "reversal":
+                    self._hub.unsubscribe(self._subscribed_ticker, self.on_reversal_confirmed)
+                else:
+                    self._hub.unsubscribe(self._subscribed_ticker, self.on_breakout_confirmed)
             self._hub.subscribe_bar(self.ticker, self.on_bar)
-            # Confirmed 3-min breakout from OrbService is the entry trigger.
-            self._hub.subscribe_breakout(self.ticker, self.on_breakout_confirmed)
+            if is_reversal_profile:
+                self._hub.subscribe_reversal(self.ticker, self.on_reversal_confirmed)
+            else:
+                self._hub.subscribe_breakout(self.ticker, self.on_breakout_confirmed)
             self._subscribed_ticker = self.ticker
+            self._subscription_type = new_sub_type
 
         # Tag every persisted debug row with this engine's identity.
         self.debug.set_context(strategy_id=self.strategy_id, ticker=self.ticker,
@@ -405,6 +414,43 @@ class ORBEngine:
                                         f"{direction}")
                 self._enter_trade(direction, price)
 
+    def on_reversal_confirmed(self, direction: str, price: float):
+        """
+        Hub callback: OrbService's multi-bar reversal scorer crossed the fire
+        threshold for this ticker. Only called for REVERSAL-profile engines.
+
+        direction — opposite of the original breakout ("PUT" if breakout was CALL)
+        price     — underlying price at the time the reversal was confirmed.
+
+        Unlike on_breakout_confirmed, we skip the time-limit guard (OrbService
+        already validated that the original breakout was within window) and skip
+        the RETEST entry mode (the score itself is the confirmation).
+        """
+        with self._tick_lock:
+            self.debug.emit("INFO",
+                f"Reversal confirmed for {self.ticker} — direction={direction} @ {price:.2f}")
+
+            if self.trade_taken:
+                self.debug.emit("WARN", "Ignoring reversal — trade already open")
+                return
+            if self.session_skipped:
+                self.debug.emit("WARN",
+                    f"Ignoring reversal — session skipped ({self.skip_reason})")
+                return
+            if not self.orh or not self.orl:
+                self.debug.emit("WARN",
+                    "Ignoring reversal — engine ORB not set (calculate_orb did not run)")
+                return
+            if datetime.now(ET).weekday() not in self.trade_days:
+                self.debug.emit("WARN", "Ignoring reversal — not a trade day")
+                return
+
+            logger.info("[ORBEngine] Reversal confirmed %s %s @ %.2f — entering",
+                        direction, self.ticker, price)
+            self.debug.emit("INFO",
+                f"Entering reversal trade — {direction} @ {price:.2f}")
+            self._enter_trade(direction, price)
+
     def _start_retest_watch(self, direction: str, breakout_price: float,
                              now_et, deadline):
         """
@@ -561,13 +607,19 @@ class ORBEngine:
         # Smart contracts: override profile qty with a tier based on the ask price.
         # Cheaper options buy more contracts; expensive ones buy fewer. This adapts
         # position sizing to available capital without a fixed profile qty.
+        # force_smart_qty (profile key) enables this regardless of the user config flag.
+        # min_smart_qty (profile key) floors the result — used by REVERSAL to ensure
+        # at least 2 contracts so the TP1+runner structure is always funded.
         # The capital_limit and buying_power checks below still apply after.
-        if self.smart_contracts:
+        if self.smart_contracts or self.profile.get("force_smart_qty", False):
             from services.strategy.profiles import smart_qty
             smart = smart_qty(ask)
+            min_sq = self.profile.get("min_smart_qty", 1)
+            if smart < min_sq:
+                smart = min_sq
             self.debug.emit("INFO",
                 f"[{self.strategy_name} | {self.profile_key}] Smart contracts: "
-                f"ask=${ask:.2f} → qty={smart} (profile default was {qty})")
+                f"ask=${ask:.2f} → qty={smart} (min={min_sq}, profile default was {qty})")
             qty = smart
 
         # Enforce user-configured capital_limit — cap qty to what the limit allows.
@@ -1229,8 +1281,12 @@ class ORBEngine:
         """
         if self._subscribed_ticker is not None:
             self._hub.unsubscribe(self._subscribed_ticker, self.on_bar)
-            self._hub.unsubscribe(self._subscribed_ticker, self.on_breakout_confirmed)
+            if self._subscription_type == "reversal":
+                self._hub.unsubscribe(self._subscribed_ticker, self.on_reversal_confirmed)
+            else:
+                self._hub.unsubscribe(self._subscribed_ticker, self.on_breakout_confirmed)
             self._subscribed_ticker = None
+            self._subscription_type = None
 
     def _calculate_fib_levels(self) -> dict:
         """

@@ -69,6 +69,11 @@ class OrbDataHub:
         self._recent_bars: dict[str, deque] = {}
         self._status: dict[str, OrbStatus] = {}
         self._max_recent = max_recent_bars
+        # Reversal-confirmed subscribers: OrbService publishes here once its
+        # multi-bar reversal scorer crosses the fire threshold. Only engines
+        # configured with the REVERSAL profile listen on this channel — regular
+        # breakout engines are unaffected.
+        self._reversal_subs: dict[str, list[Callable[[str, float], None]]] = defaultdict(list)
         # Whether OrbService (the bar feed) is currently running. Engines depend on
         # it for price data, so they stay silent / keep the session armed when it
         # is False (e.g. right after a redeploy, before the service has started).
@@ -94,10 +99,19 @@ class OrbDataHub:
                 self._breakout_subs[ticker].append(cb)
         logger.info("[OrbDataHub] breakout subscriber added for %s", ticker)
 
-    def unsubscribe(self, ticker: str, cb: Callable) -> None:
-        """Remove a callback from bar, ORB, and breakout subscriptions for a ticker."""
+    def subscribe_reversal(self, ticker: str, cb: Callable[[str, float], None]) -> None:
+        """Register a reversal-confirmed callback: cb(direction, price).
+        Only REVERSAL-profile engines subscribe here."""
         with self._lock:
-            for registry in (self._bar_subs, self._orb_subs, self._breakout_subs):
+            if cb not in self._reversal_subs[ticker]:
+                self._reversal_subs[ticker].append(cb)
+        logger.info("[OrbDataHub] reversal subscriber added for %s", ticker)
+
+    def unsubscribe(self, ticker: str, cb: Callable) -> None:
+        """Remove a callback from bar, ORB, breakout, and reversal subscriptions."""
+        with self._lock:
+            for registry in (self._bar_subs, self._orb_subs,
+                             self._breakout_subs, self._reversal_subs):
                 if cb in registry.get(ticker, []):
                     registry[ticker].remove(cb)
         logger.info("[OrbDataHub] subscriber removed for %s", ticker)
@@ -144,6 +158,27 @@ class OrbDataHub:
                 cb(direction, price)
             except Exception as e:
                 logger.error("[OrbDataHub] breakout subscriber error for %s: %s",
+                             ticker, e, exc_info=True)
+
+    def publish_reversal_confirmed(self, ticker: str, direction: str,
+                                   price: float, score: int) -> None:
+        """
+        Announce a scored reversal to REVERSAL-profile engines on this ticker.
+        direction is the OPPOSITE of the original breakout ("CALL" if original
+        was PUT, "PUT" if original was CALL). score is the reversal confidence
+        (out of 5) for logging / debug visibility.
+        """
+        with self._lock:
+            listeners = list(self._reversal_subs.get(ticker, ()))
+        logger.info(
+            "[OrbDataHub] reversal confirmed %s %s @ %.2f score=%d/5 → %d listener(s)",
+            ticker, direction, price, score, len(listeners),
+        )
+        for cb in listeners:
+            try:
+                cb(direction, price)
+            except Exception as e:
+                logger.error("[OrbDataHub] reversal subscriber error for %s: %s",
                              ticker, e, exc_info=True)
 
     # ── Queries (called by ORBEngine) ────────────────────────────────────────

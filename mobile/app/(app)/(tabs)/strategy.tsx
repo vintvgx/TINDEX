@@ -48,6 +48,7 @@ const PROFILE_COLORS: Record<ProfileKey, string> = {
   WOLF:        '#4CAF84',
   TREND_RIDER: '#A855F7',
   RETESTER:    '#06B6D4',
+  REVERSAL:    '#FF453A',
   CUSTOM:      '#A855F7',
 };
 
@@ -84,7 +85,7 @@ const DEFAULT_FORM: FormState = {
   strategy_name:          '',
   ticker:                 'IWM',
   trade_days:             [0, 2, 4],
-  profile:                'THUNDER_CAT',
+  profile:                'TREND_RIDER',
   mode:                   'paper',
   capital_limit:          '',
   bypass_breakout_window: false,
@@ -826,14 +827,26 @@ interface FormModalProps {
   onSave: () => void;
 }
 
+// Profiles always shown at the top of the picker.
+const PRIMARY_PROFILES: ProfileKey[] = ['TREND_RIDER', 'RETESTER', 'REVERSAL'];
+// Profiles hidden behind "More profiles" — legacy / advanced options.
+const SECONDARY_PROFILES: ProfileKey[] = ['BULL_DOG', 'THUNDER_CAT', 'WOLF'];
+
 function StrategyFormModal({
   visible, isEditing, form, profiles, tickerOptions, saving, colors,
   onClose, onPatch, onModeSelect, onSave,
 }: FormModalProps) {
-  const [tickerOpen, setTickerOpen]     = useState(false);
+  const [tickerOpen, setTickerOpen]       = useState(false);
   const [scrollEnabled, setScrollEnabled] = useState(true);
-  const [tab, setTab] = useState<'strategy' | 'immediate'>('strategy');
+  const [tab, setTab]                     = useState<'strategy' | 'immediate'>('strategy');
+  // Auto-expand secondary section if the active profile lives there.
+  const isSecondaryActive = SECONDARY_PROFILES.includes(form.profile) || form.profile === 'CUSTOM';
+  const [showMoreProfiles, setShowMoreProfiles] = useState(isSecondaryActive);
   React.useEffect(() => { if (visible) setTab('strategy'); }, [visible]);
+  // Re-expand if user saved a secondary profile and re-opens modal.
+  React.useEffect(() => {
+    if (visible && isSecondaryActive) setShowMoreProfiles(true);
+  }, [visible, isSecondaryActive]);
 
   const showImmediate = !isEditing && tab === 'immediate';
   return (
@@ -1137,42 +1150,78 @@ function StrategyFormModal({
             </View>
           </View>
 
-          {/* Profile picker */}
+          {/* Profile picker — primary profiles always visible */}
           <SectionHeader title="Trading Profile" colors={colors} />
-          {profiles.map(p => (
-            <ProfileCard
-              key={p.key}
-              profile={p}
-              selected={form.profile === p.key}
-              onSelect={key => onPatch('profile', key)}
-            />
-          ))}
+          {profiles
+            .filter(p => PRIMARY_PROFILES.includes(p.key))
+            .sort((a, b) => PRIMARY_PROFILES.indexOf(a.key) - PRIMARY_PROFILES.indexOf(b.key))
+            .map(p => (
+              <ProfileCard
+                key={p.key}
+                profile={p}
+                selected={form.profile === p.key}
+                onSelect={key => onPatch('profile', key)}
+              />
+            ))}
 
-          {/* Custom profile card */}
+          {/* "More profiles" toggle */}
           <TouchableOpacity
-            onPress={() => onPatch('profile', 'CUSTOM')}
-            activeOpacity={0.8}
-            style={[
-              styles.customProfileCard,
-              {
-                backgroundColor: colors.card,
-                borderColor: form.profile === 'CUSTOM' ? '#A855F7' : colors.border,
-                borderWidth: form.profile === 'CUSTOM' ? 2 : 1,
-              },
-            ]}
+            onPress={() => setShowMoreProfiles(v => !v)}
+            activeOpacity={0.7}
+            style={[styles.moreProfilesBtn, { borderColor: colors.border }]}
           >
-            {form.profile === 'CUSTOM' && (
-              <View style={[styles.customActiveBadge, { backgroundColor: '#A855F7' }]}>
-                <Ionicons name="checkmark" size={10} color="#fff" />
-              </View>
-            )}
-            <Text style={styles.customProfileEmoji}>⚙️</Text>
-            <Text style={[styles.customProfileName, { color: colors.text }]}>Custom</Text>
-            <Text style={[styles.customProfileSub, { color: '#A855F7' }]}>Custom Risk</Text>
-            <Text style={[styles.customProfileDesc, { color: colors.tabBarInactive }]}>
-              Set every parameter yourself — contracts, take-profit targets, timing, and more.
+            <Text style={[styles.moreProfilesBtnText, { color: colors.tabBarInactive }]}>
+              {showMoreProfiles ? 'Fewer profiles' : 'More profiles'}
             </Text>
+            <Ionicons
+              name={showMoreProfiles ? 'chevron-up' : 'chevron-down'}
+              size={14}
+              color={colors.tabBarInactive}
+            />
           </TouchableOpacity>
+
+          {/* Secondary profiles + Custom — hidden until expanded */}
+          {showMoreProfiles && (
+            <>
+              {profiles
+                .filter(p => SECONDARY_PROFILES.includes(p.key))
+                .sort((a, b) => SECONDARY_PROFILES.indexOf(a.key) - SECONDARY_PROFILES.indexOf(b.key))
+                .map(p => (
+                  <ProfileCard
+                    key={p.key}
+                    profile={p}
+                    selected={form.profile === p.key}
+                    onSelect={key => onPatch('profile', key)}
+                  />
+                ))}
+
+              {/* Custom profile card */}
+              <TouchableOpacity
+                onPress={() => onPatch('profile', 'CUSTOM')}
+                activeOpacity={0.8}
+                style={[
+                  styles.customProfileCard,
+                  {
+                    backgroundColor: colors.card,
+                    borderColor: form.profile === 'CUSTOM' ? '#A855F7' : colors.border,
+                    borderWidth: form.profile === 'CUSTOM' ? 2 : 1,
+                  },
+                ]}
+              >
+                {form.profile === 'CUSTOM' && (
+                  <View style={[styles.customActiveBadge, { backgroundColor: '#A855F7' }]}>
+                    <Ionicons name="checkmark" size={10} color="#fff" />
+                  </View>
+                )}
+                <Text style={styles.customProfileEmoji}>⚙️</Text>
+                <Text style={[styles.customProfileName, { color: colors.text }]}>Custom</Text>
+                <Text style={[styles.customProfileSub, { color: '#A855F7' }]}>Custom Risk</Text>
+                <Text style={[styles.customProfileDesc, { color: colors.tabBarInactive }]}>
+                  Set every parameter yourself — contracts, take-profit targets, timing, and more.
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
 
           {/* Custom thresholds editor — only shown when CUSTOM is selected */}
           {form.profile === 'CUSTOM' && (
@@ -1408,6 +1457,22 @@ const styles = StyleSheet.create({
   emptyCard:    { alignItems: 'center', borderRadius: 14, borderWidth: 1, padding: 32, gap: 8, marginBottom: 12 },
   emptyText:    { fontSize: 15, fontWeight: '600' },
   emptySubtext: { fontSize: 13 },
+
+  // ── More profiles toggle ──
+  moreProfilesBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    marginBottom: 12,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  moreProfilesBtnText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
 
   // ── Custom profile card ──
   customProfileCard: {

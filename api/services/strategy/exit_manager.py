@@ -36,6 +36,10 @@ class ExitManager:
         self.tp2_hit        = False
         self.be_stop_active = False
 
+        # Disable TP2 when the profile explicitly opts out OR when starting with
+        # ≤ 2 contracts (TP1 closes one, the other becomes a runner — no TP2 needed).
+        self._use_tp2 = profile.get("use_tp2", qty > 2)
+
         self.orh = fib_levels["orh"]
         self.orl = fib_levels["orl"]
 
@@ -86,7 +90,7 @@ class ExitManager:
             qty_tp1 = max(1, math.floor(self.qty_remaining * self.profile["tp1_close_pct"]))
             return self._action("CLOSE_PARTIAL", qty_tp1, "TP1", current_option_price)
 
-        if self.tp1_hit and not self.tp2_hit and current_option_price >= self.tp2:
+        if self._use_tp2 and self.tp1_hit and not self.tp2_hit and current_option_price >= self.tp2:
             self.tp2_hit = True
             if self.profile["tp2_close_pct"] >= 1.0:
                 return self._action("CLOSE_ALL", self.qty_remaining, "TP2_FULL_CLOSE",
@@ -141,6 +145,7 @@ class ExitManager:
             "tp1_hit":        self.tp1_hit,
             "tp2_hit":        self.tp2_hit,
             "be_stop_active": self.be_stop_active,
+            "use_tp2":        self._use_tp2,
             "qty":            self.qty,
             "qty_remaining":  self.qty_remaining,
         }

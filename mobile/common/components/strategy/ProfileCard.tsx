@@ -16,6 +16,7 @@ const BORDER_COLORS: Record<ProfileKey, string> = {
   WOLF:        '#4CAF84',
   TREND_RIDER: '#A855F7',
   RETESTER:    '#06B6D4',
+  REVERSAL:    '#FF453A',
   CUSTOM:      '#A855F7',
 };
 
@@ -47,7 +48,11 @@ export const ProfileCard: React.FC<Props> = ({ profile, selected, onSelect }) =>
         <Stat label="Contracts" value={String(profile.contracts)} colors={colors} />
         <Stat label="Max Loss" value={`-${profile.max_loss_pct}%`} colors={colors} />
         <Stat label="TP1" value={`+${profile.tp1_pct}%`} colors={colors} />
-        <Stat label="TP2" value={`+${profile.tp2_pct}%`} colors={colors} />
+        <Stat
+          label="TP2"
+          value={profile.use_tp2 === false ? 'Runner' : `+${profile.tp2_pct}%`}
+          colors={colors}
+        />
         <Stat label="VIX Max" value={String(profile.vix_max)} colors={colors} />
         <Stat label="Runner" value={profile.runner ? 'Yes' : 'No'} colors={colors} />
       </View>
