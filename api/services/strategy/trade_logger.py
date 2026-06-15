@@ -54,6 +54,7 @@ class TradeLogger:
                 "budget_otm_mode":        config.get("budget_otm_mode", False),
                 "otm_fib_level":          config.get("otm_fib_level", "1.0"),
                 "debug_mode":             config.get("debug_mode", False),
+                "smart_contracts":        config.get("smart_contracts", False),
                 "updated_at":             datetime.utcnow().isoformat(),
             }
             if "id" in config and config["id"]:
@@ -68,6 +69,13 @@ class TradeLogger:
 
     def delete_strategy_config(self, strategy_id: str):
         try:
+            # Nullify strategy_id in dependent tables first so any FK constraint
+            # (added via the Supabase dashboard) doesn't block the delete.
+            for table in ("orb_trades", "orb_session", "orb_debug_logs"):
+                try:
+                    self.client.table(table).update({"strategy_id": None}).eq("strategy_id", strategy_id).execute()
+                except Exception:
+                    pass  # table may not have strategy_id column — safe to ignore
             self.client.table("strategy_configs").delete().eq("id", strategy_id).execute()
         except Exception as e:
             logger.error("[TradeLogger] delete_strategy_config failed: %s", e)
