@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, FlatList, ScrollView,
+  View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, FlatList, ScrollView, Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
@@ -24,6 +24,8 @@ const PROFILE_OPTIONS: { key: ProfileKey; label: string }[] = [
   { key: 'BULL_DOG',    label: '🐂 Bull Dog' },
   { key: 'THUNDER_CAT', label: '🐱 Thunder Cat' },
   { key: 'WOLF',        label: '🐺 Wolf' },
+  { key: 'TREND_RIDER', label: '🚀 Trend Rider' },
+  { key: 'RETESTER',    label: '🎯 Retester' },
 ];
 
 const COL = { strike: 70, bid: 56, ask: 56, last: 56, oi: 64 };
@@ -102,6 +104,8 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   const [profile, setProfile]   = useState<ProfileKey>('THUNDER_CAT');
   const [selected, setSelected] = useState<OptionsContract | null>(null);
   const [qty, setQty]           = useState(1);
+  const [consolExit, setConsolExit] = useState(false);
+  const [volumeExit, setVolumeExit] = useState(false);
 
   // Default the ticker to the first available option once they load.
   useEffect(() => {
@@ -160,6 +164,8 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
         qty,
         profile,
         paper_mode:      paperMode,
+        consol_exit:     consolExit,
+        volume_exit:     volumeExit,
       },
       {
         onSuccess: (r) => {
@@ -268,6 +274,36 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
           <TouchableOpacity onPress={() => setQty(q => q + 1)} style={[styles.qtyBtn, { borderColor: colors.border }]}>
             <Ionicons name="add" size={18} color={colors.text} />
           </TouchableOpacity>
+        </View>
+      </View>
+
+      <View>
+        <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>EXIT CONTROLS</Text>
+        <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.exitToggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Consolidation Exit</Text>
+              <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Close when price stops moving (5 min hold)</Text>
+            </View>
+            <Switch
+              value={consolExit}
+              onValueChange={setConsolExit}
+              thumbColor={consolExit ? '#4A9EFF' : '#ccc'}
+              trackColor={{ true: '#4A9EFF55', false: colors.border }}
+            />
+          </View>
+          <View style={[styles.exitToggleRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Volume Exit</Text>
+              <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Close half on low volume (3 min hold)</Text>
+            </View>
+            <Switch
+              value={volumeExit}
+              onValueChange={setVolumeExit}
+              thumbColor={volumeExit ? '#4A9EFF' : '#ccc'}
+              trackColor={{ true: '#4A9EFF55', false: colors.border }}
+            />
+          </View>
         </View>
       </View>
 
@@ -493,4 +529,9 @@ const styles = StyleSheet.create({
   qtyValue:    { fontSize: 18, fontWeight: '700', minWidth: 28, textAlign: 'center' },
   submitBtn:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 15, borderRadius: 12 },
   submitText:  { fontSize: 15, fontWeight: '700' },
+
+  exitToggles:     { borderRadius: 12, borderWidth: 1, overflow: 'hidden' },
+  exitToggleRow:   { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, gap: 12 },
+  exitToggleLabel: { fontSize: 14, fontWeight: '500', marginBottom: 2 },
+  exitToggleSub:   { fontSize: 11 },
 });

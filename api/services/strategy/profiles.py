@@ -15,7 +15,8 @@ PROFILES = {
         "tp1_close_pct": 0.30,
         "tp2_close_pct": 0.30,
         "runner_trail_pct": 0.15,
-        "consol_exit": True,
+        "consol_exit": False,
+        "volume_exit": False,
         "consol_range_pct": 0.0005,
         "consol_bars": 6,
         "volume_exit_threshold": 0.10,
@@ -36,7 +37,8 @@ PROFILES = {
         "tp1_close_pct": 0.50,
         "tp2_close_pct": 0.50,
         "runner_trail_pct": 0.20,
-        "consol_exit": True,
+        "consol_exit": False,
+        "volume_exit": False,
         "consol_range_pct": 0.0008,
         "consol_bars": 4,
         "volume_exit_threshold": 0.20,
@@ -57,7 +59,8 @@ PROFILES = {
         "tp1_close_pct": 0.67,
         "tp2_close_pct": 1.00,
         "runner_trail_pct": 0.10,
-        "consol_exit": True,
+        "consol_exit": False,
+        "volume_exit": False,
         "consol_range_pct": 0.0012,
         "consol_bars": 3,
         "volume_exit_threshold": 0.30,
@@ -71,7 +74,7 @@ PROFILES = {
     },
     # ─── TREND RIDER — Hold for the full move ────────────────────────────────────
     "TREND_RIDER": {
-        "qty_contracts": 2,
+        "qty_contracts": 4,
         "max_loss_pct": 0.38,
         "tp1_mult": 1.60,
         "tp2_mult": 2.50,
@@ -79,6 +82,7 @@ PROFILES = {
         "tp2_close_pct": 0.35,
         "runner_trail_pct": 0.18,
         "consol_exit": False,
+        "volume_exit": False,
         "consol_range_pct": 0.0010,
         "consol_bars": 8,
         "volume_exit_threshold": 0.10,
@@ -88,7 +92,7 @@ PROFILES = {
         "target_delta_max": 0.48,
         "eod_buffer_minutes": 15,
         "breakout_time_limit_min": 90,
-        "vix_max_override": 21,
+        "vix_max_override": 25,
         "entry_mode": "BREAK",
     },
     # ─── RETESTER — Wait for price to return to the breakout level ───────────────
@@ -100,7 +104,8 @@ PROFILES = {
         "tp1_close_pct": 0.55,
         "tp2_close_pct": 0.35,
         "runner_trail_pct": 0.15,
-        "consol_exit": True,
+        "consol_exit": False,
+        "volume_exit": False,
         "consol_range_pct": 0.0008,
         "consol_bars": 4,
         "volume_exit_threshold": 0.20,
@@ -116,6 +121,27 @@ PROFILES = {
     },
 }
 
+# Smart-contracts tiers: qty scales inversely with ask premium so that
+# live accounts with limited capital still get meaningful exposure without
+# overspending on a single expensive contract.
+# Order matters — first threshold that ask >= wins.
+# The existing capital_limit and buying_power checks still apply after,
+# so these are a starting point, not a bypass of those guards.
+SMART_CONTRACT_TIERS: list[tuple[float, int]] = [
+    (1.50, 1),   # ask >= $1.50  → 1 contract
+    (1.00, 2),   # ask >= $1.00  → 2 contracts
+    (0.00, 4),   # ask <  $1.00  → 4 contracts
+]
+
+
+def smart_qty(ask: float) -> int:
+    """Return the smart-contracts qty for the given ask price."""
+    for threshold, qty in SMART_CONTRACT_TIERS:
+        if ask >= threshold:
+            return qty
+    return 1
+
+
 CUSTOM_DEFAULTS = {
     "qty_contracts":          5,
     "max_loss_pct":           0.35,
@@ -124,7 +150,8 @@ CUSTOM_DEFAULTS = {
     "tp1_close_pct":          0.50,
     "tp2_close_pct":          0.50,
     "runner_trail_pct":       0.20,
-    "consol_exit":            True,
+    "consol_exit":            False,
+    "volume_exit":            False,
     "consol_range_pct":       0.0008,
     "consol_bars":            4,
     "volume_exit_threshold":  0.20,
@@ -162,7 +189,12 @@ def get_profile(name: str, custom_thresholds: dict = None) -> dict:
         return {**CUSTOM_DEFAULTS, **(custom_thresholds or {})}
     if key not in PROFILES:
         return PROFILES["THUNDER_CAT"]
-    return PROFILES[key]
+    base = dict(PROFILES[key])
+    if custom_thresholds:
+        for k in ("consol_exit", "volume_exit"):
+            if k in custom_thresholds:
+                base[k] = custom_thresholds[k]
+    return base
 
 
 def describe_profile(key: str, custom_thresholds: dict = None) -> dict:

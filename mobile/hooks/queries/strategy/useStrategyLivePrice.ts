@@ -32,6 +32,7 @@ interface UseStrategyLivePriceResult {
 export function useStrategyLivePrice(
   strategyId: string | undefined,
   enabled: boolean = true,
+  onPositionClosed?: () => void,
 ): UseStrategyLivePriceResult {
   const [data, setData]           = useState<LivePriceData | null>(null);
   const [connected, setConnected] = useState(false);
@@ -41,6 +42,9 @@ export function useStrategyLivePrice(
   const attemptsRef               = useRef(0);
   const mountedRef                = useRef(true);
   const shouldReconnectRef        = useRef(true);
+  // Keep callback in a ref so changing it doesn't rebuild the WebSocket
+  const onPositionClosedRef       = useRef(onPositionClosed);
+  onPositionClosedRef.current     = onPositionClosed;
 
   const wsUrl = strategyId
     ? RAILWAY_BASE_URL.replace(/^https?/, (s) => (s === 'https' ? 'wss' : 'ws'))
@@ -71,8 +75,12 @@ export function useStrategyLivePrice(
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data as string);
-        if (msg.type === 'price_update' && mountedRef.current) {
+        if (!mountedRef.current) return;
+        if (msg.type === 'price_update') {
           setData(msg as LivePriceData);
+        } else if (msg.type === 'position_closed') {
+          setData(null);
+          onPositionClosedRef.current?.();
         }
       } catch {
         // ignore malformed frames (e.g. keepalive pings)

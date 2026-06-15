@@ -25,6 +25,8 @@ class ExitManager:
         self.eod_close_time = self._parse_time(eod_close_time)
         self.profile        = profile
 
+        self.entry_time   = datetime.now(ET)
+
         self.hard_stop    = entry_premium * (1 - profile["max_loss_pct"])
         self.tp1          = entry_premium * profile["tp1_mult"]
         self.tp2          = entry_premium * profile["tp2_mult"]
@@ -55,15 +57,23 @@ class ExitManager:
             return self._action("CLOSE_ALL", self.qty_remaining, "HARD_STOP",
                                 current_option_price)
 
-        self.price_buffer.append(current_underlying_price or current_option_price)
-        if current_volume:
+        # Only track actual underlying price — option price is not a valid proxy
+        # (same option premium on consecutive ticks would instantly fake consolidation)
+        if current_underlying_price is not None:
+            self.price_buffer.append(current_underlying_price)
+        if current_volume is not None:
             self.volume_buffer.append(current_volume)
 
-        if self.profile["consol_exit"] and self._is_consolidating():
+        secs_held = (datetime.now(ET) - self.entry_time).total_seconds()
+
+        # Minimum 5-minute hold before consolidation exit: price consolidates naturally
+        # right at the breakout level for the first few minutes — don't exit yet.
+        if secs_held >= 300 and self.profile["consol_exit"] and self._is_consolidating():
             return self._action("CLOSE_ALL", self.qty_remaining, "CONSOLIDATION",
                                 current_option_price)
 
-        if self._is_low_volume() and not self.tp1_hit:
+        # Minimum 3-minute hold before volume exit
+        if secs_held >= 180 and self.profile.get("volume_exit", False) and self._is_low_volume() and not self.tp1_hit:
             qty_lv = max(1, self.qty_remaining // 2)
             return self._action("CLOSE_PARTIAL", qty_lv, "LOW_VOLUME_EXIT",
                                 current_option_price)

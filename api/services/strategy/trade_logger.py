@@ -50,6 +50,7 @@ class TradeLogger:
                 "capital_limit":          config.get("capital_limit"),
                 "bypass_breakout_window": config.get("bypass_breakout_window", False),
                 "custom_thresholds":      config.get("custom_thresholds"),
+                "exit_overrides":         config.get("exit_overrides"),
                 "budget_otm_mode":        config.get("budget_otm_mode", False),
                 "otm_fib_level":          config.get("otm_fib_level", "1.0"),
                 "debug_mode":             config.get("debug_mode", False),

@@ -122,8 +122,8 @@ def create_config():
         k: data[k] for k in (
             "ticker", "paper_mode", "active",
             "profile", "trade_days", "strategy_name", "capital_limit",
-            "bypass_breakout_window", "custom_thresholds",
-            "budget_otm_mode", "otm_fib_level", "debug_mode",
+            "bypass_breakout_window", "custom_thresholds", "exit_overrides",
+            "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
         ) if k in data
     }}
     config.pop("id", None)   # force new UUID
@@ -161,8 +161,8 @@ def update_config(strategy_id: str):
     engine = _engines[strategy_id]
     allowed = {"ticker", "paper_mode", "active",
                "profile", "trade_days", "strategy_name", "capital_limit",
-               "bypass_breakout_window", "custom_thresholds",
-               "budget_otm_mode", "otm_fib_level", "debug_mode"}
+               "bypass_breakout_window", "custom_thresholds", "exit_overrides",
+               "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts"}
     for key in allowed:
         if key in data:
             engine.config[key] = data[key]
@@ -183,9 +183,21 @@ def delete_config(strategy_id: str):
     """Stop and remove a strategy."""
     engine = _engines.get(strategy_id)
     if engine and engine.trade_taken and engine.contract_symbol:
-        # Refuse to delete until the open position is closed — prevents orphaned orders
+        # Refuse to delete until the open position is closed — prevents orphaned orders.
+        # Sell only the qty this engine owns (not close_position which would wipe
+        # sibling engines trading the same contract on the same account).
         try:
-            engine.trading_client.close_position(engine.contract_symbol)
+            from alpaca.trading.requests import MarketOrderRequest
+            from alpaca.trading.enums import OrderSide, TimeInForce
+            em  = engine.exit_manager
+            qty = em.qty_remaining if em else 0
+            if qty > 0:
+                engine.trading_client.submit_order(MarketOrderRequest(
+                    symbol=engine.contract_symbol,
+                    qty=qty,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY,
+                ))
         except Exception as e:
             return jsonify({
                 "status": "error",
@@ -230,9 +242,16 @@ def force_close_strategy(strategy_id: str):
     if not engine.trade_taken or not engine.contract_symbol:
         return jsonify({"status": "ok", "message": "No active position"})
     try:
-        engine.trading_client.close_position(engine.contract_symbol)
-        em          = engine.exit_manager
-        qty         = em.qty_remaining if em else 0
+        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+        em  = engine.exit_manager
+        qty = em.qty_remaining if em else 0
+        engine.trading_client.submit_order(MarketOrderRequest(
+            symbol=engine.contract_symbol,
+            qty=qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
+        ))
         exit_price  = engine._get_option_price()
         entry_p     = em.entry_premium if em else 0
         pnl         = ((exit_price or 0) - entry_p) * qty * 100
@@ -425,12 +444,19 @@ def immediate_trade_by_ticker():
         return jsonify({"status": "error",
                         "message": "ticker, direction and contract_symbol are required"}), 400
 
+    exit_overrides = {}
+    if "consol_exit" in data:
+        exit_overrides["consol_exit"] = bool(data["consol_exit"])
+    if "volume_exit" in data:
+        exit_overrides["volume_exit"] = bool(data["volume_exit"])
+
     engine = _get_or_create_immediate_engine(ticker, paper_mode)
     result = engine.submit_manual_trade(
         direction=direction,
         contract_symbol=contract_symbol,
         qty=data.get("qty"),
         profile_key=data.get("profile"),
+        exit_overrides=exit_overrides or None,
     )
     # Surface the engine id so the client can stream live P&L over the WS.
     result["strategy_id"] = engine.strategy_id
@@ -669,6 +695,11 @@ def _engine_position_response(engine: ORBEngine):
     try:
         pos = engine.trading_client.get_open_position(engine.contract_symbol)
         em  = engine.exit_manager
+        current_price   = float(pos.current_price)
+        entry_p         = em.entry_premium if em else 0
+        qty_rem         = em.qty_remaining if em else 0
+        unrealized_pnl  = (current_price - entry_p) * qty_rem * 100
+        unrealized_pct  = ((current_price - entry_p) / entry_p * 100) if entry_p > 0 else 0
         return jsonify({
             "active":              True,
             "ticker":              engine.config["ticker"],
@@ -676,12 +707,12 @@ def _engine_position_response(engine: ORBEngine):
             "paper_mode":          engine.paper,
             "direction":           engine.position,
             "contract":            engine.contract_symbol,
-            "qty_remaining":       em.qty_remaining if em else 0,
+            "qty_remaining":       qty_rem,
             "qty_total":           em.qty if em else 0,
-            "entry_premium":       em.entry_premium if em else None,
-            "current_price":       float(pos.current_price),
-            "unrealized_pnl":      float(pos.unrealized_pl),
-            "unrealized_pnl_pct":  float(pos.unrealized_plpc) * 100,
+            "entry_premium":       entry_p,
+            "current_price":       current_price,
+            "unrealized_pnl":      round(unrealized_pnl, 2),
+            "unrealized_pnl_pct":  round(unrealized_pct, 2),
             "hard_stop":           em.hard_stop if em else None,
             "tp1":                 em.tp1 if em else None,
             "tp2":                 em.tp2 if em else None,

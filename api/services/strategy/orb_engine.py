@@ -42,9 +42,11 @@ STRATEGY_DEFAULTS = {
     "capital_limit":           None,
     "bypass_breakout_window":  False,
     "custom_thresholds":       None,
+    "exit_overrides":          None,
     "budget_otm_mode":         False,
     "otm_fib_level":           "1.0",
     "debug_mode":              False,
+    "smart_contracts":         False,
     "id":                      None,
 }
 
@@ -86,13 +88,20 @@ class ORBEngine:
         self.bypass_breakout_window  = self.config.get("bypass_breakout_window", False)
         self.budget_otm_mode         = self.config.get("budget_otm_mode", False)
         self.otm_fib_level           = self.config.get("otm_fib_level", "1.0")
+        self.smart_contracts         = self.config.get("smart_contracts", False)
         self.debug_enabled           = self.config.get("debug_mode", False)
         custom_thresholds            = self.config.get("custom_thresholds")
+        exit_overrides               = self.config.get("exit_overrides")
         self.stream_manager          = getattr(self, "_stream_manager_ref", None)
 
-        # For CUSTOM profile, pass stored thresholds to get_profile so it merges them
-        # over the CUSTOM_DEFAULTS baseline. Other profiles ignore custom_thresholds.
-        self.profile = get_profile(self.profile_key, custom_thresholds)
+        # CUSTOM profile: merge stored thresholds over CUSTOM_DEFAULTS.
+        # All other profiles: apply only the consol_exit/volume_exit keys from
+        # exit_overrides (a sparse {consol_exit, volume_exit} dict) — custom_thresholds
+        # is left null so it doesn't pollute the Supabase JSONB column.
+        if self.profile_key == "CUSTOM":
+            self.profile = get_profile(self.profile_key, custom_thresholds)
+        else:
+            self.profile = get_profile(self.profile_key, exit_overrides)
 
         trade_key    = os.getenv("ALPACA_PAPER_API_KEY" if self.paper else "ALPACA_LIVE_API_KEY")
         trade_secret = os.getenv("ALPACA_PAPER_SECRET_KEY" if self.paper else "ALPACA_LIVE_SECRET_KEY")
@@ -299,7 +308,8 @@ class ORBEngine:
 
         # Service-driven retest watch — only active when entry_mode == "RETEST"
         if self._awaiting_retest:
-            self._check_retest(current_price, now_et)
+            if current_price is not None:
+                self._check_retest(current_price, now_et)
             return
 
         # NOTE: Breakout *entry* detection no longer lives here. Entries are driven
@@ -548,6 +558,18 @@ class ORBEngine:
         ask = contract["ask"]
         acct = self.get_account_info()
 
+        # Smart contracts: override profile qty with a tier based on the ask price.
+        # Cheaper options buy more contracts; expensive ones buy fewer. This adapts
+        # position sizing to available capital without a fixed profile qty.
+        # The capital_limit and buying_power checks below still apply after.
+        if self.smart_contracts:
+            from services.strategy.profiles import smart_qty
+            smart = smart_qty(ask)
+            self.debug.emit("INFO",
+                f"[{self.strategy_name} | {self.profile_key}] Smart contracts: "
+                f"ask=${ask:.2f} → qty={smart} (profile default was {qty})")
+            qty = smart
+
         # Enforce user-configured capital_limit — cap qty to what the limit allows.
         # This is independent of account buying power; it lets the user ring-fence
         # a fixed dollar amount per strategy regardless of total account size.
@@ -716,7 +738,8 @@ class ORBEngine:
 
             logger.info("[ORBEngine] Entered %s %s qty=%d @ %.2f (manual=%s)",
                         direction, contract["symbol"], qty, entry_premium, manual)
-            self.debug.emit("SUCCESS", f"{'MANUAL ' if manual else ''}ENTERED {direction} "
+            _tag = f"[{self.strategy_name} | {self.profile_key}]"
+            self.debug.emit("SUCCESS", f"{_tag} {'MANUAL ' if manual else ''}ENTERED {direction} "
                                        f"{contract['symbol']} qty={qty} @ {entry_premium:.2f}")
         except Exception as e:
             logger.error("[ORBEngine] Order failed: %s", e)
@@ -726,7 +749,8 @@ class ORBEngine:
     # ── Manual / conviction entry ───────────────────────────────────────────────
 
     def submit_manual_trade(self, direction: str, contract_symbol: str,
-                            qty: int | None = None, profile_key: str | None = None) -> dict:
+                            qty: int | None = None, profile_key: str | None = None,
+                            exit_overrides: dict | None = None) -> dict:
         """
         Immediately submit a conviction trade for a user-chosen 0DTE contract,
         skipping the breakout wait / sentiment / flow filters. Exits are managed
@@ -745,9 +769,11 @@ class ORBEngine:
         effective_profile = self.profile
         if profile_key and profile_key != self.profile_key:
             try:
-                effective_profile = get_profile(profile_key, self.config.get("custom_thresholds"))
+                effective_profile = get_profile(profile_key, exit_overrides)
             except Exception:
                 return {"status": "error", "message": f"Unknown profile {profile_key}"}
+        elif exit_overrides:
+            effective_profile = get_profile(self.profile_key, exit_overrides)
 
         qty = int(qty) if qty else effective_profile["qty_contracts"]
         self.debug.emit("INFO", f"Manual trade requested — {direction} {contract_symbol} "
@@ -907,8 +933,9 @@ class ORBEngine:
         closing_all  = qty_to_close >= self.exit_manager.qty_remaining
         em       = self.exit_manager
         opt_str  = f"${current_option_price:.2f}" if current_option_price is not None else "N/A"
+        _tag = f"[{self.strategy_name} | {self.profile_key}]"
         self.debug.emit("INFO",
-            f"Exit triggered — {action['type']} reason={action.get('reason','')} "
+            f"{_tag} Exit triggered — {action['type']} reason={action.get('reason','')} "
             f"qty={qty_to_close} option_price={opt_str} "
             f"entry=${em.entry_premium:.2f} hard_stop=${em.hard_stop:.2f} "
             f"tp1=${em.tp1:.2f} tp2=${em.tp2:.2f}",
@@ -919,21 +946,32 @@ class ORBEngine:
         contract_snapshot = self.contract_symbol  # capture before any reset
         order_ok = False
         try:
+            # Always submit an exact-qty SELL order rather than close_position().
+            # close_position() would close the entire Alpaca position for the symbol,
+            # which stomps on contracts owned by sibling engines on the same account
+            # (e.g. two IWM strategies that both entered the same contract).
+            order = MarketOrderRequest(
+                symbol=contract_snapshot,
+                qty=qty_to_close,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY,
+            )
+            self.trading_client.submit_order(order)
             if closing_all:
-                self.trading_client.close_position(contract_snapshot)
                 self.exit_manager.qty_remaining = 0
                 self.trade_taken = False
                 self.position    = None
                 if self.stream_manager and contract_snapshot:
                     self.stream_manager.unsubscribe(contract_snapshot, self._on_stream_quote)
+                import json as _json
+                _closed_msg = _json.dumps({"type": "position_closed"})
+                with self._live_clients_lock:
+                    for _q in list(self._live_clients):
+                        try:
+                            _q.put_nowait(_closed_msg)
+                        except Exception:
+                            pass
             else:
-                order = MarketOrderRequest(
-                    symbol=contract_snapshot,
-                    qty=qty_to_close,
-                    side=OrderSide.SELL,
-                    time_in_force=TimeInForce.DAY,
-                )
-                self.trading_client.submit_order(order)
                 self.exit_manager.qty_remaining -= qty_to_close
             order_ok = True
         except Exception as e:
@@ -970,7 +1008,7 @@ class ORBEngine:
             )
             logger.info("[ORBEngine] Exit %s qty=%d reason=%s",
                         action["type"], qty_to_close, action.get("reason", ""))
-            self.debug.emit("SUCCESS", f"Exit {action['type']} qty={qty_to_close} "
+            self.debug.emit("SUCCESS", f"{_tag} Exit {action['type']} qty={qty_to_close} "
                                        f"reason={action.get('reason', '')} pnl=${pnl:.2f}")
         except Exception as e:
             logger.error("[ORBEngine] Exit log/notify failed: %s", e)
@@ -1033,9 +1071,10 @@ class ORBEngine:
         import json as _json
         self._current_option_price = mid
 
-        # Drive exit logic using the latest cached underlying price
-        underlying = self._last_underlying_price or mid
-        self.on_price_tick(current_price=underlying, current_option_price=mid)
+        # Drive exit logic — pass None for underlying if not yet polled.
+        # ExitManager skips the consolidation buffer on None, preventing false
+        # consolidation exits caused by stable option prices right after entry.
+        self.on_price_tick(current_price=self._last_underlying_price, current_option_price=mid)
 
         # Push live P&L to any connected WebSocket clients
         if not self.trade_taken or not self.exit_manager:

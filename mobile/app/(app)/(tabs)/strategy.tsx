@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, SafeAreaView, TouchableOpacity,
   StyleSheet, ActivityIndicator, Alert, Modal, TextInput,
@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useToast } from '@/common/components/ui/Toast';
 import { useStrategyConfigs } from '@/hooks/queries/strategy/useStrategyConfigs';
+import { useQueryClient } from '@tanstack/react-query';
 import { useStrategyProfiles } from '@/hooks/queries/strategy/useStrategyProfiles';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useCreateStrategyConfig } from '@/hooks/mutations/strategy/useCreateStrategyConfig';
@@ -23,7 +24,7 @@ import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModa
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
-import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, ImmediatePosition, LiveOptionPrice } from '@/common/types/strategy';
+import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, ImmediatePosition, LiveOptionPrice, ExitOverrides } from '@/common/types/strategy';
 import { formatContractSymbolShort } from '@/lib/formatContract';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -74,6 +75,9 @@ type FormState = {
   custom_thresholds:      CustomThresholds;
   budget_otm_mode:        boolean;
   otm_fib_level:          OtmFibLevel;
+  smart_contracts:        boolean;
+  consol_exit:            boolean;
+  volume_exit:            boolean;
 };
 
 const DEFAULT_FORM: FormState = {
@@ -87,6 +91,9 @@ const DEFAULT_FORM: FormState = {
   custom_thresholds:      DEFAULT_CUSTOM_THRESHOLDS,
   budget_otm_mode:        false,
   otm_fib_level:          '1.0',
+  smart_contracts:        false,
+  consol_exit:            false,
+  volume_exit:            false,
 };
 
 function configToForm(cfg: StrategyConfig): FormState {
@@ -101,6 +108,9 @@ function configToForm(cfg: StrategyConfig): FormState {
     custom_thresholds:      cfg.custom_thresholds ?? DEFAULT_CUSTOM_THRESHOLDS,
     budget_otm_mode:        cfg.budget_otm_mode ?? false,
     otm_fib_level:          cfg.otm_fib_level ?? '1.0',
+    smart_contracts:        cfg.smart_contracts ?? false,
+    consol_exit:            cfg.exit_overrides?.consol_exit ?? false,
+    volume_exit:            cfg.exit_overrides?.volume_exit ?? false,
   };
 }
 
@@ -198,6 +208,7 @@ export default function StrategyScreen() {
       return;
     }
 
+    const exitOverrides: ExitOverrides = { consol_exit: form.consol_exit, volume_exit: form.volume_exit };
     const payload = {
       strategy_name:          form.strategy_name.trim(),
       ticker:                 form.ticker,
@@ -206,8 +217,10 @@ export default function StrategyScreen() {
       capital_limit:          capitalNum,
       bypass_breakout_window: form.bypass_breakout_window,
       custom_thresholds:      form.profile === 'CUSTOM' ? form.custom_thresholds : null,
+      exit_overrides:         exitOverrides,
       budget_otm_mode:        form.budget_otm_mode,
       otm_fib_level:          form.otm_fib_level,
+      smart_contracts:        form.smart_contracts,
       ...modeToConfig(form.mode),
     };
 
@@ -386,9 +399,18 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
   const profileColor = PROFILE_COLORS[config.profile] ?? colors.accent;
   const activeDays   = config.trade_days ?? [];
 
+  const queryClient = useQueryClient();
+  const onPositionClosed = useCallback(() => {
+    // Immediately reflect the close: remove the position badge + surface the
+    // finished trade in the log without waiting for the next scheduled poll.
+    queryClient.invalidateQueries({ queryKey: ['strategy-configs'] });
+    queryClient.invalidateQueries({ queryKey: ['strategy-trades'] });
+  }, [queryClient]);
+
   const { data: live, connected: streaming } = useStrategyLivePrice(
     config.id,
     config.has_position === true,
+    onPositionClosed,
   );
   const [exitOpen, setExitOpen]   = useState(false);
   const [expanded, setExpanded]   = useState(false);
@@ -989,6 +1011,49 @@ function StrategyFormModal({
             Leave blank to use your full available buying power for this strategy.
           </Text>
 
+          {/* Smart Contracts */}
+          <SectionHeader title="Smart Contracts" colors={colors} />
+          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[styles.configRow, { borderBottomWidth: 0 }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.configLabel, { color: colors.text }]}>Enable Smart Sizing</Text>
+                <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>
+                  Qty scales with ask price — cheaper contracts buy more, expensive ones buy fewer
+                </Text>
+              </View>
+              <Switch
+                value={form.smart_contracts}
+                onValueChange={v => onPatch('smart_contracts', v)}
+                thumbColor={form.smart_contracts ? '#30D158' : '#ccc'}
+                trackColor={{ true: '#30D15855', false: colors.border }}
+              />
+            </View>
+          </View>
+          {form.smart_contracts && (
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border, marginTop: -4 }]}>
+              {([
+                ['ask < $1.00',          '4 contracts'],
+                ['$1.00 – $1.49',        '2 contracts'],
+                ['ask ≥ $1.50',          '1 contract'],
+              ] as [string, string][]).map(([range, qty], i, arr) => (
+                <View
+                  key={range}
+                  style={[
+                    styles.configRow,
+                    i < arr.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+                    { borderBottomWidth: i < arr.length - 1 ? StyleSheet.hairlineWidth : 0 },
+                  ]}
+                >
+                  <Text style={[styles.configLabel, { color: colors.tabBarInactive, fontSize: 13 }]}>{range}</Text>
+                  <Text style={[styles.configLabel, { color: colors.text, fontWeight: '700', fontSize: 13 }]}>{qty}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+          <Text style={[styles.hint, { color: colors.tabBarInactive }]}>
+            Capital limit and buying power checks still apply after smart sizing.
+          </Text>
+
           {/* Budget OTM Mode */}
           <SectionHeader title="Budget OTM Mode" colors={colors} />
           <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -1118,6 +1183,46 @@ function StrategyFormModal({
               onDragStart={() => setScrollEnabled(false)}
               onDragEnd={() => setScrollEnabled(true)}
             />
+          )}
+
+          {/* Exit Controls — non-CUSTOM only; CUSTOM sets these in the thresholds editor */}
+          {form.profile !== 'CUSTOM' && (
+            <>
+              <SectionHeader title="Exit Controls" colors={colors} />
+              <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <View style={[styles.configRow, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.configLabel, { color: colors.text }]}>Consolidation Exit</Text>
+                    <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>
+                      Close when price stops moving after 5 min
+                    </Text>
+                  </View>
+                  <Switch
+                    value={form.consol_exit}
+                    onValueChange={v => onPatch('consol_exit', v)}
+                    thumbColor={form.consol_exit ? '#4A9EFF' : '#ccc'}
+                    trackColor={{ true: '#4A9EFF55', false: colors.border }}
+                  />
+                </View>
+                <View style={[styles.configRow, { borderBottomWidth: 0 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.configLabel, { color: colors.text }]}>Volume Exit</Text>
+                    <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>
+                      Close half position on low volume after 3 min
+                    </Text>
+                  </View>
+                  <Switch
+                    value={form.volume_exit}
+                    onValueChange={v => onPatch('volume_exit', v)}
+                    thumbColor={form.volume_exit ? '#4A9EFF' : '#ccc'}
+                    trackColor={{ true: '#4A9EFF55', false: colors.border }}
+                  />
+                </View>
+              </View>
+              <Text style={[styles.hint, { color: colors.tabBarInactive }]}>
+                Both are off by default. Enable only when you want automated early exits.
+              </Text>
+            </>
           )}
 
           <View style={{ height: 60 }} />

@@ -13,7 +13,8 @@ export const DEFAULT_CUSTOM_THRESHOLDS: CustomThresholds = {
   tp1_close_pct:           0.50,
   tp2_close_pct:           0.50,
   runner_trail_pct:        0.20,
-  consol_exit:             true,
+  consol_exit:             false,
+  volume_exit:             false,
   consol_range_pct:        0.0008,
   consol_bars:             4,
   volume_exit_threshold:   0.20,
@@ -304,6 +305,18 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragSta
             value={t.consol_exit}
             onValueChange={v => patch('consol_exit', v)}
             thumbColor={t.consol_exit ? accent : '#ccc'}
+            trackColor={{ true: accent + '55', false: borderColor }}
+          />
+        </View>
+        <View style={[s.toggleRow, { borderBottomColor: borderColor }]}>
+          <View>
+            <Text style={[s.sliderLabel, { color: labelColor }]}>Volume Exit</Text>
+            <Text style={[s.toggleSub, { color: labelColor }]}>Exit half on low volume after 3 min</Text>
+          </View>
+          <Switch
+            value={t.volume_exit}
+            onValueChange={v => patch('volume_exit', v)}
+            thumbColor={t.volume_exit ? accent : '#ccc'}
             trackColor={{ true: accent + '55', false: borderColor }}
           />
         </View>

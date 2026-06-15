@@ -9,6 +9,7 @@ export interface CustomThresholds {
   tp2_close_pct:           number;
   runner_trail_pct:        number;
   consol_exit:             boolean;
+  volume_exit:             boolean;
   consol_range_pct:        number;
   consol_bars:             number;
   volume_exit_threshold:   number;
@@ -30,6 +31,7 @@ export interface ProfileThresholds {
   tp2_close_pct: number;
   runner_trail_pct: number;
   consol_exit: boolean;
+  volume_exit: boolean;
   consol_range_pct: number;
   consol_bars: number;
   volume_exit_threshold: number;
@@ -60,6 +62,11 @@ export interface StrategyProfile {
 
 export type OtmFibLevel = '1.0' | '1.618' | '2.618';
 
+export interface ExitOverrides {
+  consol_exit: boolean;
+  volume_exit: boolean;
+}
+
 export interface StrategyConfig {
   id: string;
   strategy_name: string;
@@ -71,8 +78,10 @@ export interface StrategyConfig {
   capital_limit: number | null;
   bypass_breakout_window: boolean;
   custom_thresholds: CustomThresholds | null;
+  exit_overrides: ExitOverrides | null;
   budget_otm_mode: boolean;
   otm_fib_level: OtmFibLevel;
+  smart_contracts: boolean;
   debug_mode: boolean;
   has_position?: boolean;
   qty_remaining?: number | null;
@@ -104,6 +113,8 @@ export interface ImmediateTradeByTickerRequest {
   qty?: number;
   profile?: ProfileKey;
   paper_mode: boolean;
+  consol_exit?: boolean;
+  volume_exit?: boolean;
 }
 
 /** An open position from a ticker-based immediate trade engine. */
