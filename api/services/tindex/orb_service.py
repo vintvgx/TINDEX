@@ -1306,13 +1306,15 @@ class OrbService:
                             logger.exception("Error recording reversal for %s: %s", ticker, e)
 
                         # Reset breakout flags so a fresh breakout can be detected later.
+                        # Intentionally NOT resetting breakout_type here — record_reversal()
+                        # already set it to "reversal" so the ORB card displays it. The next
+                        # bar or a new breakout will naturally overwrite it.
                         if ticker in self.monitoring_state:
                             self.monitoring_state[ticker]["high_broken"] = False
                             self.monitoring_state[ticker]["low_broken"] = False
                         self._state_cache.update_state(
                             ticker=ticker,
                             trade_date=trade_date,
-                            breakout_type="none",
                             high_broken=False,
                             low_broken=False,
                             current_price=current_price,
