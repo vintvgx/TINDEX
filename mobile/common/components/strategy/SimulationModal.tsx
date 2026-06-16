@@ -488,7 +488,7 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
                       alignItems: 'center', marginTop: 6,
                     }}
                   >
-                    <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>Done</Text>
+                    <Text style={{ color: colors.accentForeground, fontSize: 15, fontWeight: '700' }}>Done</Text>
                   </TouchableOpacity>
                 )}
               </>

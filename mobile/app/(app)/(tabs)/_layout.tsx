@@ -39,6 +39,8 @@ function Shell() {
                 backgroundColor: 'transparent',
                 borderTopWidth: 0,
                 elevation: 0,
+                borderBottomWidth: 10,
+                paddingBottom: 20
               },
             }}
             tabBar={(props) => <CustomTabBar {...props} />}
@@ -46,14 +48,14 @@ function Shell() {
             <Tabs.Screen name="feed" options={{ title: 'Home' }} />
             <Tabs.Screen name="track" options={{ href: null }} />
             <Tabs.Screen name="track-legacy" options={{ href: null }} />
+            <Tabs.Screen name="strategy" options={{ title: 'Strategies' }} />
             <Tabs.Screen name="orb" options={{ title: 'ORB' }} />
             <Tabs.Screen name="options" options={{ title: 'Contracts' }} />
+            <Tabs.Screen name="profile" options={{ title: 'Profile' }} />
             <Tabs.Screen name="notifications" options={{ href: null }} />
-            <Tabs.Screen name="profile" options={{ href: null }} />
             <Tabs.Screen name="search" options={{ href: null }} />
             <Tabs.Screen name="watchlists" options={{ href: null }} />
-            {/* Strategy screens — hidden from tab bar, accessible via the drawer */}
-            <Tabs.Screen name="strategy" options={{ href: null }} />
+            {/* Strategy sub-screens — hidden from tab bar, opened from the Strategies tab */}
             <Tabs.Screen name="position" options={{ href: null }} />
             <Tabs.Screen name="tradelog" options={{ href: null }} />
             <Tabs.Screen name="accounts" options={{ href: null }} />

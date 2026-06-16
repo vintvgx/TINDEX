@@ -233,7 +233,7 @@ const NotificationsScreen = () => {
               borderRadius: 14,
             }}
           >
-            <Text style={{ color: '#FFFFFF', fontWeight: '600', fontSize: 15 }}>Retry</Text>
+            <Text style={{ color: colors.accentForeground, fontWeight: '600', fontSize: 15 }}>Retry</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>

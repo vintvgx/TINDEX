@@ -2,29 +2,70 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Pressable, StyleSheet, Animated, Keyboard, Platform } from 'react-native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useThemeColors } from '@/lib/useColorScheme';
+import { useThemeColors, useAppColorScheme } from '@/lib/useColorScheme';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
 import { AgentModal } from '@/common/components/agent/AgentModal';
 import { useToast } from '@/common/components/ui/Toast';
 
-const VISIBLE_ROUTE_ORDER = ['feed', 'orb', 'options'] as const;
+const VISIBLE_ROUTE_ORDER = ['feed', 'strategy', 'orb', 'options', 'profile'] as const;
 
 const ROUTE_TITLES: Record<string, string> = {
   feed: 'Home',
+  strategy: 'Strategies',
   orb: 'ORB',
   options: 'Contracts',
+  profile: 'Profile',
 };
+
+const SEARCH_RADIUS = 22;
+const AGENT_RADIUS = 23;
+
+/**
+ * Reusable glass backing (blur + theme fallback tint + hairline edge) for the
+ * floating search field and AI button. Module-scoped so the BlurView isn't
+ * remounted on every parent re-render (e.g. while typing). Rendered first inside
+ * its parent so content sits on top.
+ */
+function GlassBacking({
+  radius, intensity, showFocus, blurTint, glassBorder, glassFallback, focusOverlay,
+}: {
+  radius: number;
+  intensity: number;
+  showFocus?: boolean;
+  blurTint: 'light' | 'dark';
+  glassBorder: string;
+  glassFallback: string;
+  focusOverlay: string;
+}) {
+  return (
+    <>
+      <View style={[StyleSheet.absoluteFillObject, { borderRadius: radius, overflow: 'hidden', backgroundColor: glassFallback }]}>
+        <BlurView
+          tint={blurTint}
+          intensity={intensity}
+          style={StyleSheet.absoluteFill}
+          experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
+        />
+        {showFocus && <View style={[StyleSheet.absoluteFill, { backgroundColor: focusOverlay }]} />}
+      </View>
+      <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { borderRadius: radius, borderWidth: StyleSheet.hairlineWidth, borderColor: glassBorder }]} />
+    </>
+  );
+}
 
 export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) => {
   const colors = useThemeColors();
+  const { isDarkColorScheme: isDark } = useAppColorScheme();
   const insets = useSafeAreaInsets();
   const [searchOpen, setSearchOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
   const { setOptionsTicker, optionsTicker } = useOptionsTicker();
   const toast = useToast();
   const [optionsInput, setOptionsInput] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
   const optionsInputRef = useRef<TextInput>(null);
   const currentRoute = state.routes[state.index]?.name;
   const isOnOptionsTab = currentRoute === 'options';
@@ -32,14 +73,26 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const bottomPaddingRef = useRef(0);
 
-  const TAB_PILL_HEIGHT = 68;
-  const CONTAINER_GAP = 8;
+  // Approximate height of the anchored tab bar (content) + the gap above it, used
+  // to lift the floating search row clear of the keyboard.
+  const TAB_BAR_CONTENT_HEIGHT = 56;
+  const SEARCH_ROW_GAP = 10;
   const SEARCH_BAR_MARGIN = 8;
 
   const visibleRoutes = VISIBLE_ROUTE_ORDER
     .map(name => state.routes.find(r => r.name === name))
     .filter((route): route is (typeof state.routes)[number] => Boolean(route));
-  const bottomPadding = Math.max(insets.bottom, 16);
+  // Extra breathing room below the tab labels so they clear the home-indicator /
+  // gesture (Siri) bar at the very bottom of the screen.
+  const bottomPadding = Math.max(insets.bottom, 12) + 8;
+
+  // Glass styling derived from the active theme.
+  const blurTint: 'light' | 'dark' = isDark ? 'dark' : 'light';
+  const glassBorder   = isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.12)';
+  const glassFallback = isDark ? 'rgba(28,28,30,0.35)' : 'rgba(255,255,255,0.45)';
+  // When the search field is focused, lay a near-opaque themed sheet behind the
+  // text so it stays legible against busy content showing through the glass.
+  const focusOverlay  = isDark ? 'rgba(28,28,30,0.88)' : 'rgba(255,255,255,0.92)';
 
   useEffect(() => {
     bottomPaddingRef.current = bottomPadding;
@@ -51,7 +104,7 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
 
     const onShow = Keyboard.addListener(showEvent, e => {
       setKeyboardVisible(true);
-      const searchBarBaseOffset = bottomPaddingRef.current + TAB_PILL_HEIGHT + CONTAINER_GAP;
+      const searchBarBaseOffset = bottomPaddingRef.current + TAB_BAR_CONTENT_HEIGHT + SEARCH_ROW_GAP;
       const toValue = -(e.endCoordinates.height - searchBarBaseOffset + SEARCH_BAR_MARGIN);
       Animated.spring(keyboardOffset, {
         toValue,
@@ -94,33 +147,32 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
     switch (routeName) {
       case 'feed':
         return <Ionicons name="home-outline" size={20} color={color} />;
-      case 'options':
-        return <Ionicons name="layers-outline" size={20} color={color} />;
+      case 'strategy':
+        return <Ionicons name="bar-chart-outline" size={20} color={color} />;
       case 'orb':
         return <Ionicons name="pulse-outline" size={20} color={color} />;
+      case 'options':
+        return <Ionicons name="layers-outline" size={20} color={color} />;
+      case 'profile':
+        return <Ionicons name="person-outline" size={20} color={color} />;
       default:
         return null;
     }
   };
+
+  const glassProps = { blurTint, glassBorder, glassFallback, focusOverlay };
 
   return (
     <>
       {keyboardVisible && (
         <Pressable style={StyleSheet.absoluteFillObject} onPress={Keyboard.dismiss} />
       )}
-      <View
-        pointerEvents="box-none"
-        style={[styles.container, { paddingBottom: bottomPadding }]}
-      >
-        <Animated.View style={{
-          transform: [{ translateY: keyboardOffset }],
-          width: '88%',
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 8,
-        }}>
+      <View pointerEvents="box-none" style={styles.container}>
+        {/* Floating glass search + AI row (hovers over content) */}
+        <Animated.View style={[styles.searchRow, { transform: [{ translateY: keyboardOffset }] }]}>
           {isOnOptionsTab ? (
-            <View style={[styles.searchBar, { flex: 1, backgroundColor: colors.tabBar, borderColor: colors.tabBarBorder }]}>
+            <View style={[styles.searchBar, { flex: 1 }]}>
+              <GlassBacking radius={SEARCH_RADIUS} intensity={searchFocused ? 80 : 30} showFocus={searchFocused} {...glassProps} />
               <Ionicons name="layers-outline" size={15} color={colors.tabBarInactive} style={{ marginRight: 9 }} />
               <TextInput
                 ref={optionsInputRef}
@@ -129,6 +181,8 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
                 placeholderTextColor={colors.tabBarInactive}
                 value={optionsInput}
                 onChangeText={t => setOptionsInput(t.toUpperCase())}
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => setSearchFocused(false)}
                 autoCapitalize="characters"
                 autoCorrect={false}
                 maxLength={5}
@@ -152,8 +206,9 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
             <TouchableOpacity
               onPress={() => setSearchOpen(true)}
               activeOpacity={0.82}
-              style={[styles.searchBar, { flex: 1, backgroundColor: colors.tabBar, borderColor: colors.tabBarBorder }]}
+              style={[styles.searchBar, { flex: 1 }]}
             >
+              <GlassBacking radius={SEARCH_RADIUS} intensity={30} {...glassProps} />
               <Ionicons name="search" size={15} color={colors.tabBarInactive} style={{ marginRight: 9 }} />
               <Text style={[styles.searchPlaceholder, { color: colors.tabBarInactive }]}>
                 Search stocks...
@@ -164,16 +219,22 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
           <TouchableOpacity
             onPress={() => setAgentOpen(true)}
             activeOpacity={0.82}
-            style={[styles.agentBtn, { backgroundColor: colors.tabBar, borderColor: colors.tabBarBorder }]}
+            style={styles.agentBtn}
           >
+            <GlassBacking radius={AGENT_RADIUS} intensity={30} {...glassProps} />
             <Ionicons name="sparkles" size={16} color={colors.accent} />
           </TouchableOpacity>
         </Animated.View>
 
+        {/* Traditional anchored bottom tab bar (full width, flush to the edge) */}
         <View
           style={[
             styles.tabBar,
-            { backgroundColor: colors.tabBar, borderColor: colors.tabBarBorder },
+            {
+              backgroundColor: colors.tabBar,
+              borderTopColor: colors.tabBarBorder,
+              paddingBottom: bottomPadding,
+            },
           ]}
         >
           {visibleRoutes.map(route => {
@@ -217,55 +278,44 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
+  },
+  searchRow: {
+    alignSelf: 'center',
+    width: '88%',
+    flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    marginBottom: 10,
   },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 13,
-    borderRadius: 22,
-    borderWidth: 1,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.22,
-    shadowRadius: 12,
-    elevation: 8,
+    borderRadius: SEARCH_RADIUS,
+    overflow: 'hidden',
   },
   agentBtn: {
     width: 46,
     height: 46,
-    borderRadius: 23,
+    borderRadius: AGENT_RADIUS,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.22,
-    shadowRadius: 12,
-    elevation: 8,
+    overflow: 'hidden',
   },
   searchPlaceholder: { fontSize: 14, flex: 1 },
   tabBar: {
     flexDirection: 'row',
-    width: '88%',
-    height: 68,
-    borderRadius: 34,
-    borderWidth: 1,
-    paddingBottom: 18,
+    width: '100%',
+    borderTopWidth: StyleSheet.hairlineWidth,
     paddingTop: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 16,
-    elevation: 12,
   },
   tabButton: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 2,
+    paddingVertical: 2,
   },
   label: {
     fontSize: 10,

@@ -17,7 +17,12 @@ export interface OptionsQueryParams {
  * @param params - Optional query parameters for filtering
  * @returns React Query result with options data (calls and puts)
  */
-export function useOptionsQuery(ticker: string, params?: OptionsQueryParams) {
+export function useOptionsQuery(
+  ticker: string,
+  params?: OptionsQueryParams,
+  /** When set, the chain refetches on this interval (ms) for near real-time quotes. */
+  refetchIntervalMs?: number,
+) {
   return useQuery({
     queryKey: ['options', ticker, params],
     queryFn: async (): Promise<OptionsResponse> => {
@@ -71,7 +76,10 @@ export function useOptionsQuery(ticker: string, params?: OptionsQueryParams) {
       }
     },
     enabled: !!ticker && ticker.trim().length >= 1 && ticker.trim().length <= 5,
-    staleTime: 1 * 60 * 1000, // 1 minute (options data changes frequently)
+    // When polling for real-time quotes, keep data fresh so each interval refetches.
+    staleTime: refetchIntervalMs ? 0 : 1 * 60 * 1000,
+    refetchInterval: refetchIntervalMs ?? false,
+    refetchIntervalInBackground: false,
     retry: 2,
     retryDelay: 1000,
   });

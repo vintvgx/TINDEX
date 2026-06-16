@@ -42,7 +42,6 @@ class TradeLogger:
         try:
             row = {
                 "ticker":                 config.get("ticker", "IWM"),
-                "orb_minutes":            config.get("orb_minutes", 10),
                 "paper_mode":             config.get("paper_mode", True),
                 "active":                 config.get("active", True),
                 "profile":                config.get("profile", "THUNDER_CAT"),
@@ -51,8 +50,11 @@ class TradeLogger:
                 "capital_limit":          config.get("capital_limit"),
                 "bypass_breakout_window": config.get("bypass_breakout_window", False),
                 "custom_thresholds":      config.get("custom_thresholds"),
+                "exit_overrides":         config.get("exit_overrides"),
                 "budget_otm_mode":        config.get("budget_otm_mode", False),
                 "otm_fib_level":          config.get("otm_fib_level", "1.0"),
+                "debug_mode":             config.get("debug_mode", False),
+                "smart_contracts":        config.get("smart_contracts", False),
                 "updated_at":             datetime.utcnow().isoformat(),
             }
             if "id" in config and config["id"]:
@@ -67,6 +69,13 @@ class TradeLogger:
 
     def delete_strategy_config(self, strategy_id: str):
         try:
+            # Nullify strategy_id in dependent tables first so any FK constraint
+            # (added via the Supabase dashboard) doesn't block the delete.
+            for table in ("orb_trades", "orb_session", "orb_debug_logs"):
+                try:
+                    self.client.table(table).update({"strategy_id": None}).eq("strategy_id", strategy_id).execute()
+                except Exception:
+                    pass  # table may not have strategy_id column — safe to ignore
             self.client.table("strategy_configs").delete().eq("id", strategy_id).execute()
         except Exception as e:
             logger.error("[TradeLogger] delete_strategy_config failed: %s", e)
@@ -110,24 +119,30 @@ class TradeLogger:
 
     def log_entry(self, ticker: str, direction: str, contract: dict,
                   entry_premium: float, orh: float, orl: float,
-                  fib_levels: dict, session_date, profile: str, qty: int) -> Optional[str]:
+                  fib_levels: dict, session_date, profile: str, qty: int,
+                  underlying_price_entry: Optional[float] = None,
+                  vix_at_entry: Optional[float] = None,
+                  strategy_id: Optional[str] = None) -> Optional[str]:
         try:
             res = self.client.table("orb_trades").insert({
-                "trade_date":     str(session_date),
-                "ticker":         ticker,
-                "profile":        profile,
-                "direction":      direction,
-                "contract_symbol": contract["symbol"],
-                "strike":         contract["strike"],
-                "expiry":         str(contract["expiry"]),
-                "entry_premium":  entry_premium,
-                "qty_entered":    qty,
-                "qty_exited":     0,
-                "entry_time":     datetime.utcnow().isoformat(),
-                "orh":            orh,
-                "orl":            orl,
-                "fib_targets":    fib_levels,
-                "flow_confirmed": True,
+                "trade_date":             str(session_date),
+                "ticker":                 ticker,
+                "profile":                profile,
+                "direction":              direction,
+                "contract_symbol":        contract["symbol"],
+                "strike":                 contract["strike"],
+                "expiry":                 str(contract["expiry"]),
+                "entry_premium":          entry_premium,
+                "qty_entered":            qty,
+                "qty_exited":             0,
+                "entry_time":             datetime.utcnow().isoformat(),
+                "orh":                    orh,
+                "orl":                    orl,
+                "fib_targets":            fib_levels,
+                "flow_confirmed":         True,
+                "underlying_price_entry": underlying_price_entry,
+                "vix_at_entry":           vix_at_entry,
+                "strategy_id":            strategy_id,
             }).execute()
             if res.data:
                 return res.data[0]["id"]
@@ -138,7 +153,8 @@ class TradeLogger:
 
     def log_exit(self, contract_symbol: str, exit_reason: str,
                  exit_premium: Optional[float], qty_closed: int, profile: str,
-                 strategy_id: str = None):
+                 strategy_id: str = None,
+                 underlying_price_exit: Optional[float] = None):
         try:
             # Fetch the open trade — do NOT filter by exit_time so that partial
             # exits after TP1 (which already set exit_time) are still found.
@@ -165,11 +181,12 @@ class TradeLogger:
             total_pnl_pct = (total_pnl / total_cost * 100) if total_cost else 0
 
             update: dict = {
-                "exit_premium": exit_p if exit_premium is not None else None,
-                "qty_exited":   qty_after,
-                "pnl":          round(total_pnl, 2),
-                "pnl_pct":      round(total_pnl_pct, 2),
-                "exit_reason":  exit_reason,
+                "exit_premium":          exit_p if exit_premium is not None else None,
+                "qty_exited":            qty_after,
+                "pnl":                   round(total_pnl, 2),
+                "pnl_pct":               round(total_pnl_pct, 2),
+                "exit_reason":           exit_reason,
+                "underlying_price_exit": underlying_price_exit,
             }
             # Only stamp exit_time when the position is fully closed so that
             # subsequent partial exit calls can still find the row.
@@ -231,6 +248,158 @@ class TradeLogger:
     def get_stats_by_profile(self) -> list:
         from services.strategy.profiles import PROFILES
         return [self.get_stats(profile=k) | {"profile": k} for k in PROFILES]
+
+    def get_performance(self) -> dict:
+        """
+        Returns overall + per-strategy + per-profile performance ratings (0–100).
+        Queries orb_trades joined with strategy_configs for per-strategy breakdowns.
+        """
+        try:
+            # Overall
+            all_stats = self.get_stats()
+            overall = {**all_stats, **self.compute_rating(all_stats)}
+
+            # Per-strategy: group by strategy_id
+            res = (
+                self.client.table("orb_trades")
+                .select("strategy_id, pnl, pnl_pct, exit_reason")
+                .execute()
+            )
+            rows = res.data or []
+
+            # Load config names
+            configs = {c["id"]: c for c in (self.load_configs() or [])}
+
+            from collections import defaultdict
+            buckets: dict = defaultdict(list)
+            for r in rows:
+                key = r.get("strategy_id") or "__unknown__"
+                buckets[key].append(r)
+
+            by_strategy = []
+            for sid, trades in buckets.items():
+                s = self._compute_stats_from_rows(trades)
+                cfg = configs.get(sid, {})
+                by_strategy.append({
+                    **s,
+                    **self.compute_rating(s),
+                    "strategy_id":   sid,
+                    "strategy_name": cfg.get("strategy_name", "Unknown"),
+                    "ticker":        cfg.get("ticker", ""),
+                    "profile":       cfg.get("profile", ""),
+                })
+            by_strategy.sort(key=lambda x: x["score"], reverse=True)
+
+            # Per-profile
+            from services.strategy.profiles import PROFILES
+            by_profile = []
+            for pk in PROFILES:
+                s = self.get_stats(profile=pk)
+                by_profile.append({**s, **self.compute_rating(s), "profile": pk})
+
+            return {
+                "overall":     overall,
+                "by_strategy": by_strategy,
+                "by_profile":  by_profile,
+            }
+        except Exception as e:
+            logger.error("[TradeLogger] get_performance failed: %s", e)
+            empty = {**self._empty_stats(), **self.compute_rating(self._empty_stats())}
+            return {"overall": empty, "by_strategy": [], "by_profile": []}
+
+    # ── Rating ───────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def compute_rating(stats: dict) -> dict:
+        """
+        Score a strategy's performance 0–100 across four components:
+          Win Rate (25 pts) · Profit Factor (35 pts) · Reward:Risk (25 pts) · Sample size (15 pts)
+        """
+        n = stats.get("total_trades", 0)
+        if n == 0:
+            return {
+                "score": 0, "grade": "N/A", "label": "No Trades",
+                "profit_factor": 0,
+                "breakdown": {
+                    "win_rate":      {"score": 0, "max": 25, "value": 0,   "label": "Win Rate"},
+                    "profit_factor": {"score": 0, "max": 35, "value": 0,   "label": "Profit Factor"},
+                    "reward_risk":   {"score": 0, "max": 25, "value": 0,   "label": "Avg Win / Avg Loss"},
+                    "sample_size":   {"score": 0, "max": 15, "value": 0,   "label": "Trade Count"},
+                },
+            }
+
+        wins     = stats.get("wins", 0)
+        losses   = stats.get("losses", 0)
+        win_rate = stats.get("win_rate_pct", 0)
+        avg_win  = stats.get("avg_winner", 0)
+        avg_loss = stats.get("avg_loser", 0)   # negative number
+
+        # Component 1 — Win Rate (0–25)
+        wr_score = win_rate / 100 * 25
+
+        # Component 2 — Profit Factor (0–35): total_gains / total_losses
+        total_gains  = avg_win  * wins  if wins   > 0 else 0
+        total_losses = abs(avg_loss) * losses if losses > 0 else 0
+        if total_losses == 0:
+            pf = 10.0 if total_gains > 0 else 1.0
+        else:
+            pf = total_gains / total_losses
+        pf_score = min(35.0, (min(pf, 3.0) / 3.0) * 35)
+
+        # Component 3 — Reward:Risk (0–25): avg_winner / |avg_loser|
+        if avg_loss != 0:
+            rr = avg_win / abs(avg_loss)
+        else:
+            rr = avg_win if avg_win > 0 else 1.0
+        rr_score = min(25.0, (min(rr, 3.0) / 3.0) * 25)
+
+        # Component 4 — Sample size (0–15)
+        if   n >= 30: ss_score = 15
+        elif n >= 20: ss_score = 12
+        elif n >= 10: ss_score = 8
+        elif n >= 5:  ss_score = 5
+        else:         ss_score = 2
+
+        total = round(wr_score + pf_score + rr_score + ss_score)
+        total = max(0, min(100, total))
+
+        if   total >= 85: grade, label = "A", "Excellent"
+        elif total >= 70: grade, label = "B", "Good"
+        elif total >= 55: grade, label = "C", "Average"
+        elif total >= 40: grade, label = "D", "Below Average"
+        else:             grade, label = "F", "Poor"
+
+        return {
+            "score":          total,
+            "grade":          grade,
+            "label":          label,
+            "profit_factor":  round(pf, 2),
+            "breakdown": {
+                "win_rate":      {"score": round(wr_score), "max": 25, "value": round(win_rate, 1), "label": "Win Rate"},
+                "profit_factor": {"score": round(pf_score), "max": 35, "value": round(pf, 2),       "label": "Profit Factor"},
+                "reward_risk":   {"score": round(rr_score), "max": 25, "value": round(rr, 2),        "label": "Avg Win / Avg Loss"},
+                "sample_size":   {"score": ss_score,        "max": 15, "value": n,                  "label": "Trade Count"},
+            },
+        }
+
+    def _compute_stats_from_rows(self, rows: list) -> dict:
+        if not rows:
+            return self._empty_stats()
+        wins      = [r for r in rows if (r.get("pnl") or 0) > 0]
+        losses    = [r for r in rows if (r.get("pnl") or 0) < 0]
+        total_pnl = sum(r.get("pnl") or 0 for r in rows)
+        win_rate  = len(wins) / len(rows) * 100 if rows else 0
+        avg_win   = sum(r.get("pnl") or 0 for r in wins) / len(wins) if wins else 0
+        avg_loss  = sum(r.get("pnl") or 0 for r in losses) / len(losses) if losses else 0
+        return {
+            "total_trades": len(rows),
+            "wins":         len(wins),
+            "losses":       len(losses),
+            "win_rate_pct": round(win_rate, 1),
+            "total_pnl":    round(total_pnl, 2),
+            "avg_winner":   round(avg_win, 2),
+            "avg_loser":    round(avg_loss, 2),
+        }
 
     @staticmethod
     def _empty_stats() -> dict:

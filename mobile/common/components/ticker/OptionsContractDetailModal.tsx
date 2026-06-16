@@ -22,6 +22,12 @@ interface Props {
   trackedPrice?: number | null;
   /** Actual live contract price at the time the modal was opened (mirrors the card's livePrice) */
   liveContractPrice?: number | null;
+  /**
+   * Optional custom bottom-bar content. When provided it replaces the default
+   * track/untrack action (e.g. the Immediate Trade controls). Keeps this modal
+   * decoupled from the strategy domain — the caller supplies the action UI.
+   */
+  footer?: React.ReactNode;
 }
 
 const fc = (v: number) =>
@@ -52,6 +58,7 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
   isTracking = false, isUntracking = false,
   trackedPrice = null,
   liveContractPrice = null,
+  footer,
 }) => {
   const colors = useThemeColors();
   const [greeksInfoOpen, setGreeksInfoOpen] = useState(false);
@@ -105,7 +112,7 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
         </View>
 
         <ScrollView
-          contentContainerStyle={{ padding: 16, paddingBottom: 130 }}
+          contentContainerStyle={{ padding: 16, paddingBottom: footer ? 230 : 130 }}
           showsVerticalScrollIndicator={false}
         >
           {/* ── Hero card ── */}
@@ -314,7 +321,7 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
 
         {/* ── Bottom action ── */}
         <View style={[s.bottomBar, { backgroundColor: colors.background, borderTopColor: colors.separator }]}>
-          {isTracked ? (
+          {footer ? footer : isTracked ? (
             <TouchableOpacity
               onPress={onUntrackContract}
               disabled={isUntracking}

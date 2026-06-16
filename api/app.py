@@ -2326,6 +2326,10 @@ try:
         import queue as _queue
         engine = _strategy_engines.get(strategy_id)
         if not engine:
+            # Ad-hoc immediate-trade engines aren't in _strategy_engines.
+            from routes.strategy_routes import get_immediate_engine
+            engine = get_immediate_engine(strategy_id)
+        if not engine:
             return
 
         client_q = _queue.Queue(maxsize=50)

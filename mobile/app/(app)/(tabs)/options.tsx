@@ -306,6 +306,7 @@ const OptionsScreen = () => {
     activeTicker && !useMockData
       ? { limit: 100, expiration_date_gte: dateRange.gte, expiration_date_lte: dateRange.lte }
       : undefined,
+    useMockData ? undefined : 5000,   // near real-time: refresh the chain every 5s
   );
 
   const mockData = useMemo(

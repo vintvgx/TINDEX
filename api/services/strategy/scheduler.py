@@ -4,14 +4,17 @@ APScheduler-based daily job manager.
 Trade days come from the engine config — frontend controls which days
 are active. When config changes, reschedule_jobs() rebuilds the cron jobs.
 
-ORB calc fires at 9:30 + orb_minutes + 1 minute so that all bars in the
-opening range window are complete before the engine fetches them.
+ORB calc fires at 9:46 (9:30 + 15-minute window + 1 minute) so that all bars in
+the fixed 09:30–09:45 opening-range window are complete before the engine fetches
+them. The window is fixed to stay consistent with OrbService.
 """
 
 import logging
 import threading
 from datetime import datetime
 import pytz
+
+from services.strategy.orb_engine import ORB_WINDOW_MINUTES
 
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
@@ -45,7 +48,7 @@ def reschedule_jobs(engine, strategy_id: str = None):
     strategy_id is used as a prefix so multiple engines don't clash on job IDs.
 
     NOTE: Called by init_scheduler on startup and by strategy_routes after a
-    config update so that trade_days / orb_minutes changes take effect immediately.
+    config update so that trade_days changes take effect immediately.
     """
     sched = get_scheduler()
     if not sched:
@@ -59,18 +62,17 @@ def reschedule_jobs(engine, strategy_id: str = None):
             sched.remove_job(f"job_{sid}_{suffix}")
         except Exception:
             pass
+    # NOTE: "price_poll" is retained in the removal list above to clean up any
+    # legacy job from before the hub migration; it is no longer (re)created.
 
     days_cron = _days_to_cron(list(engine.trade_days))
     if not days_cron:
         logger.info("[Scheduler] No trade days configured — no jobs scheduled")
         return
 
-    # Fire ORB calc one minute after the last bar in the window is complete.
-    # orb_minutes=5  → bars 9:30-9:34, fetch at 9:36
-    # orb_minutes=10 → bars 9:30-9:39, fetch at 9:41
-    # orb_minutes=15 → bars 9:30-9:44, fetch at 9:46
-    orb_minutes     = engine.config.get("orb_minutes", 10)
-    orb_fire_minute = 30 + orb_minutes + 1          # always within hour 9 for ≤28 min windows
+    # Fire ORB calc one minute after the last bar in the fixed 09:30–09:45 window
+    # is complete: bars 9:30-9:44, fetch at 9:46.
+    orb_fire_minute = 30 + ORB_WINDOW_MINUTES + 1   # always within hour 9
     orb_fire_hour   = 9 + orb_fire_minute // 60
     orb_fire_minute = orb_fire_minute % 60
 
@@ -84,35 +86,14 @@ def reschedule_jobs(engine, strategy_id: str = None):
         id=f"job_{sid}_orb_calc", replace_existing=True,
     )
 
-    sched.add_job(
-        lambda: _poll(engine),
-        CronTrigger(day_of_week=days_cron, hour="9-15", minute="*/1", timezone=ET),
-        id=f"job_{sid}_price_poll", replace_existing=True,
-    )
+    # Per-minute price polling is gone: underlying bars are pushed from OrbService
+    # via the hub (engine.on_bar → on_price_tick). No price_poll job is scheduled.
 
     sched.add_job(
         lambda: _eod_reset(engine),
         CronTrigger(day_of_week=days_cron, hour=15, minute=30, timezone=ET),
         id=f"job_{sid}_eod_reset", replace_existing=True,
     )
-
-
-def _poll(engine):
-    """
-    Fetch the latest price and drive on_price_tick.
-    Early-returns if ORB hasn't been established yet (before 9:30+orb_minutes ET).
-
-    NOTE: Runs every minute from 9:00–15:59 ET on trade days.
-    """
-    if not engine.orh:
-        return
-    price_data = engine.get_latest_price()
-    if price_data:
-        engine.on_price_tick(
-            current_price=price_data["underlying"],
-            current_volume=price_data.get("volume"),
-            current_option_price=price_data.get("option_price"),
-        )
 
 
 def _eod_reset(engine):
@@ -123,12 +104,21 @@ def _eod_reset(engine):
     NOTE: Fires at 15:30 ET on trade days (after all per-ticker EOD closes).
     """
     if engine.trade_taken and engine.contract_symbol:
-        try:
-            engine.trading_client.close_position(engine.contract_symbol)
+        contract_symbol = engine.contract_symbol
+        qty_closed = engine.exit_manager.qty_remaining if engine.exit_manager else 0
 
-            qty_closed = engine.exit_manager.qty_remaining if engine.exit_manager else 0
+        # Close the Alpaca position first; 0DTE options often expire worthless at
+        # market close, so close_position may throw "position not found" — that's
+        # expected and must NOT prevent the exit from being logged.
+        try:
+            engine.trading_client.close_position(contract_symbol)
+        except Exception as ex:
+            logger.warning("[Scheduler] EOD close_position failed (likely expired): %s", ex)
+
+        # Always log and notify — even if close_position above threw.
+        try:
             engine.logger.log_exit(
-                engine.contract_symbol, "EOD_HARD_CLOSE",
+                contract_symbol, "EOD_HARD_CLOSE",
                 None,
                 qty_closed,
                 engine.profile_key,
@@ -136,15 +126,45 @@ def _eod_reset(engine):
             )
             engine.notifier.notify_exit(
                 ticker=engine.ticker,
-                contract_symbol=engine.contract_symbol,
+                contract_symbol=contract_symbol,
                 exit_reason="EOD_CLOSE",
-                pnl=0.0,      # exact P&L not available here; trade log will have it
+                pnl=0.0,
                 qty=qty_closed,
                 profile_key=engine.profile_key,
             )
         except Exception as ex:
-            logger.error("[Scheduler] EOD close failed: %s", ex)
+            logger.error("[Scheduler] EOD log/notify failed: %s", ex)
+    elif engine.orh and not engine.session_skipped:
+        # Session was armed and watched all day but no breakout fired — notify user.
+        engine.notifier.notify_no_trade_eod(
+            ticker=engine.ticker,
+            profile_key=engine.profile_key,
+            orh=engine.orh,
+            orl=engine.orl,
+        )
     engine.reset_session()
+
+
+def schedule_eod_close(engine):
+    """
+    Schedule ONLY a 15:30 ET hard-close (mon–fri) for an engine that has no ORB
+    trade-day schedule — e.g. an immediate-trade engine. Ensures any open 0DTE
+    position is flattened at end of day even though the engine never auto-trades.
+    """
+    sched = get_scheduler()
+    if not sched:
+        logger.warning("[Scheduler] APScheduler not available — EOD close not scheduled")
+        return
+    if not sched.running:
+        sched.start()
+    sid = getattr(engine, "strategy_id", None) or "immediate"
+    job_id = f"job_{sid}_eod_reset"
+    sched.add_job(
+        lambda: _eod_reset(engine),
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=30, timezone=ET),
+        id=job_id, replace_existing=True,
+    )
+    logger.info("[Scheduler] EOD-only hard-close scheduled for %s (%s)", sid, engine.ticker)
 
 
 def init_scheduler(engine):
@@ -163,8 +183,7 @@ def init_scheduler(engine):
     # engine can still trade the remainder of the session.
     now_et = datetime.now(ET)
     if now_et.weekday() in engine.trade_days and not engine.orh and not engine.session_skipped:
-        orb_minutes     = engine.config.get("orb_minutes", 10)
-        orb_fire_min    = 30 + orb_minutes + 1
+        orb_fire_min    = 30 + ORB_WINDOW_MINUTES + 1
         orb_fire_hour   = 9 + orb_fire_min // 60
         orb_fire_min    = orb_fire_min % 60
         orb_calc_dt     = now_et.replace(hour=orb_fire_hour, minute=orb_fire_min,

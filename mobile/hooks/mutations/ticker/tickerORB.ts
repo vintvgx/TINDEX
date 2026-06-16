@@ -76,17 +76,26 @@ export function useToggleORBFollow(ticker?: string) {
 
         if (error) throw error;
 
-        // When removing, clean up today's monitoring row so the card drops
+        // When removing, clean up the ticker's monitoring rows so the card drops
         // from the ORB grid immediately without waiting for the service.
+        //
+        // Delete ALL rows for the ticker (not just "today"): the grid renders any
+        // row with monitoring_active=true regardless of trade_date, and the prior
+        // trade_date filter used a UTC date that diverges from the ET trade_date
+        // the backend stores — so it matched zero rows in the evening and the card
+        // never dropped.
         if (!orbEnabled) {
-          const tradeDate = new Date().toISOString().split("T")[0];
-          const { error: deleteError } = await supabase
+          const { data: deleted, error: deleteError } = await supabase
             .from("orb_monitoring_state")
             .delete()
             .eq("ticker", normalizedTicker)
-            .eq("trade_date", tradeDate);
+            .select("ticker, trade_date");
           if (deleteError) {
             console.error("Error removing ticker from orb_monitoring_state:", deleteError);
+          } else {
+            console.debug(
+              `Removed ${deleted?.length ?? 0} orb_monitoring_state row(s) for ${normalizedTicker}`
+            );
           }
         }
 

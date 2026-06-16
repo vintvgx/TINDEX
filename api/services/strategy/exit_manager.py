@@ -25,6 +25,8 @@ class ExitManager:
         self.eod_close_time = self._parse_time(eod_close_time)
         self.profile        = profile
 
+        self.entry_time   = datetime.now(ET)
+
         self.hard_stop    = entry_premium * (1 - profile["max_loss_pct"])
         self.tp1          = entry_premium * profile["tp1_mult"]
         self.tp2          = entry_premium * profile["tp2_mult"]
@@ -33,6 +35,10 @@ class ExitManager:
         self.tp1_hit        = False
         self.tp2_hit        = False
         self.be_stop_active = False
+
+        # Disable TP2 when the profile explicitly opts out OR when starting with
+        # ≤ 2 contracts (TP1 closes one, the other becomes a runner — no TP2 needed).
+        self._use_tp2 = profile.get("use_tp2", qty > 2)
 
         self.orh = fib_levels["orh"]
         self.orl = fib_levels["orl"]
@@ -55,15 +61,27 @@ class ExitManager:
             return self._action("CLOSE_ALL", self.qty_remaining, "HARD_STOP",
                                 current_option_price)
 
-        self.price_buffer.append(current_underlying_price or current_option_price)
-        if current_volume:
+        # Only track actual underlying price — option price is not a valid proxy
+        # (same option premium on consecutive ticks would instantly fake consolidation)
+        if current_underlying_price is not None:
+            self.price_buffer.append(current_underlying_price)
+        if current_volume is not None:
             self.volume_buffer.append(current_volume)
 
-        if self.profile["consol_exit"] and self._is_consolidating():
+        secs_held = (datetime.now(ET) - self.entry_time).total_seconds()
+
+        # Minimum 5-minute hold before consolidation exit: price consolidates naturally
+        # right at the breakout level for the first few minutes — don't exit yet.
+        # Also suppressed until TP1 hits — a real breakout can stall right after
+        # entry while still being a winner; closing it here mistakes a pause for
+        # a failed trade. Once TP1 is hit, the runner trail/BE-stop take over.
+        if (secs_held >= 300 and self.profile["consol_exit"]
+                and self.tp1_hit and self._is_consolidating()):
             return self._action("CLOSE_ALL", self.qty_remaining, "CONSOLIDATION",
                                 current_option_price)
 
-        if self._is_low_volume() and not self.tp1_hit:
+        # Minimum 3-minute hold before volume exit
+        if secs_held >= 180 and self.profile.get("volume_exit", False) and self._is_low_volume() and not self.tp1_hit:
             qty_lv = max(1, self.qty_remaining // 2)
             return self._action("CLOSE_PARTIAL", qty_lv, "LOW_VOLUME_EXIT",
                                 current_option_price)
@@ -76,7 +94,7 @@ class ExitManager:
             qty_tp1 = max(1, math.floor(self.qty_remaining * self.profile["tp1_close_pct"]))
             return self._action("CLOSE_PARTIAL", qty_tp1, "TP1", current_option_price)
 
-        if self.tp1_hit and not self.tp2_hit and current_option_price >= self.tp2:
+        if self._use_tp2 and self.tp1_hit and not self.tp2_hit and current_option_price >= self.tp2:
             self.tp2_hit = True
             if self.profile["tp2_close_pct"] >= 1.0:
                 return self._action("CLOSE_ALL", self.qty_remaining, "TP2_FULL_CLOSE",
@@ -131,6 +149,7 @@ class ExitManager:
             "tp1_hit":        self.tp1_hit,
             "tp2_hit":        self.tp2_hit,
             "be_stop_active": self.be_stop_active,
+            "use_tp2":        self._use_tp2,
             "qty":            self.qty,
             "qty_remaining":  self.qty_remaining,
         }

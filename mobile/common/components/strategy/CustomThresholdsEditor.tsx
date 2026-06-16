@@ -13,7 +13,8 @@ export const DEFAULT_CUSTOM_THRESHOLDS: CustomThresholds = {
   tp1_close_pct:           0.50,
   tp2_close_pct:           0.50,
   runner_trail_pct:        0.20,
-  consol_exit:             true,
+  consol_exit:             false,
+  volume_exit:             false,
   consol_range_pct:        0.0008,
   consol_bars:             4,
   volume_exit_threshold:   0.20,
@@ -38,43 +39,54 @@ function snapValue(pct: number, min: number, max: number, step: number): number 
 // ── SliderRow ─────────────────────────────────────────────────────────────────
 
 interface SliderRowProps {
-  label:       string;
-  value:       number;
-  min:         number;
-  max:         number;
-  step:        number;
-  format:      (v: number) => string;
-  onChange:    (v: number) => void;
-  accent:      string;
-  trackBg:     string;
-  labelColor:  string;
-  textColor:   string;
+  label:            string;
+  value:            number;
+  min:              number;
+  max:              number;
+  step:             number;
+  format:           (v: number) => string;
+  onChange:         (v: number) => void;
+  accent:           string;
+  trackBg:          string;
+  labelColor:       string;
+  textColor:        string;
+  onDragStart?:     () => void;
+  onDragEnd?:       () => void;
 }
 
 const SliderRow = React.memo(function SliderRow({
   label, value, min, max, step, format, onChange,
-  accent, trackBg, labelColor, textColor,
+  accent, trackBg, labelColor, onDragStart, onDragEnd,
 }: SliderRowProps) {
-  const trackWidthRef = useRef(0);
-  const startPctRef   = useRef(0);
+  const trackWidthRef  = useRef(0);
+  const startPctRef    = useRef(0);
+  const isDraggingRef  = useRef(false);
 
-  // Use refs so the memoised PanResponder always sees latest props
-  const minRef      = useRef(min);
-  const maxRef      = useRef(max);
-  const stepRef     = useRef(step);
-  const onChangeRef = useRef(onChange);
+  const minRef         = useRef(min);
+  const maxRef         = useRef(max);
+  const stepRef        = useRef(step);
+  const onChangeRef    = useRef(onChange);
+  const onDragStartRef = useRef(onDragStart);
+  const onDragEndRef   = useRef(onDragEnd);
   useEffect(() => {
     minRef.current = min; maxRef.current = max;
     stepRef.current = step; onChangeRef.current = onChange;
+    onDragStartRef.current = onDragStart;
+    onDragEndRef.current   = onDragEnd;
   });
 
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder:        () => true,
     onStartShouldSetPanResponderCapture: () => true,
-    onMoveShouldSetPanResponder:         (_, gs) => Math.abs(gs.dx) > Math.abs(gs.dy),
+    onMoveShouldSetPanResponder:         () => true,
+    onMoveShouldSetPanResponderCapture:  () => true,
+    // Prevent ScrollView from reclaiming the gesture mid-drag
+    onPanResponderTerminationRequest:    () => false,
     onPanResponderGrant: (e) => {
       const tw = trackWidthRef.current;
       if (!tw) return;
+      isDraggingRef.current = true;
+      onDragStartRef.current?.();
       const pct = e.nativeEvent.locationX / tw;
       startPctRef.current = Math.max(0, Math.min(1, pct));
       onChangeRef.current(snapValue(pct, minRef.current, maxRef.current, stepRef.current));
@@ -84,6 +96,14 @@ const SliderRow = React.memo(function SliderRow({
       if (!tw) return;
       const pct = startPctRef.current + gs.dx / tw;
       onChangeRef.current(snapValue(pct, minRef.current, maxRef.current, stepRef.current));
+    },
+    onPanResponderRelease: () => {
+      isDraggingRef.current = false;
+      onDragEndRef.current?.();
+    },
+    onPanResponderTerminate: () => {
+      isDraggingRef.current = false;
+      onDragEndRef.current?.();
     },
   }), []);
 
@@ -95,17 +115,30 @@ const SliderRow = React.memo(function SliderRow({
         <Text style={[s.sliderLabel, { color: labelColor }]}>{label}</Text>
         <Text style={[s.sliderValue, { color: accent }]}>{format(value)}</Text>
       </View>
+      {/* Enlarged hit area wraps the track so the touch target is generous */}
       <View
-        style={[s.track, { backgroundColor: trackBg }]}
+        style={[s.trackHitArea]}
         onLayout={e => { trackWidthRef.current = e.nativeEvent.layout.width; }}
         {...panResponder.panHandlers}
       >
-        <View style={[s.fill, { width: `${fillPct}%` as any, backgroundColor: accent }]} />
-        <View style={[s.thumb, {
-          left: `${fillPct}%` as any,
-          transform: [{ translateX: -8 }],
-          backgroundColor: accent,
-        }]} />
+        <View style={[s.track, { backgroundColor: trackBg }]}>
+          <View style={[s.fill, { width: `${fillPct}%` as any, backgroundColor: accent }]} />
+          <View style={[s.thumb, {
+            left:      `${fillPct}%` as any,
+            transform: [{ translateX: -10 }],
+            backgroundColor:  accent,
+            shadowColor:      accent,
+            shadowOpacity:    0.4,
+            shadowRadius:     4,
+            shadowOffset:     { width: 0, height: 2 },
+            elevation:        4,
+          }]} />
+        </View>
+      </View>
+      {/* Min / max labels */}
+      <View style={s.sliderRange}>
+        <Text style={[s.sliderRangeText, { color: labelColor }]}>{format(min)}</Text>
+        <Text style={[s.sliderRangeText, { color: labelColor }]}>{format(max)}</Text>
       </View>
     </View>
   );
@@ -149,12 +182,14 @@ function StepperRow({ label, value, min, max, step, format, onChange, accent, la
 // ── Main editor ───────────────────────────────────────────────────────────────
 
 interface Props {
-  thresholds: CustomThresholds;
-  onChange:   (t: CustomThresholds) => void;
-  colors:     any;
+  thresholds:     CustomThresholds;
+  onChange:       (t: CustomThresholds) => void;
+  colors:         any;
+  onDragStart?:   () => void;
+  onDragEnd?:     () => void;
 }
 
-export function CustomThresholdsEditor({ thresholds, onChange, colors }: Props) {
+export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragStart, onDragEnd }: Props) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const t = thresholds;
 
@@ -168,7 +203,7 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors }: Props) 
   const borderColor = colors.border;
   const cardBg      = colors.card;
 
-  const sliderProps = { accent, trackBg, labelColor, textColor };
+  const sliderProps = { accent, trackBg, labelColor, textColor, onDragStart, onDragEnd };
 
   return (
     <View>
@@ -273,6 +308,18 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors }: Props) 
             trackColor={{ true: accent + '55', false: borderColor }}
           />
         </View>
+        <View style={[s.toggleRow, { borderBottomColor: borderColor }]}>
+          <View>
+            <Text style={[s.sliderLabel, { color: labelColor }]}>Volume Exit</Text>
+            <Text style={[s.toggleSub, { color: labelColor }]}>Exit half on low volume after 3 min</Text>
+          </View>
+          <Switch
+            value={t.volume_exit}
+            onValueChange={v => patch('volume_exit', v)}
+            thumbColor={t.volume_exit ? accent : '#ccc'}
+            trackColor={{ true: accent + '55', false: borderColor }}
+          />
+        </View>
       </View>
 
       {/* ── Advanced (collapsible) ── */}
@@ -333,13 +380,17 @@ const s = StyleSheet.create({
   groupHeader:  { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginTop: 14, marginBottom: 6, marginLeft: 2 },
 
   // Slider
-  sliderRow:      { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 14 },
-  sliderLabelRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
-  sliderLabel:    { fontSize: 13, fontWeight: '500' },
-  sliderValue:    { fontSize: 13, fontWeight: '700' },
-  track:          { height: 6, borderRadius: 3, position: 'relative', justifyContent: 'center' },
-  fill:           { height: 6, borderRadius: 3, position: 'absolute', left: 0, top: 0 },
-  thumb:          { position: 'absolute', width: 16, height: 16, borderRadius: 8, top: -5 },
+  sliderRow:       { paddingHorizontal: 14, paddingTop: 14, paddingBottom: 10 },
+  sliderLabelRow:  { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
+  sliderLabel:     { fontSize: 13, fontWeight: '500' },
+  sliderValue:     { fontSize: 13, fontWeight: '700' },
+  // Enlarged hit area — the user touches this; the visual track is inside it
+  trackHitArea:   { paddingVertical: 10, justifyContent: 'center' },
+  track:          { height: 4, borderRadius: 2, position: 'relative', justifyContent: 'center' },
+  fill:           { height: 4, borderRadius: 2, position: 'absolute', left: 0, top: 0 },
+  thumb:          { position: 'absolute', width: 20, height: 20, borderRadius: 10, top: -8 },
+  sliderRange:    { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4, marginBottom: 4 },
+  sliderRangeText:{ fontSize: 10 },
 
   // Stepper
   stepRow:       { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },

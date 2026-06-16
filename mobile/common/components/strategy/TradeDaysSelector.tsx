@@ -42,7 +42,7 @@ export const TradeDaysSelector: React.FC<Props> = ({ selected, onChange }) => {
               },
             ]}
           >
-            <Text style={[styles.label, { color: active ? '#fff' : colors.text }]}>
+            <Text style={[styles.label, { color: active ? colors.background : colors.text }]}>
               {label}
             </Text>
           </TouchableOpacity>

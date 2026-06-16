@@ -65,13 +65,31 @@ class OptionStreamManager:
         if not HAS_STREAM:
             return
         self._ensure_started()
+        is_new = False
         with self._lock:
             if symbol not in self._callbacks:
                 self._callbacks[symbol] = []
-                self._stream.subscribe_quotes(self._make_handler(symbol), symbol)
+                is_new = True
             self._callbacks[symbol].append(callback)
+
+        if is_new:
+            # alpaca-py's subscribe_quotes() can block (e.g. websocket not yet
+            # connected, or the asyncio bridge stalls). Run it off-thread so a
+            # hang there can NEVER hold self._lock or the calling request thread
+            # hostage — a single bad subscribe must not wedge every other
+            # symbol's subscribe/unsubscribe for the rest of the process.
+            threading.Thread(
+                target=self._safe_subscribe_quotes, args=(symbol,),
+                daemon=True, name=f"OptionStream-sub-{symbol}",
+            ).start()
         logger.info("[OptionStream] Subscribed %s (total cb=%d)",
                     symbol, len(self._callbacks[symbol]))
+
+    def _safe_subscribe_quotes(self, symbol: str):
+        try:
+            self._stream.subscribe_quotes(self._make_handler(symbol), symbol)
+        except Exception as ex:
+            logger.error("[OptionStream] subscribe_quotes failed for %s: %s", symbol, ex)
 
     def unsubscribe(self, symbol: str, callback=None):
         """
@@ -94,11 +112,19 @@ class OptionStreamManager:
                 should_unsub = symbol not in self._callbacks
 
         if should_unsub and self._stream:
-            try:
-                self._stream.unsubscribe_quotes(symbol)
-                logger.info("[OptionStream] Unsubscribed %s", symbol)
-            except Exception as ex:
-                logger.debug("[OptionStream] unsubscribe_quotes: %s", ex)
+            # Same rationale as subscribe(): never block the caller or the lock
+            # on alpaca-py's internal call.
+            threading.Thread(
+                target=self._safe_unsubscribe_quotes, args=(symbol,),
+                daemon=True, name=f"OptionStream-unsub-{symbol}",
+            ).start()
+
+    def _safe_unsubscribe_quotes(self, symbol: str):
+        try:
+            self._stream.unsubscribe_quotes(symbol)
+            logger.info("[OptionStream] Unsubscribed %s", symbol)
+        except Exception as ex:
+            logger.debug("[OptionStream] unsubscribe_quotes: %s", ex)
 
     def verify_stream(self, symbol: str, timeout: float = 8.0) -> bool:
         """

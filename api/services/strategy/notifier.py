@@ -10,13 +10,43 @@ the APScheduler job threads that drive the engine.
 """
 
 import os
+import re
 import logging
 import threading
 import requests
+from datetime import date as _date
 
 logger = logging.getLogger(__name__)
 
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+
+_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
+def _fmt_contract(symbol: str) -> str:
+    """
+    Converts OCC symbol to human-readable label.
+    "QQQ260611C00699000" → "QQQ $699C 0DTE"  (or "QQQ $699C Jun 11")
+    """
+    m = re.match(r'^([A-Z]+)(\d{2})(\d{2})(\d{2})([CP])(\d{8})$', symbol)
+    if not m:
+        return symbol
+    ticker, yy, mm, dd, opt, strike_raw = m.groups()
+    year   = 2000 + int(yy)
+    month  = int(mm)
+    day    = int(dd)
+    strike = int(strike_raw) / 1000
+    strike_str = f"${strike:.0f}" if strike == int(strike) else f"${strike:.2f}".rstrip('0')
+
+    today = _date.today()
+    is_0dte = (year == today.year and month == today.month and day == today.day)
+    if is_0dte:
+        date_str = "0DTE"
+    elif year != today.year:
+        date_str = f"{_MONTHS[month-1]} {day}, {year}"
+    else:
+        date_str = f"{_MONTHS[month-1]} {day}"
+
+    return f"{ticker} {strike_str}{opt} {date_str}"
 
 
 class StrategyNotifier:
@@ -46,6 +76,36 @@ class StrategyNotifier:
         self._dispatch(
             title="ORB Service + Engine started",
             body=f"Monitoring active via {provider.upper()} streaming.",
+            data={"screen": "tradelog"},
+        )
+
+    def notify_session_armed(self, ticker: str, orh: float, orl: float, profile_key: str):
+        """ORB calculated — engine is now watching for a breakout."""
+        orb_range = round(orh - orl, 2)
+        self._dispatch(
+            title=f"{ticker} — Watching for breakout  [{profile_key}]",
+            body=f"ORH ${orh:.2f}  ORL ${orl:.2f}  Range ${orb_range:.2f}",
+            data={"screen": "strategy"},
+        )
+
+    def notify_retest_watching(self, ticker: str, direction: str, level: float,
+                                breakout_price: float, profile_key: str):
+        """Fired when the Retester profile detects a breakout and arms the retest watch."""
+        dir_emoji = "📈" if direction == "CALL" else "📉"
+        level_label = "ORH" if direction == "CALL" else "ORL"
+        self._dispatch(
+            title=f"{dir_emoji} {ticker} Retest Watch Armed",
+            body=(f"Breakout @ ${breakout_price:.2f} — waiting for {level_label} "
+                  f"retest at ${level:.2f}"),
+            data={"type": "retest_watching", "ticker": ticker,
+                  "profile": profile_key, "level": level},
+        )
+
+    def notify_no_trade_eod(self, ticker: str, profile_key: str, orh: float, orl: float):
+        """Session closed at EOD with no entry taken."""
+        self._dispatch(
+            title=f"{ticker} — No trade today  [{profile_key}]",
+            body=f"Watched ORH ${orh:.2f} / ORL ${orl:.2f} — no breakout triggered.",
             data={"screen": "tradelog"},
         )
 
@@ -99,14 +159,13 @@ class StrategyNotifier:
         macro_event: bool = False,
     ):
         """A market order was successfully submitted."""
-        opt_type = "C" if direction == "CALL" else "P"
-        strike   = contract.get("strike", "")
-        symbol   = contract.get("symbol", "")
-        cost     = entry_premium * qty * 100
+        symbol     = contract.get("symbol", "")
+        label      = _fmt_contract(symbol) if symbol else f"{ticker} option"
+        cost       = entry_premium * qty * 100
         macro_warn = "  ⚠ Macro event today" if macro_event else ""
 
         self._dispatch(
-            title=f"{ticker} {strike}{opt_type} entered  [{profile_key}]",
+            title=f"{label} entered  [{profile_key}]",
             body=f"@ ${entry_premium:.2f} × {qty} contracts  (${cost:,.0f} total){macro_warn}",
             data={
                 "screen":      "position",
@@ -145,9 +204,10 @@ class StrategyNotifier:
         }
         label = labels.get(exit_reason, exit_reason)
 
+        readable = _fmt_contract(contract_symbol)
         self._dispatch(
-            title=f"{emoji} {ticker} — {label}  [{profile_key}]",
-            body=f"{contract_symbol}  {qty} contracts  P&L: {sign}${pnl:,.2f}",
+            title=f"{emoji} {readable} — {label}  [{profile_key}]",
+            body=f"{qty} contracts  P&L: {sign}${pnl:,.2f}",
             data={
                 "screen":      "tradelog",
                 "symbol":      contract_symbol,
@@ -168,10 +228,11 @@ class StrategyNotifier:
         arrow = "↑" if current_pnl >= 0 else "↓"
         chg   = current_premium - entry_premium
 
+        readable = _fmt_contract(contract_symbol)
         self._dispatch(
-            title=f"{ticker} trade update (30 min)",
+            title=f"{readable} update (30 min)",
             body=(
-                f"{contract_symbol} {arrow} ${current_premium:.2f}  "
+                f"{arrow} ${current_premium:.2f}  "
                 f"({sign}${chg:.2f}/contract)  "
                 f"Total: {sign}${current_pnl:,.2f}"
             ),
@@ -184,11 +245,8 @@ class StrategyNotifier:
     def notify_stream_failed(self, ticker: str, contract_symbol: str):
         """Option stream could not be verified — trade skipped."""
         self._dispatch(
-            title=f"{ticker} — Stream unavailable",
-            body=(
-                f"Could not stream real-time quotes for {contract_symbol}. "
-                "Trade skipped to avoid blind entry."
-            ),
+            title=f"{_fmt_contract(contract_symbol)} — Stream unavailable",
+            body="Could not stream real-time quotes. Trade skipped to avoid blind entry.",
             data={"screen": "tradelog", "symbol": contract_symbol},
         )
 
@@ -202,11 +260,11 @@ class StrategyNotifier:
         profile_key: str,
     ):
         """A second entry was taken after a partial exit (runner re-entered)."""
-        opt_type = "C" if direction == "CALL" else "P"
-        strike   = contract.get("strike", "")
+        symbol  = contract.get("symbol", "")
+        label   = _fmt_contract(symbol) if symbol else f"{ticker} option"
 
         self._dispatch(
-            title=f"{ticker} {strike}{opt_type} re-entered  [{profile_key}]",
+            title=f"{label} re-entered  [{profile_key}]",
             body=f"@ ${entry_premium:.2f} × {qty} contracts",
             data={
                 "screen": "position",

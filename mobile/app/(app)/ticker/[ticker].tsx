@@ -113,7 +113,7 @@ export default function TickerScreen() {
             onPress={navigateBack}
             style={{ backgroundColor: colors.accent, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 14 }}
           >
-            <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>Go Back</Text>
+            <Text style={{ color: colors.accentForeground, fontWeight: '600' }}>Go Back</Text>
           </Pressable>
         </View>
       </SafeAreaView>

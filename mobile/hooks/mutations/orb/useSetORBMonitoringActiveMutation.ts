@@ -41,16 +41,23 @@ async function unfollowTickerORB(
     throw updateError;
   }
 
-  // When unfollowing, remove the ticker from orb_monitoring_state so it drops out of the list
+  // When unfollowing, remove the ticker's rows from orb_monitoring_state so it
+  // drops out of the list. Delete ALL rows for the ticker rather than a single
+  // trade_date: the grid shows any monitoring_active row regardless of date, and
+  // the old UTC trade_date diverged from the backend's ET trade_date (matching
+  // zero rows in the evening). A specific trade_date can still be passed to scope
+  // the delete when needed.
   if (!monitoring_active) {
-    const tradeDate =
-      trade_date ?? new Date().toISOString().split('T')[0];
-
-    const { error: deleteError } = await supabase
+    let query = supabase
       .from('orb_monitoring_state')
       .delete()
-      .eq('ticker', normalizedTicker)
-      .eq('trade_date', tradeDate);
+      .eq('ticker', normalizedTicker);
+
+    if (trade_date) {
+      query = query.eq('trade_date', trade_date);
+    }
+
+    const { error: deleteError } = await query;
 
     if (deleteError) {
       console.error('Error removing ticker from orb_monitoring_state:', deleteError);

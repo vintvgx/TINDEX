@@ -8,6 +8,8 @@ const PROFILE_EMOJI: Record<ProfileKey, string> = {
   BULL_DOG:    '🐂',
   THUNDER_CAT: '🐱',
   WOLF:        '🐺',
+  TREND_RIDER: '🚀',
+  RETESTER:    '🎯',
   CUSTOM:      '⚙️',
 };
 

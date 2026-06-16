@@ -266,7 +266,7 @@ function ConfigSheet({
                 alignItems: 'center',
               }}
             >
-              <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>
+              <Text style={{ color: colors.accentForeground, fontSize: 15, fontWeight: '700' }}>
                 Save Changes
               </Text>
             </TouchableOpacity>

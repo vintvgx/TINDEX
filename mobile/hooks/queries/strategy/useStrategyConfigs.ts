@@ -10,7 +10,8 @@ export function useStrategyConfigs() {
       if (!res.ok) throw new Error('Failed to fetch strategy configs');
       return res.json();
     },
-    staleTime: 30_000,
+    staleTime: 10_000,
+    refetchInterval: 15_000,
     retry: 2,
   });
 }

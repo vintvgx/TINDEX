@@ -1,4 +1,4 @@
-export type ProfileKey = 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'CUSTOM';
+export type ProfileKey = 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'TREND_RIDER' | 'RETESTER' | 'REVERSAL' | 'CUSTOM';
 
 export interface CustomThresholds {
   qty_contracts:           number;
@@ -9,6 +9,7 @@ export interface CustomThresholds {
   tp2_close_pct:           number;
   runner_trail_pct:        number;
   consol_exit:             boolean;
+  volume_exit:             boolean;
   consol_range_pct:        number;
   consol_bars:             number;
   volume_exit_threshold:   number;
@@ -30,6 +31,7 @@ export interface ProfileThresholds {
   tp2_close_pct: number;
   runner_trail_pct: number;
   consol_exit: boolean;
+  volume_exit: boolean;
   consol_range_pct: number;
   consol_bars: number;
   volume_exit_threshold: number;
@@ -51,19 +53,25 @@ export interface StrategyProfile {
   tp1_pct: number;        // integer percent, e.g. 50
   tp2_pct: number;        // integer percent, e.g. 100
   runner: boolean;
-  risk_level: 'Low' | 'Medium' | 'High';
+  use_tp2: boolean;
+  risk_level: 'Low' | 'Medium' | 'High' | 'Medium-High' | 'Custom';
   vix_max: number;
   breakout_limit_min: number;
   thresholds: ProfileThresholds;
+  entry_mode?: 'BREAK' | 'RETEST';
 }
 
 export type OtmFibLevel = '1.0' | '1.618' | '2.618';
+
+export interface ExitOverrides {
+  consol_exit: boolean;
+  volume_exit: boolean;
+}
 
 export interface StrategyConfig {
   id: string;
   strategy_name: string;
   ticker: string;
-  orb_minutes: 5 | 10 | 15;
   paper_mode: boolean;
   active: boolean;
   profile: ProfileKey;
@@ -71,9 +79,60 @@ export interface StrategyConfig {
   capital_limit: number | null;
   bypass_breakout_window: boolean;
   custom_thresholds: CustomThresholds | null;
+  exit_overrides: ExitOverrides | null;
   budget_otm_mode: boolean;
   otm_fib_level: OtmFibLevel;
+  smart_contracts: boolean;
+  debug_mode: boolean;
   has_position?: boolean;
+  qty_remaining?: number | null;
+}
+
+export type DebugLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
+
+export interface DebugLogEntry {
+  id: string;   // UUID from Supabase
+  ts: string;
+  level: DebugLevel;
+  message: string;
+  data: Record<string, unknown> | null;
+  strategy_id: string | null;
+  ticker: string | null;
+  strategy_name: string | null;
+}
+
+export interface DebugLogsResponse {
+  debug_enabled: boolean;
+  logs: DebugLogEntry[];
+}
+
+/** Ticker-based immediate trade (not tied to a saved strategy). */
+export interface ImmediateTradeByTickerRequest {
+  ticker: string;
+  direction: 'CALL' | 'PUT';
+  contract_symbol: string;
+  qty?: number;
+  profile?: ProfileKey;
+  paper_mode: boolean;
+  consol_exit?: boolean;
+  volume_exit?: boolean;
+}
+
+/** An open position from a ticker-based immediate trade engine. */
+export interface ImmediatePosition {
+  strategy_id: string;
+  ticker: string;
+  paper_mode: boolean;
+  direction: 'CALL' | 'PUT';
+  contract: string;
+  profile: ProfileKey;
+  qty_remaining: number;
+  entry_premium: number | null;
+  mid_price: number | null;
+  pnl: number | null;
+  pnl_pct: number | null;
+  tp1_hit: boolean;
+  tp2_hit: boolean;
 }
 
 export interface FibLevels {
@@ -113,6 +172,7 @@ export interface StrategyPosition {
 
 export interface ORBTrade {
   id: string;
+  strategy_id: string | null;
   trade_date: string;
   ticker: string;
   profile: ProfileKey;
@@ -131,7 +191,11 @@ export interface ORBTrade {
   exit_reason: string | null;
   orh: number;
   orl: number;
+  vix_at_entry: number | null;
+  underlying_price_entry: number | null;
+  underlying_price_exit: number | null;
   flow_confirmed: boolean;
+  fib_targets?: Record<string, number> | null;
 }
 
 export interface StrategyStats {
@@ -143,6 +207,34 @@ export interface StrategyStats {
   avg_winner: number;
   avg_loser: number;
   profile?: ProfileKey;
+}
+
+export interface RatingBreakdownItem {
+  score: number;
+  max: number;
+  value: number;
+  label: string;
+}
+
+export interface RatingResult {
+  score: number;
+  grade: string;
+  label: string;
+  profit_factor: number;
+  breakdown: Record<string, RatingBreakdownItem>;
+}
+
+export interface StrategyRating extends StrategyStats, RatingResult {}
+
+export interface StrategyPerformance {
+  overall: StrategyRating;
+  by_strategy: Array<StrategyRating & {
+    strategy_id: string;
+    strategy_name: string;
+    ticker: string;
+    profile: ProfileKey;
+  }>;
+  by_profile: Array<StrategyRating & { profile: ProfileKey }>;
 }
 
 export interface LiveOptionPrice {
