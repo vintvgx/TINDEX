@@ -175,8 +175,13 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
           setQty(1);
           onClose?.();   // navigate back to the strategies list on success
         },
-        // On error: keep the toast + stay on the screen so the user can retry.
-        onError: (e) => toast.error(e.message || 'Trade failed'),
+        // Close the modal(s) on error too — the toast is rendered at the root
+        // layout, so it's hidden behind these pageSheet modals until they close.
+        onError: (e) => {
+          toast.error(e.message || 'Trade failed');
+          setSelected(null);
+          onClose?.();
+        },
       },
     );
   };
