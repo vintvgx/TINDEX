@@ -196,6 +196,12 @@ class ORBEngine:
         Returns True when the session is cleared for trading; False when skipped.
         """
         now_et = datetime.now(ET)
+        # Clear any state left over from a prior session (trade_taken, position,
+        # exit_manager, etc). calculate_orb only runs once daily at 09:35 ET before
+        # any entry can happen today, so a True trade_taken here is always stale —
+        # e.g. a contract from a previous day that expired without the engine
+        # observing the close. Unsubscribes any leftover stream callback too.
+        self.reset_session()
         self.session_date = now_et.date()
 
         # The OrbService bar feed must be running or there is no price data. If it
@@ -818,6 +824,20 @@ class ORBEngine:
             return {"status": "error",
                     "message": "A position is already open for this strategy"}
 
+        # Check the market clock before doing any quote/stream work — outside
+        # regular trading hours, Alpaca will reject the order anyway, but only
+        # after the (up to 8s) stream-verify wait and with a raw, unfriendly
+        # error message. Failing this check open (continue on error) since
+        # it's a UX nicety, not a safety guard — verify_stream still gates entry.
+        try:
+            clock = self.trading_client.get_clock()
+            if not clock.is_open:
+                msg = "Market is closed — immediate trades are only available during regular trading hours (9:30 AM–4:00 PM ET)"
+                self.debug.emit("WARN", f"Manual trade blocked — {msg}")
+                return {"status": "error", "message": msg}
+        except Exception as e:
+            logger.debug("[ORBEngine] market clock check failed, continuing: %s", e)
+
         effective_profile = self.profile
         if profile_key and profile_key != self.profile_key:
             try:
@@ -881,6 +901,7 @@ class ORBEngine:
             self._execute_entry(direction, contract, qty, effective_profile, fib_levels,
                                 manual=True)
         except Exception as e:
+            self.debug.emit("ERROR", f"Manual trade blocked — order submission failed: {e}")
             return {"status": "error", "message": f"Order submission failed: {e}"}
         return {"status": "ok", "message": f"Entered {direction} {contract['symbol']} qty={qty}",
                 "contract": contract["symbol"], "qty": qty, "trade_id": self.active_trade_id}

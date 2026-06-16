@@ -1643,16 +1643,29 @@ class OrbService:
                 logger.info(f"[CONFIRMATION] {ticker} no longer in monitoring, skipping confirmation")
                 return
             
-            # Fetch current price to check if breakout is confirmed
+            # Fetch current price to check if breakout is confirmed.
+            # Use the live Alpaca bar price already maintained in the state cache
+            # (updated every bar in handle_bar) instead of yfinance — yfinance's
+            # `.info` call is slow, frequently rate-limited, and can silently
+            # return None or a stale quote, which previously meant confirmation
+            # (and therefore entry) just never fired with no visible error.
             try:
-                loop = asyncio.get_event_loop()
-                def get_current_price():
-                    stock = yf.Ticker(ticker)
-                    info = stock.info
-                    return info.get("currentPrice") or info.get("regularMarketPrice")
-                
-                current_price = await loop.run_in_executor(None, get_current_price)
-                
+                trade_date = self.get_current_et_time().date()
+                cached_state = self._state_cache.get_state(ticker, trade_date)
+                current_price = cached_state.current_price if cached_state else None
+
+                if current_price is None:
+                    logger.warning(
+                        f"[CONFIRMATION] No cached price for {ticker}, falling back to yfinance"
+                    )
+                    loop = asyncio.get_event_loop()
+                    def get_current_price():
+                        stock = yf.Ticker(ticker)
+                        info = stock.info
+                        return info.get("currentPrice") or info.get("regularMarketPrice")
+
+                    current_price = await loop.run_in_executor(None, get_current_price)
+
                 if current_price is None:
                     logger.warning(f"[CONFIRMATION] Could not fetch current price for {ticker}")
                     return

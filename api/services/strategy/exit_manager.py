@@ -72,7 +72,11 @@ class ExitManager:
 
         # Minimum 5-minute hold before consolidation exit: price consolidates naturally
         # right at the breakout level for the first few minutes — don't exit yet.
-        if secs_held >= 300 and self.profile["consol_exit"] and self._is_consolidating():
+        # Also suppressed until TP1 hits — a real breakout can stall right after
+        # entry while still being a winner; closing it here mistakes a pause for
+        # a failed trade. Once TP1 is hit, the runner trail/BE-stop take over.
+        if (secs_held >= 300 and self.profile["consol_exit"]
+                and self.tp1_hit and self._is_consolidating()):
             return self._action("CLOSE_ALL", self.qty_remaining, "CONSOLIDATION",
                                 current_option_price)
 

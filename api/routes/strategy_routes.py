@@ -7,6 +7,7 @@ operate on the first engine for backwards compatibility with old clients.
 """
 
 import logging
+import concurrent.futures
 
 from flask import Blueprint, jsonify, request
 from services.strategy.trade_logger import TradeLogger
@@ -21,6 +22,37 @@ strategy_bp = Blueprint("strategy", __name__, url_prefix="/strategy")
 logger_svc    = TradeLogger()
 _engines:      dict[str, ORBEngine] = {}   # strategy_id -> ORBEngine
 _stream_manager = None                     # OptionStreamManager — set by init_routes
+
+# Bounds how long an immediate-trade request can take. submit_manual_trade()
+# already has its own internal guards (8s stream verify, etc), but this is a
+# hard backstop: if anything downstream hangs (a wedged lock, a slow broker
+# call), the HTTP request still returns within IMMEDIATE_TRADE_TIMEOUT_S
+# instead of leaving the mobile client spinning forever.
+IMMEDIATE_TRADE_TIMEOUT_S = 15.0
+_trade_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="immediate-trade",
+)
+
+
+def _submit_manual_trade_bounded(engine: ORBEngine, **kwargs) -> dict:
+    """
+    Run engine.submit_manual_trade(**kwargs) with a hard wall-clock timeout.
+    On timeout, logs to both the server log and the engine's Supabase-backed
+    debug log (so it's visible in the Debug tab) and returns an error payload
+    instead of leaving the caller to hang indefinitely.
+    """
+    future = _trade_executor.submit(engine.submit_manual_trade, **kwargs)
+    try:
+        return future.result(timeout=IMMEDIATE_TRADE_TIMEOUT_S)
+    except concurrent.futures.TimeoutError:
+        msg = (f"Manual trade timed out after {IMMEDIATE_TRADE_TIMEOUT_S:.0f}s — "
+               f"backend call did not return (possible stream/broker hang)")
+        logger.error("[strategy] %s — ticker=%s", msg, getattr(engine, "ticker", "?"))
+        try:
+            engine.debug.emit("ERROR", msg)
+        except Exception:
+            pass
+        return {"status": "error", "message": msg}
 
 # Immediate-trade engines for ad-hoc, any-ticker conviction trades that aren't tied
 # to a saved strategy. Keyed by "TICKER:paper|live"; created lazily on first trade.
@@ -328,12 +360,16 @@ def get_debug_logs():
     limit = min(int(request.args.get("limit", 500)), 1000)
     rows: list = []
     try:
+        # Order DESC + limit to get the MOST RECENT rows (the table accumulates
+        # indefinitely — an ASC order here would return the oldest N rows ever
+        # written and today's logs would never surface once the table grew past
+        # `limit`). Reverse after fetching so the response stays oldest-first.
         res = logger_svc.client.table("orb_debug_logs") \
             .select("id,ts,level,message,data,strategy_id,ticker,strategy_name") \
-            .order("ts", desc=False) \
+            .order("ts", desc=True) \
             .limit(limit) \
             .execute()
-        rows = res.data or []
+        rows = list(reversed(res.data or []))
     except Exception as e:
         logger.warning("[strategy] debug-logs DB read failed — falling back to memory: %s", e)
         for sid, engine in _all_engines():
@@ -417,7 +453,8 @@ def immediate_trade(strategy_id: str):
         return jsonify({"status": "error",
                         "message": "direction and contract_symbol are required"}), 400
 
-    result = engine.submit_manual_trade(
+    result = _submit_manual_trade_bounded(
+        engine,
         direction=direction,
         contract_symbol=contract_symbol,
         qty=data.get("qty"),
@@ -451,7 +488,8 @@ def immediate_trade_by_ticker():
         exit_overrides["volume_exit"] = bool(data["volume_exit"])
 
     engine = _get_or_create_immediate_engine(ticker, paper_mode)
-    result = engine.submit_manual_trade(
+    result = _submit_manual_trade_bounded(
+        engine,
         direction=direction,
         contract_symbol=contract_symbol,
         qty=data.get("qty"),
