@@ -43,6 +43,8 @@ class ExitManager:
         self.orh = fib_levels["orh"]
         self.orl = fib_levels["orl"]
 
+        self._runner_mode  = profile.get("runner_mode", "trail")
+
         self.price_buffer  = deque(maxlen=profile["consol_bars"])
         self.volume_buffer = deque(maxlen=profile["consol_bars"])
 
@@ -90,7 +92,10 @@ class ExitManager:
             self.tp1_hit        = True
             self.be_stop_active = True
             self.hard_stop      = self.entry_premium  # move stop to breakeven after TP1
-            self.runner_trail   = current_option_price * (1 - self.profile["runner_trail_pct"])
+            # be_hold: runner sits at B/E stop only — no trailing stop, rides to TP2/EOD.
+            # trail: high-water-mark trailing stop activates immediately at TP1.
+            if self._runner_mode == "trail":
+                self.runner_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
             qty_tp1 = max(1, math.floor(self.qty_remaining * self.profile["tp1_close_pct"]))
             return self._action("CLOSE_PARTIAL", qty_tp1, "TP1", current_option_price)
 
@@ -102,7 +107,9 @@ class ExitManager:
             qty_tp2 = max(1, math.floor(self.qty_remaining * self.profile["tp2_close_pct"]))
             return self._action("CLOSE_PARTIAL", qty_tp2, "TP2", current_option_price)
 
-        if self.tp1_hit and self.qty_remaining > 0:
+        # trail mode only — be_hold skips this block entirely; the B/E stop below
+        # is the only floor for the runner, which then targets TP2 or rides to EOD.
+        if self._runner_mode == "trail" and self.tp1_hit and self.qty_remaining > 0:
             new_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
             if new_trail > self.runner_trail:
                 self.runner_trail = new_trail
