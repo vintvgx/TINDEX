@@ -6,19 +6,40 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { useAlpacaBothAccounts, useAlpacaAccountsHistory } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import type { AccountHistoryEntry } from '@/hooks/queries/strategy/useAlpacaAccounts';
+
+type Period = 'today' | 'week' | 'month';
+
+const PERIOD_LABELS: Record<Period, string> = {
+  today: 'Today',
+  week:  'This Week',
+  month: 'This Month',
+};
+
+function getPnl(entry: AccountHistoryEntry | undefined, period: Period): { value: number; pct: number } | null {
+  if (!entry?.available) return null;
+  if (period === 'today')  return { value: entry.pnl_today ?? 0, pct: entry.pnl_today_pct ?? 0 };
+  if (period === 'week')   return entry.pnl_week   != null ? { value: entry.pnl_week,  pct: entry.pnl_week_pct  ?? 0 } : null;
+  if (period === 'month')  return entry.pnl_month  != null ? { value: entry.pnl_month, pct: entry.pnl_month_pct ?? 0 } : null;
+  return null;
+}
 
 export default function AccountsScreen() {
   const colors = useThemeColors();
+  const [period, setPeriod] = useState<Period>('today');
   const [manualRefreshing, setManualRefreshing] = useState(false);
 
-  const { data, isLoading, refetch } = useAlpacaBothAccounts();
+  const { data: both, isLoading: bothLoading, refetch: refetchBoth } = useAlpacaBothAccounts();
+  const { data: history, isLoading: histLoading, refetch: refetchHistory } = useAlpacaAccountsHistory();
+
+  const isLoading = bothLoading || histLoading;
 
   const handlePullRefresh = useCallback(async () => {
     setManualRefreshing(true);
-    await refetch();
+    await Promise.all([refetchBoth(), refetchHistory()]);
     setManualRefreshing(false);
-  }, [refetch]);
+  }, [refetchBoth, refetchHistory]);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -30,6 +51,31 @@ export default function AccountsScreen() {
         </TouchableOpacity>
         <Text style={[styles.title, { color: colors.text }]}>Trading Accounts</Text>
         <View style={{ width: 22 }} />
+      </View>
+
+      {/* Period toggle */}
+      <View style={[styles.periodBar, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+        {(Object.keys(PERIOD_LABELS) as Period[]).map(p => {
+          const active = period === p;
+          return (
+            <TouchableOpacity
+              key={p}
+              onPress={() => setPeriod(p)}
+              activeOpacity={0.7}
+              style={[
+                styles.periodBtn,
+                active && { backgroundColor: colors.accent + '20', borderRadius: 8 },
+              ]}
+            >
+              <Text style={[
+                styles.periodBtnText,
+                { color: active ? colors.accent : colors.tabBarInactive, fontWeight: active ? '700' : '500' },
+              ]}>
+                {PERIOD_LABELS[p]}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       <ScrollView
@@ -52,7 +98,9 @@ export default function AccountsScreen() {
               label="Paper Trading"
               subtitle="Simulated — no real money"
               accentColor="#FF9F0A"
-              account={data?.paper}
+              account={both?.paper}
+              history={history?.paper}
+              period={period}
               colors={colors}
             />
 
@@ -61,13 +109,25 @@ export default function AccountsScreen() {
               label="Live Trading"
               subtitle="Real money — trade with caution"
               accentColor={colors.success}
-              account={data?.live}
+              account={both?.live}
+              history={history?.live}
+              period={period}
               colors={colors}
             />
 
-            {/* Side-by-side P&L comparison */}
-            {data?.paper?.available && data?.live?.available && (
-              <ComparisonCard paper={data.paper} live={data.live} colors={colors} />
+            {/* P&L comparison — only shown for today since we have both values readily */}
+            {period === 'today' && both?.paper?.available && both?.live?.available && (
+              <ComparisonCard
+                paper={both.paper}
+                live={both.live}
+                colors={colors}
+              />
+            )}
+
+            {period !== 'today' && (
+              <Text style={[styles.disclaimer, { color: colors.tabBarInactive }]}>
+                Pull down to refresh period data. Week and month P&L are based on Alpaca portfolio history.
+              </Text>
             )}
 
             <Text style={[styles.disclaimer, { color: colors.tabBarInactive }]}>
@@ -88,16 +148,20 @@ interface AccountCardProps {
   subtitle: string;
   accentColor: string;
   account?: { available: boolean; equity?: number; cash?: number; buying_power?: number; pnl_today?: number; pnl_today_pct?: number; day_trade_count?: number; error?: string };
+  history?: AccountHistoryEntry;
+  period: Period;
   colors: any;
 }
 
 const AccountCard: React.FC<AccountCardProps> = ({
-  label, subtitle, accentColor, account, colors,
+  label, subtitle, accentColor, account, history, period, colors,
 }) => {
   const unavailable = !account?.available;
-  const pnl    = account?.pnl_today ?? 0;
-  const pnlPct = account?.pnl_today_pct ?? 0;
+  const pnlData = getPnl(history ?? (account as any), period);
+  const pnl    = pnlData?.value ?? 0;
+  const pnlPct = pnlData?.pct ?? 0;
   const pnlColor = pnl >= 0 ? colors.success : colors.error;
+  const hasHistoryData = pnlData !== null;
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -109,6 +173,9 @@ const AccountCard: React.FC<AccountCardProps> = ({
             <Text style={[styles.cardLabel, { color: colors.text }]}>{label}</Text>
           </View>
           <Text style={[styles.cardSubtitle, { color: colors.tabBarInactive }]}>{subtitle}</Text>
+        </View>
+        <View style={[styles.periodTag, { backgroundColor: accentColor + '18', borderColor: accentColor + '44' }]}>
+          <Text style={[styles.periodTagText, { color: accentColor }]}>{PERIOD_LABELS[period]}</Text>
         </View>
       </View>
 
@@ -127,15 +194,29 @@ const AccountCard: React.FC<AccountCardProps> = ({
           <Text style={[styles.equity, { color: colors.text }]}>
             ${(account?.equity ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </Text>
-          <View style={styles.pnlRow}>
-            <Text style={[styles.pnlValue, { color: pnlColor }]}>
-              {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+
+          {/* P&L for selected period */}
+          {hasHistoryData ? (
+            <View style={styles.pnlRow}>
+              <View style={[styles.pnlPill, { backgroundColor: pnlColor + '18' }]}>
+                <Ionicons
+                  name={pnl >= 0 ? 'trending-up' : 'trending-down'}
+                  size={14}
+                  color={pnlColor}
+                />
+                <Text style={[styles.pnlValue, { color: pnlColor }]}>
+                  {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(2)}
+                </Text>
+                <Text style={[styles.pnlPct, { color: pnlColor }]}>
+                  ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+                </Text>
+              </View>
+            </View>
+          ) : (
+            <Text style={[styles.noData, { color: colors.tabBarInactive }]}>
+              Period data loading…
             </Text>
-            <Text style={[styles.pnlPct, { color: pnlColor }]}>
-              ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
-            </Text>
-            <Text style={[styles.pnlLabel, { color: colors.tabBarInactive }]}> today</Text>
-          </View>
+          )}
 
           {/* Stats row */}
           <View style={[styles.statsRow, { borderTopColor: colors.border }]}>
@@ -152,7 +233,6 @@ const AccountCard: React.FC<AccountCardProps> = ({
 const ComparisonCard = ({ paper, live, colors }: any) => {
   const paperPnl = paper.pnl_today ?? 0;
   const livePnl  = live.pnl_today  ?? 0;
-  const diff     = livePnl - paperPnl;
 
   return (
     <View style={[styles.compCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -162,7 +242,11 @@ const ComparisonCard = ({ paper, live, colors }: any) => {
         <View style={[styles.compDivider, { backgroundColor: colors.border }]} />
         <CompStat label="Live" value={livePnl} colors={colors} />
         <View style={[styles.compDivider, { backgroundColor: colors.border }]} />
-        <CompStat label="Difference" value={diff} colors={colors} />
+        <CompStat
+          label="Combined"
+          value={paperPnl + livePnl}
+          colors={colors}
+        />
       </View>
     </View>
   );
@@ -190,21 +274,39 @@ const styles = StyleSheet.create({
   header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   title:     { fontSize: 20, fontWeight: '700' },
 
-  card:         { borderRadius: 16, padding: 16, gap: 10 },
+  periodBar: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: 4,
+  },
+  periodBtn: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  periodBtnText: { fontSize: 13 },
+
+  card:         { borderRadius: 16, padding: 16, gap: 10, borderWidth: 1 },
   cardHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   labelRow:     { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3 },
   dot:          { width: 9, height: 9, borderRadius: 5 },
   cardLabel:    { fontSize: 17, fontWeight: '700' },
   cardSubtitle: { fontSize: 12 },
 
+  periodTag:     { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
+  periodTagText: { fontSize: 11, fontWeight: '700' },
+
   unavailableRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 4 },
   unavailableText: { fontSize: 12, flex: 1 },
 
-  equity:   { fontSize: 30, fontWeight: '700' },
-  pnlRow:   { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
-  pnlValue: { fontSize: 16, fontWeight: '700' },
-  pnlPct:   { fontSize: 14, fontWeight: '600' },
-  pnlLabel: { fontSize: 12 },
+  equity:  { fontSize: 30, fontWeight: '700' },
+  pnlRow:  { flexDirection: 'row' },
+  pnlPill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
+  pnlValue:{ fontSize: 15, fontWeight: '700' },
+  pnlPct:  { fontSize: 13, fontWeight: '600' },
+  noData:  { fontSize: 13, fontStyle: 'italic' },
 
   statsRow: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 12, gap: 0 },
   stat:     { flex: 1, alignItems: 'center' },

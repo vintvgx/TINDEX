@@ -9,6 +9,25 @@ export interface BothAccountsResponse {
   live:  (AlpacaAccount & { available: boolean; error?: string });
 }
 
+export interface AccountHistoryEntry {
+  available: boolean;
+  equity?: number;
+  pnl_today?: number;
+  pnl_today_pct?: number;
+  pnl_week?: number | null;
+  pnl_week_pct?: number | null;
+  pnl_month?: number | null;
+  pnl_month_pct?: number | null;
+  paper_mode?: boolean;
+  error?: string;
+}
+
+export interface AccountsHistoryResponse {
+  success: boolean;
+  paper: AccountHistoryEntry;
+  live: AccountHistoryEntry;
+}
+
 export function useAlpacaBothAccounts(enabled: boolean = true) {
   return useQuery<BothAccountsResponse>({
     queryKey: ['alpaca-both-accounts'],
@@ -22,6 +41,22 @@ export function useAlpacaBothAccounts(enabled: boolean = true) {
     enabled,
     refetchInterval: 30_000,
     staleTime: 20_000,
+    retry: 1,
+  });
+}
+
+export function useAlpacaAccountsHistory() {
+  return useQuery<AccountsHistoryResponse>({
+    queryKey: ['alpaca-accounts-history'],
+    queryFn: async () => {
+      const res = await fetch(`${RAILWAY_BASE_URL}/strategy/accounts/history`);
+      if (!res.ok) throw new Error('Failed to fetch account history');
+      const json = await res.json();
+      if (!json.success) throw new Error('Account history fetch failed');
+      return json as AccountsHistoryResponse;
+    },
+    refetchInterval: 60_000,
+    staleTime: 50_000,
     retry: 1,
   });
 }

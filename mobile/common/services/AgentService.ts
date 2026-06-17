@@ -1,3 +1,6 @@
+// Expo's fetch (unlike RN's global fetch) exposes a real ReadableStream on
+// `response.body`, which is required for the SSE token streaming below.
+import { fetch } from 'expo/fetch';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import type {
   AgentChatRequest,

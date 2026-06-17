@@ -9,7 +9,7 @@ import threading
 
 from bs4 import BeautifulSoup
 
-from flask import Flask, jsonify, request # pylint: disable=import-error # type: ignore
+from flask import Flask, jsonify, request, Response, stream_with_context # pylint: disable=import-error # type: ignore
 from flask_sock import Sock # pylint: disable=import-error # type: ignore
 
 import requests
@@ -2204,6 +2204,221 @@ def get_portfolio_metrics():
 
 
 # ── WebSocket: live price stream ───────────────────────────────────────────────
+# ── AI Agent (TINDEX assistant) ─────────────────────────────────────────────────
+
+DEFAULT_AGENT_SYSTEM_PROMPT = (
+    "You are TINDEX, an expert AI financial assistant specializing in options trading "
+    "and market analysis. Provide data-driven, actionable insights. Always include the "
+    "disclaimer: \"Not financial advice. Always do your own research.\""
+)
+
+
+def _build_ticker_context(symbols: list[str]) -> Optional[str]:
+    """
+    Build a compact live-market snapshot for $-referenced tickers, injected into the
+    agent prompt so it answers from current data rather than its training cutoff.
+
+    Uses yfinance fast_info for price metrics (fast) and falls back to .info for
+    company name / sector / valuation when available.
+    """
+    import yfinance as yf
+
+    blocks: list[str] = []
+    for sym in symbols:
+        try:
+            t = yf.Ticker(sym)
+
+            def _fi(key, *aliases):
+                fi = t.fast_info
+                for k in (key, *aliases):
+                    try:
+                        val = fi[k]
+                    except (KeyError, TypeError):
+                        val = getattr(fi, k, None)
+                    if val is not None:
+                        return val
+                return None
+
+            price = _fi("last_price", "lastPrice")
+            prev  = _fi("previous_close", "previousClose")
+            if price is None and prev is None:
+                blocks.append(f"${sym}: no market data available right now.")
+                continue
+
+            lines = [f"${sym}"]
+            if price is not None:
+                line = f"  Price: ${float(price):.2f}"
+                if prev:
+                    chg = float(price) - float(prev)
+                    pct = (chg / float(prev) * 100) if prev else 0
+                    line += f" ({'+' if chg >= 0 else ''}{chg:.2f}, {'+' if pct >= 0 else ''}{pct:.2f}%)"
+                lines.append(line)
+
+            day_low, day_high = _fi("day_low", "dayLow"), _fi("day_high", "dayHigh")
+            if day_low and day_high:
+                lines.append(f"  Day range: ${float(day_low):.2f} – ${float(day_high):.2f}")
+            yr_low, yr_high = _fi("year_low", "yearLow"), _fi("year_high", "yearHigh")
+            if yr_low and yr_high:
+                lines.append(f"  52-week range: ${float(yr_low):.2f} – ${float(yr_high):.2f}")
+            vol = _fi("last_volume", "lastVolume")
+            if vol:
+                lines.append(f"  Volume: {int(vol):,}")
+            mcap = _fi("market_cap", "marketCap")
+            if mcap:
+                lines.append(f"  Market cap: ${float(mcap)/1e9:.1f}B")
+
+            # Best-effort richer fundamentals (slower; never let it break the snapshot).
+            try:
+                info = t.get_info() or {}
+                name = info.get("shortName") or info.get("longName")
+                sector = info.get("sector")
+                pe = info.get("trailingPE")
+                if name:
+                    lines[0] = f"${sym} — {name}"
+                meta = []
+                if sector:
+                    meta.append(sector)
+                if pe:
+                    meta.append(f"P/E {float(pe):.1f}")
+                if meta:
+                    lines.append("  " + " · ".join(meta))
+            except Exception:
+                pass
+
+            blocks.append("\n".join(lines))
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("[agent] ticker snapshot failed for %s: %s", sym, exc)
+            blocks.append(f"${sym}: market data lookup failed.")
+
+    return "\n\n".join(blocks) if blocks else None
+
+
+@app.route("/api/agent/chat", methods=["POST"])
+def agent_chat():
+    """
+    Streaming chat with the TINDEX AI agent (Server-Sent Events).
+
+    Request body: { user_id, message, conversation_id?, ticker?, system_prompt? }
+    Streams `data: {"type":"chunk","content":...}` lines, then a final
+    `data: {"type":"complete", conversationId, messageId, title?}`.
+    """
+    body = request.get_json(silent=True) or {}
+    user_id = body.get("user_id")
+    message = (body.get("message") or "").strip()
+    conversation_id = body.get("conversation_id")
+    ticker = body.get("ticker")
+    system_prompt = body.get("system_prompt") or DEFAULT_AGENT_SYSTEM_PROMPT
+
+    if not user_id or not message:
+        return jsonify({"error": "user_id and message are required"}), 400
+
+    supabase = get_supabase_service()
+
+    # Live data for any $TICKER mentions, plus the conversation's context ticker.
+    symbols = anthropic_service.extract_tickers(message)
+    if ticker and ticker.upper() not in symbols:
+        symbols.insert(0, ticker.upper())
+    ticker_context = _build_ticker_context(symbols) if symbols else None
+
+    is_new = not conversation_id
+    if is_new:
+        convo = supabase.create_ai_conversation(
+            user_id=user_id,
+            title=" ".join(message.split()[:6]) or "New conversation",
+            ticker=ticker,
+        )
+        if not convo:
+            return jsonify({"error": "Failed to create conversation"}), 500
+        conversation_id = convo["id"]
+
+    supabase.add_ai_message(conversation_id, "user", message)
+
+    history = supabase.get_ai_messages(conversation_id, limit=20)
+    chat_messages = [{"role": m["role"], "content": m["content"]} for m in history] \
+        or [{"role": "user", "content": message}]
+
+    def generate():
+        full = ""
+        try:
+            for chunk in anthropic_service.stream_agent_chat(chat_messages, system_prompt, ticker_context):
+                full += chunk
+                yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
+
+            saved = supabase.add_ai_message(conversation_id, "assistant", full) if full else None
+
+            title = None
+            if is_new:
+                title = anthropic_service.generate_conversation_title(message)
+                supabase.touch_ai_conversation(conversation_id, title=title)
+            else:
+                supabase.touch_ai_conversation(conversation_id)
+
+            complete = {
+                "type": "complete",
+                "content": full,
+                "conversationId": conversation_id,
+                "messageId": (saved or {}).get("id", ""),
+            }
+            if title:
+                complete["title"] = title
+            yield f"data: {json.dumps(complete)}\n\n"
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.error("[agent] chat stream failed: %s", exc, exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
+@app.route("/api/agent/score_contract", methods=["POST"])
+def agent_score_contract():
+    """
+    Produce + persist an AI score for an options contract.
+
+    Request body: { user_id, ticker, contract, tracked_contract_id?, system_prompt? }
+    Returns { success, data: ContractScore }.
+    """
+    body = request.get_json(silent=True) or {}
+    user_id = body.get("user_id")
+    ticker = body.get("ticker")
+    contract = body.get("contract")
+    tracked_contract_id = body.get("tracked_contract_id")
+    system_prompt = body.get("system_prompt") or DEFAULT_AGENT_SYSTEM_PROMPT
+
+    if not user_id or not ticker or not contract:
+        return jsonify({"success": False, "error": "user_id, ticker and contract are required"}), 400
+
+    try:
+        result = anthropic_service.score_contract(ticker, contract, system_prompt)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error("[agent] score_contract failed: %s", exc, exc_info=True)
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+    supabase = get_supabase_service()
+    row = supabase.save_contract_score({
+        "user_id": user_id,
+        "tracked_contract_id": tracked_contract_id,
+        "ticker": ticker.upper(),
+        "contract_symbol": contract.get("symbol", ""),
+        "score": result["score"],
+        "signal": result["signal"],
+        "reasoning": result.get("reasoning", ""),
+        "factors": result.get("factors"),
+    })
+
+    data = row or {
+        **result,
+        "user_id": user_id,
+        "tracked_contract_id": tracked_contract_id,
+        "ticker": ticker.upper(),
+        "contract_symbol": contract.get("symbol", ""),
+    }
+    return jsonify({"success": True, "data": data})
+
+
 @sock.route('/ws/prices')
 def ws_prices(ws):
     """

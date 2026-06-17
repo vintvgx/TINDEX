@@ -1,4 +1,9 @@
-export type ProfileKey = 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'TREND_RIDER' | 'RETESTER' | 'REVERSAL' | 'CUSTOM';
+export type ProfileKey =
+  | 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'TREND_RIDER' | 'RETESTER' | 'REVERSAL' | 'CUSTOM'
+  // Immediate trade profiles (conviction / manual entries)
+  | 'SCALPER' | 'PRECISION' | 'MOMENTUM' | 'CONVICTION' | 'ALL_IN';
+
+export type TradeType = 'STRATEGY' | 'IMMEDIATE';
 
 export interface CustomThresholds {
   qty_contracts:           number;
@@ -196,6 +201,8 @@ export interface ORBTrade {
   underlying_price_exit: number | null;
   flow_confirmed: boolean;
   fib_targets?: Record<string, number> | null;
+  paper_mode?: boolean;
+  trade_type?: TradeType;
 }
 
 export interface StrategyStats {
@@ -244,6 +251,7 @@ export interface LiveOptionPrice {
   pnl:           number;
   pnl_pct:       number;
   qty_remaining: number;
+  market_value:  number;
   tp1_hit:       boolean;
   tp2_hit:       boolean;
   hard_stop:     number;

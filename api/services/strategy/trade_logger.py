@@ -122,7 +122,9 @@ class TradeLogger:
                   fib_levels: dict, session_date, profile: str, qty: int,
                   underlying_price_entry: Optional[float] = None,
                   vix_at_entry: Optional[float] = None,
-                  strategy_id: Optional[str] = None) -> Optional[str]:
+                  strategy_id: Optional[str] = None,
+                  paper_mode: bool = True,
+                  trade_type: str = "STRATEGY") -> Optional[str]:
         try:
             res = self.client.table("orb_trades").insert({
                 "trade_date":             str(session_date),
@@ -143,6 +145,8 @@ class TradeLogger:
                 "underlying_price_entry": underlying_price_entry,
                 "vix_at_entry":           vix_at_entry,
                 "strategy_id":            strategy_id,
+                "paper_mode":             paper_mode,
+                "trade_type":             trade_type,
             }).execute()
             if res.data:
                 return res.data[0]["id"]

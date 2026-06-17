@@ -14,61 +14,89 @@ logger = get_logger(__name__)
 
 def batch_fetch_current_prices(tickers: list[str]) -> dict[str, float]:
     """
-    Fetch current (latest close) prices for multiple tickers in a single yfinance call.
+    Fetch the latest *intraday* price for multiple tickers in a single yfinance call.
 
-    Uses yf.download with period="5d" so we get the latest available close even when
-    the market is closed (e.g. weekend). Single-ticker and multi-ticker responses have
-    different shapes; both are handled.
+    The live ticker tape needs the current market price, not yesterday's close. We
+    therefore download today's 1-minute bars (period="1d", interval="1m") and take the
+    last printed bar's Close — that is the most-recent traded price while the market is
+    open. When the market is closed (pre-market gap, weekend, holiday) the 1m frame is
+    empty, so we fall back to the latest daily close, and finally to per-ticker
+    Ticker.info.
 
     Args:
         tickers: List of ticker symbols (e.g. ["AAPL", "TSLA"]).
 
     Returns:
-        Dict mapping ticker -> latest close price. Missing/failed tickers are omitted.
+        Dict mapping ticker -> latest price. Missing/failed tickers are omitted.
     """
     if not tickers:
         return {}
 
+    # 1) Live intraday price (market hours).
+    prices = _download_last_close(tickers, period="1d", interval="1m")
+
+    # 2) Daily close fallback for any ticker the intraday call didn't cover
+    #    (market closed, illiquid symbol, etc.).
+    missing = [t for t in tickers if t not in prices]
+    if missing:
+        prices.update(_download_last_close(missing, period="5d", interval="1d"))
+
+    # 3) Last resort: per-ticker Ticker.info.
+    still_missing = [t for t in tickers if t not in prices]
+    if still_missing:
+        prices.update(_fallback_fetch_prices(still_missing))
+
+    return prices
+
+
+def _download_last_close(tickers: list[str], period: str, interval: str) -> dict[str, float]:
+    """Download bars and return {ticker: last non-NaN Close}. Never raises."""
+    if not tickers:
+        return {}
     try:
         data = yf.download(
             tickers,
-            period="5d",
+            period=period,
+            interval=interval,
             progress=False,
             threads=False,
             auto_adjust=True,
         )
-
-        if data.empty:
-            logger.warning("yf.download returned empty DataFrame for tickers=%s", tickers)
-            return _fallback_fetch_prices(tickers)
+        if data is None or data.empty:
+            return {}
 
         prices: dict[str, float] = {}
-
         if len(tickers) == 1:
-            # Single ticker: flat columns ["Close", ...] or MultiIndex ("Close", ticker)
             close_series = _get_close_series_single(data, tickers[0])
-            if close_series is not None:
-                last = close_series.iloc[-1]
-                if last is not None and not pd.isna(last):
-                    prices[tickers[0]] = float(last)
+            last = _last_valid(close_series)
+            if last is not None:
+                prices[tickers[0]] = last
         else:
-            # yfinance >= 0.2.x returns MultiIndex columns ordered (Price, Ticker)
+            # MultiIndex columns ordered (Price, Ticker) on yfinance >= 0.2.x
             for ticker in tickers:
                 try:
-                    close_series = data["Close"][ticker]
-                    last = close_series.iloc[-1]
-                    if last is not None and not pd.isna(last):
-                        prices[ticker] = float(last)
-                except (KeyError, IndexError, TypeError) as e:
-                    logger.warning("No price data for %s: %s", ticker, e)
-
-        if not prices and tickers:
-            return _fallback_fetch_prices(tickers)
+                    last = _last_valid(data["Close"][ticker])
+                    if last is not None:
+                        prices[ticker] = last
+                except (KeyError, IndexError, TypeError):
+                    continue
         return prices
+    except Exception as e:  # pylint: disable=broad-except
+        logger.warning("price download failed (period=%s interval=%s): %s", period, interval, e)
+        return {}
 
-    except Exception as e:
-        logger.error("Batch price fetch failed: %s", e, exc_info=True)
-        return _fallback_fetch_prices(tickers)
+
+def _last_valid(series) -> float | None:
+    """Return the last non-NaN value of a Close series as a float, or None."""
+    if series is None:
+        return None
+    try:
+        cleaned = series.dropna()
+        if cleaned.empty:
+            return None
+        return float(cleaned.iloc[-1])
+    except (IndexError, TypeError, ValueError):
+        return None
 
 
 def _get_close_series_single(data: pd.DataFrame, ticker: str):

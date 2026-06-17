@@ -127,6 +127,124 @@ PROFILES = {
         "vix_max_override":       45,
         "entry_mode":             "BREAK",
     },
+    # ── IMMEDIATE TRADE PROFILES ──────────────────────────────────────────────────
+    # These five profiles are purpose-built for conviction / immediate trades.
+    # They skip the ORB breakout window entirely (breakout_time_limit_min=240),
+    # have tighter EOD buffers, and are tuned for direction-already-chosen entries.
+    # Ordered left-to-right on the slider: risk-conscious → profit-maximising.
+
+    # ─── SCALPER — Quick locks, tight trail ──────────────────────────────────────
+    "SCALPER": {
+        "qty_contracts":           3,
+        "max_loss_pct":            0.30,
+        "tp1_mult":                1.30,
+        "tp2_mult":                1.60,
+        "tp1_close_pct":           0.67,    # lock 2/3 at TP1
+        "tp2_close_pct":           1.00,    # close all at TP2
+        "runner_trail_pct":        0.25,    # tight trail on the runner
+        "consol_exit":             False,
+        "volume_exit":             False,
+        "consol_range_pct":        0.0006,
+        "consol_bars":             4,
+        "volume_exit_threshold":   0.25,
+        "strike_offset_min":       0.50,
+        "strike_offset_max":       1.50,
+        "target_delta_min":        0.40,
+        "target_delta_max":        0.55,
+        "eod_buffer_minutes":      30,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        35,
+    },
+    # ─── PRECISION — Disciplined, ATM, tight stop ────────────────────────────────
+    "PRECISION": {
+        "qty_contracts":           2,
+        "max_loss_pct":            0.25,
+        "tp1_mult":                1.40,
+        "tp2_mult":                1.80,
+        "tp1_close_pct":           0.50,
+        "tp2_close_pct":           1.00,
+        "runner_trail_pct":        0.20,
+        "consol_exit":             False,
+        "volume_exit":             False,
+        "consol_range_pct":        0.0008,
+        "consol_bars":             4,
+        "volume_exit_threshold":   0.20,
+        "strike_offset_min":       0.50,
+        "strike_offset_max":       1.50,
+        "target_delta_min":        0.42,
+        "target_delta_max":        0.55,
+        "eod_buffer_minutes":      30,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        30,
+    },
+    # ─── MOMENTUM — Ride the move, small TP1, let runner go (DEFAULT) ───────────
+    "MOMENTUM": {
+        "qty_contracts":           4,
+        "max_loss_pct":            0.40,
+        "tp1_mult":                1.20,
+        "tp2_mult":                1.50,
+        "tp1_close_pct":           0.25,    # small close — mostly keep running
+        "tp2_close_pct":           0.50,
+        "runner_trail_pct":        0.18,
+        "consol_exit":             False,
+        "volume_exit":             False,
+        "consol_range_pct":        0.0010,
+        "consol_bars":             6,
+        "volume_exit_threshold":   0.15,
+        "strike_offset_min":       0.50,
+        "strike_offset_max":       2.00,
+        "target_delta_min":        0.35,
+        "target_delta_max":        0.50,
+        "eod_buffer_minutes":      20,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        35,
+    },
+    # ─── CONVICTION — High confidence, runner-focused ────────────────────────────
+    "CONVICTION": {
+        "qty_contracts":           5,
+        "max_loss_pct":            0.45,
+        "tp1_mult":                1.15,
+        "tp2_mult":                1.35,
+        "tp1_close_pct":           0.20,    # tiny close — almost all runs
+        "tp2_close_pct":           0.35,
+        "runner_trail_pct":        0.15,    # looser trail, let it breathe
+        "consol_exit":             False,
+        "volume_exit":             False,
+        "consol_range_pct":        0.0012,
+        "consol_bars":             8,
+        "volume_exit_threshold":   0.10,
+        "strike_offset_min":       0.50,
+        "strike_offset_max":       2.00,
+        "target_delta_min":        0.30,
+        "target_delta_max":        0.48,
+        "eod_buffer_minutes":      15,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        40,
+    },
+    # ─── ALL_IN — Max size, let it run until EOD ─────────────────────────────────
+    "ALL_IN": {
+        "qty_contracts":           8,
+        "use_tp2":                 False,   # skip TP2; pure runner trail
+        "max_loss_pct":            0.50,
+        "tp1_mult":                1.10,
+        "tp2_mult":                2.00,    # kept for completeness, never hit
+        "tp1_close_pct":           0.50,
+        "tp2_close_pct":           0.00,    # irrelevant (use_tp2=False)
+        "runner_trail_pct":        0.12,    # very loose — ride the full trend
+        "consol_exit":             False,
+        "volume_exit":             False,
+        "consol_range_pct":        0.0015,
+        "consol_bars":             10,
+        "volume_exit_threshold":   0.08,
+        "strike_offset_min":       0.50,
+        "strike_offset_max":       2.50,
+        "target_delta_min":        0.28,
+        "target_delta_max":        0.45,
+        "eod_buffer_minutes":      10,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        50,
+    },
+
     # ─── RETESTER — Wait for price to return to the breakout level ───────────────
     "RETESTER": {
         "qty_contracts": 4,
@@ -204,6 +322,12 @@ _DISPLAY_NAMES = {
     "RETESTER":    "Retester",
     "REVERSAL":    "Reversal",
     "CUSTOM":      "Custom",
+    # Immediate trade profiles
+    "SCALPER":    "Scalper",
+    "PRECISION":  "Precision",
+    "MOMENTUM":   "Momentum",
+    "CONVICTION": "Conviction",
+    "ALL_IN":     "All In",
 }
 
 _EMOJIS = {
@@ -214,6 +338,12 @@ _EMOJIS = {
     "RETESTER":    "🎯",
     "REVERSAL":    "🔄",
     "CUSTOM":      "⚙️",
+    # Immediate trade profiles
+    "SCALPER":    "⚡",
+    "PRECISION":  "🎯",
+    "MOMENTUM":   "📈",
+    "CONVICTION": "💎",
+    "ALL_IN":     "🔥",
 }
 
 
@@ -241,6 +371,11 @@ def describe_profile(key: str, custom_thresholds: dict = None) -> dict:
         "TREND_RIDER": "Medium-High",
         "RETESTER":    "Medium",
         "REVERSAL":    "Medium-High",
+        "SCALPER":     "Low",
+        "PRECISION":   "Low-Med",
+        "MOMENTUM":    "Medium",
+        "CONVICTION":  "Med-High",
+        "ALL_IN":      "High",
     }.get(k, "Custom")
     # A runner exists when TP2 is disabled (remaining contracts trail) OR when
     # TP2 only closes a fraction (tp2_close_pct < 1.0).

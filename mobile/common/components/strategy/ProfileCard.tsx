@@ -18,6 +18,11 @@ const BORDER_COLORS: Record<ProfileKey, string> = {
   RETESTER:    '#06B6D4',
   REVERSAL:    '#FF453A',
   CUSTOM:      '#A855F7',
+  SCALPER:     '#22C55E',
+  PRECISION:   '#84CC16',
+  MOMENTUM:    '#F59E0B',
+  CONVICTION:  '#F97316',
+  ALL_IN:      '#EF4444',
 };
 
 export const ProfileCard: React.FC<Props> = ({ profile, selected, onSelect }) => {

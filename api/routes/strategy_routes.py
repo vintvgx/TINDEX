@@ -642,6 +642,70 @@ def get_both_accounts():
     })
 
 
+@strategy_bp.route("/accounts/history", methods=["GET"])
+def get_accounts_history():
+    """Return period P&L (today / week / month) for paper and live accounts."""
+    import os
+    from alpaca.trading.client import TradingClient
+
+    def _fetch_with_history(paper: bool) -> dict:
+        try:
+            key    = os.getenv("ALPACA_PAPER_API_KEY" if paper else "ALPACA_LIVE_API_KEY")
+            secret = os.getenv("ALPACA_PAPER_SECRET_KEY" if paper else "ALPACA_LIVE_SECRET_KEY")
+            client = TradingClient(key, secret, paper=paper)
+
+            acct        = client.get_account()
+            equity      = float(acct.equity)
+            last_equity = float(acct.last_equity)
+            pnl_today   = equity - last_equity
+            pnl_today_pct = (pnl_today / last_equity * 100) if last_equity > 0 else 0
+
+            # Fetch 1-month of daily history to derive week/month P&L.
+            try:
+                hist = client.get_portfolio_history(filter=None)
+                # alpaca-py returns PortfolioHistory with .equity (list) and .profit_loss
+                equities = [float(e) for e in (hist.equity or []) if e is not None]
+            except Exception:
+                equities = []
+
+            pnl_week = pnl_week_pct = None
+            pnl_month = pnl_month_pct = None
+
+            if equities:
+                # Week: compare current equity to 5 trading days ago (or earliest available)
+                week_idx = max(0, len(equities) - 6)
+                week_start = equities[week_idx]
+                if week_start > 0:
+                    pnl_week     = round(equity - week_start, 2)
+                    pnl_week_pct = round((equity - week_start) / week_start * 100, 3)
+
+                # Month: compare to first available equity in the series
+                month_start = equities[0]
+                if month_start > 0:
+                    pnl_month     = round(equity - month_start, 2)
+                    pnl_month_pct = round((equity - month_start) / month_start * 100, 3)
+
+            return {
+                "available":      True,
+                "equity":         equity,
+                "pnl_today":      round(pnl_today, 2),
+                "pnl_today_pct":  round(pnl_today_pct, 3),
+                "pnl_week":       pnl_week,
+                "pnl_week_pct":   pnl_week_pct,
+                "pnl_month":      pnl_month,
+                "pnl_month_pct":  pnl_month_pct,
+                "paper_mode":     paper,
+            }
+        except Exception as e:
+            return {"available": False, "paper_mode": paper, "error": str(e)}
+
+    return jsonify({
+        "success": True,
+        "paper":   _fetch_with_history(True),
+        "live":    _fetch_with_history(False),
+    })
+
+
 # ── Trade history / Stats ──────────────────────────────────────────────────────
 
 @strategy_bp.route("/trades", methods=["GET"])
@@ -650,6 +714,26 @@ def get_trade_history():
     ticker  = request.args.get("ticker", None)
     profile = request.args.get("profile", None)
     return jsonify(logger_svc.get_trades(limit=limit, ticker=ticker, profile=profile))
+
+
+@strategy_bp.route("/skipped-sessions", methods=["GET"])
+def get_skipped_sessions():
+    """Return sessions where trade_taken=false (strategy chose not to trade), newest first."""
+    limit = request.args.get("limit", 50, type=int)
+    try:
+        res = (
+            logger_svc.client.table("orb_session")
+            .select("session_date,ticker,profile,skip_reason,strategy_id")
+            .eq("trade_taken", False)
+            .not_.is_("skip_reason", "null")
+            .order("session_date", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return jsonify(res.data or [])
+    except Exception as e:
+        logger.error("[strategy] skipped-sessions failed: %s", e)
+        return jsonify([])
 
 
 @strategy_bp.route("/stats", methods=["GET"])

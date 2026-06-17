@@ -10,7 +10,13 @@ const PROFILE_EMOJI: Record<ProfileKey, string> = {
   WOLF:        '🐺',
   TREND_RIDER: '🚀',
   RETESTER:    '🎯',
+  REVERSAL:    '🔄',
   CUSTOM:      '⚙️',
+  SCALPER:     '⚡',
+  PRECISION:   '🎯',
+  MOMENTUM:    '📈',
+  CONVICTION:  '💎',
+  ALL_IN:      '🔥',
 };
 
 interface Props {
@@ -37,6 +43,9 @@ export const PositionCard: React.FC<Props> = ({ position, onForceClose }) => {
   const pnlPct  = position.unrealized_pnl_pct ?? 0;
   const pnlColor = pnl >= 0 ? colors.success : colors.error;
   const dirColor = position.direction === 'CALL' ? colors.success : colors.error;
+  const mktVal  = (position.current_price != null && position.qty_remaining != null)
+    ? position.current_price * position.qty_remaining * 100
+    : null;
 
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -67,6 +76,11 @@ export const PositionCard: React.FC<Props> = ({ position, onForceClose }) => {
           <Text style={[styles.pnlPct, { color: pnlColor }]}>
             {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
           </Text>
+          {mktVal != null && (
+            <Text style={[styles.mktVal, { color: colors.tabBarInactive }]}>
+              Mkt ${mktVal.toFixed(2)}
+            </Text>
+          )}
         </View>
       </View>
 
@@ -146,6 +160,7 @@ const styles = StyleSheet.create({
   pnlBlock: { alignItems: 'flex-end' },
   pnlValue: { fontSize: 20, fontWeight: '700' },
   pnlPct:   { fontSize: 13, fontWeight: '500', marginTop: 1 },
+  mktVal:   { fontSize: 11, fontWeight: '600', marginTop: 4 },
   levelRow: { flexDirection: 'row', justifyContent: 'space-between' },
   level:    { alignItems: 'center', flex: 1 },
   levelLabel: { fontSize: 10, marginBottom: 2 },

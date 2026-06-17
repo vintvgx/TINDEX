@@ -730,11 +730,16 @@ class ORBEngine:
         self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
 
     def _execute_entry(self, direction: str, contract: dict, qty: int,
-                       effective_profile: dict, fib_levels: dict, manual: bool = False):
+                       effective_profile: dict, fib_levels: dict, manual: bool = False,
+                       profile_key_override: str | None = None):
         """
         Submit the market order, set trade state, initialise ExitManager, log and
         notify. Shared by the auto path (_enter_trade) and the manual conviction
         path (submit_manual_trade). Assumes capital/stream checks already passed.
+
+        profile_key_override: the profile key actually used for this trade (differs
+        from self.profile_key when the user selects a profile at trade submission time).
+        Always pass this from submit_manual_trade so immediate trades log correctly.
         """
         try:
             order_req = MarketOrderRequest(
@@ -766,6 +771,16 @@ class ORBEngine:
                 profile=effective_profile,
             )
 
+            # Use the override key when the user selected a profile at trade time
+            # (immediate trades). This fixes the bug where all immediate trades were
+            # logged as THUNDER_CAT regardless of the profile the user picked.
+            logged_profile_key = profile_key_override or self.profile_key
+            trade_type = "IMMEDIATE" if manual else "STRATEGY"
+
+            # Update engine's profile_key so /immediate-positions reflects it correctly.
+            if profile_key_override:
+                self.profile_key = profile_key_override
+
             self.active_trade_id = self.logger.log_entry(
                 ticker=self.ticker,
                 direction=direction,
@@ -774,11 +789,13 @@ class ORBEngine:
                 orh=fib_levels.get("orh"), orl=fib_levels.get("orl"),
                 fib_levels=fib_levels,
                 session_date=self.session_date,
-                profile=self.profile_key,
+                profile=logged_profile_key,
                 qty=qty,
                 underlying_price_entry=self._last_underlying_price,
                 vix_at_entry=self.vix,
                 strategy_id=self.strategy_id,
+                paper_mode=self.paper,
+                trade_type=trade_type,
             )
             self.notifier.notify_entry(
                 ticker=self.ticker,
@@ -787,7 +804,7 @@ class ORBEngine:
                 qty=qty,
                 entry_premium=entry_premium,
                 trade_id=self.active_trade_id,
-                profile_key=self.profile_key,
+                profile_key=logged_profile_key,
                 macro_event=self.macro_today,
             )
             # Subscribe to real-time option quotes now that the position is open
@@ -796,7 +813,7 @@ class ORBEngine:
 
             logger.info("[ORBEngine] Entered %s %s qty=%d @ %.2f (manual=%s)",
                         direction, contract["symbol"], qty, entry_premium, manual)
-            _tag = f"[{self.strategy_name} | {self.profile_key}]"
+            _tag = f"[{self.strategy_name} | {logged_profile_key}]"
             self.debug.emit("SUCCESS", f"{_tag} {'MANUAL ' if manual else ''}ENTERED {direction} "
                                        f"{contract['symbol']} qty={qty} @ {entry_premium:.2f}")
         except Exception as e:
@@ -839,9 +856,11 @@ class ORBEngine:
             logger.debug("[ORBEngine] market clock check failed, continuing: %s", e)
 
         effective_profile = self.profile
+        effective_profile_key = self.profile_key
         if profile_key and profile_key != self.profile_key:
             try:
                 effective_profile = get_profile(profile_key, exit_overrides)
+                effective_profile_key = profile_key
             except Exception:
                 return {"status": "error", "message": f"Unknown profile {profile_key}"}
         elif exit_overrides:
@@ -899,7 +918,7 @@ class ORBEngine:
 
         try:
             self._execute_entry(direction, contract, qty, effective_profile, fib_levels,
-                                manual=True)
+                                manual=True, profile_key_override=effective_profile_key)
         except Exception as e:
             self.debug.emit("ERROR", f"Manual trade blocked — order submission failed: {e}")
             return {"status": "error", "message": f"Order submission failed: {e}"}
@@ -1154,8 +1173,9 @@ class ORBEngine:
             return
         em = self.exit_manager
         entry_p = em.entry_premium or 0
-        pnl     = (mid - entry_p) * em.qty_remaining * 100
-        pnl_pct = ((mid - entry_p) / entry_p * 100) if entry_p > 0 else 0
+        pnl          = (mid - entry_p) * em.qty_remaining * 100
+        pnl_pct      = ((mid - entry_p) / entry_p * 100) if entry_p > 0 else 0
+        market_value = mid * em.qty_remaining * 100
         payload = _json.dumps({
             "type":          "price_update",
             "contract":      self.contract_symbol,
@@ -1164,6 +1184,7 @@ class ORBEngine:
             "pnl":           round(pnl, 2),
             "pnl_pct":       round(pnl_pct, 2),
             "qty_remaining": em.qty_remaining,
+            "market_value":  round(market_value, 2),
             "tp1_hit":       em.tp1_hit,
             "tp2_hit":       em.tp2_hit,
             "hard_stop":     round(em.hard_stop, 4),
