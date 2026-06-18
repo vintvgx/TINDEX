@@ -734,12 +734,12 @@ def reset_strategy_data():
     clear_debug = bool(body.get("clear_debug_logs", False))
     try:
         client = logger_svc.client
-        # Delete all trade records
-        client.table("orb_trades").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
-        # Delete all session records
-        client.table("orb_session").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+        # .not_.is_("id", "null") matches every row regardless of whether id is
+        # UUID or integer — avoids the cast error from a hardcoded UUID sentinel.
+        client.table("orb_trades").delete().not_.is_("id", "null").execute()
+        client.table("orb_session").delete().not_.is_("id", "null").execute()
         if clear_debug:
-            client.table("orb_debug_logs").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+            client.table("orb_debug_logs").delete().not_.is_("id", "null").execute()
         logger.warning("[strategy] Trade data reset performed — orb_trades and orb_session cleared")
         return jsonify({
             "status":  "ok",

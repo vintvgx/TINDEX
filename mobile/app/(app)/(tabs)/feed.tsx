@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, SafeAreaView,
   ActivityIndicator, RefreshControl, StyleSheet,
+  Modal, KeyboardAvoidingView, Platform, StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -545,16 +546,40 @@ const DashboardScreen = () => {
         />
       )}
 
-      {/* ── Immediate trade panel ───────────────────────────────────────── */}
-      <ImmediateTradePanel
-        colors={colors}
-        tickerOptions={tickerOptions}
+      {/* ── Immediate trade panel — full pageSheet modal ─────────────────── */}
+      <Modal
         visible={tradePanelVisible}
-        onClose={() => {
-          setTradePanelVisible(false);
-          refresh();
-        }}
-      />
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => { setTradePanelVisible(false); refresh(); }}
+      >
+        <StatusBar barStyle="light-content" />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={[styles.panelModal, { backgroundColor: colors.background }]}
+        >
+          {/* Header */}
+          <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity
+              onPress={() => { setTradePanelVisible(false); refresh(); }}
+              hitSlop={12}
+              style={{ width: 64 }}
+            >
+              <Text style={[styles.panelClose, { color: colors.accent }]}>Close</Text>
+            </TouchableOpacity>
+            <Text style={[styles.panelTitle, { color: colors.text }]}>Immediate Trade</Text>
+            <View style={{ width: 64 }} />
+          </View>
+
+          {/* Panel fills the rest */}
+          <ImmediateTradePanel
+            colors={colors}
+            tickerOptions={tickerOptions}
+            visible={tradePanelVisible}
+            onClose={() => { setTradePanelVisible(false); refresh(); }}
+          />
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* ── ORB notification modal ───────────────────────────────────────── */}
       <ORBNotificationModal
@@ -607,6 +632,14 @@ const styles = StyleSheet.create({
                    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   activeDot:     { width: 5, height: 5, borderRadius: 3 },
   activeBadgeText: { fontSize: 10, fontWeight: '700' },
+
+  // ── Trade panel modal ──
+  panelModal:    { flex: 1 },
+  panelHeader:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                   paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12,
+                   borderBottomWidth: StyleSheet.hairlineWidth },
+  panelClose:    { fontSize: 15, fontWeight: '600' },
+  panelTitle:    { fontSize: 17, fontWeight: '700', textAlign: 'center' },
 
   tilesRow:      { paddingBottom: 4, paddingRight: 4 },
   tile:          { borderRadius: 14, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 14,
