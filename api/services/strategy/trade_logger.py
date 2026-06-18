@@ -147,6 +147,7 @@ class TradeLogger:
                 "strategy_id":            strategy_id,
                 "paper_mode":             paper_mode,
                 "trade_type":             trade_type,
+                "exit_stages":            [],
             }).execute()
             if res.data:
                 return res.data[0]["id"]
@@ -164,7 +165,7 @@ class TradeLogger:
             # exits after TP1 (which already set exit_time) are still found.
             res = (
                 self.client.table("orb_trades")
-                .select("id, entry_premium, qty_entered, qty_exited, pnl")
+                .select("id, entry_premium, qty_entered, qty_exited, pnl, exit_stages")
                 .eq("contract_symbol", contract_symbol)
                 .order("entry_time", desc=True)
                 .limit(1)
@@ -176,13 +177,24 @@ class TradeLogger:
             row = res.data[0]
             entry_p      = row["entry_premium"] or 0
             exit_p       = exit_premium or 0
-            this_pnl     = (exit_p - entry_p) * qty_closed * 100
-            total_pnl    = (row.get("pnl") or 0) + this_pnl
-            qty_after    = row["qty_exited"] + qty_closed
+            stage_pnl    = (exit_p - entry_p) * qty_closed * 100
+            total_pnl    = (row.get("pnl") or 0) + stage_pnl
+            qty_after    = min(row["qty_exited"] + qty_closed, row["qty_entered"])
             is_fully_closed = qty_after >= row["qty_entered"]
             # pnl_pct is relative to total entry cost so it stays meaningful
             total_cost = entry_p * row["qty_entered"] * 100
             total_pnl_pct = (total_pnl / total_cost * 100) if total_cost else 0
+
+            # Build the stage record for this exit event
+            stage = {
+                "reason":  exit_reason,
+                "qty":     qty_closed,
+                "premium": round(exit_p, 4),
+                "pnl":     round(stage_pnl, 2),
+                "time":    datetime.utcnow().isoformat(),
+            }
+            current_stages = row.get("exit_stages") or []
+            new_stages = list(current_stages) + [stage]
 
             update: dict = {
                 "exit_premium":          exit_p if exit_premium is not None else None,
@@ -191,7 +203,19 @@ class TradeLogger:
                 "pnl_pct":               round(total_pnl_pct, 2),
                 "exit_reason":           exit_reason,
                 "underlying_price_exit": underlying_price_exit,
+                "exit_stages":           new_stages,
             }
+
+            # Populate dedicated TP1 / TP2 columns for easy querying and display
+            if exit_reason == "TP1":
+                update["tp1_premium"] = round(exit_p, 4)
+                update["tp1_qty"]     = qty_closed
+                update["tp1_pnl"]     = round(stage_pnl, 2)
+            elif exit_reason in ("TP2", "TP2_FULL_CLOSE"):
+                update["tp2_premium"] = round(exit_p, 4)
+                update["tp2_qty"]     = qty_closed
+                update["tp2_pnl"]     = round(stage_pnl, 2)
+
             # Only stamp exit_time when the position is fully closed so that
             # subsequent partial exit calls can still find the row.
             if is_fully_closed:
@@ -210,17 +234,56 @@ class TradeLogger:
 
     # ── Reads ───────────────────────────────────────────────────────────────────
 
-    def get_trades(self, limit: int = 20, ticker: str = None, profile: str = None) -> list:
+    def get_trades(self, limit: int = 20, ticker: str = None, profile: str = None,
+                   trade_date: str = None) -> list:
         try:
             q = self.client.table("orb_trades").select("*").order("entry_time", desc=True).limit(limit)
             if ticker:
                 q = q.eq("ticker", ticker)
             if profile:
                 q = q.eq("profile", profile)
+            if trade_date:
+                q = q.eq("trade_date", trade_date)
             return q.execute().data or []
         except Exception as e:
             logger.error("[TradeLogger] get_trades failed: %s", e)
             return []
+
+    def reconcile_orphaned_trades(self):
+        """
+        Close any orb_trades rows that are still open (exit_time IS NULL) but
+        whose expiry date is in the past. This catches trades that were never
+        properly closed due to a crash or redeploy.
+        """
+        try:
+            today = date.today().isoformat()
+            res = (
+                self.client.table("orb_trades")
+                .select("id, contract_symbol, entry_premium, expiry")
+                .is_("exit_time", "null")
+                .lt("expiry", today)
+                .execute()
+            )
+            rows = res.data or []
+            if not rows:
+                return
+            now = datetime.utcnow().isoformat()
+            for row in rows:
+                self.client.table("orb_trades").update({
+                    "exit_time":    now,
+                    "exit_premium": row.get("entry_premium"),
+                    "exit_reason":  "EOD_HARD_CLOSE",
+                    "pnl":          0.0,
+                    "pnl_pct":      0.0,
+                    "qty_exited":   0,
+                }).eq("id", row["id"]).execute()
+                logger.warning(
+                    "[TradeLogger] Orphaned trade reconciled: %s (id=%s)",
+                    row.get("contract_symbol"), row["id"],
+                )
+            logger.info("[TradeLogger] Reconciled %d orphaned trade(s)", len(rows))
+        except Exception as e:
+            logger.error("[TradeLogger] reconcile_orphaned_trades failed: %s", e)
 
     def get_stats(self, profile: str = None) -> dict:
         try:

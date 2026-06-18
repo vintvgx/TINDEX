@@ -7,14 +7,18 @@ import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
 import { useStrategyStats, useStrategyStatsByProfile, useStrategyPerformance } from '@/hooks/queries/strategy/useStrategyStats';
 import { useStrategyDebugLogs } from '@/hooks/queries/strategy/useStrategyDebugLogs';
+import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
 import { useQuery } from '@tanstack/react-query';
-import type { ProfileKey, ORBTrade, StrategyStats, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel, TradeType } from '@/common/types/strategy';
+import type { ProfileKey, ORBTrade, StrategyStats, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel, TradeType, ExitStage } from '@/common/types/strategy';
 import { formatContractSymbol } from '@/lib/formatContract';
+
+const TODAY = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
+type DateFilter = 'ALL' | 'TODAY';
 type Filter = 'ALL' | ProfileKey;
 type Tab = 'log' | 'stats' | 'debug';
 
@@ -43,23 +47,29 @@ const FILTERS: { label: string; value: Filter }[] = [
   { label: '💎 Conviction', value: 'CONVICTION' },
   { label: '🔥 All In',     value: 'ALL_IN' },
   { label: '🚀 Trend Rider',value: 'TREND_RIDER' },
+  { label: '🔄 Reversal',   value: 'REVERSAL' },
   { label: '🐂 Bull Dog',   value: 'BULL_DOG' },
   { label: '🐱 Thunder Cat',value: 'THUNDER_CAT' },
   { label: '🐺 Wolf',       value: 'WOLF' },
+  { label: '🎯 OTM Runner',     value: 'OTM_RUNNER' },
+  { label: '💎 OTM Conviction', value: 'OTM_CONVICTION' },
 ];
 
 const PROFILE_EMOJI: Record<string, string> = {
-  BULL_DOG:    '🐂',
-  THUNDER_CAT: '🐱',
-  WOLF:        '🐺',
-  TREND_RIDER: '🚀',
-  RETESTER:    '🎯',
-  REVERSAL:    '🔄',
-  SCALPER:     '⚡',
-  PRECISION:   '🎯',
-  MOMENTUM:    '📈',
-  CONVICTION:  '💎',
-  ALL_IN:      '🔥',
+  BULL_DOG:       '🐂',
+  THUNDER_CAT:    '🐱',
+  WOLF:           '🐺',
+  TREND_RIDER:    '🚀',
+  RETESTER:       '🎯',
+  REVERSAL:       '🔄',
+  SCALPER:        '⚡',
+  PRECISION:      '🎯',
+  MOMENTUM:       '📈',
+  CONVICTION:     '💎',
+  ALL_IN:         '🔥',
+  OTM_RUNNER:     '🏃',
+  OTM_CONVICTION: '🎯',
+  MANUAL:         '🖐️',
 };
 
 function useSkippedSessions() {
@@ -78,14 +88,25 @@ function useSkippedSessions() {
 export default function TradeLogScreen() {
   const colors = useThemeColors();
   const [filter, setFilter]         = useState<Filter>('ALL');
+  const [dateFilter, setDateFilter] = useState<DateFilter>('ALL');
   const [tab, setTab]               = useState<Tab>('log');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const { data: trades,  isLoading: tradesLoading } = useStrategyTrades({ profile: filter, limit: 50 });
+  const tradeDate = dateFilter === 'TODAY' ? TODAY : null;
+
+  const { data: trades,  isLoading: tradesLoading } = useStrategyTrades({
+    profile: filter, limit: 100, trade_date: tradeDate,
+  });
   const { data: stats,   isLoading: statsLoading }  = useStrategyStats(filter);
   const { data: byProfile }                         = useStrategyStatsByProfile();
   const { data: performance }                       = useStrategyPerformance();
   const { data: skipped }                           = useSkippedSessions();
+  const { data: sessionStates }                     = useStrategySessionState();
+
+  const haltedEngines = useMemo(() => {
+    if (!sessionStates) return [];
+    return Object.values(sessionStates).filter(e => e.session_halted);
+  }, [sessionStates]);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -116,12 +137,42 @@ export default function TradeLogScreen() {
         </View>
       </View>
 
+      {/* Session halt banner */}
+      {haltedEngines.length > 0 && (
+        <View style={{ backgroundColor: '#7f1d1d', paddingHorizontal: 16, paddingVertical: 10,
+                       flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Ionicons name="warning" size={16} color="#fca5a5" />
+          <Text style={{ color: '#fca5a5', fontSize: 13, flex: 1 }}>
+            Daily loss limit reached — {haltedEngines.map(e => e.ticker).join(', ')} engine(s) halted.
+            Session P&amp;L: {haltedEngines.map(e => `${e.ticker} $${e.session_pnl.toFixed(0)}`).join(', ')}
+          </Text>
+        </View>
+      )}
+
       {tab === 'debug' ? (
         <DebugLogPanel colors={colors} />
       ) : (
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
 
-        {/* Filter chips */}
+        {/* Date + Profile filter row */}
+        <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 12 }}>
+          {(['ALL', 'TODAY'] as const).map(d => (
+            <TouchableOpacity
+              key={d}
+              onPress={() => setDateFilter(d)}
+              style={[styles.filterChip, {
+                backgroundColor: dateFilter === d ? '#6366f1' : colors.card,
+                borderColor: dateFilter === d ? '#6366f1' : colors.border,
+              }]}
+            >
+              <Text style={[styles.filterText, { color: dateFilter === d ? '#fff' : colors.text }]}>
+                {d === 'TODAY' ? 'Today' : 'All Time'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Profile filter chips */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow}>
           {FILTERS.map(f => (
             <TouchableOpacity
@@ -217,7 +268,8 @@ const EXIT_REASON_LABELS: Record<string, string> = {
   LOW_VOLUME_EXIT:   'Low Volume Exit',
   MANUAL_CLOSE:      'Manually Closed',
   FORCE_CLOSE:       'Force Closed',
-  MANUAL_EXIT:       'Manual Exit',
+  MANUAL_EXIT:         'Manual Exit',
+  REVERSAL_TIME_CUT:   'Reversal Bleed Stop (20m)',
 };
 
 const fmtEt = (iso: string): string => {
@@ -353,6 +405,62 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
         value={`${trade.qty_entered} entered · ${trade.qty_exited} exited`}
         colors={colors}
       />
+
+      {/* Per-stage exit breakdown */}
+      {trade.exit_stages && trade.exit_stages.length > 0 && (
+        <>
+          <Text style={[styles.detailSectionHeader, { color: colors.tabBarInactive, marginTop: 8 }]}>
+            EXIT BREAKDOWN
+          </Text>
+          {trade.exit_stages.map((stage: ExitStage, i: number) => {
+            const stageColor = stage.pnl >= 0 ? colors.success : colors.error;
+            return (
+              <View key={i} style={[styles.detailRow, {
+                backgroundColor: colors.card, borderRadius: 6,
+                marginBottom: 4, paddingHorizontal: 8, paddingVertical: 6,
+              }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.text, fontWeight: '600', fontSize: 13 }}>
+                    {EXIT_REASON_LABELS[stage.reason] ?? stage.reason}
+                  </Text>
+                  <Text style={{ color: colors.tabBarInactive, fontSize: 11, marginTop: 2 }}>
+                    {stage.qty} contract{stage.qty !== 1 ? 's' : ''} @ ${stage.premium.toFixed(2)}
+                    {'  ·  '}{fmtEt(stage.time)}
+                  </Text>
+                </View>
+                <Text style={{ color: stageColor, fontWeight: '700', fontSize: 14 }}>
+                  {stage.pnl >= 0 ? '+' : ''}${stage.pnl.toFixed(2)}
+                </Text>
+              </View>
+            );
+          })}
+        </>
+      )}
+
+      {/* TP1 / TP2 summary rows (if exit_stages absent but columns populated) */}
+      {(!trade.exit_stages || trade.exit_stages.length === 0) && trade.tp1_pnl != null && (
+        <>
+          <Text style={[styles.detailSectionHeader, { color: colors.tabBarInactive, marginTop: 8 }]}>
+            EXIT BREAKDOWN
+          </Text>
+          {trade.tp1_pnl != null && (
+            <DetailRow
+              label="TP1"
+              value={`${trade.tp1_qty ?? '?'} contracts @ $${trade.tp1_premium?.toFixed(2) ?? '?'}  →  ${trade.tp1_pnl >= 0 ? '+' : ''}$${trade.tp1_pnl.toFixed(2)}`}
+              valueColor={trade.tp1_pnl >= 0 ? colors.success : colors.error}
+              colors={colors}
+            />
+          )}
+          {trade.tp2_pnl != null && (
+            <DetailRow
+              label="TP2"
+              value={`${trade.tp2_qty ?? '?'} contracts @ $${trade.tp2_premium?.toFixed(2) ?? '?'}  →  ${trade.tp2_pnl >= 0 ? '+' : ''}$${trade.tp2_pnl.toFixed(2)}`}
+              valueColor={trade.tp2_pnl >= 0 ? colors.success : colors.error}
+              colors={colors}
+            />
+          )}
+        </>
+      )}
     </View>
   );
 };

@@ -32,6 +32,8 @@ PROFILES = {
         "eod_buffer_minutes": 20,
         "breakout_time_limit_min": 60,
         "vix_max_override": 35,
+        "daily_loss_limit": 600,        # pause strategy if session P&L drops below -$600
+        "re_entry_cooldown_min": 60,    # block same-direction re-entry for 60 min after a loss
     },
     # ─── THUNDER CAT — Balanced (DEFAULT) ────────────────────────────────────────
     "THUNDER_CAT": {
@@ -55,6 +57,8 @@ PROFILES = {
         "eod_buffer_minutes": 25,
         "breakout_time_limit_min": 45,
         "vix_max_override": 30,
+        "daily_loss_limit": 400,
+        "re_entry_cooldown_min": 45,
     },
     # ─── WOLF — Conservative ─────────────────────────────────────────────────────
     "WOLF": {
@@ -78,12 +82,14 @@ PROFILES = {
         "eod_buffer_minutes": 30,
         "breakout_time_limit_min": 35,
         "vix_max_override": 25,
+        "daily_loss_limit": 200,
+        "re_entry_cooldown_min": 30,
     },
     # ─── TREND RIDER — Hold for the full move ────────────────────────────────────
     "TREND_RIDER": {
         "qty_contracts": 6,
         "max_loss_pct": 0.38,
-        "tp1_mult": 1.60,
+        "tp1_mult": 1.40,           # lowered from 1.60 — +40% is achievable on a normal 0DTE move
         "tp2_mult": 2.50,
         "tp1_close_pct": 0.15,
         "tp2_close_pct": 0.35,
@@ -102,18 +108,20 @@ PROFILES = {
         "breakout_time_limit_min": 90,
         "vix_max_override": 25,
         "entry_mode": "BREAK",
+        "daily_loss_limit": 500,
+        "re_entry_cooldown_min": 60,
     },
     # ─── REVERSAL — Enter the opposite contract after a scored failed breakout ───
     "REVERSAL": {
-        "qty_contracts":          2,
+        "qty_contracts":          3,
         "force_smart_qty":        True,
         "min_smart_qty":          2,
-        "use_tp2":                False,
-        "max_loss_pct":           0.35,
-        "tp1_mult":               1.55,
-        "tp2_mult":               2.30,
-        "tp1_close_pct":          0.50,
-        "tp2_close_pct":          0.00,
+        "use_tp2":                True,
+        "max_loss_pct":           0.25,   # tightened from 0.35 — reversals are cut early; long bleeds don't recover
+        "tp1_mult":               1.30,   # lowered from 1.55 — take small profit quickly on reversal
+        "tp2_mult":               1.70,   # lowered from 2.30 — realistic target without full push
+        "tp1_close_pct":         0.33,   # close 1 of 3 at TP1 (max(1, floor(3×0.33)) = 1)
+        "tp2_close_pct":          0.50,   # close 1 of 2 remaining at TP2, leave 1 runner
         "runner_trail_pct":       0.18,   # loosened from 0.14 — counter-trends can extend
         "runner_mode":            "trail", # reversals can reverse again; keep dynamic protection
         "consol_exit":            False,
@@ -129,6 +137,8 @@ PROFILES = {
         "breakout_time_limit_min": 240,
         "vix_max_override":       45,
         "entry_mode":             "BREAK",
+        "daily_loss_limit":       400,
+        "re_entry_cooldown_min":  120,   # 2 hours — a failed reversal rarely works again same day
     },
     # ── IMMEDIATE TRADE PROFILES ──────────────────────────────────────────────────
 
@@ -249,6 +259,78 @@ PROFILES = {
         "vix_max_override":        50,
     },
 
+    # ─── OTM_RUNNER — Sub-$0.25 contracts, large move thesis ────────────────────
+    "OTM_RUNNER": {
+        "qty_contracts":           10,
+        "use_tp2":                 True,
+        "max_loss_pct":            0.60,
+        "tp1_mult":                2.00,   # +100%: only fires if underlying actually moves
+        "tp2_mult":                3.50,   # +250%: full $2–$3 IWM move target
+        "tp1_close_pct":           0.25,   # close 25% at TP1 to recover cost basis
+        "tp2_close_pct":           0.33,   # close 33% of remainder at TP2
+        "runner_trail_pct":        0.20,
+        "runner_mode":             "trail",
+        "consol_exit":             False,  # OTM contracts don't consolidate cleanly
+        "volume_exit":             False,
+        "consol_range_pct":        0.0015,
+        "consol_bars":             8,
+        "volume_exit_threshold":   0.10,
+        "strike_offset_min":       1.00,
+        "strike_offset_max":       5.00,
+        "target_delta_min":        0.08,
+        "target_delta_max":        0.28,
+        "eod_buffer_minutes":      15,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        60,
+    },
+    # ─── OTM_CONVICTION — $0.25–$0.40 contracts, higher-confidence OTM play ────
+    "OTM_CONVICTION": {
+        "qty_contracts":           6,
+        "use_tp2":                 True,
+        "max_loss_pct":            0.55,
+        "tp1_mult":                1.75,   # +75%
+        "tp2_mult":                3.00,   # +200%
+        "tp1_close_pct":           0.33,   # close 33% at TP1
+        "tp2_close_pct":           0.50,   # close 50% of remainder at TP2
+        "runner_trail_pct":        0.20,
+        "runner_mode":             "be_hold",
+        "consol_exit":             False,
+        "volume_exit":             False,
+        "consol_range_pct":        0.0012,
+        "consol_bars":             6,
+        "volume_exit_threshold":   0.12,
+        "strike_offset_min":       1.00,
+        "strike_offset_max":       4.00,
+        "target_delta_min":        0.10,
+        "target_delta_max":        0.35,
+        "eod_buffer_minutes":      15,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        55,
+    },
+    # ─── MANUAL — User-controlled exit, only a hard stop fires automatically ─────
+    "MANUAL": {
+        "qty_contracts":          2,
+        "use_tp2":                False,
+        "max_loss_pct":           0.30,   # default SL — overridden by user's picker selection
+        "tp1_mult":               999.0,  # unreachable — TP1 never auto-fires
+        "tp2_mult":               999.0,
+        "tp1_close_pct":          0.00,
+        "tp2_close_pct":          0.00,
+        "runner_trail_pct":       0.00,
+        "runner_mode":            "trail",
+        "consol_exit":            False,
+        "volume_exit":            False,
+        "consol_range_pct":       0.0008,
+        "consol_bars":            4,
+        "volume_exit_threshold":  0.20,
+        "strike_offset_min":      0.50,
+        "strike_offset_max":      2.00,
+        "target_delta_min":       0.38,
+        "target_delta_max":       0.58,
+        "eod_buffer_minutes":     25,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":       50,
+    },
     # ─── RETESTER — Wait for price to return to the breakout level ───────────────
     "RETESTER": {
         "qty_contracts": 4,
@@ -273,6 +355,8 @@ PROFILES = {
         "vix_max_override": 28,
         "entry_mode": "RETEST",
         "retest_window_min": 60,
+        "daily_loss_limit":       400,
+        "re_entry_cooldown_min":  60,
     },
 }
 
@@ -330,6 +414,9 @@ _DISPLAY_NAMES = {
     "MOMENTUM":   "Momentum",
     "CONVICTION": "Conviction",
     "ALL_IN":     "All In",
+    "OTM_RUNNER":     "OTM Runner",
+    "OTM_CONVICTION": "OTM Conviction",
+    "MANUAL":         "Manual",
 }
 
 _EMOJIS = {
@@ -345,10 +432,13 @@ _EMOJIS = {
     "MOMENTUM":   "📈",
     "CONVICTION": "💎",
     "ALL_IN":     "🔥",
+    "OTM_RUNNER":     "🚀",
+    "OTM_CONVICTION": "🎯",
+    "MANUAL":         "✋",
 }
 
 
-def get_profile(name: str, custom_thresholds: dict = None) -> dict:
+def get_profile(name: str, custom_thresholds: dict | None = None) -> dict:
     key = name.upper().replace(" ", "_")
     if key == "CUSTOM":
         return {**CUSTOM_DEFAULTS, **(custom_thresholds or {})}
@@ -356,13 +446,13 @@ def get_profile(name: str, custom_thresholds: dict = None) -> dict:
         return PROFILES["THUNDER_CAT"]
     base = dict(PROFILES[key])
     if custom_thresholds:
-        for k in ("consol_exit", "volume_exit"):
+        for k in ("consol_exit", "volume_exit", "max_loss_pct"):
             if k in custom_thresholds:
                 base[k] = custom_thresholds[k]
     return base
 
 
-def describe_profile(key: str, custom_thresholds: dict = None) -> dict:
+def describe_profile(key: str, custom_thresholds: dict | None = None) -> dict:
     k = key.upper().replace(" ", "_")
     p = get_profile(k, custom_thresholds)
     risk = {
@@ -376,7 +466,9 @@ def describe_profile(key: str, custom_thresholds: dict = None) -> dict:
         "PRECISION":   "Low-Med",
         "MOMENTUM":    "Medium",
         "CONVICTION":  "Med-High",
-        "ALL_IN":      "High",
+        "ALL_IN":          "High",
+        "OTM_RUNNER":      "High",
+        "OTM_CONVICTION":  "Med-High",
     }.get(k, "Custom")
     has_runner = (not p.get("use_tp2", True)) or p["tp2_close_pct"] < 1.0
     return {

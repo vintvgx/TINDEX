@@ -453,12 +453,19 @@ def immediate_trade(strategy_id: str):
         return jsonify({"status": "error",
                         "message": "direction and contract_symbol are required"}), 400
 
+    exit_overrides_cfg = {}
+    if "max_loss_pct" in data:
+        val = float(data["max_loss_pct"])
+        if 0.05 <= val <= 0.95:
+            exit_overrides_cfg["max_loss_pct"] = val
+
     result = _submit_manual_trade_bounded(
         engine,
         direction=direction,
         contract_symbol=contract_symbol,
         qty=data.get("qty"),
         profile_key=data.get("profile"),
+        exit_overrides=exit_overrides_cfg if exit_overrides_cfg else None,
     )
     code = 200 if result.get("status") == "ok" else 409
     return jsonify(result), code
@@ -486,6 +493,10 @@ def immediate_trade_by_ticker():
         exit_overrides["consol_exit"] = bool(data["consol_exit"])
     if "volume_exit" in data:
         exit_overrides["volume_exit"] = bool(data["volume_exit"])
+    if "max_loss_pct" in data:
+        val = float(data["max_loss_pct"])
+        if 0.05 <= val <= 0.95:   # sanity clamp: 5%–95%
+            exit_overrides["max_loss_pct"] = val
 
     engine = _get_or_create_immediate_engine(ticker, paper_mode)
     result = _submit_manual_trade_bounded(
@@ -708,12 +719,47 @@ def get_accounts_history():
 
 # ── Trade history / Stats ──────────────────────────────────────────────────────
 
+@strategy_bp.route("/data/reset", methods=["POST"])
+def reset_strategy_data():
+    """
+    Danger-zone: delete all rows from orb_trades and orb_session so the user
+    can start fresh.  Optionally also wipes orb_debug_logs when
+    clear_debug_logs=true is passed in the JSON body.
+
+    Intended for development / paper-trading only.  The route does not require
+    a confirmation token beyond the explicit POST — the frontend handles the
+    two-step confirm UI.
+    """
+    body = request.get_json(silent=True) or {}
+    clear_debug = bool(body.get("clear_debug_logs", False))
+    try:
+        client = logger_svc.client
+        # Delete all trade records
+        client.table("orb_trades").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+        # Delete all session records
+        client.table("orb_session").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+        if clear_debug:
+            client.table("orb_debug_logs").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+        logger.warning("[strategy] Trade data reset performed — orb_trades and orb_session cleared")
+        return jsonify({
+            "status":  "ok",
+            "message": "Trade data cleared. orb_trades and orb_session wiped."
+                       + (" orb_debug_logs also cleared." if clear_debug else ""),
+            "cleared": ["orb_trades", "orb_session"] + (["orb_debug_logs"] if clear_debug else []),
+        })
+    except Exception as e:
+        logger.error("[strategy] data/reset failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @strategy_bp.route("/trades", methods=["GET"])
 def get_trade_history():
     limit   = request.args.get("limit", 20, type=int)
-    ticker  = request.args.get("ticker", None)
-    profile = request.args.get("profile", None)
-    return jsonify(logger_svc.get_trades(limit=limit, ticker=ticker, profile=profile))
+    ticker     = request.args.get("ticker", None)
+    profile    = request.args.get("profile", None)
+    trade_date = request.args.get("trade_date", None)
+    return jsonify(logger_svc.get_trades(limit=limit, ticker=ticker, profile=profile,
+                                         trade_date=trade_date))
 
 
 @strategy_bp.route("/skipped-sessions", methods=["GET"])

@@ -6,10 +6,12 @@ POSTs to /strategy/config. Paper vs live trading is set by paper_mode in config.
 """
 
 import os
+import uuid as _uuid
 import logging
 import threading
 import pytz
 from datetime import datetime, timedelta
+from typing import Optional
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
@@ -179,6 +181,19 @@ class ORBEngine:
         # Fan-out queues for /ws/strategy/<id>/live WebSocket clients
         self._live_clients: list     = []
         self._live_clients_lock      = __import__("threading").Lock()
+        # ── Session-level risk management ─────────────────────────────────────────
+        # Cumulative realized P&L for this trading day across all trades.
+        self._session_realized_pnl:   float = 0.0
+        # Set to True when daily_loss_limit is breached — blocks all further entries.
+        self._session_halted:         bool  = False
+        # Tracks the last losing exit per direction so re-entry cooldowns can fire.
+        # Key: "CALL" | "PUT" — Value: {"time": datetime, "pnl": float}
+        self._last_loss_by_direction: dict  = {}
+        # Accumulates P&L across partial exits for the current open trade.
+        self._active_trade_pnl:       float = 0.0
+        # REVERSAL-profile: timestamp when the trade first dropped below the -15%
+        # bleed threshold. Cleared when price recovers above -15%.
+        self._reversal_down_since:    Optional[datetime] = None
 
     def reset_session(self):
         if self.stream_manager and self.contract_symbol:
@@ -203,6 +218,9 @@ class ORBEngine:
         # observing the close. Unsubscribes any leftover stream callback too.
         self.reset_session()
         self.session_date = now_et.date()
+
+        # Close any open trades from prior expired sessions (crash/redeploy guard).
+        self.logger.reconcile_orphaned_trades()
 
         # The OrbService bar feed must be running or there is no price data. If it
         # isn't (e.g. right after a redeploy, before the service has started),
@@ -343,6 +361,29 @@ class ORBEngine:
                 current_underlying_price=current_price,
                 current_volume=current_volume,
             )
+
+            # REVERSAL time-weighted patience stop — if the trade has bled past
+            # -15% for 20+ continuous minutes without recovering, close half to
+            # limit exposure. A failed reversal rarely turns around same day.
+            if action["type"] == "HOLD" and self.profile_key == "REVERSAL":
+                em = self.exit_manager
+                pnl_pct = ((current_option_price - em.entry_premium) / em.entry_premium
+                           if em.entry_premium > 0 else 0)
+                if pnl_pct < -0.15:
+                    if self._reversal_down_since is None:
+                        self._reversal_down_since = now_et
+                    elif (now_et - self._reversal_down_since).total_seconds() >= 1200:  # 20 min
+                        qty_cut = max(1, em.qty_remaining // 2)
+                        self.debug.emit("WARN",
+                            f"REVERSAL bleed stop — down {pnl_pct*100:.1f}% for "
+                            f"{(now_et - self._reversal_down_since).total_seconds()/60:.0f}m "
+                            f"— closing {qty_cut} contract(s)")
+                        action = {"type": "CLOSE_PARTIAL", "qty": qty_cut,
+                                  "reason": "REVERSAL_TIME_CUT"}
+                        self._reversal_down_since = None
+                else:
+                    self._reversal_down_since = None
+
             self._handle_exit_action(action, current_price, current_option_price)
 
             # 30-minute P&L notification (fires once per trade)
@@ -552,6 +593,31 @@ class ORBEngine:
 
     # ── Entry ──────────────────────────────────────────────────────────────────
 
+    def _check_daily_loss_limit(self) -> bool:
+        """Returns True if the daily loss limit is active and entry should be blocked."""
+        return self._session_halted
+
+    def _check_reentry_cooldown(self, direction: str) -> bool:
+        """
+        Returns True if a same-direction loss is recent enough to block re-entry.
+        Cooldown window comes from profile['re_entry_cooldown_min'] (default 45 min).
+        Only fires on LOSSES — a winning exit never blocks re-entry.
+        """
+        cooldown_min = self.profile.get("re_entry_cooldown_min", 45)
+        last = self._last_loss_by_direction.get(direction)
+        if not last:
+            return False
+        elapsed = (datetime.now(ET) - last["time"]).total_seconds() / 60
+        if elapsed < cooldown_min:
+            remaining = cooldown_min - elapsed
+            self.debug.emit(
+                "WARN",
+                f"Re-entry blocked — {direction} lost ${abs(last['pnl']):.0f} "
+                f"{elapsed:.0f}m ago. Cooldown: {remaining:.0f}m remaining.",
+            )
+            return True
+        return False
+
     def _enter_trade(self, direction: str, trigger_price: float):
         """
         Run flow confirmation, select a contract, validate buying power, and
@@ -561,6 +627,19 @@ class ORBEngine:
         NOTE: Called by on_price_tick when price closes above ORH (CALL) or
         below ORL (PUT) for the first time in the session.
         """
+        # ── Risk guards — checked before any API / broker call ───────────────────
+        if self._check_daily_loss_limit():
+            self.debug.emit(
+                "WARN",
+                f"Entry blocked — daily loss limit reached "
+                f"(session P&L: ${self._session_realized_pnl:.0f}). "
+                f"Strategy paused for today.",
+            )
+            return
+
+        if self._check_reentry_cooldown(direction):
+            return  # detailed message emitted inside _check_reentry_cooldown
+
         uw_key = os.getenv("UNUSUAL_WHALES_KEY")
         if not self.sentiment.confirm_with_flow(self.ticker, direction, uw_key):
             logger.info("[ORBEngine] Flow confirmation failed for %s %s — skipping entry",
@@ -759,6 +838,7 @@ class ORBEngine:
             self.trade_taken      = True
             self.trade_entry_time = datetime.now(ET)
             self.timer_notified   = False
+            self._active_trade_pnl = 0.0  # reset accumulator for this trade
             self.session_date     = self.session_date or datetime.now(ET).date()
 
             eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:10")
@@ -781,6 +861,15 @@ class ORBEngine:
             if profile_key_override:
                 self.profile_key = profile_key_override
 
+            # Only pass strategy_id if it is a valid UUID — synthetic immediate-engine
+            # ids (e.g. "immediate-QQQ-paper") are not UUIDs and cause Supabase to
+            # reject the insert with a type error that is otherwise silently swallowed.
+            try:
+                _uuid.UUID(str(self.strategy_id))
+                log_strategy_id = self.strategy_id
+            except (ValueError, AttributeError, TypeError):
+                log_strategy_id = None
+
             self.active_trade_id = self.logger.log_entry(
                 ticker=self.ticker,
                 direction=direction,
@@ -793,10 +882,14 @@ class ORBEngine:
                 qty=qty,
                 underlying_price_entry=self._last_underlying_price,
                 vix_at_entry=self.vix,
-                strategy_id=self.strategy_id,
+                strategy_id=log_strategy_id,
                 paper_mode=self.paper,
                 trade_type=trade_type,
             )
+            if self.active_trade_id is None:
+                self.debug.emit("ERROR",
+                    f"Supabase log_entry failed — {contract['symbol']} trade not recorded in DB. "
+                    "Check Railway logs or Supabase connectivity.")
             self.notifier.notify_entry(
                 ticker=self.ticker,
                 direction=direction,
@@ -925,6 +1018,22 @@ class ORBEngine:
         return {"status": "ok", "message": f"Entered {direction} {contract['symbol']} qty={qty}",
                 "contract": contract["symbol"], "qty": qty, "trade_id": self.active_trade_id}
 
+    def _resolve_exit_premium(self, order, mid_fallback: float) -> float:
+        """Return the actual Alpaca fill price for a sell order, falling back to stream mid."""
+        import time as _time
+        try:
+            fp = getattr(order, "filled_avg_price", None)
+            if fp and float(fp) > 0:
+                return float(fp)
+            _time.sleep(0.5)
+            refreshed = self.trading_client.get_order_by_id(str(order.id))
+            fp = getattr(refreshed, "filled_avg_price", None)
+            if fp and float(fp) > 0:
+                return float(fp)
+        except Exception as e:
+            logger.debug("[ORBEngine] _resolve_exit_premium fallback: %s", e)
+        return mid_fallback
+
     def _resolve_entry_premium(self, order, ask_fallback: float) -> float:
         """
         Return the best entry premium to anchor TP/SL to.
@@ -1035,8 +1144,10 @@ class ORBEngine:
         # ── Step 1: Submit the Alpaca order ──────────────────────────────────────
         # Keep separate from logging so a close_position failure (e.g. option
         # already expired) does NOT suppress the exit record in Supabase.
-        contract_snapshot = self.contract_symbol  # capture before any reset
-        order_ok = False
+        contract_snapshot  = self.contract_symbol  # capture before any reset
+        direction_snapshot = self.position          # capture before closing_all resets it
+        order_ok   = False
+        fill_order = None
         try:
             # Always submit an exact-qty SELL order rather than close_position().
             # close_position() would close the entire Alpaca position for the symbol,
@@ -1048,7 +1159,7 @@ class ORBEngine:
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.DAY,
             )
-            self.trading_client.submit_order(order)
+            fill_order = self.trading_client.submit_order(order)
             if closing_all:
                 self.exit_manager.qty_remaining = 0
                 self.trade_taken = False
@@ -1074,11 +1185,42 @@ class ORBEngine:
             return
 
         # ── Step 2: Log and notify — always runs when the order succeeded ────────
-        exit_premium = (action.get("current_premium")
-                        or current_option_price
-                        or current_price)
+        mid_price    = (action.get("current_premium") or current_option_price or current_price)
+        exit_premium = self._resolve_exit_premium(fill_order, mid_price) if fill_order else mid_price
         entry_p = em.entry_premium if em else 0
         pnl = (exit_premium - entry_p) * qty_to_close * 100
+
+        # ── Step 3: Update session-level risk tracking ────────────────────────────
+        self._active_trade_pnl     += pnl
+        self._session_realized_pnl += pnl
+
+        if closing_all:
+            # Full close: record a direction-specific loss for re-entry cooldown,
+            # then check whether the daily loss limit has now been breached.
+            if self._active_trade_pnl < 0 and direction_snapshot:
+                self._last_loss_by_direction[direction_snapshot] = {
+                    "time": datetime.now(ET),
+                    "pnl":  self._active_trade_pnl,
+                }
+                self.debug.emit(
+                    "WARN",
+                    f"Loss recorded for {direction_snapshot} "
+                    f"(${self._active_trade_pnl:.0f}). "
+                    f"Re-entry cooldown active for "
+                    f"{self.profile.get('re_entry_cooldown_min', 45)} min.",
+                )
+
+            limit = self.profile.get("daily_loss_limit", 0)
+            if limit > 0 and not self._session_halted and self._session_realized_pnl < -limit:
+                self._session_halted = True
+                self.debug.emit(
+                    "ERROR",
+                    f"Daily loss limit reached — session P&L: "
+                    f"${self._session_realized_pnl:.0f} "
+                    f"(limit: -${limit:.0f}). No more entries today.",
+                )
+
+            self._active_trade_pnl = 0.0  # reset for next trade
 
         try:
             self.logger.log_exit(
@@ -1101,7 +1243,8 @@ class ORBEngine:
             logger.info("[ORBEngine] Exit %s qty=%d reason=%s",
                         action["type"], qty_to_close, action.get("reason", ""))
             self.debug.emit("SUCCESS", f"{_tag} Exit {action['type']} qty={qty_to_close} "
-                                       f"reason={action.get('reason', '')} pnl=${pnl:.2f}")
+                                       f"reason={action.get('reason', '')} pnl=${pnl:.2f} "
+                                       f"session_pnl=${self._session_realized_pnl:.0f}")
         except Exception as e:
             logger.error("[ORBEngine] Exit log/notify failed: %s", e)
             self.debug.emit("ERROR", f"Exit log/notify failed: {e}")
@@ -1399,4 +1542,12 @@ class ORBEngine:
             "position":                   self.position,
             "contract":                   self.contract_symbol,
             "exit_state":                 em.to_dict() if em else None,
+            "session_pnl":                round(self._session_realized_pnl, 2),
+            "session_halted":             self._session_halted,
+            "daily_loss_limit":           self.profile.get("daily_loss_limit", 0),
+            "re_entry_cooldown_min":      self.profile.get("re_entry_cooldown_min", 45),
+            "last_loss_by_direction":     {
+                k: {"pnl": round(v["pnl"], 2), "time": v["time"].isoformat()}
+                for k, v in self._last_loss_by_direction.items()
+            },
         }
