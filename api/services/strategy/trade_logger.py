@@ -125,36 +125,44 @@ class TradeLogger:
                   strategy_id: Optional[str] = None,
                   paper_mode: bool = True,
                   trade_type: str = "STRATEGY") -> Optional[str]:
-        try:
-            res = self.client.table("orb_trades").insert({
-                "trade_date":             str(session_date),
-                "ticker":                 ticker,
-                "profile":                profile,
-                "direction":              direction,
-                "contract_symbol":        contract["symbol"],
-                "strike":                 contract["strike"],
-                "expiry":                 str(contract["expiry"]),
-                "entry_premium":          entry_premium,
-                "qty_entered":            qty,
-                "qty_exited":             0,
-                "entry_time":             datetime.utcnow().isoformat(),
-                "orh":                    orh,
-                "orl":                    orl,
-                "fib_targets":            fib_levels,
-                "flow_confirmed":         True,
-                "underlying_price_entry": underlying_price_entry,
-                "vix_at_entry":           vix_at_entry,
-                "strategy_id":            strategy_id,
-                "paper_mode":             paper_mode,
-                "trade_type":             trade_type,
-                "exit_stages":            [],
-            }).execute()
-            if res.data:
-                return res.data[0]["id"]
-            return None
-        except Exception as e:
-            logger.error("[TradeLogger] log_entry failed: %s", e)
-            return None
+        row = {
+            "trade_date":             str(session_date),
+            "ticker":                 ticker,
+            "profile":                profile,
+            "direction":              direction,
+            "contract_symbol":        contract["symbol"],
+            "strike":                 contract["strike"],
+            "expiry":                 str(contract["expiry"]),
+            "entry_premium":          entry_premium,
+            "qty_entered":            qty,
+            "qty_exited":             0,
+            "entry_time":             datetime.utcnow().isoformat(),
+            "orh":                    orh,
+            "orl":                    orl,
+            "fib_targets":            fib_levels,
+            "flow_confirmed":         True,
+            "underlying_price_entry": underlying_price_entry,
+            "vix_at_entry":           vix_at_entry,
+            "strategy_id":            strategy_id,
+            "paper_mode":             paper_mode,
+            "trade_type":             trade_type,
+        }
+        # exit_stages requires a DB migration — try first, fall back to insert without it
+        # if the column doesn't exist yet (pre-migration safety net).
+        for attempt_row in (dict(row, exit_stages=[]), row):
+            try:
+                res = self.client.table("orb_trades").insert(attempt_row).execute()
+                if res.data:
+                    return res.data[0]["id"]
+                return None
+            except Exception as e:
+                err_str = str(e)
+                if attempt_row is row or "exit_stages" not in err_str:
+                    logger.error("[TradeLogger] log_entry failed: %s", e)
+                    return None
+                logger.warning("[TradeLogger] log_entry: exit_stages column missing — "
+                               "retrying without it (run Supabase migration to fix)")
+        return None
 
     def log_exit(self, contract_symbol: str, exit_reason: str,
                  exit_premium: Optional[float], qty_closed: int, profile: str,

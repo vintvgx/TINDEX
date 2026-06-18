@@ -16,7 +16,9 @@ from typing import Optional
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.data.historical import OptionHistoricalDataClient
+from alpaca.data.historical import OptionHistoricalDataClient, StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 
 from services.strategy.profiles import get_profile
 from services.strategy.contract_selector import select_contract
@@ -113,6 +115,7 @@ class ORBEngine:
 
         self.trading_client = TradingClient(trade_key, trade_secret, paper=self.paper)
         self.option_client  = OptionHistoricalDataClient(data_key, data_secret)
+        self.stock_client   = StockHistoricalDataClient(data_key, data_secret)
 
         self.sentiment  = SentimentFilter()
         self.logger     = TradeLogger()
@@ -222,16 +225,19 @@ class ORBEngine:
         # Close any open trades from prior expired sessions (crash/redeploy guard).
         self.logger.reconcile_orphaned_trades()
 
-        # The OrbService bar feed must be running or there is no price data. If it
-        # isn't (e.g. right after a redeploy, before the service has started),
-        # return WITHOUT skipping or notifying so the session stays armed and
-        # re-runs once the service comes up (init_scheduler late-start recovery).
+        # Log whether OrbService is live — but do NOT abort here. Even when the
+        # hub isn't marked running yet (e.g. race condition right after a restart
+        # where OrbService thread hasn't called set_service_running(True) yet),
+        # _collect_orb_window_bars() will fall back to Alpaca REST to get the
+        # 09:30–09:45 bars so ORH/ORL can still be set.  OrbService is still
+        # needed to *detect* breakouts; this just ensures the engine is ready
+        # when those signals arrive.
         if not self._hub.is_service_running():
-            logger.info("[ORBEngine] calculate_orb deferred — ORB service not running (%s)",
+            logger.info("[ORBEngine] calculate_orb running without live hub for %s "
+                        "(OrbService not yet running — will use Alpaca REST bar fallback)",
                         self.ticker)
-            self.debug.emit("WARN", "calculate_orb deferred — ORB service not running "
-                                    "(no price feed); session stays armed")
-            return False
+            self.debug.emit("WARN", "calculate_orb: hub not running — using Alpaca REST "
+                                    "bar fallback to set ORH/ORL")
 
         self.debug.emit("INFO", f"calculate_orb start — {self.ticker} "
                                 f"window=09:30–09:45 ({ORB_WINDOW_MINUTES}m)")
@@ -1414,16 +1420,20 @@ class ORBEngine:
 
     def _collect_orb_window_bars(self, n_minutes: int):
         """
-        Build the opening-range bars from the hub's recent-bar buffer: the first
-        n_minutes of bars from 09:30 ET. The service streams these bars; the engine
-        windows them over the fixed 09:30–09:45 ORB window (no separate data fetch).
+        Build the opening-range bars for the 09:30–(09:30+n_minutes) ET window.
 
-        NOTE: Called by calculate_orb. Returns [] when no in-window bars are
-        available (e.g. a server restart after the window), yielding NO_DATA.
+        Primary:  the hub's in-memory bar buffer (populated by OrbService while it
+                  is running).
+        Fallback: Alpaca StockHistoricalDataClient REST fetch — used when the server
+                  has restarted and OrbService's buffer is empty (bars were streamed
+                  before the restart and are no longer in memory).  This ensures
+                  calculate_orb() can still set ORH/ORL even on a late-start deploy.
         """
         now_et = datetime.now(ET)
         start  = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
         end    = start + timedelta(minutes=n_minutes)
+
+        # ── Primary: hub buffer ──────────────────────────────────────────────────
         bars = []
         for b in self._hub.get_recent_bars(self.ticker):
             ts = b.ts
@@ -1433,9 +1443,48 @@ class ORBEngine:
                 ts = ts.astimezone(ET)
             if start <= ts < end and b.high is not None and b.low is not None:
                 bars.append(b)
-        if not bars:
-            logger.warning("[ORBEngine] No hub bars in ORB window for %s (%s–%s)",
-                           self.ticker, start.time(), end.time())
+
+        if bars:
+            return bars
+
+        # ── Fallback: Alpaca historical bars ────────────────────────────────────
+        # Only attempt when the ORB window has already closed (after 09:30+n_min).
+        if now_et < end:
+            logger.warning("[ORBEngine] No hub bars for %s yet — window still open", self.ticker)
+            return []
+
+        logger.info("[ORBEngine] Hub buffer empty for %s — fetching ORB bars from Alpaca REST",
+                    self.ticker)
+        try:
+            req = StockBarsRequest(
+                symbol_or_symbols=self.ticker,
+                timeframe=TimeFrame.Minute,
+                start=start,
+                end=end,
+                feed="iex",
+            )
+            resp = self.stock_client.get_stock_bars(req)
+            raw_bars = resp.get(self.ticker, [])
+            for rb in raw_bars:
+                ts = rb.timestamp
+                if ts.tzinfo is None:
+                    ts = ET.localize(ts)
+                else:
+                    ts = ts.astimezone(ET)
+                if start <= ts < end and rb.high is not None and rb.low is not None:
+                    bars.append(OrbBar(ticker=self.ticker, ts=ts,
+                                       open=rb.open, high=rb.high,
+                                       low=rb.low, close=rb.close,
+                                       volume=rb.volume or 0))
+            if bars:
+                logger.info("[ORBEngine] Alpaca REST returned %d bars for %s ORB window",
+                            len(bars), self.ticker)
+            else:
+                logger.warning("[ORBEngine] No bars in ORB window for %s (%s–%s) from Alpaca REST",
+                               self.ticker, start.time(), end.time())
+        except Exception as e:
+            logger.error("[ORBEngine] Alpaca REST bar fallback failed for %s: %s", self.ticker, e)
+
         return bars
 
     def _get_option_price(self) -> float | None:
