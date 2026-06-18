@@ -12,6 +12,7 @@ import { useStrategyPositions, type PositionEntry } from '@/hooks/queries/strate
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
+import { useOrbServiceAlert } from '@/hooks/useOrbServiceAlert';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import {
@@ -338,6 +339,9 @@ const DashboardScreen = () => {
   );
   const totalActive = activeStrat.length + activeImm.length;
 
+  // ── ORB service-down alert (toast every hour + persistent banner) ─────────
+  const { serviceDown } = useOrbServiceAlert();
+
   // ── Session risk state ────────────────────────────────────────────────────
   const haltedEngines = useMemo(() => {
     if (!sessionStates) return [];
@@ -436,6 +440,16 @@ const DashboardScreen = () => {
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* ── ORB service-down banner ──────────────────────────────────────── */}
+        {serviceDown && (
+          <View style={styles.serviceDownBanner}>
+            <Ionicons name="radio-button-off" size={15} color="#fed7aa" />
+            <Text style={styles.serviceDownText}>
+              ORB service is not running — open Admin to start it
+            </Text>
+          </View>
+        )}
 
         {/* ── Session halt banner ──────────────────────────────────────────── */}
         {haltedEngines.length > 0 && (
@@ -618,6 +632,11 @@ const styles = StyleSheet.create({
   quickTradeBtnText: { fontSize: 13, fontWeight: '700' },
   sessionPnlBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   sessionPnlText:  { fontSize: 12, fontWeight: '700' },
+
+  serviceDownBanner: { backgroundColor: '#78350f', borderRadius: 10, paddingHorizontal: 14,
+                        paddingVertical: 10, flexDirection: 'row', alignItems: 'center',
+                        gap: 8, marginBottom: 8 },
+  serviceDownText:   { color: '#fed7aa', fontSize: 13, flex: 1 },
 
   haltBanner:    { backgroundColor: '#7f1d1d', borderRadius: 10, paddingHorizontal: 14,
                    paddingVertical: 10, flexDirection: 'row', alignItems: 'center',
