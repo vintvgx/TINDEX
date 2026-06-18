@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, SafeAreaView,
   ActivityIndicator, RefreshControl, StyleSheet,
@@ -12,6 +12,7 @@ import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePosi
 import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
+import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import {
   ORBNotificationModal,
   type ORBBreakoutNotificationData,
@@ -241,28 +242,21 @@ function ImmediatePositionCard({
         ))}
       </View>
 
-      {/* TP milestones */}
-      {(pos.tp1 != null || pos.tp2 != null) && (
-        <View style={styles.stageBar}>
-          {[
-            { label: 'Stop', value: pos.hard_stop,  active: !pos.tp1_hit, color: colors.error },
-            { label: 'TP1',  value: pos.tp1,        active: !!pos.tp1_hit && !pos.tp2_hit, color: '#4A9EFF' },
-            { label: 'TP2',  value: pos.tp2,        active: !!pos.tp2_hit, color: colors.success },
-          ].map((s, i) => (
-            <View key={i} style={{ alignItems: 'center', flex: 1 }}>
-              <View style={[styles.stageDot, { backgroundColor: s.active ? s.color : colors.border }]} />
-              <Text style={[styles.stageLabel, { color: s.active ? s.color : colors.textTertiary }]}>
-                {s.label}
-              </Text>
-              {s.value != null && (
-                <Text style={[styles.stageValue, { color: colors.textTertiary }]}>
-                  ${s.value.toFixed(2)}
-                </Text>
-              )}
-            </View>
-          ))}
-        </View>
-      )}
+      {/* TP milestone badges */}
+      <View style={styles.stageBar}>
+        {[
+          { label: 'Stop',  active: !pos.tp1_hit,                      color: colors.error },
+          { label: 'TP1',   active: pos.tp1_hit && !pos.tp2_hit,        color: '#4A9EFF' },
+          { label: 'TP2',   active: pos.tp2_hit,                        color: colors.success },
+        ].map((s, i) => (
+          <View key={i} style={{ alignItems: 'center', flex: 1 }}>
+            <View style={[styles.stageDot, { backgroundColor: s.active ? s.color : colors.border }]} />
+            <Text style={[styles.stageLabel, { color: s.active ? s.color : colors.textTertiary }]}>
+              {s.label}
+            </Text>
+          </View>
+        ))}
+      </View>
 
       <TouchableOpacity
         onPress={() => onExit({
@@ -356,7 +350,15 @@ const DashboardScreen = () => {
     return vals.reduce((a, b) => a + b, 0);
   }, [sessionStates]);
 
-  // ── Exit modal ────────────────────────────────────────────────────────────
+  // ── Ticker options for immediate trade panel ────────────────────────────
+  const tickerOptions = useMemo(() => {
+    const fromOrb = (orbData ?? []).map((d: any) => d.ticker as string).filter(Boolean);
+    const all = Array.from(new Set(fromOrb.length ? fromOrb : ['SPY', 'QQQ', 'IWM']));
+    return all.sort();
+  }, [orbData]);
+
+  // ── Panel / exit state ────────────────────────────────────────────────────
+  const [tradePanelVisible, setTradePanelVisible] = useState(false);
   const [exitTarget, setExitTarget] = useState<ExitTarget | null>(null);
 
   // ── ORB notification modal ────────────────────────────────────────────────
@@ -418,10 +420,19 @@ const DashboardScreen = () => {
                 <Text style={[styles.sessionPnlText, {
                   color: sessionPnl >= 0 ? '#30D158' : '#FF453A',
                 }]}>
-                  Session {sessionPnl >= 0 ? '+' : ''}${sessionPnl.toFixed(0)}
+                  {sessionPnl >= 0 ? '+' : ''}${sessionPnl.toFixed(0)}
                 </Text>
               </View>
             )}
+            <TouchableOpacity
+              onPress={() => setTradePanelVisible(true)}
+              style={[styles.quickTradeBtn, { backgroundColor: colors.accent }]}
+            >
+              <Ionicons name="flash" size={14} color={colors.accentForeground} />
+              <Text style={[styles.quickTradeBtnText, { color: colors.accentForeground }]}>
+                Trade
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -534,6 +545,17 @@ const DashboardScreen = () => {
         />
       )}
 
+      {/* ── Immediate trade panel ───────────────────────────────────────── */}
+      <ImmediateTradePanel
+        colors={colors}
+        tickerOptions={tickerOptions}
+        visible={tradePanelVisible}
+        onClose={() => {
+          setTradePanelVisible(false);
+          refresh();
+        }}
+      />
+
       {/* ── ORB notification modal ───────────────────────────────────────── */}
       <ORBNotificationModal
         visible={orbNotificationModalVisible}
@@ -566,6 +588,9 @@ const styles = StyleSheet.create({
   headerRight:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
   streamDot:     { width: 6, height: 6, borderRadius: 3 },
   streamLabel:   { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
+  quickTradeBtn: { flexDirection: 'row', alignItems: 'center', gap: 4,
+                   paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10 },
+  quickTradeBtnText: { fontSize: 13, fontWeight: '700' },
   sessionPnlBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   sessionPnlText:  { fontSize: 12, fontWeight: '700' },
 
