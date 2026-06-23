@@ -50,7 +50,7 @@ PROFILES = {
         "consol_range_pct": 0.0008,
         "consol_bars": 4,
         "volume_exit_threshold": 0.20,
-        "strike_offset_min": 0.50,
+        "strike_offset_min": 1.00,  # raised from 0.50 — confirmation entry is already past the ORH; 0.50 selects strikes that are ITM at fill
         "strike_offset_max": 2.00,
         "target_delta_min": 0.38,
         "target_delta_max": 0.58,
@@ -100,8 +100,8 @@ PROFILES = {
         "consol_range_pct": 0.0010,
         "consol_bars": 8,
         "volume_exit_threshold": 0.10,
-        "strike_offset_min": 0.50,
-        "strike_offset_max": 2.00,
+        "strike_offset_min": 1.25,  # raised from 0.50 — BREAK entry fires after confirmation, underlying is already past ORH; force at least 1.25 OTM so we're not buying ITM at fill
+        "strike_offset_max": 2.50,  # widened from 2.00 — give scorer room to find a cleaner OTM strike
         "target_delta_min": 0.30,
         "target_delta_max": 0.48,
         "eod_buffer_minutes": 15,
