@@ -14,9 +14,9 @@ PROFILES = {
     "BULL_DOG": {
         "qty_contracts": 10,
         "max_loss_pct": 0.40,
-        "tp1_mult": 1.75,
+        "tp1_mult": 1.20,           # lowered from 1.75 — +20% is reachable; TP1 locks profit and moves SL to entry
         "tp2_mult": 2.50,
-        "tp1_close_pct": 0.30,
+        "tp1_close_pct": 0.50,      # raised from 0.30 — close half at TP1, runner rides risk-free
         "tp2_close_pct": 0.30,
         "runner_trail_pct": 0.15,
         "runner_mode": "be_hold",   # high-qty aggressive — ride the full move, B/E protects runner
@@ -39,7 +39,7 @@ PROFILES = {
     "THUNDER_CAT": {
         "qty_contracts": 6,
         "max_loss_pct": 0.35,
-        "tp1_mult": 1.50,
+        "tp1_mult": 1.20,           # lowered from 1.50 — +20% is achievable on normal breakout
         "tp2_mult": 2.00,
         "tp1_close_pct": 0.50,
         "tp2_close_pct": 0.50,
@@ -64,7 +64,7 @@ PROFILES = {
     "WOLF": {
         "qty_contracts": 3,
         "max_loss_pct": 0.25,
-        "tp1_mult": 1.35,
+        "tp1_mult": 1.15,           # lowered from 1.35 — conservative profile, grab +15% fast
         "tp2_mult": 1.70,
         "tp1_close_pct": 0.67,
         "tp2_close_pct": 1.00,
@@ -89,9 +89,9 @@ PROFILES = {
     "TREND_RIDER": {
         "qty_contracts": 6,
         "max_loss_pct": 0.38,
-        "tp1_mult": 1.40,           # lowered from 1.60 — +40% is achievable on a normal 0DTE move
+        "tp1_mult": 1.15,           # lowered from 1.40 — +15% fires on the initial burst; SL moves to entry, runner is risk-free
         "tp2_mult": 2.50,
-        "tp1_close_pct": 0.15,
+        "tp1_close_pct": 0.50,      # raised from 0.15 — close half at TP1; 0.15 only closed 1/6 contracts and left too much exposed
         "tp2_close_pct": 0.35,
         "runner_trail_pct": 0.18,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode": "be_hold",   # designed for this — lock TP1, ride runner to TP2/EOD risk-free
@@ -118,9 +118,9 @@ PROFILES = {
         "min_smart_qty":          2,
         "use_tp2":                True,
         "max_loss_pct":           0.25,   # tightened from 0.35 — reversals are cut early; long bleeds don't recover
-        "tp1_mult":               1.30,   # lowered from 1.55 — take small profit quickly on reversal
+        "tp1_mult":               1.15,   # lowered from 1.30 — grab +15% fast; reversals can snap back
         "tp2_mult":               1.70,   # lowered from 2.30 — realistic target without full push
-        "tp1_close_pct":         0.33,   # close 1 of 3 at TP1 (max(1, floor(3×0.33)) = 1)
+        "tp1_close_pct":          0.50,   # raised from 0.33 — close half at TP1; SL moves to entry for runner
         "tp2_close_pct":          0.50,   # close 1 of 2 remaining at TP2, leave 1 runner
         "runner_trail_pct":       0.18,   # loosened from 0.14 — counter-trends can extend
         "runner_mode":            "trail", # reversals can reverse again; keep dynamic protection
@@ -335,7 +335,7 @@ PROFILES = {
     "RETESTER": {
         "qty_contracts": 4,
         "max_loss_pct": 0.30,
-        "tp1_mult": 1.50,
+        "tp1_mult": 1.20,           # lowered from 1.50 — retest entry is already confirmed; +20% is realistic first target
         "tp2_mult": 2.00,
         "tp1_close_pct": 0.55,
         "tp2_close_pct": 0.35,
@@ -381,7 +381,7 @@ def smart_qty(ask: float) -> int:
 CUSTOM_DEFAULTS = {
     "qty_contracts":          5,
     "max_loss_pct":           0.35,
-    "tp1_mult":               1.50,
+    "tp1_mult":               1.20,
     "tp2_mult":               2.00,
     "tp1_close_pct":          0.50,
     "tp2_close_pct":          0.50,

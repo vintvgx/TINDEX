@@ -1,9 +1,16 @@
 """
 Profile-aware exit manager. All thresholds come from the profile dict.
 
-BULL DOG  — holds longer, exits less aggressively, 40% runner after TP2
-THUNDER CAT — standard TP1/TP2/runner structure
-WOLF      — fastest exits, closes everything at TP2 (no runner)
+TP1 philosophy: tight first target (15–20%) fires on the initial breakout burst,
+closes tp1_close_pct of the position, then immediately moves hard_stop to entry_premium
+(breakeven). The runner is now risk-free — worst case is a scratch, best case is TP2/EOD.
+
+BULL DOG    — aggressive, 10 contracts, TP1 at +20%, runner to TP2
+THUNDER CAT — balanced default, TP1 at +20%, trail runner
+WOLF        — conservative, TP1 at +15%, closes 67% at TP1
+TREND RIDER — momentum, TP1 at +15%, closes 50% at TP1, be_hold runner to TP2/EOD
+RETESTER    — retest entry, TP1 at +20%, trail runner
+REVERSAL    — counter-trend, TP1 at +15%, closes 50% at TP1
 """
 
 import math
@@ -145,6 +152,10 @@ class ExitManager:
                 current_premium: float = None) -> dict:
         return {"type": action_type, "qty": qty, "reason": reason,
                 "current_premium": current_premium}
+
+    def update_qty(self, qty_closed: int) -> None:
+        """Call after executing a partial close so remaining contract count stays accurate."""
+        self.qty_remaining = max(0, self.qty_remaining - qty_closed)
 
     def to_dict(self) -> dict:
         return {
