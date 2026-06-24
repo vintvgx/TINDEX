@@ -17,6 +17,11 @@ PROFILES = {
         "tp1_mult": 1.20,           # lowered from 1.75 — +20% is reachable; TP1 locks profit and moves SL to entry
         "tp2_mult": 2.50,
         "tp1_close_pct": 0.50,      # raised from 0.30 — close half at TP1, runner rides risk-free
+        "tp1_confirm_ticks": 2,     # require 2 consecutive ticks at TP1 before firing
+        "min_tp1_dollars": 0.35,    # floor: TP1 gain must be at least $0.35/share regardless of entry price
+        "min_tp2_dollars": 1.00,
+        "cascade_ticks": 3,         # 3 consecutive underlying down-ticks triggers a cascade sell
+        "cascade_close_pct": 0.50,  # sell 50% of non-runner contracts per cascade event
         "tp2_close_pct": 0.30,
         "runner_trail_pct": 0.15,
         "runner_mode": "be_hold",   # high-qty aggressive — ride the full move, B/E protects runner
@@ -42,6 +47,11 @@ PROFILES = {
         "tp1_mult": 1.20,           # lowered from 1.50 — +20% is achievable on normal breakout
         "tp2_mult": 2.00,
         "tp1_close_pct": 0.50,
+        "tp1_confirm_ticks": 2,
+        "min_tp1_dollars": 0.25,
+        "min_tp2_dollars": 0.75,
+        "cascade_ticks": 3,
+        "cascade_close_pct": 0.50,
         "tp2_close_pct": 0.50,
         "runner_trail_pct": 0.22,   # loosened from 0.20 — less noise sensitivity
         "runner_mode": "trail",
@@ -67,6 +77,11 @@ PROFILES = {
         "tp1_mult": 1.15,           # lowered from 1.35 — conservative profile, grab +15% fast
         "tp2_mult": 1.70,
         "tp1_close_pct": 0.67,
+        "tp1_confirm_ticks": 2,
+        "min_tp1_dollars": 0.20,
+        "min_tp2_dollars": 0.55,
+        "cascade_ticks": 3,
+        "cascade_close_pct": 0.50,
         "tp2_close_pct": 1.00,
         "runner_trail_pct": 0.20,   # loosened from 0.10 — 10% was firing on bid/ask spread alone
         "runner_mode": "trail",
@@ -92,6 +107,11 @@ PROFILES = {
         "tp1_mult": 1.15,           # lowered from 1.40 — +15% fires on the initial burst; SL moves to entry, runner is risk-free
         "tp2_mult": 2.50,
         "tp1_close_pct": 0.50,      # raised from 0.15 — close half at TP1; 0.15 only closed 1/6 contracts and left too much exposed
+        "tp1_confirm_ticks": 2,
+        "min_tp1_dollars": 0.30,
+        "min_tp2_dollars": 0.90,
+        "cascade_ticks": 3,
+        "cascade_close_pct": 0.50,
         "tp2_close_pct": 0.35,
         "runner_trail_pct": 0.18,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode": "be_hold",   # designed for this — lock TP1, ride runner to TP2/EOD risk-free
@@ -121,6 +141,11 @@ PROFILES = {
         "tp1_mult":               1.15,   # lowered from 1.30 — grab +15% fast; reversals can snap back
         "tp2_mult":               1.70,   # lowered from 2.30 — realistic target without full push
         "tp1_close_pct":          0.50,   # raised from 0.33 — close half at TP1; SL moves to entry for runner
+        "tp1_confirm_ticks":      2,
+        "min_tp1_dollars":        0.18,
+        "min_tp2_dollars":        0.50,
+        "cascade_ticks":          3,
+        "cascade_close_pct":      0.50,
         "tp2_close_pct":          0.50,   # close 1 of 2 remaining at TP2, leave 1 runner
         "runner_trail_pct":       0.18,   # loosened from 0.14 — counter-trends can extend
         "runner_mode":            "trail", # reversals can reverse again; keep dynamic protection
@@ -338,6 +363,11 @@ PROFILES = {
         "tp1_mult": 1.20,           # lowered from 1.50 — retest entry is already confirmed; +20% is realistic first target
         "tp2_mult": 2.00,
         "tp1_close_pct": 0.55,
+        "tp1_confirm_ticks": 2,
+        "min_tp1_dollars": 0.20,
+        "min_tp2_dollars": 0.65,
+        "cascade_ticks": 3,
+        "cascade_close_pct": 0.50,
         "tp2_close_pct": 0.35,
         "runner_trail_pct": 0.22,   # loosened from 0.15 — entered at confirmed level, give room
         "runner_mode": "trail",     # retest entry = confirmed level; protect gains dynamically

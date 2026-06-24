@@ -58,10 +58,12 @@ VIX_MIN = 13.0
 MIN_ORB_RANGE_PCT = 0.0005
 
 EOD_CLOSE_TIMES = {
-    "SPY": "15:25",
-    "QQQ": "15:25",
-    "IWM": "15:10"
-    }
+    # ETF options (SPY, IWM, QQQ) stop trading at 4:00 PM ET.
+    # 15:58 gives a 2-minute window to route and fill the EOD market order before close.
+    "SPY": "15:58",
+    "QQQ": "15:58",
+    "IWM": "15:58",
+}
 
 
 class ORBEngine:

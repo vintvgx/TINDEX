@@ -1,16 +1,23 @@
 """
 Profile-aware exit manager. All thresholds come from the profile dict.
 
-TP1 philosophy: tight first target (15–20%) fires on the initial breakout burst,
-closes tp1_close_pct of the position, then immediately moves hard_stop to entry_premium
-(breakeven). The runner is now risk-free — worst case is a scratch, best case is TP2/EOD.
+Exit sequence:
+  1. TP1 (confirmed over N ticks, dollar-floored) — partial close, SL moves to entry.
+  2. Cascade exit — after TP1, monitors the underlying for consecutive down ticks.
+     On N consecutive downs: sells cascade_close_pct of non-runner contracts.
+     Always preserves 1 runner contract.
+  3. Runner — the final 1 contract exits at: TP2 (if reached), BE stop (entry price),
+     EOD (15:58 ET), or manual.
 
-BULL DOG    — aggressive, 10 contracts, TP1 at +20%, runner to TP2
-THUNDER CAT — balanced default, TP1 at +20%, trail runner
-WOLF        — conservative, TP1 at +15%, closes 67% at TP1
-TREND RIDER — momentum, TP1 at +15%, closes 50% at TP1, be_hold runner to TP2/EOD
-RETESTER    — retest entry, TP1 at +20%, trail runner
-REVERSAL    — counter-trend, TP1 at +15%, closes 50% at TP1
+TP1 dollar floor: TP = max(entry × mult, entry + min_dollars)
+  Prevents cheap OTM contracts from locking in noise-level gains.
+
+BULL DOG    — 10 contracts, TP1 +20% / $0.35 floor, cascade(3 ticks, 50%)
+THUNDER CAT — 6 contracts,  TP1 +20% / $0.25 floor, cascade(3 ticks, 50%)
+WOLF        — 3 contracts,  TP1 +15% / $0.20 floor, cascade(3 ticks, 50%)
+TREND RIDER — 6 contracts,  TP1 +15% / $0.30 floor, cascade(3 ticks, 50%), be_hold runner
+RETESTER    — 4 contracts,  TP1 +20% / $0.20 floor, cascade(3 ticks, 50%), trail runner
+REVERSAL    — 3 contracts,  TP1 +15% / $0.18 floor, cascade(3 ticks, 50%), trail runner
 """
 
 import math
@@ -35,8 +42,14 @@ class ExitManager:
         self.entry_time   = datetime.now(ET)
 
         self.hard_stop    = entry_premium * (1 - profile["max_loss_pct"])
-        self.tp1          = entry_premium * profile["tp1_mult"]
-        self.tp2          = entry_premium * profile["tp2_mult"]
+
+        # Dollar-floored TP targets: TP = max(entry × mult, entry + min_dollars).
+        # Prevents cheap OTM contracts from locking in noise-level gains on a %-only target.
+        min_tp1 = profile.get("min_tp1_dollars", 0.0)
+        min_tp2 = profile.get("min_tp2_dollars", 0.0)
+        self.tp1 = max(entry_premium * profile["tp1_mult"], entry_premium + min_tp1)
+        self.tp2 = max(entry_premium * profile["tp2_mult"], entry_premium + min_tp2)
+
         self.runner_trail = entry_premium
 
         self.tp1_hit        = False
@@ -54,6 +67,19 @@ class ExitManager:
 
         self.price_buffer  = deque(maxlen=profile["consol_bars"])
         self.volume_buffer = deque(maxlen=profile["consol_bars"])
+
+        # TP1 confirmation: require N consecutive ticks at/above TP1 before firing.
+        # Prevents a single ask-side spike from triggering a premature partial close.
+        self._tp1_ticks        = 0
+        self._tp1_ticks_needed = profile.get("tp1_confirm_ticks", 2)
+
+        # Cascade exit: after TP1, track consecutive underlying down-ticks.
+        # On N consecutive downs, sell cascade_close_pct of non-runner contracts.
+        # Always preserves 1 runner contract regardless of cascade count.
+        self._cascade_down_ticks   = 0
+        self._cascade_ticks_needed = profile.get("cascade_ticks", 3)
+        self._cascade_close_pct    = profile.get("cascade_close_pct", 0.50)
+        self._cascade_last_price   = None
 
     def evaluate(self, current_option_price: float,
                  current_underlying_price: float = None,
@@ -95,17 +121,24 @@ class ExitManager:
             return self._action("CLOSE_PARTIAL", qty_lv, "LOW_VOLUME_EXIT",
                                 current_option_price)
 
-        if not self.tp1_hit and current_option_price >= self.tp1:
-            self.tp1_hit        = True
-            self.be_stop_active = True
-            self.hard_stop      = self.entry_premium  # move stop to breakeven after TP1
-            # be_hold: runner sits at B/E stop only — no trailing stop, rides to TP2/EOD.
-            # trail: high-water-mark trailing stop activates immediately at TP1.
-            if self._runner_mode == "trail":
-                self.runner_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
-            qty_tp1 = max(1, math.floor(self.qty_remaining * self.profile["tp1_close_pct"]))
-            return self._action("CLOSE_PARTIAL", qty_tp1, "TP1", current_option_price)
+        # TP1 — requires tp1_confirm_ticks consecutive ticks at/above the level.
+        # Price falling back below TP1 mid-count resets the counter.
+        if not self.tp1_hit:
+            if current_option_price >= self.tp1:
+                self._tp1_ticks += 1
+                if self._tp1_ticks < self._tp1_ticks_needed:
+                    return self._action("HOLD", 0, "TP1_CONFIRMING")
+                self.tp1_hit        = True
+                self.be_stop_active = True
+                self.hard_stop      = self.entry_premium  # SL moves to breakeven
+                if self._runner_mode == "trail":
+                    self.runner_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
+                qty_tp1 = max(1, math.floor(self.qty_remaining * self.profile["tp1_close_pct"]))
+                return self._action("CLOSE_PARTIAL", qty_tp1, "TP1", current_option_price)
+            else:
+                self._tp1_ticks = 0
 
+        # TP2 — runner bonus target; only fires if the full move materialises.
         if self._use_tp2 and self.tp1_hit and not self.tp2_hit and current_option_price >= self.tp2:
             self.tp2_hit = True
             if self.profile["tp2_close_pct"] >= 1.0:
@@ -114,8 +147,7 @@ class ExitManager:
             qty_tp2 = max(1, math.floor(self.qty_remaining * self.profile["tp2_close_pct"]))
             return self._action("CLOSE_PARTIAL", qty_tp2, "TP2", current_option_price)
 
-        # trail mode only — be_hold skips this block entirely; the B/E stop below
-        # is the only floor for the runner, which then targets TP2 or rides to EOD.
+        # Trail stop (trail mode only) — be_hold skips this; BE stop is the floor.
         if self._runner_mode == "trail" and self.tp1_hit and self.qty_remaining > 0:
             new_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
             if new_trail > self.runner_trail:
@@ -123,6 +155,25 @@ class ExitManager:
             if current_option_price <= self.runner_trail:
                 return self._action("CLOSE_ALL", self.qty_remaining, "RUNNER_TRAIL_STOP",
                                     current_option_price)
+
+        # Cascade exit — active after TP1, tracks consecutive underlying down-ticks.
+        # On N consecutive downs: sell cascade_close_pct of remaining non-runner contracts.
+        # The last 1 contract (runner) is always preserved here — it exits only via
+        # TP2, BE stop, EOD, or manual.
+        if self.tp1_hit and self.qty_remaining > 1 and current_underlying_price is not None:
+            if self._cascade_last_price is not None:
+                if current_underlying_price < self._cascade_last_price:
+                    self._cascade_down_ticks += 1
+                else:
+                    self._cascade_down_ticks = 0
+                if self._cascade_down_ticks >= self._cascade_ticks_needed:
+                    self._cascade_down_ticks = 0
+                    sellable = self.qty_remaining - 1   # never sell the runner
+                    qty_cascade = min(max(1, math.floor(sellable * self._cascade_close_pct)),
+                                      sellable)
+                    return self._action("CLOSE_PARTIAL", qty_cascade, "CASCADE_EXIT",
+                                        current_option_price)
+            self._cascade_last_price = current_underlying_price
 
         if self.be_stop_active and current_option_price <= self.entry_premium:
             return self._action("CLOSE_ALL", self.qty_remaining, "BREAKEVEN_STOP",
@@ -159,15 +210,17 @@ class ExitManager:
 
     def to_dict(self) -> dict:
         return {
-            "entry_premium":  self.entry_premium,
-            "hard_stop":      self.hard_stop,
-            "tp1":            self.tp1,
-            "tp2":            self.tp2,
-            "runner_trail":   self.runner_trail,
-            "tp1_hit":        self.tp1_hit,
-            "tp2_hit":        self.tp2_hit,
-            "be_stop_active": self.be_stop_active,
-            "use_tp2":        self._use_tp2,
-            "qty":            self.qty,
-            "qty_remaining":  self.qty_remaining,
+            "entry_premium":       self.entry_premium,
+            "hard_stop":           self.hard_stop,
+            "tp1":                 self.tp1,
+            "tp2":                 self.tp2,
+            "runner_trail":        self.runner_trail,
+            "tp1_hit":             self.tp1_hit,
+            "tp2_hit":             self.tp2_hit,
+            "be_stop_active":      self.be_stop_active,
+            "use_tp2":             self._use_tp2,
+            "qty":                 self.qty,
+            "qty_remaining":       self.qty_remaining,
+            "cascade_down_ticks":  self._cascade_down_ticks,
+            "tp1_confirm_ticks":   self._tp1_ticks,
         }
