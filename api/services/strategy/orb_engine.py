@@ -64,6 +64,10 @@ EOD_CLOSE_TIMES = {
     "QQQ": "15:58",
     "IWM": "15:58",
 }
+# NOTE: The EOD close fires inside evaluate() which only runs when a price tick
+# arrives. If the option stream goes quiet near 15:58 (thin late-day liquidity,
+# dropped WebSocket), the flatten may not fire. A scheduled hard-flatten job
+# at 15:58 independent of the tick loop is the correct long-term fix (TODO).
 
 
 class ORBEngine:
@@ -849,7 +853,7 @@ class ORBEngine:
             self._active_trade_pnl = 0.0  # reset accumulator for this trade
             self.session_date     = self.session_date or datetime.now(ET).date()
 
-            eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:10")
+            eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:58")
             self.exit_manager = ExitManager(
                 entry_premium=entry_premium,
                 qty=qty,
@@ -1169,7 +1173,7 @@ class ORBEngine:
             )
             fill_order = self.trading_client.submit_order(order)
             if closing_all:
-                self.exit_manager.qty_remaining = 0
+                self.exit_manager.update_qty(self.exit_manager.qty_remaining)
                 self.trade_taken = False
                 self.position    = None
                 if self.stream_manager and contract_snapshot:
@@ -1183,7 +1187,7 @@ class ORBEngine:
                         except Exception:
                             pass
             else:
-                self.exit_manager.qty_remaining -= qty_to_close
+                self.exit_manager.update_qty(qty_to_close)
             order_ok = True
         except Exception as e:
             logger.error("[ORBEngine] Exit order failed: %s", e)
@@ -1408,6 +1412,11 @@ class ORBEngine:
         if bar.close is None:
             return
         self._last_underlying_price = bar.close
+
+        # Feed the cascade tracker at bar cadence (not quote cadence — inter-bar
+        # quotes repeat the same underlying price and would reset the counter).
+        if self.trade_taken and self.exit_manager:
+            self.exit_manager.on_underlying_bar(bar.close)
 
         # Only act once the ORB is established and the session isn't skipped.
         # getattr guards the brief __init__ window before _reset_session_state runs.

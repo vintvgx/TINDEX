@@ -89,11 +89,12 @@ class ExitManager:
         if now_et >= self.eod_close_time:
             return self._action("CLOSE_ALL", self.qty_remaining, "EOD_CLOSE")
 
-        # Premium-based hard stop: close when option price drops to entry × (1 - max_loss_pct).
-        # This is the only hard stop — the underlying crossing back into the ORB range
-        # does NOT trigger an automatic exit; the option price itself must hit the threshold.
+        # Premium-based stop. Before TP1: hard stop at entry × (1 - max_loss_pct).
+        # After TP1: hard_stop is moved to entry_premium (breakeven), so the same
+        # check doubles as the BE stop — labeled correctly for analytics.
         if current_option_price <= self.hard_stop:
-            return self._action("CLOSE_ALL", self.qty_remaining, "HARD_STOP",
+            reason = "BREAKEVEN_STOP" if self.be_stop_active else "HARD_STOP"
+            return self._action("CLOSE_ALL", self.qty_remaining, reason,
                                 current_option_price)
 
         # Only track actual underlying price — option price is not a valid proxy
@@ -156,28 +157,17 @@ class ExitManager:
                 return self._action("CLOSE_ALL", self.qty_remaining, "RUNNER_TRAIL_STOP",
                                     current_option_price)
 
-        # Cascade exit — active after TP1, tracks consecutive underlying down-ticks.
-        # On N consecutive downs: sell cascade_close_pct of remaining non-runner contracts.
-        # The last 1 contract (runner) is always preserved here — it exits only via
-        # TP2, BE stop, EOD, or manual.
-        if self.tp1_hit and self.qty_remaining > 1 and current_underlying_price is not None:
-            if self._cascade_last_price is not None:
-                if current_underlying_price < self._cascade_last_price:
-                    self._cascade_down_ticks += 1
-                else:
-                    self._cascade_down_ticks = 0
-                if self._cascade_down_ticks >= self._cascade_ticks_needed:
-                    self._cascade_down_ticks = 0
-                    sellable = self.qty_remaining - 1   # never sell the runner
-                    qty_cascade = min(max(1, math.floor(sellable * self._cascade_close_pct)),
-                                      sellable)
-                    return self._action("CLOSE_PARTIAL", qty_cascade, "CASCADE_EXIT",
-                                        current_option_price)
-            self._cascade_last_price = current_underlying_price
-
-        if self.be_stop_active and current_option_price <= self.entry_premium:
-            return self._action("CLOSE_ALL", self.qty_remaining, "BREAKEVEN_STOP",
-                                self.entry_premium)
+        # Cascade exit — fires when on_underlying_bar() has accumulated enough
+        # consecutive lower closes (bar cadence, not quote cadence).
+        # Always preserves 1 runner contract; that runner exits only via TP2/BE/EOD/manual.
+        if self.tp1_hit and self.qty_remaining > 1:
+            if self._cascade_down_ticks >= self._cascade_ticks_needed:
+                self._cascade_down_ticks = 0
+                sellable    = self.qty_remaining - 1
+                qty_cascade = min(max(1, math.floor(sellable * self._cascade_close_pct)),
+                                  sellable)
+                return self._action("CLOSE_PARTIAL", qty_cascade, "CASCADE_EXIT",
+                                    current_option_price)
 
         return self._action("HOLD", 0, "")
 
@@ -203,6 +193,25 @@ class ExitManager:
                 current_premium: float = None) -> dict:
         return {"type": action_type, "qty": qty, "reason": reason,
                 "current_premium": current_premium}
+
+    def on_underlying_bar(self, close: float) -> None:
+        """
+        Feed one 1-minute bar close into the cascade tracker.
+        Must be called from on_bar (bar cadence), NOT from quote-tick handlers —
+        inter-bar quotes repeat the same underlying price and would reset the counter.
+        Equal prices (flat bar) are treated as no information.
+        """
+        if not self.tp1_hit:
+            return  # cascade is only relevant after TP1
+        if self._cascade_last_price is None:
+            self._cascade_last_price = close
+            return
+        if close < self._cascade_last_price:
+            self._cascade_down_ticks += 1
+        elif close > self._cascade_last_price:
+            self._cascade_down_ticks = 0
+        # equal close → leave counter unchanged
+        self._cascade_last_price = close
 
     def update_qty(self, qty_closed: int) -> None:
         """Call after executing a partial close so remaining contract count stays accurate."""
