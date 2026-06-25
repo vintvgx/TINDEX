@@ -1,22 +1,39 @@
 """
-Synchronous push-notification layer for the ORB strategy engine.
+Priority-queued push-notification layer for the ORB strategy engine.
 
 Sends Expo push notifications for all significant trading events:
 skip, entry, exit (stop/TP1/TP2/EOD), 30-minute trade update,
 capital-insufficient skip, and no-contract-found skip.
 
-Notifications are sent in a background thread so they never block
-the APScheduler job threads that drive the engine.
+Notifications are dispatched through a single-worker priority queue so
+they always arrive on-device in importance order regardless of which
+engine events fire simultaneously. Priority tiers:
+
+  0 — TRADE_EXIT   (HARD_STOP / TP1 / TP2 / EOD close — money moved)
+  1 — TRADE_ENTRY  (order placed — position open)
+  2 — OPERATIONAL  (stream failure / no contract / capital warning)
+  3 — MARKET       (retest armed / 30-min timer update / flow blocked)
+  4 — INFO         (session armed / skip / no trade / service start)
+
+Within the same tier, notifications are delivered in chronological order
+(FIFO). The worker thread is a daemon so it stops cleanly on shutdown.
 """
 
-import os
 import re
+import queue
 import logging
 import threading
 import requests
 from datetime import date as _date
 
 logger = logging.getLogger(__name__)
+
+# Priority tier constants — lower = delivered first
+P_TRADE_EXIT   = 0
+P_TRADE_ENTRY  = 1
+P_OPERATIONAL  = 2
+P_MARKET       = 3
+P_INFO         = 4
 
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
@@ -60,7 +77,19 @@ class StrategyNotifier:
     """
 
     def __init__(self, supabase_client):
-        self._sb = supabase_client
+        self._sb  = supabase_client
+
+        # Priority queue: items are (priority, seq, (title, body, data)).
+        # seq is a monotonically increasing counter that keeps same-priority
+        # items in arrival order (PriorityQueue needs a fully orderable tuple).
+        self._queue    = queue.PriorityQueue()
+        self._seq      = 0
+        self._seq_lock = threading.Lock()
+
+        # Single daemon thread drains the queue so notifications are serialized
+        # and arrive on-device in priority order.
+        self._worker = threading.Thread(target=self._drain, daemon=True, name="notifier-drain")
+        self._worker.start()
 
     # ── Public event methods ────────────────────────────────────────────────────
     def notify_flow_blocked(self, ticker: str, direction: str):
@@ -69,6 +98,7 @@ class StrategyNotifier:
             title=f"{ticker} — Flow mismatch",
             body=f"Breakout detected ({direction}) but options flow disagrees. Entry skipped.",
             data={"screen": "tradelog"},
+            priority=P_MARKET,
         )
 
     def notify_start(self, provider: str):
@@ -77,6 +107,7 @@ class StrategyNotifier:
             title="ORB Service + Engine started",
             body=f"Monitoring active via {provider.upper()} streaming.",
             data={"screen": "tradelog"},
+            priority=P_INFO,
         )
 
     def notify_session_armed(self, ticker: str, orh: float, orl: float, profile_key: str):
@@ -86,6 +117,7 @@ class StrategyNotifier:
             title=f"{ticker} — Watching for breakout  [{profile_key}]",
             body=f"ORH ${orh:.2f}  ORL ${orl:.2f}  Range ${orb_range:.2f}",
             data={"screen": "strategy"},
+            priority=P_INFO,
         )
 
     def notify_retest_watching(self, ticker: str, direction: str, level: float,
@@ -99,6 +131,7 @@ class StrategyNotifier:
                   f"retest at ${level:.2f}"),
             data={"type": "retest_watching", "ticker": ticker,
                   "profile": profile_key, "level": level},
+            priority=P_MARKET,
         )
 
     def notify_no_trade_eod(self, ticker: str, profile_key: str, orh: float, orl: float):
@@ -107,6 +140,7 @@ class StrategyNotifier:
             title=f"{ticker} — No trade today  [{profile_key}]",
             body=f"Watched ORH ${orh:.2f} / ORL ${orl:.2f} — no breakout triggered.",
             data={"screen": "tradelog"},
+            priority=P_INFO,
         )
 
     def notify_skip(self, ticker: str, reason: str):
@@ -126,6 +160,7 @@ class StrategyNotifier:
             title=f"No trade — {ticker}",
             body=f"Session skipped: {readable}.",
             data={"screen": "tradelog", "reason": reason},
+            priority=P_INFO,
         )
 
     def notify_no_contract(self, ticker: str):
@@ -134,6 +169,7 @@ class StrategyNotifier:
             title=f"{ticker} — No contract",
             body="No suitable contract found for this breakout. Skipping entry.",
             data={"screen": "tradelog"},
+            priority=P_OPERATIONAL,
         )
 
     def notify_insufficient_capital(self, ticker: str, required: float, available: float):
@@ -145,6 +181,7 @@ class StrategyNotifier:
                 "No contracts entered."
             ),
             data={"screen": "tradelog"},
+            priority=P_OPERATIONAL,
         )
 
     def notify_entry(
@@ -173,6 +210,7 @@ class StrategyNotifier:
                 "symbol":      symbol,
                 "macro_event": macro_event,
             },
+            priority=P_TRADE_ENTRY,
         )
 
     def notify_exit(
@@ -213,6 +251,7 @@ class StrategyNotifier:
                 "symbol":      contract_symbol,
                 "exit_reason": exit_reason,
             },
+            priority=P_TRADE_EXIT,
         )
 
     def notify_timer_update(
@@ -240,6 +279,7 @@ class StrategyNotifier:
                 "screen": "position",
                 "symbol": contract_symbol,
             },
+            priority=P_MARKET,
         )
 
     def notify_stream_failed(self, ticker: str, contract_symbol: str):
@@ -248,6 +288,7 @@ class StrategyNotifier:
             title=f"{_fmt_contract(contract_symbol)} — Stream unavailable",
             body="Could not stream real-time quotes. Trade skipped to avoid blind entry.",
             data={"screen": "tradelog", "symbol": contract_symbol},
+            priority=P_OPERATIONAL,
         )
 
     def notify_re_entry(
@@ -271,18 +312,37 @@ class StrategyNotifier:
                 "symbol": contract.get("symbol"),
                 "re_entry": True,
             },
+            priority=P_TRADE_ENTRY,
         )
 
     # ── Internal helpers ────────────────────────────────────────────────────────
 
-    def _dispatch(self, title: str, body: str, data: dict | None = None):
-        """Fire-and-forget: send on a daemon thread so the engine is never blocked."""
-        t = threading.Thread(
-            target=self._send_all,
-            args=(title, body, data or {}),
-            daemon=True,
-        )
-        t.start()
+    def _dispatch(self, title: str, body: str, data: dict | None = None,
+                  priority: int = P_INFO):
+        """
+        Enqueue a notification. The worker thread drains in (priority, seq) order,
+        so lower priority values always arrive on-device first. Items at the same
+        priority are delivered in the order they were enqueued (FIFO via seq).
+        """
+        with self._seq_lock:
+            seq = self._seq
+            self._seq += 1
+        self._queue.put((priority, seq, (title, body, data or {})))
+
+    def _drain(self):
+        """
+        Single worker thread. Blocks on the priority queue and sends each
+        notification in order. Serialising through one thread guarantees delivery
+        order — multiple concurrent daemon threads would race to Expo's API and
+        arrive out of order.
+        """
+        while True:
+            try:
+                priority, seq, (title, body, data) = self._queue.get()
+                self._send_all(title, body, data)
+                self._queue.task_done()
+            except Exception as e:
+                logger.error("[StrategyNotifier] drain error: %s", e)
 
     def _send_all(self, title: str, body: str, data: dict):
         tokens = self._fetch_tokens()

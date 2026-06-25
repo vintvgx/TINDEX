@@ -187,6 +187,13 @@ class ORBEngine:
         self._retest_max_dist      = 0.0    # max extension past level (confirms real breakout)
         self._retest_trigger_price = None
         self._retest_deadline      = None
+        # Bar-close confirmation pending (used when profile bar_close_confirm == True).
+        # After the 3-minute OrbService confirmation fires, entry is deferred until the
+        # next 1-minute bar CLOSES above ORH (CALL) or below ORL (PUT).  A single tick
+        # or wick above the level cannot trigger entry — the bar body must close outside.
+        self._bar_confirm_pending   = False
+        self._bar_confirm_direction = None   # "CALL" | "PUT"
+        self._bar_confirm_price     = None   # underlying price at the time of the signal
         # Fan-out queues for /ws/strategy/<id>/live WebSocket clients
         self._live_clients: list     = []
         self._live_clients_lock      = __import__("threading").Lock()
@@ -466,6 +473,16 @@ class ORBEngine:
             entry_mode = self.profile.get("entry_mode", "BREAK")
             if entry_mode == "RETEST":
                 self._start_retest_watch(direction, price, now_et, deadline)
+            elif self.profile.get("bar_close_confirm", False):
+                # Bar-close confirmation: defer entry until the next 1-minute bar
+                # closes on the correct side of the ORH/ORL.  A single tick or wick
+                # that momentarily crosses the level cannot trigger entry.
+                self._bar_confirm_pending   = True
+                self._bar_confirm_direction = direction
+                self._bar_confirm_price     = price
+                self.debug.emit("INFO",
+                    f"3-min breakout confirmed ({direction} @ {price:.2f}) — "
+                    f"waiting for bar close above ORH to enter [{self.profile_key}]")
             else:
                 logger.info("[ORBEngine] Confirmed %s breakout for %s @ %.2f — entering",
                             direction, self.ticker, price)
@@ -1421,6 +1438,33 @@ class ORBEngine:
         # Only act once the ORB is established and the session isn't skipped.
         # getattr guards the brief __init__ window before _reset_session_state runs.
         if not getattr(self, "orh", None) or getattr(self, "session_skipped", False):
+            return
+
+        # Bar-close confirmation: after the 3-minute OrbService signal the engine
+        # waits for the first 1-minute bar to CLOSE on the correct side of the ORH/ORL
+        # before entering.  A wick or momentary tick above the level is not enough.
+        if getattr(self, "_bar_confirm_pending", False) and not self.trade_taken:
+            direction = self._bar_confirm_direction or ""
+            orh = self.orh or 0.0
+            orl = self.orl or 0.0
+            confirmed = bar.close > orh if direction == "CALL" else bar.close < orl
+            level_str = f"{orh:.2f}" if direction == "CALL" else f"{orl:.2f}"
+            side_str  = "above ORH" if direction == "CALL" else "below ORL"
+            if confirmed:
+                self.debug.emit("SUCCESS",
+                    f"Bar-close confirmed {direction} breakout — "
+                    f"bar closed at {bar.close:.2f} ({side_str} {level_str}) — entering")
+                self._bar_confirm_pending   = False
+                self._bar_confirm_direction = None
+                self._enter_trade(direction, bar.close)
+            else:
+                self.debug.emit("WARN",
+                    f"Bar-close fakeout — {direction} pending but bar closed at "
+                    f"{bar.close:.2f}, did not clear {'ORH' if direction == 'CALL' else 'ORL'} "
+                    f"{level_str} — entry cancelled")
+                self._bar_confirm_pending   = False
+                self._bar_confirm_direction = None
+                self._bar_confirm_price     = None
             return
 
         self.on_price_tick(

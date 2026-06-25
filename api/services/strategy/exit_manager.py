@@ -17,7 +17,7 @@ THUNDER CAT — 6 contracts,  TP1 +20% / $0.25 floor, cascade(3 ticks, 50%)
 WOLF        — 3 contracts,  TP1 +15% / $0.20 floor, cascade(3 ticks, 50%)
 TREND RIDER — 6 contracts,  TP1 +15% / $0.30 floor, cascade(3 ticks, 50%), be_hold runner
 RETESTER    — 4 contracts,  TP1 +20% / $0.20 floor, cascade(3 ticks, 50%), trail runner
-REVERSAL    — 3 contracts,  TP1 +15% / $0.18 floor, cascade(3 ticks, 50%), trail runner
+REVERSAL    — 3 contracts,  TP1 +15% / $0.18 floor, cascade(5 ticks, 50%), be_hold runner
 """
 
 import math
@@ -200,15 +200,22 @@ class ExitManager:
         Must be called from on_bar (bar cadence), NOT from quote-tick handlers —
         inter-bar quotes repeat the same underlying price and would reset the counter.
         Equal prices (flat bar) are treated as no information.
+
+        "Against-the-trade" direction is: lower closes for a CALL (underlying
+        moving against us), higher closes for a PUT (underlying moving against us).
+        Firing the cascade during a winning PUT move (consecutive lower closes)
+        would incorrectly force-sell contracts while they are gaining value.
         """
         if not self.tp1_hit:
             return  # cascade is only relevant after TP1
         if self._cascade_last_price is None:
             self._cascade_last_price = close
             return
-        if close < self._cascade_last_price:
+        against = close < self._cascade_last_price if self.direction == "CALL" else close > self._cascade_last_price
+        recovering = close > self._cascade_last_price if self.direction == "CALL" else close < self._cascade_last_price
+        if against:
             self._cascade_down_ticks += 1
-        elif close > self._cascade_last_price:
+        elif recovering:
             self._cascade_down_ticks = 0
         # equal close → leave counter unchanged
         self._cascade_last_price = close

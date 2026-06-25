@@ -103,7 +103,7 @@ PROFILES = {
     # ─── TREND RIDER — Hold for the full move ────────────────────────────────────
     "TREND_RIDER": {
         "qty_contracts": 6,
-        "max_loss_pct": 0.38,
+        "max_loss_pct": 0.30,    # reduced from 0.38 — at $2+ entries, 38% = $600+ per trade; 30% caps it at $470
         "tp1_mult": 1.15,           # lowered from 1.40 — +15% fires on the initial burst; SL moves to entry, runner is risk-free
         "tp2_mult": 2.50,
         "tp1_close_pct": 0.50,      # raised from 0.15 — close half at TP1; 0.15 only closed 1/6 contracts and left too much exposed
@@ -125,11 +125,12 @@ PROFILES = {
         "target_delta_min": 0.30,
         "target_delta_max": 0.48,
         "eod_buffer_minutes": 15,
-        "breakout_time_limit_min": 90,
+        "breakout_time_limit_min": 180,  # extended from 90 — with 30-min cooldown after a loss, re-entry eligible from 10:29 AM to 12:45 PM ET
         "vix_max_override": 25,
         "entry_mode": "BREAK",
+        "bar_close_confirm": True,  # wait for a bar to CLOSE above ORH before entering; blocks fakeout/wick entries
         "daily_loss_limit": 500,
-        "re_entry_cooldown_min": 60,
+        "re_entry_cooldown_min": 30,
     },
     # ─── REVERSAL — Enter the opposite contract after a scored failed breakout ───
     "REVERSAL": {
@@ -144,11 +145,11 @@ PROFILES = {
         "tp1_confirm_ticks":      2,
         "min_tp1_dollars":        0.18,
         "min_tp2_dollars":        0.50,
-        "cascade_ticks":          3,
+        "cascade_ticks":          5,    # raised from 3 — 3-bar bounces are intraday noise on a trending day; 5 consecutive bars against = genuine recovery
         "cascade_close_pct":      0.50,
         "tp2_close_pct":          0.50,   # close 1 of 2 remaining at TP2, leave 1 runner
-        "runner_trail_pct":       0.18,   # loosened from 0.14 — counter-trends can extend
-        "runner_mode":            "trail", # reversals can reverse again; keep dynamic protection
+        "runner_trail_pct":       0.18,   # kept for reference; ignored in be_hold mode
+        "runner_mode":            "be_hold", # trail exited within seconds on fast moves; cascade (now direction-aware) handles runner reduction
         "consol_exit":            False,
         "volume_exit":            False,
         "consol_range_pct":       0.0008,
@@ -376,7 +377,7 @@ PROFILES = {
         "consol_range_pct": 0.0008,
         "consol_bars": 4,
         "volume_exit_threshold": 0.20,
-        "strike_offset_min": 0.50,
+        "strike_offset_min": 1.00,  # raised from 0.50 — RETEST entry fires after underlying retests ORH; 0.50 selects near-ATM at fill
         "strike_offset_max": 2.00,
         "target_delta_min": 0.38,
         "target_delta_max": 0.55,
