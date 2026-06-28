@@ -1,10 +1,17 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity } from 'react-native';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { AnimatedNumber } from './AnimatedNumber';
 import { GapTrendBadges } from './GapTrendBadges';
 import type { GapTrendContext } from '@/common/types/orb';
 import { useThemeColors } from '@/lib/useColorScheme';
+
+export interface FlowSummary {
+  callPct: number;
+  putPct: number;
+  totalAlerts: number;
+  topUnusualScore: number;
+}
 
 interface ORBCardProps {
   data: ORBMonitoringState;
@@ -12,12 +19,8 @@ interface ORBCardProps {
   orbRange?: GapTrendContext | null;
   fullWidth?: boolean;
   livePrice?: number | null;
+  flowSummary?: FlowSummary | null;
 }
-
-const formatPrice = (price: number | null | undefined): string => {
-  if (price == null || isNaN(price)) return 'N/A';
-  return `$${price.toFixed(2)}`;
-};
 
 const getBreakoutColor = (breakoutType: string, colors: ReturnType<typeof useThemeColors>): string => {
   switch (breakoutType) {
@@ -32,12 +35,11 @@ const getBreakoutColor = (breakoutType: string, colors: ReturnType<typeof useThe
   }
 };
 
-export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullWidth = false, livePrice }) => {
+export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullWidth = false, livePrice, flowSummary }) => {
   const colors = useThemeColors();
 
   const orbHigh = data.orb_high ?? 0;
   const orbLow = data.orb_low ?? 0;
-  // Prefer WebSocket live price; fall back to Supabase value
   const currentPrice = livePrice ?? data.current_price ?? 0;
   const isAboveHigh = currentPrice > orbHigh;
   const isBelowLow = currentPrice < orbLow;
@@ -50,6 +52,13 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
 
   const breakoutColor = getBreakoutColor(data.breakout_type, colors);
   const hasBreakout = data.breakout_type !== 'none';
+
+  const showFlow = !!flowSummary && flowSummary.totalAlerts > 0;
+  const flowBullish = showFlow && flowSummary!.callPct > flowSummary!.putPct;
+  const flowPillColor = flowBullish ? colors.success : colors.error;
+  const flowPillLabel = flowBullish
+    ? `▲ CALL ${flowSummary!.callPct}%`
+    : `▼ PUT ${flowSummary!.putPct}%`;
 
   return (
     <TouchableOpacity
@@ -64,7 +73,7 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
         padding: 16,
         borderWidth: 1,
         borderColor: colors.border,
-        shadowColor: colors.cardShadow,
+        shadowColor: (colors as any).cardShadow,
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 1,
         shadowRadius: 8,
@@ -180,6 +189,43 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
               style={{ fontSize: 14, fontWeight: '600' }}
               color={breakoutColor}
             />
+          </View>
+        </View>
+      )}
+
+      {/* Flow summary strip */}
+      {showFlow && (
+        <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.separator }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '500' }}>⚡ Flow</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={{
+                paddingHorizontal: 8,
+                paddingVertical: 3,
+                borderRadius: 20,
+                backgroundColor: flowPillColor + '18',
+                borderWidth: 1,
+                borderColor: flowPillColor + '40',
+              }}>
+                <Text style={{ color: flowPillColor, fontSize: 11, fontWeight: '700' }}>
+                  {flowPillLabel}
+                </Text>
+              </View>
+              {flowSummary!.topUnusualScore > 70 && (
+                <View style={{
+                  paddingHorizontal: 7,
+                  paddingVertical: 3,
+                  borderRadius: 20,
+                  backgroundColor: colors.accent + '18',
+                  borderWidth: 1,
+                  borderColor: colors.accent + '40',
+                }}>
+                  <Text style={{ color: colors.accent, fontSize: 11, fontWeight: '700' }}>
+                    {Math.round(flowSummary!.topUnusualScore)} UW
+                  </Text>
+                </View>
+              )}
+            </View>
           </View>
         </View>
       )}

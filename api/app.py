@@ -40,6 +40,7 @@ from routes.options_routes import bp as options_bp
 from routes.portfolio_routes import bp as portfolio_bp
 from routes.agent_routes import bp as agent_bp
 from routes.flow_routes import bp as flow_bp
+from routes.swing_routes import bp as swing_bp
 
 app.register_blueprint(ticker_bp)
 app.register_blueprint(yahoo_bp)
@@ -48,6 +49,7 @@ app.register_blueprint(options_bp)
 app.register_blueprint(portfolio_bp)
 app.register_blueprint(agent_bp)
 app.register_blueprint(flow_bp)
+app.register_blueprint(swing_bp)
 
 
 # ── WebSocket: live price stream ───────────────────────────────────────────────

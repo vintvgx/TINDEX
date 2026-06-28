@@ -589,6 +589,49 @@ class AlpacaOptionService:
             logger.error(f"Error stopping options stream: {e}", exc_info=True)
             return False
 
+    async def place_option_order(
+        self,
+        symbol: str,
+        qty: int,
+        side: str = "buy",
+        order_type: str = "market",
+        paper: bool = False,
+    ) -> dict:
+        """Submit a market or limit option order via Alpaca TradingClient."""
+        from alpaca.trading.client import TradingClient
+        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass
+
+        client = TradingClient(
+            api_key=self.alpaca_api_key,
+            secret_key=self.alpaca_secret_key,
+            paper=paper,
+        )
+        order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
+        req = MarketOrderRequest(
+            symbol=symbol.upper(),
+            qty=qty,
+            side=order_side,
+            time_in_force=TimeInForce.DAY,
+        )
+
+        def _submit():
+            return client.submit_order(req)
+
+        loop = asyncio.get_event_loop()
+        order = await loop.run_in_executor(None, _submit)
+        return {
+            "id": str(order.id),
+            "symbol": order.symbol,
+            "qty": str(order.qty),
+            "side": order.side.value,
+            "status": order.status.value,
+        }
+
+    async def close_option_position(self, symbol: str, qty: int, paper: bool = False) -> dict:
+        """Close (sell) an open option position by placing a sell market order."""
+        return await self.place_option_order(symbol=symbol, qty=qty, side="sell", order_type="market", paper=paper)
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 

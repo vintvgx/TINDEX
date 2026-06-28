@@ -326,6 +326,53 @@ def sell_position(strategy_id: str):
     return jsonify(result), code
 
 
+@strategy_bp.route("/configs/<strategy_id>/exits", methods=["PATCH"])
+def update_strategy_exits(strategy_id: str):
+    """
+    Update the live ExitManager's stop-loss and/or TP levels mid-trade.
+    Body: { hard_stop?, tp1?, tp2? }  — all optional, only provided fields are changed.
+    Returns the updated exit state so the client can confirm the new levels.
+    """
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        return jsonify({"status": "error", "message": "Engine not found"}), 404
+    em = engine.exit_manager
+    if not em:
+        return jsonify({"status": "error", "message": "No active position — nothing to update"}), 409
+
+    data = request.get_json() or {}
+    changed = {}
+
+    if "hard_stop" in data:
+        val = float(data["hard_stop"])
+        if val <= 0:
+            return jsonify({"status": "error", "message": "hard_stop must be > 0"}), 400
+        em.hard_stop = val
+        changed["hard_stop"] = round(val, 4)
+
+    if "tp1" in data:
+        val = float(data["tp1"])
+        if val <= em.entry_premium:
+            return jsonify({"status": "error", "message": "tp1 must be above entry premium"}), 400
+        em.tp1 = val
+        changed["tp1"] = round(val, 4)
+
+    if "tp2" in data:
+        val = float(data["tp2"])
+        em.tp2 = val
+        changed["tp2"] = round(val, 4)
+
+    if not changed:
+        return jsonify({"status": "noop", "message": "No fields provided"}), 400
+
+    logger.info("[strategy] Updated exits for %s: %s", strategy_id, changed)
+    return jsonify({
+        "status": "ok",
+        "updated": changed,
+        "exit_state": em.to_dict(),
+    })
+
+
 @strategy_bp.route("/configs/<strategy_id>/position", methods=["GET"])
 def get_strategy_position(strategy_id: str):
     engine = _engines.get(strategy_id)
