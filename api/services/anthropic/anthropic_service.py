@@ -1,8 +1,19 @@
 import os
 import asyncio
 import json
-from typing import Dict, Any, Optional, AsyncGenerator, List
-from anthropic import AsyncAnthropic
+import re
+from typing import Dict, Any, Optional, AsyncGenerator, Generator, List
+from anthropic import AsyncAnthropic, Anthropic
+
+# Model used for the in-app conversational AI agent (TINDEX assistant).
+# Per Anthropic guidance we default to the latest Opus; override via env if needed.
+AGENT_MODEL = os.getenv("AGENT_MODEL", "claude-opus-4-8")
+# Cheaper/faster model for one-off utility calls (titles, contract scoring).
+AGENT_UTILITY_MODEL = os.getenv("AGENT_UTILITY_MODEL", "claude-haiku-4-5")
+# Whether to give the agent the server-side web_search tool so it can pull the
+# latest market news. Requires web search to be enabled on the Anthropic account.
+AGENT_ENABLE_WEB_SEARCH = os.getenv("AGENT_ENABLE_WEB_SEARCH", "true").lower() == "true"
+
 
 class AnthropicService:
     """
@@ -26,6 +37,12 @@ class AnthropicService:
             raise ValueError("ANTHROPIC_API_KEY not defined")
 
         self.client = AsyncAnthropic(
+            api_key=self.anthropic_api_key,
+        )
+        # Synchronous client for the Flask (sync/threaded) agent endpoints. The
+        # streaming chat route runs inside a normal request thread, so a sync
+        # client + generator is far simpler than bridging async into Flask.
+        self.sync_client = Anthropic(
             api_key=self.anthropic_api_key,
         )
 
@@ -566,6 +583,172 @@ TAGS: [comma-separated list of applicable tags from the list above, e.g., "Volat
         except Exception as e:
             # Return empty list on error
             return []
+
+    # ── In-app AI agent (TINDEX assistant) ──────────────────────────────────────
+
+    def stream_agent_chat(
+        self,
+        messages: List[Dict[str, str]],
+        system_prompt: str,
+        ticker_context: Optional[str] = None,
+    ) -> Generator[str, None, None]:
+        """
+        Stream a conversational reply from the AI agent, yielding text chunks.
+
+        Runs synchronously (intended for a Flask streaming route). Uses the
+        server-side web_search tool so the model can pull the latest news, and
+        loops on `pause_turn` so a long server-tool turn resumes cleanly.
+
+        Args:
+            messages: Full chat history as [{"role": "user"|"assistant", "content": str}].
+            system_prompt: The agent persona/instructions (supplied by the client).
+            ticker_context: Optional pre-fetched market snapshot text injected as an
+                additional system block so the model answers from live data.
+
+        Yields:
+            Text fragments of the assistant's reply as they are generated.
+        """
+        system_blocks: List[Dict[str, Any]] = [{"type": "text", "text": system_prompt}]
+        if ticker_context:
+            system_blocks.append({
+                "type": "text",
+                "text": (
+                    "Live market data for tickers the user referenced (fetched just now — "
+                    "prefer these numbers over your training data):\n\n" + ticker_context
+                ),
+            })
+
+        tools = []
+        if AGENT_ENABLE_WEB_SEARCH:
+            tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 4}]
+
+        working_messages = [dict(m) for m in messages]
+
+        # Guard against runaway server-tool loops.
+        for _ in range(4):
+            with self.sync_client.messages.stream(
+                model=AGENT_MODEL,
+                max_tokens=4096,
+                system=system_blocks,
+                messages=working_messages,
+                tools=tools,
+            ) as stream:
+                for text in stream.text_stream:
+                    yield text
+                final = stream.get_final_message()
+
+            if final.stop_reason == "pause_turn":
+                # Server-side tool loop paused — re-send to resume.
+                working_messages.append({"role": "assistant", "content": final.content})
+                continue
+            break
+
+    def generate_conversation_title(self, first_message: str) -> str:
+        """Generate a short (<= 6 word) title for a new conversation."""
+        try:
+            response = self.sync_client.messages.create(
+                model=AGENT_UTILITY_MODEL,
+                max_tokens=24,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "Write a concise 3-6 word title (no quotes, no period) for a chat that "
+                        f"starts with this message:\n\n{first_message[:500]}"
+                    ),
+                }],
+            )
+            if response.content:
+                title = response.content[0].text.strip().strip('"').strip()
+                return title[:120] if title else "New conversation"
+        except Exception as e:
+            print(f"[agent] title generation failed: {e}")
+        # Fallback: first few words of the message.
+        words = first_message.strip().split()
+        return " ".join(words[:6]) or "New conversation"
+
+    def score_contract(
+        self,
+        ticker: str,
+        contract: Dict[str, Any],
+        system_prompt: str,
+    ) -> Dict[str, Any]:
+        """
+        Produce an AI score (0-100) + signal + reasoning for an options contract.
+
+        Returns a dict matching the ContractScore shape the mobile app expects:
+        {score, signal, reasoning, factors}.
+        """
+        prompt = (
+            f"Score this {ticker} options contract for a near-term trade on a 0-100 scale "
+            "(0 = avoid, 100 = exceptional setup). Weigh the Greeks, implied volatility, "
+            "open interest/volume (liquidity), the bid/ask spread, expiry timing, and the "
+            "moneyness relative to the underlying.\n\n"
+            f"Contract data:\n{json.dumps(contract, indent=2, default=str)}\n\n"
+            "Respond with ONLY a JSON object (no markdown, no prose) of exactly this shape:\n"
+            "{\n"
+            '  "score": <integer 0-100>,\n'
+            '  "signal": "STRONG_BUY" | "BUY" | "HOLD" | "SELL" | "STRONG_SELL",\n'
+            '  "reasoning": "<2-3 specific, actionable sentences>",\n'
+            '  "factors": {\n'
+            '    "news_sentiment": <0-100>, "sector_performance": <0-100>,\n'
+            '    "market_conditions": <0-100>, "greeks_score": <0-100>, "expiry_timing": <0-100>\n'
+            "  }\n"
+            "}"
+        )
+
+        response = self.sync_client.messages.create(
+            model=AGENT_MODEL,
+            max_tokens=1024,
+            system=system_prompt,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        raw = next((b.text for b in response.content if b.type == "text"), "{}")
+        data = self._parse_json_object(raw)
+
+        # Normalize / defensively clamp to the ContractScore contract.
+        valid_signals = {"STRONG_BUY", "BUY", "HOLD", "SELL", "STRONG_SELL"}
+        try:
+            score = max(0, min(100, int(round(float(data.get("score", 50))))))
+        except (TypeError, ValueError):
+            score = 50
+        signal = str(data.get("signal", "HOLD")).upper().replace(" ", "_")
+        if signal not in valid_signals:
+            signal = "HOLD"
+        return {
+            "score": score,
+            "signal": signal,
+            "reasoning": str(data.get("reasoning", "")).strip(),
+            "factors": data.get("factors") if isinstance(data.get("factors"), dict) else None,
+        }
+
+    @staticmethod
+    def _parse_json_object(raw: str) -> Dict[str, Any]:
+        """Extract the first JSON object from a model response (handles ```json fences)."""
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+        return {}
+
+    @staticmethod
+    def extract_tickers(text: str) -> List[str]:
+        """Extract $-prefixed ticker symbols (e.g. '$IWM') from a message, de-duped."""
+        matches = re.findall(r"\$([A-Za-z]{1,5})\b", text or "")
+        seen: List[str] = []
+        for m in matches:
+            sym = m.upper()
+            if sym not in seen:
+                seen.append(sym)
+        return seen[:3]  # cap to keep prompts tight
 
     async def test_connection(self) -> Dict[str, Any]:
         """

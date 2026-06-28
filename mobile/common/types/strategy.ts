@@ -1,4 +1,12 @@
-export type ProfileKey = 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'TREND_RIDER' | 'RETESTER' | 'REVERSAL' | 'CUSTOM';
+export type ProfileKey =
+  | 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'TREND_RIDER' | 'RETESTER' | 'REVERSAL' | 'CUSTOM'
+  // Immediate trade profiles (conviction / manual entries)
+  | 'SCALPER' | 'PRECISION' | 'MOMENTUM' | 'CONVICTION' | 'ALL_IN'
+  // OTM-specific profiles (auto-selected for cheap out-of-money contracts)
+  | 'OTM_RUNNER' | 'OTM_CONVICTION'
+  | 'MANUAL';
+
+export type TradeType = 'STRATEGY' | 'IMMEDIATE';
 
 export interface CustomThresholds {
   qty_contracts:           number;
@@ -116,6 +124,7 @@ export interface ImmediateTradeByTickerRequest {
   paper_mode: boolean;
   consol_exit?: boolean;
   volume_exit?: boolean;
+  max_loss_pct?: number; // MANUAL profile: decimal (e.g. 0.30 = 30% SL)
 }
 
 /** An open position from a ticker-based immediate trade engine. */
@@ -170,6 +179,14 @@ export interface StrategyPosition {
   fib_levels?: FibLevels;
 }
 
+export interface ExitStage {
+  reason: string;   // "TP1" | "TP2" | "HARD_STOP" | "RUNNER_TRAIL_STOP" | "EOD_CLOSE" | etc.
+  qty: number;
+  premium: number;
+  pnl: number;      // dollar P&L for this partial close
+  time: string;     // ISO timestamp
+}
+
 export interface ORBTrade {
   id: string;
   strategy_id: string | null;
@@ -196,6 +213,16 @@ export interface ORBTrade {
   underlying_price_exit: number | null;
   flow_confirmed: boolean;
   fib_targets?: Record<string, number> | null;
+  paper_mode?: boolean;
+  trade_type?: TradeType;
+  // ── Per-stage exit detail (populated as each partial close fires) ──────────
+  tp1_premium?: number | null;
+  tp1_qty?: number | null;
+  tp1_pnl?: number | null;
+  tp2_premium?: number | null;
+  tp2_qty?: number | null;
+  tp2_pnl?: number | null;
+  exit_stages?: ExitStage[] | null;
 }
 
 export interface StrategyStats {
@@ -244,6 +271,7 @@ export interface LiveOptionPrice {
   pnl:           number;
   pnl_pct:       number;
   qty_remaining: number;
+  market_value:  number;
   tp1_hit:       boolean;
   tp2_hit:       boolean;
   hard_stop:     number;

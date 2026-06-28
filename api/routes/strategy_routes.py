@@ -453,12 +453,19 @@ def immediate_trade(strategy_id: str):
         return jsonify({"status": "error",
                         "message": "direction and contract_symbol are required"}), 400
 
+    exit_overrides_cfg = {}
+    if "max_loss_pct" in data:
+        val = float(data["max_loss_pct"])
+        if 0.05 <= val <= 0.95:
+            exit_overrides_cfg["max_loss_pct"] = val
+
     result = _submit_manual_trade_bounded(
         engine,
         direction=direction,
         contract_symbol=contract_symbol,
         qty=data.get("qty"),
         profile_key=data.get("profile"),
+        exit_overrides=exit_overrides_cfg if exit_overrides_cfg else None,
     )
     code = 200 if result.get("status") == "ok" else 409
     return jsonify(result), code
@@ -486,6 +493,10 @@ def immediate_trade_by_ticker():
         exit_overrides["consol_exit"] = bool(data["consol_exit"])
     if "volume_exit" in data:
         exit_overrides["volume_exit"] = bool(data["volume_exit"])
+    if "max_loss_pct" in data:
+        val = float(data["max_loss_pct"])
+        if 0.05 <= val <= 0.95:   # sanity clamp: 5%–95%
+            exit_overrides["max_loss_pct"] = val
 
     engine = _get_or_create_immediate_engine(ticker, paper_mode)
     result = _submit_manual_trade_bounded(
@@ -642,14 +653,133 @@ def get_both_accounts():
     })
 
 
+@strategy_bp.route("/accounts/history", methods=["GET"])
+def get_accounts_history():
+    """Return period P&L (today / week / month) for paper and live accounts."""
+    import os
+    from alpaca.trading.client import TradingClient
+
+    def _fetch_with_history(paper: bool) -> dict:
+        try:
+            key    = os.getenv("ALPACA_PAPER_API_KEY" if paper else "ALPACA_LIVE_API_KEY")
+            secret = os.getenv("ALPACA_PAPER_SECRET_KEY" if paper else "ALPACA_LIVE_SECRET_KEY")
+            client = TradingClient(key, secret, paper=paper)
+
+            acct        = client.get_account()
+            equity      = float(acct.equity)
+            last_equity = float(acct.last_equity)
+            pnl_today   = equity - last_equity
+            pnl_today_pct = (pnl_today / last_equity * 100) if last_equity > 0 else 0
+
+            # Fetch 1-month of daily history to derive week/month P&L.
+            try:
+                hist = client.get_portfolio_history(filter=None)
+                # alpaca-py returns PortfolioHistory with .equity (list) and .profit_loss
+                equities = [float(e) for e in (hist.equity or []) if e is not None]
+            except Exception:
+                equities = []
+
+            pnl_week = pnl_week_pct = None
+            pnl_month = pnl_month_pct = None
+
+            if equities:
+                # Week: compare current equity to 5 trading days ago (or earliest available)
+                week_idx = max(0, len(equities) - 6)
+                week_start = equities[week_idx]
+                if week_start > 0:
+                    pnl_week     = round(equity - week_start, 2)
+                    pnl_week_pct = round((equity - week_start) / week_start * 100, 3)
+
+                # Month: compare to first available equity in the series
+                month_start = equities[0]
+                if month_start > 0:
+                    pnl_month     = round(equity - month_start, 2)
+                    pnl_month_pct = round((equity - month_start) / month_start * 100, 3)
+
+            return {
+                "available":      True,
+                "equity":         equity,
+                "pnl_today":      round(pnl_today, 2),
+                "pnl_today_pct":  round(pnl_today_pct, 3),
+                "pnl_week":       pnl_week,
+                "pnl_week_pct":   pnl_week_pct,
+                "pnl_month":      pnl_month,
+                "pnl_month_pct":  pnl_month_pct,
+                "paper_mode":     paper,
+            }
+        except Exception as e:
+            return {"available": False, "paper_mode": paper, "error": str(e)}
+
+    return jsonify({
+        "success": True,
+        "paper":   _fetch_with_history(True),
+        "live":    _fetch_with_history(False),
+    })
+
+
 # ── Trade history / Stats ──────────────────────────────────────────────────────
+
+@strategy_bp.route("/data/reset", methods=["POST"])
+def reset_strategy_data():
+    """
+    Danger-zone: delete all rows from orb_trades and orb_session so the user
+    can start fresh.  Optionally also wipes orb_debug_logs when
+    clear_debug_logs=true is passed in the JSON body.
+
+    Intended for development / paper-trading only.  The route does not require
+    a confirmation token beyond the explicit POST — the frontend handles the
+    two-step confirm UI.
+    """
+    body = request.get_json(silent=True) or {}
+    clear_debug = bool(body.get("clear_debug_logs", False))
+    try:
+        client = logger_svc.client
+        # .not_.is_("id", "null") matches every row regardless of whether id is
+        # UUID or integer — avoids the cast error from a hardcoded UUID sentinel.
+        client.table("orb_trades").delete().not_.is_("id", "null").execute()
+        client.table("orb_session").delete().not_.is_("id", "null").execute()
+        if clear_debug:
+            client.table("orb_debug_logs").delete().not_.is_("id", "null").execute()
+        logger.warning("[strategy] Trade data reset performed — orb_trades and orb_session cleared")
+        return jsonify({
+            "status":  "ok",
+            "message": "Trade data cleared. orb_trades and orb_session wiped."
+                       + (" orb_debug_logs also cleared." if clear_debug else ""),
+            "cleared": ["orb_trades", "orb_session"] + (["orb_debug_logs"] if clear_debug else []),
+        })
+    except Exception as e:
+        logger.error("[strategy] data/reset failed: %s", e)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @strategy_bp.route("/trades", methods=["GET"])
 def get_trade_history():
     limit   = request.args.get("limit", 20, type=int)
-    ticker  = request.args.get("ticker", None)
-    profile = request.args.get("profile", None)
-    return jsonify(logger_svc.get_trades(limit=limit, ticker=ticker, profile=profile))
+    ticker     = request.args.get("ticker", None)
+    profile    = request.args.get("profile", None)
+    trade_date = request.args.get("trade_date", None)
+    return jsonify(logger_svc.get_trades(limit=limit, ticker=ticker, profile=profile,
+                                         trade_date=trade_date))
+
+
+@strategy_bp.route("/skipped-sessions", methods=["GET"])
+def get_skipped_sessions():
+    """Return sessions where trade_taken=false (strategy chose not to trade), newest first."""
+    limit = request.args.get("limit", 50, type=int)
+    try:
+        res = (
+            logger_svc.client.table("orb_session")
+            .select("session_date,ticker,profile,skip_reason,strategy_id")
+            .eq("trade_taken", False)
+            .not_.is_("skip_reason", "null")
+            .order("session_date", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return jsonify(res.data or [])
+    except Exception as e:
+        logger.error("[strategy] skipped-sessions failed: %s", e)
+        return jsonify([])
 
 
 @strategy_bp.route("/stats", methods=["GET"])

@@ -6,15 +6,19 @@ POSTs to /strategy/config. Paper vs live trading is set by paper_mode in config.
 """
 
 import os
+import uuid as _uuid
 import logging
 import threading
 import pytz
 from datetime import datetime, timedelta
+from typing import Optional
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.data.historical import OptionHistoricalDataClient
+from alpaca.data.historical import OptionHistoricalDataClient, StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 
 from services.strategy.profiles import get_profile
 from services.strategy.contract_selector import select_contract
@@ -51,13 +55,19 @@ STRATEGY_DEFAULTS = {
 }
 
 VIX_MIN = 13.0
-MIN_ORB_RANGE_PCT = 0.0015
+MIN_ORB_RANGE_PCT = 0.0005
 
 EOD_CLOSE_TIMES = {
-    "SPY": "15:25",
-    "QQQ": "15:25",
-    "IWM": "15:10"
-    }
+    # ETF options (SPY, IWM, QQQ) stop trading at 4:00 PM ET.
+    # 15:58 gives a 2-minute window to route and fill the EOD market order before close.
+    "SPY": "15:58",
+    "QQQ": "15:58",
+    "IWM": "15:58",
+}
+# NOTE: The EOD close fires inside evaluate() which only runs when a price tick
+# arrives. If the option stream goes quiet near 15:58 (thin late-day liquidity,
+# dropped WebSocket), the flatten may not fire. A scheduled hard-flatten job
+# at 15:58 independent of the tick loop is the correct long-term fix (TODO).
 
 
 class ORBEngine:
@@ -111,6 +121,7 @@ class ORBEngine:
 
         self.trading_client = TradingClient(trade_key, trade_secret, paper=self.paper)
         self.option_client  = OptionHistoricalDataClient(data_key, data_secret)
+        self.stock_client   = StockHistoricalDataClient(data_key, data_secret)
 
         self.sentiment  = SentimentFilter()
         self.logger     = TradeLogger()
@@ -176,9 +187,29 @@ class ORBEngine:
         self._retest_max_dist      = 0.0    # max extension past level (confirms real breakout)
         self._retest_trigger_price = None
         self._retest_deadline      = None
+        # Bar-close confirmation pending (used when profile bar_close_confirm == True).
+        # After the 3-minute OrbService confirmation fires, entry is deferred until the
+        # next 1-minute bar CLOSES above ORH (CALL) or below ORL (PUT).  A single tick
+        # or wick above the level cannot trigger entry — the bar body must close outside.
+        self._bar_confirm_pending   = False
+        self._bar_confirm_direction = None   # "CALL" | "PUT"
+        self._bar_confirm_price     = None   # underlying price at the time of the signal
         # Fan-out queues for /ws/strategy/<id>/live WebSocket clients
         self._live_clients: list     = []
         self._live_clients_lock      = __import__("threading").Lock()
+        # ── Session-level risk management ─────────────────────────────────────────
+        # Cumulative realized P&L for this trading day across all trades.
+        self._session_realized_pnl:   float = 0.0
+        # Set to True when daily_loss_limit is breached — blocks all further entries.
+        self._session_halted:         bool  = False
+        # Tracks the last losing exit per direction so re-entry cooldowns can fire.
+        # Key: "CALL" | "PUT" — Value: {"time": datetime, "pnl": float}
+        self._last_loss_by_direction: dict  = {}
+        # Accumulates P&L across partial exits for the current open trade.
+        self._active_trade_pnl:       float = 0.0
+        # REVERSAL-profile: timestamp when the trade first dropped below the -15%
+        # bleed threshold. Cleared when price recovers above -15%.
+        self._reversal_down_since:    Optional[datetime] = None
 
     def reset_session(self):
         if self.stream_manager and self.contract_symbol:
@@ -204,16 +235,22 @@ class ORBEngine:
         self.reset_session()
         self.session_date = now_et.date()
 
-        # The OrbService bar feed must be running or there is no price data. If it
-        # isn't (e.g. right after a redeploy, before the service has started),
-        # return WITHOUT skipping or notifying so the session stays armed and
-        # re-runs once the service comes up (init_scheduler late-start recovery).
+        # Close any open trades from prior expired sessions (crash/redeploy guard).
+        self.logger.reconcile_orphaned_trades()
+
+        # Log whether OrbService is live — but do NOT abort here. Even when the
+        # hub isn't marked running yet (e.g. race condition right after a restart
+        # where OrbService thread hasn't called set_service_running(True) yet),
+        # _collect_orb_window_bars() will fall back to Alpaca REST to get the
+        # 09:30–09:45 bars so ORH/ORL can still be set.  OrbService is still
+        # needed to *detect* breakouts; this just ensures the engine is ready
+        # when those signals arrive.
         if not self._hub.is_service_running():
-            logger.info("[ORBEngine] calculate_orb deferred — ORB service not running (%s)",
+            logger.info("[ORBEngine] calculate_orb running without live hub for %s "
+                        "(OrbService not yet running — will use Alpaca REST bar fallback)",
                         self.ticker)
-            self.debug.emit("WARN", "calculate_orb deferred — ORB service not running "
-                                    "(no price feed); session stays armed")
-            return False
+            self.debug.emit("WARN", "calculate_orb: hub not running — using Alpaca REST "
+                                    "bar fallback to set ORH/ORL")
 
         self.debug.emit("INFO", f"calculate_orb start — {self.ticker} "
                                 f"window=09:30–09:45 ({ORB_WINDOW_MINUTES}m)")
@@ -343,6 +380,29 @@ class ORBEngine:
                 current_underlying_price=current_price,
                 current_volume=current_volume,
             )
+
+            # REVERSAL time-weighted patience stop — if the trade has bled past
+            # -15% for 20+ continuous minutes without recovering, close half to
+            # limit exposure. A failed reversal rarely turns around same day.
+            if action["type"] == "HOLD" and self.profile_key == "REVERSAL":
+                em = self.exit_manager
+                pnl_pct = ((current_option_price - em.entry_premium) / em.entry_premium
+                           if em.entry_premium > 0 else 0)
+                if pnl_pct < -0.15:
+                    if self._reversal_down_since is None:
+                        self._reversal_down_since = now_et
+                    elif (now_et - self._reversal_down_since).total_seconds() >= 1200:  # 20 min
+                        qty_cut = max(1, em.qty_remaining // 2)
+                        self.debug.emit("WARN",
+                            f"REVERSAL bleed stop — down {pnl_pct*100:.1f}% for "
+                            f"{(now_et - self._reversal_down_since).total_seconds()/60:.0f}m "
+                            f"— closing {qty_cut} contract(s)")
+                        action = {"type": "CLOSE_PARTIAL", "qty": qty_cut,
+                                  "reason": "REVERSAL_TIME_CUT"}
+                        self._reversal_down_since = None
+                else:
+                    self._reversal_down_since = None
+
             self._handle_exit_action(action, current_price, current_option_price)
 
             # 30-minute P&L notification (fires once per trade)
@@ -413,6 +473,16 @@ class ORBEngine:
             entry_mode = self.profile.get("entry_mode", "BREAK")
             if entry_mode == "RETEST":
                 self._start_retest_watch(direction, price, now_et, deadline)
+            elif self.profile.get("bar_close_confirm", False):
+                # Bar-close confirmation: defer entry until the next 1-minute bar
+                # closes on the correct side of the ORH/ORL.  A single tick or wick
+                # that momentarily crosses the level cannot trigger entry.
+                self._bar_confirm_pending   = True
+                self._bar_confirm_direction = direction
+                self._bar_confirm_price     = price
+                self.debug.emit("INFO",
+                    f"3-min breakout confirmed ({direction} @ {price:.2f}) — "
+                    f"waiting for bar close above ORH to enter [{self.profile_key}]")
             else:
                 logger.info("[ORBEngine] Confirmed %s breakout for %s @ %.2f — entering",
                             direction, self.ticker, price)
@@ -552,6 +622,31 @@ class ORBEngine:
 
     # ── Entry ──────────────────────────────────────────────────────────────────
 
+    def _check_daily_loss_limit(self) -> bool:
+        """Returns True if the daily loss limit is active and entry should be blocked."""
+        return self._session_halted
+
+    def _check_reentry_cooldown(self, direction: str) -> bool:
+        """
+        Returns True if a same-direction loss is recent enough to block re-entry.
+        Cooldown window comes from profile['re_entry_cooldown_min'] (default 45 min).
+        Only fires on LOSSES — a winning exit never blocks re-entry.
+        """
+        cooldown_min = self.profile.get("re_entry_cooldown_min", 45)
+        last = self._last_loss_by_direction.get(direction)
+        if not last:
+            return False
+        elapsed = (datetime.now(ET) - last["time"]).total_seconds() / 60
+        if elapsed < cooldown_min:
+            remaining = cooldown_min - elapsed
+            self.debug.emit(
+                "WARN",
+                f"Re-entry blocked — {direction} lost ${abs(last['pnl']):.0f} "
+                f"{elapsed:.0f}m ago. Cooldown: {remaining:.0f}m remaining.",
+            )
+            return True
+        return False
+
     def _enter_trade(self, direction: str, trigger_price: float):
         """
         Run flow confirmation, select a contract, validate buying power, and
@@ -561,6 +656,19 @@ class ORBEngine:
         NOTE: Called by on_price_tick when price closes above ORH (CALL) or
         below ORL (PUT) for the first time in the session.
         """
+        # ── Risk guards — checked before any API / broker call ───────────────────
+        if self._check_daily_loss_limit():
+            self.debug.emit(
+                "WARN",
+                f"Entry blocked — daily loss limit reached "
+                f"(session P&L: ${self._session_realized_pnl:.0f}). "
+                f"Strategy paused for today.",
+            )
+            return
+
+        if self._check_reentry_cooldown(direction):
+            return  # detailed message emitted inside _check_reentry_cooldown
+
         uw_key = os.getenv("UNUSUAL_WHALES_KEY")
         if not self.sentiment.confirm_with_flow(self.ticker, direction, uw_key):
             logger.info("[ORBEngine] Flow confirmation failed for %s %s — skipping entry",
@@ -730,11 +838,16 @@ class ORBEngine:
         self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
 
     def _execute_entry(self, direction: str, contract: dict, qty: int,
-                       effective_profile: dict, fib_levels: dict, manual: bool = False):
+                       effective_profile: dict, fib_levels: dict, manual: bool = False,
+                       profile_key_override: str | None = None):
         """
         Submit the market order, set trade state, initialise ExitManager, log and
         notify. Shared by the auto path (_enter_trade) and the manual conviction
         path (submit_manual_trade). Assumes capital/stream checks already passed.
+
+        profile_key_override: the profile key actually used for this trade (differs
+        from self.profile_key when the user selects a profile at trade submission time).
+        Always pass this from submit_manual_trade so immediate trades log correctly.
         """
         try:
             order_req = MarketOrderRequest(
@@ -754,9 +867,10 @@ class ORBEngine:
             self.trade_taken      = True
             self.trade_entry_time = datetime.now(ET)
             self.timer_notified   = False
+            self._active_trade_pnl = 0.0  # reset accumulator for this trade
             self.session_date     = self.session_date or datetime.now(ET).date()
 
-            eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:10")
+            eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:58")
             self.exit_manager = ExitManager(
                 entry_premium=entry_premium,
                 qty=qty,
@@ -766,6 +880,25 @@ class ORBEngine:
                 profile=effective_profile,
             )
 
+            # Use the override key when the user selected a profile at trade time
+            # (immediate trades). This fixes the bug where all immediate trades were
+            # logged as THUNDER_CAT regardless of the profile the user picked.
+            logged_profile_key = profile_key_override or self.profile_key
+            trade_type = "IMMEDIATE" if manual else "STRATEGY"
+
+            # Update engine's profile_key so /immediate-positions reflects it correctly.
+            if profile_key_override:
+                self.profile_key = profile_key_override
+
+            # Only pass strategy_id if it is a valid UUID — synthetic immediate-engine
+            # ids (e.g. "immediate-QQQ-paper") are not UUIDs and cause Supabase to
+            # reject the insert with a type error that is otherwise silently swallowed.
+            try:
+                _uuid.UUID(str(self.strategy_id))
+                log_strategy_id = self.strategy_id
+            except (ValueError, AttributeError, TypeError):
+                log_strategy_id = None
+
             self.active_trade_id = self.logger.log_entry(
                 ticker=self.ticker,
                 direction=direction,
@@ -774,12 +907,18 @@ class ORBEngine:
                 orh=fib_levels.get("orh"), orl=fib_levels.get("orl"),
                 fib_levels=fib_levels,
                 session_date=self.session_date,
-                profile=self.profile_key,
+                profile=logged_profile_key,
                 qty=qty,
                 underlying_price_entry=self._last_underlying_price,
                 vix_at_entry=self.vix,
-                strategy_id=self.strategy_id,
+                strategy_id=log_strategy_id,
+                paper_mode=self.paper,
+                trade_type=trade_type,
             )
+            if self.active_trade_id is None:
+                self.debug.emit("ERROR",
+                    f"Supabase log_entry failed — {contract['symbol']} trade not recorded in DB. "
+                    "Check Railway logs or Supabase connectivity.")
             self.notifier.notify_entry(
                 ticker=self.ticker,
                 direction=direction,
@@ -787,7 +926,7 @@ class ORBEngine:
                 qty=qty,
                 entry_premium=entry_premium,
                 trade_id=self.active_trade_id,
-                profile_key=self.profile_key,
+                profile_key=logged_profile_key,
                 macro_event=self.macro_today,
             )
             # Subscribe to real-time option quotes now that the position is open
@@ -796,7 +935,7 @@ class ORBEngine:
 
             logger.info("[ORBEngine] Entered %s %s qty=%d @ %.2f (manual=%s)",
                         direction, contract["symbol"], qty, entry_premium, manual)
-            _tag = f"[{self.strategy_name} | {self.profile_key}]"
+            _tag = f"[{self.strategy_name} | {logged_profile_key}]"
             self.debug.emit("SUCCESS", f"{_tag} {'MANUAL ' if manual else ''}ENTERED {direction} "
                                        f"{contract['symbol']} qty={qty} @ {entry_premium:.2f}")
         except Exception as e:
@@ -839,9 +978,11 @@ class ORBEngine:
             logger.debug("[ORBEngine] market clock check failed, continuing: %s", e)
 
         effective_profile = self.profile
+        effective_profile_key = self.profile_key
         if profile_key and profile_key != self.profile_key:
             try:
                 effective_profile = get_profile(profile_key, exit_overrides)
+                effective_profile_key = profile_key
             except Exception:
                 return {"status": "error", "message": f"Unknown profile {profile_key}"}
         elif exit_overrides:
@@ -899,12 +1040,28 @@ class ORBEngine:
 
         try:
             self._execute_entry(direction, contract, qty, effective_profile, fib_levels,
-                                manual=True)
+                                manual=True, profile_key_override=effective_profile_key)
         except Exception as e:
             self.debug.emit("ERROR", f"Manual trade blocked — order submission failed: {e}")
             return {"status": "error", "message": f"Order submission failed: {e}"}
         return {"status": "ok", "message": f"Entered {direction} {contract['symbol']} qty={qty}",
                 "contract": contract["symbol"], "qty": qty, "trade_id": self.active_trade_id}
+
+    def _resolve_exit_premium(self, order, mid_fallback: float) -> float:
+        """Return the actual Alpaca fill price for a sell order, falling back to stream mid."""
+        import time as _time
+        try:
+            fp = getattr(order, "filled_avg_price", None)
+            if fp and float(fp) > 0:
+                return float(fp)
+            _time.sleep(0.5)
+            refreshed = self.trading_client.get_order_by_id(str(order.id))
+            fp = getattr(refreshed, "filled_avg_price", None)
+            if fp and float(fp) > 0:
+                return float(fp)
+        except Exception as e:
+            logger.debug("[ORBEngine] _resolve_exit_premium fallback: %s", e)
+        return mid_fallback
 
     def _resolve_entry_premium(self, order, ask_fallback: float) -> float:
         """
@@ -1016,8 +1173,10 @@ class ORBEngine:
         # ── Step 1: Submit the Alpaca order ──────────────────────────────────────
         # Keep separate from logging so a close_position failure (e.g. option
         # already expired) does NOT suppress the exit record in Supabase.
-        contract_snapshot = self.contract_symbol  # capture before any reset
-        order_ok = False
+        contract_snapshot  = self.contract_symbol  # capture before any reset
+        direction_snapshot = self.position          # capture before closing_all resets it
+        order_ok   = False
+        fill_order = None
         try:
             # Always submit an exact-qty SELL order rather than close_position().
             # close_position() would close the entire Alpaca position for the symbol,
@@ -1029,9 +1188,9 @@ class ORBEngine:
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.DAY,
             )
-            self.trading_client.submit_order(order)
+            fill_order = self.trading_client.submit_order(order)
             if closing_all:
-                self.exit_manager.qty_remaining = 0
+                self.exit_manager.update_qty(self.exit_manager.qty_remaining)
                 self.trade_taken = False
                 self.position    = None
                 if self.stream_manager and contract_snapshot:
@@ -1045,7 +1204,7 @@ class ORBEngine:
                         except Exception:
                             pass
             else:
-                self.exit_manager.qty_remaining -= qty_to_close
+                self.exit_manager.update_qty(qty_to_close)
             order_ok = True
         except Exception as e:
             logger.error("[ORBEngine] Exit order failed: %s", e)
@@ -1055,11 +1214,42 @@ class ORBEngine:
             return
 
         # ── Step 2: Log and notify — always runs when the order succeeded ────────
-        exit_premium = (action.get("current_premium")
-                        or current_option_price
-                        or current_price)
+        mid_price    = (action.get("current_premium") or current_option_price or current_price)
+        exit_premium = self._resolve_exit_premium(fill_order, mid_price) if fill_order else mid_price
         entry_p = em.entry_premium if em else 0
         pnl = (exit_premium - entry_p) * qty_to_close * 100
+
+        # ── Step 3: Update session-level risk tracking ────────────────────────────
+        self._active_trade_pnl     += pnl
+        self._session_realized_pnl += pnl
+
+        if closing_all:
+            # Full close: record a direction-specific loss for re-entry cooldown,
+            # then check whether the daily loss limit has now been breached.
+            if self._active_trade_pnl < 0 and direction_snapshot:
+                self._last_loss_by_direction[direction_snapshot] = {
+                    "time": datetime.now(ET),
+                    "pnl":  self._active_trade_pnl,
+                }
+                self.debug.emit(
+                    "WARN",
+                    f"Loss recorded for {direction_snapshot} "
+                    f"(${self._active_trade_pnl:.0f}). "
+                    f"Re-entry cooldown active for "
+                    f"{self.profile.get('re_entry_cooldown_min', 45)} min.",
+                )
+
+            limit = self.profile.get("daily_loss_limit", 0)
+            if limit > 0 and not self._session_halted and self._session_realized_pnl < -limit:
+                self._session_halted = True
+                self.debug.emit(
+                    "ERROR",
+                    f"Daily loss limit reached — session P&L: "
+                    f"${self._session_realized_pnl:.0f} "
+                    f"(limit: -${limit:.0f}). No more entries today.",
+                )
+
+            self._active_trade_pnl = 0.0  # reset for next trade
 
         try:
             self.logger.log_exit(
@@ -1082,7 +1272,8 @@ class ORBEngine:
             logger.info("[ORBEngine] Exit %s qty=%d reason=%s",
                         action["type"], qty_to_close, action.get("reason", ""))
             self.debug.emit("SUCCESS", f"{_tag} Exit {action['type']} qty={qty_to_close} "
-                                       f"reason={action.get('reason', '')} pnl=${pnl:.2f}")
+                                       f"reason={action.get('reason', '')} pnl=${pnl:.2f} "
+                                       f"session_pnl=${self._session_realized_pnl:.0f}")
         except Exception as e:
             logger.error("[ORBEngine] Exit log/notify failed: %s", e)
             self.debug.emit("ERROR", f"Exit log/notify failed: {e}")
@@ -1154,8 +1345,9 @@ class ORBEngine:
             return
         em = self.exit_manager
         entry_p = em.entry_premium or 0
-        pnl     = (mid - entry_p) * em.qty_remaining * 100
-        pnl_pct = ((mid - entry_p) / entry_p * 100) if entry_p > 0 else 0
+        pnl          = (mid - entry_p) * em.qty_remaining * 100
+        pnl_pct      = ((mid - entry_p) / entry_p * 100) if entry_p > 0 else 0
+        market_value = mid * em.qty_remaining * 100
         payload = _json.dumps({
             "type":          "price_update",
             "contract":      self.contract_symbol,
@@ -1164,6 +1356,7 @@ class ORBEngine:
             "pnl":           round(pnl, 2),
             "pnl_pct":       round(pnl_pct, 2),
             "qty_remaining": em.qty_remaining,
+            "market_value":  round(market_value, 2),
             "tp1_hit":       em.tp1_hit,
             "tp2_hit":       em.tp2_hit,
             "hard_stop":     round(em.hard_stop, 4),
@@ -1237,9 +1430,41 @@ class ORBEngine:
             return
         self._last_underlying_price = bar.close
 
+        # Feed the cascade tracker at bar cadence (not quote cadence — inter-bar
+        # quotes repeat the same underlying price and would reset the counter).
+        if self.trade_taken and self.exit_manager:
+            self.exit_manager.on_underlying_bar(bar.close)
+
         # Only act once the ORB is established and the session isn't skipped.
         # getattr guards the brief __init__ window before _reset_session_state runs.
         if not getattr(self, "orh", None) or getattr(self, "session_skipped", False):
+            return
+
+        # Bar-close confirmation: after the 3-minute OrbService signal the engine
+        # waits for the first 1-minute bar to CLOSE on the correct side of the ORH/ORL
+        # before entering.  A wick or momentary tick above the level is not enough.
+        if getattr(self, "_bar_confirm_pending", False) and not self.trade_taken:
+            direction = self._bar_confirm_direction or ""
+            orh = self.orh or 0.0
+            orl = self.orl or 0.0
+            confirmed = bar.close > orh if direction == "CALL" else bar.close < orl
+            level_str = f"{orh:.2f}" if direction == "CALL" else f"{orl:.2f}"
+            side_str  = "above ORH" if direction == "CALL" else "below ORL"
+            if confirmed:
+                self.debug.emit("SUCCESS",
+                    f"Bar-close confirmed {direction} breakout — "
+                    f"bar closed at {bar.close:.2f} ({side_str} {level_str}) — entering")
+                self._bar_confirm_pending   = False
+                self._bar_confirm_direction = None
+                self._enter_trade(direction, bar.close)
+            else:
+                self.debug.emit("WARN",
+                    f"Bar-close fakeout — {direction} pending but bar closed at "
+                    f"{bar.close:.2f}, did not clear {'ORH' if direction == 'CALL' else 'ORL'} "
+                    f"{level_str} — entry cancelled")
+                self._bar_confirm_pending   = False
+                self._bar_confirm_direction = None
+                self._bar_confirm_price     = None
             return
 
         self.on_price_tick(
@@ -1250,16 +1475,20 @@ class ORBEngine:
 
     def _collect_orb_window_bars(self, n_minutes: int):
         """
-        Build the opening-range bars from the hub's recent-bar buffer: the first
-        n_minutes of bars from 09:30 ET. The service streams these bars; the engine
-        windows them over the fixed 09:30–09:45 ORB window (no separate data fetch).
+        Build the opening-range bars for the 09:30–(09:30+n_minutes) ET window.
 
-        NOTE: Called by calculate_orb. Returns [] when no in-window bars are
-        available (e.g. a server restart after the window), yielding NO_DATA.
+        Primary:  the hub's in-memory bar buffer (populated by OrbService while it
+                  is running).
+        Fallback: Alpaca StockHistoricalDataClient REST fetch — used when the server
+                  has restarted and OrbService's buffer is empty (bars were streamed
+                  before the restart and are no longer in memory).  This ensures
+                  calculate_orb() can still set ORH/ORL even on a late-start deploy.
         """
         now_et = datetime.now(ET)
         start  = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
         end    = start + timedelta(minutes=n_minutes)
+
+        # ── Primary: hub buffer ──────────────────────────────────────────────────
         bars = []
         for b in self._hub.get_recent_bars(self.ticker):
             ts = b.ts
@@ -1269,9 +1498,48 @@ class ORBEngine:
                 ts = ts.astimezone(ET)
             if start <= ts < end and b.high is not None and b.low is not None:
                 bars.append(b)
-        if not bars:
-            logger.warning("[ORBEngine] No hub bars in ORB window for %s (%s–%s)",
-                           self.ticker, start.time(), end.time())
+
+        if bars:
+            return bars
+
+        # ── Fallback: Alpaca historical bars ────────────────────────────────────
+        # Only attempt when the ORB window has already closed (after 09:30+n_min).
+        if now_et < end:
+            logger.warning("[ORBEngine] No hub bars for %s yet — window still open", self.ticker)
+            return []
+
+        logger.info("[ORBEngine] Hub buffer empty for %s — fetching ORB bars from Alpaca REST",
+                    self.ticker)
+        try:
+            req = StockBarsRequest(
+                symbol_or_symbols=self.ticker,
+                timeframe=TimeFrame.Minute,
+                start=start,
+                end=end,
+                feed="iex",
+            )
+            resp = self.stock_client.get_stock_bars(req)
+            raw_bars = resp.get(self.ticker, [])
+            for rb in raw_bars:
+                ts = rb.timestamp
+                if ts.tzinfo is None:
+                    ts = ET.localize(ts)
+                else:
+                    ts = ts.astimezone(ET)
+                if start <= ts < end and rb.high is not None and rb.low is not None:
+                    bars.append(OrbBar(ticker=self.ticker, ts=ts,
+                                       open=rb.open, high=rb.high,
+                                       low=rb.low, close=rb.close,
+                                       volume=rb.volume or 0))
+            if bars:
+                logger.info("[ORBEngine] Alpaca REST returned %d bars for %s ORB window",
+                            len(bars), self.ticker)
+            else:
+                logger.warning("[ORBEngine] No bars in ORB window for %s (%s–%s) from Alpaca REST",
+                               self.ticker, start.time(), end.time())
+        except Exception as e:
+            logger.error("[ORBEngine] Alpaca REST bar fallback failed for %s: %s", self.ticker, e)
+
         return bars
 
     def _get_option_price(self) -> float | None:
@@ -1378,4 +1646,12 @@ class ORBEngine:
             "position":                   self.position,
             "contract":                   self.contract_symbol,
             "exit_state":                 em.to_dict() if em else None,
+            "session_pnl":                round(self._session_realized_pnl, 2),
+            "session_halted":             self._session_halted,
+            "daily_loss_limit":           self.profile.get("daily_loss_limit", 0),
+            "re_entry_cooldown_min":      self.profile.get("re_entry_cooldown_min", 45),
+            "last_loss_by_direction":     {
+                k: {"pnl": round(v["pnl"], 2), "time": v["time"].isoformat()}
+                for k, v in self._last_loss_by_direction.items()
+            },
         }

@@ -163,7 +163,11 @@ def select_contract(
         ask_f = float(ask)
         bid_f = float(getattr(q, "bid_price", 0) or 0)
         spread_pct = (ask_f - bid_f) / ask_f if ask_f > 0 else 1.0
-        offset = abs(strike - breakout_level)
+        # Signed offset: positive = OTM (in the trade direction), negative = ITM.
+        # Using abs() here would let ITM strikes pass the offset window — a $295C
+        # at distance 1.93 below ORH would score identically to a $299C at distance
+        # 2.08 above ORH, causing the selector to choose the ITM contract.
+        offset = (strike - breakout_level) if direction == "CALL" else (breakout_level - strike)
 
         raw_delta = contract.greeks.delta if getattr(contract, "greeks", None) else None
         delta = abs(raw_delta) if raw_delta is not None else None
@@ -187,6 +191,8 @@ def select_contract(
             if fib_anchor is not None and abs(strike - fib_anchor) > _BUDGET_STRIKE_TOLERANCE:
                 continue
         else:
+            # offset is signed: negative = ITM. offset_min is always positive,
+            # so ITM strikes (offset < 0) are automatically rejected here.
             if offset < offset_min or offset > offset_max:
                 continue
         # 2. Delta range — enforced only when greeks are present (indicative feed omits them)

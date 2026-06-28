@@ -1132,6 +1132,75 @@ class SupabaseService:
                 e, f"delete_tracked_contract for user {user_id} and contract {contract_id}"
             )
 
+    # ── AI Agent (TINDEX assistant) persistence ─────────────────────────────────
+
+    def create_ai_conversation(
+        self, user_id: str, title: str, ticker: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Create a new AI chat conversation and return the inserted row."""
+        try:
+            payload = {"user_id": user_id, "title": title[:120] if title else "New conversation"}
+            if ticker:
+                payload["ticker"] = ticker.upper()
+            result = self.client.table("ai_conversations").insert(payload).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error("create_ai_conversation failed for %s: %s", user_id, str(e), exc_info=True)
+            return None
+
+    def touch_ai_conversation(
+        self, conversation_id: str, title: Optional[str] = None
+    ) -> None:
+        """Bump updated_at (and optionally the title) on a conversation."""
+        try:
+            update: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
+            if title:
+                update["title"] = title[:120]
+            self.client.table("ai_conversations").update(update).eq("id", conversation_id).execute()
+        except Exception as e:
+            logger.warning("touch_ai_conversation failed for %s: %s", conversation_id, str(e))
+
+    def add_ai_message(
+        self, conversation_id: str, role: str, content: str
+    ) -> Optional[Dict[str, Any]]:
+        """Persist a single chat message and return the inserted row."""
+        try:
+            result = (
+                self.client.table("ai_messages")
+                .insert({"conversation_id": conversation_id, "role": role, "content": content})
+                .execute()
+            )
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error("add_ai_message failed for %s: %s", conversation_id, str(e), exc_info=True)
+            return None
+
+    def get_ai_messages(self, conversation_id: str, limit: int = 20) -> list:
+        """Fetch the most recent messages for a conversation (chronological order)."""
+        try:
+            result = (
+                self.client.table("ai_messages")
+                .select("role, content, created_at")
+                .eq("conversation_id", conversation_id)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            rows = result.data or []
+            return list(reversed(rows))  # back to chronological
+        except Exception as e:
+            logger.warning("get_ai_messages failed for %s: %s", conversation_id, str(e))
+            return []
+
+    def save_contract_score(self, score_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Persist an AI contract score and return the inserted row."""
+        try:
+            result = self.client.table("ai_contract_scores").insert(score_data).execute()
+            return result.data[0] if result.data else None
+        except Exception as e:
+            logger.error("save_contract_score failed: %s", str(e), exc_info=True)
+            return None
+
 
 _supabase_service = None
 

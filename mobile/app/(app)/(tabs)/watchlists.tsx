@@ -1,16 +1,26 @@
 import { View, Text, SafeAreaView } from "react-native";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useIsFocused } from "@react-navigation/native";
 import { WatchlistType } from "@/common/types";
 import { useWatchlists } from "@/hooks/queries/watchlist/useWatchlist";
 import { WatchlistSelector } from "@/common/components/watchlist/WatchlistSelector";
 import { StockTable } from "@/common/components/watchlist/StockTable";
 import { WATCHLIST_LABELS, WatchlistStock } from "@/common/types/watchlist";
 import useBaseNavigation from "@/hooks/navigation/useBaseNavigation";
+import { useMarketStream } from "@/hooks/useMarketStream";
+
+// Watchlist types backed by real ticker lists worth live-streaming (the rest
+// render a "coming soon" placeholder with no stocks to stream).
+const STREAMABLE_WATCHLISTS: WatchlistType[] = ['gainers', 'trending', 'most_active'];
 
 const WatchlistsScreen = () => {
   const [selectedWatchlist, setSelectedWatchlist] = useState<WatchlistType>('gainers');
-  
-  // Fetch all watchlists 
+
+  // Only true while this tab is the focused/active screen — gates the live
+  // price stream below so it never runs while the user is elsewhere in the app.
+  const isFocused = useIsFocused();
+
+  // Fetch all watchlists
   const { data: watchlistsData, isLoading: watchlistsLoading } = useWatchlists();
 
   // Navigates to selected ticker
@@ -67,6 +77,31 @@ const WatchlistsScreen = () => {
 
   const { stocks, isLoading } = getWatchlistData();
 
+  // Stream only the tickers actually shown in the active list, and only while
+  // that list's tab is selected AND the screen is in view. Switching tabs or
+  // navigating away flips `enabled` to false, which closes the socket and
+  // unsubscribes these tickers server-side (see useMarketStream).
+  const streamTickers = useMemo(() => stocks.map(s => s.ticker), [stocks]);
+  const streamEnabled = isFocused
+    && STREAMABLE_WATCHLISTS.includes(selectedWatchlist)
+    && streamTickers.length > 0;
+  const { livePrices } = useMarketStream(streamTickers, { enabled: streamEnabled });
+
+  // Overlay live prices onto the REST snapshot so rows update in real time
+  // without waiting on the 5-minute watchlist refetch. `change`/`change_percent`
+  // are re-derived off the previous close implied by the snapshot.
+  const liveStocks = useMemo<WatchlistStock[]>(() => {
+    if (!streamEnabled || Object.keys(livePrices).length === 0) return stocks;
+    return stocks.map(s => {
+      const live = livePrices[s.ticker];
+      if (live == null || s.price == null) return s;
+      const prevClose = s.price - (s.change ?? 0);
+      const change = live - prevClose;
+      const change_percent = prevClose !== 0 ? (change / prevClose) * 100 : s.change_percent;
+      return { ...s, price: live, change, change_percent };
+    });
+  }, [stocks, livePrices, streamEnabled]);
+
   return (
     <SafeAreaView className="flex-1 bg-black">
       {/* Subtle background gradient matching feed screen */}
@@ -92,7 +127,7 @@ const WatchlistsScreen = () => {
       <View className="flex-1">
         {/* Show table for implemented watchlist types */}
         {['gainers', 'trending', 'most_active', 'favorites'].includes(selectedWatchlist) ? (
-          <StockTable stocks={stocks} isLoading={isLoading} onPress={handleNavigation} />
+          <StockTable stocks={liveStocks} isLoading={isLoading} onPress={handleNavigation} />
         ) : (
           <View className="flex-1 justify-center items-center px-6">
             <Text className="text-gray-400 text-center">

@@ -7,15 +7,29 @@ import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
 import { useStrategyStats, useStrategyStatsByProfile, useStrategyPerformance } from '@/hooks/queries/strategy/useStrategyStats';
 import { useStrategyDebugLogs } from '@/hooks/queries/strategy/useStrategyDebugLogs';
-import type { ProfileKey, ORBTrade, StrategyStats, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel } from '@/common/types/strategy';
+import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
+import { useQuery } from '@tanstack/react-query';
+import type { ProfileKey, ORBTrade, StrategyStats, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel, TradeType, ExitStage } from '@/common/types/strategy';
 import { formatContractSymbol } from '@/lib/formatContract';
+
+const TODAY = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
+type DateFilter = 'ALL' | 'TODAY';
 type Filter = 'ALL' | ProfileKey;
 type Tab = 'log' | 'stats' | 'debug';
+
+interface SkippedSession {
+  id?: string;
+  session_date: string;
+  ticker: string;
+  profile: string;
+  skip_reason: string | null;
+  strategy_id: string | null;
+}
 
 const DEBUG_COLORS: Record<DebugLevel, string> = {
   ERROR:   '#EF4444',
@@ -26,25 +40,73 @@ const DEBUG_COLORS: Record<DebugLevel, string> = {
 };
 
 const FILTERS: { label: string; value: Filter }[] = [
-  { label: 'All', value: 'ALL' },
-  { label: '🐂 Bull Dog', value: 'BULL_DOG' },
-  { label: '🐱 Thunder Cat', value: 'THUNDER_CAT' },
-  { label: '🐺 Wolf', value: 'WOLF' },
+  { label: 'All',           value: 'ALL' },
+  { label: '⚡ Scalper',    value: 'SCALPER' },
+  { label: '🎯 Precision',  value: 'PRECISION' },
+  { label: '📈 Momentum',   value: 'MOMENTUM' },
+  { label: '💎 Conviction', value: 'CONVICTION' },
+  { label: '🔥 All In',     value: 'ALL_IN' },
+  { label: '🚀 Trend Rider',value: 'TREND_RIDER' },
+  { label: '🔄 Reversal',   value: 'REVERSAL' },
+  { label: '🐂 Bull Dog',   value: 'BULL_DOG' },
+  { label: '🐱 Thunder Cat',value: 'THUNDER_CAT' },
+  { label: '🐺 Wolf',       value: 'WOLF' },
+  { label: '🎯 OTM Runner',     value: 'OTM_RUNNER' },
+  { label: '💎 OTM Conviction', value: 'OTM_CONVICTION' },
 ];
+
+const PROFILE_EMOJI: Record<string, string> = {
+  BULL_DOG:       '🐂',
+  THUNDER_CAT:    '🐱',
+  WOLF:           '🐺',
+  TREND_RIDER:    '🚀',
+  RETESTER:       '🎯',
+  REVERSAL:       '🔄',
+  SCALPER:        '⚡',
+  PRECISION:      '🎯',
+  MOMENTUM:       '📈',
+  CONVICTION:     '💎',
+  ALL_IN:         '🔥',
+  OTM_RUNNER:     '🏃',
+  OTM_CONVICTION: '🎯',
+  MANUAL:         '🖐️',
+};
+
+function useSkippedSessions() {
+  return useQuery<SkippedSession[]>({
+    queryKey: ['skipped-sessions'],
+    queryFn: async () => {
+      const res = await fetch(`${RAILWAY_BASE_URL}/strategy/skipped-sessions`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    staleTime: 60_000,
+    retry: 1,
+  });
+}
 
 export default function TradeLogScreen() {
   const colors = useThemeColors();
-  const [filter, setFilter]     = useState<Filter>('ALL');
-  const [tab, setTab]           = useState<Tab>('log');
+  const [filter, setFilter]         = useState<Filter>('ALL');
+  const [dateFilter, setDateFilter] = useState<DateFilter>('ALL');
+  const [tab, setTab]               = useState<Tab>('log');
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const { data: trades, isLoading: tradesLoading } = useStrategyTrades({
-    profile: filter,
-    limit: 50,
+  const tradeDate = dateFilter === 'TODAY' ? TODAY : null;
+
+  const { data: trades,  isLoading: tradesLoading } = useStrategyTrades({
+    profile: filter, limit: 100, trade_date: tradeDate,
   });
-  const { data: stats,       isLoading: statsLoading }  = useStrategyStats(filter);
-  const { data: byProfile }                             = useStrategyStatsByProfile();
-  const { data: performance }                           = useStrategyPerformance();
+  const { data: stats,   isLoading: statsLoading }  = useStrategyStats(filter);
+  const { data: byProfile }                         = useStrategyStatsByProfile();
+  const { data: performance }                       = useStrategyPerformance();
+  const { data: skipped }                           = useSkippedSessions();
+  const { data: sessionStates }                     = useStrategySessionState();
+
+  const haltedEngines = useMemo(() => {
+    if (!sessionStates) return [];
+    return Object.values(sessionStates).filter(e => e.session_halted);
+  }, [sessionStates]);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -75,12 +137,42 @@ export default function TradeLogScreen() {
         </View>
       </View>
 
+      {/* Session halt banner */}
+      {haltedEngines.length > 0 && (
+        <View style={{ backgroundColor: '#7f1d1d', paddingHorizontal: 16, paddingVertical: 10,
+                       flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Ionicons name="warning" size={16} color="#fca5a5" />
+          <Text style={{ color: '#fca5a5', fontSize: 13, flex: 1 }}>
+            Daily loss limit reached — {haltedEngines.map(e => e.ticker).join(', ')} engine(s) halted.
+            Session P&amp;L: {haltedEngines.map(e => `${e.ticker} $${e.session_pnl.toFixed(0)}`).join(', ')}
+          </Text>
+        </View>
+      )}
+
       {tab === 'debug' ? (
         <DebugLogPanel colors={colors} />
       ) : (
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
 
-        {/* Filter chips */}
+        {/* Date + Profile filter row */}
+        <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 12 }}>
+          {(['ALL', 'TODAY'] as const).map(d => (
+            <TouchableOpacity
+              key={d}
+              onPress={() => setDateFilter(d)}
+              style={[styles.filterChip, {
+                backgroundColor: dateFilter === d ? '#6366f1' : colors.card,
+                borderColor: dateFilter === d ? '#6366f1' : colors.border,
+              }]}
+            >
+              <Text style={[styles.filterText, { color: dateFilter === d ? '#fff' : colors.text }]}>
+                {d === 'TODAY' ? 'Today' : 'All Time'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Profile filter chips */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow}>
           {FILTERS.map(f => (
             <TouchableOpacity
@@ -118,6 +210,18 @@ export default function TradeLogScreen() {
                   onToggle={() => setExpandedId(id => id === trade.id ? null : trade.id)}
                 />
               ))}
+
+              {/* Skipped sessions section */}
+              {skipped && skipped.length > 0 && (
+                <>
+                  <Text style={[styles.sectionHeader, { color: colors.tabBarInactive }]}>
+                    NO-TRADE SESSIONS
+                  </Text>
+                  {skipped.map((s, i) => (
+                    <SkippedRow key={`${s.session_date}-${s.strategy_id ?? i}`} session={s} colors={colors} />
+                  ))}
+                </>
+              )}
             </>
           )
         ) : (
@@ -164,7 +268,8 @@ const EXIT_REASON_LABELS: Record<string, string> = {
   LOW_VOLUME_EXIT:   'Low Volume Exit',
   MANUAL_CLOSE:      'Manually Closed',
   FORCE_CLOSE:       'Force Closed',
-  MANUAL_EXIT:       'Manual Exit',
+  MANUAL_EXIT:         'Manual Exit',
+  REVERSAL_TIME_CUT:   'Reversal Bleed Stop (20m)',
 };
 
 const fmtEt = (iso: string): string => {
@@ -184,6 +289,16 @@ const fmtDuration = (entry: string, exit: string | null): string => {
   const min = Math.round(ms / 60_000);
   if (min < 60) return `${min}m`;
   return `${Math.floor(min / 60)}h ${min % 60}m`;
+};
+
+// "2026-06-15" → "Jun 15"
+const fmtTradeDate = (d: string): string => {
+  const p = d?.split('-');
+  if (!p || p.length !== 3) return d ?? '';
+  const dt = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  return Number.isNaN(dt.getTime())
+    ? d
+    : dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 };
 
 // ── TradeDetail ───────────────────────────────────────────────────────────────
@@ -290,6 +405,62 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
         value={`${trade.qty_entered} entered · ${trade.qty_exited} exited`}
         colors={colors}
       />
+
+      {/* Per-stage exit breakdown */}
+      {trade.exit_stages && trade.exit_stages.length > 0 && (
+        <>
+          <Text style={[styles.detailSectionHeader, { color: colors.tabBarInactive, marginTop: 8 }]}>
+            EXIT BREAKDOWN
+          </Text>
+          {trade.exit_stages.map((stage: ExitStage, i: number) => {
+            const stageColor = stage.pnl >= 0 ? colors.success : colors.error;
+            return (
+              <View key={i} style={[styles.detailRow, {
+                backgroundColor: colors.card, borderRadius: 6,
+                marginBottom: 4, paddingHorizontal: 8, paddingVertical: 6,
+              }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.text, fontWeight: '600', fontSize: 13 }}>
+                    {EXIT_REASON_LABELS[stage.reason] ?? stage.reason}
+                  </Text>
+                  <Text style={{ color: colors.tabBarInactive, fontSize: 11, marginTop: 2 }}>
+                    {stage.qty} contract{stage.qty !== 1 ? 's' : ''} @ ${stage.premium.toFixed(2)}
+                    {'  ·  '}{fmtEt(stage.time)}
+                  </Text>
+                </View>
+                <Text style={{ color: stageColor, fontWeight: '700', fontSize: 14 }}>
+                  {stage.pnl >= 0 ? '+' : ''}${stage.pnl.toFixed(2)}
+                </Text>
+              </View>
+            );
+          })}
+        </>
+      )}
+
+      {/* TP1 / TP2 summary rows (if exit_stages absent but columns populated) */}
+      {(!trade.exit_stages || trade.exit_stages.length === 0) && trade.tp1_pnl != null && (
+        <>
+          <Text style={[styles.detailSectionHeader, { color: colors.tabBarInactive, marginTop: 8 }]}>
+            EXIT BREAKDOWN
+          </Text>
+          {trade.tp1_pnl != null && (
+            <DetailRow
+              label="TP1"
+              value={`${trade.tp1_qty ?? '?'} contracts @ $${trade.tp1_premium?.toFixed(2) ?? '?'}  →  ${trade.tp1_pnl >= 0 ? '+' : ''}$${trade.tp1_pnl.toFixed(2)}`}
+              valueColor={trade.tp1_pnl >= 0 ? colors.success : colors.error}
+              colors={colors}
+            />
+          )}
+          {trade.tp2_pnl != null && (
+            <DetailRow
+              label="TP2"
+              value={`${trade.tp2_qty ?? '?'} contracts @ $${trade.tp2_premium?.toFixed(2) ?? '?'}  →  ${trade.tp2_pnl >= 0 ? '+' : ''}$${trade.tp2_pnl.toFixed(2)}`}
+              valueColor={trade.tp2_pnl >= 0 ? colors.success : colors.error}
+              colors={colors}
+            />
+          )}
+        </>
+      )}
     </View>
   );
 };
@@ -302,12 +473,22 @@ const TradeRow = ({
   trade: ORBTrade; colors: any; expanded: boolean; onToggle: () => void;
 }) => {
   const pnl          = trade.pnl ?? 0;
-  const pnlColor     = pnl > 0 ? colors.success : pnl < 0 ? colors.error : colors.tabBarInactive;
-  const profileEmoji = trade.profile === 'BULL_DOG' ? '🐂'
-    : trade.profile === 'WOLF'        ? '🐺'
-    : trade.profile === 'TREND_RIDER' ? '🚀'
-    : trade.profile === 'RETESTER'    ? '🎯'
-    : '🐱';
+  const isOpen       = trade.exit_time == null;
+  const pnlColor     = isOpen ? colors.accent
+                     : pnl > 0 ? colors.success
+                     : pnl < 0 ? colors.error : colors.tabBarInactive;
+  const accentColor  = isOpen ? colors.accent
+                     : pnl > 0 ? colors.success
+                     : pnl < 0 ? colors.error : colors.border;
+  const profileEmoji = PROFILE_EMOJI[trade.profile] ?? '📊';
+  const isLive       = trade.paper_mode === false;
+  const isImmediate  = trade.trade_type === 'IMMEDIATE';
+  const isCall       = trade.direction === 'CALL';
+  const dirColor     = isCall ? colors.success : colors.error;
+
+  const exitLabel = trade.exit_reason
+    ? (EXIT_REASON_LABELS[trade.exit_reason] ?? trade.exit_reason)
+    : isOpen ? 'Open' : null;
 
   const handlePress = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -318,57 +499,112 @@ const TradeRow = ({
     <TouchableOpacity
       onPress={handlePress}
       activeOpacity={0.85}
-      style={[styles.tradeRow, { backgroundColor: colors.card, borderColor: colors.border }]}
+      style={[styles.tradeRow, {
+        backgroundColor: colors.card,
+        borderColor: colors.border,
+        borderLeftColor: accentColor,
+        borderLeftWidth: 3,
+      }]}
     >
       <View style={styles.tradeRowMain}>
+        {/* Identity */}
         <View style={styles.tradeLeft}>
-          <Text style={[styles.tradeDate, { color: colors.tabBarInactive }]}>{trade.trade_date}</Text>
-          <Text style={[styles.tradeTicker, { color: colors.text }]}>
-            {profileEmoji} {trade.ticker}
-          </Text>
-          <Text style={[styles.tradeContract, { color: colors.tabBarInactive }]}>
+          <View style={styles.tradeTitleRow}>
+            <Text style={[styles.tradeTicker, { color: colors.text }]}>
+              {profileEmoji} {trade.ticker}
+            </Text>
+            <View style={[styles.dirPill, { backgroundColor: dirColor + '1A' }]}>
+              <Ionicons name={isCall ? 'trending-up' : 'trending-down'} size={10} color={dirColor} />
+              <Text style={[styles.dirPillText, { color: dirColor }]}>{trade.direction}</Text>
+            </View>
+            {isLive && (
+              <View style={[styles.tag, { backgroundColor: colors.error + '1A' }]}>
+                <Text style={[styles.tagText, { color: colors.error }]}>LIVE</Text>
+              </View>
+            )}
+            {isImmediate && (
+              <View style={[styles.tag, { backgroundColor: colors.accent + '1A' }]}>
+                <Text style={[styles.tagText, { color: colors.accent }]}>IMMED</Text>
+              </View>
+            )}
+          </View>
+
+          <Text style={[styles.tradeContract, { color: colors.text }]} numberOfLines={1}>
             {formatContractSymbol(trade.contract_symbol)}
           </Text>
-          <View style={styles.tradeBadges}>
-            <View style={[styles.dirBadge, {
-              backgroundColor: trade.direction === 'CALL' ? colors.success + '22' : colors.error + '22',
-            }]}>
-              <Text style={[styles.dirText, {
-                color: trade.direction === 'CALL' ? colors.success : colors.error,
-              }]}>
-                {trade.direction}
-              </Text>
-            </View>
-          </View>
-          {trade.exit_reason && !expanded && (
-            <Text style={[styles.exitReason, { color: colors.tabBarInactive }]}>
-              {EXIT_REASON_LABELS[trade.exit_reason] ?? trade.exit_reason}
-            </Text>
-          )}
+
+          <Text style={[styles.tradeMeta, { color: colors.tabBarInactive }]} numberOfLines={1}>
+            {fmtTradeDate(trade.trade_date)}
+            {'  ·  '}
+            ${trade.entry_premium?.toFixed(2) ?? '—'} → {trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—'}
+            {exitLabel ? `  ·  ${exitLabel}` : ''}
+          </Text>
         </View>
+
+        {/* P&L */}
         <View style={styles.tradeRight}>
           <Text style={[styles.tradePnl, { color: pnlColor }]}>
-            {pnl > 0 ? '+' : ''}${pnl.toFixed(2)}
+            {isOpen ? 'OPEN' : `${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}`}
           </Text>
-          {trade.pnl_pct != null && (
-            <Text style={[styles.tradePnlPct, { color: pnlColor }]}>
-              {trade.pnl_pct > 0 ? '+' : ''}{trade.pnl_pct.toFixed(1)}%
-            </Text>
+          {trade.pnl_pct != null && !isOpen && (
+            <View style={[styles.pnlPctPill, { backgroundColor: pnlColor + '1A' }]}>
+              <Text style={[styles.tradePnlPct, { color: pnlColor }]}>
+                {trade.pnl_pct > 0 ? '+' : ''}{trade.pnl_pct.toFixed(1)}%
+              </Text>
+            </View>
           )}
-          <Text style={[styles.tradeEntry, { color: colors.tabBarInactive }]}>
-            ${trade.entry_premium?.toFixed(2)} → {trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—'}
-          </Text>
           <Ionicons
             name={expanded ? 'chevron-up' : 'chevron-down'}
             size={14}
             color={colors.tabBarInactive}
-            style={{ marginTop: 4 }}
+            style={{ marginTop: 6 }}
           />
         </View>
       </View>
 
       {expanded && <TradeDetail trade={trade} colors={colors} />}
     </TouchableOpacity>
+  );
+};
+
+// ── SkippedRow ────────────────────────────────────────────────────────────────
+
+const SKIP_REASON_LABELS: Record<string, string> = {
+  VIX_TOO_HIGH:        'VIX too high',
+  VIX_TOO_LOW:         'VIX too low',
+  NO_ORB_RANGE:        'ORB range not established',
+  ORB_RANGE_TOO_SMALL: 'ORB range too small',
+  NOT_TRADE_DAY:       'Not a scheduled trade day',
+  ALREADY_TRADED:      'Already traded today',
+  NO_BREAKOUT:         'No breakout confirmed',
+  MARKET_CLOSED:       'Market closed',
+  FLOW_REJECTED:       'Flow confirmation failed',
+  REVERSAL_UNSCORED:   'Reversal confidence too low',
+};
+
+const SkippedRow = ({ session, colors }: { session: SkippedSession; colors: any }) => {
+  const emoji  = PROFILE_EMOJI[session.profile] ?? '📊';
+  const reason = session.skip_reason
+    ? (SKIP_REASON_LABELS[session.skip_reason] ?? session.skip_reason.replace(/_/g, ' '))
+    : 'No trade taken';
+  return (
+    <View style={[styles.skippedRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={[styles.skippedLeft, { backgroundColor: colors.tabBarInactive + '22' }]}>
+        <Text style={[styles.skippedDate, { color: colors.tabBarInactive }]}>
+          {session.session_date}
+        </Text>
+        <Text style={[styles.skippedTicker, { color: colors.text }]}>
+          {emoji} {session.ticker}
+        </Text>
+        <Text style={[styles.skippedProfile, { color: colors.tabBarInactive }]}>
+          {session.profile.replace(/_/g, ' ')}
+        </Text>
+      </View>
+      <View style={styles.skippedRight}>
+        <Ionicons name="ban-outline" size={14} color={colors.tabBarInactive} style={{ marginBottom: 2 }} />
+        <Text style={[styles.skippedReason, { color: colors.tabBarInactive }]}>{reason}</Text>
+      </View>
+    </View>
   );
 };
 
@@ -607,20 +843,21 @@ const styles = StyleSheet.create({
   filterChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1, marginRight: 8 },
   filterText: { fontSize: 13, fontWeight: '600' },
   empty:     { textAlign: 'center', marginTop: 40, fontSize: 14 },
-  tradeRow:     { borderRadius: 12, borderWidth: 1, padding: 12 },
-  tradeRowMain: { flexDirection: 'row', justifyContent: 'space-between' },
-  tradeLeft: { flex: 1, gap: 3 },
-  tradeDate:     { fontSize: 11 },
-  tradeTicker:   { fontSize: 15, fontWeight: '700' },
-  tradeContract: { fontSize: 11, marginTop: 1 },
-  tradeBadges: { flexDirection: 'row', gap: 6 },
-  dirBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
-  dirText:  { fontSize: 11, fontWeight: '700' },
-  exitReason: { fontSize: 10 },
-  tradeRight: { alignItems: 'flex-end', justifyContent: 'center', gap: 2 },
-  tradePnl:  { fontSize: 17, fontWeight: '700' },
-  tradePnlPct: { fontSize: 12, fontWeight: '600' },
-  tradeEntry: { fontSize: 10 },
+  tradeRow:     { borderRadius: 12, borderWidth: 1, padding: 13, paddingLeft: 13 },
+  tradeRowMain: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
+  tradeLeft: { flex: 1, gap: 5 },
+  tradeTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  tradeTicker:   { fontSize: 16, fontWeight: '800', letterSpacing: 0.2 },
+  dirPill:   { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
+  dirPillText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
+  tag:      { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5 },
+  tagText:  { fontSize: 9, fontWeight: '800', letterSpacing: 0.4 },
+  tradeContract: { fontSize: 12, fontWeight: '600' },
+  tradeMeta: { fontSize: 11 },
+  tradeRight: { alignItems: 'flex-end', justifyContent: 'center', gap: 4 },
+  tradePnl:  { fontSize: 18, fontWeight: '800', letterSpacing: 0.2 },
+  pnlPctPill: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
+  tradePnlPct: { fontSize: 11, fontWeight: '700' },
 
   // Trade detail expansion
   detailSection:       { marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, gap: 5 },
@@ -661,6 +898,16 @@ const styles = StyleSheet.create({
   stratRatingBadge:   { width: 44, height: 44, borderRadius: 22, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   stratRatingScore:   { fontSize: 14, fontWeight: '800', lineHeight: 16 },
   stratRatingGrade:   { fontSize: 10, fontWeight: '700' },
+
+  // Skipped sessions
+  sectionHeader:  { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 16, marginBottom: 4 },
+  skippedRow:     { borderRadius: 10, borderWidth: 1, flexDirection: 'row', overflow: 'hidden' },
+  skippedLeft:    { padding: 10, minWidth: 110, gap: 2 },
+  skippedDate:    { fontSize: 10 },
+  skippedTicker:  { fontSize: 13, fontWeight: '700' },
+  skippedProfile: { fontSize: 10 },
+  skippedRight:   { flex: 1, padding: 10, justifyContent: 'center', gap: 3 },
+  skippedReason:  { fontSize: 12 },
 
   // Debug tab
   debugControls:    { paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth },

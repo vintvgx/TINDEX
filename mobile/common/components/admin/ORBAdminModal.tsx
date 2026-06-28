@@ -7,11 +7,13 @@ import {
   StatusBar,
   ActivityIndicator,
   TouchableOpacity,
+  Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/common/components/ui/text';
 import { useORBStatus } from '@/hooks/queries/orb/useORBStatus';
 import { useStartORBMutation, useStopORBMutation } from '@/hooks/mutations/orb/useORBControl';
+import { useResetStrategyData } from '@/hooks/mutations/strategy/useResetStrategyData';
 import { PortfolioViewModal } from './PortfolioViewModal';
 import { useToast } from '@/common/components/ui/Toast';
 
@@ -43,6 +45,9 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
   const startMutation = useStartORBMutation();
   const stopMutation = useStopORBMutation();
   const [portfolioModalVisible, setPortfolioModalVisible] = useState(false);
+  const [resetConfirming, setResetConfirming] = useState(false);
+  const [clearDebugLogs, setClearDebugLogs] = useState(false);
+  const resetMutation = useResetStrategyData();
   const toast = useToast();
 
   const isRunning = status?.running ?? false;
@@ -81,6 +86,26 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
   };
 
   const isLoadingAction = startMutation.isPending || stopMutation.isPending;
+
+  const handleResetData = () => {
+    if (!resetConfirming) {
+      setResetConfirming(true);
+      return;
+    }
+    resetMutation.mutate(
+      { clear_debug_logs: clearDebugLogs },
+      {
+        onSuccess: (res) => {
+          toast.success(res.message);
+          setResetConfirming(false);
+        },
+        onError: (err) => {
+          toast.error(err instanceof Error ? err.message : 'Reset failed');
+          setResetConfirming(false);
+        },
+      },
+    );
+  };
 
   return (
     <Modal
@@ -310,6 +335,74 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
             )}
 
           </View>
+
+          {/* ─── Danger Zone ─────────────────────────────────────── */}
+          <View className="mb-8">
+            <Text className="text-lg font-semibold text-gray-900 mb-4">Danger Zone</Text>
+
+            <View className="border border-red-300 rounded-xl p-4 bg-red-50">
+              {/* Header row */}
+              <View className="flex-row items-center gap-2 mb-2">
+                <Ionicons name="warning-outline" size={20} color="#dc2626" />
+                <Text className="text-red-700 font-semibold text-base">Reset Trade Data</Text>
+              </View>
+
+              <Text className="text-red-600 text-sm mb-4">
+                Permanently deletes all rows from{' '}
+                <Text className="font-mono font-semibold">orb_trades</Text> and{' '}
+                <Text className="font-mono font-semibold">orb_session</Text>. Use this to clear
+                paper-trading debug data and start fresh.
+              </Text>
+
+              {/* Clear debug logs toggle */}
+              <View className="flex-row items-center justify-between mb-4 bg-red-100 rounded-lg px-3 py-2">
+                <Text className="text-red-700 text-sm font-medium">Also clear debug logs</Text>
+                <Switch
+                  value={clearDebugLogs}
+                  onValueChange={setClearDebugLogs}
+                  trackColor={{ false: '#fecaca', true: '#ef4444' }}
+                  thumbColor="#ffffff"
+                />
+              </View>
+
+              {resetConfirming ? (
+                <View className="gap-2">
+                  <Text className="text-red-700 font-semibold text-sm text-center mb-1">
+                    Are you sure? This cannot be undone.
+                  </Text>
+                  <View className="flex-row gap-2">
+                    <TouchableOpacity
+                      onPress={() => setResetConfirming(false)}
+                      className="flex-1 h-11 rounded-md bg-gray-200 items-center justify-center">
+                      <Text className="text-gray-700 font-semibold">Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={handleResetData}
+                      disabled={resetMutation.isPending}
+                      className={`flex-1 h-11 rounded-md bg-red-600 items-center justify-center ${
+                        resetMutation.isPending ? 'opacity-50' : 'active:opacity-90'
+                      }`}>
+                      {resetMutation.isPending ? (
+                        <ActivityIndicator size="small" color="#ffffff" />
+                      ) : (
+                        <Text className="text-white font-semibold">Yes, Delete All</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  onPress={handleResetData}
+                  className="w-full h-11 rounded-md bg-red-600 items-center justify-center active:opacity-90">
+                  <View className="flex-row items-center gap-2">
+                    <Ionicons name="trash-outline" size={18} color="#ffffff" />
+                    <Text className="text-white font-semibold">Reset Trade Data</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
         </View>
       </ScrollView>
 

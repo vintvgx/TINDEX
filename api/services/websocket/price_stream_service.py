@@ -36,8 +36,8 @@ def _sentiment(vix: Optional[float]) -> dict:
 
 class PriceStreamService:
     def __init__(self):
-        self._tickers:     set[str]          = set()
-        self._queues:      list[queue.Queue] = []
+        self._ticker_refcounts: dict[str, int]   = {}
+        self._queues:           list[queue.Queue] = []
         self._tickers_lock = threading.Lock()
         self._queues_lock  = threading.Lock()
         self._running      = False
@@ -50,14 +50,25 @@ class PriceStreamService:
         logger.info("[PriceStream] background loop started (interval=%ds)", POLL_INTERVAL)
 
     # ── subscription management ────────────────────────────────────────
+    # Refcounted: a ticker stays in the poll set as long as at least one
+    # client wants it, so one client unsubscribing (tab switch, disconnect)
+    # never drops a ticker another client is still watching.
 
     def subscribe(self, ticker: str):
+        ticker = ticker.upper()
         with self._tickers_lock:
-            self._tickers.add(ticker.upper())
+            self._ticker_refcounts[ticker] = self._ticker_refcounts.get(ticker, 0) + 1
 
     def unsubscribe(self, ticker: str):
+        ticker = ticker.upper()
         with self._tickers_lock:
-            self._tickers.discard(ticker.upper())
+            count = self._ticker_refcounts.get(ticker)
+            if count is None:
+                return
+            if count <= 1:
+                del self._ticker_refcounts[ticker]
+            else:
+                self._ticker_refcounts[ticker] = count - 1
 
     # ── per-connection queue registration ─────────────────────────────
 
@@ -88,7 +99,7 @@ class PriceStreamService:
         from services.portfolio.portfolio_service import batch_fetch_current_prices
 
         with self._tickers_lock:
-            user_tickers = list(self._tickers)
+            user_tickers = list(self._ticker_refcounts.keys())
 
         all_tickers = list({VIX_TICKER, SPY_TICKER} | set(user_tickers))
 
