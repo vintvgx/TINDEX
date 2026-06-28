@@ -167,6 +167,54 @@ def schedule_eod_close(engine):
     logger.info("[Scheduler] EOD-only hard-close scheduled for %s (%s)", sid, engine.ticker)
 
 
+def schedule_daily_review(supabase_client):
+    """
+    Register a single 4:15 PM ET mon–fri job that generates the daily trade
+    review and saves it to Supabase. Safe to call multiple times — the job ID
+    is fixed so it is replaced, never duplicated.
+
+    Call once at app startup after the Supabase client is ready:
+        from services.strategy.scheduler import schedule_daily_review
+        schedule_daily_review(sb_client)
+    """
+    sched = get_scheduler()
+    if not sched:
+        logger.warning("[Scheduler] APScheduler not available — daily review not scheduled")
+        return
+    if not sched.running:
+        sched.start()
+
+    sched.add_job(
+        lambda: _run_daily_review(supabase_client),
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=15, timezone=ET),
+        id="job_daily_review",
+        replace_existing=True,
+    )
+    logger.info("[Scheduler] Daily review job scheduled at 4:15 PM ET mon–fri")
+
+
+def _run_daily_review(supabase_client):
+    """
+    EOD review job: query today's trades, call Claude, save to Supabase.
+    Errors are caught and logged so they never surface as unhandled exceptions
+    in the scheduler thread.
+    """
+    from services.strategy.review_generator import ReviewGenerator
+    from datetime import date as _date
+    try:
+        gen      = ReviewGenerator(supabase_client)
+        today    = _date.today()
+        content, meta = gen.generate(today)
+        trades   = gen._fetch_trades(today)
+        gen.save_to_supabase(today, content, trades, meta)
+        logger.info(
+            "[Scheduler] Daily review complete — %d trades, net P&L $%.2f",
+            meta["trade_count"], meta["net_pnl"],
+        )
+    except Exception as e:
+        logger.error("[Scheduler] Daily review job failed: %s", e)
+
+
 def init_scheduler(engine):
     """Start the BackgroundScheduler and register jobs for the current engine config."""
     sched = get_scheduler()
