@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
+import { getAuthHeaders } from '@/common/utils/api/getAuthHeaders';
 import type { SwingProfileName } from '@/common/types/swing';
 
 export function useRunSwingPipeline() {
@@ -26,8 +27,8 @@ export function useAddSwingWatchlist(userId: string | undefined) {
     mutationFn: async (payload: { contract_symbol: string; ticker: string; note?: string }) => {
       const resp = await fetch(`${RAILWAY_BASE_URL}/swing/watchlist`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userId, ...payload }),
+        headers: await getAuthHeaders(),
+        body: JSON.stringify(payload),
       });
       if (!resp.ok) throw new Error('Failed to add to watchlist');
       return resp.json();
@@ -42,7 +43,7 @@ export function useRemoveSwingWatchlist(userId: string | undefined) {
     mutationFn: async (watchlistId: string) => {
       const resp = await fetch(`${RAILWAY_BASE_URL}/swing/watchlist/${watchlistId}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getAuthHeaders(),
       });
       if (!resp.ok) throw new Error('Failed to remove from watchlist');
       return resp.json();
@@ -65,8 +66,8 @@ export function useEnterSwingPosition(userId: string | undefined) {
     }) => {
       const resp = await fetch(`${RAILWAY_BASE_URL}/swing/positions/enter`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userId, ...payload }),
+        headers: await getAuthHeaders(),
+        body: JSON.stringify(payload),
       });
       if (!resp.ok) throw new Error('Failed to enter position');
       return resp.json();
@@ -85,8 +86,8 @@ export function useExitSwingPosition(userId: string | undefined) {
     }) => {
       const resp = await fetch(`${RAILWAY_BASE_URL}/swing/positions/${payload.position_id}/exit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userId, qty: payload.qty, exit_price: payload.exit_price }),
+        headers: await getAuthHeaders(),
+        body: JSON.stringify({ qty: payload.qty, exit_price: payload.exit_price }),
       });
       if (!resp.ok) throw new Error('Failed to exit position');
       return resp.json();

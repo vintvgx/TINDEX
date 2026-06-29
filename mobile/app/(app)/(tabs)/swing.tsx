@@ -318,7 +318,7 @@ function PositionsScreen({
 
   const handleSubmitExits = async (payload: { hard_stop?: number; tp1_pct?: number; tp2_pct?: number }) => {
     if (!editPosition) return;
-    await updateExits.mutateAsync({ position_id: editPosition.id, user_id: userId, ...payload });
+    await updateExits.mutateAsync({ position_id: editPosition.id, ...payload });
     Alert.alert('Updated', 'Stop loss and targets saved.');
     setEditPosition(null);
   };

@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
+import { getAuthHeaders } from '@/common/utils/api/getAuthHeaders';
 import type { SwingPosition } from '@/common/types/swing';
 
 interface SwingPositionsResponse {
@@ -13,8 +14,8 @@ export function useSwingPositions(userId: string | undefined) {
     queryKey: ['swing-positions', userId],
     enabled: !!userId,
     queryFn: async () => {
-      const resp = await fetch(`${RAILWAY_BASE_URL}/swing/positions?user_id=${userId}`, {
-        headers: { 'Content-Type': 'application/json' },
+      const resp = await fetch(`${RAILWAY_BASE_URL}/swing/positions`, {
+        headers: await getAuthHeaders(),
       });
       if (!resp.ok) throw new Error(`Failed to fetch swing positions: ${resp.statusText}`);
       const json: SwingPositionsResponse = await resp.json();

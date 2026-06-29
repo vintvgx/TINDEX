@@ -2,8 +2,9 @@
 Swing Trade [Beta] API routes.
 
 All endpoints use no url_prefix — paths are exactly as defined in spec §7.
-Pipeline runs use the service-role Supabase client; user-owned tables (watchlist,
-positions) enforce RLS via the same client but scoped by user_id.
+Pipeline runs use the service-role Supabase client. User-owned tables (watchlist,
+positions) are accessed with the service-role client but scoped to the caller id
+resolved from a verified Supabase access token.
 """
 
 import asyncio
@@ -32,6 +33,27 @@ def _run_async(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
+
+
+def _require_authenticated_user_id():
+    """Return (user_id, error_response). error_response is a Flask tuple when auth fails."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None, (jsonify({"success": False, "error": "Authorization required"}), 401)
+
+    token = auth_header.removeprefix("Bearer ").strip()
+    if not token:
+        return None, (jsonify({"success": False, "error": "Authorization required"}), 401)
+
+    try:
+        user_id = get_supabase_service().resolve_authenticated_user_id(token)
+        return user_id, None
+    except ValueError as e:
+        logger.warning("[swing/auth] token validation failed: %s", e)
+        return None, (jsonify({"success": False, "error": str(e)}), 401)
+    except Exception as e:
+        logger.error("[swing/auth] unexpected auth failure: %s", e, exc_info=True)
+        return None, (jsonify({"success": False, "error": "Authentication failed"}), 401)
 
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -118,9 +140,9 @@ def get_swing_config():
 
 @bp.route("/swing/watchlist", methods=["GET"])
 def get_swing_watchlist():
-    user_id = request.args.get("user_id")
-    if not user_id:
-        return jsonify({"success": False, "error": "user_id required"}), 400
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
     try:
         rows = _sb().table("swing_watchlist").select("*").eq("user_id", user_id).order("added_at", desc=True).execute().data or []
         return jsonify({"success": True, "data": rows})
@@ -131,11 +153,13 @@ def get_swing_watchlist():
 
 @bp.route("/swing/watchlist", methods=["POST"])
 def add_swing_watchlist():
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
     body = request.get_json(silent=True) or {}
-    user_id = body.get("user_id")
     contract_symbol = body.get("contract_symbol")
-    if not user_id or not contract_symbol:
-        return jsonify({"success": False, "error": "user_id and contract_symbol required"}), 400
+    if not contract_symbol:
+        return jsonify({"success": False, "error": "contract_symbol required"}), 400
     try:
         row = _sb().table("swing_watchlist").upsert({
             "user_id": user_id,
@@ -151,9 +175,9 @@ def add_swing_watchlist():
 
 @bp.route("/swing/watchlist/<watchlist_id>", methods=["DELETE"])
 def remove_swing_watchlist(watchlist_id: str):
-    user_id = request.args.get("user_id")
-    if not user_id:
-        return jsonify({"success": False, "error": "user_id required"}), 400
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
     try:
         _sb().table("swing_watchlist").delete().eq("id", watchlist_id).eq("user_id", user_id).execute()
         return jsonify({"success": True})
@@ -166,9 +190,9 @@ def remove_swing_watchlist(watchlist_id: str):
 
 @bp.route("/swing/positions", methods=["GET"])
 def get_swing_positions():
-    user_id = request.args.get("user_id")
-    if not user_id:
-        return jsonify({"success": False, "error": "user_id required"}), 400
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
     status_filter = request.args.get("status", "open")
     try:
         query = _sb().table("swing_positions").select("*").eq("user_id", user_id)
@@ -185,16 +209,18 @@ def get_swing_positions():
 def enter_swing_position():
     """
     Open a paper or live position.
-    Body: { user_id, contract_symbol, ticker, qty, entry_price, mode, strategy_profile, side }
+    Body: { contract_symbol, ticker, qty, entry_price, mode, strategy_profile, side }
     For live mode: routes order via Alpaca.
     """
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
     body = request.get_json(silent=True) or {}
-    required = ["user_id", "contract_symbol", "ticker", "qty", "entry_price", "strategy_profile"]
+    required = ["contract_symbol", "ticker", "qty", "entry_price", "strategy_profile"]
     for field in required:
         if not body.get(field):
             return jsonify({"success": False, "error": f"{field} is required"}), 400
 
-    user_id = body["user_id"]
     contract_symbol = body["contract_symbol"]
     qty = int(body["qty"])
     entry_price = float(body["entry_price"])
@@ -226,27 +252,10 @@ def enter_swing_position():
         "effective_stop": None,
     }
 
-    broker_order_ids = None
-
-    # Live execution via Alpaca
-    if mode == "live":
-        try:
-            from services.alpaca.alpaca_option_service import get_alpaca_option_service
-            alpaca = get_alpaca_option_service()
-            order = _run_async(alpaca.place_option_order(
-                symbol=contract_symbol,
-                qty=qty,
-                side="buy",
-                order_type="market",
-                paper=False,
-            ))
-            broker_order_ids = {"alpaca_order_id": order.get("id")} if order else None
-        except Exception as e:
-            logger.error("[swing/positions/enter] Alpaca order failed: %s", e, exc_info=True)
-            return jsonify({"success": False, "error": f"Live order failed: {str(e)}"}), 500
-
+    # 1. Persist a pending record BEFORE touching the broker so every Alpaca
+    #    order has a corresponding local row, even if the confirm step fails.
     try:
-        row = _sb().table("swing_positions").insert({
+        pending = _sb().table("swing_positions").insert({
             "user_id": user_id,
             "mode": mode,
             "contract_symbol": contract_symbol,
@@ -257,12 +266,47 @@ def enter_swing_position():
             "strategy_profile": strategy_profile,
             "stop_config": stop_config,
             "tp_ladder": tp_ladder,
+            "status": "pending",
+            "broker_order_ids": None,
+        }).execute().data
+        position_id = pending[0]["id"]
+    except Exception as e:
+        logger.error("[swing/positions/enter] Supabase pre-insert failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+    # 2. Place broker order (live only). On failure, mark the pending row so it
+    #    is visible and reconcilable — no silent orphan at the broker.
+    broker_order_ids = None
+    if mode == "live":
+        try:
+            from services.alpaca.alpaca_option_service import get_alpaca_option_service
+            order = _run_async(get_alpaca_option_service().place_option_order(
+                symbol=contract_symbol,
+                qty=qty,
+                side="buy",
+                order_type="market",
+                paper=False,
+            ))
+            broker_order_ids = {"alpaca_order_id": order.get("id")} if order else None
+        except Exception as e:
+            logger.error("[swing/positions/enter] Alpaca order failed: %s", e, exc_info=True)
+            try:
+                _sb().table("swing_positions").update({"status": "failed"}).eq("id", position_id).execute()
+            except Exception:
+                pass  # best-effort; pending row still exists and is detectable
+            return jsonify({"success": False, "error": f"Live order failed: {str(e)}"}), 500
+
+    # 3. Confirm the record as open now that broker execution succeeded (or paper).
+    try:
+        row = _sb().table("swing_positions").update({
             "status": "open",
             "broker_order_ids": broker_order_ids,
-        }).execute().data
+        }).eq("id", position_id).execute().data
         return jsonify({"success": True, "data": row[0] if row else None})
     except Exception as e:
-        logger.error("[swing/positions/enter] Supabase insert failed: %s", e, exc_info=True)
+        # Broker order placed but confirm failed — row stays "pending" (detectable,
+        # not a silent orphan). Log with position_id for manual reconciliation.
+        logger.error("[swing/positions/enter] Supabase confirm failed pos=%s: %s", position_id, e, exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -270,12 +314,12 @@ def enter_swing_position():
 def exit_swing_position(position_id: str):
     """
     Manual exit or partial close.
-    Body: { user_id, qty?, exit_price? }
+    Body: { qty?, exit_price?, reason? }
     """
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
     body = request.get_json(silent=True) or {}
-    user_id = body.get("user_id")
-    if not user_id:
-        return jsonify({"success": False, "error": "user_id required"}), 400
 
     try:
         pos_rows = _sb().table("swing_positions").select("*").eq("id", position_id).eq("user_id", user_id).execute().data or []
@@ -290,7 +334,7 @@ def exit_swing_position(position_id: str):
     entry_price = float(pos.get("entry_price") or 0)
     pnl = (exit_price - entry_price) * qty_to_close * 100 if exit_price and entry_price else None
 
-    # Live close via Alpaca
+    # Live close via Alpaca — broker result is authoritative; do not update local state on failure.
     if pos.get("mode") == "live":
         try:
             from services.alpaca.alpaca_option_service import get_alpaca_option_service
@@ -300,7 +344,8 @@ def exit_swing_position(position_id: str):
                 paper=False,
             ))
         except Exception as e:
-            logger.warning("[swing/positions/exit] Alpaca close failed (position may be expired): %s", e)
+            logger.error("[swing/positions/exit] Alpaca close failed: %s", e, exc_info=True)
+            return jsonify({"success": False, "error": f"Live close failed: {str(e)}"}), 500
 
     new_qty = (pos.get("qty") or 0) - qty_to_close
     new_status = "closed" if new_qty <= 0 else "partially_closed"
@@ -335,17 +380,17 @@ def exit_swing_position(position_id: str):
 def update_swing_exits(position_id: str):
     """
     Update stop-loss and/or TP levels for a swing position.
-    Body: { user_id, hard_stop?, tp1_pct?, tp2_pct? }
+    Body: { hard_stop?, tp1_pct?, tp2_pct? }
       - hard_stop: absolute premium price (e.g. 0.18)
       - tp1_pct:   TP1 as % gain on entry (e.g. 0.15 = +15%)
       - tp2_pct:   TP2 as % gain on entry (e.g. 0.30 = +30%), optional
     These are persisted to stop_config / tp_ladder so the exit manager
     reads the new values on the next evaluation cycle.
     """
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
     body = request.get_json(silent=True) or {}
-    user_id = body.get("user_id")
-    if not user_id:
-        return jsonify({"success": False, "error": "user_id required"}), 400
 
     try:
         rows = _sb().table("swing_positions").select("*").eq("id", position_id).eq("user_id", user_id).execute().data or []
