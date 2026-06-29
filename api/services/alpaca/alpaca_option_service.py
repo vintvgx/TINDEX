@@ -598,6 +598,14 @@ class AlpacaOptionService:
         paper: bool = False,
     ) -> dict:
         """Submit a market or limit option order via Alpaca TradingClient."""
+        side_normalized = side.lower()
+        if side_normalized not in {"buy", "sell"}:
+            raise ValueError("side must be 'buy' or 'sell'")
+        if qty <= 0:
+            raise ValueError("qty must be > 0")
+        if order_type.lower() != "market":
+            raise ValueError("Only market option orders are currently supported")
+
         from alpaca.trading.client import TradingClient
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass
@@ -607,7 +615,7 @@ class AlpacaOptionService:
             secret_key=self.alpaca_secret_key,
             paper=paper,
         )
-        order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
+        order_side = OrderSide.BUY if side_normalized == "buy" else OrderSide.SELL
         req = MarketOrderRequest(
             symbol=symbol.upper(),
             qty=qty,
