@@ -84,7 +84,8 @@ class SwingPipeline:
         if not uw_svc._available():
             msg = "Unusual Whales API key not configured — swing pipeline aborted"
             logger.error("[SwingPipeline] %s", msg)
-            self._write_run_log(scan_date, 0, 0, 0, 0, 0, [msg], round(time.time() - t0, 2))
+            duration = round(time.time() - t0, 2)
+            self._persist(scan_date, [], [msg], 0, 0, 0, 0, 0, duration)
             return {"success": False, "error": msg, "surfaced": [], "meta": {}}
 
         raw_flows = self._fetch_uw_flows(uw_svc, limit=200)
