@@ -40,10 +40,14 @@ export function useRemoveSwingWatchlist(userId: string | undefined) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (watchlistId: string) => {
-      const resp = await fetch(`${RAILWAY_BASE_URL}/swing/watchlist/${watchlistId}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-      });
+      if (!userId) throw new Error('userId is required');
+      const resp = await fetch(
+        `${RAILWAY_BASE_URL}/swing/watchlist/${encodeURIComponent(watchlistId)}?user_id=${encodeURIComponent(userId)}`,
+        {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
       if (!resp.ok) throw new Error('Failed to remove from watchlist');
       return resp.json();
     },
