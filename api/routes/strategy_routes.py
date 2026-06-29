@@ -896,6 +896,29 @@ def run_simulation():
 
 
 
+# ── EMA / Technical data ──────────────────────────────────────────────────────
+
+@strategy_bp.route("/technicals/<ticker>", methods=["GET"])
+def get_ticker_technicals(ticker: str):
+    from services.technical_service import get_technicals
+    force = request.args.get("force", "false").lower() == "true"
+    data = get_technicals(ticker.upper(), force_refresh=force)
+    if data.get("error"):
+        return jsonify({"success": False, "error": data["error"]}), 422
+    return jsonify({"success": True, "data": data})
+
+
+@strategy_bp.route("/technicals/batch", methods=["POST"])
+def get_batch_technicals():
+    from services.technical_service import get_technicals
+    body = request.get_json(silent=True) or {}
+    tickers = [t.upper().strip() for t in (body.get("tickers") or []) if t]
+    if not tickers:
+        return jsonify({"success": False, "error": "tickers required"}), 400
+    results = {t: get_technicals(t) for t in tickers}
+    return jsonify({"success": True, "data": results})
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _engine_position_response(engine: ORBEngine):

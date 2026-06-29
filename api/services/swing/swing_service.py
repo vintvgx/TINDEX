@@ -12,12 +12,63 @@ Stages:
 All stage thresholds and weights are config-driven (swing_config table).
 """
 
+import math
 import time
 import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ── Black-Scholes helpers (pure Python, no numpy) ─────────────────────────────
+
+_RISK_FREE_RATE = 0.0525  # ~current Fed funds rate
+
+
+def _norm_cdf(x: float) -> float:
+    return (1.0 + math.erf(x / math.sqrt(2.0))) / 2.0
+
+
+def _bs_price(S: float, K: float, T: float, sigma: float, option_type: str = "call") -> float:
+    """Black-Scholes option price. T in years."""
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return max(S - K, 0.0) if option_type == "call" else max(K - S, 0.0)
+    r = _RISK_FREE_RATE
+    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    if option_type == "call":
+        return S * _norm_cdf(d1) - K * math.exp(-r * T) * _norm_cdf(d2)
+    else:
+        return K * math.exp(-r * T) * _norm_cdf(-d2) - S * _norm_cdf(-d1)
+
+
+def _bs_delta(S: float, K: float, T: float, sigma: float, option_type: str = "call") -> float:
+    """BS delta (directional probability proxy)."""
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return 1.0 if (option_type == "call" and S > K) else 0.0
+    r = _RISK_FREE_RATE
+    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    return _norm_cdf(d1) if option_type == "call" else _norm_cdf(d1) - 1.0
+
+
+def _strike_increment(price: float) -> float:
+    """Standard options market strike grid by underlying price."""
+    if price < 30:   return 0.50
+    if price < 100:  return 2.50
+    if price < 200:  return 5.0
+    if price < 500:  return 10.0
+    return 25.0
+
+
+def _round_to_strike(target: float, increment: float) -> float:
+    """Snap to the nearest strike on the standard grid."""
+    return round(round(target / increment) * increment, 2)
+
+
+# Extra strikes beyond the UW anchor to step further OTM, by tier.
+_TIER_EXTRA_STEPS = {"Prime": 3, "Strong": 2, "Watch": 1}
+_MIN_DELTA = 0.14   # below this the option is too far OTM for a swing
+_MAX_OTM_PCT = 0.25 # never go more than 25% OTM regardless of tier
 
 # ── Defaults (overridden by swing_config if available) ────────────────────────
 _DEFAULT_CONFIG = {
@@ -125,6 +176,9 @@ class SwingPipeline:
                 dollar_flow = float(flow.get("premium") or 0)
                 iv = float(flow.get("implied_volatility") or 0)
 
+                dte = self._calc_dte(flow.get("expiry"), scan_date) or 0
+                smart = self._select_smart_contract(flow, tech, tier, dte)
+
                 scored.append({
                     "contract_symbol": flow.get("contract_symbol", f"{ticker}_{flow.get('expiry','')}_{flow.get('strike','')}_{flow.get('contract_type','')}"),
                     "scan_date": str(scan_date),
@@ -132,11 +186,12 @@ class SwingPipeline:
                     "strike": float(flow.get("strike") or 0),
                     "expiry": flow.get("expiry"),
                     "side": flow.get("contract_type", ""),
-                    "dte": self._calc_dte(flow.get("expiry"), scan_date),
+                    "dte": dte,
                     "composite_score": composite,
                     "tier": tier,
                     "flow_score": round(flow_score, 1),
                     "setup_score": round(tech_score, 1),
+                    "smart_contract": smart,
                     "breakdown": {
                         "tech": tech,
                         "tech_score": round(tech_score, 1),
@@ -215,75 +270,12 @@ class SwingPipeline:
         return list(best.values())
 
     def _fetch_technical(self, ticker: str) -> dict:
-        try:
-            import yfinance as yf
-            import pandas as pd
-
-            hist = yf.Ticker(ticker).history(period="60d", interval="1d")
-            if hist.empty or len(hist) < 20:
-                return {"error": "insufficient_history", "trend": "unknown"}
-
-            close = hist["Close"]
-
-            ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
-            ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1] if len(close) >= 50 else None
-            ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1] if len(close) >= 200 else None
-            current = float(close.iloc[-1])
-
-            # RSI 14
-            delta = close.diff()
-            gain = delta.clip(lower=0).rolling(14).mean()
-            loss = (-delta.clip(upper=0)).rolling(14).mean()
-            rs = gain / loss.replace(0, float("nan"))
-            rsi = float(100 - 100 / (1 + rs.iloc[-1]))
-
-            # MACD (12, 26, 9)
-            ema12 = close.ewm(span=12, adjust=False).mean()
-            ema26 = close.ewm(span=26, adjust=False).mean()
-            macd_line = ema12 - ema26
-            signal_line = macd_line.ewm(span=9, adjust=False).mean()
-            macd_turning_up = float(macd_line.iloc[-1]) > float(signal_line.iloc[-1])
-
-            # ATR 14
-            high = hist["High"]
-            low = hist["Low"]
-            tr = pd.concat([
-                high - low,
-                (high - close.shift()).abs(),
-                (low - close.shift()).abs(),
-            ], axis=1).max(axis=1)
-            atr = float(tr.rolling(14).mean().iloc[-1])
-
-            # EMA stacking
-            ema_aligned = current > float(ema20)
-            if ema50 is not None:
-                ema_aligned = ema_aligned and float(ema20) > float(ema50)
-            if ema200 is not None:
-                ema_aligned = ema_aligned and (float(ema50 or ema20) > float(ema200))
-
-            # Trend structure (simple: last 10 closes trending)
-            recent = close.iloc[-10:].tolist()
-            highs_rising = recent[-1] > recent[0]
-            trend = "up" if ema_aligned and highs_rising else "sideways" if not ema_aligned and highs_rising else "down"
-
-            # Distance from 20 EMA as %
-            dist_from_ema20_pct = abs(current - float(ema20)) / float(ema20) * 100
-
-            return {
-                "current_price": round(current, 4),
-                "ema20": round(float(ema20), 4),
-                "ema50": round(float(ema50), 4) if ema50 is not None else None,
-                "ema200": round(float(ema200), 4) if ema200 is not None else None,
-                "rsi": round(rsi, 2),
-                "macd_turning_up": macd_turning_up,
-                "atr": round(atr, 4),
-                "trend": trend,
-                "ema_aligned": ema_aligned,
-                "dist_from_ema20_pct": round(dist_from_ema20_pct, 2),
-            }
-        except Exception as e:
-            logger.warning("[SwingPipeline] Technical fetch failed for %s: %s", ticker, e)
-            return {"error": str(e), "trend": "unknown"}
+        from services.technical_service import get_technicals
+        result = get_technicals(ticker)
+        # Alias macd_above_signal → macd_turning_up for scoring compatibility
+        if "macd_above_signal" in result and "macd_turning_up" not in result:
+            result["macd_turning_up"] = result["macd_above_signal"]
+        return result
 
     def _technical_score(self, tech: dict) -> float:
         if tech.get("error"):
@@ -360,6 +352,104 @@ class SwingPipeline:
             return (expiry - from_date).days
         except Exception:
             return None
+
+    # ── Smart contract selection ──────────────────────────────────────────────
+
+    def _select_smart_contract(self, flow: dict, tech: dict, tier: str, dte: int) -> dict:
+        """
+        Suggest a retail-optimised contract: further OTM than the UW anchor for
+        cheaper premium and higher % upside if the directional move plays out.
+
+        Strategy:
+          - The UW anchor strike is what institutions buy (near-ATM, high delta).
+          - Retail gets better risk/reward by stepping OTM: cheaper cost per contract,
+            same DTE, higher % gain if the stock reaches the target.
+          - We step extra_strikes beyond the anchor, then walk back in if the resulting
+            delta falls below _MIN_DELTA (too far OTM = lottery ticket).
+          - Returns the anchor data too so callers can compare both contracts.
+        """
+        S = float(tech.get("current_price") or 0)
+        anchor_K = float(flow.get("strike") or 0)
+        sigma = float(flow.get("implied_volatility") or 0.40)
+        option_type = flow.get("contract_type", "call")
+        T = max(dte / 365.0, 1 / 365.0)
+
+        if S <= 0 or anchor_K <= 0:
+            return {"error": "missing_price_data"}
+
+        inc = _strike_increment(S)
+        extra_steps = _TIER_EXTRA_STEPS.get(tier, 1)
+
+        # Step further OTM from anchor
+        direction = 1 if option_type == "call" else -1
+        smart_K = _round_to_strike(anchor_K + direction * extra_steps * inc, inc)
+
+        # Walk back towards anchor if delta drops below minimum
+        while extra_steps > 0:
+            delta = _bs_delta(S, smart_K, T, sigma, option_type)
+            if abs(delta) >= _MIN_DELTA:
+                break
+            extra_steps -= 1
+            smart_K = _round_to_strike(anchor_K + direction * extra_steps * inc, inc)
+
+        # Hard cap: never go more than _MAX_OTM_PCT from current price
+        max_smart_K = S * (1 + _MAX_OTM_PCT) if option_type == "call" else S * (1 - _MAX_OTM_PCT)
+        if option_type == "call":
+            smart_K = min(smart_K, _round_to_strike(max_smart_K, inc))
+        else:
+            smart_K = max(smart_K, _round_to_strike(max_smart_K, inc))
+
+        # Compute prices and deltas
+        anchor_price  = _bs_price(S, anchor_K, T, sigma, option_type)
+        smart_price   = _bs_price(S, smart_K, T, sigma, option_type)
+        anchor_delta  = _bs_delta(S, anchor_K, T, sigma, option_type)
+        smart_delta   = _bs_delta(S, smart_K, T, sigma, option_type)
+
+        # Upside scenario: stock reaches the 1-standard-deviation BS implied move by expiry.
+        # This is what IV "expects" is possible — a more honest target than the anchor strike
+        # (which may still leave the smart contract OTM).
+        # For calls: target = S + S * sigma * sqrt(T)  (1-sigma up move)
+        # For puts:  target = S - S * sigma * sqrt(T)  (1-sigma down move)
+        implied_move = S * sigma * math.sqrt(T)
+        if option_type == "call":
+            target_price = S + implied_move
+        else:
+            target_price = max(S - implied_move, 0.01)
+
+        # Price the smart contract at the target, with half the DTE remaining
+        gain_scenario_price = _bs_price(target_price, smart_K, T * 0.5, sigma * 0.9, option_type)
+        smart_contract_cost  = smart_price * 100
+        anchor_contract_cost = anchor_price * 100
+        potential_gain_amt   = max(gain_scenario_price - smart_price, 0) * 100
+        potential_gain_pct   = (potential_gain_amt / smart_contract_cost * 100) if smart_contract_cost > 0 else 0
+
+        otm_pct = abs(smart_K - S) / S * 100
+        savings_pct = ((anchor_price - smart_price) / anchor_price * 100) if anchor_price > 0 else 0
+
+        # Build a plain-English rationale
+        rationale_parts = [
+            f"UW flagged the ${anchor_K:.0f}{option_type[0].upper()} (${anchor_price:.2f} = ${anchor_contract_cost:.0f}/contract, delta {abs(anchor_delta):.2f}).",
+            f"Stepping {extra_steps} strike{'s' if extra_steps != 1 else ''} further OTM → ${smart_K:.0f}{option_type[0].upper()} (${smart_price:.2f} = ${smart_contract_cost:.0f}/contract) — {savings_pct:.0f}% cheaper.",
+            f"Delta {abs(smart_delta):.2f} keeps this directional, not a lottery ticket.",
+            f"IV implies {flow.get('ticker','')} could reach ~${target_price:.0f} by expiry (1-sigma move); at that price this contract est. +{potential_gain_pct:.0f}% (${potential_gain_amt:.0f}/contract).",
+        ]
+
+        return {
+            "anchor_strike":        anchor_K,
+            "anchor_premium":       round(anchor_price, 2),
+            "anchor_cost_per_contract": round(anchor_contract_cost, 2),
+            "anchor_delta":         round(abs(anchor_delta), 3),
+            "smart_strike":         smart_K,
+            "smart_premium":        round(smart_price, 2),
+            "smart_cost_per_contract": round(smart_contract_cost, 2),
+            "smart_delta":          round(abs(smart_delta), 3),
+            "smart_otm_pct":        round(otm_pct, 1),
+            "extra_steps_taken":    extra_steps,
+            "potential_gain_pct":   round(potential_gain_pct, 1),
+            "potential_gain_amt":   round(potential_gain_amt, 2),
+            "savings_vs_anchor":    round(anchor_contract_cost - smart_contract_cost, 2),
+            "rationale":            " ".join(rationale_parts),
+        }
 
     # ── Persistence ───────────────────────────────────────────────────────────
 

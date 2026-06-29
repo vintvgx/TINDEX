@@ -5,6 +5,8 @@ import { AnimatedNumber } from './AnimatedNumber';
 import { GapTrendBadges } from './GapTrendBadges';
 import type { GapTrendContext } from '@/common/types/orb';
 import { useThemeColors } from '@/lib/useColorScheme';
+import { useTickerTechnicals } from '@/hooks/queries/technicals/useTickerTechnicals';
+import { EMAZoneBadge } from '@/common/components/shared/EMAZoneBadge';
 
 export interface FlowSummary {
   callPct: number;
@@ -37,6 +39,7 @@ const getBreakoutColor = (breakoutType: string, colors: ReturnType<typeof useThe
 
 export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullWidth = false, livePrice, flowSummary }) => {
   const colors = useThemeColors();
+  const { data: tech } = useTickerTechnicals(data.ticker);
 
   const orbHigh = data.orb_high ?? 0;
   const orbLow = data.orb_low ?? 0;
@@ -80,11 +83,14 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
         elevation: 3,
       }}
     >
-      {/* Header: Ticker + breakout badge */}
+      {/* Header: Ticker + EMA zone + breakout badge */}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-        <Text style={{ color: colors.text, fontSize: 18, fontWeight: '700', letterSpacing: -0.3 }}>
-          {data.ticker}
-        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text style={{ color: colors.text, fontSize: 18, fontWeight: '700', letterSpacing: -0.3 }}>
+            {data.ticker}
+          </Text>
+          {tech?.zone && <EMAZoneBadge zone={tech.zone} size="sm" />}
+        </View>
         {hasBreakout && (
           <View style={{ alignItems: 'flex-end', gap: 4 }}>
             <View
