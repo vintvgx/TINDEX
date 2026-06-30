@@ -90,6 +90,7 @@ class SwingExitManager:
         self.profile_name = profile_name
 
         self.entry_price: float = float(position_data.get("entry_price") or 0)
+        self.entry_underlying_price: float = float(position_data.get("entry_underlying_price") or 0)
         self.qty_total: int = int(position_data.get("qty") or 0)
         self.qty_remaining: int = int(position_data.get("qty_remaining", self.qty_total))
         self.tp1_hit: bool = bool(position_data.get("tp1_hit", False))
@@ -166,13 +167,20 @@ class SwingExitManager:
 
         if stop_type == "atr":
             mult = self.profile.get("stop_atr_mult", 2.0)
-            stop_level = self.entry_price - (atr * mult * 0.01 * self.entry_price)  # ATR as % of premium proxy
-            if current_premium <= max(stop_level, 0.01):
-                return self._exit(
-                    exit_type="HARD_STOP",
-                    qty=self.qty_remaining,
-                    reason=f"ATR stop hit: premium ${current_premium:.4f} ≤ ${stop_level:.4f} ({mult}×ATR)",
-                )
+            # Stop fires when the UNDERLYING drops mult×ATR below entry underlying price.
+            # Comparing option premium to ATR directly is meaningless — ATR lives on the
+            # stock price scale, not the option premium scale.
+            if self.entry_underlying_price > 0 and atr > 0:
+                underlying_stop = self.entry_underlying_price - (atr * mult)
+                if current_underlying_price <= underlying_stop:
+                    return self._exit(
+                        exit_type="HARD_STOP",
+                        qty=self.qty_remaining,
+                        reason=(
+                            f"ATR stop hit: underlying ${current_underlying_price:.2f} ≤ "
+                            f"${underlying_stop:.2f} (entry ${self.entry_underlying_price:.2f} − {mult}×ATR ${atr:.2f})"
+                        ),
+                    )
 
         elif stop_type == "fixed_pct":
             pct = self.profile.get("stop_fixed_pct", 0.20)

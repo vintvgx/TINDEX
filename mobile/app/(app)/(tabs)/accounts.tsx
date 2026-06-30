@@ -6,8 +6,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useAlpacaBothAccounts, useAlpacaAccountsHistory } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { useAlpacaAccountsHistory } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import type { AccountHistoryEntry } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { useAccountValueDisplay } from '@/hooks/queries/strategy/useAccountValueDisplay';
 
 type Period = 'today' | 'week' | 'month';
 
@@ -30,16 +31,16 @@ export default function AccountsScreen() {
   const [period, setPeriod] = useState<Period>('today');
   const [manualRefreshing, setManualRefreshing] = useState(false);
 
-  const { data: both, isLoading: bothLoading, refetch: refetchBoth } = useAlpacaBothAccounts();
+  const { paper: paperDisplay, live: liveDisplay, has_open_positions } = useAccountValueDisplay();
   const { data: history, isLoading: histLoading, refetch: refetchHistory } = useAlpacaAccountsHistory();
 
-  const isLoading = bothLoading || histLoading;
+  const isLoading = histLoading && !paperDisplay && !liveDisplay;
 
   const handlePullRefresh = useCallback(async () => {
     setManualRefreshing(true);
-    await Promise.all([refetchBoth(), refetchHistory()]);
+    await refetchHistory();
     setManualRefreshing(false);
-  }, [refetchBoth, refetchHistory]);
+  }, [refetchHistory]);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -98,7 +99,7 @@ export default function AccountsScreen() {
               label="Paper Trading"
               subtitle="Simulated — no real money"
               accentColor="#FF9F0A"
-              account={both?.paper}
+              account={paperDisplay}
               history={history?.paper}
               period={period}
               colors={colors}
@@ -109,17 +110,27 @@ export default function AccountsScreen() {
               label="Live Trading"
               subtitle="Real money — trade with caution"
               accentColor={colors.success}
-              account={both?.live}
+              account={liveDisplay}
               history={history?.live}
               period={period}
               colors={colors}
             />
 
-            {/* P&L comparison — only shown for today since we have both values readily */}
-            {period === 'today' && both?.paper?.available && both?.live?.available && (
+            {/* Live indicator when positions are open */}
+            {has_open_positions && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4 }}>
+                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#10B981' }} />
+                <Text style={{ color: colors.tabBarInactive, fontSize: 11 }}>
+                  Equity updating every 5 s from live positions
+                </Text>
+              </View>
+            )}
+
+            {/* P&L comparison — only shown for today */}
+            {period === 'today' && paperDisplay?.available && liveDisplay?.available && (
               <ComparisonCard
-                paper={both.paper}
-                live={both.live}
+                paper={paperDisplay}
+                live={liveDisplay}
                 colors={colors}
               />
             )}
@@ -147,7 +158,18 @@ interface AccountCardProps {
   label: string;
   subtitle: string;
   accentColor: string;
-  account?: { available: boolean; equity?: number; cash?: number; buying_power?: number; pnl_today?: number; pnl_today_pct?: number; day_trade_count?: number; error?: string };
+  account?: {
+    available: boolean;
+    equity?: number;
+    cash?: number;
+    buying_power?: number;
+    pnl_today?: number;
+    pnl_today_pct?: number;
+    day_trade_count?: number;
+    live_derived?: boolean;
+    total_unrealized_pl?: number;
+    error?: string;
+  };
   history?: AccountHistoryEntry;
   period: Period;
   colors: any;
@@ -191,9 +213,24 @@ const AccountCard: React.FC<AccountCardProps> = ({
       ) : (
         <>
           {/* Main equity */}
-          <Text style={[styles.equity, { color: colors.text }]}>
-            ${(account?.equity ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
+            <Text style={[styles.equity, { color: colors.text }]}>
+              ${(account?.equity ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            </Text>
+            {account?.live_derived && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: '#10B981' }} />
+                <Text style={{ color: colors.tabBarInactive, fontSize: 10 }}>LIVE</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Unrealized P&L from open positions */}
+          {account?.live_derived && account.total_unrealized_pl !== undefined && (
+            <Text style={{ color: account.total_unrealized_pl >= 0 ? colors.success : colors.error, fontSize: 13, fontWeight: '600', marginTop: -4 }}>
+              {account.total_unrealized_pl >= 0 ? '+' : ''}${account.total_unrealized_pl.toFixed(2)} unrealized
+            </Text>
+          )}
 
           {/* P&L for selected period */}
           {hasHistoryData ? (

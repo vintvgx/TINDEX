@@ -52,6 +52,7 @@ const SECTIONS: NavSection[] = [
   {
     title: 'ORB Trading',
     items: [
+      { label: '0DTE Watchlist', route: '/(app)/(tabs)/zero_dte_watchlist' },
       { label: 'Accounts', route: '/(app)/(tabs)/accounts' },
       { label: 'Strategy Control', route: '/(app)/(tabs)/strategy' },
       { label: 'Live Position', route: '/(app)/(tabs)/position' },

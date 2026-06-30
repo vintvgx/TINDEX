@@ -764,6 +764,61 @@ def get_accounts_history():
     })
 
 
+@strategy_bp.route("/accounts/positions", methods=["GET"])
+def get_alpaca_positions():
+    """
+    Fast endpoint: open position market values for paper and/or live.
+
+    Called every 5 s by the mobile app when positions are active so the UI
+    can derive a live equity without waiting for the slower /accounts/both poll.
+
+      displayEquity = cash + sum(position.market_value)
+
+    cash is stable mid-trade; position.market_value ticks with options quotes.
+    ?mode=paper | live | both  (default: both)
+    """
+    import os
+    from alpaca.trading.client import TradingClient
+
+    mode = request.args.get("mode", "both")
+
+    def _fetch(paper: bool) -> dict:
+        try:
+            key    = os.getenv("ALPACA_PAPER_API_KEY" if paper else "ALPACA_LIVE_API_KEY")
+            secret = os.getenv("ALPACA_PAPER_SECRET_KEY" if paper else "ALPACA_LIVE_SECRET_KEY")
+            client = TradingClient(key, secret, paper=paper)
+            raw    = client.get_all_positions()
+            positions = [
+                {
+                    "symbol":           str(p.symbol),
+                    "qty":              float(p.qty or 0),
+                    "side":             str(p.side),
+                    "market_value":     float(p.market_value or 0),
+                    "unrealized_pl":    float(p.unrealized_pl or 0),
+                    "unrealized_plpc":  float(p.unrealized_plpc or 0),
+                    "current_price":    float(p.current_price or 0),
+                    "avg_entry_price":  float(p.avg_entry_price or 0),
+                }
+                for p in raw
+            ]
+            return {
+                "available":           True,
+                "positions":           positions,
+                "total_market_value":  sum(p["market_value"]   for p in positions),
+                "total_unrealized_pl": sum(p["unrealized_pl"]  for p in positions),
+            }
+        except Exception as e:
+            logger.warning("[accounts/positions] paper=%s %s", paper, e)
+            return {"available": False, "positions": [], "total_market_value": 0, "total_unrealized_pl": 0, "error": str(e)}
+
+    result: dict = {"success": True}
+    if mode in ("paper", "both"):
+        result["paper"] = _fetch(True)
+    if mode in ("live", "both"):
+        result["live"] = _fetch(False)
+    return jsonify(result)
+
+
 # ── Trade history / Stats ──────────────────────────────────────────────────────
 
 @strategy_bp.route("/data/reset", methods=["POST"])
@@ -894,6 +949,43 @@ def run_simulation():
     }), 202
 
 
+
+
+# ── Manual review trigger ─────────────────────────────────────────────────────
+
+@strategy_bp.route("/review/generate", methods=["POST"])
+def trigger_review():
+    """
+    Manually generate (or re-generate) the daily performance review.
+    Body: { "date": "YYYY-MM-DD" }  — defaults to today if omitted.
+    Useful when the 4:15 PM scheduler missed due to a Railway restart.
+    """
+    from datetime import date as _date
+    from services.strategy.review_generator import ReviewGenerator
+    from services.supabase.supabase_service import get_supabase_service
+
+    body = request.get_json(silent=True) or {}
+    date_str = body.get("date")
+    try:
+        session_date = _date.fromisoformat(date_str) if date_str else _date.today()
+    except ValueError:
+        return jsonify({"success": False, "error": f"Invalid date: {date_str}"}), 400
+
+    try:
+        sb = get_supabase_service().client
+        gen = ReviewGenerator(sb)
+        content, meta = gen.generate(session_date)
+        trades = gen._fetch_trades(session_date)
+        gen.save_to_supabase(session_date, content, trades, meta)
+        return jsonify({
+            "success": True,
+            "date": str(session_date),
+            "meta": meta,
+            "preview": content[:500] + ("..." if len(content) > 500 else ""),
+        })
+    except Exception as e:
+        logger.error("[strategy/review/generate] Failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ── EMA / Technical data ──────────────────────────────────────────────────────

@@ -39,8 +39,8 @@ export function useAlpacaBothAccounts(enabled: boolean = true) {
       return json as BothAccountsResponse;
     },
     enabled,
-    refetchInterval: 30_000,
-    staleTime: 20_000,
+    refetchInterval: 60_000,
+    staleTime: 55_000,
     retry: 1,
   });
 }

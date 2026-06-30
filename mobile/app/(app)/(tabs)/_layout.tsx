@@ -60,6 +60,7 @@ function Shell() {
             <Tabs.Screen name="position" options={{ href: null }} />
             <Tabs.Screen name="tradelog" options={{ href: null }} />
             <Tabs.Screen name="accounts" options={{ href: null }} />
+            <Tabs.Screen name="zero_dte_watchlist" options={{ href: null }} />
           </Tabs>
         </SafeAreaInsetsContext.Provider>
       </View>
