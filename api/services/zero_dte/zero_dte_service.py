@@ -269,4 +269,8 @@ def get_zero_dte_scanner(supabase_client=None) -> ZeroDTEScanner:
     global _scanner_instance
     if _scanner_instance is None:
         _scanner_instance = ZeroDTEScanner(supabase_client)
+    elif supabase_client is not None and _scanner_instance._sb is None:
+        # Adopt a client if the instance was first created without one,
+        # otherwise persistence would silently never happen.
+        _scanner_instance._sb = supabase_client
     return _scanner_instance

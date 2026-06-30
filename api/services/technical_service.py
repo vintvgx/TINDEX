@@ -1,3 +1,4 @@
+import threading
 import time
 import logging
 from datetime import datetime, timezone
@@ -5,12 +6,18 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 _cache: dict = {}
+_cache_lock = threading.Lock()
 _CACHE_TTL_SECONDS = 8 * 3600
 
 
-def _compute_zone(current: float, ema20: float, ema50, ema200, rsi, macd_above_signal: bool, dist_pct: float) -> str:
+def _compute_zone(
+    current: float, ema20: float, ema50, ema200,
+    rsi, macd_above_signal: bool, dist_pct: float,
+) -> str:
+    # Bearish: price below its own 20-day EMA, or short-term EMA crossed below mid-term
     if current < ema20 or (ema50 is not None and ema20 < ema50):
         return "bearish"
+    # Extended: only to the upside (current > ema20 already guaranteed by the bearish check above)
     if dist_pct > 8.0:
         return "extended"
     if (ema50 is None or ema20 > ema50) and rsi is not None and 35 <= rsi <= 70 and macd_above_signal:
@@ -22,9 +29,10 @@ def get_technicals(ticker: str, force_refresh: bool = False) -> dict:
     ticker = ticker.upper().strip()
     now = time.time()
 
-    if not force_refresh and ticker in _cache:
-        entry = _cache[ticker]
-        if now - entry["fetched_at"] < _CACHE_TTL_SECONDS:
+    if not force_refresh:
+        with _cache_lock:
+            entry = _cache.get(ticker)
+        if entry and now - entry["fetched_at"] < _CACHE_TTL_SECONDS:
             return entry["data"]
 
     try:
@@ -42,16 +50,22 @@ def get_technicals(ticker: str, force_refresh: bool = False) -> dict:
         ema50  = float(close.ewm(span=50,  adjust=False).mean().iloc[-1]) if len(close) >= 50  else None
         ema200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1]) if len(close) >= 200 else None
 
+        # RSI-14: guard against loss=0 (all-gain window) producing nan via 0/nan
         delta = close.diff()
         gain  = delta.clip(lower=0).rolling(14).mean()
         loss  = (-delta.clip(upper=0)).rolling(14).mean()
         rs    = gain / loss.replace(0, float("nan"))
-        rsi   = float(100 - 100 / (1 + rs.iloc[-1]))
+        rs_val = float(rs.iloc[-1])
+        if pd.isna(rs_val):
+            # loss was 0 — pure uptrend → RSI 100; completely flat → 50
+            rsi: float | None = 100.0 if float(gain.iloc[-1]) > 0 else 50.0
+        else:
+            rsi = float(100 - 100 / (1 + rs_val))
 
         ema12 = close.ewm(span=12, adjust=False).mean()
         ema26 = close.ewm(span=26, adjust=False).mean()
-        macd_line   = ema12 - ema26
-        signal_line = macd_line.ewm(span=9, adjust=False).mean()
+        macd_line        = ema12 - ema26
+        signal_line      = macd_line.ewm(span=9, adjust=False).mean()
         macd_above_signal = float(macd_line.iloc[-1]) > float(signal_line.iloc[-1])
         macd_value        = round(float(macd_line.iloc[-1]), 4)
 
@@ -64,15 +78,25 @@ def get_technicals(ticker: str, force_refresh: bool = False) -> dict:
         ], axis=1).max(axis=1)
         atr = float(tr.rolling(14).mean().iloc[-1])
 
+        # EMA alignment: full bull stack = price > EMA20 > EMA50 > EMA200
+        # Bug fix: use explicit None-check for the fallback, not Python truthiness.
+        # (ema50 or ema20) would silently evaluate to ema50 for any nonzero float,
+        # making the ema20 fallback dead code except when ema50 == 0.0 exactly.
         ema_aligned = current > ema20
-        if ema50  is not None: ema_aligned = ema_aligned and ema20 > ema50
-        if ema200 is not None: ema_aligned = ema_aligned and (ema50 or ema20) > ema200
+        if ema50  is not None:
+            ema_aligned = ema_aligned and ema20 > ema50
+        if ema200 is not None:
+            mid = ema50 if ema50 is not None else ema20
+            ema_aligned = ema_aligned and mid > ema200
 
+        # Net-direction over 10 sessions (two single data points, not a highs/lows check).
+        # Named accurately to avoid misleading callers.
         recent = close.iloc[-10:].tolist()
-        highs_rising = recent[-1] > recent[0]
-        if ema_aligned and highs_rising:
+        close_net_rising = recent[-1] > recent[0]
+
+        if ema_aligned and close_net_rising:
             trend = "up"
-        elif not ema_aligned and not highs_rising:
+        elif not ema_aligned and not close_net_rising:
             trend = "down"
         else:
             trend = "sideways"
@@ -96,7 +120,10 @@ def get_technicals(ticker: str, force_refresh: bool = False) -> dict:
             "zone":                zone,
             "last_fetched_utc":    datetime.now(timezone.utc).isoformat(),
         }
-        _cache[ticker] = {"data": result, "fetched_at": now}
+
+        with _cache_lock:
+            _cache[ticker] = {"data": result, "fetched_at": now}
+
         return result
 
     except Exception as e:

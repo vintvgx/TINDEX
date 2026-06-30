@@ -19,7 +19,7 @@ export function useEnterZeroDTEPosition() {
     }) => {
       const resp = await fetch(`${RAILWAY_BASE_URL}/zero-dte/positions/enter`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
+        headers: await getAuthHeaders(),
         body: JSON.stringify(payload),
       });
       const json = await resp.json();
@@ -42,7 +42,7 @@ export function useExitZeroDTEPosition() {
       const { position_id, ...body } = payload;
       const resp = await fetch(`${RAILWAY_BASE_URL}/zero-dte/positions/${position_id}/exit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(await getAuthHeaders()) },
+        headers: await getAuthHeaders(),
         body: JSON.stringify(body),
       });
       const json = await resp.json();

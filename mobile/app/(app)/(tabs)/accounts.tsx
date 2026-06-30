@@ -169,7 +169,7 @@ interface AccountCardProps {
     live_derived?: boolean;
     total_unrealized_pl?: number;
     error?: string;
-  };
+  } | null;
   history?: AccountHistoryEntry;
   period: Period;
   colors: any;

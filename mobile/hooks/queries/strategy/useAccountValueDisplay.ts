@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useAlpacaBothAccounts } from './useAlpacaAccounts';
 import { useAlpacaPositionValues } from './useAlpacaPositionValues';
 
@@ -38,14 +38,31 @@ export interface AccountValueDisplay {
  *
  * When no positions are open, positions returns [] in <100 ms and we fall back
  * to the cached account equity — no wasted computation.
+ *
+ * Transition skew: cash and position market value are polled on different clocks,
+ * so right after an open or close the two are briefly inconsistent (cash lags by
+ * up to one slow-poll interval). We mitigate by force-refetching the account poll
+ * the moment the open-position count changes, re-syncing cash within ~1 round trip.
  */
 export function useAccountValueDisplay(): AccountValueDisplay {
   // Slow: full account data (equity, cash, PnL). Increase interval — we no longer
   // depend on it for live equity when positions are open.
-  const { data: accountData } = useAlpacaBothAccounts();
+  const { data: accountData, refetch: refetchAccount } = useAlpacaBothAccounts();
 
   // Fast: position market values. Always enabled; Alpaca returns [] quickly when empty.
   const { data: posData } = useAlpacaPositionValues('both', { refetchIntervalMs: 5_000 });
+
+  // Re-sync cash immediately when a position is opened or closed, so the
+  // cash + market_value formula doesn't show a stale equity during the transition.
+  const prevCount = useRef<number | null>(null);
+  const positionCount =
+    (posData?.paper?.positions?.length ?? 0) + (posData?.live?.positions?.length ?? 0);
+  useEffect(() => {
+    if (prevCount.current !== null && prevCount.current !== positionCount) {
+      refetchAccount();
+    }
+    prevCount.current = positionCount;
+  }, [positionCount, refetchAccount]);
 
   const paper = useMemo((): AccountDisplayValue | null => {
     const acct = accountData?.paper;
