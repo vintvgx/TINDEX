@@ -456,6 +456,18 @@ class SwingPipeline:
     def _persist(self, scan_date, surfaced, errors, uw_raw, swing_elig, candidates, scored_count, surfaced_count, duration):
         if not self._sb:
             return
+
+        # Remove expired contracts and scores older than 14 days before writing new results
+        try:
+            today_str = str(scan_date)
+            cutoff_str = str(scan_date - timedelta(days=14))
+            expired = self._sb.table("swing_scores").delete().lt("expiry", today_str).execute()
+            stale   = self._sb.table("swing_scores").delete().lt("scan_date", cutoff_str).execute()
+            logger.info("[SwingPipeline] Cleanup: removed expired=%s stale=%s rows",
+                        len(expired.data or []), len(stale.data or []))
+        except Exception as e:
+            logger.warning("[SwingPipeline] Cleanup failed (non-fatal): %s", e)
+
         try:
             for item in surfaced:
                 self._sb.table("swing_scores").upsert(

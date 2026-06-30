@@ -27,6 +27,9 @@ def _compute_zone(
 
 def get_technicals(ticker: str, force_refresh: bool = False) -> dict:
     ticker = ticker.upper().strip()
+    # Index tickers like $SPX, $RUT use exchange-internal symbols yfinance cannot resolve.
+    if ticker.startswith("$"):
+        return {"error": "index_ticker_unsupported", "ticker": ticker, "trend": "unknown"}
     now = time.time()
 
     if not force_refresh:
@@ -78,16 +81,14 @@ def get_technicals(ticker: str, force_refresh: bool = False) -> dict:
         ], axis=1).max(axis=1)
         atr = float(tr.rolling(14).mean().iloc[-1])
 
-        # EMA alignment: full bull stack = price > EMA20 > EMA50 > EMA200
-        # Bug fix: use explicit None-check for the fallback, not Python truthiness.
-        # (ema50 or ema20) would silently evaluate to ema50 for any nonzero float,
-        # making the ema20 fallback dead code except when ema50 == 0.0 exactly.
-        ema_aligned = current > ema20
-        if ema50  is not None:
-            ema_aligned = ema_aligned and ema20 > ema50
-        if ema200 is not None:
+        # EMA alignment: is the medium-term trend above the long-term baseline?
+        # (EMA50 > EMA200, falling back to EMA20 when EMA50 is unavailable)
+        # Uses explicit None-check so the ema20 fallback fires when ema50 is absent,
+        # not only when ema50 == 0.0 (the Python-truthiness pitfall in the original).
+        ema_aligned = ema20 is not None
+        if ema_aligned and ema200 is not None:
             mid = ema50 if ema50 is not None else ema20
-            ema_aligned = ema_aligned and mid > ema200
+            ema_aligned = mid > ema200
 
         # Net-direction over 10 sessions (two single data points, not a highs/lows check).
         # Named accurately to avoid misleading callers.

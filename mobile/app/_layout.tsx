@@ -32,6 +32,11 @@ import LoadingScreen from "@/common/components/LoadingScreen";
 import { ToastProvider } from "@/common/components/ui/Toast";
 import { FONT_ASSETS } from "@/lib/typography";
 
+import { applyGlobalFont } from "@/lib/applyGlobalFont";
+
+// Install Space Grotesk as the app-wide default for every <Text>/<TextInput>.                                                                                                                                  
+applyGlobalFont();
+
 // import { GluestackUIProvider } from "../components/ui/gluestack-ui-provider";
 // import LoadingScreen from "./components/LoadingScreen";
 import { Slot } from "expo-router";
@@ -115,12 +120,12 @@ function AppContent() {
   // Initialize notification response handler
   useEffect(() => {
     // Set up the listener
-    notificationResponseListener.current = 
+    notificationResponseListener.current =
       Notifications.addNotificationResponseReceivedListener(response => {
         const data = response.notification.request.content.data;
         const title = response.notification.request.content.title;
         const body = response.notification.request.content.body;
-        
+
         // Handle ORB breakout notifications
         if (data.type === 'orb_breakout' || data.type === 'orb_breakout_confirmed' || data.type === 'orb_breakout_invalidated') {
           // Navigate to feed screen with notification data
@@ -158,7 +163,7 @@ function AppContent() {
           });
           return;
         }
-        
+
         // Handle contract price alert notifications
         if (data.type === 'contract_price_alert') {
           router.push('/(app)/(tabs)/options');

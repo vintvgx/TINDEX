@@ -1,5 +1,5 @@
-import { View, Text, SafeAreaView, TouchableOpacity } from 'react-native';
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { Component, useState, useMemo, useEffect, useCallback } from 'react';
+import { View, Text, SafeAreaView, TouchableOpacity, ScrollView } from 'react-native';
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { MarketPulseStrip } from '@/common/components/orb/MarketPulseStrip';
 import * as SecureStore from 'expo-secure-store';
@@ -19,10 +19,37 @@ import { useStartServices, useStopServices } from '@/hooks/mutations/services/us
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useToast } from '@/common/components/ui/Toast';
 
+class ORBErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null };
+  static getDerivedStateFromError(e: Error) { return { error: e }; }
+  render() {
+    if (this.state.error) {
+      const err = this.state.error as Error;
+      return (
+        <ScrollView style={{ flex: 1, backgroundColor: '#0a0a0a', padding: 20 }}>
+          <Text style={{ color: '#ef4444', fontSize: 16, fontWeight: '700', marginTop: 60 }}>ORB Crash Caught</Text>
+          <Text style={{ color: '#f1f5f9', fontSize: 13, marginTop: 12, fontFamily: 'monospace' }}>{err.message}</Text>
+          <Text style={{ color: '#94a3b8', fontSize: 10, marginTop: 12, fontFamily: 'monospace' }}>{err.stack}</Text>
+        </ScrollView>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const ORB_GRID_LAYOUT_KEY = '@alethia/orb_grid_layout';
 
 const ORBScreen = () => {
+  console.log('[ORB] render start');
+
+  console.log('[ORB] calling useThemeColors');
   const colors = useThemeColors();
+  console.log('[ORB] useThemeColors OK');
+
+  console.log('[ORB] calling useState x6');
   const [watchlistsModalVisible, setWatchlistsModalVisible] = useState(false);
   const [logViewerVisible, setLogViewerVisible] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
@@ -33,7 +60,11 @@ const ORBScreen = () => {
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [lastFetchTime, setLastFetchTime] = useState<Date | null>(null);
   const [gridLayout, setGridLayout] = useState<ORBGridLayout>('1x1');
+  console.log('[ORB] useState OK');
+
+  console.log('[ORB] calling useToast');
   const toast = useToast();
+  console.log('[ORB] useToast OK');
 
   useEffect(() => {
     let mounted = true;
@@ -41,7 +72,9 @@ const ORBScreen = () => {
       try {
         const saved = await SecureStore.getItemAsync(ORB_GRID_LAYOUT_KEY);
         if (mounted && (saved === '2x2' || saved === '1x1')) setGridLayout(saved);
-      } catch {}
+      } catch (e) {
+        console.error('[ORB] SecureStore read error:', e);
+      }
     })();
     return () => { mounted = false; };
   }, []);
@@ -55,23 +88,33 @@ const ORBScreen = () => {
     }
   }, []);
 
+  console.log('[ORB] calling useORBMonitoringState');
   const { data: orbData, isLoading: orbLoading } = useORBMonitoringState(useMockData, useCalculationMockData);
-  const { rangesByTicker } = useORBRanges(useMockData || useCalculationMockData);
+  console.log('[ORB] useORBMonitoringState OK — orbData length:', orbData?.length ?? 'undefined');
 
-  // Unified service status — shared cache with Options screen (React Query deduplicates)
+  console.log('[ORB] calling useORBRanges');
+  const { rangesByTicker } = useORBRanges(useMockData || useCalculationMockData);
+  console.log('[ORB] useORBRanges OK');
+
+  console.log('[ORB] calling useServicesStatus');
   const { data: servicesStatus } = useServicesStatus();
+  console.log('[ORB] useServicesStatus OK');
   const isORBRunning       = servicesStatus?.orb?.running ?? false;
   const isContractsRunning = servicesStatus?.contracts?.running ?? false;
   const anyServiceRunning    = isORBRunning || isContractsRunning;
 
-  // Extract tickers for live price streaming
   const orbTickers = useMemo(
     () => (orbData ?? []).map(item => item.ticker),
     [orbData],
   );
 
+  console.log('[ORB] calling useMarketStream, tickers:', orbTickers.length);
   const { livePrices, vix, spy, sentiment, connected } = useMarketStream(orbTickers);
+  console.log('[ORB] useMarketStream OK');
+
+  console.log('[ORB] calling useORBFlowSummaries');
   const flowSummaries = useORBFlowSummaries(orbTickers);
+  console.log('[ORB] useORBFlowSummaries OK');
 
   const transformedORBData = useMemo(() => {
     if (!orbData) return [];
@@ -89,9 +132,16 @@ const ORBScreen = () => {
     return transformedORBData.find((item) => item.ticker === selectedTicker) || null;
   }, [selectedTicker, transformedORBData]);
 
+  console.log('[ORB] calling useStartServices / useStopServices');
   const startServices = useStartServices();
   const stopServices  = useStopServices();
+  console.log('[ORB] services mutations OK');
+
+  console.log('[ORB] calling useBaseNavigation');
   const { toTicker }  = useBaseNavigation();
+  console.log('[ORB] useBaseNavigation OK');
+
+  console.log('[ORB] hooks complete — entering render');
 
   const handleCardPress = (data: ORBMonitoringState) => {
     setSelectedTicker(data.ticker);
@@ -229,4 +279,10 @@ const ORBScreen = () => {
   );
 };
 
-export default ORBScreen;
+export default function ORBScreenWithBoundary() {
+  return (
+    <ORBErrorBoundary>
+      <ORBScreen />
+    </ORBErrorBoundary>
+  );
+}
