@@ -104,26 +104,49 @@ export default function ZeroDTEWatchlistScreen() {
           </Text>
         </View>
 
-        <TouchableOpacity
-          onPress={handleRunScan}
-          disabled={scanMutation.isPending}
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 18,
-            backgroundColor: colors.iconButton,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderWidth: 1,
-            borderColor: colors.iconButtonBorder,
-            marginBottom: 2,
-          }}
-        >
-          {scanMutation.isPending
-            ? <ActivityIndicator size="small" color={colors.text} />
-            : <Ionicons name="refresh" size={18} color={colors.text} />
-          }
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+          {/* Fetch latest from Supabase */}
+          <TouchableOpacity
+            onPress={() => refetch()}
+            disabled={isFetching}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: colors.iconButton,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderWidth: 1,
+              borderColor: colors.iconButtonBorder,
+            }}
+          >
+            {isFetching && !isLoading
+              ? <ActivityIndicator size="small" color={colors.text} />
+              : <Ionicons name="cloud-download-outline" size={18} color={colors.text} />
+            }
+          </TouchableOpacity>
+
+          {/* Run a new scan */}
+          <TouchableOpacity
+            onPress={handleRunScan}
+            disabled={scanMutation.isPending}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: colors.iconButton,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderWidth: 1,
+              borderColor: colors.iconButtonBorder,
+            }}
+          >
+            {scanMutation.isPending
+              ? <ActivityIndicator size="small" color={colors.text} />
+              : <Ionicons name="refresh" size={18} color={colors.text} />
+            }
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* ── Status bar ── */}
