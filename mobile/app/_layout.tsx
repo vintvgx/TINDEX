@@ -31,10 +31,6 @@ import "@/common/services/LogService";
 import LoadingScreen from "@/common/components/LoadingScreen";
 import { ToastProvider } from "@/common/components/ui/Toast";
 import { FONT_ASSETS } from "@/lib/typography";
-import { applyGlobalFont } from "@/lib/applyGlobalFont";
-
-// Install Space Grotesk as the app-wide default for every <Text>/<TextInput>.
-applyGlobalFont();
 
 // import { GluestackUIProvider } from "../components/ui/gluestack-ui-provider";
 // import LoadingScreen from "./components/LoadingScreen";
