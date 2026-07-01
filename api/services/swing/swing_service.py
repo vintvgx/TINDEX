@@ -483,12 +483,16 @@ class SwingPipeline:
         except Exception as e:
             logger.warning("[SwingPipeline] Cleanup failed (non-fatal): %s", e)
 
+        _SWING_SCORES_COLS = {
+            "contract_symbol", "scan_date", "ticker", "strike", "expiry",
+            "side", "dte", "composite_score", "tier", "flow_score", "setup_score",
+            "breakdown", "premium", "iv_pct", "vol", "oi", "vol_oi",
+            "dollar_flow", "pct_at_ask", "is_sweep", "is_floor", "unusual_score",
+        }
         try:
-            for item in surfaced:
-                self._sb.table("swing_scores").upsert(
-                    {k: v for k, v in item.items()},
-                    on_conflict="contract_symbol,scan_date",
-                ).execute()
+            rows = [{k: v for k, v in item.items() if k in _SWING_SCORES_COLS} for item in surfaced]
+            if rows:
+                self._sb.table("swing_scores").upsert(rows, on_conflict="contract_symbol,scan_date").execute()
         except Exception as e:
             logger.error("[SwingPipeline] Failed to persist swing_scores: %s", e)
 
