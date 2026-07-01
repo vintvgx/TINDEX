@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { AnimatedNumber } from './AnimatedNumber';
@@ -7,6 +7,8 @@ import type { GapTrendContext } from '@/common/types/orb';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useTickerTechnicals } from '@/hooks/queries/technicals/useTickerTechnicals';
 import { EMAZoneBadge } from '@/common/components/shared/EMAZoneBadge';
+import { Ionicons } from '@expo/vector-icons';
+import { FlowAboutModal } from './FlowAboutModal';
 
 export interface FlowSummary {
   callPct: number;
@@ -40,6 +42,7 @@ const getBreakoutColor = (breakoutType: string, colors: ReturnType<typeof useThe
 export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullWidth = false, livePrice, flowSummary }) => {
   const colors = useThemeColors();
   const { data: tech } = useTickerTechnicals(data.ticker);
+  const [showFlowAbout, setShowFlowAbout] = useState(false);
 
   const orbHigh = data.orb_high ?? 0;
   const orbLow = data.orb_low ?? 0;
@@ -205,7 +208,14 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
       {showFlow && (
         <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.separator }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '500' }}>⚡ Flow</Text>
+            <TouchableOpacity
+              onPress={(e) => { e.stopPropagation(); setShowFlowAbout(true); }}
+              hitSlop={10}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+            >
+              <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '500' }}>⚡ Flow</Text>
+              <Ionicons name="information-circle-outline" size={13} color={colors.textTertiary} />
+            </TouchableOpacity>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
               <View style={{
                 paddingHorizontal: 8,
@@ -237,6 +247,8 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
           </View>
         </View>
       )}
+
+      <FlowAboutModal visible={showFlowAbout} onClose={() => setShowFlowAbout(false)} />
     </TouchableOpacity>
   );
 };

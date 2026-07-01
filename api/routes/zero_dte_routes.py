@@ -115,6 +115,54 @@ def get_history():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# ── Spot prices ───────────────────────────────────────────────────────────────
+
+@bp.route("/zero-dte/spot", methods=["GET"])
+def get_spot_prices():
+    """
+    GET /zero-dte/spot?tickers=SPY,IWM,QQQ
+    Returns current price, day change %, and VWAP position for each ticker.
+    """
+    raw = request.args.get("tickers", "")
+    tickers = [t.strip().upper() for t in raw.split(",") if t.strip()]
+    if not tickers:
+        return jsonify({"success": False, "error": "tickers param required"}), 400
+
+    try:
+        import yfinance as yf
+        result = {}
+        for ticker in tickers:
+            try:
+                hist = yf.Ticker(ticker).history(period="1d", interval="5m")
+                if hist.empty:
+                    result[ticker] = None
+                    continue
+
+                current   = float(hist["Close"].iloc[-1])
+                day_open  = float(hist["Open"].iloc[0])
+                change_pct = (current - day_open) / day_open * 100 if day_open else 0
+
+                volume  = hist["Volume"]
+                typical = (hist["High"] + hist["Low"] + hist["Close"]) / 3
+                vwap    = float((typical * volume).cumsum().iloc[-1] / volume.cumsum().iloc[-1])
+
+                result[ticker] = {
+                    "price":       round(current, 2),
+                    "open":        round(day_open, 2),
+                    "change_pct":  round(change_pct, 2),
+                    "vwap":        round(vwap, 2),
+                    "above_vwap":  current > vwap,
+                }
+            except Exception as e:
+                logger.warning("[zero-dte/spot] %s failed: %s", ticker, e)
+                result[ticker] = None
+
+        return jsonify({"success": True, "data": result})
+    except Exception as e:
+        logger.error("[zero-dte/spot] %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # ── Profiles ──────────────────────────────────────────────────────────────────
 
 @bp.route("/zero-dte/profiles", methods=["GET"])

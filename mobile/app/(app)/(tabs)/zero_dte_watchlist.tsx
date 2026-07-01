@@ -6,6 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useZeroDTEWatchlist } from '@/hooks/queries/zero_dte/useZeroDTEWatchlist';
 import { useZeroDTEPositions } from '@/hooks/queries/zero_dte/useZeroDTEPositions';
+import { useZeroDTESpotPrices } from '@/hooks/queries/zero_dte/useZeroDTESpotPrices';
 import { useRunZeroDTEScan } from '@/hooks/mutations/zero_dte/useRunZeroDTEScan';
 import { useEnterZeroDTEPosition } from '@/hooks/mutations/zero_dte/useEnterZeroDTEPosition';
 import { useUpdateZeroDTEExits } from '@/hooks/mutations/zero_dte/useUpdateZeroDTEExits';
@@ -51,6 +52,13 @@ export default function ZeroDTEWatchlistScreen() {
     SET:   items.filter(i => i.tier === 'SET').length,
     WATCH: items.filter(i => i.tier === 'WATCH').length,
   }), [items]);
+
+  const uniqueTickers = useMemo(() => {
+    const all = [...items, ...scanCandidates].map(i => i.ticker);
+    return [...new Set(all)].slice(0, 5);
+  }, [items, scanCandidates]);
+
+  const { data: spotPrices } = useZeroDTESpotPrices(uniqueTickers);
 
   const lastScanLabel = useMemo(() => {
     if (!items.length) return null;
@@ -220,6 +228,57 @@ export default function ZeroDTEWatchlistScreen() {
                 <Text style={{ fontSize: 14 }}>{cfg.emoji}</Text>
                 <Text style={{ fontSize: 18, fontWeight: '700', color: cfg.color }}>{tierCounts[tier]}</Text>
                 <Text style={{ fontSize: 11, fontWeight: '600', color: cfg.color }}>{tier}</Text>
+              </View>
+            );
+          })}
+        </View>
+      )}
+
+      {/* ── Live spot prices ── */}
+      {uniqueTickers.length > 0 && (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingBottom: 10 }}>
+          {uniqueTickers.map(ticker => {
+            const spot = spotPrices?.[ticker];
+            const up   = spot ? spot.change_pct >= 0 : null;
+            const clr  = up === null ? colors.textTertiary : up ? '#10B981' : '#EF4444';
+            return (
+              <View
+                key={ticker}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 6,
+                  backgroundColor: colors.surface,
+                  borderRadius: 10,
+                  paddingHorizontal: 10,
+                  paddingVertical: 7,
+                  borderWidth: 1,
+                  borderColor: spot ? clr + '44' : colors.border,
+                }}
+              >
+                <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700' }}>{ticker}</Text>
+                {spot ? (
+                  <>
+                    <Text style={{ color: colors.text, fontSize: 14, fontWeight: '800' }}>
+                      ${spot.price.toFixed(2)}
+                    </Text>
+                    <Text style={{ color: clr, fontSize: 11, fontWeight: '600' }}>
+                      {up ? '+' : ''}{spot.change_pct.toFixed(2)}%
+                    </Text>
+                    <View style={{
+                      backgroundColor: spot.above_vwap ? '#10B981' + '22' : '#EF4444' + '22',
+                      borderRadius: 4,
+                      paddingHorizontal: 4,
+                      paddingVertical: 1,
+                    }}>
+                      <Text style={{ color: spot.above_vwap ? '#10B981' : '#EF4444', fontSize: 9, fontWeight: '700' }}>
+                        {spot.above_vwap ? '▲ VWAP' : '▼ VWAP'}
+                      </Text>
+                    </View>
+                  </>
+                ) : (
+                  <Text style={{ color: colors.textTertiary, fontSize: 12 }}>—</Text>
+                )}
               </View>
             );
           })}

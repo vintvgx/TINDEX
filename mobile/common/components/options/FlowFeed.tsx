@@ -11,9 +11,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useTickerFlowAlerts } from '@/hooks/queries/flow/useTickerFlowAlerts';
 import { useFlowAlerts } from '@/hooks/queries/flow/useFlowAlerts';
+import { useEnterZeroDTEPosition } from '@/hooks/mutations/zero_dte/useEnterZeroDTEPosition';
 import { FlowCard } from './FlowCard';
 import { FlowSummaryBar } from './FlowSummaryBar';
 import { FlowInfoModal } from './FlowInfoModal';
+import { FlowEnterModal } from './FlowEnterModal';
+import { useToast } from '@/common/components/ui/Toast';
 import type { FlowAlert } from '@/common/types/flow';
 import { computeFlowSummary } from '@/common/types/flow';
 
@@ -181,6 +184,10 @@ export const FlowFeed: React.FC<FlowFeedProps> = ({ ticker, useMockData = false 
   const [sortOrder, setSortOrder] = useState<SortOrder>('premium');
   const [expiryFilter, setExpiryFilter] = useState<ExpiryFilter>('all');
   const [infoVisible, setInfoVisible] = useState(false);
+  const [enterAlert, setEnterAlert] = useState<FlowAlert | null>(null);
+
+  const enterMutation = useEnterZeroDTEPosition();
+  const toast = useToast();
 
   const tickerQuery = useTickerFlowAlerts(useMockData ? null : (ticker || null));
   const globalQuery = useFlowAlerts();
@@ -225,6 +232,30 @@ export const FlowFeed: React.FC<FlowFeedProps> = ({ ticker, useMockData = false 
 
   const summary = useMemo(() => computeFlowSummary(rawAlerts), [rawAlerts]);
 
+  const handleEnterSubmit = (payload: Parameters<typeof enterMutation.mutate>[0]) => {
+    enterMutation.mutate(payload, {
+      onSuccess: () => {
+        setEnterAlert(null);
+        const mode = payload.mode === 'live' ? 'Live' : 'Paper';
+        toast.success(`${mode} ${payload.contract_type.toUpperCase()} entered for ${payload.ticker}`);
+      },
+      onError: (e) => toast.error((e as Error).message),
+    });
+  };
+
+  const modals = (
+    <>
+      <FlowInfoModal visible={infoVisible} onClose={() => setInfoVisible(false)} />
+      <FlowEnterModal
+        alert={enterAlert}
+        visible={!!enterAlert}
+        onClose={() => setEnterAlert(null)}
+        onSubmit={handleEnterSubmit}
+        isLoading={enterMutation.isPending}
+      />
+    </>
+  );
+
   if (!isAvailable && !isLoading) {
     return (
       <>
@@ -254,7 +285,7 @@ export const FlowFeed: React.FC<FlowFeedProps> = ({ ticker, useMockData = false 
             <Text style={{ color: colors.accent, fontSize: 13, fontWeight: '600' }}>Flow Guide</Text>
           </TouchableOpacity>
         </View>
-        <FlowInfoModal visible={infoVisible} onClose={() => setInfoVisible(false)} />
+        {modals}
       </>
     );
   }
@@ -277,7 +308,7 @@ export const FlowFeed: React.FC<FlowFeedProps> = ({ ticker, useMockData = false 
             <Text style={{ color: colors.accent, fontWeight: '600' }}>Retry</Text>
           </TouchableOpacity>
         </View>
-        <FlowInfoModal visible={infoVisible} onClose={() => setInfoVisible(false)} />
+        {modals}
       </>
     );
   }
@@ -449,7 +480,7 @@ export const FlowFeed: React.FC<FlowFeedProps> = ({ ticker, useMockData = false 
             </Text>
           </View>
         </View>
-        <FlowInfoModal visible={infoVisible} onClose={() => setInfoVisible(false)} />
+        {modals}
       </>
     );
   }
@@ -459,7 +490,9 @@ export const FlowFeed: React.FC<FlowFeedProps> = ({ ticker, useMockData = false 
       <FlatList
         data={filtered}
         keyExtractor={(item, i) => `${item.ticker}-${item.timestamp}-${i}`}
-        renderItem={({ item }) => <FlowCard alert={item} />}
+        renderItem={({ item }) => (
+          <FlowCard alert={item} onPress={() => setEnterAlert(item)} />
+        )}
         ListHeaderComponent={renderHeader}
         contentContainerStyle={{ paddingTop: 12, paddingBottom: 200 }}
         showsVerticalScrollIndicator={false}
@@ -471,7 +504,7 @@ export const FlowFeed: React.FC<FlowFeedProps> = ({ ticker, useMockData = false 
           />
         }
       />
-      <FlowInfoModal visible={infoVisible} onClose={() => setInfoVisible(false)} />
+      {modals}
     </>
   );
 };

@@ -62,9 +62,16 @@ export function ZeroDTECard({ item, rank, onPress }: Props) {
         </Text>
         <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>${item.strike.toFixed(0)}</Text>
         <Text style={{ color: colors.textSecondary, fontSize: 12 }}>exp {item.expiry}</Text>
-        <Text style={{ color: colors.textTertiary, fontSize: 12, marginLeft: 'auto' }}>
-          {item.otm_pct.toFixed(1)}% OTM
-        </Text>
+        <View style={{ marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          {item.current_price > 0 && (
+            <Text style={{ color: colors.textTertiary, fontSize: 11 }}>
+              SP ${item.current_price.toFixed(2)}
+            </Text>
+          )}
+          <Text style={{ color: colors.textTertiary, fontSize: 12 }}>
+            {item.otm_pct.toFixed(1)}% OTM
+          </Text>
+        </View>
       </View>
 
       {/* ── Score bar ── */}
