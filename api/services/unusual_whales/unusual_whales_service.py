@@ -26,6 +26,29 @@ class UnusualWhalesService:
     def _available(self) -> bool:
         return bool(self.api_key)
 
+    def _normalize(self, alert: dict) -> dict:
+        """
+        Map UW's actual field names to the FlowAlert interface the app expects.
+        UW uses 'type', 'has_sweep', 'has_floor', 'total_premium', etc.
+        All original fields are preserved; mapped keys are added/overwritten.
+        """
+        ask_prem = float(alert.get("total_ask_side_prem") or 0)
+        bid_prem = float(alert.get("total_bid_side_prem") or 0)
+        return {
+            **alert,
+            "contract_type":      alert.get("type", ""),
+            "is_sweep":           bool(alert.get("has_sweep", False)),
+            "is_floor":           bool(alert.get("has_floor", False)),
+            "is_multileg":        bool(alert.get("has_multileg", False)),
+            "size":               int(alert.get("total_size") or 0),
+            "premium":            str(alert.get("total_premium") or "0"),
+            "implied_volatility": str(alert.get("iv_end") or alert.get("iv_start") or "0"),
+            "side":               "ask" if ask_prem > bid_prem else "bid",
+            "timestamp":          alert.get("created_at", ""),
+            "unusual_score":      str(alert.get("unusual_score") or "0"),
+            "tags":               alert.get("tags") or [],
+        }
+
     def get_flow_alerts(self, limit: int = 50) -> list:
         """Return global option flow alerts ordered by premium descending."""
         if not self._available():
@@ -35,7 +58,7 @@ class UnusualWhalesService:
             resp = self.session.get(url, headers=self._headers(), params={"limit": limit}, timeout=10)
             resp.raise_for_status()
             raw = resp.json()
-            return raw.get("data", [])
+            return [self._normalize(a) for a in raw.get("data", [])]
         except Exception as exc:
             logger.error("[UnusualWhales] get_flow_alerts error: %s", exc)
             return []
@@ -49,7 +72,7 @@ class UnusualWhalesService:
             resp = self.session.get(url, headers=self._headers(), params={"limit": limit}, timeout=10)
             resp.raise_for_status()
             raw = resp.json()
-            return raw.get("data", [])
+            return [self._normalize(a) for a in raw.get("data", [])]
         except Exception as exc:
             logger.error("[UnusualWhales] get_ticker_flow_alerts(%s) error: %s", ticker, exc)
             return []

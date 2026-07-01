@@ -59,9 +59,11 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
   const showFlow = !!flowSummary && flowSummary.totalAlerts > 0;
   const flowBullish = showFlow && flowSummary!.callPct > flowSummary!.putPct;
   const flowPillColor = flowBullish ? colors.success : colors.error;
-  const flowPillLabel = flowBullish
-    ? `▲ CALL ${flowSummary!.callPct}%`
-    : `▼ PUT ${flowSummary!.putPct}%`;
+  const flowPillLabel = showFlow
+    ? flowBullish
+      ? `▲ CALL ${flowSummary!.callPct}%`
+      : `▼ PUT ${flowSummary!.putPct}%`
+    : '';
 
   return (
     <TouchableOpacity
