@@ -57,6 +57,7 @@ const SECTIONS: NavSection[] = [
       { label: 'Strategy Control', route: '/(app)/(tabs)/strategy' },
       { label: 'Live Position', route: '/(app)/(tabs)/position' },
       { label: 'Trade Log', route: '/(app)/(tabs)/tradelog' },
+      { label: 'Daily Review', route: '/(app)/(tabs)/daily_review' },
     ],
   },
   {

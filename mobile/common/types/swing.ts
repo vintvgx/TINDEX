@@ -8,10 +8,10 @@ export interface SwingScore {
   side: 'call' | 'put';
   dte: number;
   composite_score: number;
-  tier: 'Prime' | 'Strong' | 'Watch';
+  tier: 'Prime' | 'Strong' | 'Watch' | 'Candidate';
   flow_score: number;
   setup_score: number;
-  breakdown: Record<string, number | string>;
+  breakdown: Record<string, unknown> & { fail_reason?: string };
   premium: number;
   iv_pct: number;
   vol: number;
@@ -89,7 +89,8 @@ export const SWING_PROFILE_DESCRIPTIONS: Record<SwingProfileName, string> = {
 };
 
 export const TIER_COLORS: Record<SwingScore['tier'], string> = {
-  Prime: '#FFD700',
-  Strong: '#3B82F6',
-  Watch: '#8B5CF6',
+  Prime:     '#FFD700',
+  Strong:    '#3B82F6',
+  Watch:     '#8B5CF6',
+  Candidate: '#64748B',
 };

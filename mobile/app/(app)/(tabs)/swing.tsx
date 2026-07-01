@@ -41,20 +41,57 @@ export default function SwingScreen() {
   const [screen, setScreen] = useState<Screen>('Dashboard');
   const [detailItem, setDetailItem] = useState<SwingScore | null>(null);
   const [enterItem, setEnterItem] = useState<SwingScore | null>(null);
+  const [scanResult, setScanResult] = useState<{ candidates: SwingScore[]; surfaced: SwingScore[] } | null>(null);
 
   const userId = user?.id;
+  const runPipeline = useRunSwingPipeline();
+
+  const handleRunPipeline = () => {
+    runPipeline.mutate(undefined, {
+      onSuccess: (data: any) => {
+        const candidates: SwingScore[] = data?.candidates ?? [];
+        const surfaced: SwingScore[] = data?.surfaced ?? [];
+        setScanResult({ candidates, surfaced });
+        const count = surfaced.length;
+        Alert.alert('Scan complete', count > 0 ? `${count} opportunit${count === 1 ? 'y' : 'ies'} surfaced, ${candidates.length} total reviewed.` : `No opportunities surfaced. ${candidates.length} candidates reviewed.`);
+      },
+      onError: (e) => Alert.alert('Error', (e as Error).message),
+    });
+  };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
       {/* Screen header */}
       <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <Text style={{ color: colors.text, fontSize: 22, fontWeight: '800', flex: 1 }}>
+          <Text style={{ color: colors.text, fontSize: 22, fontWeight: '800' }}>
             Swing Trade
           </Text>
-          <View style={{ backgroundColor: '#8B5CF622', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+          <View style={{ backgroundColor: '#8B5CF622', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 8 }}>
             <Text style={{ color: '#8B5CF6', fontSize: 10, fontWeight: '700', letterSpacing: 0.5 }}>BETA</Text>
           </View>
+          <View style={{ flex: 1 }} />
+          {screen === 'Dashboard' && (
+            <TouchableOpacity
+              onPress={handleRunPipeline}
+              disabled={runPipeline.isPending}
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 17,
+                backgroundColor: colors.surface,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 1,
+                borderColor: colors.border,
+              }}
+            >
+              {runPipeline.isPending
+                ? <ActivityIndicator size="small" color={colors.accent} />
+                : <Ionicons name="refresh-outline" size={18} color={colors.accent} />
+              }
+            </TouchableOpacity>
+          )}
         </View>
         <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
           Multi-day options flow intelligence
@@ -85,6 +122,8 @@ export default function SwingScreen() {
             userId={userId ?? ''}
             onPressItem={setDetailItem}
             onEnter={setEnterItem}
+            scanResult={scanResult}
+            onClearScan={() => setScanResult(null)}
           />
         )}
         {screen === 'Watchlist' && (
@@ -117,47 +156,54 @@ export default function SwingScreen() {
 // Dashboard
 // ──────────────────────────────────────────────
 function DashboardScreen({
-  colors, userId, onPressItem, onEnter,
+  colors, userId, onPressItem, onEnter, scanResult, onClearScan,
 }: {
   colors: ReturnType<typeof useThemeColors>;
   userId: string;
   onPressItem: (item: SwingScore) => void;
   onEnter: (item: SwingScore) => void;
+  scanResult: { candidates: SwingScore[]; surfaced: SwingScore[] } | null;
+  onClearScan: () => void;
 }) {
   const { data, isLoading, isFetching, refetch } = useSwingScores();
   const addWatch = useAddSwingWatchlist(userId);
-  const runPipeline = useRunSwingPipeline();
 
-  const scores = data?.data ?? [];
-  const tierCounts = scores.reduce<Record<string, number>>((acc, s) => {
+  // If a scan result is available, show all scored candidates (surfaced first, then the rest)
+  // Otherwise fall back to Supabase persisted surfaced scores
+  const displayItems: SwingScore[] = scanResult
+    ? scanResult.candidates  // already sorted by composite desc (surfaced first)
+    : (data?.data ?? []);
+
+  const surfacedItems = displayItems.filter(s => s.tier !== 'Candidate');
+  const candidateItems = displayItems.filter(s => s.tier === 'Candidate');
+
+  const tierCounts = surfacedItems.reduce<Record<string, number>>((acc, s) => {
     acc[s.tier] = (acc[s.tier] ?? 0) + 1;
     return acc;
   }, {});
 
-  const handleRunPipeline = () => {
-    runPipeline.mutate(undefined, {
-      onSuccess: () => Alert.alert('Pipeline complete', 'Swing scan finished. Pull to refresh.'),
-      onError: (e) => Alert.alert('Error', (e as Error).message),
-    });
+  const scanDate = scanResult
+    ? scanResult.candidates[0]?.scan_date
+    : data?.scan_date;
+
+  const handleRefresh = () => {
+    onClearScan();
+    refetch();
   };
+
+  const isEmpty = displayItems.length === 0 && !isLoading;
 
   return (
     <FlatList
-      data={scores}
-      keyExtractor={(i) => i.id}
-      renderItem={({ item }) => (
-        <SwingOpportunityCard
-          item={item}
-          onPress={onPressItem}
-          onWatch={(s) => addWatch.mutate({ contract_symbol: s.contract_symbol, ticker: s.ticker })}
-        />
-      )}
-      refreshControl={<RefreshControl refreshing={isFetching && !isLoading} onRefresh={() => refetch()} tintColor={colors.accent} />}
+      data={[]}
+      keyExtractor={() => ''}
+      renderItem={() => null}
+      refreshControl={<RefreshControl refreshing={isFetching && !isLoading} onRefresh={handleRefresh} tintColor={colors.accent} />}
       contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
       ListHeaderComponent={() => (
-        <View style={{ marginBottom: 14 }}>
-          {/* Stats row */}
-          {data && (
+        <View>
+          {/* Stats row — only for surfaced */}
+          {(surfacedItems.length > 0 || data) && (
             <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
               {(['Prime', 'Strong', 'Watch'] as const).map((tier) => (
                 <View key={tier} style={{ flex: 1, backgroundColor: colors.surface, borderRadius: 10, padding: 10, alignItems: 'center', borderWidth: 1, borderColor: colors.border }}>
@@ -169,43 +215,61 @@ function DashboardScreen({
               ))}
             </View>
           )}
-          {/* Run pipeline button */}
-          <TouchableOpacity
-            onPress={handleRunPipeline}
-            disabled={runPipeline.isPending}
-            style={{ backgroundColor: colors.surface, borderRadius: 10, padding: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1, borderColor: colors.border, marginBottom: 4 }}
-          >
-            {runPipeline.isPending ? (
-              <ActivityIndicator size="small" color={colors.accent} />
-            ) : (
-              <Ionicons name="refresh-outline" size={16} color={colors.accent} />
-            )}
-            <Text style={{ color: colors.accent, fontSize: 13, fontWeight: '600' }}>
-              {runPipeline.isPending ? 'Scanning…' : 'Run New Scan'}
+          {scanDate && (
+            <Text style={{ color: colors.textTertiary, fontSize: 11, textAlign: 'center', marginBottom: 12 }}>
+              {scanResult ? 'Last scan' : 'Scan date'}: {scanDate} · {surfacedItems.length} surfaced{scanResult ? `, ${candidateItems.length} reviewed` : ''}
             </Text>
-          </TouchableOpacity>
-          {data?.scan_date && (
-            <Text style={{ color: colors.textTertiary, fontSize: 11, textAlign: 'center', marginBottom: 8 }}>
-              Scan date: {data.scan_date} · {scores.length} opportunities
+          )}
+
+          {/* Surfaced section */}
+          {surfacedItems.length > 0 && (
+            <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 8 }}>
+              OPPORTUNITIES
             </Text>
+          )}
+          {surfacedItems.map((item) => (
+            <SwingOpportunityCard
+              key={item.id ?? item.contract_symbol}
+              item={item}
+              onPress={onPressItem}
+              onWatch={(s) => addWatch.mutate({ contract_symbol: s.contract_symbol, ticker: s.ticker })}
+            />
+          ))}
+
+          {/* Candidates section */}
+          {candidateItems.length > 0 && (
+            <View style={{ marginTop: surfacedItems.length > 0 ? 8 : 0 }}>
+              <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 8 }}>
+                CANDIDATES — BELOW THRESHOLD ({candidateItems.length})
+              </Text>
+              {candidateItems.map((item) => (
+                <SwingOpportunityCard
+                  key={item.id ?? item.contract_symbol}
+                  item={item}
+                  onPress={onPressItem}
+                />
+              ))}
+            </View>
+          )}
+
+          {/* Empty state */}
+          {isEmpty && (
+            <View style={{ padding: 40, alignItems: 'center' }}>
+              {isLoading ? (
+                <ActivityIndicator size="large" color={colors.accent} />
+              ) : (
+                <>
+                  <Ionicons name="analytics-outline" size={40} color={colors.textTertiary} />
+                  <Text style={{ color: colors.textSecondary, marginTop: 12, textAlign: 'center' }}>
+                    No opportunities found.{'\n'}Tap the refresh button to run a new scan.
+                  </Text>
+                </>
+              )}
+            </View>
           )}
         </View>
       )}
-      ListEmptyComponent={() => (
-        isLoading ? (
-          <View style={{ padding: 40, alignItems: 'center' }}>
-            <ActivityIndicator size="large" color={colors.accent} />
-            <Text style={{ color: colors.textSecondary, marginTop: 12 }}>Loading opportunities…</Text>
-          </View>
-        ) : (
-          <View style={{ padding: 40, alignItems: 'center' }}>
-            <Ionicons name="analytics-outline" size={40} color={colors.textTertiary} />
-            <Text style={{ color: colors.textSecondary, marginTop: 12, textAlign: 'center' }}>
-              No opportunities found.{'\n'}Tap "Run New Scan" to analyze today's flow.
-            </Text>
-          </View>
-        )
-      )}
+      ListEmptyComponent={null}
     />
   );
 }
@@ -437,7 +501,7 @@ function AboutScreen({ colors }: { colors: ReturnType<typeof useThemeColors> }) 
     },
     {
       title: 'Tier Definitions',
-      content: '🥇 Prime (90+) — Exceptional setup AND flow convergence. Highest conviction.\n\n💎 Strong (75–89) — Solid on both dimensions, worth active monitoring.\n\n👁 Watch (60–74) — Emerging signal, lower conviction. Monitor before entering.',
+      content: '🥇 Prime (90+) — Exceptional setup AND flow convergence. Highest conviction.\n\n💎 Strong (75–89) — Solid on both dimensions, worth active monitoring.\n\n👁 Watch (60–74) — Emerging signal, lower conviction. Monitor before entering.\n\n🔍 Candidate — Reviewed but below threshold. Score or reason shown on card.',
     },
     {
       title: 'Risk Profiles',

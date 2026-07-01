@@ -71,7 +71,7 @@ class ZeroDTEScanner:
         minutes_remaining = max(0, int((market_close - now_et).total_seconds() / 60))
         time_penalty      = self._time_penalty(now_et)
 
-        scored = []
+        all_scored = []   # every scored candidate (surfaced + below-threshold)
         for flow in candidates:
             try:
                 ticker        = (flow.get("ticker") or "").upper()
@@ -82,20 +82,21 @@ class ZeroDTEScanner:
                 adjusted_flow         = max(0.0, flow_score - time_penalty)
                 composite             = _FLOW_WEIGHT * adjusted_flow + _TECH_WEIGHT * intraday_score
                 tier                  = self._assign_tier(composite)
-                if tier is None:
-                    continue
+
+                is_surfaced = tier is not None
+                fail_reason = None if is_surfaced else f"Score too low ({composite:.1f}/100, need ≥{_TIER_WATCH:.0f})"
 
                 strike        = float(flow.get("strike") or 0)
                 current_price = intra.get("current_price") or 0
                 otm_pct       = abs(strike - current_price) / current_price * 100 if current_price else 0
 
-                scored.append({
+                all_scored.append({
                     "ticker":            ticker,
                     "contract_type":     contract_type,
                     "strike":            strike,
                     "expiry":            str(today),
                     "composite_score":   round(composite, 1),
-                    "tier":              tier,
+                    "tier":              tier if is_surfaced else "CANDIDATE",
                     "flow_score":        round(adjusted_flow, 1),
                     "raw_flow_score":    round(flow_score, 1),
                     "intraday_score":    round(intraday_score, 1),
@@ -118,11 +119,13 @@ class ZeroDTEScanner:
                     "minutes_remaining": minutes_remaining,
                     "scan_time":         scan_time.isoformat(),
                     "scan_date":         str(today),
+                    "fail_reason":       fail_reason,
                 })
             except Exception as e:
                 logger.warning("[ZeroDTE] Scoring failed for %s: %s", flow.get("ticker"), e)
 
-        surfaced = sorted(scored, key=lambda x: x["composite_score"], reverse=True)[:_MAX_RESULTS]
+        all_scored_sorted = sorted(all_scored, key=lambda x: x["composite_score"], reverse=True)
+        surfaced = [s for s in all_scored_sorted if s["tier"] != "CANDIDATE"][:_MAX_RESULTS]
         duration = round(time.time() - t0, 2)
 
         logger.info(
@@ -134,15 +137,16 @@ class ZeroDTEScanner:
             self._persist(surfaced)
 
         return {
-            "success":  True,
-            "surfaced": surfaced,
-            "skipped":  False,
+            "success":    True,
+            "surfaced":   surfaced,
+            "candidates": all_scored_sorted,  # all scored items including below-threshold
+            "skipped":    False,
             "meta": {
                 "scan_time":         scan_time.isoformat(),
                 "scan_date":         str(today),
                 "uw_flows_raw":      len(raw_flows),
                 "zero_dte_flows":    len(zero_dte_flows),
-                "candidates":        len(candidates),
+                "candidates":        len(all_scored),
                 "surfaced":          len(surfaced),
                 "minutes_remaining": minutes_remaining,
                 "time_penalty":      time_penalty,

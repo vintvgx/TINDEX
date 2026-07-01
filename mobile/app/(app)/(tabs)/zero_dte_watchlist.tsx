@@ -24,6 +24,7 @@ export default function ZeroDTEWatchlistScreen() {
   const scanMutation  = useRunZeroDTEScan();
   const enterMutation = useEnterZeroDTEPosition();
   const [enterItem, setEnterItem] = useState<ZeroDTEOpportunity | null>(null);
+  const [scanCandidates, setScanCandidates] = useState<ZeroDTEOpportunity[]>([]);
 
   // Notify when a new auto-scan result arrives (scan_time changed on the server)
   const prevScanTimeRef = useRef<string | null>(null);
@@ -58,14 +59,16 @@ export default function ZeroDTEWatchlistScreen() {
   const handleRunScan = () => {
     scanMutation.mutate(undefined, {
       onSuccess: (data) => {
-        const surfaced = data?.surfaced ?? [];
-        const fire  = surfaced.filter((i: ZeroDTEOpportunity) => i.tier === 'FIRE').length;
-        const set   = surfaced.filter((i: ZeroDTEOpportunity) => i.tier === 'SET').length;
-        const watch = surfaced.filter((i: ZeroDTEOpportunity) => i.tier === 'WATCH').length;
+        const surfaced: ZeroDTEOpportunity[] = data?.surfaced ?? [];
+        const allCandidates: ZeroDTEOpportunity[] = data?.candidates ?? [];
+        setScanCandidates(allCandidates);
+        const fire  = surfaced.filter((i) => i.tier === 'FIRE').length;
+        const set   = surfaced.filter((i) => i.tier === 'SET').length;
+        const watch = surfaced.filter((i) => i.tier === 'WATCH').length;
         if (surfaced.length > 0) {
           toast.success(`Scan complete — ${fire} 🔥 FIRE  ${set} ✅ SET  ${watch} 👁 WATCH`);
         } else {
-          toast.info('Scan complete — no opportunities found');
+          toast.info(`Scan complete — 0 surfaced, ${allCandidates.length} reviewed`);
         }
       },
       onError: (e) => toast.error(`Scan failed: ${(e as Error).message}`),
@@ -208,33 +211,11 @@ export default function ZeroDTEWatchlistScreen() {
             Fetching scan results...
           </Text>
         </View>
-      ) : items.length === 0 ? (
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 }}>
-          <View style={{
-            backgroundColor: colors.surface,
-            borderRadius: 20,
-            padding: 32,
-            alignItems: 'center',
-            borderWidth: 1,
-            borderColor: colors.border,
-          }}>
-            <Text style={{ fontSize: 40, marginBottom: 16 }}>📭</Text>
-            <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700', marginBottom: 8, textAlign: 'center' }}>
-              No opportunities yet
-            </Text>
-            <Text style={{ color: colors.textSecondary, fontSize: 14, textAlign: 'center', lineHeight: 20 }}>
-              Scans run at {SCAN_WINDOWS.join(', ')} ET.{'\n'}
-              Tap the refresh button to run a manual scan.
-            </Text>
-          </View>
-        </View>
       ) : (
         <FlatList
-          data={items}
-          keyExtractor={(item, i) => `${item.ticker}-${item.strike}-${i}`}
-          renderItem={({ item, index }) => (
-            <ZeroDTECard item={item} rank={index + 1} onPress={setEnterItem} />
-          )}
+          data={[]}
+          keyExtractor={() => ''}
+          renderItem={() => null}
           contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 32 }}
           refreshControl={
             <RefreshControl
@@ -243,6 +224,61 @@ export default function ZeroDTEWatchlistScreen() {
               tintColor={colors.accent}
             />
           }
+          ListHeaderComponent={() => (
+            <View>
+              {/* Surfaced opportunities */}
+              {items.length > 0 && (
+                <>
+                  <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 8 }}>
+                    OPPORTUNITIES
+                  </Text>
+                  {items.map((item, index) => (
+                    <ZeroDTECard key={`${item.ticker}-${item.strike}-${index}`} item={item} rank={index + 1} onPress={setEnterItem} />
+                  ))}
+                </>
+              )}
+
+              {/* Candidates from last scan (below threshold) */}
+              {scanCandidates.filter(c => c.tier === 'CANDIDATE').length > 0 && (
+                <View style={{ marginTop: items.length > 0 ? 12 : 0 }}>
+                  <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 8 }}>
+                    CANDIDATES — BELOW THRESHOLD ({scanCandidates.filter(c => c.tier === 'CANDIDATE').length})
+                  </Text>
+                  {scanCandidates
+                    .filter(c => c.tier === 'CANDIDATE')
+                    .map((item, index) => (
+                      <ZeroDTECard key={`cand-${item.ticker}-${item.strike}-${index}`} item={item} rank={index + 1} onPress={setEnterItem} />
+                    ))
+                  }
+                </View>
+              )}
+
+              {/* Empty state */}
+              {items.length === 0 && scanCandidates.length === 0 && (
+                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingTop: 60 }}>
+                  <View style={{
+                    backgroundColor: colors.surface,
+                    borderRadius: 20,
+                    padding: 32,
+                    alignItems: 'center',
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    width: '100%',
+                  }}>
+                    <Text style={{ fontSize: 40, marginBottom: 16 }}>📭</Text>
+                    <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700', marginBottom: 8, textAlign: 'center' }}>
+                      No opportunities yet
+                    </Text>
+                    <Text style={{ color: colors.textSecondary, fontSize: 14, textAlign: 'center', lineHeight: 20 }}>
+                      Scans run at {SCAN_WINDOWS.join(', ')} ET.{'\n'}
+                      Tap the refresh button to run a manual scan.
+                    </Text>
+                  </View>
+                </View>
+              )}
+            </View>
+          )}
+          ListEmptyComponent={null}
         />
       )}
 

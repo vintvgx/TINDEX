@@ -15,11 +15,13 @@ const fmt = (n: number, dec = 0) => n?.toLocaleString('en-US', { maximumFraction
 
 export function SwingOpportunityCard({ item, onPress, onWatch }: Props) {
   const colors = useThemeColors();
+  const isCandidate = item.tier === 'Candidate';
   const tierColor = TIER_COLORS[item.tier] ?? colors.textSecondary;
   const sideColor = item.side === 'call' ? '#10B981' : '#EF4444';
   const dollarFlow = item.dollar_flow >= 1_000_000
     ? `$${(item.dollar_flow / 1_000_000).toFixed(1)}M`
     : `$${(item.dollar_flow / 1_000).toFixed(0)}K`;
+  const failReason = item.breakdown?.fail_reason;
 
   return (
     <TouchableOpacity
@@ -31,7 +33,8 @@ export function SwingOpportunityCard({ item, onPress, onWatch }: Props) {
         padding: 14,
         marginBottom: 10,
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: isCandidate ? colors.border : colors.border,
+        opacity: isCandidate ? 0.72 : 1,
       }}
     >
       {/* Header row */}
@@ -47,18 +50,18 @@ export function SwingOpportunityCard({ item, onPress, onWatch }: Props) {
           borderColor: tierColor + '44',
         }}>
           <Text style={{ color: tierColor, fontSize: 11, fontWeight: '700', letterSpacing: 0.5 }}>
-            {item.tier.toUpperCase()}
+            {isCandidate ? 'CANDIDATE' : item.tier.toUpperCase()}
           </Text>
         </View>
 
         {/* Ticker */}
-        <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700', flex: 1 }}>
+        <Text style={{ color: isCandidate ? colors.textSecondary : colors.text, fontSize: 17, fontWeight: '700', flex: 1 }}>
           {item.ticker}
         </Text>
 
         {/* Score */}
         <View style={{ alignItems: 'flex-end' }}>
-          <Text style={{ color: colors.text, fontSize: 20, fontWeight: '800' }}>
+          <Text style={{ color: isCandidate ? colors.textSecondary : colors.text, fontSize: 20, fontWeight: '800' }}>
             {item.composite_score.toFixed(0)}
           </Text>
           <Text style={{ color: colors.textTertiary, fontSize: 10, fontWeight: '500' }}>SCORE</Text>
@@ -98,17 +101,27 @@ export function SwingOpportunityCard({ item, onPress, onWatch }: Props) {
         <Stat label="$ Flow" value={dollarFlow} colors={colors} />
         <Stat label="Vol/OI" value={item.vol_oi?.toFixed(2) ?? '—'} colors={colors} />
         <Stat label="IV" value={`${item.iv_pct?.toFixed(0) ?? '—'}%`} colors={colors} />
-        <Stat label="UW Score" value={item.unusual_score?.toFixed(0) ?? '—'} colors={colors} accent />
+        <Stat label="UW Score" value={item.unusual_score?.toFixed(0) ?? '—'} colors={colors} accent={!isCandidate} />
       </View>
 
       {/* Mini score bars */}
       <View style={{ flexDirection: 'row', gap: 6, marginTop: 10 }}>
-        <ScoreBar label="Setup" value={item.setup_score} color="#3B82F6" colors={colors} />
-        <ScoreBar label="Flow" value={item.flow_score} color="#10B981" colors={colors} />
+        <ScoreBar label="Setup" value={item.setup_score} color={isCandidate ? '#475569' : '#3B82F6'} colors={colors} />
+        <ScoreBar label="Flow" value={item.flow_score} color={isCandidate ? '#475569' : '#10B981'} colors={colors} />
       </View>
 
-      {/* Watch action */}
-      {onWatch && (
+      {/* Fail reason for candidates */}
+      {isCandidate && failReason && (
+        <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.separator }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Ionicons name="alert-circle-outline" size={12} color={colors.textTertiary} />
+            <Text style={{ color: colors.textTertiary, fontSize: 11 }}>{failReason}</Text>
+          </View>
+        </View>
+      )}
+
+      {/* Watch action — only for surfaced items */}
+      {onWatch && !isCandidate && (
         <TouchableOpacity
           onPress={() => onWatch(item)}
           style={{ position: 'absolute', top: 14, right: 46 }}

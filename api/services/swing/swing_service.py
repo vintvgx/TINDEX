@@ -157,7 +157,8 @@ class SwingPipeline:
         sorted_ivs = sorted(ivs)
         iv_80th = sorted_ivs[int(len(sorted_ivs) * 0.8)] if sorted_ivs else 9999.0
 
-        scored = []
+        all_scored = []    # every scored candidate (surfaced + below-threshold)
+        surfaced_scored = []  # only those that pass both thresholds
         for flow in candidates:
             ticker = flow.get("ticker", "")
             try:
@@ -167,8 +168,15 @@ class SwingPipeline:
                 composite = self._composite(tech_score, flow_score, cfg["tech_weight"], cfg["flow_weight"])
                 tier = self._assign_tier(composite, cfg)
 
-                if tier is None or tech_score < cfg["min_tech_score"]:
-                    continue  # below threshold — not surfaced
+                is_surfaced = tier is not None and tech_score >= cfg["min_tech_score"]
+
+                if not is_surfaced:
+                    if tech_score < cfg["min_tech_score"]:
+                        fail_reason = f"Setup score too low ({tech_score:.0f}/100, min {cfg['min_tech_score']:.0f})"
+                    else:
+                        fail_reason = f"Composite too low ({composite:.1f}/100, need ≥{cfg['tier_watch']:.0f})"
+                else:
+                    fail_reason = None
 
                 vol = int(flow.get("volume") or 0)
                 oi = int(flow.get("open_interest") or 0)
@@ -177,9 +185,10 @@ class SwingPipeline:
                 iv = float(flow.get("implied_volatility") or 0)
 
                 dte = self._calc_dte(flow.get("expiry"), scan_date) or 0
-                smart = self._select_smart_contract(flow, tech, tier, dte)
+                # Smart contract selection only for surfaced items (BS calcs are expensive)
+                smart = self._select_smart_contract(flow, tech, tier, dte) if is_surfaced else {}
 
-                scored.append({
+                item = {
                     "contract_symbol": flow.get("contract_symbol", f"{ticker}_{flow.get('expiry','')}_{flow.get('strike','')}_{flow.get('contract_type','')}"),
                     "scan_date": str(scan_date),
                     "ticker": ticker,
@@ -188,7 +197,7 @@ class SwingPipeline:
                     "side": flow.get("contract_type", ""),
                     "dte": dte,
                     "composite_score": composite,
-                    "tier": tier,
+                    "tier": tier if is_surfaced else "Candidate",
                     "flow_score": round(flow_score, 1),
                     "setup_score": round(tech_score, 1),
                     "smart_contract": smart,
@@ -204,6 +213,7 @@ class SwingPipeline:
                         "unusual_score_raw": flow.get("unusual_score"),
                         "iv_80th_threshold": round(iv_80th, 4),
                         "iv_penalized": iv > iv_80th,
+                        "fail_reason": fail_reason,
                     },
                     "premium": float(flow.get("price") or 0),
                     "iv_pct": round(iv * 100, 2),
@@ -215,32 +225,37 @@ class SwingPipeline:
                     "is_sweep": flow.get("is_sweep", False),
                     "is_floor": flow.get("is_floor", False),
                     "unusual_score": float(flow.get("unusual_score") or 0),
-                })
+                }
+                all_scored.append(item)
+                if is_surfaced:
+                    surfaced_scored.append(item)
             except Exception as e:
                 err_msg = f"{ticker}: {e}"
                 logger.warning("[SwingPipeline] Scoring failed for %s: %s", ticker, e)
                 errors.append(err_msg)
 
-        # Sort by composite desc, cap at limit
-        scored.sort(key=lambda x: x["composite_score"], reverse=True)
-        surfaced = scored[:limit]
+        # Sort all by composite desc; cap surfaced at limit
+        all_scored.sort(key=lambda x: x["composite_score"], reverse=True)
+        surfaced_scored.sort(key=lambda x: x["composite_score"], reverse=True)
+        surfaced = surfaced_scored[:limit]
 
         duration = round(time.time() - t0, 2)
-        logger.info("[SwingPipeline] Surfaced %d opportunities in %.1fs", len(surfaced), duration)
+        logger.info("[SwingPipeline] Surfaced %d / %d scored in %.1fs", len(surfaced), len(all_scored), duration)
 
         # ── Stage 6: persist ──────────────────────────────────────────────────
         if self._sb:
-            self._persist(scan_date, surfaced, errors, uw_count, len(swing_flows), len(candidates), len(scored), len(surfaced), duration)
+            self._persist(scan_date, surfaced, errors, uw_count, len(swing_flows), len(candidates), len(surfaced_scored), len(surfaced), duration)
 
         return {
             "success": True,
             "surfaced": surfaced,
+            "candidates": all_scored,  # all scored items including below-threshold
             "meta": {
                 "scan_date": str(scan_date),
                 "uw_flows_raw": uw_count,
                 "swing_eligible": len(swing_flows),
                 "candidates": len(candidates),
-                "scored": len(scored),
+                "scored": len(surfaced_scored),
                 "surfaced": len(surfaced),
                 "duration_sec": duration,
             },

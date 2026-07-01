@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import type { ZeroDTEOpportunity } from '@/common/types/zero_dte';
 import { TIER_CONFIG } from '@/common/types/zero_dte';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -18,7 +19,8 @@ interface Props {
 
 export function ZeroDTECard({ item, rank, onPress }: Props) {
   const colors = useThemeColors();
-  const tier   = TIER_CONFIG[item.tier];
+  const isCandidate = item.tier === 'CANDIDATE';
+  const tier = TIER_CONFIG[item.tier] ?? TIER_CONFIG['CANDIDATE'];
   const isCall = item.contract_type === 'call';
   const sideColor = isCall ? '#10B981' : '#EF4444';
 
@@ -38,6 +40,7 @@ export function ZeroDTECard({ item, rank, onPress }: Props) {
         shadowOpacity: 1,
         shadowRadius: 6,
         elevation: 2,
+        opacity: isCandidate ? 0.72 : 1,
       }}
     >
       {/* ── Header: rank · ticker · tier ── */}
@@ -45,7 +48,7 @@ export function ZeroDTECard({ item, rank, onPress }: Props) {
         <View style={{ backgroundColor: colors.surfaceSecondary, borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 }}>
           <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '700' }}>#{rank}</Text>
         </View>
-        <Text style={{ color: colors.text, fontSize: 18, fontWeight: '700', flex: 1 }}>{item.ticker}</Text>
+        <Text style={{ color: isCandidate ? colors.textSecondary : colors.text, fontSize: 18, fontWeight: '700', flex: 1 }}>{item.ticker}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, backgroundColor: tier.bg, gap: 4 }}>
           <Text style={{ fontSize: 12 }}>{tier.emoji}</Text>
           <Text style={{ color: tier.color, fontSize: 11, fontWeight: '700', letterSpacing: 0.5 }}>{tier.label}</Text>
@@ -111,6 +114,14 @@ export function ZeroDTECard({ item, rank, onPress }: Props) {
           ${item.premium.toFixed(2)}/share · ${(item.premium * 100).toFixed(0)}/contract
         </Text>
       </View>
+
+      {/* ── Fail reason for candidates ── */}
+      {isCandidate && item.fail_reason && (
+        <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.separator, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <Ionicons name="alert-circle-outline" size={12} color={colors.textTertiary} />
+          <Text style={{ color: colors.textTertiary, fontSize: 11 }}>{item.fail_reason}</Text>
+        </View>
+      )}
     </TouchableOpacity>
   );
 }

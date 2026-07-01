@@ -951,6 +951,51 @@ def run_simulation():
 
 
 
+# ── Performance reviews ───────────────────────────────────────────────────────
+
+@strategy_bp.route("/review/list", methods=["GET"])
+def list_reviews():
+    """Return recent daily review summaries (no markdown/trades for list efficiency)."""
+    from services.supabase.supabase_service import get_supabase_service
+    limit = min(int(request.args.get("limit", 30)), 90)
+    try:
+        rows = (
+            get_supabase_service().client
+            .table("performance_reviews")
+            .select("review_date, net_pnl, trade_count, win_rate, winners, losers, created_at")
+            .order("review_date", desc=True)
+            .limit(limit)
+            .execute()
+            .data or []
+        )
+        return jsonify({"success": True, "data": rows, "count": len(rows)})
+    except Exception as e:
+        logger.error("[review/list] %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@strategy_bp.route("/review/<review_date>", methods=["GET"])
+def get_review(review_date: str):
+    """Return full review for a date including markdown and trades_json."""
+    from services.supabase.supabase_service import get_supabase_service
+    try:
+        rows = (
+            get_supabase_service().client
+            .table("performance_reviews")
+            .select("*")
+            .eq("review_date", review_date)
+            .limit(1)
+            .execute()
+            .data or []
+        )
+        if not rows:
+            return jsonify({"success": False, "error": "Review not found"}), 404
+        return jsonify({"success": True, "data": rows[0]})
+    except Exception as e:
+        logger.error("[review/%s] %s", review_date, e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # ── Manual review trigger ─────────────────────────────────────────────────────
 
 @strategy_bp.route("/review/generate", methods=["POST"])

@@ -1,4 +1,4 @@
-export type ZeroDTETier = 'FIRE' | 'SET' | 'WATCH';
+export type ZeroDTETier = 'FIRE' | 'SET' | 'WATCH' | 'CANDIDATE';
 export type ContractType = 'call' | 'put';
 
 export interface ZeroDTEOpportunity {
@@ -28,6 +28,7 @@ export interface ZeroDTEOpportunity {
   premium: number;
   minutes_remaining: number;
   time_penalty?: number;
+  fail_reason?: string;
 }
 
 export interface ZeroDTEScanMeta {
@@ -43,9 +44,10 @@ export interface ZeroDTEScanMeta {
 }
 
 export const TIER_CONFIG: Record<ZeroDTETier, { label: string; color: string; bg: string; emoji: string }> = {
-  FIRE:  { label: 'FIRE',  color: '#F97316', bg: '#431407', emoji: '🔥' },
-  SET:   { label: 'SET',   color: '#10B981', bg: '#064E3B', emoji: '✅' },
-  WATCH: { label: 'WATCH', color: '#94A3B8', bg: '#1E293B', emoji: '👁' },
+  FIRE:      { label: 'FIRE',      color: '#F97316', bg: '#431407', emoji: '🔥' },
+  SET:       { label: 'SET',       color: '#10B981', bg: '#064E3B', emoji: '✅' },
+  WATCH:     { label: 'WATCH',     color: '#94A3B8', bg: '#1E293B', emoji: '👁' },
+  CANDIDATE: { label: 'CANDIDATE', color: '#64748B', bg: '#1E293B', emoji: '🔍' },
 };
 
 // ── Position profiles ─────────────────────────────────────────────────────────
