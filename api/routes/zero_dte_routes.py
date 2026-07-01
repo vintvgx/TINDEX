@@ -193,6 +193,60 @@ def enter_zero_dte_position():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@bp.route("/zero-dte/positions/<position_id>/exits", methods=["PATCH"])
+def update_zero_dte_exits(position_id: str):
+    """Update TP/SL levels for an open position. Body: { stop_price?, tp_ladder? }"""
+    user_id, auth_error = _require_user_id()
+    if auth_error:
+        return auth_error
+    body = request.get_json(silent=True) or {}
+
+    try:
+        rows = (
+            _sb().table("zero_dte_positions")
+            .select("*").eq("id", position_id).eq("user_id", user_id)
+            .execute().data or []
+        )
+        if not rows:
+            return jsonify({"success": False, "error": "Position not found"}), 404
+        pos = rows[0]
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+    if pos.get("status") not in ("open", "partially_closed"):
+        return jsonify({"success": False, "error": "Position is not open"}), 400
+
+    updates = {}
+    entry_price = float(pos.get("entry_price") or 0)
+
+    if "stop_price" in body:
+        stop_price = float(body["stop_price"])
+        stop_pct = (entry_price - stop_price) / entry_price if entry_price else 0
+        updates["stop_price"] = round(stop_price, 4)
+        updates["stop_pct"] = round(max(stop_pct, 0), 4)
+
+    if "tp_ladder" in body:
+        new_ladder = []
+        for step in body["tp_ladder"]:
+            new_ladder.append({
+                "level":   step.get("level", "TP1"),
+                "pct":     float(step.get("pct", 0)),
+                "qty_pct": float(step.get("qty_pct", 1.0)),
+                "hit":     bool(step.get("hit", False)),
+            })
+        updates["tp_ladder"] = new_ladder
+
+    if not updates:
+        return jsonify({"success": False, "error": "Nothing to update"}), 400
+
+    try:
+        _sb().table("zero_dte_positions").update(updates).eq("id", position_id).execute()
+        return jsonify({"success": True, "position_id": position_id, "updates": updates})
+    except Exception as e:
+        logger.error("[zero-dte/positions/exits] %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @bp.route("/zero-dte/positions/<position_id>/exit", methods=["POST"])
 def exit_zero_dte_position(position_id: str):
     """Manual close. Body: { qty?, exit_price?, reason? }"""

@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity,
-  RefreshControl, ActivityIndicator, SafeAreaView, Alert,
+  RefreshControl, ActivityIndicator, SafeAreaView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { usePerformanceReviews } from '@/hooks/queries/review/usePerformanceReviews';
 import { useGenerateReview } from '@/hooks/mutations/review/useGenerateReview';
 import { ReviewDetailModal } from '@/common/components/review/ReviewDetailModal';
+import { useToast } from '@/common/components/ui/Toast';
 import type { PerformanceReviewSummary } from '@/common/types/review';
 
 function pnlColor(pnl: number, colors: ReturnType<typeof useThemeColors>) {
@@ -35,30 +36,20 @@ export default function DailyReviewScreen() {
 
   const { data, isLoading, isFetching, refetch } = usePerformanceReviews(30);
   const generateReview = useGenerateReview();
+  const toast = useToast();
 
   const reviews: PerformanceReviewSummary[] = data?.data ?? [];
 
   const handleGenerate = () => {
-    Alert.alert(
-      'Generate Today\'s Review',
-      'This calls Claude to analyse today\'s trades. It takes ~15 seconds and costs a small amount of API credit.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Generate',
-          onPress: () => {
-            generateReview.mutate(undefined, {
-              onSuccess: (res) => {
-                const date = res?.date;
-                Alert.alert('Review ready', `Review for ${date} generated.`);
-                if (date) setSelectedDate(date);
-              },
-              onError: (e) => Alert.alert('Failed', (e as Error).message),
-            });
-          },
-        },
-      ],
-    );
+    toast.info('Generating review… this takes ~15 seconds');
+    generateReview.mutate(undefined, {
+      onSuccess: (res) => {
+        const date = res?.date as string | undefined;
+        toast.success(`Review for ${date ?? 'today'} is ready`);
+        if (date) setSelectedDate(date);
+      },
+      onError: (e) => toast.error((e as Error).message),
+    });
   };
 
   return (

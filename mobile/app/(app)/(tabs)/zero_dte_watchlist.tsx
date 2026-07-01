@@ -5,12 +5,15 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useZeroDTEWatchlist } from '@/hooks/queries/zero_dte/useZeroDTEWatchlist';
+import { useZeroDTEPositions } from '@/hooks/queries/zero_dte/useZeroDTEPositions';
 import { useRunZeroDTEScan } from '@/hooks/mutations/zero_dte/useRunZeroDTEScan';
 import { useEnterZeroDTEPosition } from '@/hooks/mutations/zero_dte/useEnterZeroDTEPosition';
+import { useUpdateZeroDTEExits } from '@/hooks/mutations/zero_dte/useUpdateZeroDTEExits';
 import { ZeroDTECard } from '@/common/components/zero_dte/ZeroDTECard';
 import { ZeroDTEEnterModal } from '@/common/components/zero_dte/ZeroDTEEnterModal';
+import { ZeroDTEEditExitsModal } from '@/common/components/zero_dte/ZeroDTEEditExitsModal';
 import { TIER_CONFIG } from '@/common/types/zero_dte';
-import type { ZeroDTEOpportunity } from '@/common/types/zero_dte';
+import type { ZeroDTEOpportunity, ZeroDTEPosition } from '@/common/types/zero_dte';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useToast } from '@/common/components/ui/Toast';
 
@@ -21,9 +24,12 @@ export default function ZeroDTEWatchlistScreen() {
   const toast  = useToast();
 
   const { data: items = [], isLoading, refetch, isFetching } = useZeroDTEWatchlist();
-  const scanMutation  = useRunZeroDTEScan();
-  const enterMutation = useEnterZeroDTEPosition();
+  const { data: openPositions = [] } = useZeroDTEPositions('open');
+  const scanMutation    = useRunZeroDTEScan();
+  const enterMutation   = useEnterZeroDTEPosition();
+  const updateExitsMut  = useUpdateZeroDTEExits();
   const [enterItem, setEnterItem] = useState<ZeroDTEOpportunity | null>(null);
+  const [editPosition, setEditPosition] = useState<ZeroDTEPosition | null>(null);
   const [scanCandidates, setScanCandidates] = useState<ZeroDTEOpportunity[]>([]);
 
   // Notify when a new auto-scan result arrives (scan_time changed on the server)
@@ -84,6 +90,23 @@ export default function ZeroDTEWatchlistScreen() {
       },
       onError: (e) => toast.error((e as Error).message),
     });
+  };
+
+  const handleUpdateExits = (
+    positionId: string,
+    stopPrice: number,
+    tpLadder: ZeroDTEPosition['tp_ladder'],
+  ) => {
+    updateExitsMut.mutate(
+      { positionId, stop_price: stopPrice, tp_ladder: tpLadder },
+      {
+        onSuccess: () => {
+          setEditPosition(null);
+          toast.success('Exit levels updated');
+        },
+        onError: (e) => toast.error((e as Error).message),
+      },
+    );
   };
 
   return (
@@ -226,6 +249,93 @@ export default function ZeroDTEWatchlistScreen() {
           }
           ListHeaderComponent={() => (
             <View>
+              {/* Open positions */}
+              {openPositions.length > 0 && (
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 8 }}>
+                    OPEN POSITIONS ({openPositions.length})
+                  </Text>
+                  {openPositions.map((pos) => {
+                    const isCall  = pos.contract_type === 'call';
+                    const sideClr = isCall ? '#10B981' : '#EF4444';
+                    const tp1     = pos.tp_ladder[0];
+                    const tp1Price = tp1 ? pos.entry_price * (1 + tp1.pct) : null;
+                    return (
+                      <View
+                        key={pos.id}
+                        style={{
+                          backgroundColor: colors.surface,
+                          borderRadius: 14,
+                          padding: 14,
+                          marginBottom: 8,
+                          borderWidth: 1,
+                          borderColor: colors.border,
+                          borderLeftWidth: 3,
+                          borderLeftColor: sideClr,
+                        }}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                          <Text style={{ color: colors.text, fontSize: 17, fontWeight: '800', flex: 1 }}>
+                            {pos.ticker}
+                          </Text>
+                          <View style={{ flexDirection: 'row', gap: 6 }}>
+                            <View style={{ backgroundColor: sideClr + '22', borderRadius: 5, paddingHorizontal: 7, paddingVertical: 2 }}>
+                              <Text style={{ color: sideClr, fontSize: 11, fontWeight: '700' }}>
+                                {isCall ? '▲' : '▼'} {pos.contract_type.toUpperCase()}
+                              </Text>
+                            </View>
+                            <View style={{ backgroundColor: pos.mode === 'live' ? '#EF4444' + '22' : '#8B5CF6' + '22', borderRadius: 5, paddingHorizontal: 7, paddingVertical: 2 }}>
+                              <Text style={{ color: pos.mode === 'live' ? '#EF4444' : '#8B5CF6', fontSize: 11, fontWeight: '700' }}>
+                                {pos.mode.toUpperCase()}
+                              </Text>
+                            </View>
+                          </View>
+                        </View>
+
+                        <View style={{ flexDirection: 'row', gap: 16, marginBottom: 10 }}>
+                          <View>
+                            <Text style={{ color: colors.textTertiary, fontSize: 10 }}>Entry</Text>
+                            <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>${pos.entry_price.toFixed(2)}</Text>
+                          </View>
+                          <View>
+                            <Text style={{ color: colors.textTertiary, fontSize: 10 }}>Stop</Text>
+                            <Text style={{ color: '#EF4444', fontSize: 13, fontWeight: '600' }}>${pos.stop_price.toFixed(2)}</Text>
+                          </View>
+                          {tp1Price !== null && (
+                            <View>
+                              <Text style={{ color: colors.textTertiary, fontSize: 10 }}>TP1</Text>
+                              <Text style={{ color: '#10B981', fontSize: 13, fontWeight: '600' }}>${tp1Price.toFixed(2)}</Text>
+                            </View>
+                          )}
+                          <View>
+                            <Text style={{ color: colors.textTertiary, fontSize: 10 }}>Qty</Text>
+                            <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>{pos.qty_remaining}/{pos.qty}</Text>
+                          </View>
+                        </View>
+
+                        <TouchableOpacity
+                          onPress={() => setEditPosition(pos)}
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 6,
+                            backgroundColor: '#3B82F6' + '22',
+                            borderRadius: 8,
+                            paddingVertical: 8,
+                            borderWidth: 1,
+                            borderColor: '#3B82F6' + '44',
+                          }}
+                        >
+                          <Ionicons name="pencil-outline" size={14} color="#3B82F6" />
+                          <Text style={{ color: '#3B82F6', fontSize: 13, fontWeight: '600' }}>Edit Exits</Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+
               {/* Surfaced opportunities */}
               {items.length > 0 && (
                 <>
@@ -288,6 +398,14 @@ export default function ZeroDTEWatchlistScreen() {
         onClose={() => setEnterItem(null)}
         onSubmit={handleEnterSubmit}
         isLoading={enterMutation.isPending}
+      />
+
+      <ZeroDTEEditExitsModal
+        position={editPosition}
+        visible={!!editPosition}
+        onClose={() => setEditPosition(null)}
+        onSubmit={handleUpdateExits}
+        isLoading={updateExitsMut.isPending}
       />
     </SafeAreaView>
   );
