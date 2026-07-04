@@ -38,7 +38,7 @@ function fmtTime(iso: string | null) {
 }
 
 function fmtPnl(n: number) {
-  return `${n >= 0 ? '+' : ''}$${Math.abs(n).toFixed(0)}`;
+  return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(0)}`;
 }
 
 // ── Parse AI markdown into display sections ───────────────────────────────────

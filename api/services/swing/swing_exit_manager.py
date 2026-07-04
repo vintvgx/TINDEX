@@ -172,12 +172,12 @@ class SwingExitManager:
             # stock price scale, not the option premium scale.
             if self.entry_underlying_price > 0 and atr > 0:
                 underlying_stop = self.entry_underlying_price - (atr * mult)
-                if current_underlying_price <= underlying_stop:
+                if underlying <= underlying_stop:
                     return self._exit(
                         exit_type="HARD_STOP",
                         qty=self.qty_remaining,
                         reason=(
-                            f"ATR stop hit: underlying ${current_underlying_price:.2f} ≤ "
+                            f"ATR stop hit: underlying ${underlying:.2f} <= "
                             f"${underlying_stop:.2f} (entry ${self.entry_underlying_price:.2f} − {mult}×ATR ${atr:.2f})"
                         ),
                     )
