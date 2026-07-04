@@ -326,6 +326,53 @@ def sell_position(strategy_id: str):
     return jsonify(result), code
 
 
+@strategy_bp.route("/configs/<strategy_id>/exits", methods=["PATCH"])
+def update_strategy_exits(strategy_id: str):
+    """
+    Update the live ExitManager's stop-loss and/or TP levels mid-trade.
+    Body: { hard_stop?, tp1?, tp2? }  — all optional, only provided fields are changed.
+    Returns the updated exit state so the client can confirm the new levels.
+    """
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        return jsonify({"status": "error", "message": "Engine not found"}), 404
+    em = engine.exit_manager
+    if not em:
+        return jsonify({"status": "error", "message": "No active position — nothing to update"}), 409
+
+    data = request.get_json() or {}
+    changed = {}
+
+    if "hard_stop" in data:
+        val = float(data["hard_stop"])
+        if val <= 0:
+            return jsonify({"status": "error", "message": "hard_stop must be > 0"}), 400
+        em.hard_stop = val
+        changed["hard_stop"] = round(val, 4)
+
+    if "tp1" in data:
+        val = float(data["tp1"])
+        if val <= em.entry_premium:
+            return jsonify({"status": "error", "message": "tp1 must be above entry premium"}), 400
+        em.tp1 = val
+        changed["tp1"] = round(val, 4)
+
+    if "tp2" in data:
+        val = float(data["tp2"])
+        em.tp2 = val
+        changed["tp2"] = round(val, 4)
+
+    if not changed:
+        return jsonify({"status": "noop", "message": "No fields provided"}), 400
+
+    logger.info("[strategy] Updated exits for %s: %s", strategy_id, changed)
+    return jsonify({
+        "status": "ok",
+        "updated": changed,
+        "exit_state": em.to_dict(),
+    })
+
+
 @strategy_bp.route("/configs/<strategy_id>/position", methods=["GET"])
 def get_strategy_position(strategy_id: str):
     engine = _engines.get(strategy_id)
@@ -717,6 +764,61 @@ def get_accounts_history():
     })
 
 
+@strategy_bp.route("/accounts/positions", methods=["GET"])
+def get_alpaca_positions():
+    """
+    Fast endpoint: open position market values for paper and/or live.
+
+    Called every 5 s by the mobile app when positions are active so the UI
+    can derive a live equity without waiting for the slower /accounts/both poll.
+
+      displayEquity = cash + sum(position.market_value)
+
+    cash is stable mid-trade; position.market_value ticks with options quotes.
+    ?mode=paper | live | both  (default: both)
+    """
+    import os
+    from alpaca.trading.client import TradingClient
+
+    mode = request.args.get("mode", "both")
+
+    def _fetch(paper: bool) -> dict:
+        try:
+            key    = os.getenv("ALPACA_PAPER_API_KEY" if paper else "ALPACA_LIVE_API_KEY")
+            secret = os.getenv("ALPACA_PAPER_SECRET_KEY" if paper else "ALPACA_LIVE_SECRET_KEY")
+            client = TradingClient(key, secret, paper=paper)
+            raw    = client.get_all_positions()
+            positions = [
+                {
+                    "symbol":           str(p.symbol),
+                    "qty":              float(p.qty or 0),
+                    "side":             str(p.side),
+                    "market_value":     float(p.market_value or 0),
+                    "unrealized_pl":    float(p.unrealized_pl or 0),
+                    "unrealized_plpc":  float(p.unrealized_plpc or 0),
+                    "current_price":    float(p.current_price or 0),
+                    "avg_entry_price":  float(p.avg_entry_price or 0),
+                }
+                for p in raw
+            ]
+            return {
+                "available":           True,
+                "positions":           positions,
+                "total_market_value":  sum(p["market_value"]   for p in positions),
+                "total_unrealized_pl": sum(p["unrealized_pl"]  for p in positions),
+            }
+        except Exception as e:
+            logger.warning("[accounts/positions] paper=%s %s", paper, e)
+            return {"available": False, "positions": [], "total_market_value": 0, "total_unrealized_pl": 0, "error": str(e)}
+
+    result: dict = {"success": True}
+    if mode in ("paper", "both"):
+        result["paper"] = _fetch(True)
+    if mode in ("live", "both"):
+        result["live"] = _fetch(False)
+    return jsonify(result)
+
+
 # ── Trade history / Stats ──────────────────────────────────────────────────────
 
 @strategy_bp.route("/data/reset", methods=["POST"])
@@ -847,6 +949,111 @@ def run_simulation():
     }), 202
 
 
+
+
+# ── Performance reviews ───────────────────────────────────────────────────────
+
+@strategy_bp.route("/review/list", methods=["GET"])
+def list_reviews():
+    """Return recent daily review summaries (no markdown/trades for list efficiency)."""
+    from services.supabase.supabase_service import get_supabase_service
+    limit = min(int(request.args.get("limit", 30)), 90)
+    try:
+        rows = (
+            get_supabase_service().client
+            .table("performance_reviews")
+            .select("review_date, net_pnl, trade_count, win_rate, winners, losers, created_at")
+            .order("review_date", desc=True)
+            .limit(limit)
+            .execute()
+            .data or []
+        )
+        return jsonify({"success": True, "data": rows, "count": len(rows)})
+    except Exception as e:
+        logger.error("[review/list] %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@strategy_bp.route("/review/<review_date>", methods=["GET"])
+def get_review(review_date: str):
+    """Return full review for a date including markdown and trades_json."""
+    from services.supabase.supabase_service import get_supabase_service
+    try:
+        rows = (
+            get_supabase_service().client
+            .table("performance_reviews")
+            .select("*")
+            .eq("review_date", review_date)
+            .limit(1)
+            .execute()
+            .data or []
+        )
+        if not rows:
+            return jsonify({"success": False, "error": "Review not found"}), 404
+        return jsonify({"success": True, "data": rows[0]})
+    except Exception as e:
+        logger.error("[review/%s] %s", review_date, e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── Manual review trigger ─────────────────────────────────────────────────────
+
+@strategy_bp.route("/review/generate", methods=["POST"])
+def trigger_review():
+    """
+    Manually generate (or re-generate) the daily performance review.
+    Body: { "date": "YYYY-MM-DD" }  — defaults to today if omitted.
+    Useful when the 4:15 PM scheduler missed due to a Railway restart.
+    """
+    from datetime import date as _date
+    from services.strategy.review_generator import ReviewGenerator
+    from services.supabase.supabase_service import get_supabase_service
+
+    body = request.get_json(silent=True) or {}
+    date_str = body.get("date")
+    try:
+        session_date = _date.fromisoformat(date_str) if date_str else _date.today()
+    except ValueError:
+        return jsonify({"success": False, "error": f"Invalid date: {date_str}"}), 400
+
+    try:
+        sb = get_supabase_service().client
+        gen = ReviewGenerator(sb)
+        content, meta = gen.generate(session_date)
+        trades = gen._fetch_trades(session_date)
+        gen.save_to_supabase(session_date, content, trades, meta)
+        return jsonify({
+            "success": True,
+            "date": str(session_date),
+            "meta": meta,
+            "preview": content[:500] + ("..." if len(content) > 500 else ""),
+        })
+    except Exception as e:
+        logger.error("[strategy/review/generate] Failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ── EMA / Technical data ──────────────────────────────────────────────────────
+
+@strategy_bp.route("/technicals/<ticker>", methods=["GET"])
+def get_ticker_technicals(ticker: str):
+    from services.technical_service import get_technicals
+    force = request.args.get("force", "false").lower() == "true"
+    data = get_technicals(ticker.upper(), force_refresh=force)
+    if data.get("error"):
+        return jsonify({"success": False, "error": data["error"]}), 422
+    return jsonify({"success": True, "data": data})
+
+
+@strategy_bp.route("/technicals/batch", methods=["POST"])
+def get_batch_technicals():
+    from services.technical_service import get_technicals
+    body = request.get_json(silent=True) or {}
+    tickers = [t.upper().strip() for t in (body.get("tickers") or []) if t]
+    if not tickers:
+        return jsonify({"success": False, "error": "tickers required"}), 400
+    results = {t: get_technicals(t) for t in tickers}
+    return jsonify({"success": True, "data": results})
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

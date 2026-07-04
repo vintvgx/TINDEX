@@ -40,6 +40,8 @@ from routes.options_routes import bp as options_bp
 from routes.portfolio_routes import bp as portfolio_bp
 from routes.agent_routes import bp as agent_bp
 from routes.flow_routes import bp as flow_bp
+from routes.swing_routes import bp as swing_bp
+from routes.zero_dte_routes import bp as zero_dte_bp
 
 app.register_blueprint(ticker_bp)
 app.register_blueprint(yahoo_bp)
@@ -48,6 +50,8 @@ app.register_blueprint(options_bp)
 app.register_blueprint(portfolio_bp)
 app.register_blueprint(agent_bp)
 app.register_blueprint(flow_bp)
+app.register_blueprint(swing_bp)
+app.register_blueprint(zero_dte_bp)
 
 
 # ── WebSocket: live price stream ───────────────────────────────────────────────
@@ -137,6 +141,24 @@ try:
     app.register_blueprint(strategy_bp)
     init_strategy_routes(_strategy_engines, stream_manager=_option_stream_manager)
     logger.info("[App] ORB strategy engines initialised (%d configs)", len(_strategy_engines))
+
+    # Schedule the 4:15 PM ET daily review at startup so it survives Railway restarts.
+    # Previously this was only registered inside /tindex/orb/start — meaning a mid-day
+    # server restart would silently drop the job and produce no review that day.
+    try:
+        from services.strategy.scheduler import schedule_daily_review as _sched_review
+        from services.supabase.supabase_service import get_supabase_service as _get_sb
+        _sched_review(_get_sb().client)
+        logger.info("[App] Daily review job registered at startup")
+    except Exception as _rev_err:
+        logger.warning("[App] Daily review scheduler registration failed: %s", _rev_err)
+
+    try:
+        from services.strategy.scheduler import schedule_zero_dte_scans as _sched_zero_dte
+        _sched_zero_dte(_get_sb().client)
+        logger.info("[App] 0DTE scan jobs registered at startup")
+    except Exception as _zdre:
+        logger.warning("[App] 0DTE scan scheduler failed: %s", _zdre)
 
     @sock.route("/ws/strategy/<strategy_id>/live")
     def ws_strategy_live(ws, strategy_id: str):

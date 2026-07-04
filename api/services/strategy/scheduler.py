@@ -215,6 +215,46 @@ def _run_daily_review(supabase_client):
         logger.error("[Scheduler] Daily review job failed: %s", e)
 
 
+def schedule_zero_dte_scans(supabase_client):
+    """
+    Register 5 intraday cron jobs for the 0DTE watchlist scanner.
+    Scan windows: 9:45, 10:30, 11:30, 12:30, 13:30 ET (Mon–Fri).
+    Safe to call multiple times — fixed job IDs prevent duplication.
+    """
+    sched = get_scheduler()
+    if not sched:
+        logger.warning("[Scheduler] APScheduler not available — 0DTE scans not scheduled")
+        return
+    if not sched.running:
+        sched.start()
+
+    windows = [(9, 45), (10, 30), (11, 30), (12, 30), (13, 30)]
+    for hour, minute in windows:
+        job_id = f"job_zero_dte_{hour:02d}{minute:02d}"
+        sched.add_job(
+            lambda h=hour, m=minute: _run_zero_dte_scan(supabase_client),
+            CronTrigger(day_of_week="mon-fri", hour=hour, minute=minute, timezone=ET),
+            id=job_id,
+            replace_existing=True,
+        )
+    logger.info("[Scheduler] 0DTE scan jobs registered at %s ET mon–fri",
+                ", ".join(f"{h:02d}:{m:02d}" for h, m in windows))
+
+
+def _run_zero_dte_scan(supabase_client):
+    try:
+        from services.zero_dte.zero_dte_service import get_zero_dte_scanner
+        scanner = get_zero_dte_scanner(supabase_client)
+        result  = scanner.run_scan()
+        meta    = result.get("meta", {})
+        logger.info(
+            "[Scheduler] 0DTE scan: %d surfaced, %d min remaining",
+            meta.get("surfaced", 0), meta.get("minutes_remaining", 0),
+        )
+    except Exception as e:
+        logger.error("[Scheduler] 0DTE scan failed: %s", e)
+
+
 def init_scheduler(engine):
     """Start the BackgroundScheduler and register jobs for the current engine config."""
     sched = get_scheduler()

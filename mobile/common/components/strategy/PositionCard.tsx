@@ -15,8 +15,11 @@ const PROFILE_EMOJI: Record<ProfileKey, string> = {
   SCALPER:     '⚡',
   PRECISION:   '🎯',
   MOMENTUM:    '📈',
-  CONVICTION:  '💎',
-  ALL_IN:      '🔥',
+  CONVICTION:    '💎',
+  ALL_IN:        '🔥',
+  OTM_RUNNER:    '🎯',
+  OTM_CONVICTION:'💡',
+  MANUAL:        '🛠️',
 };
 
 interface Props {

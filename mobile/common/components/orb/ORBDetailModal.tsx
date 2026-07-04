@@ -17,6 +17,9 @@ import { GapTrendBadges } from './GapTrendBadges';
 import type { GapTrendContext } from '@/common/types/orb';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
+import { FlowFeed } from '@/common/components/options/FlowFeed';
+import { useTickerTechnicals } from '@/hooks/queries/technicals/useTickerTechnicals';
+import { EMAZoneBadge } from '@/common/components/shared/EMAZoneBadge';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,7 +31,7 @@ interface ORBDetailModalProps {
   gapTrendContext?: GapTrendContext | null;
 }
 
-type Tab = 'Overview' | 'Levels' | 'Details';
+type Tab = 'Overview' | 'Levels' | 'Details' | 'Flow';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -116,6 +119,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   const setMonitoringActive = useUnfollowTickerORB();
   const { authState: { user } } = useAuth();
   const [activeTab, setActiveTab] = useState<Tab>('Overview');
+  const { data: tech } = useTickerTechnicals(data?.ticker ?? null);
 
   const handleUnfollow = () => {
     if (!data?.ticker) return;
@@ -313,6 +317,12 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
 
   // ── Tab content ────────────────────────────────────────────────────────────
 
+  const FlowTab = () => (
+    <View style={{ flex: 1 }}>
+      <FlowFeed ticker={data.ticker} />
+    </View>
+  );
+
   const OverviewTab = () => (
     <View style={styles.tabContent}>
       {/* Contract Suggestion */}
@@ -376,6 +386,27 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
       {gapTrendContext && gapTrendContext.gap_direction != null && (
         <View style={[styles.gapRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <GapTrendBadges context={gapTrendContext} compact />
+        </View>
+      )}
+
+      {/* EMA Trend Zone */}
+      {tech && !(tech as any).error && (
+        <View style={styles.techPanel}>
+          <View style={styles.techHeader}>
+            <Text style={styles.techTitle}>EMA TREND ZONE</Text>
+            <EMAZoneBadge zone={tech.zone} />
+          </View>
+          <View style={styles.emaRow}>
+            <EMALine label="EMA 20" value={tech.ema20} current={tech.current_price} />
+            {tech.ema50  != null && <EMALine label="EMA 50"  value={tech.ema50}  current={tech.current_price} />}
+            {tech.ema200 != null && <EMALine label="EMA 200" value={tech.ema200} current={tech.current_price} />}
+          </View>
+          <View style={styles.emaStats}>
+            <StatChip label="RSI" value={tech.rsi.toFixed(1)} />
+            <StatChip label="ATR" value={`$${tech.atr.toFixed(2)}`} />
+            <StatChip label="Dist EMA20" value={`${tech.dist_from_ema20_pct.toFixed(1)}%`} />
+            <StatChip label="MACD" value={tech.macd_above_signal ? '▲ Above' : '▼ Below'} positive={tech.macd_above_signal} />
+          </View>
         </View>
       )}
     </View>
@@ -528,7 +559,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
         </View>
       )}
 
-      {/* Actions */}
+      {/* Unfollow / navigate actions */}
       <View style={{ gap: 10 }}>
         {data.monitoring_active && (
           <TouchableOpacity
@@ -604,7 +635,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
 
         {/* Tab bar */}
         <View style={[styles.tabRow, { borderBottomColor: colors.separator }]}>
-          {(['Overview', 'Levels', 'Details'] as Tab[]).map(tab => {
+          {(['Overview', 'Levels', 'Details', 'Flow'] as Tab[]).map(tab => {
             const active = activeTab === tab;
             return (
               <TouchableOpacity
@@ -626,12 +657,38 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
           {activeTab === 'Overview' && <OverviewTab />}
           {activeTab === 'Levels' && <LevelsTab />}
           {activeTab === 'Details' && <DetailsTab />}
+          {activeTab === 'Flow' && <FlowTab />}
         </View>
 
       </SafeAreaView>
     </Modal>
   );
 };
+
+// ─── EMA sub-components ───────────────────────────────────────────────────────
+
+function EMALine({ label, value, current }: { label: string; value: number; current: number }) {
+  const above = current > value;
+  return (
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+      <Text style={{ color: '#94A3B8', fontSize: 12 }}>{label}</Text>
+      <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+        <Text style={{ color: '#F1F5F9', fontSize: 12, fontVariant: ['tabular-nums'] }}>${value.toFixed(2)}</Text>
+        <Text style={{ color: above ? '#10B981' : '#EF4444', fontSize: 10 }}>{above ? '▲ above' : '▼ below'}</Text>
+      </View>
+    </View>
+  );
+}
+
+function StatChip({ label, value, positive }: { label: string; value: string; positive?: boolean }) {
+  const color = positive === undefined ? '#94A3B8' : positive ? '#10B981' : '#EF4444';
+  return (
+    <View style={{ backgroundColor: '#1E293B', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 }}>
+      <Text style={{ color: '#64748B', fontSize: 9, marginBottom: 1 }}>{label}</Text>
+      <Text style={{ color, fontSize: 12, fontWeight: '600' }}>{value}</Text>
+    </View>
+  );
+}
 
 // ─── StatItem ─────────────────────────────────────────────────────────────────
 
@@ -787,6 +844,13 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   rowLabel: { fontSize: 13, fontWeight: '500' },
   rowValue: { fontSize: 15, fontWeight: '600' },
+
+  // EMA panel
+  techPanel:  { marginTop: 4, backgroundColor: '#0F172A', borderRadius: 10, padding: 12, gap: 8 },
+  techHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  techTitle:  { color: '#64748B', fontSize: 10, fontWeight: '700', letterSpacing: 1 },
+  emaRow:     { gap: 2 },
+  emaStats:   { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
 
   // Action buttons
   actionBtn: {

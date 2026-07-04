@@ -1440,33 +1440,6 @@ class ORBEngine:
         if not getattr(self, "orh", None) or getattr(self, "session_skipped", False):
             return
 
-        # Bar-close confirmation: after the 3-minute OrbService signal the engine
-        # waits for the first 1-minute bar to CLOSE on the correct side of the ORH/ORL
-        # before entering.  A wick or momentary tick above the level is not enough.
-        if getattr(self, "_bar_confirm_pending", False) and not self.trade_taken:
-            direction = self._bar_confirm_direction or ""
-            orh = self.orh or 0.0
-            orl = self.orl or 0.0
-            confirmed = bar.close > orh if direction == "CALL" else bar.close < orl
-            level_str = f"{orh:.2f}" if direction == "CALL" else f"{orl:.2f}"
-            side_str  = "above ORH" if direction == "CALL" else "below ORL"
-            if confirmed:
-                self.debug.emit("SUCCESS",
-                    f"Bar-close confirmed {direction} breakout — "
-                    f"bar closed at {bar.close:.2f} ({side_str} {level_str}) — entering")
-                self._bar_confirm_pending   = False
-                self._bar_confirm_direction = None
-                self._enter_trade(direction, bar.close)
-            else:
-                self.debug.emit("WARN",
-                    f"Bar-close fakeout — {direction} pending but bar closed at "
-                    f"{bar.close:.2f}, did not clear {'ORH' if direction == 'CALL' else 'ORL'} "
-                    f"{level_str} — entry cancelled")
-                self._bar_confirm_pending   = False
-                self._bar_confirm_direction = None
-                self._bar_confirm_price     = None
-            return
-
         self.on_price_tick(
             current_price=bar.close,
             current_volume=bar.volume,

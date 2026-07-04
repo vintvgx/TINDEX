@@ -16,6 +16,7 @@
 | `routes/agent_routes.py` | `agent` | *(none)* | TINDEX AI chat (SSE stream), contract AI scoring |
 | `routes/flow_routes.py` | `flow` | *(none)* | Unusual Whales flow alerts (global + per-ticker) |
 | `routes/strategy_routes.py` | `strategy_bp` | *(none)* | ORB strategy CRUD, immediate-trade engine, strategy WebSocket helper |
+| `routes/swing_routes.py` | `swing` | *(none)* | Swing trade pipeline, scores, watchlist, positions (paper+live), run logs |
 
 > All blueprints use **no `url_prefix`** — every URL path is identical to what it was before the split.
 
@@ -33,6 +34,7 @@
 | AI chat, AI contract scoring | `agent_routes.py` |
 | Option flow / dark pool alerts | `flow_routes.py` |
 | ORB strategy config, paper/live toggle, trade history | `strategy_routes.py` |
+| Swing trade pipeline, scores, watchlist, positions, logs | `swing_routes.py` |
 | WebSocket handlers | `app.py` (needs `sock` object directly) |
 
 ---

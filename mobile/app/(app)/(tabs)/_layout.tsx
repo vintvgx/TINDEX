@@ -50,6 +50,7 @@ function Shell() {
             <Tabs.Screen name="track-legacy" options={{ href: null }} />
             <Tabs.Screen name="strategy" options={{ title: 'Strategies' }} />
             <Tabs.Screen name="orb" options={{ title: 'ORB' }} />
+            <Tabs.Screen name="swing" options={{ href: null }} />
             <Tabs.Screen name="options" options={{ title: 'Contracts' }} />
             <Tabs.Screen name="profile" options={{ title: 'Profile' }} />
             <Tabs.Screen name="notifications" options={{ href: null }} />
@@ -59,6 +60,8 @@ function Shell() {
             <Tabs.Screen name="position" options={{ href: null }} />
             <Tabs.Screen name="tradelog" options={{ href: null }} />
             <Tabs.Screen name="accounts" options={{ href: null }} />
+            <Tabs.Screen name="zero_dte_watchlist" options={{ href: null }} />
+            <Tabs.Screen name="daily_review" options={{ href: null }} />
           </Tabs>
         </SafeAreaInsetsContext.Provider>
       </View>

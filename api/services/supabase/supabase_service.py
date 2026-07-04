@@ -197,6 +197,30 @@ class SupabaseService:
 
         logger.info("Supabase client initialized successfully")
 
+    def resolve_authenticated_user_id(self, access_token: str) -> str:
+        """
+        Resolve the caller's user id from a Supabase access token.
+
+        Args:
+            access_token: Bearer JWT from the client session
+
+        Returns:
+            Authenticated user id
+
+        Raises:
+            ValueError: when the token is missing, invalid, or expired
+        """
+        if not access_token:
+            raise ValueError("Missing access token")
+
+        response = self.client.auth.get_user(access_token)
+        user = getattr(response, "user", None)
+        user_id = getattr(user, "id", None) if user else None
+        if not user_id:
+            raise ValueError("Invalid or expired access token")
+
+        return user_id
+
     def verify_user(self, user_id: str | None) -> bool:
         """
         Verifies the user id is an authenticated user within supabase.

@@ -26,6 +26,7 @@ interface NavItem {
 
 interface NavSection {
   title?: string;
+  beta?: boolean;
   items: NavItem[];
 }
 
@@ -42,12 +43,21 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
+    title: 'Swing Trading',
+    beta: true,
+    items: [
+      { label: 'Swing Trade Scan', route: '/(app)/(tabs)/swing' },
+    ],
+  },
+  {
     title: 'ORB Trading',
     items: [
+      { label: '0DTE Watchlist', route: '/(app)/(tabs)/zero_dte_watchlist' },
       { label: 'Accounts', route: '/(app)/(tabs)/accounts' },
       { label: 'Strategy Control', route: '/(app)/(tabs)/strategy' },
       { label: 'Live Position', route: '/(app)/(tabs)/position' },
       { label: 'Trade Log', route: '/(app)/(tabs)/tradelog' },
+      { label: 'Daily Review', route: '/(app)/(tabs)/daily_review' },
     ],
   },
   {
@@ -173,9 +183,16 @@ export function DrawerMenu() {
             {SECTIONS.map((section, si) => (
               <View key={si} style={styles.section}>
                 {section.title && (
-                  <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
-                    {section.title}
-                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14, marginLeft: 4 }}>
+                    <Text style={[styles.sectionTitle, { color: colors.textTertiary, marginBottom: 0, marginLeft: 0 }]}>
+                      {section.title}
+                    </Text>
+                    {section.beta && (
+                      <View style={{ backgroundColor: '#8B5CF622', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 }}>
+                        <Text style={{ color: '#8B5CF6', fontSize: 9, fontWeight: '700', letterSpacing: 0.5 }}>BETA</Text>
+                      </View>
+                    )}
+                  </View>
                 )}
                 {/* In each section's group, add the border color from theme: */}
                 <View style={styles.group}>

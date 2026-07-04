@@ -21,8 +21,11 @@ const BORDER_COLORS: Record<ProfileKey, string> = {
   SCALPER:     '#22C55E',
   PRECISION:   '#84CC16',
   MOMENTUM:    '#F59E0B',
-  CONVICTION:  '#F97316',
-  ALL_IN:      '#EF4444',
+  CONVICTION:    '#F97316',
+  ALL_IN:        '#EF4444',
+  OTM_RUNNER:    '#8B5CF6',
+  OTM_CONVICTION:'#EC4899',
+  MANUAL:        '#94A3B8',
 };
 
 export const ProfileCard: React.FC<Props> = ({ profile, selected, onSelect }) => {
