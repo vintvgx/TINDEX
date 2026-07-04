@@ -968,6 +968,8 @@ def list_reviews():
             .execute()
             .data or []
         )
+        for row in rows:
+            row["is_reviewed"] = True
         return jsonify({"success": True, "data": rows, "count": len(rows)})
     except Exception as e:
         logger.error("[review/list] %s", e, exc_info=True)

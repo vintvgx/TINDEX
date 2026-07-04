@@ -6,6 +6,7 @@ export interface PerformanceReviewSummary {
   winners: number;
   losers: number;
   created_at: string;
+  is_reviewed: boolean;
 }
 
 export interface ReviewTrade {
