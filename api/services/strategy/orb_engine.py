@@ -51,6 +51,7 @@ STRATEGY_DEFAULTS = {
     "otm_fib_level":           "1.0",
     "debug_mode":              False,
     "smart_contracts":         False,
+    "flow_gate_enabled":       True,   # False = flow is informational only, never blocks entry
     "id":                      None,
 }
 
@@ -101,6 +102,7 @@ class ORBEngine:
         self.otm_fib_level           = self.config.get("otm_fib_level", "1.0")
         self.smart_contracts         = self.config.get("smart_contracts", False)
         self.debug_enabled           = self.config.get("debug_mode", False)
+        self.flow_gate_enabled       = self.config.get("flow_gate_enabled", True)
         custom_thresholds            = self.config.get("custom_thresholds")
         exit_overrides               = self.config.get("exit_overrides")
         self.stream_manager          = getattr(self, "_stream_manager_ref", None)
@@ -168,10 +170,11 @@ class ORBEngine:
         self.position         = None
         self.contract_symbol  = None
         self.exit_manager     = None
-        self.trade_taken      = False
-        self.session_date     = None
-        self.session_skipped  = False
-        self.skip_reason      = None
+        self.trade_taken           = False
+        self._trade_was_taken_today = False  # stays True all day once any entry executes
+        self.session_date          = None
+        self.session_skipped       = False
+        self.skip_reason           = None
         self.active_trade_id  = None
         self.trade_entry_time        = None   # used by 30-min timer notification
         self.timer_notified          = False  # ensures the 30-min update fires only once
@@ -664,19 +667,41 @@ class ORBEngine:
                 f"(session P&L: ${self._session_realized_pnl:.0f}). "
                 f"Strategy paused for today.",
             )
+            self.notifier.notify_skip(
+                self.ticker,
+                f"DAILY_LOSS_LIMIT (session P&L: ${self._session_realized_pnl:.0f})",
+            )
             return
 
         if self._check_reentry_cooldown(direction):
-            return  # detailed message emitted inside _check_reentry_cooldown
+            cooldown_min = self.profile.get("re_entry_cooldown_min", 45)
+            last = self._last_loss_by_direction.get(direction, {})
+            elapsed = int(
+                (datetime.now(ET) - last["time"]).total_seconds() / 60
+            ) if last.get("time") else 0
+            self.notifier.notify_skip(
+                self.ticker,
+                f"RE_ENTRY_COOLDOWN ({direction} — {cooldown_min - elapsed}m remaining)",
+            )
+            return
 
         uw_key = os.getenv("UNUSUAL_WHALES_KEY")
-        if not self.sentiment.confirm_with_flow(self.ticker, direction, uw_key):
-            logger.info("[ORBEngine] Flow confirmation failed for %s %s — skipping entry",
-                        self.ticker, direction)
-            self.debug.emit("ERROR", f"Entry blocked — flow confirmation failed ({direction})")
-            self.notifier.notify_flow_blocked(self.ticker, direction)
-            return
-        self.debug.emit("INFO", f"Flow confirmed for {direction}")
+        flow_agrees = self.sentiment.confirm_with_flow(self.ticker, direction, uw_key)
+        if not flow_agrees:
+            if self.flow_gate_enabled:
+                logger.info("[ORBEngine] Flow gate blocked %s %s entry", self.ticker, direction)
+                self.debug.emit("ERROR", f"Entry blocked — flow gate ({direction})")
+                self.notifier.notify_flow_blocked(self.ticker, direction)
+                return
+            else:
+                # Gate disabled — notify for awareness but don't block the trade.
+                logger.info("[ORBEngine] Flow mismatch for %s %s — gate disabled, proceeding",
+                            self.ticker, direction)
+                self.debug.emit("WARN",
+                    f"Flow disagrees with {direction} but flow_gate_enabled=False — entering anyway")
+                self.notifier.notify_flow_blocked(self.ticker, direction)
+        else:
+            self.debug.emit("INFO", f"Flow confirmed for {direction}")
 
         # VWAP soft confirmation (log only — does not block entry)
         if self.session_vwap is not None:
@@ -862,9 +887,10 @@ class ORBEngine:
             # TP/SL levels are anchored to what was actually paid.
             entry_premium = self._resolve_entry_premium(submitted, contract["ask"])
 
-            self.position         = direction
-            self.contract_symbol  = contract["symbol"]
-            self.trade_taken      = True
+            self.position               = direction
+            self.contract_symbol        = contract["symbol"]
+            self.trade_taken            = True
+            self._trade_was_taken_today = True  # survives the position close
             self.trade_entry_time = datetime.now(ET)
             self.timer_notified   = False
             self._active_trade_pnl = 0.0  # reset accumulator for this trade
@@ -1609,6 +1635,7 @@ class ORBEngine:
             "trade_days":                 list(self.trade_days),
             "paper_mode":                 self.paper,
             "debug_mode":                 self.debug_enabled,
+            "flow_gate_enabled":          self.flow_gate_enabled,
             "orh":                        self.orh,
             "orl":                        self.orl,
             "orb_range":                  self.orb_range,

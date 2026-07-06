@@ -134,8 +134,10 @@ def _eod_reset(engine):
             )
         except Exception as ex:
             logger.error("[Scheduler] EOD log/notify failed: %s", ex)
-    elif engine.orh and not engine.session_skipped:
-        # Session was armed and watched all day but no breakout fired — notify user.
+    elif engine.orh and not engine.session_skipped and not getattr(engine, "_trade_was_taken_today", False):
+        # Session was armed, watched all day, and no trade was entered at all.
+        # Suppress this if a trade was taken and closed earlier — _trade_was_taken_today
+        # stays True even after the position closes, unlike trade_taken which resets.
         engine.notifier.notify_no_trade_eod(
             ticker=engine.ticker,
             profile_key=engine.profile_key,

@@ -89,6 +89,7 @@ type FormState = {
   budget_otm_mode:        boolean;
   otm_fib_level:          OtmFibLevel;
   smart_contracts:        boolean;
+  flow_gate_enabled:      boolean;
   consol_exit:            boolean;
   volume_exit:            boolean;
 };
@@ -105,6 +106,7 @@ const DEFAULT_FORM: FormState = {
   budget_otm_mode:        false,
   otm_fib_level:          '1.0',
   smart_contracts:        false,
+  flow_gate_enabled:      true,
   consol_exit:            false,
   volume_exit:            false,
 };
@@ -122,6 +124,7 @@ function configToForm(cfg: StrategyConfig): FormState {
     budget_otm_mode:        cfg.budget_otm_mode ?? false,
     otm_fib_level:          cfg.otm_fib_level ?? '1.0',
     smart_contracts:        cfg.smart_contracts ?? false,
+    flow_gate_enabled:      cfg.flow_gate_enabled ?? true,
     consol_exit:            cfg.exit_overrides?.consol_exit ?? false,
     volume_exit:            cfg.exit_overrides?.volume_exit ?? false,
   };
@@ -265,6 +268,7 @@ export default function StrategyScreen() {
       budget_otm_mode:        form.budget_otm_mode,
       otm_fib_level:          form.otm_fib_level,
       smart_contracts:        form.smart_contracts,
+      flow_gate_enabled:      form.flow_gate_enabled,
       ...modeToConfig(form.mode),
     };
     setSaving(true);
@@ -1222,7 +1226,7 @@ function StrategyFormModal({
 
             <SectionHeader title="Breakout Window" colors={colors} />
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <View style={[styles.configRow, { borderBottomWidth: 0 }]}>
+              <View style={[styles.configRow, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.configLabel, { color: colors.text }]}>Bypass Time Limit</Text>
                   <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>
@@ -1234,6 +1238,23 @@ function StrategyFormModal({
                   onValueChange={v => onPatch('bypass_breakout_window', v)}
                   thumbColor={form.bypass_breakout_window ? '#FF9F0A' : '#ccc'}
                   trackColor={{ true: '#FF9F0A55', false: colors.border }}
+                />
+              </View>
+
+              <View style={[styles.configRow, { borderBottomWidth: 0 }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.configLabel, { color: colors.text }]}>Flow Gate</Text>
+                  <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>
+                    {form.flow_gate_enabled
+                      ? 'Unusual Whales flow can block entry when it disagrees'
+                      : 'Flow is informational only — will not block any entry'}
+                  </Text>
+                </View>
+                <Switch
+                  value={form.flow_gate_enabled}
+                  onValueChange={v => onPatch('flow_gate_enabled', v)}
+                  thumbColor={form.flow_gate_enabled ? '#5856D6' : '#ccc'}
+                  trackColor={{ true: '#5856D655', false: colors.border }}
                 />
               </View>
             </View>

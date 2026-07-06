@@ -12,6 +12,7 @@ import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition
 import { useAlpacaAccount } from '@/hooks/queries/strategy/useAlpacaAccount';
 import { useForceClosePosition } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
 import { PositionCard } from '@/common/components/strategy/PositionCard';
+import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
 import type { FibLevels } from '@/common/types/strategy';
 
 const MOCK_POSITIONS: PositionEntry[] = [
@@ -49,13 +50,18 @@ export default function PositionScreen() {
   const colors = useThemeColors();
   const toast  = useToast();
   const [showMock, setShowMock] = useState(false);
+  const [mode, setMode] = useState<'live' | 'paper'>('live');
 
   const { data: livePositions = [], isLoading } = useStrategyPositions();
   const { data: account } = useAlpacaAccount();
   const { mutate: forceClose } = useForceClosePosition();
 
-  const positions   = showMock ? MOCK_POSITIONS : livePositions;
-  const activeCount = positions.filter(p => p.active).length;
+  const positions         = showMock ? MOCK_POSITIONS : livePositions;
+  const activePositions   = positions.filter(p => p.active);
+  const filteredPositions = activePositions.filter(p =>
+    mode === 'live' ? !p.paper_mode : !!p.paper_mode,
+  );
+  const activeCount = filteredPositions.length;
 
   const handleForceClose = (strategyId: string) => {
     forceClose(strategyId, {
@@ -124,6 +130,39 @@ export default function PositionScreen() {
         </View>
       )}
 
+      {/* ── LIVE / PAPER toggle ── */}
+      <View style={[styles.modeToggleRow, { borderBottomColor: colors.border }]}>
+        {(['live', 'paper'] as const).map((m) => {
+          const isActive = mode === m;
+          const accentClr = m === 'live' ? '#30D158' : '#FF9F0A';
+          return (
+            <TouchableOpacity
+              key={m}
+              onPress={() => setMode(m)}
+              style={[
+                styles.modeBtn,
+                isActive && { backgroundColor: accentClr + '22', borderColor: accentClr + '66' },
+                !isActive && { borderColor: colors.border },
+              ]}
+            >
+              {m === 'live' && (
+                <View style={[styles.modeDot, { backgroundColor: isActive ? '#30D158' : colors.textTertiary }]} />
+              )}
+              <Text style={[styles.modeBtnText, { color: isActive ? accentClr : colors.textTertiary }]}>
+                {m === 'live' ? 'LIVE' : 'PAPER'}
+              </Text>
+              {activePositions.filter(p => m === 'live' ? !p.paper_mode : !!p.paper_mode).length > 0 && (
+                <View style={[styles.modeBadge, { backgroundColor: isActive ? accentClr : colors.border }]}>
+                  <Text style={[styles.modeBadgeText, { color: isActive ? '#fff' : colors.textSecondary }]}>
+                    {activePositions.filter(p => m === 'live' ? !p.paper_mode : !!p.paper_mode).length}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
       {/* ── Mock banner ── */}
       {showMock && (
         <View style={[styles.mockBanner, { backgroundColor: colors.accent + '15', borderBottomColor: colors.accent + '44' }]}>
@@ -139,22 +178,27 @@ export default function PositionScreen() {
         ) : activeCount === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="pulse-outline" size={52} color={colors.tabBarInactive} style={{ opacity: 0.4 }} />
-            <Text style={[styles.emptyTitle, { color: colors.tabBarInactive }]}>No Live Positions</Text>
-            <Text style={[styles.emptySubtitle, { color: colors.tabBarInactive }]}>
-              Active trade positions will appear here in real time
+            <Text style={[styles.emptyTitle, { color: colors.tabBarInactive }]}>
+              No {mode === 'live' ? 'Live' : 'Paper'} Positions
             </Text>
-            <TouchableOpacity
-              onPress={() => setShowMock(true)}
-              style={[styles.mockPreviewBtn, { borderColor: colors.accent + 'AA' }]}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="flask-outline" size={14} color={colors.accent} />
-              <Text style={[styles.mockPreviewText, { color: colors.accent }]}>Preview with mock data</Text>
-            </TouchableOpacity>
+            <Text style={[styles.emptySubtitle, { color: colors.tabBarInactive }]}>
+              {mode === 'live'
+                ? 'Active live positions will appear here in real time'
+                : 'Active paper positions will appear here'}
+            </Text>
+            {mode === 'live' && (
+              <TouchableOpacity
+                onPress={() => setShowMock(true)}
+                style={[styles.mockPreviewBtn, { borderColor: colors.accent + 'AA' }]}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="flask-outline" size={14} color={colors.accent} />
+                <Text style={[styles.mockPreviewText, { color: colors.accent }]}>Preview with mock data</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
-          positions
-            .filter(p => p.active)
+          filteredPositions
             .map(pos => (
               <View key={pos.strategy_id} style={styles.positionBlock}>
 
@@ -175,6 +219,20 @@ export default function PositionScreen() {
                   position={pos}
                   onForceClose={pos.active && !showMock ? () => handleForceClose(pos.strategy_id) : undefined}
                 />
+                {pos.active && !showMock && (
+                  <EditExitsButton
+                    mode="orb"
+                    strategy_id={pos.strategy_id}
+                    ticker={pos.ticker}
+                    hard_stop={pos.hard_stop ?? 0}
+                    tp1={pos.tp1 ?? 0}
+                    tp2={pos.tp2}
+                    entry_premium={pos.entry_premium ?? 0}
+                    tp1_hit={pos.tp1_hit}
+                    tp2_hit={pos.tp2_hit}
+                    style={{ alignSelf: 'stretch', marginTop: 8 }}
+                  />
+                )}
 
                 {/* Fib levels */}
                 {pos.fib_levels && (
@@ -243,6 +301,21 @@ const styles = StyleSheet.create({
   acctLabel:   { fontSize: 10, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
   acctValue:   { fontSize: 14, fontWeight: '700' },
   divider:     { width: StyleSheet.hairlineWidth, height: 28 },
+
+  // ── Mode toggle ──
+  modeToggleRow: {
+    flexDirection: 'row', gap: 10, paddingHorizontal: 16,
+    paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  modeBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
+    borderWidth: 1,
+  },
+  modeDot:      { width: 6, height: 6, borderRadius: 3 },
+  modeBtnText:  { fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
+  modeBadge:    { borderRadius: 8, paddingHorizontal: 6, paddingVertical: 1, minWidth: 18, alignItems: 'center' },
+  modeBadgeText:{ fontSize: 11, fontWeight: '700' },
 
   // ── Mock banner ──
   mockBanner:     { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 6, borderBottomWidth: 1 },

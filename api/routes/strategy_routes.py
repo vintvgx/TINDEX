@@ -156,6 +156,7 @@ def create_config():
             "profile", "trade_days", "strategy_name", "capital_limit",
             "bypass_breakout_window", "custom_thresholds", "exit_overrides",
             "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
+            "flow_gate_enabled",
         ) if k in data
     }}
     config.pop("id", None)   # force new UUID
@@ -194,7 +195,8 @@ def update_config(strategy_id: str):
     allowed = {"ticker", "paper_mode", "active",
                "profile", "trade_days", "strategy_name", "capital_limit",
                "bypass_breakout_window", "custom_thresholds", "exit_overrides",
-               "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts"}
+               "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
+               "flow_gate_enabled"}
     for key in allowed:
         if key in data:
             engine.config[key] = data[key]

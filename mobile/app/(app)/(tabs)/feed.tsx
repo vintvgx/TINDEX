@@ -328,7 +328,7 @@ const DashboardScreen = () => {
     return '◉ In Range';
   }
 
-  // ── Active positions (combined) ───────────────────────────────────────────
+  // ── Active positions (combined, split by mode) ────────────────────────────
   const activeStrat = useMemo(
     () => (stratPositions ?? []).filter(p => p.active),
     [stratPositions],
@@ -337,7 +337,15 @@ const DashboardScreen = () => {
     () => (immPositions ?? []).filter(p => (p.qty_remaining ?? 0) > 0),
     [immPositions],
   );
-  const totalActive = activeStrat.length + activeImm.length;
+
+  const liveStrat  = useMemo(() => activeStrat.filter(p => p.paper_mode === false), [activeStrat]);
+  const paperStrat = useMemo(() => activeStrat.filter(p => p.paper_mode !== false),  [activeStrat]);
+  const liveImm    = useMemo(() => activeImm.filter(p => p.paper_mode === false),    [activeImm]);
+  const paperImm   = useMemo(() => activeImm.filter(p => p.paper_mode !== false),    [activeImm]);
+
+  const totalLive   = liveStrat.length + liveImm.length;
+  const totalPaper  = paperStrat.length + paperImm.length;
+  const totalActive = totalLive + totalPaper;
 
   // ── ORB service-down alert (toast every hour + persistent banner) ─────────
   const { serviceDown } = useOrbServiceAlert();
@@ -521,22 +529,43 @@ const DashboardScreen = () => {
           </View>
         ) : (
           <>
-            {activeStrat.map(pos => (
-              <StrategyPositionCard
-                key={pos.strategy_id}
-                pos={pos}
-                colors={colors}
-                onExit={setExitTarget}
-              />
-            ))}
-            {activeImm.map(pos => (
-              <ImmediatePositionCard
-                key={pos.strategy_id}
-                pos={pos}
-                colors={colors}
-                onExit={setExitTarget}
-              />
-            ))}
+            {/* ── LIVE positions ────────────────────────────── */}
+            {totalLive > 0 && (
+              <>
+                <View style={styles.modeSubHeader}>
+                  <View style={[styles.modeSubDot, { backgroundColor: '#30D158' }]} />
+                  <Text style={[styles.modeSubLabel, { color: '#30D158' }]}>LIVE</Text>
+                  <Text style={[styles.modeSubCount, { color: colors.textTertiary }]}>
+                    {totalLive} active
+                  </Text>
+                </View>
+                {liveStrat.map(pos => (
+                  <StrategyPositionCard key={pos.strategy_id} pos={pos} colors={colors} onExit={setExitTarget} />
+                ))}
+                {liveImm.map(pos => (
+                  <ImmediatePositionCard key={pos.strategy_id} pos={pos} colors={colors} onExit={setExitTarget} />
+                ))}
+              </>
+            )}
+
+            {/* ── PAPER positions ───────────────────────────── */}
+            {totalPaper > 0 && (
+              <>
+                <View style={[styles.modeSubHeader, totalLive > 0 && { marginTop: 8 }]}>
+                  <View style={[styles.modeSubDot, { backgroundColor: '#FF9F0A' }]} />
+                  <Text style={[styles.modeSubLabel, { color: '#FF9F0A' }]}>PAPER</Text>
+                  <Text style={[styles.modeSubCount, { color: colors.textTertiary }]}>
+                    {totalPaper} active
+                  </Text>
+                </View>
+                {paperStrat.map(pos => (
+                  <StrategyPositionCard key={pos.strategy_id} pos={pos} colors={colors} onExit={setExitTarget} />
+                ))}
+                {paperImm.map(pos => (
+                  <ImmediatePositionCard key={pos.strategy_id} pos={pos} colors={colors} onExit={setExitTarget} />
+                ))}
+              </>
+            )}
           </>
         )}
 
@@ -695,6 +724,12 @@ const styles = StyleSheet.create({
                    alignItems: 'center', gap: 8 },
   emptyTitle:    { fontSize: 16, fontWeight: '600' },
   emptySub:      { fontSize: 13, textAlign: 'center' },
+
+  // ── Mode sub-headers (LIVE / PAPER sections) ──
+  modeSubHeader: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 8 },
+  modeSubDot:    { width: 7, height: 7, borderRadius: 4 },
+  modeSubLabel:  { fontSize: 11, fontWeight: '700', letterSpacing: 0.8 },
+  modeSubCount:  { fontSize: 11, fontWeight: '500' },
 });
 
 export default DashboardScreen;
