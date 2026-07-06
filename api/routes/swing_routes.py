@@ -265,7 +265,6 @@ def enter_swing_position():
             "entry_price": entry_price,
             "entry_at": datetime.utcnow().isoformat(),
             "realized_pnl": 0.0,
-            "unrealized_pnl": 0.0,
             "strategy_profile": strategy_profile,
             "stop_config": stop_config,
             "tp_ladder": tp_ladder,
