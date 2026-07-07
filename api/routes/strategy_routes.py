@@ -1026,6 +1026,10 @@ def trigger_review():
         content, meta = gen.generate(session_date)
         trades = gen._fetch_trades(session_date)
         gen.save_to_supabase(session_date, content, trades, meta)
+
+        from services.strategy.notifier import StrategyNotifier
+        StrategyNotifier(sb).notify_review_ready(str(session_date), meta["trade_count"], meta["net_pnl"])
+
         return jsonify({
             "success": True,
             "date": str(session_date),

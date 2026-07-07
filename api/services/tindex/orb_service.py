@@ -918,7 +918,24 @@ class OrbService:
 
         effective_score = max(len(signals_hit) - penalty, 0)
         state["score"] = effective_score
-        fire = effective_score >= self._reversal_fire_threshold
+
+        # ── Minimum boundary-distance gate ────────────────────────────────────────
+        # A high signal score doesn't by itself mean the failed breakout traveled
+        # far enough from the ORH/ORL level to be a real reversal rather than
+        # chop right at the boundary. Require the worst wrong-side close to have
+        # penetrated at least 20% of the opening-range width past the key level.
+        orb_range = orh - orl
+        worst = state["worst_wrong_close"]
+        penetration = abs(key_level - worst) if worst is not None else 0.0
+        min_penetration = orb_range * 0.20 if orb_range > 0 else 0.0
+        cleared_boundary_buffer = penetration >= min_penetration
+
+        fire = effective_score >= self._reversal_fire_threshold and cleared_boundary_buffer
+        if effective_score >= self._reversal_fire_threshold and not cleared_boundary_buffer:
+            logger.debug(
+                "[REV %s] fire suppressed: penetration %.4f < min %.4f (20%% of range %.4f)",
+                ticker, penetration, min_penetration, orb_range,
+            )
 
         return {"score": effective_score, "signals": list(signals_hit), "fire": fire}
     

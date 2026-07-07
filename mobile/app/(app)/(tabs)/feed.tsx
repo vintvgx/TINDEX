@@ -129,11 +129,16 @@ function StrategyPositionCard({
         {/* P&L */}
         <View style={{ alignItems: 'flex-end' }}>
           <Text style={[styles.posPnl, { color: pnlColor }]}>
-            {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(2)}
+            {pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toFixed(2)}
           </Text>
           <Text style={[styles.posPnlPct, { color: pnlColor }]}>
-            {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
+            {pnlPct >= 0 ? '+' : '-'}{Math.abs(pnlPct).toFixed(1)}%
           </Text>
+          {pos.current_price != null && pos.qty_remaining != null && (
+            <Text style={[styles.posMktVal, { color: colors.textTertiary }]}>
+              Mkt ${(pos.current_price * pos.qty_remaining * 100).toFixed(2)}
+            </Text>
+          )}
         </View>
       </View>
 
@@ -223,11 +228,16 @@ function ImmediatePositionCard({
 
         <View style={{ alignItems: 'flex-end' }}>
           <Text style={[styles.posPnl, { color: pnlColor }]}>
-            {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(2)}
+            {pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toFixed(2)}
           </Text>
           <Text style={[styles.posPnlPct, { color: pnlColor }]}>
-            {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
+            {pnlPct >= 0 ? '+' : '-'}{Math.abs(pnlPct).toFixed(1)}%
           </Text>
+          {pos.mid_price != null && pos.qty_remaining != null && (
+            <Text style={[styles.posMktVal, { color: colors.textTertiary }]}>
+              Mkt ${(pos.mid_price * pos.qty_remaining * 100).toFixed(2)}
+            </Text>
+          )}
         </View>
       </View>
 
@@ -706,6 +716,7 @@ const styles = StyleSheet.create({
   badgeText:     { fontSize: 10, fontWeight: '700' },
   posPnl:        { fontSize: 22, fontWeight: '700' },
   posPnlPct:     { fontSize: 13, fontWeight: '600', marginTop: 2 },
+  posMktVal:     { fontSize: 11, fontWeight: '500', marginTop: 2 },
 
   posLevels:     { flexDirection: 'row', justifyContent: 'space-between' },
   levelLabel:    { fontSize: 10, fontWeight: '600', marginBottom: 3 },

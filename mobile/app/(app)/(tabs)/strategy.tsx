@@ -643,15 +643,17 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
         )}
       </View>
 
-      {/* Actions */}
-      <View style={styles.stratActions}>
-        <TouchableOpacity onPress={onEdit} hitSlop={8} style={styles.actionBtn}>
-          <Ionicons name="pencil-outline" size={18} color={colors.accent} />
-        </TouchableOpacity>
-        <TouchableOpacity onPress={onDelete} hitSlop={8} style={styles.actionBtn}>
-          <Ionicons name="trash-outline" size={18} color={colors.error} />
-        </TouchableOpacity>
-      </View>
+      {/* Actions — editing/deleting the strategy config is blocked while a trade is live */}
+      {!hasPosition && (
+        <View style={styles.stratActions}>
+          <TouchableOpacity onPress={onEdit} hitSlop={8} style={styles.actionBtn}>
+            <Ionicons name="pencil-outline" size={18} color={colors.accent} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onDelete} hitSlop={8} style={styles.actionBtn}>
+            <Ionicons name="trash-outline" size={18} color={colors.error} />
+          </TouchableOpacity>
+        </View>
+      )}
 
       <ExitTradeModal
         visible={exitOpen}

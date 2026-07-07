@@ -54,6 +54,8 @@ def reschedule_jobs(engine, strategy_id: str = None):
     if not sched:
         logger.warning("[Scheduler] APScheduler not available — scheduling disabled")
         return
+    if not sched.running:
+        sched.start()
 
     sid = strategy_id or getattr(engine, "strategy_id", None) or "default"
 
@@ -202,6 +204,7 @@ def _run_daily_review(supabase_client):
     in the scheduler thread.
     """
     from services.strategy.review_generator import ReviewGenerator
+    from services.strategy.notifier import StrategyNotifier
     from datetime import date as _date
     try:
         gen      = ReviewGenerator(supabase_client)
@@ -212,6 +215,9 @@ def _run_daily_review(supabase_client):
         logger.info(
             "[Scheduler] Daily review complete — %d trades, net P&L $%.2f",
             meta["trade_count"], meta["net_pnl"],
+        )
+        StrategyNotifier(supabase_client).notify_review_ready(
+            str(today), meta["trade_count"], meta["net_pnl"],
         )
     except Exception as e:
         logger.error("[Scheduler] Daily review job failed: %s", e)

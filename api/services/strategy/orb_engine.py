@@ -935,7 +935,7 @@ class ORBEngine:
                 session_date=self.session_date,
                 profile=logged_profile_key,
                 qty=qty,
-                underlying_price_entry=self._last_underlying_price,
+                underlying_price_entry=self._get_underlying_price(),
                 vix_at_entry=self.vix,
                 strategy_id=log_strategy_id,
                 paper_mode=self.paper,
@@ -1003,6 +1003,16 @@ class ORBEngine:
         except Exception as e:
             logger.debug("[ORBEngine] market clock check failed, continuing: %s", e)
 
+        # No new manual entries in the final 30 minutes of the session — 0DTE
+        # theta/gamma in this window punishes discretionary entries too
+        # consistently to allow them (2026-07-06 daily review recommendation #4).
+        now_et = datetime.now(ET)
+        cutoff = now_et.replace(hour=15, minute=0, second=0, microsecond=0)
+        if now_et >= cutoff:
+            msg = "Manual trades are disabled in the final 30 minutes of the session (after 3:00 PM ET)"
+            self.debug.emit("WARN", f"Manual trade blocked — {msg}")
+            return {"status": "error", "message": msg}
+
         effective_profile = self.profile
         effective_profile_key = self.profile_key
         if profile_key and profile_key != self.profile_key:
@@ -1032,7 +1042,7 @@ class ORBEngine:
         if self.orh and self.orl and self.fib_levels:
             fib_levels = self.fib_levels
         else:
-            anchor = self._last_underlying_price or contract["strike"]
+            anchor = self._get_underlying_price() or contract["strike"]
             fib_levels = self._synthetic_fib_levels(anchor)
 
         # Capital guard (reduce qty / block) — reuse the same affordability math.
@@ -1112,6 +1122,29 @@ class ORBEngine:
         except Exception as e:
             logger.debug("[ORBEngine] _resolve_entry_premium fallback: %s", e)
         return ask_fallback
+
+    def _get_underlying_price(self) -> float | None:
+        """
+        Best-effort underlying price for logging/fib-anchor purposes.
+
+        `_last_underlying_price` is only populated once the hub has pushed at
+        least one bar for this ticker; a manual trade fired before that first
+        bar arrives would otherwise log `underlying_price_entry=None` and fall
+        back to the contract strike as the fib anchor (2026-07-06 daily review
+        recommendation #5). Falls back to a live REST quote in that case.
+        """
+        if self._last_underlying_price is not None:
+            return self._last_underlying_price
+        try:
+            from alpaca.data.requests import StockLatestTradeRequest
+            trades = self.stock_client.get_stock_latest_trade(
+                StockLatestTradeRequest(symbol_or_symbols=self.ticker)
+            )
+            trade = trades.get(self.ticker)
+            return float(trade.price) if trade and trade.price else None
+        except Exception as e:
+            logger.warning("[ORBEngine] Live underlying price fallback failed for %s: %s", self.ticker, e)
+            return None
 
     def _resolve_contract(self, contract_symbol: str, direction: str) -> dict | None:
         """

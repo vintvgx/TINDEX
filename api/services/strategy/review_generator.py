@@ -51,6 +51,10 @@ RETESTER     — 4 contracts, TP1 +20% / $0.20 floor, trail runner,
 BULL_DOG     — 10 contracts, TP1 +20% / $0.35 floor, cascade runner.
 THUNDER_CAT  — 6 contracts, TP1 +20% / $0.25 floor, cascade runner.
 WOLF         — 3 contracts, TP1 +15% / $0.20 floor, cascade runner.
+OTM_CONVICTION — 6 contracts, higher-confidence OTM play ($0.25-$0.40 contracts,
+               strike offset $1-4, delta 0.10-0.35). TP1 +75% (close 33%),
+               TP2 +200% (close 50% of remainder), be_hold runner, max_loss 55%,
+               window 240 min.
 
 ─── Exit Reason Glossary ────────────────────────────────────────────────────
 HARD_STOP           Full stop before TP1. Worst outcome — full position loss.

@@ -13,6 +13,7 @@ import { usePerformanceReviews } from '@/hooks/queries/review/usePerformanceRevi
 import { useGenerateReview } from '@/hooks/mutations/review/useGenerateReview';
 import { ReviewDetailModal } from '@/common/components/review/ReviewDetailModal';
 import { useToast } from '@/common/components/ui/Toast';
+import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 
 const WEEKDAY_LABELS = ['Mo', 'Tu', 'We', 'Th', 'Fr'];
 
@@ -60,10 +61,12 @@ export default function DailyReviewScreen() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [modalDate, setModalDate] = useState<string | null>(null);
+  const [generatingDate, setGeneratingDate] = useState<string | null>(null);
 
   const { data, isLoading, isFetching, refetch } = usePerformanceReviews(180);
   const generateReview = useGenerateReview();
   const toast = useToast();
+  const tabBarHeight = useFloatingTabBarHeight();
 
   const reviewedDates = useMemo(() => {
     const s = new Set<string>();
@@ -80,20 +83,30 @@ export default function DailyReviewScreen() {
   const selectedIsFuture = selectedDate ? isAfter(parseISO(selectedDate), today) : false;
 
   const handleGenerate = () => {
-    if (!selectedDate || selectedIsReviewed || selectedIsFuture) return;
+    if (!selectedDate || selectedIsReviewed || selectedIsFuture || generateReview.isPending) return;
+    const dateToGenerate = selectedDate;
+    setGeneratingDate(dateToGenerate);
     toast.info('Generating review… this takes ~15 seconds');
-    generateReview.mutate(selectedDate, {
+    generateReview.mutate(dateToGenerate, {
       onSuccess: (res) => {
         const date = res?.date as string | undefined;
-        toast.success(`Review for ${date ?? selectedDate} is ready`);
+        toast.success(`Review for ${date ?? dateToGenerate} is ready`);
         setSelectedDate(null);
-        setModalDate(date ?? selectedDate);
+        setGeneratingDate(null);
+        setModalDate(date ?? dateToGenerate);
       },
-      onError: (e) => toast.error((e as Error).message),
+      onError: (e) => {
+        toast.error((e as Error).message);
+        setGeneratingDate(null);
+      },
     });
   };
 
   const handleDayPress = (day: Date) => {
+    // Lock day selection while a generation is in flight — only one review
+    // can be generated at a time, for any day.
+    if (generateReview.isPending) return;
+
     const key = dateKey(day);
     const isFuture = isAfter(day, today);
     if (isFuture) return;
@@ -124,7 +137,7 @@ export default function DailyReviewScreen() {
       </View>
 
       <ScrollView
-        contentContainerStyle={{ paddingBottom: selectedDate ? 160 : 40 }}
+        contentContainerStyle={{ paddingBottom: selectedDate ? tabBarHeight + 140 : tabBarHeight + 20 }}
         scrollIndicatorInsets={{ right: 1 }}
       >
         {/* Month navigation */}
@@ -181,12 +194,20 @@ export default function DailyReviewScreen() {
                   const isToday = isSameDay(day, today);
                   const isSelected = selectedDate === key;
                   const isReviewed = reviewedDates.has(key);
+                  const isGenerating = generatingDate === key;
+                  // While any day is generating, dim/lock every other day so it's
+                  // clear only one review can run at a time.
+                  const isLockedByOther = generateReview.isPending && !isGenerating;
 
                   return (
                     <Pressable
                       key={di}
                       onPress={() => handleDayPress(day)}
-                      style={{ flex: 1, alignItems: 'center', paddingVertical: 4, opacity: isFuture ? 0.25 : 1 }}
+                      disabled={isLockedByOther}
+                      style={{
+                        flex: 1, alignItems: 'center', paddingVertical: 4,
+                        opacity: isFuture ? 0.25 : isLockedByOther ? 0.35 : 1,
+                      }}
                     >
                       <View style={{
                         width: 38, height: 38, borderRadius: 19,
@@ -199,16 +220,20 @@ export default function DailyReviewScreen() {
                         borderWidth: isToday && !isSelected ? 1.5 : 0,
                         borderColor: colors.accent,
                       }}>
-                        <Text style={{
-                          color: isSelected ? '#fff' : isReviewed ? colors.success : colors.text,
-                          fontSize: 14,
-                          fontWeight: (isToday || isSelected || isReviewed) ? '700' : '400',
-                        }}>
-                          {format(day, 'd')}
-                        </Text>
+                        {isGenerating ? (
+                          <ActivityIndicator size="small" color={isSelected ? '#fff' : colors.accent} />
+                        ) : (
+                          <Text style={{
+                            color: isSelected ? '#fff' : isReviewed ? colors.success : colors.text,
+                            fontSize: 14,
+                            fontWeight: (isToday || isSelected || isReviewed) ? '700' : '400',
+                          }}>
+                            {format(day, 'd')}
+                          </Text>
+                        )}
                       </View>
                       {/* Dot indicator under reviewed days */}
-                      {isReviewed && !isSelected && (
+                      {isReviewed && !isSelected && !isGenerating && (
                         <View style={{
                           width: 4, height: 4, borderRadius: 2,
                           backgroundColor: colors.success, marginTop: 2,
@@ -245,7 +270,7 @@ export default function DailyReviewScreen() {
           position: 'absolute', bottom: 0, left: 0, right: 0,
           backgroundColor: colors.surface,
           borderTopWidth: 1, borderTopColor: colors.border,
-          paddingHorizontal: 20, paddingTop: 16, paddingBottom: 36,
+          paddingHorizontal: 20, paddingTop: 16, paddingBottom: tabBarHeight + 16,
         }}>
           {/* Selected date info */}
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
@@ -254,10 +279,16 @@ export default function DailyReviewScreen() {
                 {format(parseISO(selectedDate), 'EEEE, MMMM d')}
               </Text>
               <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 2 }}>
-                {selectedIsReviewed ? 'Review already exists' : 'No review generated yet'}
+                {generateReview.isPending
+                  ? 'Generating…'
+                  : selectedIsReviewed ? 'Review already exists' : 'No review generated yet'}
               </Text>
             </View>
-            <TouchableOpacity onPress={() => setSelectedDate(null)} style={{ padding: 4 }}>
+            <TouchableOpacity
+              onPress={() => setSelectedDate(null)}
+              disabled={generateReview.isPending}
+              style={{ padding: 4, opacity: generateReview.isPending ? 0.3 : 1 }}
+            >
               <Ionicons name="close" size={20} color={colors.textTertiary} />
             </TouchableOpacity>
           </View>
@@ -292,7 +323,7 @@ export default function DailyReviewScreen() {
               fontSize: 15, fontWeight: '700',
               color: (selectedIsReviewed || selectedIsFuture) ? colors.textTertiary : '#fff',
             }}>
-              {selectedIsReviewed ? 'Already Reviewed' : 'Generate Review'}
+              {generateReview.isPending ? 'Generating…' : selectedIsReviewed ? 'Already Reviewed' : 'Generate Review'}
             </Text>
           </TouchableOpacity>
         </View>

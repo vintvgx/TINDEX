@@ -326,6 +326,16 @@ class StrategyNotifier:
             priority=P_TRADE_ENTRY,
         )
 
+    def notify_review_ready(self, review_date: str, trade_count: int, net_pnl: float):
+        """Daily performance review finished generating and saving."""
+        pnl_emoji = "📈" if net_pnl >= 0 else "📉"
+        self._dispatch(
+            title=f"{pnl_emoji} Daily Review ready — {review_date}",
+            body=f"{trade_count} trade(s) · Net P&L {'+' if net_pnl >= 0 else '-'}${abs(net_pnl):,.2f}",
+            data={"screen": "daily_review", "review_date": review_date},
+            priority=P_INFO,
+        )
+
     # ── Internal helpers ────────────────────────────────────────────────────────
 
     def _dispatch(self, title: str, body: str, data: dict | None = None,
