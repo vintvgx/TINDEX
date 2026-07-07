@@ -23,6 +23,7 @@ import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
+import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
 import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, ImmediatePosition, LiveOptionPrice, ExitOverrides, ORBTrade } from '@/common/types/strategy';
@@ -613,15 +614,31 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
               <ActivityIndicator size="small" color={colors.accent} style={{ marginTop: 8 }} />
             )}
 
-            {/* Manual exit */}
-            <TouchableOpacity
-              onPress={() => setExitOpen(true)}
-              activeOpacity={0.8}
-              style={[styles.exitBtn, { borderColor: colors.error + '55', backgroundColor: colors.error + '14' }]}
-            >
-              <Ionicons name="exit-outline" size={16} color={colors.error} />
-              <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
-            </TouchableOpacity>
+            {/* Edit exits + manual exit */}
+            <View style={styles.liveActionsRow}>
+              {live && (
+                <EditExitsButton
+                  mode="orb"
+                  strategy_id={config.id}
+                  ticker={config.ticker}
+                  hard_stop={live.hard_stop}
+                  tp1={live.tp1}
+                  tp2={live.tp2}
+                  entry_premium={live.entry_premium}
+                  tp1_hit={live.tp1_hit}
+                  tp2_hit={live.tp2_hit}
+                  style={{ flex: 1 }}
+                />
+              )}
+              <TouchableOpacity
+                onPress={() => setExitOpen(true)}
+                activeOpacity={0.8}
+                style={[styles.exitBtn, { flex: 1, marginTop: 0, borderColor: colors.error + '55', backgroundColor: colors.error + '14' }]}
+              >
+                <Ionicons name="exit-outline" size={16} color={colors.error} />
+                <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
       </View>
@@ -767,14 +784,30 @@ function ImmediatePositionCard({ position, colors }: { position: ImmediatePositi
 
           {expanded && live && <LivePositionDetail live={live} colors={colors} />}
 
-          <TouchableOpacity
-            onPress={() => setExitOpen(true)}
-            activeOpacity={0.8}
-            style={[styles.exitBtn, { borderColor: colors.error + '55', backgroundColor: colors.error + '14' }]}
-          >
-            <Ionicons name="exit-outline" size={16} color={colors.error} />
-            <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
-          </TouchableOpacity>
+          <View style={styles.liveActionsRow}>
+            {live && (
+              <EditExitsButton
+                mode="orb"
+                strategy_id={position.strategy_id}
+                ticker={position.ticker}
+                hard_stop={live.hard_stop}
+                tp1={live.tp1}
+                tp2={live.tp2}
+                entry_premium={live.entry_premium}
+                tp1_hit={live.tp1_hit}
+                tp2_hit={live.tp2_hit}
+                style={{ flex: 1 }}
+              />
+            )}
+            <TouchableOpacity
+              onPress={() => setExitOpen(true)}
+              activeOpacity={0.8}
+              style={[styles.exitBtn, { flex: 1, marginTop: 0, borderColor: colors.error + '55', backgroundColor: colors.error + '14' }]}
+            >
+              <Ionicons name="exit-outline" size={16} color={colors.error} />
+              <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -1467,6 +1500,7 @@ const styles = StyleSheet.create({
 
   exitBtn:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 10, paddingVertical: 9, borderRadius: 9, borderWidth: 1 },
   exitBtnText: { fontSize: 13, fontWeight: '700' },
+  liveActionsRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
 
   liveDetail:          { marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, gap: 8 },
   liveDetailRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

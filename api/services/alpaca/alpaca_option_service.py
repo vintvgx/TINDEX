@@ -39,6 +39,12 @@ def _safe_int(val) -> int:
         return 0
 
 
+def _round_to_tick(price: float) -> float:
+    """OCC options quote in $0.01 increments below $3, $0.05 at/above."""
+    tick = 0.05 if price >= 3.0 else 0.01
+    return round(round(price / tick) * tick, 2)
+
+
 def _parse_occ_type(symbol: str) -> str:
     """
     Derive CALL/PUT from the OCC symbol character at position [-10].
@@ -595,6 +601,7 @@ class AlpacaOptionService:
         qty: int,
         side: str = "buy",
         order_type: str = "market",
+        limit_price: Optional[float] = None,
         paper: bool = False,
     ) -> dict:
         """Submit a market or limit option order via Alpaca TradingClient."""
@@ -603,12 +610,15 @@ class AlpacaOptionService:
             raise ValueError("side must be 'buy' or 'sell'")
         if qty <= 0:
             raise ValueError("qty must be > 0")
-        if order_type.lower() != "market":
-            raise ValueError("Only market option orders are currently supported")
+        order_type_normalized = order_type.lower()
+        if order_type_normalized not in {"market", "limit"}:
+            raise ValueError("order_type must be 'market' or 'limit'")
+        if order_type_normalized == "limit" and not limit_price:
+            raise ValueError("limit_price is required for limit orders")
 
         from alpaca.trading.client import TradingClient
-        from alpaca.trading.requests import MarketOrderRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass
+        from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
 
         client = TradingClient(
             api_key=self.alpaca_api_key,
@@ -616,12 +626,22 @@ class AlpacaOptionService:
             paper=paper,
         )
         order_side = OrderSide.BUY if side_normalized == "buy" else OrderSide.SELL
-        req = MarketOrderRequest(
-            symbol=symbol.upper(),
-            qty=qty,
-            side=order_side,
-            time_in_force=TimeInForce.DAY,
-        )
+
+        if order_type_normalized == "limit":
+            req = LimitOrderRequest(
+                symbol=symbol.upper(),
+                qty=qty,
+                side=order_side,
+                time_in_force=TimeInForce.DAY,
+                limit_price=_round_to_tick(limit_price),
+            )
+        else:
+            req = MarketOrderRequest(
+                symbol=symbol.upper(),
+                qty=qty,
+                side=order_side,
+                time_in_force=TimeInForce.DAY,
+            )
 
         def _submit():
             return client.submit_order(req)
@@ -634,11 +654,204 @@ class AlpacaOptionService:
             "qty": str(order.qty),
             "side": order.side.value,
             "status": order.status.value,
+            "limit_price": _safe_float(getattr(order, "limit_price", None)),
+            "filled_avg_price": _safe_float(getattr(order, "filled_avg_price", None)),
         }
 
     async def close_option_position(self, symbol: str, qty: int, paper: bool = False) -> dict:
-        """Close (sell) an open option position by placing a sell market order."""
+        """Close (sell) an open option position immediately at market — no price chasing."""
         return await self.place_option_order(symbol=symbol, qty=qty, side="sell", order_type="market", paper=paper)
+
+    async def _get_latest_bid(self, symbol: str) -> Optional[float]:
+        """Lightweight single-symbol bid fetch, used for repeated polling."""
+        from alpaca.data.requests import OptionLatestQuoteRequest
+
+        loop = asyncio.get_event_loop()
+        occ_symbol = symbol.upper()
+
+        def _fetch():
+            req = OptionLatestQuoteRequest(symbol_or_symbols=occ_symbol)
+            return self.options_client.get_option_latest_quote(req)
+
+        try:
+            quotes = await loop.run_in_executor(None, _fetch)
+            quote = quotes.get(occ_symbol) if isinstance(quotes, dict) else None
+            bid = _safe_float(getattr(quote, "bid_price", None)) if quote else None
+            return bid if bid and bid > 0 else None
+        except Exception as e:
+            logger.warning(f"Error fetching latest bid for {occ_symbol}: {e}")
+            return None
+
+    async def sample_best_price(
+        self,
+        symbol: str,
+        duration_sec: float = 10.0,
+        poll_interval_sec: float = 0.5,
+    ) -> Dict:
+        """
+        Poll the live bid for `duration_sec` and report the best (highest) price seen.
+
+        No order is placed — this is used to pick a realistic exit price for
+        paper positions (which never touch the broker) and can be reused as
+        the read-only baseline phase for `smart_close_option_position`.
+        """
+        loop = asyncio.get_event_loop()
+        start = loop.time()
+        samples: List[float] = []
+
+        while loop.time() - start < duration_sec:
+            bid = await self._get_latest_bid(symbol)
+            if bid:
+                samples.append(bid)
+            await asyncio.sleep(poll_interval_sec)
+
+        return {
+            "best_price": max(samples) if samples else None,
+            "last_price": samples[-1] if samples else None,
+            "samples": samples,
+            "elapsed_sec": round(loop.time() - start, 2),
+        }
+
+    async def smart_close_option_position(
+        self,
+        symbol: str,
+        qty: int,
+        paper: bool = False,
+        baseline_sec: float = 3.0,
+        max_wait_sec: float = 10.0,
+        poll_interval_sec: float = 0.5,
+    ) -> Dict:
+        """
+        Exit an option position while chasing the best bid instead of firing a
+        market sell at whatever single price happens to be showing.
+
+        Alpaca's free/indicative option feed bounces noticeably tick to tick
+        (e.g. 0.54 <-> 0.45 within a second), so a market sell fired at one
+        instant can land well below what was available a moment earlier.
+
+        "Baseline, chase, force":
+          1. Baseline (first `baseline_sec`): poll the bid and note the best
+             seen so far — this sets the floor for what "good" looks like.
+          2. Chase (remaining time up to `max_wait_sec`): rest a limit sell at
+             the best bid seen. Keep polling; whenever the bid ticks above the
+             resting limit, cancel and re-post at the new best so the order
+             rides the market up instead of guessing a fixed target. A fill at
+             any point ends the process at that price.
+          3. Force: if nothing filled by `max_wait_sec`, cancel the resting
+             limit and fire a market order so the exit still happens — a stop
+             loss or manual exit can't hang forever waiting for a better print.
+        """
+        if qty <= 0:
+            raise ValueError("qty must be > 0")
+
+        from alpaca.trading.client import TradingClient
+        from alpaca.trading.enums import OrderStatus
+
+        trading_client = TradingClient(
+            api_key=self.alpaca_api_key,
+            secret_key=self.alpaca_secret_key,
+            paper=paper,
+        )
+        loop = asyncio.get_event_loop()
+        start = loop.time()
+        samples: List[float] = []
+
+        def _cancel(order_id: str):
+            try:
+                trading_client.cancel_order_by_id(order_id)
+            except Exception as e:
+                logger.warning(f"Cancel failed for resting exit order {order_id}: {e}")
+
+        def _get_order(order_id: str):
+            return trading_client.get_order_by_id(order_id)
+
+        # ── Phase 1: baseline — observe only, no orders yet ─────────────────
+        while loop.time() - start < baseline_sec:
+            bid = await self._get_latest_bid(symbol)
+            if bid:
+                samples.append(bid)
+            await asyncio.sleep(poll_interval_sec)
+
+        best_bid = max(samples) if samples else None
+        resting_id: Optional[str] = None
+        resting_price: Optional[float] = None
+        filled_order = None
+
+        if best_bid:
+            order = await self.place_option_order(
+                symbol=symbol, qty=qty, side="sell", order_type="limit",
+                limit_price=best_bid, paper=paper,
+            )
+            resting_id, resting_price = order["id"], best_bid
+
+        # ── Phase 2: chase — ratchet the resting limit up with the market ──
+        while resting_id and not filled_order and loop.time() - start < max_wait_sec:
+            await asyncio.sleep(poll_interval_sec)
+
+            order = await loop.run_in_executor(None, _get_order, resting_id)
+            if order.status == OrderStatus.FILLED:
+                filled_order = order
+                break
+
+            bid = await self._get_latest_bid(symbol)
+            if bid:
+                samples.append(bid)
+                if bid > resting_price:
+                    await loop.run_in_executor(None, _cancel, resting_id)
+                    new_order = await self.place_option_order(
+                        symbol=symbol, qty=qty, side="sell", order_type="limit",
+                        limit_price=bid, paper=paper,
+                    )
+                    resting_id, resting_price = new_order["id"], bid
+
+        # ── Phase 3: force — give up on a better print, exit at market ─────
+        if not filled_order and resting_id:
+            order = await loop.run_in_executor(None, _get_order, resting_id)
+            if order.status == OrderStatus.FILLED:
+                filled_order = order
+            else:
+                await loop.run_in_executor(None, _cancel, resting_id)
+
+        elapsed = round(loop.time() - start, 2)
+        best_bid_seen = max(samples) if samples else None
+
+        if filled_order:
+            return {
+                "id": str(filled_order.id),
+                "symbol": filled_order.symbol,
+                "qty": str(filled_order.qty),
+                "side": filled_order.side.value,
+                "status": filled_order.status.value,
+                "fill_price": _safe_float(getattr(filled_order, "filled_avg_price", None)) or resting_price,
+                "method": "limit_chase",
+                "best_bid_seen": best_bid_seen,
+                "samples_seen": len(samples),
+                "elapsed_sec": elapsed,
+            }
+
+        market_order = await self.place_option_order(
+            symbol=symbol, qty=qty, side="sell", order_type="market", paper=paper,
+        )
+
+        # Market fills are often not instantaneous — give it a couple of quick
+        # polls to capture the real fill price before falling back to the
+        # last observed bid.
+        fill_price = market_order.get("filled_avg_price")
+        for _ in range(4):
+            if fill_price:
+                break
+            await asyncio.sleep(0.5)
+            refreshed = await loop.run_in_executor(None, _get_order, market_order["id"])
+            fill_price = _safe_float(getattr(refreshed, "filled_avg_price", None))
+
+        return {
+            **market_order,
+            "fill_price": fill_price or best_bid_seen,
+            "method": "market_fallback",
+            "best_bid_seen": best_bid_seen,
+            "samples_seen": len(samples),
+            "elapsed_sec": elapsed,
+        }
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
