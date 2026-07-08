@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Modal, View, Text, TextInput, TouchableOpacity,
   SafeAreaView, ScrollView, Alert,
@@ -49,13 +49,18 @@ export function EditExitsModal({
   const [tp1Val, setTp1Val] = useState('');
   const [tp2Val, setTp2Val] = useState('');
 
-  // Reset fields to current values when modal opens
+  // Reset fields to current values only on the closed→open transition — `current`
+  // comes from a polling query and gets a new object reference on every refetch,
+  // so keying this effect on `current` too would wipe out in-progress edits every
+  // few seconds while the sheet is open, before the user can hit submit.
+  const wasVisibleRef = useRef(false);
   useEffect(() => {
-    if (visible) {
+    if (visible && !wasVisibleRef.current) {
       setStopVal(current.hard_stop > 0 ? current.hard_stop.toFixed(2) : '');
       setTp1Val(current.tp1 > 0 ? current.tp1.toFixed(2) : '');
       setTp2Val(current.tp2 && current.tp2 > 0 ? current.tp2.toFixed(2) : '');
     }
+    wasVisibleRef.current = visible;
   }, [visible, current]);
 
   const entry = current.entry_premium;

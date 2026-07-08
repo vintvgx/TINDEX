@@ -9,6 +9,10 @@ runner_mode controls what happens to remaining contracts after TP1 is hit:
   "trail"   — traditional high-water-mark trailing stop (runner_trail_pct from peak).
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 PROFILES = {
     # ─── BULL DOG — Aggressive ───────────────────────────────────────────────────
     "BULL_DOG": {
@@ -477,9 +481,14 @@ def get_profile(name: str, custom_thresholds: dict | None = None) -> dict:
         return PROFILES["THUNDER_CAT"]
     base = dict(PROFILES[key])
     if custom_thresholds:
-        for k in ("consol_exit", "volume_exit", "max_loss_pct"):
-            if k in custom_thresholds:
-                base[k] = custom_thresholds[k]
+        for k, v in custom_thresholds.items():
+            if k in base:
+                base[k] = v
+            else:
+                logger.warning(
+                    "[profiles] Ignoring unknown override key %r for profile %s "
+                    "(not a field on the base profile)", k, key,
+                )
     return base
 
 

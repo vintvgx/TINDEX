@@ -87,10 +87,12 @@ type FormState = {
   capital_limit:          string;
   bypass_breakout_window: boolean;
   custom_thresholds:      CustomThresholds;
+  override_enabled:       boolean;
   budget_otm_mode:        boolean;
   otm_fib_level:          OtmFibLevel;
   smart_contracts:        boolean;
   flow_gate_enabled:      boolean;
+  confirm_entry:          boolean;
   consol_exit:            boolean;
   volume_exit:            boolean;
 };
@@ -104,10 +106,12 @@ const DEFAULT_FORM: FormState = {
   capital_limit:          '',
   bypass_breakout_window: false,
   custom_thresholds:      DEFAULT_CUSTOM_THRESHOLDS,
+  override_enabled:       false,
   budget_otm_mode:        false,
   otm_fib_level:          '1.0',
   smart_contracts:        false,
   flow_gate_enabled:      true,
+  confirm_entry:          false,
   consol_exit:            false,
   volume_exit:            false,
 };
@@ -122,10 +126,12 @@ function configToForm(cfg: StrategyConfig): FormState {
     capital_limit:          cfg.capital_limit != null ? String(cfg.capital_limit) : '',
     bypass_breakout_window: cfg.bypass_breakout_window ?? false,
     custom_thresholds:      cfg.custom_thresholds ?? DEFAULT_CUSTOM_THRESHOLDS,
+    override_enabled:       cfg.profile !== 'CUSTOM' && cfg.custom_thresholds != null,
     budget_otm_mode:        cfg.budget_otm_mode ?? false,
     otm_fib_level:          cfg.otm_fib_level ?? '1.0',
     smart_contracts:        cfg.smart_contracts ?? false,
     flow_gate_enabled:      cfg.flow_gate_enabled ?? true,
+    confirm_entry:          cfg.confirm_entry ?? false,
     consol_exit:            cfg.exit_overrides?.consol_exit ?? false,
     volume_exit:            cfg.exit_overrides?.volume_exit ?? false,
   };
@@ -264,12 +270,13 @@ export default function StrategyScreen() {
       profile:                form.profile,
       capital_limit:          capitalNum,
       bypass_breakout_window: form.bypass_breakout_window,
-      custom_thresholds:      form.profile === 'CUSTOM' ? form.custom_thresholds : null,
+      custom_thresholds:      (form.profile === 'CUSTOM' || form.override_enabled) ? form.custom_thresholds : null,
       exit_overrides:         exitOverrides,
       budget_otm_mode:        form.budget_otm_mode,
       otm_fib_level:          form.otm_fib_level,
       smart_contracts:        form.smart_contracts,
       flow_gate_enabled:      form.flow_gate_enabled,
+      confirm_entry:          form.confirm_entry,
       ...modeToConfig(form.mode),
     };
     setSaving(true);
@@ -1032,6 +1039,25 @@ function StrategyFormModal({
   React.useEffect(() => { if (visible) setTab('strategy'); }, [visible]);
   React.useEffect(() => { if (visible && isSecondaryActive) setShowMoreProfiles(true); }, [visible, isSecondaryActive]);
 
+  // Selecting a new archetype while overrides are on re-seeds the editor from
+  // that profile's real defaults — otherwise a Bull Dog TP1 (+20%) would carry
+  // over as a Wolf override, which reads as a different profile entirely.
+  const handleProfileSelect = (key: ProfileKey) => {
+    onPatch('profile', key);
+    if (form.override_enabled && key !== 'CUSTOM') {
+      const base = profiles.find(p => p.key === key)?.thresholds;
+      if (base) onPatch('custom_thresholds', { ...DEFAULT_CUSTOM_THRESHOLDS, ...base });
+    }
+  };
+
+  const handleOverrideToggle = (enabled: boolean) => {
+    onPatch('override_enabled', enabled);
+    if (enabled) {
+      const base = profiles.find(p => p.key === form.profile)?.thresholds;
+      if (base) onPatch('custom_thresholds', { ...DEFAULT_CUSTOM_THRESHOLDS, ...base });
+    }
+  };
+
   const showImmediate = !isEditing && tab === 'immediate';
   return (
     <Modal
@@ -1276,7 +1302,7 @@ function StrategyFormModal({
                 />
               </View>
 
-              <View style={[styles.configRow, { borderBottomWidth: 0 }]}>
+              <View style={[styles.configRow, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.configLabel, { color: colors.text }]}>Flow Gate</Text>
                   <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>
@@ -1292,13 +1318,30 @@ function StrategyFormModal({
                   trackColor={{ true: '#5856D655', false: colors.border }}
                 />
               </View>
+
+              <View style={[styles.configRow, { borderBottomWidth: 0 }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.configLabel, { color: colors.text }]}>Confirm Before Entry</Text>
+                  <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>
+                    {form.confirm_entry
+                      ? 'Pause and ask before every auto entry — Enter or Skip from the app'
+                      : 'Enter automatically the moment a signal is confirmed'}
+                  </Text>
+                </View>
+                <Switch
+                  value={form.confirm_entry}
+                  onValueChange={v => onPatch('confirm_entry', v)}
+                  thumbColor={form.confirm_entry ? '#30D158' : '#ccc'}
+                  trackColor={{ true: '#30D15855', false: colors.border }}
+                />
+              </View>
             </View>
 
             <SectionHeader title="Trading Profile" colors={colors} />
             {profiles.filter(p => PRIMARY_PROFILES.includes(p.key))
               .sort((a, b) => PRIMARY_PROFILES.indexOf(a.key) - PRIMARY_PROFILES.indexOf(b.key))
               .map(p => (
-                <ProfileCard key={p.key} profile={p} selected={form.profile === p.key} onSelect={key => onPatch('profile', key)} />
+                <ProfileCard key={p.key} profile={p} selected={form.profile === p.key} onSelect={handleProfileSelect} />
               ))}
 
             <TouchableOpacity
@@ -1317,7 +1360,7 @@ function StrategyFormModal({
                 {profiles.filter(p => SECONDARY_PROFILES.includes(p.key))
                   .sort((a, b) => SECONDARY_PROFILES.indexOf(a.key) - SECONDARY_PROFILES.indexOf(b.key))
                   .map(p => (
-                    <ProfileCard key={p.key} profile={p} selected={form.profile === p.key} onSelect={key => onPatch('profile', key)} />
+                    <ProfileCard key={p.key} profile={p} selected={form.profile === p.key} onSelect={handleProfileSelect} />
                   ))}
 
                 <TouchableOpacity
@@ -1340,7 +1383,29 @@ function StrategyFormModal({
               </>
             )}
 
-            {form.profile === 'CUSTOM' && (
+            {form.profile !== 'CUSTOM' && (
+              <>
+                <SectionHeader title="Override Defaults" colors={colors} />
+                <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <View style={[styles.configRow, { borderBottomWidth: 0 }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.configLabel, { color: colors.text }]}>Customize This Strategy</Text>
+                      <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>
+                        Keep {profiles.find(p => p.key === form.profile)?.display_name ?? form.profile}'s entry/exit logic, but set your own contracts, TP1/TP2, and stop-loss for this strategy only
+                      </Text>
+                    </View>
+                    <Switch
+                      value={form.override_enabled}
+                      onValueChange={handleOverrideToggle}
+                      thumbColor={form.override_enabled ? '#30D158' : '#ccc'}
+                      trackColor={{ true: '#30D15855', false: colors.border }}
+                    />
+                  </View>
+                </View>
+              </>
+            )}
+
+            {(form.profile === 'CUSTOM' || form.override_enabled) && (
               <CustomThresholdsEditor
                 thresholds={form.custom_thresholds}
                 onChange={t => onPatch('custom_thresholds', t)}
@@ -1350,7 +1415,7 @@ function StrategyFormModal({
               />
             )}
 
-            {form.profile !== 'CUSTOM' && (
+            {form.profile !== 'CUSTOM' && !form.override_enabled && (
               <>
                 <SectionHeader title="Exit Controls" colors={colors} />
                 <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>

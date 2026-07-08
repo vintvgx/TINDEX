@@ -326,6 +326,40 @@ class StrategyNotifier:
             priority=P_TRADE_ENTRY,
         )
 
+    def notify_confirm_entry(
+        self,
+        ticker: str,
+        direction: str,
+        profile_key: str,
+        confidence: float,
+        contract: dict,
+        pending_id: str,
+        expires_in_min: int,
+    ):
+        """
+        confirm_entry gate: a breakout/reversal was confirmed and a contract was
+        selected, but the strategy is configured to wait for user approval before
+        the order is actually submitted. Tapping this opens the in-app
+        Enter/Skip confirmation modal (the modal itself is also shown from
+        foregrounding the app while a confirmation is open, not only from the tap).
+        """
+        symbol = contract.get("symbol", "")
+        label  = _fmt_contract(symbol) if symbol else f"{ticker} option"
+        self._dispatch(
+            title=f"Confirm {ticker} Trade",
+            body=(
+                f"{label}  [{profile_key}]  ·  Confidence {confidence:.0f}/100  ·  "
+                f"expires in {expires_in_min} min"
+            ),
+            data={
+                "screen":     "strategy",
+                "type":       "confirm_entry",
+                "pending_id": pending_id,
+                "symbol":     symbol,
+            },
+            priority=P_TRADE_ENTRY,
+        )
+
     def notify_review_ready(self, review_date: str, trade_count: int, net_pnl: float):
         """Daily performance review finished generating and saving."""
         pnl_emoji = "📈" if net_pnl >= 0 else "📉"

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
+import type { PendingPriceUpdate } from '@/common/types/strategy';
 
 export interface LivePriceData {
   contract:      string;
@@ -16,9 +17,13 @@ export interface LivePriceData {
 }
 
 interface UseStrategyLivePriceResult {
-  data:        LivePriceData | null;
-  connected:   boolean;
-  disconnect:  () => void;
+  data:               LivePriceData | null;
+  /** Live premium + recomputed SL/TP1/TP2 preview while a confirm_entry trade
+   *  is pending approval — null once a position is open (server stops sending
+   *  this type and starts sending "price_update" instead) or nothing pending. */
+  pendingPriceData:   PendingPriceUpdate | null;
+  connected:          boolean;
+  disconnect:         () => void;
 }
 
 /**
@@ -34,8 +39,9 @@ export function useStrategyLivePrice(
   enabled: boolean = true,
   onPositionClosed?: () => void,
 ): UseStrategyLivePriceResult {
-  const [data, setData]           = useState<LivePriceData | null>(null);
-  const [connected, setConnected] = useState(false);
+  const [data, setData]                       = useState<LivePriceData | null>(null);
+  const [pendingPriceData, setPendingPriceData] = useState<PendingPriceUpdate | null>(null);
+  const [connected, setConnected]             = useState(false);
   const wsRef                     = useRef<WebSocket | null>(null);
   const reconnectTimer            = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openTimer                 = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -78,6 +84,8 @@ export function useStrategyLivePrice(
         if (!mountedRef.current) return;
         if (msg.type === 'price_update') {
           setData(msg as LivePriceData);
+        } else if (msg.type === 'pending_price_update') {
+          setPendingPriceData(msg as PendingPriceUpdate);
         } else if (msg.type === 'position_closed') {
           setData(null);
           onPositionClosedRef.current?.();
@@ -120,6 +128,7 @@ export function useStrategyLivePrice(
     wsRef.current = null;
     setConnected(false);
     setData(null);
+    setPendingPriceData(null);
   }, []);
 
   useEffect(() => {
@@ -135,5 +144,5 @@ export function useStrategyLivePrice(
     // re-runs exactly when the target socket changes (no reconnect storm).
   }, [connect, disconnect, enabled, wsUrl]);
 
-  return { data, connected, disconnect };
+  return { data, pendingPriceData, connected, disconnect };
 }
