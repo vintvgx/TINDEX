@@ -497,9 +497,10 @@ class ORBEngine:
                 self._bar_confirm_pending   = True
                 self._bar_confirm_direction = direction
                 self._bar_confirm_price     = price
+                side_str = "above ORH" if direction == "CALL" else "below ORL"
                 self.debug.emit("INFO",
                     f"3-min breakout confirmed ({direction} @ {price:.2f}) — "
-                    f"waiting for bar close above ORH to enter [{self.profile_key}]")
+                    f"waiting for bar close {side_str} to enter [{self.profile_key}]")
             else:
                 logger.info("[ORBEngine] Confirmed %s breakout for %s @ %.2f — entering",
                             direction, self.ticker, price)
@@ -1129,8 +1130,14 @@ class ORBEngine:
         with self._tick_lock:
             pc = self._pending_confirmation
             if not pc or pc["id"] != pending_id:
+                self.debug.emit("WARN",
+                    f"Approve requested for pending {pending_id} but no matching "
+                    "confirmation is open — already resolved or expired")
                 return {"status": "error", "message": "No matching pending confirmation"}
             if datetime.now(ET) > datetime.fromisoformat(pc["expires_at"]):
+                self.debug.emit("WARN",
+                    f"Approve requested for {pc['direction']} {pc['contract_symbol']} "
+                    "but the confirmation had already expired")
                 self._resolve_pending("EXPIRED")
                 return {"status": "error", "message": "Confirmation expired"}
 
@@ -1142,6 +1149,8 @@ class ORBEngine:
             if self.stream_manager:
                 self.stream_manager.unsubscribe(contract["symbol"], self._on_pending_quote)
 
+            self.debug.emit("SUCCESS",
+                f"Confirmation approved by user — entering {direction} {contract['symbol']}")
             try:
                 self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
             except Exception:
@@ -1181,6 +1190,9 @@ class ORBEngine:
         with self._tick_lock:
             pc = self._pending_confirmation
             if not pc or pc["id"] != pending_id:
+                self.debug.emit("WARN",
+                    f"Skip requested for pending {pending_id} but no matching "
+                    "confirmation is open — already resolved or expired")
                 return {"status": "error", "message": "No matching pending confirmation"}
 
             self.debug.emit("INFO", f"Confirmation skipped — {pc['direction']} {pc['contract_symbol']}")
