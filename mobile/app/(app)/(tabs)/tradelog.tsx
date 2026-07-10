@@ -278,7 +278,7 @@ const fmtEt = (iso: string): string => {
       timeZone: 'America/New_York',
       month: 'short', day: 'numeric',
       hour: '2-digit', minute: '2-digit', second: '2-digit',
-      hour12: false,
+      hour12: true,
     }) + ' ET';
   } catch { return iso; }
 };
@@ -737,7 +737,9 @@ const DEBUG_FILTERS: ('ALL' | DebugLevel)[] = ['ALL', 'ERROR', 'WARN', 'SUCCESS'
 
 const formatLogTime = (iso: string): string => {
   const d = new Date(iso);
-  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  return d.toLocaleTimeString('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
+  });
 };
 
 function DebugLogPanel({ colors }: { colors: any }) {

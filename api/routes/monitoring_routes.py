@@ -45,22 +45,25 @@ def get_orb_service(provider: str = "alpaca") -> OrbService:
 
 # ── ORB routes ────────────────────────────────────────────────────────────────
 
-@bp.route("/tindex/orb/start", methods=["POST"])
-def start_orb_monitoring():
-    global ORB_SERVICE, ORB_TASK
-    try:
-        debug_mode = request.args.get("debug", "").lower() == "true"
-        provider = request.args.get("provider", "alpaca").lower()
-        try:
-            body = request.get_json(silent=True) or {}
-            debug_mode = debug_mode or bool(body.get("debug", False))
-            provider = body.get("provider", provider).lower()
-        except Exception as e:
-            logger.error("Failed to retrieve request data: %s", e)
+def start_orb_service(provider: str = "alpaca", debug_mode: bool = False,
+                       notify: bool = True) -> dict:
+    """
+    Core start logic shared by the /tindex/orb/start route, app.py's boot-time
+    auto-start, and the watchdog's auto-restart (see scheduler.py). A single
+    entry point here means all three can never race each other into creating
+    duplicate OrbService instances/threads — the whole check-then-create
+    sequence is under orb_lock, not just the "already running" read.
 
-        with orb_lock:
-            if ORB_SERVICE and ORB_SERVICE.is_running:
-                return jsonify({"message": "ORB service already running"})
+    notify=False is used by app.py's boot-time auto-start and the watchdog's
+    auto-restart — a silent self-heal (which could fire on any redeploy, not
+    just once a day) should be logged, not re-sent as if it were the normal
+    morning "ORB Service + Engine started" push. Only the explicit
+    /tindex/orb/start route (the 9:20 AM cron, or a manual call) notifies.
+    """
+    global ORB_SERVICE, ORB_TASK
+    with orb_lock:
+        if ORB_SERVICE and ORB_SERVICE.is_running:
+            return {"success": True, "message": "ORB service already running", "already_running": True}
 
         ORB_SERVICE = get_orb_service(provider=provider)
 
@@ -73,22 +76,38 @@ def start_orb_monitoring():
         ORB_TASK = threading.Thread(target=run_orb, daemon=True)
         ORB_TASK.start()
 
-        # Ensure strategy engines and review scheduler are live
-        try:
-            from services.strategy.scheduler import init_scheduler as _init_sched, schedule_daily_review as _sched_review
-            from routes.strategy_routes import _engines
-            for _eng in _engines.values():
-                _init_sched(_eng)
-            if _engines:
-                next(iter(_engines.values())).notifier.notify_start(provider)
-            _sched_review(get_supabase_service().client)
-        except Exception as _e:
-            logger.warning("[ORB Start] Engine check failed: %s", _e)
+    # Ensure strategy engines and review scheduler are live
+    try:
+        from services.strategy.scheduler import init_scheduler as _init_sched, schedule_daily_review as _sched_review
+        from routes.strategy_routes import _engines
+        for _eng in _engines.values():
+            _init_sched(_eng)
+        if notify and _engines:
+            next(iter(_engines.values())).notifier.notify_start(provider)
+        _sched_review(get_supabase_service().client)
+    except Exception as _e:
+        logger.warning("[ORB Start] Engine check failed: %s", _e)
 
-        message = "ORB Service + Engine started"
-        if debug_mode:
-            message += " (DEBUG MODE: Market hours check bypassed)"
-        return jsonify({"success": True, "message": message, "debug_mode": debug_mode, "provider": provider})
+    message = "ORB Service + Engine started"
+    if debug_mode:
+        message += " (DEBUG MODE: Market hours check bypassed)"
+    return {"success": True, "message": message, "debug_mode": debug_mode, "provider": provider}
+
+
+@bp.route("/tindex/orb/start", methods=["POST"])
+def start_orb_monitoring():
+    try:
+        debug_mode = request.args.get("debug", "").lower() == "true"
+        provider = request.args.get("provider", "alpaca").lower()
+        try:
+            body = request.get_json(silent=True) or {}
+            debug_mode = debug_mode or bool(body.get("debug", False))
+            provider = body.get("provider", provider).lower()
+        except Exception as e:
+            logger.error("Failed to retrieve request data: %s", e)
+
+        result = start_orb_service(provider=provider, debug_mode=debug_mode)
+        return jsonify(result)
 
     except Exception as e:
         logger.error("Failed to start ORB monitoring: %s", e)
@@ -110,17 +129,104 @@ def stop_orb_monitoring():
         return jsonify({"error": str(e)}), 500
 
 
+# Seconds without a bar (during market hours) before the feed is considered
+# stale rather than just quiet. Bars arrive roughly every 60s per ticker;
+# 180s gives room for an occasional slow tick without false-alarming.
+# Shared with the watchdog (scheduler.py) so the health badge and the
+# auto-restart trigger on the exact same definition of "stale".
+STALE_FEED_THRESHOLD_SEC = 180
+
+
+def get_orb_health() -> dict:
+    """
+    Shared by the /tindex/orb/status route and the watchdog (scheduler.py) —
+    a single definition of "healthy" so the UI badge and the auto-restart
+    decision can never disagree with each other.
+
+    is_running=True alone is NOT sufficient — the 2026-07-09 outage showed
+    OrbService reporting itself as running (and firing the "started" push)
+    while the underlying stream had gone silent. seconds_since_last_bar is
+    the real liveness signal: a bar actually arriving proves data is flowing.
+    """
+    with orb_lock:
+        if not (ORB_SERVICE and hasattr(ORB_SERVICE, "is_running") and ORB_SERVICE.is_running):
+            return {"running": False, "healthy": False}
+
+        from services.utils.orb_data_hub import get_orb_data_hub
+        hub = get_orb_data_hub()
+        stale_secs = hub.seconds_since_last_bar()
+        market_hours = ORB_SERVICE.is_market_hours()
+        # Outside market hours (or before the first bar has ever arrived that
+        # session) a quiet feed is expected, not an outage.
+        stale = market_hours and (stale_secs is None or stale_secs > STALE_FEED_THRESHOLD_SEC)
+
+        return {
+            "running": True,
+            "calculation_phase": getattr(ORB_SERVICE, "calculation_phase", False),
+            "active_tickers": list(getattr(ORB_SERVICE, "active_tickers", set())),
+            "orb_ranges_count": len(getattr(ORB_SERVICE, "orb_ranges", {})),
+            "seconds_since_last_bar": stale_secs,
+            "market_hours": market_hours,
+            "healthy": not stale,
+        }
+
+
 @bp.route("/tindex/orb/status", methods=["GET"])
 def get_orb_status():
-    with orb_lock:
-        if ORB_SERVICE and hasattr(ORB_SERVICE, "is_running") and ORB_SERVICE.is_running:
-            return jsonify({
-                "running": True,
-                "calculation_phase": getattr(ORB_SERVICE, "calculation_phase", False),
-                "active_tickers": list(getattr(ORB_SERVICE, "active_tickers", set())),
-                "orb_ranges_count": len(getattr(ORB_SERVICE, "orb_ranges", {})),
-            })
-    return jsonify({"running": False})
+    return jsonify(get_orb_health())
+
+
+def restart_orb_if_unhealthy() -> dict:
+    """
+    Watchdog entry point — call periodically (see the pg_cron sweep migration)
+    to detect and recover from the two failure modes that can leave the hub
+    dark for the rest of a session: never running at all, or (the actual
+    2026-07-09 incident) running with a dead stream underneath it.
+
+    The "running but stale" case needs an explicit stop() first: start_orb_service()
+    early-returns "already running" whenever ORB_SERVICE.is_running is True,
+    which is exactly the state a stale-but-alive service is stuck in — it never
+    crashed at the Python level, it just stopped receiving bars.
+
+    NOTE: this will also restart a service an operator deliberately stopped via
+    POST /tindex/orb/stop for maintenance — there's no separate "intentionally
+    off" flag distinct from "crashed". Acceptable given the sweep interval is a
+    few minutes and a deliberate stop is a rare, actively-watched action; flag
+    this trade-off if that ever changes.
+    """
+    global ORB_SERVICE
+    health = get_orb_health()
+    if health.get("healthy"):
+        return {"action": "none", "health": health}
+
+    was_running_but_stale = health.get("running") is True
+    if was_running_but_stale:
+        logger.warning(
+            "[ORB Watchdog] Feed stale for %.0fs while reporting running=True — force-restarting",
+            health.get("seconds_since_last_bar") or -1,
+        )
+        with orb_lock:
+            try:
+                if ORB_SERVICE:
+                    asyncio.run(ORB_SERVICE.stop())
+            except Exception as e:
+                logger.error("[ORB Watchdog] stop() during forced restart failed: %s", e)
+            ORB_SERVICE = None
+    else:
+        logger.warning("[ORB Watchdog] Hub not running — restarting")
+
+    result = start_orb_service(notify=False)
+    return {"action": "restarted", "was_stale": was_running_but_stale, "health": health, "result": result}
+
+
+@bp.route("/tindex/orb/watchdog", methods=["POST"])
+def orb_watchdog_sweep():
+    """Stateless endpoint for the periodic pg_cron watchdog call."""
+    try:
+        return jsonify(restart_orb_if_unhealthy())
+    except Exception as e:
+        logger.error("[ORB Watchdog] Sweep failed: %s", e)
+        return jsonify({"error": str(e)}), 500
 
 
 # ── Options contract monitor routes ──────────────────────────────────────────
