@@ -18,6 +18,7 @@ import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 import type { TrackedOptionContract } from '@/common/types/options';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsContractDetailModal';
+import { TradeContractSheet } from '@/common/components/ticker/TradeContractSheet';
 import { TrackedContractsList } from '@/common/components/options/TrackedContractsList';
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
@@ -273,6 +274,7 @@ const OptionsScreen = () => {
   const [detailTrackedId, setDetailTrackedId] = useState<string | null>(null);
   const [detailTrackedPrice, setDetailTrackedPrice] = useState<number | null>(null);
   const [detailLiveContractPrice, setDetailLiveContractPrice] = useState<number | null>(null);
+  const [tradeSheetVisible, setTradeSheetVisible] = useState(false);
 
   // Service status (shared React Query cache — no extra network call if ORB screen is mounted)
   const { data: servicesStatus } = useServicesStatus();
@@ -1001,8 +1003,18 @@ const OptionsScreen = () => {
           isUntracking={untrackContract.isPending}
           trackedPrice={detailTrackedId ? detailTrackedPrice : null}
           liveContractPrice={detailTrackedId ? detailLiveContractPrice : null}
+          onTrade={() => setTradeSheetVisible(true)}
         />
       )}
+
+      <TradeContractSheet
+        visible={tradeSheetVisible}
+        onClose={() => setTradeSheetVisible(false)}
+        colors={colors}
+        ticker={detailContract?.ticker || activeTicker}
+        contract={detailContract}
+        currentPrice={detailCurrentPrice}
+      />
     </SafeAreaView>
   );
 };

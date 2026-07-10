@@ -1,15 +1,18 @@
 import { useEffect, useRef, useMemo, useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert,
-  FlatList, ScrollView,
+  FlatList, ScrollView, TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
 import { useImmediateTradeByTicker } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
 import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsContractDetailModal';
-import type { ProfileKey } from '@/common/types/strategy';
 import type { OptionsContract, OptionsOpportunity } from '@/common/types/blogPosts/ticker';
+import {
+  IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
+  getOtmAutoProfileIndex, ProfileDropdown, ManualSLPicker,
+} from '@/common/components/strategy/ImmediateProfilePicker';
 
 interface Props {
   colors: any;
@@ -18,140 +21,37 @@ interface Props {
   onClose?: () => void;
 }
 
-// ── Immediate-trade profile definitions ──────────────────────────────────────
+// ── Expiration targeting ──────────────────────────────────────────────────────
+// SPY/QQQ/IWM list expirations on a Mon/Wed/Fri cadence (matches EOD_CLOSE_TIMES
+// in api/services/strategy/orb_engine.py — the same three tickers the ORB engine
+// treats specially). Single stocks only ever list standard Friday weeklies —
+// "today" is essentially never a listed expiration for them, which is why this
+// panel used to show an empty chain for any non-ETF ticker.
+const ETF_TICKERS = new Set(['SPY', 'QQQ', 'IWM']);
+// Date.getUTCDay(): 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+const ETF_EXPIRY_WEEKDAYS   = new Set([1, 3, 5]); // Mon/Wed/Fri
+const STOCK_EXPIRY_WEEKDAYS = new Set([5]);       // Friday weeklies
 
-interface ImmediateProfile {
-  key: ProfileKey;
-  emoji: string;
-  name: string;
-  qty: number;
-  maxLoss: number;  // percent, e.g. 30
-  tp1: number;      // percent gain at TP1 (0 = no auto TP)
-  tp2: number;      // percent gain at TP2 (0 = runner or none)
-  risk: string;
-  description: string;
-  isManual?: boolean;
-  isOtmProfile?: boolean;
+function addDays(iso: string, days: number): string {
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().split('T')[0];
 }
 
-const IMMEDIATE_PROFILES: ImmediateProfile[] = [
-  {
-    key: 'SCALPER',
-    emoji: '⚡',
-    name: 'Scalper',
-    qty: 3,
-    maxLoss: 30,
-    tp1: 30,
-    tp2: 60,
-    risk: 'Low',
-    description: 'Quick locks, take gains fast, tight trail on the runner.',
-  },
-  {
-    key: 'PRECISION',
-    emoji: '🎯',
-    name: 'Precision',
-    qty: 2,
-    maxLoss: 25,
-    tp1: 40,
-    tp2: 80,
-    risk: 'Low-Med',
-    description: 'Disciplined ATM entry, balanced close at both targets.',
-  },
-  {
-    key: 'MOMENTUM',
-    emoji: '📈',
-    name: 'Momentum',
-    qty: 4,
-    maxLoss: 40,
-    tp1: 20,
-    tp2: 50,
-    risk: 'Medium',
-    description: 'Small TP1 clip, let the bulk of the position run with the trend.',
-  },
-  {
-    key: 'CONVICTION',
-    emoji: '💎',
-    name: 'Conviction',
-    qty: 5,
-    maxLoss: 45,
-    tp1: 15,
-    tp2: 35,
-    risk: 'Med-High',
-    description: 'High-confidence runner play. Tiny TP1 clip, almost all rides.',
-  },
-  {
-    key: 'ALL_IN',
-    emoji: '🔥',
-    name: 'All In',
-    qty: 8,
-    maxLoss: 50,
-    tp1: 10,
-    tp2: 0,
-    risk: 'High',
-    description: 'Max size, no TP2 — pure runner trail until EOD or stopped.',
-  },
-  {
-    key: 'OTM_RUNNER',
-    emoji: '🚀',
-    name: 'OTM Runner',
-    qty: 10,
-    maxLoss: 60,
-    tp1: 100,
-    tp2: 250,
-    risk: 'High',
-    description: 'For contracts under $0.25. TP targets sized for a real underlying move — not bid/ask noise.',
-    isOtmProfile: true,
-  },
-  {
-    key: 'OTM_CONVICTION',
-    emoji: '🎯',
-    name: 'OTM Conviction',
-    qty: 6,
-    maxLoss: 55,
-    tp1: 75,
-    tp2: 200,
-    risk: 'Med-High',
-    description: 'For contracts $0.25–$0.40. High-confidence directional play with room to breathe.',
-    isOtmProfile: true,
-  },
-  {
-    key: 'MANUAL',
-    emoji: '✋',
-    name: 'Manual',
-    qty: 2,
-    maxLoss: 30,
-    tp1: 0,
-    tp2: 0,
-    risk: 'Custom',
-    description: 'You control the exit. Set your stop loss below — nothing else closes automatically.',
-    isManual: true,
-  },
-];
-
-const DEFAULT_PROFILE_INDEX = 2; // MOMENTUM
-const SL_PRESETS = [20, 30, 40, 50];
-
-// ── OTM auto-selection ────────────────────────────────────────────────────────
-// Above this ask price, OTM contracts are priced well enough for normal profiles.
-// Raised to $0.50 to capture mid-range OTM contracts like the $0.48 QQQ CALL today.
-const OTM_PRICE_CEILING = 0.50;
-// Below this ask price, use OTM_RUNNER (cheaper lottery-ticket contracts).
-// Between OTM_RUNNER_CEILING and OTM_PRICE_CEILING, use OTM_CONVICTION.
-const OTM_RUNNER_CEILING = 0.25;
-
-function getOtmAutoProfileIndex(
-  contract: OptionsContract,
-  underlyingPrice: number,
-): number | null {
-  if (!underlyingPrice || underlyingPrice <= 0) return null;
-  const isOTM =
-    contract.option_type === 'CALL'
-      ? contract.strike > underlyingPrice
-      : contract.strike < underlyingPrice;
-  if (!isOTM || contract.ask <= 0 || contract.ask >= OTM_PRICE_CEILING) return null;
-  const targetKey: ProfileKey =
-    contract.ask < OTM_RUNNER_CEILING ? 'OTM_RUNNER' : 'OTM_CONVICTION';
-  return IMMEDIATE_PROFILES.findIndex(p => p.key === targetKey);
+/**
+ * Pick the nearest expiration matching the ticker's expected cadence from
+ * whatever the chain actually returned. Falls back to the single nearest
+ * expiration overall if none match the cadence (holiday shift, data gap) —
+ * never show an empty chain when the provider did return something.
+ */
+function pickTargetExpiration(ticker: string, available: string[]): string | null {
+  if (!available.length) return null;
+  const allowedWeekdays = ETF_TICKERS.has(ticker.toUpperCase())
+    ? ETF_EXPIRY_WEEKDAYS
+    : STOCK_EXPIRY_WEEKDAYS;
+  const sorted = [...available].sort();
+  const matching = sorted.filter(d => allowedWeekdays.has(new Date(d + 'T00:00:00Z').getUTCDay()));
+  return matching[0] ?? sorted[0];
 }
 
 // ── Chain helpers ─────────────────────────────────────────────────────────────
@@ -200,237 +100,13 @@ const asOpportunity = (c: OptionsContract): OptionsOpportunity => ({
   strike: c.strike, theta: c.theta, total_score: 0, vega: c.vega, volume: c.volume,
 });
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-const riskColor = (r: string, colors: any): string => {
-  if (r === 'Low')      return '#22C55E';
-  if (r === 'Low-Med')  return '#84CC16';
-  if (r === 'Medium')   return '#F59E0B';
-  if (r === 'Med-High') return '#F97316';
-  if (r === 'High')     return '#EF4444';
-  return colors.accent; // Custom / OTM
-};
-
-// ── ProfileDropdown ───────────────────────────────────────────────────────────
-
-function ProfileDropdown({
-  selectedIndex,
-  onSelect,
-  colors,
-}: {
-  selectedIndex: number;
-  onSelect: (idx: number) => void;
-  colors: any;
-}) {
-  const [open, setOpen] = useState(false);
-  const profile = IMMEDIATE_PROFILES[selectedIndex];
-
-  return (
-    <View>
-      {/* Trigger */}
-      <TouchableOpacity
-        onPress={() => setOpen(o => !o)}
-        activeOpacity={0.8}
-        style={[styles.ddTrigger, { backgroundColor: colors.card, borderColor: open ? colors.accent : colors.border }]}
-      >
-        <Text style={[styles.ddTriggerEmoji]}>{profile.emoji}</Text>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.ddTriggerName, { color: colors.text }]}>{profile.name}</Text>
-          <Text style={[styles.ddTriggerSub, { color: colors.tabBarInactive }]} numberOfLines={1}>
-            {profile.isManual
-              ? 'Manual exit — SL only'
-              : `Stop −${profile.maxLoss}%  ·  TP1 +${profile.tp1}%  ·  ${profile.tp2 > 0 ? `TP2 +${profile.tp2}%` : 'Runner'}`}
-          </Text>
-        </View>
-        <View style={[styles.ddRiskBadge, { backgroundColor: riskColor(profile.risk, colors) + '22' }]}>
-          <Text style={[styles.ddRiskText, { color: riskColor(profile.risk, colors) }]}>{profile.risk}</Text>
-        </View>
-        <Ionicons
-          name={open ? 'chevron-up' : 'chevron-down'}
-          size={16}
-          color={colors.tabBarInactive}
-          style={{ marginLeft: 6 }}
-        />
-      </TouchableOpacity>
-
-      {/* Expanded list */}
-      {open && (
-        <View style={[styles.ddList, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          {IMMEDIATE_PROFILES.map((p, i) => {
-            const active = i === selectedIndex;
-            const rc = riskColor(p.risk, colors);
-            const prevProfile = i > 0 ? IMMEDIATE_PROFILES[i - 1] : null;
-            const showOtmHeader = p.isOtmProfile && !prevProfile?.isOtmProfile;
-            const showManualHeader = p.isManual && !prevProfile?.isManual;
-            return (
-              <View key={p.key}>
-                {showOtmHeader && (
-                  <View style={[styles.ddSectionHeader, { borderTopColor: colors.border, borderBottomColor: colors.border }]}>
-                    <View style={[styles.ddSectionDivider, { backgroundColor: colors.border }]} />
-                    <Text style={[styles.ddSectionLabel, { color: colors.tabBarInactive }]}>OTM CONTRACTS</Text>
-                    <View style={[styles.ddSectionDivider, { backgroundColor: colors.border }]} />
-                  </View>
-                )}
-                {showManualHeader && (
-                  <View style={[styles.ddSectionHeader, { borderTopColor: colors.border, borderBottomColor: colors.border }]}>
-                    <View style={[styles.ddSectionDivider, { backgroundColor: colors.border }]} />
-                    <Text style={[styles.ddSectionLabel, { color: colors.tabBarInactive }]}>MANUAL CONTROL</Text>
-                    <View style={[styles.ddSectionDivider, { backgroundColor: colors.border }]} />
-                  </View>
-                )}
-              <TouchableOpacity
-                onPress={() => { onSelect(i); setOpen(false); }}
-                activeOpacity={0.75}
-                style={[
-                  styles.ddItem,
-                  { borderBottomColor: colors.border },
-                  active && { backgroundColor: colors.accent + '12' },
-                  i === IMMEDIATE_PROFILES.length - 1 && { borderBottomWidth: 0 },
-                ]}
-              >
-                <View style={styles.ddItemHeader}>
-                  <Text style={styles.ddItemEmoji}>{p.emoji}</Text>
-                  <Text style={[styles.ddItemName, { color: colors.text }]}>{p.name}</Text>
-                  {active && (
-                    <Ionicons name="checkmark-circle" size={15} color={colors.accent} style={{ marginLeft: 4 }} />
-                  )}
-                  <View style={[styles.ddRiskBadge, { backgroundColor: rc + '22', marginLeft: 'auto' }]}>
-                    <Text style={[styles.ddRiskText, { color: rc }]}>{p.risk}</Text>
-                  </View>
-                </View>
-                <Text style={[styles.ddItemDesc, { color: colors.tabBarInactive }]}>{p.description}</Text>
-                {!p.isManual && (
-                  <View style={styles.ddItemStats}>
-                    <DDStat label="Max Loss" value={`−${p.maxLoss}%`} color="#EF4444" colors={colors} />
-                    <DDStat label="TP1"      value={`+${p.tp1}%`}   color="#22C55E" colors={colors} />
-                    <DDStat
-                      label={p.tp2 > 0 ? 'TP2' : 'Exit'}
-                      value={p.tp2 > 0 ? `+${p.tp2}%` : 'Runner'}
-                      color={p.tp2 > 0 ? '#22C55E' : colors.accent}
-                      colors={colors}
-                    />
-                    <DDStat label="Qty" value={String(p.qty)} colors={colors} />
-                  </View>
-                )}
-                {p.isManual && (
-                  <View style={styles.ddItemStats}>
-                    <DDStat label="TP1 / TP2" value="None" color={colors.tabBarInactive} colors={colors} />
-                    <DDStat label="Stop Loss" value="You set it" color="#EF4444" colors={colors} />
-                    <DDStat label="Qty" value={String(p.qty)} colors={colors} />
-                  </View>
-                )}
-              </TouchableOpacity>
-              </View>
-            );
-          })}
-        </View>
-      )}
-    </View>
-  );
-}
-
-const DDStat = ({ label, value, color, colors }: { label: string; value: string; color?: string; colors: any }) => (
-  <View style={styles.ddStatItem}>
-    <Text style={[styles.ddStatValue, { color: color ?? colors.text }]}>{value}</Text>
-    <Text style={[styles.ddStatLabel, { color: colors.tabBarInactive }]}>{label}</Text>
-  </View>
-);
-
-// ── ManualSLPicker ────────────────────────────────────────────────────────────
-
-function ManualSLPicker({
-  slPct,
-  onChangePct,
-  askPrice,
-  colors,
-}: {
-  slPct: number;
-  onChangePct: (pct: number) => void;
-  askPrice: number;
-  colors: any;
-}) {
-  const stopPrice = askPrice > 0 ? (askPrice * (1 - slPct / 100)).toFixed(2) : null;
-
-  return (
-    <View style={[styles.slPickerWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      {/* Header */}
-      <View style={styles.slHeader}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <Ionicons name="shield-half-outline" size={14} color="#EF4444" />
-          <Text style={[styles.slTitle, { color: colors.text }]}>Stop Loss</Text>
-        </View>
-        <View style={styles.slValueRow}>
-          <Text style={[styles.slPct, { color: '#EF4444' }]}>−{slPct}%</Text>
-          {stopPrice && (
-            <Text style={[styles.slStop, { color: colors.tabBarInactive }]}>
-              stop at ${stopPrice}
-            </Text>
-          )}
-        </View>
-      </View>
-
-      {/* Preset chips */}
-      <View style={styles.slPresets}>
-        {SL_PRESETS.map(pct => {
-          const active = slPct === pct;
-          const stopAt = askPrice > 0 ? (askPrice * (1 - pct / 100)).toFixed(2) : null;
-          return (
-            <TouchableOpacity
-              key={pct}
-              onPress={() => onChangePct(pct)}
-              activeOpacity={0.75}
-              style={[
-                styles.slChip,
-                {
-                  backgroundColor: active ? '#EF444422' : colors.surface ?? colors.card,
-                  borderColor: active ? '#EF4444' : colors.border,
-                },
-              ]}
-            >
-              <Text style={[styles.slChipPct, { color: active ? '#EF4444' : colors.text }]}>
-                −{pct}%
-              </Text>
-              {stopAt && (
-                <Text style={[styles.slChipStop, { color: active ? '#EF4444' : colors.tabBarInactive }]}>
-                  ${stopAt}
-                </Text>
-              )}
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      {/* Fine stepper */}
-      <View style={[styles.slStepper, { borderTopColor: colors.border }]}>
-        <TouchableOpacity
-          onPress={() => onChangePct(Math.max(10, slPct - 5))}
-          style={[styles.slStepBtn, { borderColor: colors.border }]}
-          hitSlop={8}
-        >
-          <Ionicons name="remove" size={16} color={colors.text} />
-        </TouchableOpacity>
-        <View style={{ alignItems: 'center' }}>
-          <Text style={[styles.slStepValue, { color: colors.text }]}>{slPct}%</Text>
-          <Text style={[styles.slStepLabel, { color: colors.tabBarInactive }]}>custom</Text>
-        </View>
-        <TouchableOpacity
-          onPress={() => onChangePct(Math.min(75, slPct + 5))}
-          style={[styles.slStepBtn, { borderColor: colors.border }]}
-          hitSlop={8}
-        >
-          <Ionicons name="add" size={16} color={colors.text} />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }: Props) {
   const toast = useToast();
   const [ticker, setTicker]             = useState<string>('');
   const [tickerOpen, setTickerOpen]     = useState(false);
+  const [tickerInput, setTickerInput]   = useState('');
   const [paperMode, setPaperMode]       = useState(true);
   const [side, setSide]                 = useState<OptionSide>('CALL');
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
@@ -470,9 +146,14 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   }, [tickerOptions, ticker]);
 
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
+  // ETFs (SPY/QQQ/IWM) may not have a fresh expiration on any given day, and
+  // stocks never expire same-day at all — fetch a 2-week window and pick the
+  // nearest expiration that actually exists and matches the ticker's cadence,
+  // rather than assuming "today" is always a listed expiration.
+  const queryWindowEnd = useMemo(() => addDays(today, 14), [today]);
   const { data, isLoading, error } = useOptionsQuery(
     visible && ticker ? ticker : '',
-    { limit: 100, expiration_date_gte: today, expiration_date_lte: today },
+    { limit: 100, expiration_date_gte: today, expiration_date_lte: queryWindowEnd },
     4000,
   );
 
@@ -481,11 +162,16 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   const chain        = data?.success ? data.data : null;
   const currentPrice = chain?.current_price ?? 0;
 
+  const targetExpiration = useMemo(() => {
+    if (!chain) return null;
+    return pickTargetExpiration(ticker, chain.expirations_fetched);
+  }, [chain, ticker]);
+
   const sideContracts = useMemo(() => {
-    if (!chain) return [];
+    if (!chain || !targetExpiration) return [];
     const list = side === 'CALL' ? chain.calls : chain.puts;
-    return list.filter(c => c.expiration === today);
-  }, [chain, side, today]);
+    return list.filter(c => c.expiration === targetExpiration);
+  }, [chain, side, targetExpiration]);
 
   const rows = useMemo(() => buildRows(sideContracts, currentPrice, side), [sideContracts, currentPrice, side]);
 
@@ -765,7 +451,43 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
         {/* Ticker dropdown */}
         {tickerOpen && (
           <View style={[styles.tickerMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <ScrollView style={{ maxHeight: 200 }} keyboardShouldPersistTaps="handled">
+            {/* Free-text entry — tickerOptions only lists ORB-monitored tickers
+                (effectively SPY/QQQ/IWM today), so this is the only way to reach
+                any other stock. Same 1-5 alpha validation the backend applies. */}
+            <View style={styles.tickerSearchRow}>
+              <TextInput
+                value={tickerInput}
+                onChangeText={t => setTickerInput(t.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5))}
+                placeholder="Type any ticker (e.g. AAPL)"
+                placeholderTextColor={colors.tabBarInactive}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                style={[styles.tickerSearchInput, { color: colors.text, borderColor: colors.border }]}
+                onSubmitEditing={() => {
+                  if (!tickerInput) return;
+                  setTicker(tickerInput);
+                  setTickerOpen(false);
+                  setSelected(null);
+                  setTickerInput('');
+                }}
+                returnKeyType="go"
+              />
+              <TouchableOpacity
+                onPress={() => {
+                  if (!tickerInput) return;
+                  setTicker(tickerInput);
+                  setTickerOpen(false);
+                  setSelected(null);
+                  setTickerInput('');
+                }}
+                disabled={!tickerInput}
+                style={[styles.tickerSearchGo, { backgroundColor: tickerInput ? colors.accent : colors.border }]}
+              >
+                <Ionicons name="arrow-forward" size={16} color={colors.iconButton ?? '#fff'} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 160 }} keyboardShouldPersistTaps="handled">
               {tickerOptions.map(t => {
                 const sel = ticker === t;
                 return (
@@ -832,17 +554,18 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
       ) : showError ? (
         <View style={styles.centered}>
           <Ionicons name="alert-circle-outline" size={40} color={colors.error} />
-          <Text style={[styles.emptyText, { color: colors.text }]}>Could not load the 0DTE chain</Text>
+          <Text style={[styles.emptyText, { color: colors.text }]}>Could not load the options chain</Text>
           <Text style={[styles.emptySub, { color: colors.tabBarInactive }]}>
-            0DTE options are only available during market hours.
+            Options data is only available during market hours.
           </Text>
         </View>
       ) : rows.length === 0 ? (
         <View style={styles.centered}>
           <Ionicons name="layers-outline" size={32} color={colors.tabBarInactive} />
-          <Text style={[styles.emptyText, { color: colors.text }]}>No 0DTE contracts</Text>
+          <Text style={[styles.emptyText, { color: colors.text }]}>No contracts found</Text>
           <Text style={[styles.emptySub, { color: colors.tabBarInactive }]}>
-            No {side === 'CALL' ? 'calls' : 'puts'} expiring today for {ticker || 'this ticker'}.
+            No {side === 'CALL' ? 'calls' : 'puts'} found for {ticker || 'this ticker'}
+            {targetExpiration ? ` expiring ${targetExpiration}` : ' in the nearest expirations'}.
           </Text>
         </View>
       ) : (
@@ -885,6 +608,9 @@ const styles = StyleSheet.create({
   tickerMenu:        { borderRadius: 10, borderWidth: 1, overflow: 'hidden' },
   tickerMenuItem:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12 },
   tickerMenuItemText:{ fontSize: 14 },
+  tickerSearchRow:   { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10 },
+  tickerSearchInput: { flex: 1, fontSize: 14, fontWeight: '600', borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9 },
+  tickerSearchGo:    { width: 36, height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
 
   accountToggle: { flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3 },
   accountBtn:    { flex: 1, alignItems: 'center', paddingVertical: 7 },
@@ -913,43 +639,6 @@ const styles = StyleSheet.create({
   autoSelectBanner: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, borderWidth: 1 },
   autoSelectText:   { fontSize: 11, fontWeight: '600', flex: 1 },
   autoSelectSub:    { fontSize: 10 },
-
-  // ── Profile dropdown ──
-  ddTrigger:      { flexDirection: 'row', alignItems: 'center', borderRadius: 12, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10, gap: 10 },
-  ddTriggerEmoji: { fontSize: 22 },
-  ddTriggerName:  { fontSize: 15, fontWeight: '700', marginBottom: 1 },
-  ddTriggerSub:   { fontSize: 11 },
-  ddRiskBadge:    { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
-  ddRiskText:     { fontSize: 10, fontWeight: '700' },
-  ddList:         { borderRadius: 12, borderWidth: 1, overflow: 'hidden', marginTop: 6 },
-  ddItem:         { padding: 12, borderBottomWidth: StyleSheet.hairlineWidth },
-  ddItemHeader:   { flexDirection: 'row', alignItems: 'center', marginBottom: 3, gap: 6 },
-  ddItemEmoji:    { fontSize: 16 },
-  ddItemName:     { fontSize: 14, fontWeight: '700' },
-  ddItemDesc:     { fontSize: 11, lineHeight: 15, marginBottom: 8 },
-  ddItemStats:    { flexDirection: 'row', gap: 16 },
-  ddSectionHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
-  ddSectionDivider:{ flex: 1, height: StyleSheet.hairlineWidth },
-  ddSectionLabel:  { fontSize: 10, fontWeight: '700', letterSpacing: 0.8 },
-  ddStatItem:      { alignItems: 'center' },
-  ddStatValue:    { fontSize: 13, fontWeight: '700' },
-  ddStatLabel:    { fontSize: 10, marginTop: 1 },
-
-  // ── Manual SL picker ──
-  slPickerWrap: { borderRadius: 12, borderWidth: 1, overflow: 'hidden' },
-  slHeader:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10 },
-  slTitle:      { fontSize: 13, fontWeight: '700' },
-  slValueRow:   { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  slPct:        { fontSize: 16, fontWeight: '800' },
-  slStop:       { fontSize: 11 },
-  slPresets:    { flexDirection: 'row', paddingHorizontal: 10, paddingBottom: 10, gap: 8 },
-  slChip:       { flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 10, borderWidth: 1 },
-  slChipPct:    { fontSize: 13, fontWeight: '700' },
-  slChipStop:   { fontSize: 10, marginTop: 2 },
-  slStepper:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 10, borderTopWidth: StyleSheet.hairlineWidth },
-  slStepBtn:    { width: 36, height: 36, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  slStepValue:  { fontSize: 18, fontWeight: '700' },
-  slStepLabel:  { fontSize: 10, marginTop: 1 },
 
   // ── Footer ──
   footerLabel:    { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 },
