@@ -263,6 +263,8 @@ def enter_swing_position():
             "side": side,
             "qty": qty,
             "entry_price": entry_price,
+            "entry_at": datetime.utcnow().isoformat(),
+            "realized_pnl": 0.0,
             "strategy_profile": strategy_profile,
             "stop_config": stop_config,
             "tp_ladder": tp_ladder,
@@ -330,22 +332,40 @@ def exit_swing_position(position_id: str):
         return jsonify({"success": False, "error": str(e)}), 500
 
     qty_to_close = int(body.get("qty") or pos["qty"])
-    exit_price = float(body.get("exit_price") or 0)
     entry_price = float(pos.get("entry_price") or 0)
-    pnl = (exit_price - entry_price) * qty_to_close * 100 if exit_price and entry_price else None
+    exit_price = float(body.get("exit_price") or 0) or None
 
-    # Live close via Alpaca — broker result is authoritative; do not update local state on failure.
+    # Live close via Alpaca — chase the best bid for a few seconds instead of
+    # firing a market order at a single, possibly-volatile instant. Broker
+    # result is authoritative; do not update local state on failure.
     if pos.get("mode") == "live":
         try:
             from services.alpaca.alpaca_option_service import get_alpaca_option_service
-            _run_async(get_alpaca_option_service().close_option_position(
+            fill = _run_async(get_alpaca_option_service().smart_close_option_position(
                 symbol=pos["contract_symbol"],
                 qty=qty_to_close,
                 paper=False,
             ))
+            exit_price = fill.get("fill_price") or exit_price
+            logger.info(
+                "[swing/positions/exit] %s filled via %s in %ss (samples=%s)",
+                pos["contract_symbol"], fill.get("method"), fill.get("elapsed_sec"), fill.get("samples_seen"),
+            )
         except Exception as e:
             logger.error("[swing/positions/exit] Alpaca close failed: %s", e, exc_info=True)
             return jsonify({"success": False, "error": f"Live close failed: {str(e)}"}), 500
+    elif exit_price is None:
+        # Paper trade — no real order to fill against, so sample live quotes
+        # over the same window to pick a realistic best price instead of
+        # trusting a possibly-stale client-supplied price.
+        try:
+            from services.alpaca.alpaca_option_service import get_alpaca_option_service
+            sample = _run_async(get_alpaca_option_service().sample_best_price(pos["contract_symbol"]))
+            exit_price = sample.get("best_price")
+        except Exception as e:
+            logger.warning("[swing/positions/exit] price sampling failed: %s", e, exc_info=True)
+
+    pnl = (exit_price - entry_price) * qty_to_close * 100 if exit_price and entry_price else None
 
     new_qty = (pos.get("qty") or 0) - qty_to_close
     new_status = "closed" if new_qty <= 0 else "partially_closed"
@@ -368,7 +388,13 @@ def exit_swing_position(position_id: str):
             "reason": body.get("reason", "Manual exit"),
         }).execute()
 
-        return jsonify({"success": True, "status": new_status, "realized_pnl": realized, "qty_closed": qty_to_close})
+        return jsonify({
+            "success": True,
+            "status": new_status,
+            "realized_pnl": realized,
+            "qty_closed": qty_to_close,
+            "exit_price": exit_price,
+        })
     except Exception as e:
         logger.error("[swing/positions/exit] %s", e, exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500

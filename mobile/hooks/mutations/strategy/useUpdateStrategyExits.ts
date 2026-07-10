@@ -1,5 +1,6 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
+import { getAuthHeaders } from '@/common/utils/api/getAuthHeaders';
 
 interface UpdateStrategyExitsPayload {
   strategy_id: string;
@@ -9,16 +10,18 @@ interface UpdateStrategyExitsPayload {
 }
 
 export function useUpdateStrategyExits() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ strategy_id, ...body }: UpdateStrategyExitsPayload) => {
-      const resp = await fetch(`${RAILWAY_BASE_URL}/configs/${strategy_id}/exits`, {
+      const resp = await fetch(`${RAILWAY_BASE_URL}/strategy/configs/${strategy_id}/exits`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getAuthHeaders(),
         body: JSON.stringify(body),
       });
-      const json = await resp.json();
-      if (json.status !== 'ok') throw new Error(json.message ?? 'Failed to update exits');
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok || json.status !== 'ok') throw new Error(json.message ?? `Request failed (${resp.status})`);
       return json;
     },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy-positions'] }),
   });
 }

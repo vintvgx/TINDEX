@@ -22,7 +22,7 @@ from alpaca.data.timeframe import TimeFrame
 
 from services.strategy.profiles import get_profile
 from services.strategy.contract_selector import select_contract
-from services.strategy.exit_manager import ExitManager
+from services.strategy.exit_manager import ExitManager, compute_exit_levels
 from services.strategy.sentiment import SentimentFilter
 from services.strategy.trade_logger import TradeLogger
 from services.strategy.notifier import StrategyNotifier
@@ -51,8 +51,16 @@ STRATEGY_DEFAULTS = {
     "otm_fib_level":           "1.0",
     "debug_mode":              False,
     "smart_contracts":         False,
+    "flow_gate_enabled":       True,   # False = flow is informational only, never blocks entry
+    "confirm_entry":           False,  # True = pause for user approval before every auto entry
     "id":                      None,
 }
+
+# How long a pending trade confirmation stays valid before it's auto-expired
+# (treated as a skip). 0DTE breakouts age fast; longer than this and the
+# contract/price the user would be approving is no longer representative of
+# the signal that triggered it.
+PENDING_CONFIRMATION_TTL_MIN = 5
 
 VIX_MIN = 13.0
 MIN_ORB_RANGE_PCT = 0.0005
@@ -101,18 +109,21 @@ class ORBEngine:
         self.otm_fib_level           = self.config.get("otm_fib_level", "1.0")
         self.smart_contracts         = self.config.get("smart_contracts", False)
         self.debug_enabled           = self.config.get("debug_mode", False)
+        self.flow_gate_enabled       = self.config.get("flow_gate_enabled", True)
+        self.confirm_entry           = self.config.get("confirm_entry", False)
         custom_thresholds            = self.config.get("custom_thresholds")
         exit_overrides               = self.config.get("exit_overrides")
         self.stream_manager          = getattr(self, "_stream_manager_ref", None)
 
-        # CUSTOM profile: merge stored thresholds over CUSTOM_DEFAULTS.
-        # All other profiles: apply only the consol_exit/volume_exit keys from
-        # exit_overrides (a sparse {consol_exit, volume_exit} dict) — custom_thresholds
-        # is left null so it doesn't pollute the Supabase JSONB column.
-        if self.profile_key == "CUSTOM":
-            self.profile = get_profile(self.profile_key, custom_thresholds)
-        else:
-            self.profile = get_profile(self.profile_key, exit_overrides)
+        # Merge exit_overrides (sparse consol_exit/volume_exit patch channel) with
+        # custom_thresholds (per-instance overrides of any field on the base
+        # profile — qty_contracts, tp1_mult, max_loss_pct, etc.) on top of the
+        # named profile's archetype defaults. custom_thresholds wins on overlap.
+        # Applies to every profile, not just CUSTOM — get_profile() only accepts
+        # keys that already exist on the base profile, so this can't inject
+        # unknown fields.
+        overrides = {**(exit_overrides or {}), **(custom_thresholds or {})}
+        self.profile = get_profile(self.profile_key, overrides or None)
 
         trade_key    = os.getenv("ALPACA_PAPER_API_KEY" if self.paper else "ALPACA_LIVE_API_KEY")
         trade_secret = os.getenv("ALPACA_PAPER_SECRET_KEY" if self.paper else "ALPACA_LIVE_SECRET_KEY")
@@ -168,10 +179,11 @@ class ORBEngine:
         self.position         = None
         self.contract_symbol  = None
         self.exit_manager     = None
-        self.trade_taken      = False
-        self.session_date     = None
-        self.session_skipped  = False
-        self.skip_reason      = None
+        self.trade_taken           = False
+        self._trade_was_taken_today = False  # stays True all day once any entry executes
+        self.session_date          = None
+        self.session_skipped       = False
+        self.skip_reason           = None
         self.active_trade_id  = None
         self.trade_entry_time        = None   # used by 30-min timer notification
         self.timer_notified          = False  # ensures the 30-min update fires only once
@@ -194,6 +206,11 @@ class ORBEngine:
         self._bar_confirm_pending   = False
         self._bar_confirm_direction = None   # "CALL" | "PUT"
         self._bar_confirm_price     = None   # underlying price at the time of the signal
+        # confirm_entry gate: set while a candidate trade is awaiting user
+        # approval via the app (see _pause_for_confirmation / approve_pending_entry
+        # / skip_pending_entry). None when no confirmation is outstanding.
+        self._pending_confirmation: Optional[dict] = None
+        self._pending_last_price:   Optional[float] = None
         # Fan-out queues for /ws/strategy/<id>/live WebSocket clients
         self._live_clients: list     = []
         self._live_clients_lock      = __import__("threading").Lock()
@@ -480,9 +497,10 @@ class ORBEngine:
                 self._bar_confirm_pending   = True
                 self._bar_confirm_direction = direction
                 self._bar_confirm_price     = price
+                side_str = "above ORH" if direction == "CALL" else "below ORL"
                 self.debug.emit("INFO",
                     f"3-min breakout confirmed ({direction} @ {price:.2f}) — "
-                    f"waiting for bar close above ORH to enter [{self.profile_key}]")
+                    f"waiting for bar close {side_str} to enter [{self.profile_key}]")
             else:
                 logger.info("[ORBEngine] Confirmed %s breakout for %s @ %.2f — entering",
                             direction, self.ticker, price)
@@ -656,6 +674,11 @@ class ORBEngine:
         NOTE: Called by on_price_tick when price closes above ORH (CALL) or
         below ORL (PUT) for the first time in the session.
         """
+        if self._pending_confirmation is not None:
+            self.debug.emit("WARN", "Ignoring signal — a trade confirmation is "
+                                    "already awaiting your response")
+            return
+
         # ── Risk guards — checked before any API / broker call ───────────────────
         if self._check_daily_loss_limit():
             self.debug.emit(
@@ -664,19 +687,41 @@ class ORBEngine:
                 f"(session P&L: ${self._session_realized_pnl:.0f}). "
                 f"Strategy paused for today.",
             )
+            self.notifier.notify_skip(
+                self.ticker,
+                f"DAILY_LOSS_LIMIT (session P&L: ${self._session_realized_pnl:.0f})",
+            )
             return
 
         if self._check_reentry_cooldown(direction):
-            return  # detailed message emitted inside _check_reentry_cooldown
+            cooldown_min = self.profile.get("re_entry_cooldown_min", 45)
+            last = self._last_loss_by_direction.get(direction, {})
+            elapsed = int(
+                (datetime.now(ET) - last["time"]).total_seconds() / 60
+            ) if last.get("time") else 0
+            self.notifier.notify_skip(
+                self.ticker,
+                f"RE_ENTRY_COOLDOWN ({direction} — {cooldown_min - elapsed}m remaining)",
+            )
+            return
 
         uw_key = os.getenv("UNUSUAL_WHALES_KEY")
-        if not self.sentiment.confirm_with_flow(self.ticker, direction, uw_key):
-            logger.info("[ORBEngine] Flow confirmation failed for %s %s — skipping entry",
-                        self.ticker, direction)
-            self.debug.emit("ERROR", f"Entry blocked — flow confirmation failed ({direction})")
-            self.notifier.notify_flow_blocked(self.ticker, direction)
-            return
-        self.debug.emit("INFO", f"Flow confirmed for {direction}")
+        flow_agrees = self.sentiment.confirm_with_flow(self.ticker, direction, uw_key)
+        if not flow_agrees:
+            if self.flow_gate_enabled:
+                logger.info("[ORBEngine] Flow gate blocked %s %s entry", self.ticker, direction)
+                self.debug.emit("ERROR", f"Entry blocked — flow gate ({direction})")
+                self.notifier.notify_flow_blocked(self.ticker, direction)
+                return
+            else:
+                # Gate disabled — notify for awareness but don't block the trade.
+                logger.info("[ORBEngine] Flow mismatch for %s %s — gate disabled, proceeding",
+                            self.ticker, direction)
+                self.debug.emit("WARN",
+                    f"Flow disagrees with {direction} but flow_gate_enabled=False — entering anyway")
+                self.notifier.notify_flow_blocked(self.ticker, direction)
+        else:
+            self.debug.emit("INFO", f"Flow confirmed for {direction}")
 
         # VWAP soft confirmation (log only — does not block entry)
         if self.session_vwap is not None:
@@ -835,6 +880,10 @@ class ORBEngine:
                 self.notifier.notify_stream_failed(self.ticker, symbol_to_verify)
                 return
 
+        if self.confirm_entry:
+            self._pause_for_confirmation(direction, trigger_price, contract, qty, effective_profile)
+            return
+
         self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
 
     def _execute_entry(self, direction: str, contract: dict, qty: int,
@@ -862,9 +911,10 @@ class ORBEngine:
             # TP/SL levels are anchored to what was actually paid.
             entry_premium = self._resolve_entry_premium(submitted, contract["ask"])
 
-            self.position         = direction
-            self.contract_symbol  = contract["symbol"]
-            self.trade_taken      = True
+            self.position               = direction
+            self.contract_symbol        = contract["symbol"]
+            self.trade_taken            = True
+            self._trade_was_taken_today = True  # survives the position close
             self.trade_entry_time = datetime.now(ET)
             self.timer_notified   = False
             self._active_trade_pnl = 0.0  # reset accumulator for this trade
@@ -909,7 +959,7 @@ class ORBEngine:
                 session_date=self.session_date,
                 profile=logged_profile_key,
                 qty=qty,
-                underlying_price_entry=self._last_underlying_price,
+                underlying_price_entry=self._get_underlying_price(),
                 vix_at_entry=self.vix,
                 strategy_id=log_strategy_id,
                 paper_mode=self.paper,
@@ -942,6 +992,282 @@ class ORBEngine:
             logger.error("[ORBEngine] Order failed: %s", e)
             self.debug.emit("ERROR", f"Order submission failed: {e}")
             raise
+
+    # ── Confirm-entry gate ───────────────────────────────────────────────────────
+
+    def _compute_confidence(self, direction: str, trigger_price: float) -> tuple[float, dict]:
+        """
+        0-100 technicals-based confidence score for a confirmed breakout/reversal,
+        composed entirely from price/volume/VWAP already tracked by this engine —
+        deliberately independent of options flow. Three equally-reasoned signals:
+
+          - breakout_strength: how far price cleared ORH/ORL relative to the
+            opening range itself (a marginal clear is weaker than a clean one).
+          - vwap_alignment: is the trigger price on the side of session VWAP that
+            actually agrees with the trade direction (trend confirmation).
+          - volume_surge: is the triggering bar's volume elevated vs. the recent
+            trailing average (real participation vs. a low-volume drift).
+
+        Any signal that can't be computed (VWAP not yet set, too few bars for a
+        volume baseline) contributes a neutral 0.5 rather than skewing the score.
+        """
+        breakdown: dict = {}
+
+        if self.orb_range and self.orb_range > 0:
+            if direction == "CALL":
+                raw = (trigger_price - (self.orh or trigger_price)) / self.orb_range
+            else:
+                raw = ((self.orl or trigger_price) - trigger_price) / self.orb_range
+            breakout_score = max(0.0, min(1.0, raw / 0.5))
+        else:
+            breakout_score = 0.5
+        breakdown["breakout_strength"] = round(breakout_score, 2)
+
+        if self.session_vwap is not None:
+            aligned = (
+                (direction == "CALL" and trigger_price > self.session_vwap) or
+                (direction == "PUT"  and trigger_price < self.session_vwap)
+            )
+            vwap_score = 1.0 if aligned else 0.3
+        else:
+            vwap_score = 0.5
+        breakdown["vwap_alignment"] = round(vwap_score, 2)
+
+        volume_score = 0.5
+        try:
+            bars = list(self._hub.get_recent_bars(self.ticker))[-10:]
+            vols = [b.volume for b in bars if getattr(b, "volume", None)]
+            if len(vols) >= 4:
+                avg_prior = sum(vols[:-1]) / len(vols[:-1])
+                if avg_prior > 0:
+                    ratio = vols[-1] / avg_prior
+                    volume_score = max(0.0, min(1.0, (ratio - 0.5) / 1.5))
+        except Exception:
+            pass  # missing/short bar history — keep the neutral default
+        breakdown["volume_surge"] = round(volume_score, 2)
+
+        weights = {"breakout_strength": 0.4, "vwap_alignment": 0.3, "volume_surge": 0.3}
+        confidence = round(100 * (
+            weights["breakout_strength"] * breakout_score +
+            weights["vwap_alignment"]    * vwap_score +
+            weights["volume_surge"]      * volume_score
+        ), 1)
+        breakdown["weights"] = weights
+        return confidence, breakdown
+
+    def _pause_for_confirmation(self, direction: str, trigger_price: float,
+                                 contract: dict, qty: int, effective_profile: dict):
+        """
+        confirm_entry gate: instead of submitting the order, persist the
+        candidate trade, push a notification, and stream the live premium so
+        the user can Enter or Skip from the app. Called from _enter_trade in
+        place of _execute_entry when self.confirm_entry is True.
+        """
+        confidence, breakdown = self._compute_confidence(direction, trigger_price)
+        entry_estimate = contract["ask"]
+        hard_stop, tp1, tp2 = compute_exit_levels(entry_estimate, effective_profile)
+        expires_at = datetime.now(ET) + timedelta(minutes=PENDING_CONFIRMATION_TTL_MIN)
+
+        row = self.logger.create_pending_confirmation({
+            "strategy_id":          self.strategy_id,
+            "ticker":               self.ticker,
+            "profile":              self.profile_key,
+            "direction":            direction,
+            "contract_symbol":      contract["symbol"],
+            "strike":               contract["strike"],
+            "qty":                  qty,
+            "trigger_price":        trigger_price,
+            "entry_estimate":       entry_estimate,
+            "confidence":           confidence,
+            "confidence_breakdown": breakdown,
+            "effective_profile":    effective_profile,
+            "hard_stop":            hard_stop,
+            "tp1":                  tp1,
+            "tp2":                  tp2,
+            "expires_at":           expires_at.isoformat(),
+        })
+        if row is None:
+            # Persistence failed — don't strand the signal where the user can
+            # never approve it. Fall back to entering directly, same as if
+            # confirm_entry were off.
+            self.debug.emit("ERROR", "Confirmation persist failed — entering without confirmation")
+            self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
+            return
+
+        self._pending_confirmation = {
+            **row,
+            "_contract":          contract,
+            "_qty":               qty,
+            "_effective_profile": effective_profile,
+        }
+
+        if self.stream_manager:
+            self.stream_manager.subscribe(contract["symbol"], self._on_pending_quote)
+
+        self.debug.emit("INFO",
+            f"Entry paused for confirmation — {direction} {contract['symbol']} "
+            f"confidence={confidence:.0f} expires in {PENDING_CONFIRMATION_TTL_MIN}m")
+        self.notifier.notify_confirm_entry(
+            ticker=self.ticker,
+            direction=direction,
+            profile_key=self.profile_key,
+            confidence=confidence,
+            contract=contract,
+            pending_id=row["id"],
+            expires_in_min=PENDING_CONFIRMATION_TTL_MIN,
+        )
+
+    def approve_pending_entry(self, pending_id: str,
+                               overrides: dict | None = None) -> dict:
+        """
+        User tapped Enter in the confirmation modal. Submits the order using the
+        exact contract/qty/profile already shown to the user, then applies any
+        user-edited SL/TP1/TP2 on top of the real fill.
+
+        NOTE: guarded by _tick_lock so a near-simultaneous approve+skip (or
+        approve racing the expiry sweep) can't both act on the same pending row.
+        """
+        with self._tick_lock:
+            pc = self._pending_confirmation
+            if not pc or pc["id"] != pending_id:
+                self.debug.emit("WARN",
+                    f"Approve requested for pending {pending_id} but no matching "
+                    "confirmation is open — already resolved or expired")
+                return {"status": "error", "message": "No matching pending confirmation"}
+            if datetime.now(ET) > datetime.fromisoformat(pc["expires_at"]):
+                self.debug.emit("WARN",
+                    f"Approve requested for {pc['direction']} {pc['contract_symbol']} "
+                    "but the confirmation had already expired")
+                self._resolve_pending("EXPIRED")
+                return {"status": "error", "message": "Confirmation expired"}
+
+            contract          = pc["_contract"]
+            qty               = pc["_qty"]
+            effective_profile = pc["_effective_profile"]
+            direction         = pc["direction"]
+
+            if self.stream_manager:
+                self.stream_manager.unsubscribe(contract["symbol"], self._on_pending_quote)
+
+            self.debug.emit("SUCCESS",
+                f"Confirmation approved by user — entering {direction} {contract['symbol']}")
+            try:
+                self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
+            except Exception:
+                # Either the order itself failed (broker rejection — nothing
+                # happened, safe to mark EXPIRED) or a downstream step in
+                # _execute_entry raised AFTER the order already filled
+                # (self.trade_taken flips True before logging/notifying) — in
+                # that case a real trade IS open, so the confirmation's audit
+                # trail should say APPROVED, not EXPIRED. Either way, clear
+                # _pending_confirmation so this engine isn't stuck refusing
+                # every future signal (_enter_trade's guard blocks while it's
+                # set), then let the error surface to the caller.
+                self._resolve_pending("APPROVED" if self.trade_taken else "EXPIRED")
+                raise
+
+            if overrides and self.exit_manager:
+                try:
+                    self.exit_manager.apply_overrides(
+                        hard_stop=overrides.get("hard_stop"),
+                        tp1=overrides.get("tp1"),
+                        tp2=overrides.get("tp2"),
+                    )
+                except ValueError as e:
+                    self.debug.emit("WARN",
+                        f"Confirmation SL/TP override rejected post-fill ({e}) — "
+                        "using profile-computed defaults instead")
+
+            self._resolve_pending("APPROVED")
+            return {"status": "ok"}
+
+    def skip_pending_entry(self, pending_id: str) -> dict:
+        """
+        User tapped Skip — decline this specific signal. The engine keeps
+        listening for a later breakout/reversal the same session (same as any
+        other declined/timed-out entry attempt).
+        """
+        with self._tick_lock:
+            pc = self._pending_confirmation
+            if not pc or pc["id"] != pending_id:
+                self.debug.emit("WARN",
+                    f"Skip requested for pending {pending_id} but no matching "
+                    "confirmation is open — already resolved or expired")
+                return {"status": "error", "message": "No matching pending confirmation"}
+
+            self.debug.emit("INFO", f"Confirmation skipped — {pc['direction']} {pc['contract_symbol']}")
+            self._resolve_pending("SKIPPED")
+            return {"status": "ok"}
+
+    def expire_pending_if_stale(self) -> bool:
+        """
+        Called by the periodic sweep (pg_cron → POST /pending-confirmations/sweep).
+        Returns True if a stale confirmation was found and expired.
+        """
+        with self._tick_lock:
+            pc = self._pending_confirmation
+            if not pc:
+                return False
+            if datetime.now(ET) <= datetime.fromisoformat(pc["expires_at"]):
+                return False
+            self.debug.emit("WARN",
+                f"Confirmation expired unanswered — {pc['direction']} {pc['contract_symbol']}")
+            self._resolve_pending("EXPIRED")
+            return True
+
+    def _resolve_pending(self, status: str):
+        """
+        Common teardown for approve/skip/expire: unsubscribe the preview stream,
+        persist the terminal status, and clear in-memory state. Caller must
+        already hold _tick_lock.
+        """
+        pc = self._pending_confirmation
+        if not pc:
+            return
+        if self.stream_manager:
+            try:
+                self.stream_manager.unsubscribe(pc["contract_symbol"], self._on_pending_quote)
+            except Exception:
+                pass
+        self.logger.update_pending_confirmation(pc["id"], {
+            "status":      status,
+            "resolved_at": datetime.now(ET).isoformat(),
+        })
+        self._pending_confirmation = None
+        self._pending_last_price = None
+
+    def _on_pending_quote(self, mid: float):
+        """
+        Streams the live premium (and a recomputed SL/TP1/TP2 preview) for a
+        contract awaiting user confirmation — fans out over the same
+        /ws/strategy/<id>/live socket used for open positions, under a distinct
+        message type. Deliberately a separate callback from _on_stream_quote
+        (rather than subscribing that one early) so approving never risks
+        double-subscribing the same callback — OptionStreamManager.subscribe()
+        appends without de-duplication, which would otherwise fire every tick
+        twice once _execute_entry does its own normal post-entry subscribe.
+        """
+        import json as _json
+        pc = self._pending_confirmation
+        if not pc:
+            return
+        self._pending_last_price = mid
+        hard_stop, tp1, tp2 = compute_exit_levels(mid, pc["_effective_profile"])
+        payload = _json.dumps({
+            "type":              "pending_price_update",
+            "pending_id":        pc["id"],
+            "contract":          pc["contract_symbol"],
+            "mid_price":         round(mid, 4),
+            "hard_stop_preview": round(hard_stop, 4),
+            "tp1_preview":       round(tp1, 4),
+            "tp2_preview":       round(tp2, 4) if tp2 is not None else None,
+        })
+        with self._live_clients_lock:
+            for q in list(self._live_clients):
+                try:
+                    q.put_nowait(payload)
+                except Exception:
+                    pass
 
     # ── Manual / conviction entry ───────────────────────────────────────────────
 
@@ -977,6 +1303,16 @@ class ORBEngine:
         except Exception as e:
             logger.debug("[ORBEngine] market clock check failed, continuing: %s", e)
 
+        # No new manual entries in the final 30 minutes of the session — 0DTE
+        # theta/gamma in this window punishes discretionary entries too
+        # consistently to allow them (2026-07-06 daily review recommendation #4).
+        now_et = datetime.now(ET)
+        cutoff = now_et.replace(hour=15, minute=0, second=0, microsecond=0)
+        if now_et >= cutoff:
+            msg = "Manual trades are disabled in the final 30 minutes of the session (after 3:00 PM ET)"
+            self.debug.emit("WARN", f"Manual trade blocked — {msg}")
+            return {"status": "error", "message": msg}
+
         effective_profile = self.profile
         effective_profile_key = self.profile_key
         if profile_key and profile_key != self.profile_key:
@@ -1006,7 +1342,7 @@ class ORBEngine:
         if self.orh and self.orl and self.fib_levels:
             fib_levels = self.fib_levels
         else:
-            anchor = self._last_underlying_price or contract["strike"]
+            anchor = self._get_underlying_price() or contract["strike"]
             fib_levels = self._synthetic_fib_levels(anchor)
 
         # Capital guard (reduce qty / block) — reuse the same affordability math.
@@ -1086,6 +1422,29 @@ class ORBEngine:
         except Exception as e:
             logger.debug("[ORBEngine] _resolve_entry_premium fallback: %s", e)
         return ask_fallback
+
+    def _get_underlying_price(self) -> float | None:
+        """
+        Best-effort underlying price for logging/fib-anchor purposes.
+
+        `_last_underlying_price` is only populated once the hub has pushed at
+        least one bar for this ticker; a manual trade fired before that first
+        bar arrives would otherwise log `underlying_price_entry=None` and fall
+        back to the contract strike as the fib anchor (2026-07-06 daily review
+        recommendation #5). Falls back to a live REST quote in that case.
+        """
+        if self._last_underlying_price is not None:
+            return self._last_underlying_price
+        try:
+            from alpaca.data.requests import StockLatestTradeRequest
+            trades = self.stock_client.get_stock_latest_trade(
+                StockLatestTradeRequest(symbol_or_symbols=self.ticker)
+            )
+            trade = trades.get(self.ticker)
+            return float(trade.price) if trade and trade.price else None
+        except Exception as e:
+            logger.warning("[ORBEngine] Live underlying price fallback failed for %s: %s", self.ticker, e)
+            return None
 
     def _resolve_contract(self, contract_symbol: str, direction: str) -> dict | None:
         """
@@ -1440,6 +1799,33 @@ class ORBEngine:
         if not getattr(self, "orh", None) or getattr(self, "session_skipped", False):
             return
 
+        # Bar-close confirmation: after the 3-minute OrbService signal the engine
+        # waits for the first 1-minute bar to CLOSE on the correct side of the ORH/ORL
+        # before entering.  A wick or momentary tick above the level is not enough.
+        if getattr(self, "_bar_confirm_pending", False) and not self.trade_taken:
+            direction = self._bar_confirm_direction or ""
+            orh = self.orh or 0.0
+            orl = self.orl or 0.0
+            confirmed = bar.close > orh if direction == "CALL" else bar.close < orl
+            level_str = f"{orh:.2f}" if direction == "CALL" else f"{orl:.2f}"
+            side_str  = "above ORH" if direction == "CALL" else "below ORL"
+            if confirmed:
+                self.debug.emit("SUCCESS",
+                    f"Bar-close confirmed {direction} breakout — "
+                    f"bar closed at {bar.close:.2f} ({side_str} {level_str}) — entering")
+                self._bar_confirm_pending   = False
+                self._bar_confirm_direction = None
+                self._enter_trade(direction, bar.close)
+            else:
+                self.debug.emit("WARN",
+                    f"Bar-close fakeout — {direction} pending but bar closed at "
+                    f"{bar.close:.2f}, did not clear {'ORH' if direction == 'CALL' else 'ORL'} "
+                    f"{level_str} — entry cancelled")
+                self._bar_confirm_pending   = False
+                self._bar_confirm_direction = None
+                self._bar_confirm_price     = None
+            return
+
         self.on_price_tick(
             current_price=bar.close,
             current_volume=bar.volume,
@@ -1609,6 +1995,7 @@ class ORBEngine:
             "trade_days":                 list(self.trade_days),
             "paper_mode":                 self.paper,
             "debug_mode":                 self.debug_enabled,
+            "flow_gate_enabled":          self.flow_gate_enabled,
             "orh":                        self.orh,
             "orl":                        self.orl,
             "orb_range":                  self.orb_range,

@@ -23,6 +23,26 @@ const ROUTE_TITLES: Record<string, string> = {
 const SEARCH_RADIUS = 22;
 const AGENT_RADIUS = 23;
 
+// Approximate height of the anchored tab bar (content) + the gap above it, used
+// to lift the floating search row clear of the keyboard.
+const TAB_BAR_CONTENT_HEIGHT = 56;
+const SEARCH_ROW_GAP = 10;
+const SEARCH_BAR_MARGIN = 8;
+// Rendered height of the floating search row itself (padding + line height).
+const SEARCH_BAR_HEIGHT = 46;
+
+/**
+ * Total height the floating search row + tab bar occupy above the real screen
+ * bottom. Screens with their own fixed-position bottom content (action panels,
+ * sticky buttons) should add this to their bottom offset/padding so it isn't
+ * hidden behind the floating overlay.
+ */
+export function useFloatingTabBarHeight(): number {
+  const insets = useSafeAreaInsets();
+  const bottomPadding = Math.max(insets.bottom, 12) + 8;
+  return bottomPadding + TAB_BAR_CONTENT_HEIGHT + SEARCH_ROW_GAP + SEARCH_BAR_HEIGHT;
+}
+
 /**
  * Reusable glass backing (blur + theme fallback tint + hairline edge) for the
  * floating search field and AI button. Module-scoped so the BlurView isn't
@@ -72,12 +92,6 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
   const keyboardOffset = useRef(new Animated.Value(0)).current;
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const bottomPaddingRef = useRef(0);
-
-  // Approximate height of the anchored tab bar (content) + the gap above it, used
-  // to lift the floating search row clear of the keyboard.
-  const TAB_BAR_CONTENT_HEIGHT = 56;
-  const SEARCH_ROW_GAP = 10;
-  const SEARCH_BAR_MARGIN = 8;
 
   const visibleRoutes = VISIBLE_ROUTE_ORDER
     .map(name => state.routes.find(r => r.name === name))

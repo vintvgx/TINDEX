@@ -30,6 +30,7 @@ import "@/common/services/LogService";
 
 import LoadingScreen from "@/common/components/LoadingScreen";
 import { ToastProvider } from "@/common/components/ui/Toast";
+import { PendingConfirmationProvider } from "@/common/components/strategy/PendingConfirmationProvider";
 import { FONT_ASSETS } from "@/lib/typography";
 
 import { applyGlobalFont } from "@/lib/applyGlobalFont";
@@ -170,6 +171,15 @@ function AppContent() {
           return;
         }
 
+        // confirm_entry gate: the modal itself is driven by polling
+        // (PendingConfirmationProvider) so it appears regardless of which
+        // screen is active — this tap handler is just a convenience deep
+        // link to the strategy tab where that modal naturally surfaces.
+        if (data.type === 'confirm_entry') {
+          router.push('/(app)/(tabs)/strategy');
+          return;
+        }
+
         // Handle different screen types
         if (data.screen === 'watchlists' && isValidWatchlistType(data.watchlistType)) {
           router.push({
@@ -204,7 +214,9 @@ function AppContent() {
   return (
     <ToastProvider>
       <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
-        <Slot />
+        <PendingConfirmationProvider>
+          <Slot />
+        </PendingConfirmationProvider>
         <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
       </ThemeProvider>
     </ToastProvider>

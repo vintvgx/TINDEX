@@ -73,8 +73,11 @@ export function useEnterSwingPosition(userId: string | undefined) {
         headers: await getAuthHeaders(),
         body: JSON.stringify(payload),
       });
-      if (!resp.ok) throw new Error('Failed to enter position');
-      return resp.json();
+      const json = await resp.json().catch(() => ({}));
+      if (!resp.ok || json.success === false) {
+        throw new Error(json.error ?? `Request failed (${resp.status})`);
+      }
+      return json;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['swing-positions', userId] }),
   });

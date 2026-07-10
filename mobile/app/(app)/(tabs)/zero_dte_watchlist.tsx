@@ -31,7 +31,10 @@ export default function ZeroDTEWatchlistScreen() {
   const updateExitsMut  = useUpdateZeroDTEExits();
   const [enterItem, setEnterItem] = useState<ZeroDTEOpportunity | null>(null);
   const [editPosition, setEditPosition] = useState<ZeroDTEPosition | null>(null);
-  const [scanCandidates, setScanCandidates] = useState<ZeroDTEOpportunity[]>([]);
+  const [scanCandidates, setScanCandidates] = useState<{
+    scanTime: string | null;
+    items: ZeroDTEOpportunity[];
+  }>({ scanTime: null, items: [] });
 
   // Notify when a new auto-scan result arrives (scan_time changed on the server)
   const prevScanTimeRef = useRef<string | null>(null);
@@ -43,9 +46,16 @@ export default function ZeroDTEWatchlistScreen() {
       const set   = items.filter(i => i.tier === 'SET').length;
       const watch = items.filter(i => i.tier === 'WATCH').length;
       toast.info(`0DTE updated — ${fire} 🔥 FIRE  ${set} ✅ SET  ${watch} 👁 WATCH`);
+      setScanCandidates({ scanTime: null, items: [] });
     }
     prevScanTimeRef.current = newScanTime;
   }, [items]);
+
+  const belowThresholdCandidates = useMemo(() => {
+    if (!scanCandidates.scanTime) return [];
+    if (items.length > 0 && items[0].scan_time !== scanCandidates.scanTime) return [];
+    return scanCandidates.items.filter(c => c.tier === 'CANDIDATE');
+  }, [scanCandidates, items]);
 
   const tierCounts = useMemo(() => ({
     FIRE:  items.filter(i => i.tier === 'FIRE').length,
@@ -54,9 +64,9 @@ export default function ZeroDTEWatchlistScreen() {
   }), [items]);
 
   const uniqueTickers = useMemo(() => {
-    const all = [...items, ...scanCandidates].map(i => i.ticker);
+    const all = [...items, ...belowThresholdCandidates].map(i => i.ticker);
     return [...new Set(all)].slice(0, 5);
-  }, [items, scanCandidates]);
+  }, [items, belowThresholdCandidates]);
 
   const { data: spotPrices } = useZeroDTESpotPrices(uniqueTickers);
 
@@ -75,7 +85,12 @@ export default function ZeroDTEWatchlistScreen() {
       onSuccess: (data) => {
         const surfaced: ZeroDTEOpportunity[] = data?.surfaced ?? [];
         const allCandidates: ZeroDTEOpportunity[] = data?.candidates ?? [];
-        setScanCandidates(allCandidates);
+        const scanTime: string | null =
+          data?.meta?.scan_time ??
+          allCandidates[0]?.scan_time ??
+          surfaced[0]?.scan_time ??
+          null;
+        setScanCandidates({ scanTime, items: allCandidates });
         const fire  = surfaced.filter((i) => i.tier === 'FIRE').length;
         const set   = surfaced.filter((i) => i.tier === 'SET').length;
         const watch = surfaced.filter((i) => i.tier === 'WATCH').length;
@@ -408,22 +423,19 @@ export default function ZeroDTEWatchlistScreen() {
               )}
 
               {/* Candidates from last scan (below threshold) */}
-              {scanCandidates.filter(c => c.tier === 'CANDIDATE').length > 0 && (
+              {belowThresholdCandidates.length > 0 && (
                 <View style={{ marginTop: items.length > 0 ? 12 : 0 }}>
                   <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 8 }}>
-                    CANDIDATES — BELOW THRESHOLD ({scanCandidates.filter(c => c.tier === 'CANDIDATE').length})
+                    CANDIDATES — BELOW THRESHOLD ({belowThresholdCandidates.length})
                   </Text>
-                  {scanCandidates
-                    .filter(c => c.tier === 'CANDIDATE')
-                    .map((item, index) => (
-                      <ZeroDTECard key={`cand-${item.ticker}-${item.strike}-${index}`} item={item} rank={index + 1} onPress={setEnterItem} />
-                    ))
-                  }
+                  {belowThresholdCandidates.map((item, index) => (
+                    <ZeroDTECard key={`cand-${item.ticker}-${item.strike}-${index}`} item={item} rank={index + 1} onPress={setEnterItem} />
+                  ))}
                 </View>
               )}
 
               {/* Empty state */}
-              {items.length === 0 && scanCandidates.length === 0 && (
+              {items.length === 0 && belowThresholdCandidates.length === 0 && (
                 <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingTop: 60 }}>
                   <View style={{
                     backgroundColor: colors.surface,

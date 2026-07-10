@@ -8,6 +8,7 @@ operate on the first engine for backwards compatibility with old clients.
 
 import logging
 import concurrent.futures
+from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 from services.strategy.trade_logger import TradeLogger
@@ -156,6 +157,7 @@ def create_config():
             "profile", "trade_days", "strategy_name", "capital_limit",
             "bypass_breakout_window", "custom_thresholds", "exit_overrides",
             "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
+            "flow_gate_enabled", "confirm_entry",
         ) if k in data
     }}
     config.pop("id", None)   # force new UUID
@@ -194,7 +196,8 @@ def update_config(strategy_id: str):
     allowed = {"ticker", "paper_mode", "active",
                "profile", "trade_days", "strategy_name", "capital_limit",
                "bypass_breakout_window", "custom_thresholds", "exit_overrides",
-               "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts"}
+               "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
+               "flow_gate_enabled", "confirm_entry"}
     for key in allowed:
         if key in data:
             engine.config[key] = data[key]
@@ -341,26 +344,14 @@ def update_strategy_exits(strategy_id: str):
         return jsonify({"status": "error", "message": "No active position — nothing to update"}), 409
 
     data = request.get_json() or {}
-    changed = {}
-
-    if "hard_stop" in data:
-        val = float(data["hard_stop"])
-        if val <= 0:
-            return jsonify({"status": "error", "message": "hard_stop must be > 0"}), 400
-        em.hard_stop = val
-        changed["hard_stop"] = round(val, 4)
-
-    if "tp1" in data:
-        val = float(data["tp1"])
-        if val <= em.entry_premium:
-            return jsonify({"status": "error", "message": "tp1 must be above entry premium"}), 400
-        em.tp1 = val
-        changed["tp1"] = round(val, 4)
-
-    if "tp2" in data:
-        val = float(data["tp2"])
-        em.tp2 = val
-        changed["tp2"] = round(val, 4)
+    try:
+        changed = em.apply_overrides(
+            hard_stop=float(data["hard_stop"]) if "hard_stop" in data else None,
+            tp1=float(data["tp1"]) if "tp1" in data else None,
+            tp2=float(data["tp2"]) if "tp2" in data else None,
+        )
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
 
     if not changed:
         return jsonify({"status": "noop", "message": "No fields provided"}), 400
@@ -371,6 +362,78 @@ def update_strategy_exits(strategy_id: str):
         "updated": changed,
         "exit_state": em.to_dict(),
     })
+
+
+@strategy_bp.route("/pending-confirmations", methods=["GET"])
+def list_pending_confirmations():
+    """All trade confirmations currently awaiting a user response, oldest first."""
+    return jsonify(logger_svc.list_open_pending_confirmations())
+
+
+@strategy_bp.route("/pending-confirmations/sweep", methods=["POST"])
+def sweep_pending_confirmations():
+    """
+    Periodic cleanup — called every minute by a Supabase pg_cron job (see
+    supabase/migrations/20260707_confirm_entry_sweep_cron.sql), same pattern as
+    the daily-review/0DTE-scan jobs migrated off in-process APScheduler.
+
+    Expires any pending confirmation whose expires_at has passed: first via
+    each live in-memory engine (so its preview price stream is unsubscribed
+    cleanly), then a DB-level bulk expiry as a safety net for confirmations
+    left behind by an engine that no longer exists (e.g. after a redeploy).
+    """
+    engine_expired = 0
+    for sid, eng in _all_engines():
+        try:
+            if eng.expire_pending_if_stale():
+                engine_expired += 1
+        except Exception as e:
+            logger.error("[strategy] Confirmation sweep failed for %s: %s", sid, e)
+    bulk_expired = logger_svc.expire_stale_pending_confirmations()
+    return jsonify({"status": "ok", "engine_expired": engine_expired, "bulk_expired": bulk_expired})
+
+
+@strategy_bp.route("/configs/<strategy_id>/pending/<pending_id>/approve", methods=["POST"])
+def approve_pending_confirmation(strategy_id: str, pending_id: str):
+    """Body: { hard_stop?, tp1?, tp2? } — optional user-edited overrides."""
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        # No live engine to ask (e.g. the strategy was deleted after the
+        # confirmation was created) — resolve the row directly so it doesn't
+        # sit as PENDING until the periodic sweep's 5-minute TTL catches it.
+        logger_svc.update_pending_confirmation(pending_id, {
+            "status": "EXPIRED", "resolved_at": datetime.utcnow().isoformat(),
+        })
+        return jsonify({"status": "error", "message": "Engine not found"}), 404
+
+    data = request.get_json() or {}
+    overrides = {
+        key: float(data[key]) for key in ("hard_stop", "tp1", "tp2")
+        if data.get(key) is not None
+    }
+    try:
+        result = engine.approve_pending_entry(pending_id, overrides or None)
+    except Exception as e:
+        logger.error("[strategy] approve_pending_entry failed for %s/%s: %s", strategy_id, pending_id, e)
+        return jsonify({"status": "error", "message": f"Order submission failed: {e}"}), 500
+    code = 200 if result.get("status") == "ok" else 400
+    return jsonify(result), code
+
+
+@strategy_bp.route("/configs/<strategy_id>/pending/<pending_id>/skip", methods=["POST"])
+def skip_pending_confirmation(strategy_id: str, pending_id: str):
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        # Same rationale as approve above — the user's intent was explicitly
+        # to skip, so resolve as SKIPPED rather than waiting on the sweep.
+        logger_svc.update_pending_confirmation(pending_id, {
+            "status": "SKIPPED", "resolved_at": datetime.utcnow().isoformat(),
+        })
+        return jsonify({"status": "error", "message": "Engine not found"}), 404
+
+    result = engine.skip_pending_entry(pending_id)
+    code = 200 if result.get("status") == "ok" else 400
+    return jsonify(result), code
 
 
 @strategy_bp.route("/configs/<strategy_id>/position", methods=["GET"])
@@ -968,6 +1031,8 @@ def list_reviews():
             .execute()
             .data or []
         )
+        for row in rows:
+            row["is_reviewed"] = True
         return jsonify({"success": True, "data": rows, "count": len(rows)})
     except Exception as e:
         logger.error("[review/list] %s", e, exc_info=True)
@@ -1022,6 +1087,10 @@ def trigger_review():
         content, meta = gen.generate(session_date)
         trades = gen._fetch_trades(session_date)
         gen.save_to_supabase(session_date, content, trades, meta)
+
+        from services.strategy.notifier import StrategyNotifier
+        StrategyNotifier(sb).notify_review_ready(str(session_date), meta["trade_count"], meta["net_pnl"])
+
         return jsonify({
             "success": True,
             "date": str(session_date),

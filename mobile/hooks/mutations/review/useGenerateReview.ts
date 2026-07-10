@@ -6,7 +6,7 @@ export function useGenerateReview() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (date?: string) => {
-      const resp = await fetch(`${RAILWAY_BASE_URL}/review/generate`, {
+      const resp = await fetch(`${RAILWAY_BASE_URL}/strategy/review/generate`, {
         method: 'POST',
         headers: await getAuthHeaders(),
         body: JSON.stringify(date ? { date } : {}),

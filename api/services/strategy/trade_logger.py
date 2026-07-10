@@ -55,6 +55,7 @@ class TradeLogger:
                 "otm_fib_level":          config.get("otm_fib_level", "1.0"),
                 "debug_mode":             config.get("debug_mode", False),
                 "smart_contracts":        config.get("smart_contracts", False),
+                "confirm_entry":          config.get("confirm_entry", False),
                 "updated_at":             datetime.utcnow().isoformat(),
             }
             if "id" in config and config["id"]:
@@ -79,6 +80,74 @@ class TradeLogger:
             self.client.table("strategy_configs").delete().eq("id", strategy_id).execute()
         except Exception as e:
             logger.error("[TradeLogger] delete_strategy_config failed: %s", e)
+
+    # ── Pending trade confirmations (confirm_entry gate) ────────────────────────
+
+    def create_pending_confirmation(self, row: dict) -> dict | None:
+        """Insert a new orb_pending_confirmations row. Returns the saved row (with id)."""
+        try:
+            row = {**row, "id": row.get("id") or str(uuid.uuid4())}
+            res = self.client.table("orb_pending_confirmations").insert(row).execute()
+            return res.data[0] if res.data else None
+        except Exception as e:
+            logger.error("[TradeLogger] create_pending_confirmation failed: %s", e)
+            return None
+
+    def get_pending_confirmation(self, pending_id: str) -> dict | None:
+        try:
+            res = (
+                self.client.table("orb_pending_confirmations")
+                .select("*").eq("id", pending_id).limit(1).execute()
+            )
+            return res.data[0] if res.data else None
+        except Exception as e:
+            logger.error("[TradeLogger] get_pending_confirmation failed: %s", e)
+            return None
+
+    def list_open_pending_confirmations(self) -> list[dict]:
+        """All confirmations still awaiting a user response, oldest first."""
+        try:
+            res = (
+                self.client.table("orb_pending_confirmations")
+                .select("*").eq("status", "PENDING").order("created_at").execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error("[TradeLogger] list_open_pending_confirmations failed: %s", e)
+            return []
+
+    def update_pending_confirmation(self, pending_id: str, patch: dict) -> dict | None:
+        try:
+            res = (
+                self.client.table("orb_pending_confirmations")
+                .update(patch).eq("id", pending_id).execute()
+            )
+            return res.data[0] if res.data else None
+        except Exception as e:
+            logger.error("[TradeLogger] update_pending_confirmation failed: %s", e)
+            return None
+
+    def expire_stale_pending_confirmations(self) -> int:
+        """
+        Bulk-expire any PENDING row whose expires_at has passed, regardless of
+        whether a live in-memory ORBEngine still references it. Safety net for
+        a backend restart while a confirmation was open — ORBEngine.expire_pending_if_stale()
+        only catches that case if the same engine instance survives to check its
+        own state; a fresh engine after a redeploy has no memory of it at all.
+        """
+        try:
+            now_iso = datetime.utcnow().isoformat()
+            res = (
+                self.client.table("orb_pending_confirmations")
+                .update({"status": "EXPIRED", "resolved_at": now_iso})
+                .eq("status", "PENDING")
+                .lt("expires_at", now_iso)
+                .execute()
+            )
+            return len(res.data or [])
+        except Exception as e:
+            logger.error("[TradeLogger] expire_stale_pending_confirmations failed: %s", e)
+            return 0
 
     # ── Session logging ─────────────────────────────────────────────────────────
 

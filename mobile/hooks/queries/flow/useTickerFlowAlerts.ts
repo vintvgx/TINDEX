@@ -23,8 +23,8 @@ export function useTickerFlowAlerts(ticker: string | null, limit = 50) {
       return data;
     },
     enabled: !!ticker && ticker.trim().length >= 1 && ticker.trim().length <= 5,
-    staleTime: 30 * 1000,
-    refetchInterval: 60 * 1000,
+    staleTime: 5 * 60 * 1000,   // treat as fresh for 5 min — user pulls to refresh manually
+    refetchOnWindowFocus: false,
     retry: 1,
   });
 }

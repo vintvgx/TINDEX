@@ -92,8 +92,51 @@ export interface StrategyConfig {
   otm_fib_level: OtmFibLevel;
   smart_contracts: boolean;
   debug_mode: boolean;
+  flow_gate_enabled: boolean;
+  confirm_entry: boolean;
   has_position?: boolean;
   qty_remaining?: number | null;
+}
+
+export type PendingConfirmationStatus = 'PENDING' | 'APPROVED' | 'SKIPPED' | 'EXPIRED';
+
+export interface PendingConfirmation {
+  id: string;
+  strategy_id: string;
+  ticker: string;
+  profile: ProfileKey;
+  direction: 'CALL' | 'PUT';
+  contract_symbol: string;
+  strike: number;
+  qty: number;
+  trigger_price: number;
+  entry_estimate: number;
+  confidence: number;   // 0-100
+  confidence_breakdown: {
+    breakout_strength: number;
+    vwap_alignment: number;
+    volume_surge: number;
+    weights: { breakout_strength: number; vwap_alignment: number; volume_surge: number };
+  } | null;
+  hard_stop: number;
+  tp1: number;
+  tp2: number | null;
+  status: PendingConfirmationStatus;
+  expires_at: string;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+/** Live price message shape pushed over /ws/strategy/<id>/live while a
+ *  confirmation is pending (distinct from the post-entry "price_update" type). */
+export interface PendingPriceUpdate {
+  type: 'pending_price_update';
+  pending_id: string;
+  contract: string;
+  mid_price: number;
+  hard_stop_preview: number;
+  tp1_preview: number;
+  tp2_preview: number | null;
 }
 
 export type DebugLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';

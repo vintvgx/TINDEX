@@ -43,11 +43,16 @@ function PositionChip({ pos, colors }: { pos: PositionEntry; colors: any }) {
 
       {/* P&L */}
       <Text style={{ color: pnlColor, fontSize: 17, fontWeight: '800' }}>
-        {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(2)}{' '}
+        {pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toFixed(2)}{' '}
         <Text style={{ fontSize: 13, fontWeight: '600' }}>
-          ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)
+          ({pnlPct >= 0 ? '+' : '-'}{Math.abs(pnlPct).toFixed(1)}%)
         </Text>
       </Text>
+      {pos.current_price != null && pos.qty_remaining != null && (
+        <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 3 }}>
+          Mkt ${(pos.current_price * pos.qty_remaining * 100).toFixed(2)}
+        </Text>
+      )}
     </View>
   );
 }

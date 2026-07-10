@@ -28,6 +28,24 @@ from collections import deque
 ET = pytz.timezone("America/New_York")
 
 
+def compute_exit_levels(entry_premium: float, profile: dict) -> tuple[float, float, float]:
+    """
+    Shared SL/TP1/TP2 calc — used by ExitManager.__init__ for a real position
+    and by ORBEngine's pending-confirmation preview (before any order is
+    placed), so the two numbers never drift apart.
+
+    Dollar-floored TP targets: TP = max(entry × mult, entry + min_dollars).
+    Prevents cheap OTM contracts from locking in noise-level gains on a
+    %-only target.
+    """
+    hard_stop = entry_premium * (1 - profile["max_loss_pct"])
+    min_tp1 = profile.get("min_tp1_dollars", 0.0)
+    min_tp2 = profile.get("min_tp2_dollars", 0.0)
+    tp1 = max(entry_premium * profile["tp1_mult"], entry_premium + min_tp1)
+    tp2 = max(entry_premium * profile["tp2_mult"], entry_premium + min_tp2)
+    return hard_stop, tp1, tp2
+
+
 class ExitManager:
     def __init__(self, entry_premium: float, qty: int, fib_levels: dict,
                  direction: str, eod_close_time: str, profile: dict):
@@ -41,14 +59,7 @@ class ExitManager:
 
         self.entry_time   = datetime.now(ET)
 
-        self.hard_stop    = entry_premium * (1 - profile["max_loss_pct"])
-
-        # Dollar-floored TP targets: TP = max(entry × mult, entry + min_dollars).
-        # Prevents cheap OTM contracts from locking in noise-level gains on a %-only target.
-        min_tp1 = profile.get("min_tp1_dollars", 0.0)
-        min_tp2 = profile.get("min_tp2_dollars", 0.0)
-        self.tp1 = max(entry_premium * profile["tp1_mult"], entry_premium + min_tp1)
-        self.tp2 = max(entry_premium * profile["tp2_mult"], entry_premium + min_tp2)
+        self.hard_stop, self.tp1, self.tp2 = compute_exit_levels(entry_premium, profile)
 
         self.runner_trail = entry_premium
 
@@ -223,6 +234,35 @@ class ExitManager:
     def update_qty(self, qty_closed: int) -> None:
         """Call after executing a partial close so remaining contract count stays accurate."""
         self.qty_remaining = max(0, self.qty_remaining - qty_closed)
+
+    def apply_overrides(self, hard_stop: float | None = None, tp1: float | None = None,
+                        tp2: float | None = None) -> dict:
+        """
+        Validate and apply user-supplied SL/TP1/TP2 overrides to this (already
+        open) position. Raises ValueError with a user-facing message on invalid
+        input — never partially applies a rejected field.
+
+        Shared by the mid-trade PATCH /configs/<id>/exits route and the
+        confirm-entry approve path (edited fields from the confirmation modal,
+        applied right after the real fill so levels are relative to the actual
+        entry premium, not the pre-fill estimate shown in the modal).
+        """
+        if hard_stop is not None and hard_stop <= 0:
+            raise ValueError("hard_stop must be > 0")
+        if tp1 is not None and tp1 <= self.entry_premium:
+            raise ValueError("tp1 must be above entry premium")
+
+        changed = {}
+        if hard_stop is not None:
+            self.hard_stop = hard_stop
+            changed["hard_stop"] = round(hard_stop, 4)
+        if tp1 is not None:
+            self.tp1 = tp1
+            changed["tp1"] = round(tp1, 4)
+        if tp2 is not None:
+            self.tp2 = tp2
+            changed["tp2"] = round(tp2, 4)
+        return changed
 
     def to_dict(self) -> dict:
         return {

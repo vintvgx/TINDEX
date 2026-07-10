@@ -20,8 +20,8 @@ export function useFlowAlerts(limit = 50) {
       if (!data.success) throw new Error(data.error ?? 'Failed to fetch flow alerts');
       return data;
     },
-    staleTime: 30 * 1000,      // 30 seconds — flow data moves fast
-    refetchInterval: 60 * 1000, // auto-refresh every 60 seconds
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
     retry: 1,
   });
 }

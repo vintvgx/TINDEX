@@ -13,7 +13,10 @@ ORB breakouts).
 import os
 import logging
 import requests
-from datetime import date
+from datetime import date, timezone
+import pytz
+
+_ET_TZ = pytz.timezone("America/New_York")
 
 logger = logging.getLogger(__name__)
 
@@ -80,51 +83,139 @@ class SentimentFilter:
     def confirm_with_flow(self, ticker: str, direction: str,
                           unusual_whales_key: str = None) -> bool:
         """
-        Cross-check trade direction against recent Unusual Whales options flow.
+        Cross-check trade direction against recent Unusual Whales options flow,
+        weighting each alert by expiry proximity, recency, and aggression so that
+        0DTE sweeps in the last 30 minutes carry far more signal than a week-out
+        floor print from 2 hours ago.
 
-        Policy — FAILS OPEN. Only a successful flow read that genuinely contradicts
-        the trade direction blocks the trade (returns False). Any access/availability
-        problem bypasses the check and allows the trade (returns True): missing API
-        key, non-200 response (auth / rate-limit / outage), network error, or empty
-        data. This keeps the strategy tradeable before an Unusual Whales key is
-        provisioned and resilient to API outages, while still vetoing a trade that
-        fights a clear, readable flow once a key is present.
+        Weight formula per alert:
+            weighted_premium = raw_premium × expiry_weight × recency_weight × aggression_weight
+
+        Expiry weights  — closer expiry = more relevant to today's move:
+            0DTE (today)            3.0×
+            1–4 days                1.5×
+            5–30 days               0.75×
+            > 30 days               0.25×
+
+        Recency weights — more recent = more actionable:
+            ≤ 30 min                3.0×
+            30–60 min               2.0×
+            1–2 h                   1.0×
+            2–4 h                   0.5×
+            > 4 h                   0.25×
+
+        Aggression weights — ask-side aggressive buys carry more conviction:
+            ask side                1.5×
+            bid side                1.0×
+
+        Policy — FAILS OPEN. Only a successful read with a non-zero weighted total
+        that genuinely contradicts the direction blocks the trade (returns False).
+        Any availability problem or empty data allows the trade (returns True).
+
+        Thresholds: CALL blocked when weighted call share < 35%;
+                    PUT  blocked when weighted call share > 65%.
         """
         if not unusual_whales_key:
             logger.info("[SentimentFilter] Flow check bypassed for %s %s — no Unusual Whales key",
                         ticker, direction)
             return True
         try:
-            url = "https://api.unusualwhales.com/api/option-contracts/flow"
-            headers = {"Authorization": f"Bearer {unusual_whales_key}"}
-            params = {"ticker": ticker, "limit": 50}
-            resp = requests.get(url, headers=headers, params=params, timeout=5)
-            if resp.status_code != 200:
-                logger.warning("[SentimentFilter] Flow check bypassed for %s %s — Unusual Whales "
-                               "API returned HTTP %s (access/availability issue, not a flow signal)",
-                               ticker, direction, resp.status_code)
-                return True
-            data = resp.json().get("data", [])
-            call_p = sum(float(c.get("premium", 0)) for c in data if c.get("type") == "call")
-            put_p  = sum(float(c.get("premium", 0)) for c in data if c.get("type") == "put")
-            total  = call_p + put_p
-            if total == 0:
-                logger.info("[SentimentFilter] Flow check bypassed for %s %s — no flow data returned",
+            from datetime import datetime
+            from services.unusual_whales.unusual_whales_service import get_unusual_whales_service
+
+            data = get_unusual_whales_service().get_ticker_flow_alerts(ticker, limit=50)
+            if not data:
+                logger.info("[SentimentFilter] Flow check bypassed for %s %s — no flow data",
                             ticker, direction)
                 return True
-            call_pct = call_p / total
+
+            now_utc   = datetime.now(timezone.utc)
+            today_str = now_utc.astimezone(_ET_TZ).strftime("%Y-%m-%d")
+
+            call_w = 0.0
+            put_w  = 0.0
+
+            for alert in data:
+                raw_premium = float(alert.get("premium") or 0)
+                if raw_premium <= 0:
+                    continue
+
+                # ── Expiry weight ────────────────────────────────────────────────
+                expiry_str = alert.get("expiry", "")
+                try:
+                    exp_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+                    today    = datetime.strptime(today_str, "%Y-%m-%d").date()
+                    days_out = (exp_date - today).days
+                except Exception:
+                    days_out = 999  # treat unknown as far-dated
+                if days_out <= 0:
+                    expiry_w = 3.0
+                elif days_out <= 4:
+                    expiry_w = 1.5
+                elif days_out <= 30:
+                    expiry_w = 0.75
+                else:
+                    expiry_w = 0.25
+
+                # ── Recency weight ───────────────────────────────────────────────
+                ts_str = alert.get("timestamp", "")
+                try:
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    age_min = (now_utc - ts).total_seconds() / 60
+                except Exception:
+                    age_min = 999
+                if age_min <= 30:
+                    recency_w = 3.0
+                elif age_min <= 60:
+                    recency_w = 2.0
+                elif age_min <= 120:
+                    recency_w = 1.0
+                elif age_min <= 240:
+                    recency_w = 0.5
+                else:
+                    recency_w = 0.25
+
+                # ── Aggression weight ────────────────────────────────────────────
+                aggression_w = 1.5 if alert.get("side") == "ask" else 1.0
+
+                weighted = raw_premium * expiry_w * recency_w * aggression_w
+
+                if alert.get("contract_type") == "call":
+                    call_w += weighted
+                else:
+                    put_w += weighted
+
+            total = call_w + put_w
+            if total == 0:
+                logger.info("[SentimentFilter] Flow check bypassed for %s %s — weighted total is zero",
+                            ticker, direction)
+                return True
+
+            call_pct = call_w / total
+            logger.info(
+                "[SentimentFilter] %s weighted flow — call %.0f%% put %.0f%% "
+                "(raw alerts=%d, weighted_total=%.0f)",
+                ticker, call_pct * 100, (1 - call_pct) * 100, len(data), total,
+            )
+
             if direction == "CALL" and call_pct < 0.35:
-                logger.info("[SentimentFilter] Flow BLOCKS %s CALL — call premium %.0f%% < 35%% threshold",
+                logger.info("[SentimentFilter] Flow BLOCKS %s CALL — weighted call share %.0f%% < 35%%",
                             ticker, call_pct * 100)
                 return False
-            if direction == "PUT"  and call_pct > 0.65:
-                logger.info("[SentimentFilter] Flow BLOCKS %s PUT — call premium %.0f%% > 65%% threshold",
+            if direction == "PUT" and call_pct > 0.65:
+                logger.info("[SentimentFilter] Flow BLOCKS %s PUT — weighted call share %.0f%% > 65%%",
                             ticker, call_pct * 100)
                 return False
+
+            logger.info("[SentimentFilter] Flow confirms %s %s — weighted call share %.0f%%",
+                        ticker, direction, call_pct * 100)
             return True
+
         except Exception as exc:
-            logger.warning("[SentimentFilter] Flow check bypassed for %s %s — request failed: %s "
-                           "(access/availability issue, not a flow signal)", ticker, direction, exc)
+            logger.warning("[SentimentFilter] Flow check bypassed for %s %s — %s",
+                           ticker, direction, exc)
             return True
 
     def _get_vix(self) -> float | None:

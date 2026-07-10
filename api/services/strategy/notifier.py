@@ -20,6 +20,7 @@ Within the same tier, notifications are delivered in chronological order
 """
 
 import re
+import time
 import queue
 import logging
 import threading
@@ -145,16 +146,26 @@ class StrategyNotifier:
 
     def notify_skip(self, ticker: str, reason: str):
         """Session skipped before ORB could be evaluated."""
-        readable = {
-            "NOT_TRADE_DAY":             "not a scheduled trade day",
-            "STRATEGY_DISABLED":         "strategy is disabled",
-            "NO_DATA":                   "no price data available",
-            "ORB_RANGE_TOO_TIGHT":       "ORB range too tight",
-            "VIX_TOO_LOW":               "VIX too low",
-            "VIX_TOO_HIGH":              "VIX too high",
-            "MACRO_EVENT":               "macro event today",
+        # For dynamic reasons (e.g. "RE_ENTRY_COOLDOWN (CALL — 32m remaining)"),
+        # check prefix first so the detail is preserved in the body.
+        _prefix_map = {
+            "RE_ENTRY_COOLDOWN":  "re-entry cooldown active",
+            "DAILY_LOSS_LIMIT":   "daily loss limit reached — session halted",
+        }
+        _exact_map = {
+            "NOT_TRADE_DAY":                "not a scheduled trade day",
+            "STRATEGY_DISABLED":            "strategy is disabled",
+            "NO_DATA":                      "no price data available",
+            "ORB_RANGE_TOO_TIGHT":          "ORB range too tight",
+            "VIX_TOO_LOW":                  "VIX too low",
+            "VIX_TOO_HIGH":                 "VIX too high",
+            "MACRO_EVENT":                  "macro event today",
             "BREAKOUT_TIME_LIMIT_EXCEEDED": "breakout window expired",
-        }.get(reason, reason)
+            "RETEST_TIMEOUT":               "retest timed out",
+            "RETEST_INVALIDATED":           "retest invalidated — price crossed level",
+        }
+        prefix_hit = next((v for k, v in _prefix_map.items() if reason.startswith(k)), None)
+        readable = prefix_hit or _exact_map.get(reason, reason)
 
         self._dispatch(
             title=f"No trade — {ticker}",
@@ -315,6 +326,50 @@ class StrategyNotifier:
             priority=P_TRADE_ENTRY,
         )
 
+    def notify_confirm_entry(
+        self,
+        ticker: str,
+        direction: str,
+        profile_key: str,
+        confidence: float,
+        contract: dict,
+        pending_id: str,
+        expires_in_min: int,
+    ):
+        """
+        confirm_entry gate: a breakout/reversal was confirmed and a contract was
+        selected, but the strategy is configured to wait for user approval before
+        the order is actually submitted. Tapping this opens the in-app
+        Enter/Skip confirmation modal (the modal itself is also shown from
+        foregrounding the app while a confirmation is open, not only from the tap).
+        """
+        symbol = contract.get("symbol", "")
+        label  = _fmt_contract(symbol) if symbol else f"{ticker} option"
+        self._dispatch(
+            title=f"Confirm {ticker} Trade",
+            body=(
+                f"{label}  [{profile_key}]  ·  Confidence {confidence:.0f}/100  ·  "
+                f"expires in {expires_in_min} min"
+            ),
+            data={
+                "screen":     "strategy",
+                "type":       "confirm_entry",
+                "pending_id": pending_id,
+                "symbol":     symbol,
+            },
+            priority=P_TRADE_ENTRY,
+        )
+
+    def notify_review_ready(self, review_date: str, trade_count: int, net_pnl: float):
+        """Daily performance review finished generating and saving."""
+        pnl_emoji = "📈" if net_pnl >= 0 else "📉"
+        self._dispatch(
+            title=f"{pnl_emoji} Daily Review ready — {review_date}",
+            body=f"{trade_count} trade(s) · Net P&L {'+' if net_pnl >= 0 else '-'}${abs(net_pnl):,.2f}",
+            data={"screen": "daily_review", "review_date": review_date},
+            priority=P_INFO,
+        )
+
     # ── Internal helpers ────────────────────────────────────────────────────────
 
     def _dispatch(self, title: str, body: str, data: dict | None = None,
@@ -329,17 +384,31 @@ class StrategyNotifier:
             self._seq += 1
         self._queue.put((priority, seq, (title, body, data or {})))
 
+    # Seconds to wait between consecutive notifications. Gives iOS enough time to
+    # deliver each banner individually so none are silently collapsed by the system.
+    INTER_NOTIFICATION_DELAY = 5
+
     def _drain(self):
         """
         Single worker thread. Blocks on the priority queue and sends each
         notification in order. Serialising through one thread guarantees delivery
         order — multiple concurrent daemon threads would race to Expo's API and
         arrive out of order.
+
+        A 5-second sleep between sends lets iOS surface each banner individually
+        so they don't all arrive in the same delivery batch.
+        Trade-critical exits (priority 0) skip the delay so stops/TPs land immediately.
         """
+        last_sent_priority = None
         while True:
             try:
                 priority, seq, (title, body, data) = self._queue.get()
+                # Skip the inter-notification delay for trade exits — stops and TPs
+                # are time-critical and should arrive as fast as possible.
+                if last_sent_priority is not None and priority != P_TRADE_EXIT:
+                    time.sleep(self.INTER_NOTIFICATION_DELAY)
                 self._send_all(title, body, data)
+                last_sent_priority = priority
                 self._queue.task_done()
             except Exception as e:
                 logger.error("[StrategyNotifier] drain error: %s", e)

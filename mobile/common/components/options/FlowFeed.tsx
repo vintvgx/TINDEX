@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -182,7 +182,7 @@ export const FlowFeed: React.FC<FlowFeedProps> = ({ ticker, useMockData = false 
   const [contractFilter, setContractFilter] = useState<ContractFilter>('all');
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
   const [sortOrder, setSortOrder] = useState<SortOrder>('premium');
-  const [expiryFilter, setExpiryFilter] = useState<ExpiryFilter>('all');
+  const [expiryFilter, setExpiryFilter] = useState<ExpiryFilter>('0dte');
   const [infoVisible, setInfoVisible] = useState(false);
   const [enterAlert, setEnterAlert] = useState<FlowAlert | null>(null);
 
@@ -198,11 +198,32 @@ export const FlowFeed: React.FC<FlowFeedProps> = ({ ticker, useMockData = false 
   const isLoading = queryLoading && !useMockData;
   const isAvailable = useMockData ? true : (data?.available ?? true);
 
-  const rawAlerts: FlowAlert[] = useMockData
+  const fetchedAlerts: FlowAlert[] = useMockData
     ? (ticker
         ? MOCK_FLOW_ALERTS.filter(a => a.ticker === ticker.toUpperCase())
         : MOCK_FLOW_ALERTS)
     : (data?.data ?? []);
+
+  // Snapshot: freeze the displayed list so background refetches or filter changes
+  // don't jump the scroll position mid-browse. Only updated on first load and on
+  // an explicit pull-to-refresh.
+  const [snapshot, setSnapshot] = useState<FlowAlert[]>([]);
+  const initialised = useRef(false);
+
+  useEffect(() => {
+    if (fetchedAlerts.length > 0 && !initialised.current) {
+      setSnapshot(fetchedAlerts);
+      initialised.current = true;
+    }
+  }, [fetchedAlerts]);
+
+  const handleRefresh = () => {
+    refetch().then((result) => {
+      setSnapshot(result.data?.data ?? []);
+    });
+  };
+
+  const rawAlerts = useMockData ? fetchedAlerts : snapshot;
 
   const filtered = useMemo(() => {
     let list = [...rawAlerts];
@@ -302,7 +323,7 @@ export const FlowFeed: React.FC<FlowFeedProps> = ({ ticker, useMockData = false 
             {(error as Error).message}
           </Text>
           <TouchableOpacity
-            onPress={() => refetch()}
+            onPress={handleRefresh}
             style={{ marginTop: 16, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10, backgroundColor: colors.accent + '18', borderWidth: 1, borderColor: colors.accent + '44' }}
           >
             <Text style={{ color: colors.accent, fontWeight: '600' }}>Retry</Text>
@@ -499,7 +520,7 @@ export const FlowFeed: React.FC<FlowFeedProps> = ({ ticker, useMockData = false 
         refreshControl={
           <RefreshControl
             refreshing={isRefetching && !useMockData}
-            onRefresh={refetch}
+            onRefresh={handleRefresh}
             tintColor={colors.accent}
           />
         }
