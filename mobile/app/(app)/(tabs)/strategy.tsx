@@ -22,6 +22,7 @@ import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/comp
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
 import { StrategyDetailModal } from '@/common/components/strategy/StrategyDetailModal';
+import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { OrbHubHealthBanner } from '@/common/components/strategy/OrbHubHealthBanner';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
@@ -141,7 +142,13 @@ function configToForm(cfg: StrategyConfig): FormState {
 
 // ── Main screen ────────────────────────────────────────────────────────────────
 
-export default function StrategyScreen() {
+interface StrategyScreenProps {
+  /** True when rendered as a SegmentedPager scene (ORB tab) — hides the
+   *  redundant title (the segment pill above already names this page). */
+  embedded?: boolean;
+}
+
+export default function StrategyScreen({ embedded = false }: StrategyScreenProps) {
   const colors  = useThemeColors();
   const toast   = useToast();
 
@@ -151,6 +158,13 @@ export default function StrategyScreen() {
   const { data: monitoringState } = useORBMonitoringState();
   const { data: immediatePositions } = useImmediatePositions();
   const { data: recentTrades } = useStrategyTrades({ limit: 50 });
+
+  // Decoupled LIVE/PAPER view — everything below (positions, strategies,
+  // today's results, the account card) is scoped to one account at a time
+  // instead of mixing real and paper money together. Defaults to LIVE since
+  // that's where actual capital is at risk.
+  const [accountMode, setAccountMode] = useState<AccountMode>('live');
+  const wantPaper = accountMode === 'paper';
 
   const tickerOptions = useMemo(() => {
     const tickers = (monitoringState ?? [])
@@ -169,36 +183,50 @@ export default function StrategyScreen() {
     );
   }, [recentTrades, today]);
 
+  // Everything below is scoped to the selected account (LIVE or PAPER).
+  const modeConfigs = useMemo(
+    () => (configs ?? []).filter(c => c.paper_mode === wantPaper),
+    [configs, wantPaper],
+  );
+  const modeImmediatePositions = useMemo(
+    () => (immediatePositions ?? []).filter(p => p.paper_mode === wantPaper),
+    [immediatePositions, wantPaper],
+  );
+  const modeTodayCompletedTrades = useMemo(
+    () => todayCompletedTrades.filter(t => (t.paper_mode ?? false) === wantPaper),
+    [todayCompletedTrades, wantPaper],
+  );
+
   // Split configs: those with live positions vs the rest
   const liveStrategyConfigs = useMemo(
-    () => (configs ?? []).filter(c => c.has_position === true),
-    [configs],
+    () => modeConfigs.filter(c => c.has_position === true),
+    [modeConfigs],
   );
   const inactiveStrategyConfigs = useMemo(() => {
     // Configs without a live position, sorted: live mode > paper mode > off
     const modeOrder: Record<TradingMode, number> = { live: 0, paper: 1, off: 2 };
-    return (configs ?? [])
+    return modeConfigs
       .filter(c => !c.has_position)
       .sort((a, b) => modeOrder[getMode(a)] - modeOrder[getMode(b)]);
-  }, [configs]);
+  }, [modeConfigs]);
 
   // Completed strategy trades today that haven't already been surfaced as live positions
   const completedStrategyTrades = useMemo<ORBTrade[]>(() => {
     const liveIds = new Set(liveStrategyConfigs.map(c => c.id));
-    return todayCompletedTrades.filter(
+    return modeTodayCompletedTrades.filter(
       t => t.trade_type !== 'IMMEDIATE' && (t.strategy_id == null || !liveIds.has(t.strategy_id))
     );
-  }, [todayCompletedTrades, liveStrategyConfigs]);
+  }, [modeTodayCompletedTrades, liveStrategyConfigs]);
 
   const completedImmediateTrades = useMemo<ORBTrade[]>(() => {
-    const activeContracts = new Set((immediatePositions ?? []).map(p => p.contract));
-    return todayCompletedTrades.filter(
+    const activeContracts = new Set(modeImmediatePositions.map(p => p.contract));
+    return modeTodayCompletedTrades.filter(
       t => t.trade_type === 'IMMEDIATE' && !activeContracts.has(t.contract_symbol)
     );
-  }, [todayCompletedTrades, immediatePositions]);
+  }, [modeTodayCompletedTrades, modeImmediatePositions]);
 
   const hasLiveActivity =
-    liveStrategyConfigs.length > 0 || (immediatePositions?.length ?? 0) > 0;
+    liveStrategyConfigs.length > 0 || modeImmediatePositions.length > 0;
   const hasCompletedToday =
     completedStrategyTrades.length > 0 || completedImmediateTrades.length > 0;
 
@@ -321,7 +349,7 @@ export default function StrategyScreen() {
         >
           <Ionicons name="book-outline" size={17} color={colors.accent} />
         </TouchableOpacity>
-        <Text style={[styles.title, { color: colors.text }]}>ORB Strategies</Text>
+        {!embedded && <Text style={[styles.title, { color: colors.text }]}>ORB Strategies</Text>}
         <TouchableOpacity
           onPress={openCreate}
           hitSlop={8}
@@ -336,12 +364,26 @@ export default function StrategyScreen() {
 
         <OrbHubHealthBanner colors={colors} />
 
-        {/* Account banner */}
+        {/* LIVE/PAPER — everything below is scoped to one account at a time */}
+        <LiveModeToggle
+          mode={accountMode}
+          onChange={setAccountMode}
+          counts={{
+            live: (configs ?? []).filter(c => !c.paper_mode && c.has_position).length,
+            paper: (configs ?? []).filter(c => c.paper_mode && c.has_position).length,
+          }}
+          colors={colors}
+        />
+
+        {/* Account banner — just the selected account, not both side by side */}
         {accounts && (
           <View style={[styles.accountCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <AccountBannerSide label="PAPER" accentColor="#FF9F0A" account={accounts.paper} colors={colors} />
-            <View style={[styles.accountDivider, { backgroundColor: colors.border }]} />
-            <AccountBannerSide label="LIVE" accentColor={colors.success} account={accounts.live} colors={colors} />
+            <AccountBannerSide
+              label={accountMode.toUpperCase()}
+              accentColor={wantPaper ? '#FF9F0A' : colors.success}
+              account={wantPaper ? accounts.paper : accounts.live}
+              colors={colors}
+            />
           </View>
         )}
 
@@ -349,27 +391,24 @@ export default function StrategyScreen() {
         {hasLiveActivity && (
           <>
             <SectionHeader
-              title={`Live Positions (${liveStrategyConfigs.length + (immediatePositions?.length ?? 0)})`}
+              title={`Open Positions (${liveStrategyConfigs.length + modeImmediatePositions.length})`}
               accent
               colors={colors}
             />
 
-            {/* Strategy live positions — LIVE mode first, then paper */}
-            {liveStrategyConfigs
-              .slice()
-              .sort((a, b) => (a.paper_mode ? 1 : 0) - (b.paper_mode ? 1 : 0))
-              .map(cfg => (
-                <StrategyCard
-                  key={cfg.id}
-                  config={cfg}
-                  profiles={profiles ?? []}
-                  colors={colors}
-                  onPress={() => openDetail(cfg)}
-                />
-              ))}
+            {/* Strategy live positions */}
+            {liveStrategyConfigs.map(cfg => (
+              <StrategyCard
+                key={cfg.id}
+                config={cfg}
+                profiles={profiles ?? []}
+                colors={colors}
+                onPress={() => openDetail(cfg)}
+              />
+            ))}
 
             {/* Immediate positions */}
-            {(immediatePositions ?? []).map(pos => (
+            {modeImmediatePositions.map(pos => (
               <ImmediatePositionCard key={pos.strategy_id} position={pos} colors={colors} />
             ))}
           </>

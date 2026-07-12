@@ -266,6 +266,10 @@ export interface ORBTrade {
   tp2_qty?: number | null;
   tp2_pnl?: number | null;
   exit_stages?: ExitStage[] | null;
+  // ── Account-level snapshot (only populated for trades logged going forward) ─
+  account_balance_before?: number | null;
+  account_balance_after?: number | null;
+  account_balance_change?: number | null;
 }
 
 export interface StrategyStats {

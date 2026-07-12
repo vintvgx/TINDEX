@@ -294,6 +294,7 @@ def force_close_strategy(strategy_id: str):
             engine.contract_symbol, "MANUAL_CLOSE", exit_price,
             qty, engine.profile_key,
             strategy_id=engine.strategy_id,
+            trading_client=engine.trading_client,
         )
         engine.notifier.notify_exit(
             ticker=engine.ticker,
@@ -765,9 +766,39 @@ def get_both_accounts():
 
 @strategy_bp.route("/accounts/history", methods=["GET"])
 def get_accounts_history():
-    """Return period P&L (today / week / month) for paper and live accounts."""
+    """
+    Return period P&L (today / week / month / YTD / all-time) plus deposit
+    tracking for paper and live accounts.
+
+    Correctness notes (fixed 2026-07-12 — this endpoint previously crashed on
+    every call and silently degraded to "no data"):
+      - `client.get_portfolio_history(...)` takes its request object
+        POSITIONALLY. The old code passed `filter=None`, a kwarg that doesn't
+        exist on this method — every call raised, was swallowed by a bare
+        `except Exception`, and week/month always came back None (hence
+        "This Week" spinning forever in the app — the query had already
+        resolved to `available: True` with no data, not an actual loading state).
+      - Week/month used to be computed from raw EQUITY deltas, which counts
+        deposits as if they were trading profit. Alpaca's `profit_loss` array
+        already excludes cashflow (deposits/withdrawals) — using it instead is
+        what actually answers "what did my trades do", not "what did my
+        balance do" (a $100 deposit is not $100 of P&L).
+    """
     import os
+    from datetime import date as _date
     from alpaca.trading.client import TradingClient
+    from alpaca.trading.requests import GetPortfolioHistoryRequest
+    from alpaca.trading.enums import ActivityType
+
+    def _nearest_index_on_or_before(timestamps: list, target_ts: float) -> int:
+        """Index of the latest daily bar at/before target_ts, clamped to [0, len-1]."""
+        idx = 0
+        for i, ts in enumerate(timestamps):
+            if ts <= target_ts:
+                idx = i
+            else:
+                break
+        return idx
 
     def _fetch_with_history(paper: bool) -> dict:
         try:
@@ -781,41 +812,93 @@ def get_accounts_history():
             pnl_today   = equity - last_equity
             pnl_today_pct = (pnl_today / last_equity * 100) if last_equity > 0 else 0
 
-            # Fetch 1-month of daily history to derive week/month P&L.
-            try:
-                hist = client.get_portfolio_history(filter=None)
-                # alpaca-py returns PortfolioHistory with .equity (list) and .profit_loss
-                equities = [float(e) for e in (hist.equity or []) if e is not None]
-            except Exception:
-                equities = []
-
+            # One daily-granularity fetch spanning the account's full life —
+            # every other period (week/month/YTD/all-time) is a slice of it,
+            # so this is the only history call we need to make.
             pnl_week = pnl_week_pct = None
             pnl_month = pnl_month_pct = None
+            pnl_ytd = pnl_ytd_pct = None
+            pnl_all_time = pnl_all_time_pct = None
+            total_deposited = total_withdrawn = 0.0
 
-            if equities:
-                # Week: compare current equity to 5 trading days ago (or earliest available)
-                week_idx = max(0, len(equities) - 6)
-                week_start = equities[week_idx]
-                if week_start > 0:
-                    pnl_week     = round(equity - week_start, 2)
-                    pnl_week_pct = round((equity - week_start) / week_start * 100, 3)
+            try:
+                # `cashflow_types` must be requested explicitly — Alpaca omits
+                # the cashflow dict entirely otherwise (confirmed against
+                # alpaca-py 0.43.2's GetPortfolioHistoryRequest, which defaults
+                # cashflow_types to None).
+                hist = client.get_portfolio_history(
+                    GetPortfolioHistoryRequest(
+                        period="all", timeframe="1D",
+                        cashflow_types=f"{ActivityType.CSD.value},{ActivityType.CSW.value}",
+                    )
+                )
+                timestamps = list(hist.timestamp or [])
+                equities   = [float(e) if e is not None else None for e in (hist.equity or [])]
+                pls        = [float(p) if p is not None else None for p in (hist.profit_loss or [])]
+                cashflow   = hist.cashflow or {}
 
-                # Month: compare to first available equity in the series
-                month_start = equities[0]
-                if month_start > 0:
-                    pnl_month     = round(equity - month_start, 2)
-                    pnl_month_pct = round((equity - month_start) / month_start * 100, 3)
+                for activity, values in cashflow.items():
+                    total = sum(float(v) for v in values if v is not None)
+                    key_name = activity.value if hasattr(activity, "value") else str(activity)
+                    if key_name == "CSD":
+                        total_deposited += total
+                    elif key_name == "CSW":
+                        total_withdrawn += abs(total)
+
+                if timestamps and pls:
+                    now_ts = timestamps[-1]
+                    latest_pl = next((p for p in reversed(pls) if p is not None), None)
+
+                    def _period_pnl(days_ago: int | None, boundary_ts: float | None = None):
+                        if latest_pl is None:
+                            return None, None
+                        target = boundary_ts if boundary_ts is not None else now_ts - days_ago * 86400
+                        idx = _nearest_index_on_or_before(timestamps, target)
+                        base_pl     = pls[idx]
+                        base_equity = equities[idx]
+                        if base_pl is None or base_equity is None or base_equity <= 0:
+                            return None, None
+                        delta = round(latest_pl - base_pl, 2)
+                        pct   = round(delta / base_equity * 100, 3)
+                        return delta, pct
+
+                    pnl_week,  pnl_week_pct  = _period_pnl(7)
+                    pnl_month, pnl_month_pct = _period_pnl(30)
+
+                    jan1 = _date(_date.today().year, 1, 1)
+                    jan1_ts = __import__("time").mktime(jan1.timetuple())
+                    pnl_ytd, pnl_ytd_pct = _period_pnl(None, boundary_ts=jan1_ts)
+
+                    # All-time: delta from the very first recorded day (index 0)
+                    # — this is "P&L since the account started", excluding every
+                    # deposit/withdrawal along the way.
+                    if pls[0] is not None and equities[0] and equities[0] > 0:
+                        pnl_all_time = round(latest_pl - pls[0], 2)
+                    # % on total capital actually contributed, not on a fluctuating
+                    # equity base — matches how a user thinks about "my return":
+                    # gained/lost X% of the money I actually put in.
+                    if pnl_all_time is not None and total_deposited > 0:
+                        pnl_all_time_pct = round(pnl_all_time / total_deposited * 100, 3)
+            except Exception as hist_err:
+                logger.warning("[strategy] Portfolio history fetch failed (paper=%s): %s", paper, hist_err)
 
             return {
-                "available":      True,
-                "equity":         equity,
-                "pnl_today":      round(pnl_today, 2),
-                "pnl_today_pct":  round(pnl_today_pct, 3),
-                "pnl_week":       pnl_week,
-                "pnl_week_pct":   pnl_week_pct,
-                "pnl_month":      pnl_month,
-                "pnl_month_pct":  pnl_month_pct,
-                "paper_mode":     paper,
+                "available":         True,
+                "equity":            equity,
+                "pnl_today":         round(pnl_today, 2),
+                "pnl_today_pct":     round(pnl_today_pct, 3),
+                "pnl_week":          pnl_week,
+                "pnl_week_pct":      pnl_week_pct,
+                "pnl_month":         pnl_month,
+                "pnl_month_pct":     pnl_month_pct,
+                "pnl_ytd":           pnl_ytd,
+                "pnl_ytd_pct":       pnl_ytd_pct,
+                "pnl_all_time":      pnl_all_time,
+                "pnl_all_time_pct":  pnl_all_time_pct,
+                "total_deposited":   round(total_deposited, 2),
+                "total_withdrawn":   round(total_withdrawn, 2),
+                "net_contributions": round(total_deposited - total_withdrawn, 2),
+                "paper_mode":        paper,
             }
         except Exception as e:
             return {"available": False, "paper_mode": paper, "error": str(e)}

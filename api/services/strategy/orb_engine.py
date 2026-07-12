@@ -986,6 +986,7 @@ class ORBEngine:
                 strategy_id=log_strategy_id,
                 paper_mode=self.paper,
                 trade_type=trade_type,
+                trading_client=self.trading_client,
             )
             if self.active_trade_id is None:
                 self.debug.emit("ERROR",
@@ -1641,6 +1642,7 @@ class ORBEngine:
                 profile=self.profile_key,
                 strategy_id=self.strategy_id,
                 underlying_price_exit=current_price,
+                trading_client=self.trading_client,
             )
             self.notifier.notify_exit(
                 ticker=self.ticker,

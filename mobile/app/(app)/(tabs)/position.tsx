@@ -46,7 +46,17 @@ const MOCK_POSITIONS: PositionEntry[] = [
   },
 ];
 
-export default function PositionScreen() {
+interface Props {
+  /**
+   * True when rendered as a SegmentedPager scene (Home/Accounts tabs) instead
+   * of a standalone pushed route — hides the back arrow (there's nothing to
+   * pop back to within a pager page) and the redundant title (the segment
+   * pill above already names this page).
+   */
+  embedded?: boolean;
+}
+
+export default function PositionScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
   const toast  = useToast();
   const [showMock, setShowMock] = useState(false);
@@ -75,12 +85,16 @@ export default function PositionScreen() {
 
       {/* ── Sticky header ── */}
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.headerSide}>
-          <Ionicons name="arrow-back" size={22} color={colors.text} />
-        </TouchableOpacity>
+        {embedded ? (
+          <View style={styles.headerSide} />
+        ) : (
+          <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.headerSide}>
+            <Ionicons name="arrow-back" size={22} color={colors.text} />
+          </TouchableOpacity>
+        )}
 
         <View style={styles.headerCenter}>
-          <Text style={[styles.title, { color: colors.text }]}>Live Positions</Text>
+          {!embedded && <Text style={[styles.title, { color: colors.text }]}>Live Positions</Text>}
           {activeCount > 0 && (
             <View style={[styles.activeBadge, { backgroundColor: colors.success + '22' }]}>
               <View style={[styles.liveDot, { backgroundColor: colors.success }]} />

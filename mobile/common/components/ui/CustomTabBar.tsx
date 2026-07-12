@@ -1,23 +1,21 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Pressable, StyleSheet, Animated, Keyboard, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, Pressable, StyleSheet, Animated, Keyboard, Platform } from 'react-native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useThemeColors, useAppColorScheme } from '@/lib/useColorScheme';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
-import { useOptionsTicker } from '@/lib/optionsTickerContext';
 import { AgentModal } from '@/common/components/agent/AgentModal';
 import { useToast } from '@/common/components/ui/Toast';
 
-const VISIBLE_ROUTE_ORDER = ['feed', 'strategy', 'orb', 'options', 'profile'] as const;
+const VISIBLE_ROUTE_ORDER = ['feed', 'orb', 'accounts', 'menu'] as const;
 
 const ROUTE_TITLES: Record<string, string> = {
   feed: 'Home',
-  strategy: 'Strategies',
   orb: 'ORB',
-  options: 'Contracts',
-  profile: 'Profile',
+  accounts: 'Accounts',
+  menu: 'Menu',
 };
 
 const SEARCH_RADIUS = 22;
@@ -82,13 +80,7 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
   const insets = useSafeAreaInsets();
   const [searchOpen, setSearchOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
-  const { setOptionsTicker, optionsTicker } = useOptionsTicker();
   const toast = useToast();
-  const [optionsInput, setOptionsInput] = useState('');
-  const [searchFocused, setSearchFocused] = useState(false);
-  const optionsInputRef = useRef<TextInput>(null);
-  const currentRoute = state.routes[state.index]?.name;
-  const isOnOptionsTab = currentRoute === 'options';
   const keyboardOffset = useRef(new Animated.Value(0)).current;
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const bottomPaddingRef = useRef(0);
@@ -99,6 +91,41 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
   // Extra breathing room below the tab labels so they clear the home-indicator /
   // gesture (Siri) bar at the very bottom of the screen.
   const bottomPadding = Math.max(insets.bottom, 12) + 8;
+
+  // Index within `visibleRoutes` (not `state.index`, which indexes the full
+  // route list including hidden href:null screens) — -1 when the focused
+  // screen isn't one of the 4 visible tabs (e.g. a pushed detail screen).
+  const focusedVisibleIndex = visibleRoutes.findIndex(
+    route => state.routes[state.index]?.name === route.name,
+  );
+
+  // Same sliding-pill technique as SegmentedPager's top tabs, adapted for
+  // discrete tab presses instead of a continuous swipe gesture: measure each
+  // button's real (variable) width/x via onLayout, then spring the shared
+  // highlight pill to the newly focused button instead of it just appearing.
+  const [buttonLayouts, setButtonLayouts] = useState<Record<number, { x: number; width: number }>>({});
+  const pillX = useRef(new Animated.Value(0)).current;
+  const pillWidth = useRef(new Animated.Value(0)).current;
+  const pillReady = useRef(false);
+
+  useEffect(() => {
+    const active = buttonLayouts[focusedVisibleIndex];
+    if (!active) return;
+    if (!pillReady.current) {
+      pillX.setValue(active.x);
+      pillWidth.setValue(active.width);
+      pillReady.current = true;
+      return;
+    }
+    Animated.parallel([
+      Animated.spring(pillX, {
+        toValue: active.x, useNativeDriver: false, damping: 20, stiffness: 220, mass: 0.6,
+      }),
+      Animated.spring(pillWidth, {
+        toValue: active.width, useNativeDriver: false, damping: 20, stiffness: 220, mass: 0.6,
+      }),
+    ]).start();
+  }, [focusedVisibleIndex, buttonLayouts, pillX, pillWidth]);
 
   // Glass styling derived from the active theme.
   const blurTint: 'light' | 'dark' = isDark ? 'dark' : 'light';
@@ -161,14 +188,12 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
     switch (routeName) {
       case 'feed':
         return <Ionicons name="home-outline" size={20} color={color} />;
-      case 'strategy':
-        return <Ionicons name="bar-chart-outline" size={20} color={color} />;
       case 'orb':
         return <Ionicons name="pulse-outline" size={20} color={color} />;
-      case 'options':
-        return <Ionicons name="layers-outline" size={20} color={color} />;
-      case 'profile':
-        return <Ionicons name="person-outline" size={20} color={color} />;
+      case 'accounts':
+        return <Ionicons name="wallet-outline" size={20} color={color} />;
+      case 'menu':
+        return <Ionicons name="menu-outline" size={22} color={color} />;
       default:
         return null;
     }
@@ -184,51 +209,17 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
       <View pointerEvents="box-none" style={styles.container}>
         {/* Floating glass search + AI row (hovers over content) */}
         <Animated.View style={[styles.searchRow, { transform: [{ translateY: keyboardOffset }] }]}>
-          {isOnOptionsTab ? (
-            <View style={[styles.searchBar, { flex: 1 }]}>
-              <GlassBacking radius={SEARCH_RADIUS} intensity={searchFocused ? 80 : 30} showFocus={searchFocused} {...glassProps} />
-              <Ionicons name="layers-outline" size={15} color={colors.tabBarInactive} style={{ marginRight: 9 }} />
-              <TextInput
-                ref={optionsInputRef}
-                style={[styles.searchPlaceholder, { color: colors.text, flex: 1 }]}
-                placeholder="Options ticker (e.g. AAPL)..."
-                placeholderTextColor={colors.tabBarInactive}
-                value={optionsInput}
-                onChangeText={t => setOptionsInput(t.toUpperCase())}
-                onFocus={() => setSearchFocused(true)}
-                onBlur={() => setSearchFocused(false)}
-                autoCapitalize="characters"
-                autoCorrect={false}
-                maxLength={5}
-                returnKeyType="search"
-                onSubmitEditing={() => {
-                  const t = optionsInput.trim();
-                  if (t.length >= 1) setOptionsTicker(t);
-                  optionsInputRef.current?.blur();
-                }}
-              />
-              {optionsInput.length > 0 && (
-                <TouchableOpacity
-                  onPress={() => { setOptionsInput(''); setOptionsTicker(''); }}
-                  hitSlop={8}
-                >
-                  <Ionicons name="close-circle" size={15} color={colors.tabBarInactive} />
-                </TouchableOpacity>
-              )}
-            </View>
-          ) : (
-            <TouchableOpacity
-              onPress={() => setSearchOpen(true)}
-              activeOpacity={0.82}
-              style={[styles.searchBar, { flex: 1 }]}
-            >
-              <GlassBacking radius={SEARCH_RADIUS} intensity={30} {...glassProps} />
-              <Ionicons name="search" size={15} color={colors.tabBarInactive} style={{ marginRight: 9 }} />
-              <Text style={[styles.searchPlaceholder, { color: colors.tabBarInactive }]}>
-                Search stocks...
-              </Text>
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity
+            onPress={() => setSearchOpen(true)}
+            activeOpacity={0.82}
+            style={[styles.searchBar, { flex: 1 }]}
+          >
+            <GlassBacking radius={SEARCH_RADIUS} intensity={30} {...glassProps} />
+            <Ionicons name="search" size={15} color={colors.tabBarInactive} style={{ marginRight: 9 }} />
+            <Text style={[styles.searchPlaceholder, { color: colors.tabBarInactive }]}>
+              Search stocks...
+            </Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             onPress={() => setAgentOpen(true)}
@@ -240,37 +231,55 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
           </TouchableOpacity>
         </Animated.View>
 
-        {/* Traditional anchored bottom tab bar (full width, flush to the edge) */}
-        <View
-          style={[
-            styles.tabBar,
-            {
-              backgroundColor: colors.tabBar,
-              borderTopColor: colors.tabBarBorder,
-              paddingBottom: bottomPadding,
-            },
-          ]}
-        >
-          {visibleRoutes.map(route => {
-            const isFocused = state.routes[state.index]?.name === route.name;
-            const color = isFocused ? colors.tabBarActive : colors.tabBarInactive;
-            const label = ROUTE_TITLES[route.name] ?? route.name;
+        {/* Floating pill bottom tab bar — Astor-style, active tab gets a
+            filled sub-pill instead of the bar being flush/full-width. */}
+        <View style={[styles.tabBarOuter, { paddingBottom: bottomPadding }]}>
+          <View
+            style={[
+              styles.tabBar,
+              { backgroundColor: colors.tabBar, borderColor: colors.tabBarBorder },
+            ]}
+          >
+            {focusedVisibleIndex >= 0 && buttonLayouts[focusedVisibleIndex] && (
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.activePill,
+                  {
+                    backgroundColor: colors.tabBarActive,
+                    width: pillWidth,
+                    transform: [{ translateX: pillX }],
+                  },
+                ]}
+              />
+            )}
+            {visibleRoutes.map((route, i) => {
+              const isFocused = i === focusedVisibleIndex;
+              const color = isFocused ? colors.iconButton ?? '#fff' : colors.tabBarInactive;
+              const label = ROUTE_TITLES[route.name] ?? route.name;
 
-            return (
-              <TouchableOpacity
-                key={route.key}
-                onPress={() => handleTabPress(route, isFocused)}
-                style={styles.tabButton}
-                activeOpacity={0.7}
-                accessibilityRole="button"
-                accessibilityState={isFocused ? { selected: true } : {}}
-                accessibilityLabel={label}
-              >
-                {getIcon(route.name, color)}
-                <Text style={[styles.label, { color }]}>{label}</Text>
-              </TouchableOpacity>
-            );
-          })}
+              return (
+                <TouchableOpacity
+                  key={route.key}
+                  onPress={() => handleTabPress(route, isFocused)}
+                  onLayout={e => {
+                    const { x, width } = e.nativeEvent.layout;
+                    setButtonLayouts(prev =>
+                      prev[i]?.x === x && prev[i]?.width === width ? prev : { ...prev, [i]: { x, width } },
+                    );
+                  }}
+                  style={styles.tabButton}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityState={isFocused ? { selected: true } : {}}
+                  accessibilityLabel={label}
+                >
+                  {getIcon(route.name, color)}
+                  <Text style={[styles.label, { color }]}>{label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
       </View>
 
@@ -279,7 +288,6 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
       <AgentModal
         visible={agentOpen}
         onClose={() => setAgentOpen(false)}
-        ticker={isOnOptionsTab && optionsTicker ? optionsTicker : undefined}
         onError={(msg) => toast.error(msg)}
       />
     </>
@@ -318,22 +326,43 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   searchPlaceholder: { fontSize: 14, flex: 1 },
+  tabBarOuter: {
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
   tabBar: {
     flexDirection: 'row',
-    width: '100%',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingTop: 10,
+    alignItems: 'center',
+    borderRadius: 100,
+    borderWidth: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    gap: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 8,
   },
   tabButton: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 2,
-    paddingVertical: 2,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 100,
+    minWidth: 68,
+  },
+  activePill: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    borderRadius: 100,
   },
   label: {
     fontSize: 10,
-    fontWeight: '500',
+    fontWeight: '600',
     letterSpacing: 0.2,
     marginTop: 2,
   },

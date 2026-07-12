@@ -125,6 +125,7 @@ def _eod_reset(engine):
                 qty_closed,
                 engine.profile_key,
                 strategy_id=engine.strategy_id,
+                trading_client=engine.trading_client,
             )
             engine.notifier.notify_exit(
                 ticker=engine.ticker,
