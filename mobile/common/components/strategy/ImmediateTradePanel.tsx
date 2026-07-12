@@ -39,19 +39,26 @@ function addDays(iso: string, days: number): string {
 }
 
 /**
- * Pick the nearest expiration matching the ticker's expected cadence from
- * whatever the chain actually returned. Falls back to the single nearest
- * expiration overall if none match the cadence (holiday shift, data gap) —
- * never show an empty chain when the provider did return something.
+ * Expirations matching the ticker's expected cadence, nearest first — the
+ * set shown by the expiration picker. Falls back to every available
+ * expiration if none match the cadence (holiday shift, data gap) — never
+ * leave the picker empty when the provider did return something.
  */
-function pickTargetExpiration(ticker: string, available: string[]): string | null {
-  if (!available.length) return null;
+function pickCadenceExpirations(ticker: string, available: string[]): string[] {
+  if (!available.length) return [];
   const allowedWeekdays = ETF_TICKERS.has(ticker.toUpperCase())
     ? ETF_EXPIRY_WEEKDAYS
     : STOCK_EXPIRY_WEEKDAYS;
   const sorted = [...available].sort();
   const matching = sorted.filter(d => allowedWeekdays.has(new Date(d + 'T00:00:00Z').getUTCDay()));
-  return matching[0] ?? sorted[0];
+  return matching.length > 0 ? matching : sorted;
+}
+
+// "2026-07-17" → "Fri 7/17"
+function formatExpirationChip(iso: string): string {
+  const d = new Date(iso + 'T00:00:00Z');
+  const weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+  return `${weekday} ${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
 }
 
 // ── Chain helpers ─────────────────────────────────────────────────────────────
@@ -146,32 +153,65 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   }, [tickerOptions, ticker]);
 
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
-  // ETFs (SPY/QQQ/IWM) may not have a fresh expiration on any given day, and
-  // stocks never expire same-day at all — fetch a 2-week window and pick the
-  // nearest expiration that actually exists and matches the ticker's cadence,
-  // rather than assuming "today" is always a listed expiration.
+  const [selectedExpiration, setSelectedExpiration] = useState<string | null>(null);
+
+  // ── Step 1: discovery — ETFs (SPY/QQQ/IWM) may not have a fresh expiration
+  // on any given day, and stocks never expire same-day at all, so fetch a
+  // 2-week window just to see which expirations actually exist. A small limit
+  // is enough here — this query is only ever read for expirations_fetched
+  // (and current_price), never for the actual contract list. Using it for
+  // contracts too was the previous bug: the backend keeps only the top-N
+  // strikes nearest current price ACROSS ALL expirations in the window
+  // combined, so a stock's correct Friday could appear in expirations_fetched
+  // while its actual contracts got crowded out by a nearer expiration's
+  // strikes — "no EOW contracts" even though that Friday genuinely exists.
   const queryWindowEnd = useMemo(() => addDays(today, 14), [today]);
-  const { data, isLoading, error } = useOptionsQuery(
+  const { data: discoveryData } = useOptionsQuery(
     visible && ticker ? ticker : '',
-    { limit: 100, expiration_date_gte: today, expiration_date_lte: queryWindowEnd },
+    { limit: 20, expiration_date_gte: today, expiration_date_lte: queryWindowEnd },
+    15000,
+  );
+  const discoveryChain = discoveryData?.success ? discoveryData.data : null;
+
+  // Expirations matching this ticker's cadence (Mon/Wed/Fri for SPY/QQQ/IWM,
+  // Friday weeklies for everything else), nearest first — the set the picker
+  // below shows and the user can override, not just an auto-pick.
+  const pickableExpirations = useMemo(() => {
+    if (!discoveryChain) return [];
+    return pickCadenceExpirations(ticker, discoveryChain.expirations_fetched);
+  }, [discoveryChain, ticker]);
+
+  // Default to the nearest matching expiration whenever the ticker changes or
+  // the current selection is no longer in the available set; otherwise leave
+  // the user's explicit choice alone.
+  useEffect(() => {
+    if (pickableExpirations.length === 0) { setSelectedExpiration(null); return; }
+    if (!selectedExpiration || !pickableExpirations.includes(selectedExpiration)) {
+      setSelectedExpiration(pickableExpirations[0]);
+    }
+  // Only re-run when the available set changes, not on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickableExpirations]);
+
+  // ── Step 2: the real chain, scoped to exactly the chosen expiration — so
+  // the backend's top-100-nearest-to-price limit applies within that one
+  // date only, guaranteeing complete strikes for it.
+  const { data, isLoading, error } = useOptionsQuery(
+    visible && ticker && selectedExpiration ? ticker : '',
+    { limit: 100, expiration_date_gte: selectedExpiration ?? today, expiration_date_lte: selectedExpiration ?? today },
     4000,
   );
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
   const chain        = data?.success ? data.data : null;
-  const currentPrice = chain?.current_price ?? 0;
-
-  const targetExpiration = useMemo(() => {
-    if (!chain) return null;
-    return pickTargetExpiration(ticker, chain.expirations_fetched);
-  }, [chain, ticker]);
+  const currentPrice = chain?.current_price ?? discoveryChain?.current_price ?? 0;
 
   const sideContracts = useMemo(() => {
-    if (!chain || !targetExpiration) return [];
+    if (!chain || !selectedExpiration) return [];
     const list = side === 'CALL' ? chain.calls : chain.puts;
-    return list.filter(c => c.expiration === targetExpiration);
-  }, [chain, side, targetExpiration]);
+    return list.filter(c => c.expiration === selectedExpiration);
+  }, [chain, side, selectedExpiration]);
 
   const rows = useMemo(() => buildRows(sideContracts, currentPrice, side), [sideContracts, currentPrice, side]);
 
@@ -508,6 +548,34 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
           </View>
         )}
 
+        {/* Expiration picker — Mon/Wed/Fri for ETFs, Friday weeklies for
+            stocks. Defaults to the nearest, but explicitly overridable. */}
+        {pickableExpirations.length > 0 && (
+          <View style={{ marginTop: 10 }}>
+            <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>EXPIRATION</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 2 }}>
+              {pickableExpirations.map(exp => {
+                const active = selectedExpiration === exp;
+                return (
+                  <TouchableOpacity
+                    key={exp}
+                    onPress={() => { setSelectedExpiration(exp); setSelected(null); }}
+                    activeOpacity={0.75}
+                    style={[
+                      styles.expChip,
+                      { borderColor: active ? colors.accent : colors.border, backgroundColor: active ? colors.accent + '1A' : colors.card },
+                    ]}
+                  >
+                    <Text style={[styles.expChipText, { color: active ? colors.accent : colors.text }]}>
+                      {formatExpirationChip(exp)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+
         {/* Calls / Puts + price */}
         <View style={styles.controlRow}>
           <View style={[styles.toggle, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -565,7 +633,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
           <Text style={[styles.emptyText, { color: colors.text }]}>No contracts found</Text>
           <Text style={[styles.emptySub, { color: colors.tabBarInactive }]}>
             No {side === 'CALL' ? 'calls' : 'puts'} found for {ticker || 'this ticker'}
-            {targetExpiration ? ` expiring ${targetExpiration}` : ' in the nearest expirations'}.
+            {selectedExpiration ? ` expiring ${selectedExpiration}` : ' in the nearest expirations'}.
           </Text>
         </View>
       ) : (
@@ -620,6 +688,9 @@ const styles = StyleSheet.create({
   toggleBtn:  { paddingHorizontal: 18, paddingVertical: 6, borderRadius: 100 },
   toggleText: { fontSize: 13, fontWeight: '600' },
   priceText:  { fontSize: 13, fontWeight: '600', flex: 1, textAlign: 'right' },
+
+  expChip:     { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, borderWidth: 1 },
+  expChipText: { fontSize: 12, fontWeight: '700' },
 
   colHeaderRow: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth },
   colHead:      { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },

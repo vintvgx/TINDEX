@@ -7,7 +7,9 @@ they are never duplicated across the process.
 
 import asyncio
 import threading
+from datetime import datetime, time
 
+import pytz
 from flask import Blueprint, jsonify, request
 
 from log.logging_config import get_logger
@@ -136,6 +138,23 @@ def stop_orb_monitoring():
 # auto-restart trigger on the exact same definition of "stale".
 STALE_FEED_THRESHOLD_SEC = 180
 
+_MARKET_OPEN  = time(9, 15)
+_MARKET_CLOSE = time(16, 0)
+_ET = pytz.timezone("America/New_York")
+
+
+def _is_market_hours_now() -> bool:
+    """
+    Standalone equivalent of OrbService.is_market_hours() that doesn't need a
+    live instance — ORB_SERVICE is None whenever the hub isn't running at all,
+    which is exactly the case this needs to distinguish ("not running because
+    it's 2 AM" vs "not running because it crashed at 11 AM").
+    """
+    now = datetime.now(_ET)
+    if now.weekday() >= 5:
+        return False
+    return _MARKET_OPEN <= now.time() <= _MARKET_CLOSE
+
 
 def get_orb_health() -> dict:
     """
@@ -147,10 +166,16 @@ def get_orb_health() -> dict:
     OrbService reporting itself as running (and firing the "started" push)
     while the underlying stream had gone silent. seconds_since_last_bar is
     the real liveness signal: a bar actually arriving proves data is flowing.
+
+    Outside market hours, ORB_SERVICE not running is the CORRECT state, not
+    an outage — this used to unconditionally report healthy:False whenever
+    ORB_SERVICE was None, which made the health banner warn every night and
+    weekend as if something were broken.
     """
     with orb_lock:
         if not (ORB_SERVICE and hasattr(ORB_SERVICE, "is_running") and ORB_SERVICE.is_running):
-            return {"running": False, "healthy": False}
+            market_hours = _is_market_hours_now()
+            return {"running": False, "healthy": not market_hours, "market_hours": market_hours}
 
         from services.utils.orb_data_hub import get_orb_data_hub
         hub = get_orb_data_hub()
