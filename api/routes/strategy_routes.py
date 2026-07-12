@@ -1099,21 +1099,31 @@ def run_simulation():
 
 # ── Performance reviews ───────────────────────────────────────────────────────
 
+def _parse_paper_mode_arg(raw: str | None, default: bool = True) -> bool:
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("false", "0", "no")
+
+
 @strategy_bp.route("/review/list", methods=["GET"])
 def list_reviews():
-    """Return recent daily review summaries (no markdown/trades for list efficiency)."""
+    """
+    Return recent daily review summaries (no markdown/trades for list efficiency).
+    Reviews are decoupled per account — pass ?paper_mode=true|false to scope
+    the list to one account; omit to get both (e.g. for a combined calendar).
+    """
     from services.supabase.supabase_service import get_supabase_service
     limit = min(int(request.args.get("limit", 30)), 90)
+    paper_mode_arg = request.args.get("paper_mode")
     try:
-        rows = (
+        q = (
             get_supabase_service().client
             .table("performance_reviews")
-            .select("review_date, net_pnl, trade_count, win_rate, winners, losers, created_at")
-            .order("review_date", desc=True)
-            .limit(limit)
-            .execute()
-            .data or []
+            .select("review_date, paper_mode, net_pnl, trade_count, win_rate, winners, losers, created_at")
         )
+        if paper_mode_arg is not None:
+            q = q.eq("paper_mode", _parse_paper_mode_arg(paper_mode_arg))
+        rows = q.order("review_date", desc=True).limit(limit).execute().data or []
         for row in rows:
             row["is_reviewed"] = True
         return jsonify({"success": True, "data": rows, "count": len(rows)})
@@ -1124,14 +1134,22 @@ def list_reviews():
 
 @strategy_bp.route("/review/<review_date>", methods=["GET"])
 def get_review(review_date: str):
-    """Return full review for a date including markdown and trades_json."""
+    """
+    Return full review for a date including markdown and trades_json.
+    A date can now have both a paper and a live review — pass
+    ?paper_mode=true|false to pick one. Defaults to paper_mode=true, matching
+    how pre-decoupling single-review dates were saved (see migration
+    20260712_performance_reviews_decouple_paper_live.sql).
+    """
     from services.supabase.supabase_service import get_supabase_service
+    paper_mode = _parse_paper_mode_arg(request.args.get("paper_mode"))
     try:
         rows = (
             get_supabase_service().client
             .table("performance_reviews")
             .select("*")
             .eq("review_date", review_date)
+            .eq("paper_mode", paper_mode)
             .limit(1)
             .execute()
             .data or []
@@ -1149,8 +1167,11 @@ def get_review(review_date: str):
 @strategy_bp.route("/review/generate", methods=["POST"])
 def trigger_review():
     """
-    Manually generate (or re-generate) the daily performance review.
-    Body: { "date": "YYYY-MM-DD" }  — defaults to today if omitted.
+    Manually generate (or re-generate) one account's daily performance review.
+    Body: { "date": "YYYY-MM-DD", "paper_mode": true|false }
+      - date defaults to today if omitted.
+      - paper_mode defaults to true if omitted (paper first, matches how the
+        4:15 PM scheduler orders the two — see scheduler._run_daily_review).
     Useful when the 4:15 PM scheduler missed due to a Railway restart.
     """
     from datetime import date as _date
@@ -1159,6 +1180,7 @@ def trigger_review():
 
     body = request.get_json(silent=True) or {}
     date_str = body.get("date")
+    paper_mode = bool(body.get("paper_mode", True))
     try:
         session_date = _date.fromisoformat(date_str) if date_str else _date.today()
     except ValueError:
@@ -1167,16 +1189,19 @@ def trigger_review():
     try:
         sb = get_supabase_service().client
         gen = ReviewGenerator(sb)
-        content, meta = gen.generate(session_date)
-        trades = gen._fetch_trades(session_date)
-        gen.save_to_supabase(session_date, content, trades, meta)
+        content, meta = gen.generate(session_date, paper_mode)
+        trades = gen._fetch_trades(session_date, paper_mode)
+        gen.save_to_supabase(session_date, content, trades, meta, paper_mode)
 
         from services.strategy.notifier import StrategyNotifier
-        StrategyNotifier(sb).notify_review_ready(str(session_date), meta["trade_count"], meta["net_pnl"])
+        StrategyNotifier(sb).notify_review_ready(
+            str(session_date), meta["trade_count"], meta["net_pnl"], paper_mode,
+        )
 
         return jsonify({
             "success": True,
             "date": str(session_date),
+            "paper_mode": paper_mode,
             "meta": meta,
             "preview": content[:500] + ("..." if len(content) > 500 else ""),
         })

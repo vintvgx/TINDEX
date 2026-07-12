@@ -61,7 +61,7 @@ export const EnterPositionModal: React.FC<EnterPositionModalProps> = ({
     >
       <View>
         <View className="mb-4">
-          <Text className="text-base font-semibold text-white mb-2">Entry Price *</Text>
+          <Text className="text-base font-semibold text-black dark:text-white mb-2">Entry Price *</Text>
           <TextInput
             value={entryPrice}
             onChangeText={(text) => {
@@ -70,8 +70,8 @@ export const EnterPositionModal: React.FC<EnterPositionModalProps> = ({
             }}
             placeholder="0.00"
             keyboardType="decimal-pad"
-            className={`border rounded-lg p-4 text-base text-white bg-gray-800 ${
-              error ? "border-red-500" : "border-gray-700"
+            className={`border rounded-lg p-4 text-base text-black dark:text-white bg-gray-100 dark:bg-gray-800 ${
+              error ? "border-red-500" : "border-gray-300 dark:border-gray-700"
             }`}
             placeholderTextColor="#6b7280"
             editable={!isSubmitting}
@@ -82,7 +82,7 @@ export const EnterPositionModal: React.FC<EnterPositionModalProps> = ({
         </View>
 
         <View className="mb-4">
-          <Text className="text-base font-semibold text-white mb-2">Position Size *</Text>
+          <Text className="text-base font-semibold text-black dark:text-white mb-2">Position Size *</Text>
           <TextInput
             value={positionSize}
             onChangeText={(text) => {
@@ -91,8 +91,8 @@ export const EnterPositionModal: React.FC<EnterPositionModalProps> = ({
             }}
             placeholder="1"
             keyboardType="number-pad"
-            className={`border rounded-lg p-4 text-base text-white bg-gray-800 ${
-              error ? "border-red-500" : "border-gray-700"
+            className={`border rounded-lg p-4 text-base text-black dark:text-white bg-gray-100 dark:bg-gray-800 ${
+              error ? "border-red-500" : "border-gray-300 dark:border-gray-700"
             }`}
             placeholderTextColor="#6b7280"
             editable={!isSubmitting}

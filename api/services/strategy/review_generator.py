@@ -25,9 +25,13 @@ ET = pytz.timezone("America/New_York")
 _CLAUDE_MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS   = 4096
 
-_SYSTEM_PROMPT = """
+_SYSTEM_PROMPT_TEMPLATE = """
 You are a trading performance analyst for ALETHIA, an automated ORB (Opening Range Breakout)
 0DTE options strategy running on SPY, IWM, and QQQ.
+
+This review covers the __ACCOUNT_LABEL__ account ONLY — __ACCOUNT_NOTE__. Do not speculate
+about or reference the other account's activity; you have not been given it. Every dollar
+figure in this review must reflect __ACCOUNT_LABEL_LOWER__ money only.
 
 Analyse the provided daily trade data and generate a structured performance review in Markdown.
 Be specific, data-driven, and directly actionable. Reference exact P&L figures, entry/exit
@@ -71,7 +75,7 @@ EOD_HARD_CLOSE      Position still open at hard deadline — force-closed.
 Return ONLY the Markdown review. No preamble, no commentary outside the
 document. Use this exact structure:
 
-# Trade Review — {date}
+# Trade Review — {date} (__ACCOUNT_LABEL__)
 
 **Net P&L:** ${net_pnl}
 **Trades:** {n} total — {w} winners, {l} losers
@@ -128,6 +132,27 @@ as designed, any anomalies, and whether the profile config is appropriate.]
 [Numbered list, most impactful first. Each item must be specific and
 actionable: a concrete parameter change, a behaviour to watch, or a
 structural adjustment to the strategy.]
+
+__MODE_CLOSING_NOTE__
+""".strip()
+
+_LIVE_CLOSING_NOTE = """
+─── Live Account Focus ────────────────────────────────────────────────────
+This is real capital. Weight your recommendations toward capital preservation
+and whether each strategy/profile that traded today has proven itself enough
+to keep running live at its current size — call out explicitly if a profile's
+live track record looks shaky enough that it should be moved back to paper
+for further testing.
+""".strip()
+
+_PAPER_CLOSING_NOTE = """
+─── Paper Account Focus ───────────────────────────────────────────────────
+This is simulated capital used for testing. Weight your recommendations
+toward whether each strategy/profile that traded today is behaving well
+enough, over a large enough sample, to be promoted to the live account —
+call out explicitly which profiles (if any) look ready, and what's still
+missing (sample size, an unresolved failure mode, etc.) for the ones that
+aren't.
 """.strip()
 
 
@@ -140,20 +165,24 @@ class ReviewGenerator:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def generate(self, session_date: date | None = None) -> tuple[str, dict]:
+    def generate(self, session_date: date | None = None, paper_mode: bool = True) -> tuple[str, dict]:
         """
-        Generate and return (markdown_content, metadata).
+        Generate and return (markdown_content, metadata) for ONE account
+        (paper XOR live) — reviews are fully decoupled per account so a
+        live strategy's real track record is never blended with paper
+        testing activity, in either the numbers or the AI narrative.
+
         metadata keys: net_pnl, trade_count, win_rate, winners, losers.
         Raises on Claude API failure — caller decides whether to swallow.
         """
         session_date = session_date or date.today()
-        trades   = self._fetch_trades(session_date)
+        trades   = self._fetch_trades(session_date, paper_mode)
         sessions = self._fetch_sessions(session_date)
-        recent   = self._fetch_recent_pnl(session_date, days=5)
+        recent   = self._fetch_recent_pnl(session_date, paper_mode, days=5)
 
         meta     = self._compute_meta(trades)
-        prompt   = self._build_prompt(trades, sessions, recent, session_date, meta)
-        content  = self._call_claude(prompt)
+        prompt   = self._build_prompt(trades, sessions, recent, session_date, meta, paper_mode)
+        content  = self._call_claude(prompt, paper_mode)
         return content, meta
 
     def save_to_supabase(
@@ -162,10 +191,12 @@ class ReviewGenerator:
         content: str,
         trades: list,
         meta: dict,
+        paper_mode: bool = True,
     ) -> bool:
         try:
             self._sb.table("performance_reviews").upsert({
                 "review_date":    str(review_date),
+                "paper_mode":     paper_mode,
                 "net_pnl":        meta["net_pnl"],
                 "trade_count":    meta["trade_count"],
                 "win_rate":       meta["win_rate"],
@@ -174,8 +205,9 @@ class ReviewGenerator:
                 "markdown":       content,
                 "trades_json":    trades,
                 "created_at":     datetime.utcnow().isoformat(),
-            }, on_conflict="review_date").execute()
-            logger.info("[ReviewGenerator] Saved review for %s to Supabase", review_date)
+            }, on_conflict="review_date,paper_mode").execute()
+            logger.info("[ReviewGenerator] Saved %s review for %s to Supabase",
+                        "paper" if paper_mode else "live", review_date)
             return True
         except Exception as e:
             logger.error("[ReviewGenerator] Supabase save failed: %s", e)
@@ -183,7 +215,7 @@ class ReviewGenerator:
 
     # ── Data fetching ──────────────────────────────────────────────────────────
 
-    def _fetch_trades(self, session_date: date) -> list:
+    def _fetch_trades(self, session_date: date, paper_mode: bool = True) -> list:
         try:
             res = (
                 self._sb.table("orb_trades")
@@ -195,6 +227,7 @@ class ReviewGenerator:
                     "vix_at_entry, orh, orl, exit_stages, paper_mode"
                 )
                 .eq("trade_date", str(session_date))
+                .eq("paper_mode", paper_mode)
                 .order("entry_time")
                 .execute()
             )
@@ -207,7 +240,7 @@ class ReviewGenerator:
         try:
             res = (
                 self._sb.table("orb_session")
-                .select("ticker, profile_key, orh, orl, trade_taken, skip_reason")
+                .select("ticker, profile, orh, orl, trade_taken, skip_reason")
                 .eq("session_date", str(session_date))
                 .execute()
             )
@@ -216,13 +249,16 @@ class ReviewGenerator:
             logger.warning("[ReviewGenerator] fetch_sessions failed: %s", e)
             return []
 
-    def _fetch_recent_pnl(self, session_date: date, days: int = 5) -> list[dict]:
-        """Return last N trading days' net P&L for rolling context."""
+    def _fetch_recent_pnl(self, session_date: date, paper_mode: bool = True, days: int = 5) -> list[dict]:
+        """Return last N trading days' net P&L for rolling context — scoped to
+        the same account as the review so the trend line isn't muddied by the
+        other account's activity."""
         try:
             since = str(session_date - timedelta(days=days * 2))  # buffer for weekends
             res = (
                 self._sb.table("orb_trades")
                 .select("trade_date, pnl")
+                .eq("paper_mode", paper_mode)
                 .gte("trade_date", since)
                 .lt("trade_date", str(session_date))
                 .execute()
@@ -314,8 +350,7 @@ class ReviewGenerator:
             f"  Underlying at exit: {self._fv(t.get('underlying_price_exit'))}\n"
             f"  VIX at entry: {t.get('vix_at_entry') or 'n/a'}\n"
             f"  Exit reason: {t.get('exit_reason') or '?'}  "
-            f"P&L: {'+' if pnl >= 0 else ''}${pnl:.2f} ({pnl_pct:.1f}%)\n"
-            f"  Paper mode: {t.get('paper_mode')}"
+            f"P&L: {'+' if pnl >= 0 else ''}${pnl:.2f} ({pnl_pct:.1f}%)"
             + stages_str
         )
 
@@ -326,9 +361,11 @@ class ReviewGenerator:
         recent: list,
         session_date: date,
         meta: dict,
+        paper_mode: bool = True,
     ) -> str:
+        account_label = "PAPER" if paper_mode else "LIVE"
         lines = [
-            f"## Daily Trade Data — {session_date.strftime('%B %d, %Y')}",
+            f"## Daily Trade Data — {session_date.strftime('%B %d, %Y')} — {account_label} account",
             "",
             f"Net P&L: ${meta['net_pnl']:+.2f}  |  "
             f"Trades: {meta['trade_count']}  |  "
@@ -350,7 +387,7 @@ class ReviewGenerator:
             for s in sessions:
                 skip = f"  SKIPPED: {s.get('skip_reason')}" if s.get("skip_reason") else ""
                 lines.append(
-                    f"  {s.get('ticker')} [{s.get('profile_key')}]  "
+                    f"  {s.get('ticker')} [{s.get('profile')}]  "
                     f"ORH=${s.get('orh')}  ORL=${s.get('orl')}  "
                     f"Trade taken: {s.get('trade_taken')}{skip}"
                 )
@@ -372,11 +409,28 @@ class ReviewGenerator:
         )
         return "\n".join(lines)
 
-    def _call_claude(self, prompt: str) -> str:
+    @staticmethod
+    def build_system_prompt(paper_mode: bool = True) -> str:
+        """The account-scoped system prompt actually sent to Claude — a public
+        static method so callers/tests/scripts can inspect exactly what each
+        review's system prompt looks like without generating one."""
+        if paper_mode:
+            label, note, closing = "PAPER", "simulated capital used to test strategies before they go live", _PAPER_CLOSING_NOTE
+        else:
+            label, note, closing = "LIVE", "real capital — every dollar figure here is real money", _LIVE_CLOSING_NOTE
+        return (
+            _SYSTEM_PROMPT_TEMPLATE
+            .replace("__ACCOUNT_LABEL_LOWER__", label.lower())
+            .replace("__ACCOUNT_LABEL__", label)
+            .replace("__ACCOUNT_NOTE__", note)
+            .replace("__MODE_CLOSING_NOTE__", closing)
+        )
+
+    def _call_claude(self, prompt: str, paper_mode: bool = True) -> str:
         response = self._claude.messages.create(
             model=_CLAUDE_MODEL,
             max_tokens=_MAX_TOKENS,
-            system=_SYSTEM_PROMPT,
+            system=self.build_system_prompt(paper_mode),
             messages=[{"role": "user", "content": prompt}],
         )
         return response.content[0].text

@@ -201,27 +201,35 @@ def schedule_daily_review(supabase_client):
 def _run_daily_review(supabase_client):
     """
     EOD review job: query today's trades, call Claude, save to Supabase.
-    Errors are caught and logged so they never surface as unhandled exceptions
-    in the scheduler thread.
+    Reviews are decoupled per account (see review_generator.py) — this
+    generates BOTH the paper and the live review independently, so a failure
+    on one (e.g. Claude hiccup, zero trades on one side) never blocks the
+    other. Each is caught and logged so neither ever surfaces as an
+    unhandled exception in the scheduler thread.
     """
     from services.strategy.review_generator import ReviewGenerator
     from services.strategy.notifier import StrategyNotifier
     from datetime import date as _date
-    try:
-        gen      = ReviewGenerator(supabase_client)
-        today    = _date.today()
-        content, meta = gen.generate(today)
-        trades   = gen._fetch_trades(today)
-        gen.save_to_supabase(today, content, trades, meta)
-        logger.info(
-            "[Scheduler] Daily review complete — %d trades, net P&L $%.2f",
-            meta["trade_count"], meta["net_pnl"],
-        )
-        StrategyNotifier(supabase_client).notify_review_ready(
-            str(today), meta["trade_count"], meta["net_pnl"],
-        )
-    except Exception as e:
-        logger.error("[Scheduler] Daily review job failed: %s", e)
+
+    today = _date.today()
+    gen   = ReviewGenerator(supabase_client)
+    notifier = StrategyNotifier(supabase_client)
+
+    for paper_mode in (True, False):
+        label = "paper" if paper_mode else "live"
+        try:
+            content, meta = gen.generate(today, paper_mode)
+            trades = gen._fetch_trades(today, paper_mode)
+            gen.save_to_supabase(today, content, trades, meta, paper_mode)
+            logger.info(
+                "[Scheduler] %s daily review complete — %d trades, net P&L $%.2f",
+                label.capitalize(), meta["trade_count"], meta["net_pnl"],
+            )
+            notifier.notify_review_ready(
+                str(today), meta["trade_count"], meta["net_pnl"], paper_mode,
+            )
+        except Exception as e:
+            logger.error("[Scheduler] %s daily review job failed: %s", label.capitalize(), e)
 
 
 def schedule_zero_dte_scans(supabase_client):

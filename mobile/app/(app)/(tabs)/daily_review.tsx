@@ -14,6 +14,7 @@ import { useGenerateReview } from '@/hooks/mutations/review/useGenerateReview';
 import { ReviewDetailModal } from '@/common/components/review/ReviewDetailModal';
 import { useToast } from '@/common/components/ui/Toast';
 import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
+import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 
 const WEEKDAY_LABELS = ['Mo', 'Tu', 'We', 'Th', 'Fr'];
 
@@ -62,8 +63,13 @@ export default function DailyReviewScreen() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [modalDate, setModalDate] = useState<string | null>(null);
   const [generatingDate, setGeneratingDate] = useState<string | null>(null);
+  // Reviews are fully decoupled per account — a day can have a live review,
+  // a paper review, both, or neither. Default live: "especially my live
+  // strategies" is the primary thing being tracked; paper is for testing.
+  const [mode, setMode] = useState<AccountMode>('live');
+  const paperMode = mode === 'paper';
 
-  const { data, isLoading, isFetching, refetch } = usePerformanceReviews(180);
+  const { data, isLoading, isFetching, refetch } = usePerformanceReviews(180, paperMode);
   const generateReview = useGenerateReview();
   const toast = useToast();
   const tabBarHeight = useFloatingTabBarHeight();
@@ -86,11 +92,11 @@ export default function DailyReviewScreen() {
     if (!selectedDate || selectedIsReviewed || selectedIsFuture || generateReview.isPending) return;
     const dateToGenerate = selectedDate;
     setGeneratingDate(dateToGenerate);
-    toast.info('Generating review… this takes ~15 seconds');
-    generateReview.mutate(dateToGenerate, {
+    toast.info(`Generating ${mode} review… this takes ~15 seconds`);
+    generateReview.mutate({ date: dateToGenerate, paperMode }, {
       onSuccess: (res) => {
         const date = res?.date as string | undefined;
-        toast.success(`Review for ${date ?? dateToGenerate} is ready`);
+        toast.success(`${mode === 'live' ? 'Live' : 'Paper'} review for ${date ?? dateToGenerate} is ready`);
         setSelectedDate(null);
         setGeneratingDate(null);
         setModalDate(date ?? dateToGenerate);
@@ -100,6 +106,11 @@ export default function DailyReviewScreen() {
         setGeneratingDate(null);
       },
     });
+  };
+
+  const handleModeChange = (next: AccountMode) => {
+    setMode(next);
+    setSelectedDate(null);
   };
 
   const handleDayPress = (day: Date) => {
@@ -132,9 +143,11 @@ export default function DailyReviewScreen() {
           Daily Review
         </Text>
         <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 2 }}>
-          Auto-generated at 4:15 PM ET · paper + live
+          Auto-generated at 4:15 PM ET · {mode === 'live' ? 'live account only' : 'paper account only'}
         </Text>
       </View>
+
+      <LiveModeToggle mode={mode} onChange={handleModeChange} colors={colors} />
 
       <ScrollView
         contentContainerStyle={{ paddingBottom: selectedDate ? tabBarHeight + 140 : tabBarHeight + 20 }}
@@ -331,6 +344,7 @@ export default function DailyReviewScreen() {
 
       <ReviewDetailModal
         date={modalDate}
+        paperMode={paperMode}
         visible={!!modalDate}
         onClose={() => { setModalDate(null); refetch(); }}
       />

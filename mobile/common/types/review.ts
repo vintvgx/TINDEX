@@ -1,5 +1,6 @@
 export interface PerformanceReviewSummary {
   review_date: string;
+  paper_mode: boolean;
   net_pnl: number;
   trade_count: number;
   win_rate: number;
