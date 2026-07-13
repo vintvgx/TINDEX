@@ -360,6 +360,29 @@ class StrategyNotifier:
             priority=P_TRADE_ENTRY,
         )
 
+    def notify_social_signal(self, handle: str, contract_symbol: str, ticker: str,
+                              option_type: str, strike: float, tweet_text: str,
+                              tweet_url: str):
+        """A watched X/Twitter account called out an options contract."""
+        contract_label = _fmt_contract(contract_symbol)
+        snippet = tweet_text if len(tweet_text) <= 100 else tweet_text[:97] + "..."
+        self._dispatch(
+            title=f"🔥 @{handle}: {contract_label}",
+            body=snippet,
+            data={
+                "screen": "options",
+                "type": "social_signal",
+                "handle": handle,
+                "contract_symbol": contract_symbol,
+                "ticker": ticker,
+                "option_type": option_type,
+                "strike": strike,
+                "tweet_url": tweet_url,
+            },
+            priority=P_MARKET,
+            pref_key="flow_signals",
+        )
+
     def notify_review_ready(self, review_date: str, trade_count: int, net_pnl: float,
                              paper_mode: bool = True):
         """Daily performance review finished generating and saving."""
@@ -375,16 +398,20 @@ class StrategyNotifier:
     # ── Internal helpers ────────────────────────────────────────────────────────
 
     def _dispatch(self, title: str, body: str, data: dict | None = None,
-                  priority: int = P_INFO):
+                  priority: int = P_INFO, pref_key: str | None = None):
         """
         Enqueue a notification. The worker thread drains in (priority, seq) order,
         so lower priority values always arrive on-device first. Items at the same
         priority are delivered in the order they were enqueued (FIFO via seq).
+
+        `pref_key`, if given, additionally gates delivery on
+        `notification_preferences[pref_key]` (defaults to True for users who
+        haven't set it) — on top of the always-checked global `enabled` flag.
         """
         with self._seq_lock:
             seq = self._seq
             self._seq += 1
-        self._queue.put((priority, seq, (title, body, data or {})))
+        self._queue.put((priority, seq, (title, body, data or {}, pref_key)))
 
     # Seconds to wait between consecutive notifications. Gives iOS enough time to
     # deliver each banner individually so none are silently collapsed by the system.
@@ -404,19 +431,19 @@ class StrategyNotifier:
         last_sent_priority = None
         while True:
             try:
-                priority, seq, (title, body, data) = self._queue.get()
+                priority, seq, (title, body, data, pref_key) = self._queue.get()
                 # Skip the inter-notification delay for trade exits — stops and TPs
                 # are time-critical and should arrive as fast as possible.
                 if last_sent_priority is not None and priority != P_TRADE_EXIT:
                     time.sleep(self.INTER_NOTIFICATION_DELAY)
-                self._send_all(title, body, data)
+                self._send_all(title, body, data, pref_key)
                 last_sent_priority = priority
                 self._queue.task_done()
             except Exception as e:
                 logger.error("[StrategyNotifier] drain error: %s", e)
 
-    def _send_all(self, title: str, body: str, data: dict):
-        tokens = self._fetch_tokens()
+    def _send_all(self, title: str, body: str, data: dict, pref_key: str | None = None):
+        tokens = self._fetch_tokens(pref_key)
         if not tokens:
             return
         for token in tokens:
@@ -442,8 +469,10 @@ class StrategyNotifier:
             except Exception as e:
                 logger.warning("[StrategyNotifier] send failed: %s", e)
 
-    def _fetch_tokens(self) -> list[str]:
-        """Return all enabled Expo push tokens from user_profiles."""
+    def _fetch_tokens(self, pref_key: str | None = None) -> list[str]:
+        """Return all enabled Expo push tokens from user_profiles. `pref_key`,
+        if given, additionally requires notification_preferences[pref_key] to
+        be truthy (defaults to True — an unset key doesn't opt a user out)."""
         try:
             res = (
                 self._sb.table("user_profiles")
@@ -456,6 +485,8 @@ class StrategyNotifier:
             for row in (res.data or []):
                 prefs = row.get("notification_preferences") or {}
                 if not prefs.get("enabled", True):
+                    continue
+                if pref_key and not prefs.get(pref_key, True):
                     continue
                 tok = row.get("expo_push_token")
                 if tok:

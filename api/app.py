@@ -42,6 +42,7 @@ from routes.agent_routes import bp as agent_bp
 from routes.flow_routes import bp as flow_bp
 from routes.swing_routes import bp as swing_bp
 from routes.zero_dte_routes import bp as zero_dte_bp
+from routes.social_routes import bp as social_bp
 
 app.register_blueprint(ticker_bp)
 app.register_blueprint(yahoo_bp)
@@ -51,6 +52,7 @@ app.register_blueprint(portfolio_bp)
 app.register_blueprint(agent_bp)
 app.register_blueprint(flow_bp)
 app.register_blueprint(swing_bp)
+app.register_blueprint(social_bp)
 app.register_blueprint(zero_dte_bp)
 
 
@@ -204,6 +206,81 @@ try:
             with engine._live_clients_lock:
                 if client_q in engine._live_clients:
                     engine._live_clients.remove(client_q)
+
+    @sock.route("/ws/social-signals/live")
+    def ws_social_signals_live(ws):
+        """
+        Live mid-price ticks for every currently-tracked social-signal
+        contract (tracked_options_contracts, status='tracking', source=
+        'social_signal') — one shared connection multiplexing all of them,
+        not one WS per card. Reuses the same OptionStreamManager instance the
+        ORB engines stream through — no second connection to Alpaca.
+
+        Resync (picking up newly-tracked/entered/removed contracts) is a
+        30s poll against tracked_options_contracts for the lifetime of this
+        connection — simple and self-contained; see
+        docs/features/social-signal-contracts.md §7's noted open question on
+        push-based resync as a possible later optimization.
+        """
+        import queue as _queue
+        import time as _time
+
+        client_q: "_queue.Queue" = _queue.Queue(maxsize=100)
+        subscribed: dict[str, "callable"] = {}  # contract_symbol -> callback
+        stop_event = threading.Event()
+
+        def _make_callback(symbol: str):
+            def _cb(mid_price: float):
+                try:
+                    client_q.put_nowait(json.dumps({
+                        "type": "price_update",
+                        "contract_symbol": symbol,
+                        "mid_price": round(mid_price, 4),
+                    }))
+                except _queue.Full:
+                    pass
+            return _cb
+
+        def _resync_loop():
+            from services.supabase.supabase_service import get_supabase_service as _get_sb
+            while not stop_event.is_set():
+                try:
+                    rows = (
+                        _get_sb().client.table("tracked_options_contracts")
+                        .select("contract_symbol")
+                        .eq("status", "tracking")
+                        .eq("tracked_from_source", "social_signal")
+                        .execute().data or []
+                    )
+                    live_symbols = {r["contract_symbol"] for r in rows}
+
+                    for symbol in live_symbols - subscribed.keys():
+                        cb = _make_callback(symbol)
+                        subscribed[symbol] = cb
+                        _option_stream_manager.subscribe(symbol, cb)
+
+                    for symbol in list(subscribed.keys() - live_symbols):
+                        _option_stream_manager.unsubscribe(symbol, subscribed.pop(symbol))
+                except Exception as exc:
+                    logger.debug("[WS/social-signals] resync error: %s", exc)
+                stop_event.wait(30)
+
+        resync_thread = threading.Thread(target=_resync_loop, daemon=True)
+        resync_thread.start()
+
+        try:
+            while True:
+                try:
+                    msg = client_q.get(timeout=30)
+                    ws.send(msg)
+                except _queue.Empty:
+                    ws.send(json.dumps({"type": "ping"}))
+        except Exception as exc:
+            logger.debug("[WS/social-signals] client disconnected: %s", exc)
+        finally:
+            stop_event.set()
+            for symbol, cb in subscribed.items():
+                _option_stream_manager.unsubscribe(symbol, cb)
 
 except Exception as _strategy_init_err:
     logger.warning("[App] ORB strategy engine init failed (non-fatal): %s", _strategy_init_err)
