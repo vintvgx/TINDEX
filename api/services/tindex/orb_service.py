@@ -2471,20 +2471,38 @@ class OrbService:
             
             # Normal operation
             # If past ORB calculation period, ensure we have ranges (fetch historically if needed)
+            #
+            # This initial subscribe attempt is deliberately fail-soft: a transient
+            # error here (one bad Supabase call, one flaky Alpaca/Tradier connect)
+            # used to propagate straight to the outer except/finally below and tear
+            # down the ENTIRE service — self.stop() unsubscribes everything, kills
+            # the stream, and fires the "stopped" push — for a failure that run_service()'s
+            # own loop already retries on its own every 2 minutes via the ticker-list
+            # refresh (and again at the next ORB calculation window). Swallowing it
+            # here and falling through to run_service() regardless means a single
+            # transient hiccup at startup no longer kills a service that would have
+            # healed itself within minutes anyway.
             if not self.is_orb_calculation_period():
-                await self.ensure_orb_ranges()
-                
-                if self.orb_ranges:
-                    logger.info(f"Starting monitoring with {len(self.orb_ranges)} ORB ranges")
-                    tickers = await self.load_followed_stocks()
-                    if tickers:
-                        self.active_tickers = tickers
-                        subscribed = await self.streaming_service.subscribe(tickers, self._create_bar_handler_wrapper())
-                        if subscribed:
-                            await self.streaming_service.start_stream()
-                else:
-                    logger.info("No ORB ranges available, will wait for calculation period")
-            
+                try:
+                    await self.ensure_orb_ranges()
+
+                    if self.orb_ranges:
+                        logger.info(f"Starting monitoring with {len(self.orb_ranges)} ORB ranges")
+                        tickers = await self.load_followed_stocks()
+                        if tickers:
+                            self.active_tickers = tickers
+                            subscribed = await self.streaming_service.subscribe(tickers, self._create_bar_handler_wrapper())
+                            if subscribed:
+                                await self.streaming_service.start_stream()
+                    else:
+                        logger.info("No ORB ranges available, will wait for calculation period")
+                except Exception as e:
+                    logger.error(
+                        f"Initial subscribe/start failed (non-fatal — run_service()'s "
+                        f"ticker-refresh loop will retry within 2 min): {e}",
+                        exc_info=True,
+                    )
+
             await self.run_service()
             
         except Exception as e:
@@ -2493,8 +2511,21 @@ class OrbService:
         finally:
             await self.stop()
     
-    async def stop(self):
-        """Stop the monitoring service"""
+    async def stop(self, notify: bool = True):
+        """Stop the monitoring service.
+
+        notify=False is used by the watchdog's forced-restart path
+        (monitoring_routes.py restart_orb_if_unhealthy) — that stop() is
+        immediately followed by an automatic restart within the same 2-minute
+        sweep, so it's an internal recovery step, not something the user needs
+        to react to. Previously this always notified while the matching
+        restart used notify=False for its "started" push, so a flapping feed
+        produced a stream of "⏸️ ORB Service Stopped" pushes with no matching
+        "started" push ever confirming recovery — looking like a persistently
+        broken service even while the watchdog was successfully healing it
+        every cycle. A deliberate operator stop (POST /tindex/orb/stop) still
+        notifies normally.
+        """
         logger.info("=" * 60)
         logger.info("STOPPING ORB MONITORING SERVICE")
         logger.info(f"Total bars received this session: {self._bars_received_count}")
@@ -2536,8 +2567,9 @@ class OrbService:
         
         # Stop cache (flushes remaining dirty entries)
         await self._state_cache.cache_monitoring_stop()
-        
-        await self.send_service_status_notification("stopped")
-        
+
+        if notify:
+            await self.send_service_status_notification("stopped")
+
         logger.info("ORB Monitoring Service stopped")
 

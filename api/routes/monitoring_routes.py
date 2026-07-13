@@ -208,7 +208,14 @@ def restart_orb_if_unhealthy() -> dict:
         with orb_lock:
             try:
                 if ORB_SERVICE:
-                    asyncio.run(ORB_SERVICE.stop())
+                    # notify=False — this stop is immediately followed by an
+                    # automatic restart (below) within the same watchdog sweep,
+                    # not a state the user needs to react to. Previously this
+                    # always notified while the restart's own "started" push
+                    # was already suppressed (notify=False), so a flapping feed
+                    # produced a stream of "stopped" pushes with no matching
+                    # "started" push ever confirming recovery.
+                    asyncio.run(ORB_SERVICE.stop(notify=False))
             except Exception as e:
                 logger.error("[ORB Watchdog] stop() during forced restart failed: %s", e)
             ORB_SERVICE = None
