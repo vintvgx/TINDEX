@@ -160,6 +160,23 @@ try:
     except Exception as _zdre:
         logger.warning("[App] 0DTE scan scheduler failed: %s", _zdre)
 
+    # Auto-start the ORB data hub on every process boot — not a replacement for
+    # the 9:20 AM daily cron that hits /tindex/orb/start, but a self-healing
+    # backstop for it. ORB_SERVICE is a plain in-process global (monitoring_routes.py);
+    # any mid-session Railway restart (redeploy, platform restart, crash) wipes it
+    # to None with nothing to bring it back until the NEXT day's cron fires — the
+    # strategy engines above rebuild themselves automatically on every boot and look
+    # "armed" in the UI regardless, so a restart like this silently blinded every
+    # strategy for the rest of the session with no visible symptom (2026-07-09 incident).
+    # Calling this unconditionally is safe outside market hours too — OrbService.start()
+    # already just enters a lightweight 60s-poll wait loop until the market opens.
+    try:
+        from routes.monitoring_routes import start_orb_service as _start_orb
+        _start_orb_result = _start_orb(notify=False)
+        logger.info("[App] ORB hub auto-start at boot: %s", _start_orb_result.get("message"))
+    except Exception as _orb_boot_err:
+        logger.warning("[App] ORB hub auto-start at boot failed: %s", _orb_boot_err)
+
     @sock.route("/ws/strategy/<strategy_id>/live")
     def ws_strategy_live(ws, strategy_id: str):
         import queue as _queue

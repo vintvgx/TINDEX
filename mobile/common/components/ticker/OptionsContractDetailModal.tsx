@@ -28,6 +28,13 @@ interface Props {
    * decoupled from the strategy domain — the caller supplies the action UI.
    */
   footer?: React.ReactNode;
+  /**
+   * Opens a trade-entry sheet for this exact contract (profile + qty +
+   * paper/live). Shown alongside the default Track/Untrack button, not in
+   * place of it — ignored entirely when `footer` is provided, since a custom
+   * footer already takes full ownership of the bottom bar.
+   */
+  onTrade?: () => void;
 }
 
 const fc = (v: number) =>
@@ -59,6 +66,7 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
   trackedPrice = null,
   liveContractPrice = null,
   footer,
+  onTrade,
 }) => {
   const colors = useThemeColors();
   const [greeksInfoOpen, setGreeksInfoOpen] = useState(false);
@@ -321,39 +329,54 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
 
         {/* ── Bottom action ── */}
         <View style={[s.bottomBar, { backgroundColor: colors.background, borderTopColor: colors.separator }]}>
-          {footer ? footer : isTracked ? (
-            <TouchableOpacity
-              onPress={onUntrackContract}
-              disabled={isUntracking}
-              activeOpacity={0.8}
-              style={[s.actionBtn, { backgroundColor: colors.error + '18', borderColor: colors.error + '50', opacity: isUntracking ? 0.5 : 1 }]}
-            >
-              {isUntracking ? (
-                <ActivityIndicator color={colors.error} />
-              ) : (
-                <>
-                  <Ionicons name="bookmark-outline" size={18} color={colors.error} />
-                  <Text style={[s.actionText, { color: colors.error }]}>Remove from Watchlist</Text>
-                </>
+          {footer ? footer : (
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              {isTracked ? (
+                <TouchableOpacity
+                  onPress={onUntrackContract}
+                  disabled={isUntracking}
+                  activeOpacity={0.8}
+                  style={[s.actionBtn, { flex: 1, backgroundColor: colors.error + '18', borderColor: colors.error + '50', opacity: isUntracking ? 0.5 : 1 }]}
+                >
+                  {isUntracking ? (
+                    <ActivityIndicator color={colors.error} />
+                  ) : (
+                    <>
+                      <Ionicons name="bookmark-outline" size={18} color={colors.error} />
+                      <Text style={[s.actionText, { color: colors.error }]}>Remove</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              ) : onTrackContract ? (
+                <TouchableOpacity
+                  onPress={onTrackContract}
+                  disabled={isTracking}
+                  activeOpacity={0.8}
+                  style={[s.actionBtn, { flex: 1, backgroundColor: colors.accent + '18', borderColor: colors.accent + '50', opacity: isTracking ? 0.5 : 1 }]}
+                >
+                  {isTracking ? (
+                    <ActivityIndicator color={colors.accent} />
+                  ) : (
+                    <>
+                      <Ionicons name="add-circle" size={18} color={colors.accent} />
+                      <Text style={[s.actionText, { color: colors.accent }]}>Watchlist</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              ) : null}
+
+              {onTrade && (
+                <TouchableOpacity
+                  onPress={onTrade}
+                  activeOpacity={0.8}
+                  style={[s.actionBtn, { flex: 1, backgroundColor: colors.success + '1E', borderColor: colors.success + '55' }]}
+                >
+                  <Ionicons name="flash" size={18} color={colors.success} />
+                  <Text style={[s.actionText, { color: colors.success }]}>Trade</Text>
+                </TouchableOpacity>
               )}
-            </TouchableOpacity>
-          ) : onTrackContract ? (
-            <TouchableOpacity
-              onPress={onTrackContract}
-              disabled={isTracking}
-              activeOpacity={0.8}
-              style={[s.actionBtn, { backgroundColor: colors.accent + '18', borderColor: colors.accent + '50', opacity: isTracking ? 0.5 : 1 }]}
-            >
-              {isTracking ? (
-                <ActivityIndicator color={colors.accent} />
-              ) : (
-                <>
-                  <Ionicons name="add-circle" size={18} color={colors.accent} />
-                  <Text style={[s.actionText, { color: colors.accent }]}>Add to Watchlist</Text>
-                </>
-              )}
-            </TouchableOpacity>
-          ) : null}
+            </View>
+          )}
         </View>
       </SafeAreaView>
     </Modal>

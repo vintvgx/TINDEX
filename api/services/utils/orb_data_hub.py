@@ -78,6 +78,13 @@ class OrbDataHub:
         # it for price data, so they stay silent / keep the session armed when it
         # is False (e.g. right after a redeploy, before the service has started).
         self._service_running = False
+        # Wall-clock time of the last bar actually received, across any ticker.
+        # is_service_running() alone proved insufficient on 2026-07-09: the flag
+        # can read True (OrbService started and reported itself as running) while
+        # the underlying stream is silently dead — this is a stronger liveness
+        # signal (a bar arriving proves data is truly flowing) used by the
+        # /tindex/orb/status health check and the watchdog's stale-feed restart.
+        self._last_bar_at: Optional[datetime] = None
 
     # ── Subscription ─────────────────────────────────────────────────────────
 
@@ -125,6 +132,10 @@ class OrbDataHub:
                 buf = deque(maxlen=self._max_recent)
                 self._recent_bars[bar.ticker] = buf
             buf.append(bar)
+            # Wall-clock receipt time (not bar.ts, which is the bar's own start
+            # time) — this is a "how long since we last heard anything" check,
+            # so it must reflect when we actually got it.
+            self._last_bar_at = datetime.utcnow()
             listeners = list(self._bar_subs.get(bar.ticker, ()))
         for cb in listeners:
             try:
@@ -203,6 +214,18 @@ class OrbDataHub:
     def is_service_running(self) -> bool:
         with self._lock:
             return self._service_running
+
+    def seconds_since_last_bar(self) -> Optional[float]:
+        """
+        Seconds since any bar was received, or None if none has ever arrived
+        this process lifetime. A large value while is_service_running() is
+        True is the stale-feed signature the 2026-07-09 outage was not caught
+        by — "running" was true, but nothing was actually flowing.
+        """
+        with self._lock:
+            if self._last_bar_at is None:
+                return None
+            return (datetime.utcnow() - self._last_bar_at).total_seconds()
 
 
 _hub_singleton: Optional[OrbDataHub] = None

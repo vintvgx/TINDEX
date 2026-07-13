@@ -763,22 +763,44 @@ class ORBEngine:
         ask = contract["ask"]
         acct = self.get_account_info()
 
-        # Smart contracts: override profile qty with a tier based on the ask price.
-        # Cheaper options buy more contracts; expensive ones buy fewer. This adapts
+        # Smart contracts: adjust qty by a tier based on the ask price. Cheaper
+        # options buy more contracts; expensive ones buy fewer. This adapts
         # position sizing to available capital without a fixed profile qty.
         # force_smart_qty (profile key) enables this regardless of the user config flag.
         # min_smart_qty (profile key) floors the result — used by REVERSAL to ensure
         # at least 2 contracts so the TP1+runner structure is always funded.
-        # The capital_limit and buying_power checks below still apply after.
+        #
+        # Capped at the profile's OWN qty_contracts (the ceiling) — smart sizing
+        # can only ever size DOWN from what's configured, never inflate past it.
+        # Before this cap, a live account with qty_contracts deliberately
+        # customized down to 3 (for a small live-capital account) still got
+        # blown up to 6 contracts whenever the ask was under $1.00 — the exact
+        # config the user set to manage risk was silently discarded every time
+        # (2026-07-08 incident: every live entry attempt failed on buying power
+        # as a direct result). The capital_limit and buying_power checks below
+        # still apply on top of whichever number comes out of this block.
         if self.smart_contracts or self.profile.get("force_smart_qty", False):
             from services.strategy.profiles import smart_qty
+            ceiling = qty  # the profile's configured qty_contracts, pre-smart-sizing
             smart = smart_qty(ask)
             min_sq = self.profile.get("min_smart_qty", 1)
             if smart < min_sq:
                 smart = min_sq
+            if smart > ceiling:
+                self.debug.emit("INFO",
+                    f"[{self.strategy_name} | {self.profile_key}] Smart contracts: "
+                    f"tier suggested {smart} but capped at configured qty_contracts={ceiling}")
+                smart = ceiling
+            if smart < min_sq:
+                # The configured ceiling is below the profile's own structural
+                # floor (e.g. REVERSAL's min_smart_qty=2 for TP1+runner) — flag
+                # it, but the user's explicit qty still wins on a live account.
+                self.debug.emit("WARN",
+                    f"[{self.strategy_name} | {self.profile_key}] qty_contracts={ceiling} "
+                    f"is below this profile's min_smart_qty={min_sq} — structure may be degraded")
             self.debug.emit("INFO",
                 f"[{self.strategy_name} | {self.profile_key}] Smart contracts: "
-                f"ask=${ask:.2f} → qty={smart} (min={min_sq}, profile default was {qty})")
+                f"ask=${ask:.2f} → qty={smart} (min={min_sq}, ceiling={ceiling})")
             qty = smart
 
         # Enforce user-configured capital_limit — cap qty to what the limit allows.
@@ -804,7 +826,7 @@ class ORBEngine:
 
         if acct:
             required = qty * ask * 100
-            buying_power = acct["buying_power"]
+            buying_power = acct["options_buying_power"]
             if required > buying_power:
                 affordable = int(buying_power / (ask * 100))
                 if affordable < 1:
@@ -1349,7 +1371,7 @@ class ORBEngine:
         ask = contract["ask"]
         acct = self.get_account_info()
         if acct:
-            buying_power = acct["buying_power"]
+            buying_power = acct["options_buying_power"]
             required = qty * ask * 100
             if required > buying_power:
                 affordable = int(buying_power / (ask * 100))
@@ -1961,21 +1983,35 @@ class ORBEngine:
         Return a snapshot of the active Alpaca account (equity, cash, buying
         power, day-trade count, today's P&L).
 
-        NOTE: Called by strategy_routes.py /account endpoint and by _enter_trade
-        to validate buying power before order submission.
+        NOTE: Called by strategy_routes.py /account endpoint (which wants the
+        general buying_power figure for account overview display) and by
+        _enter_trade to validate buying power before order submission (which
+        must use options_buying_power instead — see below).
         """
         try:
             acct = self.trading_client.get_account()
+            buying_power = float(acct.buying_power)
+            # Options orders are gated by a separate, stricter figure than
+            # general margin buying_power — confirmed by Alpaca's own order
+            # rejections, which report the constraint under this exact field
+            # name. _enter_trade's pre-flight capital check used to compare
+            # against plain buying_power, which reported enough headroom and
+            # let doomed orders through to the broker every time (2026-07-08).
+            # Falls back to buying_power if the attribute is absent (e.g. some
+            # paper/cash accounts don't expose it) rather than blocking entirely.
+            options_bp_raw = getattr(acct, "options_buying_power", None)
+            options_buying_power = float(options_bp_raw) if options_bp_raw is not None else buying_power
             return {
-                "equity":             float(acct.equity),
-                "cash":               float(acct.cash),
-                "buying_power":       float(acct.buying_power),
-                "day_trade_count":    acct.daytrade_count,
-                "pnl_today":          float(acct.equity) - float(acct.last_equity),
-                "pnl_today_pct":      ((float(acct.equity) - float(acct.last_equity))
-                                       / float(acct.last_equity) * 100)
-                                      if float(acct.last_equity) > 0 else 0,
-                "paper_mode":         self.paper,
+                "equity":               float(acct.equity),
+                "cash":                 float(acct.cash),
+                "buying_power":         buying_power,
+                "options_buying_power": options_buying_power,
+                "day_trade_count":      acct.daytrade_count,
+                "pnl_today":            float(acct.equity) - float(acct.last_equity),
+                "pnl_today_pct":        ((float(acct.equity) - float(acct.last_equity))
+                                         / float(acct.last_equity) * 100)
+                                        if float(acct.last_equity) > 0 else 0,
+                "paper_mode":           self.paper,
             }
         except Exception as e:
             logger.error("[ORBEngine] get_account_info failed: %s", e)

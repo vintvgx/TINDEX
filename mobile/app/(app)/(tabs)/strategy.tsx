@@ -21,6 +21,8 @@ import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState
 import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/components/strategy/CustomThresholdsEditor';
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
+import { StrategyDetailModal } from '@/common/components/strategy/StrategyDetailModal';
+import { OrbHubHealthBanner } from '@/common/components/strategy/OrbHubHealthBanner';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
@@ -210,9 +212,12 @@ export default function StrategyScreen() {
   const [form, setForm]                     = useState<FormState>(DEFAULT_FORM);
   const [saving, setSaving]                 = useState(false);
   const [guideVisible, setGuideVisible]     = useState(false);
+  const [detailConfig, setDetailConfig]     = useState<StrategyConfig | null>(null);
+  const [detailVisible, setDetailVisible]   = useState(false);
 
   const openCreate = () => { setEditingConfig(null); setForm(DEFAULT_FORM); setModalVisible(true); };
   const openEdit   = (cfg: StrategyConfig) => { setEditingConfig(cfg); setForm(configToForm(cfg)); setModalVisible(true); };
+  const openDetail = (cfg: StrategyConfig) => { setDetailConfig(cfg); setDetailVisible(true); };
 
   const handleDelete = (cfg: StrategyConfig) => {
     const label = cfg.strategy_name || `${cfg.ticker} ${cfg.profile.replace('_', ' ')}`;
@@ -329,6 +334,8 @@ export default function StrategyScreen() {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
 
+        <OrbHubHealthBanner colors={colors} />
+
         {/* Account banner */}
         {accounts && (
           <View style={[styles.accountCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -355,9 +362,9 @@ export default function StrategyScreen() {
                 <StrategyCard
                   key={cfg.id}
                   config={cfg}
+                  profiles={profiles ?? []}
                   colors={colors}
-                  onEdit={() => openEdit(cfg)}
-                  onDelete={() => handleDelete(cfg)}
+                  onPress={() => openDetail(cfg)}
                 />
               ))}
 
@@ -392,9 +399,9 @@ export default function StrategyScreen() {
               <StrategyCard
                 key={cfg.id}
                 config={cfg}
+                profiles={profiles ?? []}
                 colors={colors}
-                onEdit={() => openEdit(cfg)}
-                onDelete={() => handleDelete(cfg)}
+                onPress={() => openDetail(cfg)}
               />
             ))}
           </>
@@ -460,6 +467,16 @@ export default function StrategyScreen() {
         onClose={() => setGuideVisible(false)}
         colors={colors}
       />
+
+      <StrategyDetailModal
+        visible={detailVisible}
+        config={detailConfig}
+        profiles={profiles ?? []}
+        colors={colors}
+        onClose={() => setDetailVisible(false)}
+        onEdit={() => detailConfig && openEdit(detailConfig)}
+        onDelete={() => detailConfig && handleDelete(detailConfig)}
+      />
     </SafeAreaView>
   );
 }
@@ -468,17 +485,19 @@ export default function StrategyScreen() {
 
 interface StrategyCardProps {
   config: StrategyConfig;
+  profiles: StrategyProfile[];
   colors: any;
-  onEdit: () => void;
-  onDelete: () => void;
+  onPress: () => void;
 }
 
-function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
+function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) {
   const mode         = getMode(config);
   const modeMeta     = MODE_META[mode];
   const profileColor = PROFILE_COLORS[config.profile] ?? colors.accent;
   const activeDays   = config.trade_days ?? [];
   const hasPosition  = config.has_position === true;
+  const qtyContracts = config.custom_thresholds?.qty_contracts
+    ?? profiles.find(p => p.key === config.profile)?.thresholds.qty_contracts;
 
   const queryClient = useQueryClient();
   const onPositionClosed = useCallback(() => {
@@ -504,7 +523,11 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
     : colors.tabBarInactive;
 
   return (
-    <View style={[styles.stratCard, { backgroundColor: colors.card, borderColor: hasPosition ? profileColor + '55' : colors.border }]}>
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.85}
+      style={[styles.stratCard, { backgroundColor: colors.card, borderColor: hasPosition ? profileColor + '55' : colors.border }]}
+    >
       {/* Left accent bar — brighter when position is live */}
       <View style={[styles.stratAccent, { backgroundColor: profileColor, opacity: hasPosition ? 1 : 0.5 }]} />
 
@@ -530,6 +553,21 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
           <MetaChip label={config.profile.replace('_', ' ')} color={profileColor} />
           <MetaChip label={activeDays.map(d => DAY_LABELS[d]).join('/')} color={colors.tabBarInactive} />
           {config.bypass_breakout_window && <MetaChip label="No Window" color="#FF9F0A" />}
+        </View>
+
+        {/* Row 3: contracts + confirm-entry + flow-gate flags */}
+        <View style={styles.stratMeta}>
+          {qtyContracts != null && (
+            <MetaChip label={`${qtyContracts} contract${qtyContracts === 1 ? '' : 's'}`} color={colors.tabBarInactive} />
+          )}
+          <MetaChip
+            label={config.confirm_entry ? 'Confirm Entry' : 'Auto Entry'}
+            color={config.confirm_entry ? '#30D158' : colors.tabBarInactive}
+          />
+          <MetaChip
+            label={config.flow_gate_enabled ? 'Flow Gate On' : 'Flow Gate Off'}
+            color={config.flow_gate_enabled ? '#5856D6' : colors.tabBarInactive}
+          />
         </View>
 
         {config.capital_limit != null && (
@@ -650,18 +688,6 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
         )}
       </View>
 
-      {/* Actions — editing/deleting the strategy config is blocked while a trade is live */}
-      {!hasPosition && (
-        <View style={styles.stratActions}>
-          <TouchableOpacity onPress={onEdit} hitSlop={8} style={styles.actionBtn}>
-            <Ionicons name="pencil-outline" size={18} color={colors.accent} />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={onDelete} hitSlop={8} style={styles.actionBtn}>
-            <Ionicons name="trash-outline" size={18} color={colors.error} />
-          </TouchableOpacity>
-        </View>
-      )}
-
       <ExitTradeModal
         visible={exitOpen}
         colors={colors}
@@ -672,7 +698,7 @@ function StrategyCard({ config, colors, onEdit, onDelete }: StrategyCardProps) {
         paperMode={config.paper_mode}
         onClose={() => setExitOpen(false)}
       />
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -844,7 +870,9 @@ function CompletedTradeCard({ trade, colors }: { trade: ORBTrade; colors: any })
   const isImmediate = trade.trade_type === 'IMMEDIATE';
 
   const exitTime = trade.exit_time
-    ? new Date(trade.exit_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    ? new Date(trade.exit_time).toLocaleTimeString('en-US', {
+        timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true,
+      })
     : null;
 
   return (

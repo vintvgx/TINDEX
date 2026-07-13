@@ -262,9 +262,31 @@ class ReviewGenerator:
             return f"{prefix}{v:{fmt}}"
         return str(v)
 
+    @staticmethod
+    def _fmt_et_time(iso_str: str | None) -> str:
+        """
+        Convert a Supabase timestamptz (stored/returned as UTC, e.g.
+        "2026-07-09T14:39:30.585771+00:00") to a 12-hour Eastern time for the
+        review — e.g. "10:39 AM ET". Previously these were fed into the Claude
+        prompt as raw UTC strings sliced to "HH:MM:SS" with no timezone
+        conversion or 12-hour formatting, so the review displayed times both
+        in the wrong timezone (UTC, ~4-5h ahead of ET) and in 24-hour format —
+        left entirely to Claude to guess/convert on its own instead of being
+        computed deterministically here.
+        """
+        if not iso_str:
+            return "n/a"
+        try:
+            dt = datetime.fromisoformat(iso_str)
+            if dt.tzinfo is None:
+                dt = pytz.utc.localize(dt)
+            return dt.astimezone(ET).strftime("%-I:%M %p ET")
+        except (ValueError, TypeError):
+            return iso_str
+
     def _fmt_trade(self, idx: int, t: dict) -> str:
-        entry_t    = (t.get("entry_time") or "")[:19].replace("T", " ")
-        exit_t     = (t.get("exit_time")  or "")[:19].replace("T", " ")
+        entry_t    = self._fmt_et_time(t.get("entry_time"))
+        exit_t     = self._fmt_et_time(t.get("exit_time"))
         entry_p    = t.get("entry_premium") or 0.0
         exit_p     = t.get("exit_premium")
         pnl        = t.get("pnl") or 0.0

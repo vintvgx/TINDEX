@@ -11,7 +11,7 @@ interface ProfileGuideModalProps {
   colors: any;
 }
 
-const PROFILES: ProfileGuide[] = [
+export const PROFILES: ProfileGuide[] = [
   {
     key: 'BULL_DOG',
     emoji: '🐂',
@@ -243,7 +243,7 @@ const PROFILES: ProfileGuide[] = [
   },
 ];
 
-interface ProfileGuide {
+export interface ProfileGuide {
   key: string;
   emoji: string;
   name: string;
