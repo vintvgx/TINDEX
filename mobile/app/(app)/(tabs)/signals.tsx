@@ -12,7 +12,14 @@ import { SignalCard } from '@/common/components/social/SignalCard';
 import { SignalEnterSheet } from '@/common/components/social/SignalEnterSheet';
 import type { SocialSignalContract } from '@/common/types/social';
 
-export default function SignalsScreen() {
+interface Props {
+  /** True when rendered as a SegmentedPager scene (ORB tab, between Strategy
+   *  and Trade Log) — hides the back arrow and redundant title (the segment
+   *  pill above already names it), matching StrategyScreen/TradeLogScreen. */
+  embedded?: boolean;
+}
+
+export default function SignalsScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
   const [refreshing, setRefreshing] = useState(false);
   const [enterContract, setEnterContract] = useState<SocialSignalContract | null>(null);
@@ -24,22 +31,31 @@ export default function SignalsScreen() {
   const trackingCards = (contracts ?? []).filter(c => c.status === 'tracking');
 
   const handleRefresh = async () => {
+    console.log('[SignalsScreen] pull-to-refresh: start');
     setRefreshing(true);
-    try { await refetch(); } finally { setRefreshing(false); }
+    try {
+      const result = await refetch();
+      console.log('[SignalsScreen] pull-to-refresh: done',
+        result.isError ? `error=${result.error}` : `rows=${result.data?.length ?? 0}`);
+    } catch (e) {
+      console.error('[SignalsScreen] pull-to-refresh: threw', e);
+    } finally {
+      setRefreshing(false);
+      console.log('[SignalsScreen] pull-to-refresh: refreshing=false');
+    }
   };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
-          <Ionicons name="arrow-back" size={22} color={colors.text} />
-        </TouchableOpacity>
-        <Text style={[styles.title, { color: colors.text }]}>Signals</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: connected ? colors.success : colors.tabBarInactive }} />
-          <Text style={{ color: colors.tabBarInactive, fontSize: 11 }}>{connected ? 'Live' : 'Offline'}</Text>
+      {!embedded && (
+        <View style={[styles.header, { borderBottomColor: colors.border }]}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
+            <Ionicons name="arrow-back" size={22} color={colors.text} />
+          </TouchableOpacity>
+          <Text style={[styles.title, { color: colors.text }]}>Signals</Text>
+          <View style={{ width: 22 }} />
         </View>
-      </View>
+      )}
 
       <ScrollView
         contentContainerStyle={styles.content}
@@ -50,9 +66,15 @@ export default function SignalsScreen() {
         <FollowedAccountsSection colors={colors} />
 
         <View>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>
-            Tracked Contracts {trackingCards.length > 0 ? `(${trackingCards.length})` : ''}
-          </Text>
+          <View style={styles.sectionTitleRow}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>
+              Tracked Contracts {trackingCards.length > 0 ? `(${trackingCards.length})` : ''}
+            </Text>
+            <View style={styles.liveDotRow}>
+              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: connected ? colors.success : colors.tabBarInactive }} />
+              <Text style={{ color: colors.tabBarInactive, fontSize: 11 }}>{connected ? 'Live' : 'Offline'}</Text>
+            </View>
+          </View>
 
           {isLoading ? (
             <ActivityIndicator color={colors.accent} style={{ marginTop: 24 }} />
@@ -97,7 +119,9 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   title: { fontSize: 20, fontWeight: '700' },
   content: { padding: 16, gap: 20 },
-  sectionTitle: { fontSize: 15, fontWeight: '700', marginBottom: 12 },
+  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  sectionTitle: { fontSize: 15, fontWeight: '700' },
+  liveDotRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   emptyWrap: { alignItems: 'center', paddingVertical: 32, gap: 10, paddingHorizontal: 24 },
   emptyText: { fontSize: 13, textAlign: 'center', lineHeight: 19 },
 });

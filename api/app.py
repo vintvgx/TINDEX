@@ -242,11 +242,24 @@ try:
             return _cb
 
         def _resync_loop():
-            from services.supabase.supabase_service import get_supabase_service as _get_sb
+            # Dedicated client, NOT the shared get_supabase_service() singleton —
+            # this loop runs every 30s for the entire lifetime of the WS
+            # connection (which can be minutes/hours), and sharing the one
+            # process-wide client with every HTTP route risked exactly the
+            # kind of connection-pool contention that made GET /social-signals/
+            # contracts hang indefinitely (2026-07 incident). Each background
+            # loop in this codebase (SignalIngestService, OptionsContractMonitorService)
+            # already follows this same "create your own client" convention —
+            # this loop was the one exception, now fixed.
+            import os as _os
+            from supabase import create_client as _create_client
+            _sb = _create_client(_os.getenv("SUPABASE_URL"), _os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
+
             while not stop_event.is_set():
+                t0 = _time.time()
                 try:
                     rows = (
-                        _get_sb().client.table("tracked_options_contracts")
+                        _sb.table("tracked_options_contracts")
                         .select("contract_symbol")
                         .eq("status", "tracking")
                         .eq("tracked_from_source", "social_signal")
@@ -261,8 +274,12 @@ try:
 
                     for symbol in list(subscribed.keys() - live_symbols):
                         _option_stream_manager.unsubscribe(symbol, subscribed.pop(symbol))
+
+                    logger.info("[WS/social-signals] resync ok — %d tracked, %.2fs",
+                                len(live_symbols), _time.time() - t0)
                 except Exception as exc:
-                    logger.debug("[WS/social-signals] resync error: %s", exc)
+                    logger.warning("[WS/social-signals] resync error after %.2fs: %s",
+                                   _time.time() - t0, exc)
                 stop_event.wait(30)
 
         resync_thread = threading.Thread(target=_resync_loop, daemon=True)

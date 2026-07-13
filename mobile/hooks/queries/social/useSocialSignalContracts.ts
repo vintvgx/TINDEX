@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
+import { loggedFetch } from '@/lib/loggedFetch';
 import type { SocialSignalContract } from '@/common/types/social';
 
 /** Durable fallback for card data (entry price, status, tweet attribution) —
@@ -9,8 +10,8 @@ export function useSocialSignalContracts() {
   return useQuery<SocialSignalContract[]>({
     queryKey: ['social-signal-contracts'],
     queryFn: async () => {
-      const res = await fetch(`${RAILWAY_BASE_URL}/social-signals/contracts`);
-      if (!res.ok) throw new Error('Failed to fetch tracked contracts');
+      const res = await loggedFetch(`${RAILWAY_BASE_URL}/social-signals/contracts`);
+      if (!res.ok) throw new Error(`Failed to fetch tracked contracts (${res.status})`);
       const json = await res.json();
       if (!json.success) throw new Error(json.error ?? 'Failed to fetch tracked contracts');
       return json.data as SocialSignalContract[];

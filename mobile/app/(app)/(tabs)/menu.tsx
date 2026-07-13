@@ -24,8 +24,9 @@ interface NavSection {
 }
 
 // Home, ORB Monitor, Contracts, Accounts, Strategy Control, Live Position,
-// Trade Log, and Daily Review moved into the Home/ORB/Accounts bottom tabs +
-// their swipeable segments — this list is only what's NOT reachable that way.
+// Signals, Trade Log, and Daily Review moved into the Home/ORB/Accounts
+// bottom tabs + their swipeable segments — this list is only what's NOT
+// reachable that way.
 const SECTIONS: NavSection[] = [
   {
     title: 'Menu',
@@ -46,7 +47,6 @@ const SECTIONS: NavSection[] = [
     title: 'ORB Trading',
     items: [
       { label: '0DTE Watchlist', route: '/(app)/(tabs)/zero_dte_watchlist' },
-      { label: 'Signals', route: '/(app)/(tabs)/signals' },
     ],
   },
   {

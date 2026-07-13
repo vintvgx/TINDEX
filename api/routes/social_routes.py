@@ -11,8 +11,10 @@ call, until this has a track record (same reasoning as the removed v1 scraper).
 """
 
 import asyncio
+import functools
 import os
 import threading
+import time
 
 from flask import Blueprint, jsonify, request
 
@@ -26,6 +28,32 @@ from services.supabase.supabase_service import get_supabase_service
 
 logger = get_logger(__name__)
 
+
+def _logged_route(fn):
+    """
+    Logs entry (method, path, args) and exit (status/duration, or exception +
+    duration) for every social-signals route. Added specifically so a hang
+    (request received but response never sent — e.g. the 2026-07 incident
+    where GET /social-signals/contracts hung indefinitely) is visible in
+    Railway logs as "IN" with no matching "OUT", rather than being invisible.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        t0 = time.time()
+        logger.info("[social-signals] IN  %s %s args=%s", request.method, request.path, kwargs or "")
+        try:
+            result = fn(*args, **kwargs)
+            status = result[1] if isinstance(result, tuple) else 200
+            logger.info("[social-signals] OUT %s %s status=%s %.3fs",
+                        request.method, request.path, status, time.time() - t0)
+            return result
+        except Exception:
+            logger.error("[social-signals] ERR %s %s after %.3fs",
+                         request.method, request.path, time.time() - t0, exc_info=True)
+            raise
+    return wrapper
+
+
 bp = Blueprint("social", __name__)
 
 INGEST_SERVICE = None
@@ -36,6 +64,7 @@ ingest_lock = threading.Lock()
 # ── Ingest service lifecycle ─────────────────────────────────────────────────
 
 @bp.route("/social-signals/start", methods=["POST"])
+@_logged_route
 def start_signal_ingest():
     global INGEST_SERVICE, INGEST_TASK
 
@@ -61,6 +90,7 @@ def start_signal_ingest():
 
 
 @bp.route("/social-signals/stop", methods=["POST"])
+@_logged_route
 def stop_signal_ingest():
     global INGEST_SERVICE
     with ingest_lock:
@@ -73,6 +103,7 @@ def stop_signal_ingest():
 
 
 @bp.route("/social-signals/status", methods=["GET"])
+@_logged_route
 def signal_ingest_status():
     with ingest_lock:
         running = bool(INGEST_SERVICE and getattr(INGEST_SERVICE, "is_running", False))
@@ -98,6 +129,7 @@ def signal_ingest_status():
 # ── Account follow management ────────────────────────────────────────────────
 
 @bp.route("/social-signals/accounts", methods=["GET"])
+@_logged_route
 def list_accounts():
     try:
         sb = get_supabase_service().client
@@ -115,6 +147,7 @@ def list_accounts():
 
 
 @bp.route("/social-signals/accounts", methods=["POST"])
+@_logged_route
 def follow_account():
     """
     Follow a new X account. Body: { "handle": "OptionsBuffett", "parse_keywords"?: [...] }
@@ -150,6 +183,7 @@ def follow_account():
 
 
 @bp.route("/social-signals/accounts/<account_id>", methods=["PATCH"])
+@_logged_route
 def update_account(account_id: str):
     """Body: { "active"?: bool, "parse_keywords"?: [str, ...] }"""
     body = request.get_json(silent=True) or {}
@@ -173,6 +207,7 @@ def update_account(account_id: str):
 
 
 @bp.route("/social-signals/accounts/<account_id>", methods=["DELETE"])
+@_logged_route
 def unfollow_account(account_id: str):
     try:
         sb = get_supabase_service().client
@@ -186,6 +221,7 @@ def unfollow_account(account_id: str):
 # ── Read endpoints ───────────────────────────────────────────────────────────
 
 @bp.route("/social-signals/tweets", methods=["GET"])
+@_logged_route
 def list_social_signal_tweets():
     limit = min(int(request.args.get("limit", 50)), 200)
     status_filter = request.args.get("status")
@@ -207,6 +243,7 @@ def list_social_signal_tweets():
 
 
 @bp.route("/social-signals/contracts", methods=["GET"])
+@_logged_route
 def list_social_signal_contracts():
     """tracked_options_contracts rows sourced from social_signal — the
     Signal Cards list the app surfaces to the user."""
@@ -227,6 +264,7 @@ def list_social_signal_contracts():
 
 
 @bp.route("/social-signals/contracts/<contract_id>", methods=["DELETE"])
+@_logged_route
 def remove_social_signal_contract(contract_id: str):
     """User removes a card — mirrors 'cancelled' rather than deleting the
     row outright, matching tracked_options_contracts' existing lifecycle."""
@@ -246,6 +284,7 @@ def remove_social_signal_contract(contract_id: str):
 # ── X API spend estimate ─────────────────────────────────────────────────────
 
 @bp.route("/social-signals/usage", methods=["GET"])
+@_logged_route
 def get_usage_estimate():
     """
     Self-tracked spend estimate — X has no public endpoint for the actual $

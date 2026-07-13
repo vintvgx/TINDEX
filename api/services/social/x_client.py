@@ -13,6 +13,7 @@ calls of its own.
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -75,11 +76,15 @@ class XApiClient:
         """Resolve @handle -> numeric X user id. One-time per followed account —
         callers should cache the result (social_signal_accounts.x_user_id)."""
         handle = handle.lstrip("@")
+        t0 = time.time()
+        logger.info("[XApiClient] IN  lookup_user_id handle=@%s", handle)
         resp = requests.get(
             f"{X_API_BASE}/users/by/username/{handle}",
             headers=self._headers(),
             timeout=_REQUEST_TIMEOUT,
         )
+        logger.info("[XApiClient] OUT lookup_user_id handle=@%s status=%s %.3fs",
+                    handle, resp.status_code, time.time() - t0)
         if resp.status_code == 401:
             raise XApiAuthError(f"X API rejected the bearer token (401): {resp.text[:200]}")
         if resp.status_code == 404:
@@ -109,12 +114,15 @@ class XApiClient:
         if since_id:
             params["since_id"] = since_id
 
+        t0 = time.time()
+        logger.info("[XApiClient] IN  search_recent query=%r since_id=%s", query, since_id)
         resp = requests.get(
             f"{X_API_BASE}/tweets/search/recent",
             headers=self._headers(),
             params=params,
             timeout=_REQUEST_TIMEOUT,
         )
+        logger.info("[XApiClient] OUT search_recent status=%s %.3fs", resp.status_code, time.time() - t0)
         if resp.status_code == 401:
             raise XApiAuthError(f"X API rejected the bearer token (401): {resp.text[:200]}")
         if resp.status_code == 429:
@@ -123,6 +131,7 @@ class XApiClient:
 
         body = resp.json()
         rows = body.get("data", []) or []
+        logger.info("[XApiClient] search_recent returned %d tweet(s)", len(rows))
         self._log_usage("posts_read", len(rows), COST_POSTS_READ)
 
         tweets = [
