@@ -30,6 +30,36 @@ def log_response_info(response):
 from services.websocket.price_stream_service import price_stream
 price_stream.start()
 
+from services.websocket.social_signals_stream import social_signals_stream
+social_signals_stream.start()
+
+
+@sock.route("/ws/social-signals/live")
+def ws_social_signals_live(ws):
+    """
+    Live mid-price ticks for every currently-tracked social-signal contract —
+    one shared connection per client, fanned out from social_signals_stream's
+    single background broadcast loop (see that module's docstring for why
+    this isn't one poll-loop-per-connection, and why this route is registered
+    here at module scope rather than nested inside the ORB engine's
+    try/except below — a failure initialising ORB engines must never be able
+    to silently take the social-signals stream down with it).
+    """
+    import queue as _queue
+
+    client_q = social_signals_stream.add_client()
+    try:
+        while True:
+            try:
+                msg = client_q.get(timeout=30)
+                ws.send(msg)
+            except _queue.Empty:
+                ws.send(json.dumps({"type": "ping"}))
+    except Exception as exc:
+        logger.debug("[WS/social-signals] connection ended: %s", exc)
+    finally:
+        social_signals_stream.remove_client(client_q)
+
 
 # ── Blueprints ─────────────────────────────────────────────────────────────────
 
@@ -206,98 +236,6 @@ try:
             with engine._live_clients_lock:
                 if client_q in engine._live_clients:
                     engine._live_clients.remove(client_q)
-
-    @sock.route("/ws/social-signals/live")
-    def ws_social_signals_live(ws):
-        """
-        Live mid-price ticks for every currently-tracked social-signal
-        contract (tracked_options_contracts, status='tracking', source=
-        'social_signal') — one shared connection multiplexing all of them,
-        not one WS per card. Reuses the same OptionStreamManager instance the
-        ORB engines stream through — no second connection to Alpaca.
-
-        Resync (picking up newly-tracked/entered/removed contracts) is a
-        30s poll against tracked_options_contracts for the lifetime of this
-        connection — simple and self-contained; see
-        docs/features/social-signal-contracts.md §7's noted open question on
-        push-based resync as a possible later optimization.
-        """
-        import queue as _queue
-        import time as _time
-
-        client_q: "_queue.Queue" = _queue.Queue(maxsize=100)
-        subscribed: dict[str, "callable"] = {}  # contract_symbol -> callback
-        stop_event = threading.Event()
-
-        def _make_callback(symbol: str):
-            def _cb(mid_price: float):
-                try:
-                    client_q.put_nowait(json.dumps({
-                        "type": "price_update",
-                        "contract_symbol": symbol,
-                        "mid_price": round(mid_price, 4),
-                    }))
-                except _queue.Full:
-                    pass
-            return _cb
-
-        def _resync_loop():
-            # Dedicated client, NOT the shared get_supabase_service() singleton —
-            # this loop runs every 30s for the entire lifetime of the WS
-            # connection (which can be minutes/hours), and sharing the one
-            # process-wide client with every HTTP route risked exactly the
-            # kind of connection-pool contention that made GET /social-signals/
-            # contracts hang indefinitely (2026-07 incident). Each background
-            # loop in this codebase (SignalIngestService, OptionsContractMonitorService)
-            # already follows this same "create your own client" convention —
-            # this loop was the one exception, now fixed.
-            import os as _os
-            from supabase import create_client as _create_client
-            _sb = _create_client(_os.getenv("SUPABASE_URL"), _os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
-
-            while not stop_event.is_set():
-                t0 = _time.time()
-                try:
-                    rows = (
-                        _sb.table("tracked_options_contracts")
-                        .select("contract_symbol")
-                        .eq("status", "tracking")
-                        .eq("tracked_from_source", "social_signal")
-                        .execute().data or []
-                    )
-                    live_symbols = {r["contract_symbol"] for r in rows}
-
-                    for symbol in live_symbols - subscribed.keys():
-                        cb = _make_callback(symbol)
-                        subscribed[symbol] = cb
-                        _option_stream_manager.subscribe(symbol, cb)
-
-                    for symbol in list(subscribed.keys() - live_symbols):
-                        _option_stream_manager.unsubscribe(symbol, subscribed.pop(symbol))
-
-                    logger.info("[WS/social-signals] resync ok — %d tracked, %.2fs",
-                                len(live_symbols), _time.time() - t0)
-                except Exception as exc:
-                    logger.warning("[WS/social-signals] resync error after %.2fs: %s",
-                                   _time.time() - t0, exc)
-                stop_event.wait(30)
-
-        resync_thread = threading.Thread(target=_resync_loop, daemon=True)
-        resync_thread.start()
-
-        try:
-            while True:
-                try:
-                    msg = client_q.get(timeout=30)
-                    ws.send(msg)
-                except _queue.Empty:
-                    ws.send(json.dumps({"type": "ping"}))
-        except Exception as exc:
-            logger.debug("[WS/social-signals] client disconnected: %s", exc)
-        finally:
-            stop_event.set()
-            for symbol, cb in subscribed.items():
-                _option_stream_manager.unsubscribe(symbol, cb)
 
 except Exception as _strategy_init_err:
     logger.warning("[App] ORB strategy engine init failed (non-fatal): %s", _strategy_init_err)

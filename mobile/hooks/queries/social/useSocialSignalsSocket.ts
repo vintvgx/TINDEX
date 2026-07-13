@@ -28,16 +28,22 @@ export function useSocialSignalsSocket(enabled: boolean = true) {
     if (!mountedRef.current) return;
 
     shouldReconnectRef.current = true;
+    const connectStartedAt = Date.now();
+    console.log(`[SocialSignalsWS] connecting → ${wsUrl} (attempt ${attemptsRef.current})`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     if (openTimer.current) clearTimeout(openTimer.current);
     openTimer.current = setTimeout(() => {
-      if (mountedRef.current && ws.readyState !== WebSocket.OPEN) ws.close();
+      if (mountedRef.current && ws.readyState !== WebSocket.OPEN) {
+        console.warn('[SocialSignalsWS] handshake did not complete within 8s — closing to retry');
+        ws.close();
+      }
     }, 8000);
 
     ws.onopen = () => {
       if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
+      console.log(`[SocialSignalsWS] open (${Date.now() - connectStartedAt}ms to connect)`);
       attemptsRef.current = 0;
       if (mountedRef.current) setConnected(true);
     };
@@ -54,19 +60,23 @@ export function useSocialSignalsSocket(enabled: boolean = true) {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
+      const uptimeMs = Date.now() - connectStartedAt;
+      console.warn(`[SocialSignalsWS] closed after ${uptimeMs}ms — code=${event.code} reason=${event.reason || '(none)'} wasClean=${event.wasClean}`);
       if (!mountedRef.current) return;
       setConnected(false);
       if (!shouldReconnectRef.current || !enabled) return;
       const delay = Math.min(2000 * 1.6 ** attemptsRef.current, 20000);
       attemptsRef.current += 1;
+      console.log(`[SocialSignalsWS] reconnecting in ${delay}ms`);
       reconnectTimer.current = setTimeout(() => {
         if (mountedRef.current && enabled && shouldReconnectRef.current) connect();
       }, delay);
     };
 
-    ws.onerror = () => {
+    ws.onerror = (event) => {
+      console.error('[SocialSignalsWS] error event', event);
       ws.close();
     };
   }, [wsUrl, enabled]);
