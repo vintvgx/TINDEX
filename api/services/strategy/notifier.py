@@ -102,6 +102,26 @@ class StrategyNotifier:
             priority=P_MARKET,
         )
 
+    def notify_position_recovered(self, ticker: str, contract_symbol: str, direction: str,
+                                   qty: int, entry_premium: float):
+        """
+        A restart happened while this position was open, and its exit
+        management (stop-loss/TP monitoring) has just been reattached —
+        added after a restart on 2026-07-13 silently dropped an open IWM put
+        with no notification at all, leaving it unmonitored until the user
+        noticed and closed it manually through Alpaca directly. This fires
+        at P_TRADE_ENTRY priority specifically so it's impossible to miss —
+        confirms the position is visible and protected again, not just that
+        something recovered somewhere.
+        """
+        readable = _fmt_contract(contract_symbol)
+        self._dispatch(
+            title=f"🔄 {readable} — position recovered",
+            body=f"{direction} qty={qty} @ ${entry_premium:.2f} — stop-loss monitoring resumed after restart.",
+            data={"screen": "position", "symbol": contract_symbol},
+            priority=P_TRADE_ENTRY,
+        )
+
     def notify_start(self, provider: str):
         """ORB service and strategy engine confirmed running."""
         self._dispatch(

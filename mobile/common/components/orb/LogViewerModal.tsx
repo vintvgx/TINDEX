@@ -8,7 +8,7 @@ import {
   StatusBar,
   TextInput,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { logService, LogEntry } from '@/common/services/LogService';
 
@@ -77,15 +77,22 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
   const [isAtBottom, setIsAtBottom] = useState(true);
   const previousLogCountRef = useRef(0);
   const hasScrolledOnOpen = useRef(false);
+  const insets = useSafeAreaInsets();
 
   // Refresh logs periodically and on mount
   useEffect(() => {
     if (!visible) return;
 
+    // Proof-of-life: guarantees at least one entry every time the modal is
+    // opened, so "No logs yet" is only ever shown when the console-capture
+    // pipeline (LogService's console.* overrides) genuinely isn't receiving
+    // anything — not because the modal itself failed to read logService.
+    console.info('[LogViewerModal] opened at', new Date().toISOString());
+
     const updateLogs = async () => {
       // Ensure logs are loaded from file
       await logService.waitForInitialization();
-      
+
       const allLogs = logService.getLogs();
       setLogs((prevLogs) => {
         // Track if new logs were added
@@ -179,8 +186,19 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
       presentationStyle="fullScreen"
       onRequestClose={onClose}
     >
-      <SafeAreaView className="flex-1 bg-black">
+      <View style={{ flex: 1, backgroundColor: '#000', paddingTop: insets.top, paddingBottom: insets.bottom }}>
         <StatusBar barStyle="light-content" />
+
+        {/*
+          Deliberately NOT relying on <SafeAreaView> here — a Modal with
+          presentationStyle="fullScreen" is presented in its own native view
+          hierarchy on iOS, and the automatic SafeAreaView (even the
+          react-native-safe-area-context one) has been confirmed to still
+          render its top edge under the status bar/notch in this Modal
+          specifically. Reading insets directly via useSafeAreaInsets() and
+          applying them as explicit padding sidesteps whatever's making the
+          automatic component unreliable here.
+        */}
 
         {/* Header */}
         <View className="px-6 py-4 border-b border-gray-800 flex-row items-center justify-between">
@@ -351,7 +369,7 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
             ))
           )}
         </ScrollView>
-      </SafeAreaView>
+      </View>
     </Modal>
   );
 };

@@ -15,6 +15,7 @@ import functools
 import os
 import threading
 import time
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
@@ -60,6 +61,12 @@ INGEST_SERVICE = None
 INGEST_TASK = None
 ingest_lock = threading.Lock()
 
+# "Live since" for the admin status screen — same pattern as monitoring_
+# routes.py's SERVICE_LIVE_SINCE, kept local since this service is
+# deliberately not wired into that module's SERVICE_REGISTRY (see module
+# docstring).
+_INGEST_LIVE_SINCE: str | None = None
+
 
 # ── Ingest service lifecycle ─────────────────────────────────────────────────
 
@@ -85,6 +92,8 @@ def start_signal_ingest():
 
     INGEST_TASK = threading.Thread(target=run, daemon=True)
     INGEST_TASK.start()
+    global _INGEST_LIVE_SINCE
+    _INGEST_LIVE_SINCE = datetime.now(timezone.utc).isoformat()
 
     return jsonify({"success": True, "message": "Social signal ingest started"})
 
@@ -92,12 +101,13 @@ def start_signal_ingest():
 @bp.route("/social-signals/stop", methods=["POST"])
 @_logged_route
 def stop_signal_ingest():
-    global INGEST_SERVICE
+    global INGEST_SERVICE, _INGEST_LIVE_SINCE
     with ingest_lock:
         if INGEST_SERVICE and INGEST_SERVICE.is_running:
             asyncio.run(INGEST_SERVICE.stop())
             reset_signal_ingest_service()
             INGEST_SERVICE = None
+            _INGEST_LIVE_SINCE = None
             return jsonify({"success": True, "message": "Social signal ingest stopped"})
     return jsonify({"message": "Social signal ingest not running"})
 
@@ -121,6 +131,8 @@ def signal_ingest_status():
         accounts, has_token = [], None
     return jsonify({
         "running": running,
+        "live_since": _INGEST_LIVE_SINCE if running else None,
+        "toggle": True,
         "has_bearer_token": has_token,
         "accounts": accounts,
     })

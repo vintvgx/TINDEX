@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator, LayoutAnimation, Platform, UIManager } from 'react-native';
+import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -9,10 +9,12 @@ import { useStrategyStats, useStrategyStatsByProfile, useStrategyPerformance } f
 import { useStrategyDebugLogs } from '@/hooks/queries/strategy/useStrategyDebugLogs';
 import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
 import { useAlpacaAccountsHistory } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { useReconcileTrades } from '@/hooks/mutations/strategy/useReconcileTrades';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { useQuery } from '@tanstack/react-query';
 import type { ProfileKey, ORBTrade, StrategyStats, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel, TradeType, ExitStage } from '@/common/types/strategy';
 import { formatContractSymbol } from '@/lib/formatContract';
+import { useToast } from '@/common/components/ui/Toast';
 
 const TODAY = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
 
@@ -95,11 +97,13 @@ interface Props {
 
 export default function TradeLogScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
+  const toast = useToast();
   const [filter, setFilter]         = useState<Filter>('ALL');
   const [dateFilter, setDateFilter] = useState<DateFilter>('ALL');
   const [tab, setTab]               = useState<Tab>('log');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [mode, setMode]             = useState<AccountMode>('live');
+  const [refreshing, setRefreshing] = useState(false);
 
   const tradeDate = dateFilter === 'TODAY' ? TODAY : null;
   const wantPaper = mode === 'paper';
@@ -113,6 +117,32 @@ export default function TradeLogScreen({ embedded = false }: Props) {
   const { data: skipped }                           = useSkippedSessions();
   const { data: sessionStates }                     = useStrategySessionState();
   const { data: acctHistory }                       = useAlpacaAccountsHistory();
+  const reconcileTrades                             = useReconcileTrades();
+
+  // Pull-to-refresh doesn't just refetch — it cross-references every still-
+  // open trade against Alpaca's real position state first, so a position
+  // closed directly on Alpaca (bypassing this app) gets its exit data filled
+  // in instead of sitting "open" forever with no P/L. See
+  // docs/incidents/2026-07-14-position-lost-on-restart.md.
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const result = await reconcileTrades.mutateAsync();
+      if (result.mismatches.length > 0) {
+        toast.error(
+          `${result.mismatches.length} trade(s) marked closed but still open at the broker — check manually`,
+        );
+      } else if (result.reconciled.length > 0) {
+        toast.info(`Reconciled ${result.reconciled.length} trade(s) from Alpaca`);
+      } else if (result.errors.length > 0) {
+        toast.error(`${result.errors.length} trade(s) failed to reconcile`);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Reconcile failed');
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // Trades don't carry which account they trace back to except via
   // `paper_mode` — split here so the toggle mirrors position.tsx/strategy.tsx.
@@ -182,7 +212,13 @@ export default function TradeLogScreen({ embedded = false }: Props) {
       {tab === 'debug' ? (
         <DebugLogPanel colors={colors} />
       ) : (
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.accent} />
+        }
+      >
 
         {/* Date + Profile filter row */}
         <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 12 }}>
@@ -304,6 +340,8 @@ const EXIT_REASON_LABELS: Record<string, string> = {
   FORCE_CLOSE:       'Force Closed',
   MANUAL_EXIT:         'Manual Exit',
   REVERSAL_TIME_CUT:   'Reversal Bleed Stop (20m)',
+  'RECONCILED FROM ALPACA':         'Exit Reason: Reconciled from Alpaca',
+  'UNKNOWN — RECONCILED FROM ALPACA': 'Exit Reason: Unknown — pulled from Alpaca',
 };
 
 const fmtEt = (iso: string): string => {

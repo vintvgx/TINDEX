@@ -174,6 +174,21 @@ try:
     init_strategy_routes(_strategy_engines, stream_manager=_option_stream_manager)
     logger.info("[App] ORB strategy engines initialised (%d configs)", len(_strategy_engines))
 
+    # Reattach exit management to any position still open at the broker —
+    # unconditional, every boot, regardless of time of day. Before this, a
+    # restart mid-position silently dropped it from both display and stop-
+    # loss/TP monitoring while the real Alpaca position sat untouched — that
+    # cost real money on 2026-07-13. See
+    # docs/incidents/2026-07-14-position-lost-on-restart.md. Not wrapped in
+    # its own try/except beyond what recover_open_positions() already does
+    # internally per-row — a failure recovering one position must never
+    # silently skip the rest.
+    try:
+        from routes.strategy_routes import recover_open_positions as _recover_positions
+        _recover_positions()
+    except Exception as _recover_err:
+        logger.error("[App] Position recovery failed: %s", _recover_err, exc_info=True)
+
     # Schedule the 4:15 PM ET daily review at startup so it survives Railway restarts.
     # Previously this was only registered inside /tindex/orb/start — meaning a mid-day
     # server restart would silently drop the job and produce no review that day.

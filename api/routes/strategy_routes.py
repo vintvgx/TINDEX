@@ -8,7 +8,7 @@ operate on the first engine for backwards compatibility with old clients.
 
 import logging
 import concurrent.futures
-from datetime import datetime
+from datetime import date, datetime
 
 from flask import Blueprint, jsonify, request
 from services.strategy.trade_logger import TradeLogger
@@ -125,6 +125,217 @@ def _get_or_create_immediate_engine(ticker: str, paper_mode: bool) -> ORBEngine:
         schedule_eod_close(eng)                # EOD backstop so 0DTE positions flatten
         logger.info("[strategy] Created immediate engine %s", key)
     return eng
+
+
+def recover_open_positions():
+    """
+    Scan for any position still open at the broker (orb_trades with no
+    exit_time) and reattach exit management to it — called once at boot,
+    after init_routes() so _engines/_stream_manager are ready.
+
+    Before this existed, every ORBEngine/ExitManager was pure in-memory
+    state with no way to reconstruct itself: a restart mid-position (a
+    redeploy, a crash, anything) silently wiped out both the "is this
+    position even displayed" state AND the "is anything watching this
+    position's stop-loss" state, while the real position sat untouched at
+    the broker. That's what happened on 2026-07-13 — an open IWM put with a
+    stop that should have fired never got the chance to, because the engine
+    managing it no longer existed after a restart, and had to be closed
+    manually through Alpaca directly. See
+    docs/incidents/2026-07-14-position-lost-on-restart.md. This function is
+    the fix: nothing here is optional or best-effort — every open position
+    found gets its exit management reattached before this function returns.
+    """
+    rows = logger_svc.get_open_trades()
+    if not rows:
+        logger.info("[strategy] Position recovery: no open positions found")
+        return
+
+    logger.warning("[strategy] Position recovery: %d open position(s) found — reattaching", len(rows))
+    recovered = 0
+    for row in rows:
+        try:
+            strategy_id = row.get("strategy_id")
+            if strategy_id and strategy_id in _engines:
+                engine = _engines[strategy_id]
+            else:
+                # No saved-strategy match (immediate/manual trade, or a
+                # strategy that's since been deleted) — recover it into an
+                # immediate engine keyed the same way a live one would be.
+                engine = _get_or_create_immediate_engine(row["ticker"], bool(row["paper_mode"]))
+
+            if engine.trade_taken:
+                # Engine already has a live position recorded (e.g. it was
+                # created moments ago by this same recovery pass for another
+                # row, or somehow already re-entered) — never clobber it.
+                logger.warning(
+                    "[strategy] Position recovery: engine for %s already has an "
+                    "active trade — skipping row %s to avoid overwriting live state",
+                    row.get("ticker"), row.get("id"),
+                )
+                continue
+
+            if engine.recover_position(row):
+                recovered += 1
+        except Exception as e:
+            logger.error(
+                "[strategy] Position recovery FAILED for %s %s (id=%s): %s — "
+                "this position is still open at the broker but is NOT being "
+                "monitored by this app. Check it manually.",
+                row.get("ticker"), row.get("contract_symbol"), row.get("id"), e,
+                exc_info=True,
+            )
+
+    logger.warning("[strategy] Position recovery complete: %d/%d reattached", recovered, len(rows))
+
+
+def _reconcile_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
+    """
+    Cross-reference one still-open orb_trades row against Alpaca's actual
+    position state for the contract. Handles the case this app has no other
+    way to detect: a position closed directly on Alpaca (bypassing this app
+    entirely), which otherwise leaves the row stuck "open" forever with no
+    exit data, and — worse — leaves engine.exit_manager still armed and
+    evaluating stop/TP against live quotes for a position that no longer
+    exists. See docs/incidents/2026-07-14-position-lost-on-restart.md; this
+    closes the other half of that gap (broker-truth, not just restart-truth).
+    """
+    symbol = row.get("contract_symbol")
+    try:
+        engine.trading_client.get_open_position(symbol)
+        return {"contract_symbol": symbol, "status": "still_open"}
+    except Exception:
+        pass  # not found at the broker -> already closed there
+
+    qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
+    if qty_remaining <= 0:
+        return {"contract_symbol": symbol, "status": "already_closed"}
+
+    exit_price = None
+    exit_reason = "UNKNOWN — RECONCILED FROM ALPACA"
+    try:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus, OrderSide
+
+        orders = engine.trading_client.get_orders(GetOrdersRequest(
+            symbols=[symbol], status=QueryOrderStatus.CLOSED, side=OrderSide.SELL, limit=10,
+        ))
+        filled = [o for o in orders if getattr(o, "filled_avg_price", None) is not None]
+        filled.sort(key=lambda o: o.filled_at or datetime.min, reverse=True)
+        if filled:
+            exit_price = float(filled[0].filled_avg_price)
+            exit_reason = "RECONCILED FROM ALPACA"
+    except Exception as e:
+        logger.warning("[reconcile] order lookup failed for %s: %s", symbol, e)
+
+    # Fall back to entry_premium (pnl=0) when the real fill can't be found —
+    # same convention TradeLogger.reconcile_orphaned_trades already uses for
+    # "we know it closed but not at what price" rather than fabricating a
+    # gain/loss that didn't happen.
+    logger_svc.log_exit(
+        symbol, exit_reason,
+        exit_price if exit_price is not None else row.get("entry_premium"),
+        qty_remaining, row.get("profile"),
+        strategy_id=row.get("strategy_id"), trading_client=engine.trading_client,
+    )
+
+    if engine.contract_symbol == symbol:
+        try:
+            engine.reset_session()
+        except Exception:
+            logger.warning("[reconcile] engine.reset_session() failed for %s", symbol, exc_info=True)
+
+    return {
+        "contract_symbol": symbol,
+        "status": "reconciled",
+        "exit_reason": exit_reason,
+        "exit_premium": exit_price,
+    }
+
+
+def _verify_closed_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
+    """
+    Sanity-check a trade orb_trades already marked closed today: confirm the
+    broker agrees nothing is open for that contract anymore. Unlike
+    _reconcile_trade_with_broker, this never writes anything — a closed row's
+    qty/pnl math can't be safely rewritten after the fact (e.g. a same-day
+    re-entry into the same contract would make "is there an open position for
+    this symbol" ambiguous as to which trade it belongs to). A mismatch here
+    just means "look at this one manually," not "let me fix it for you."
+    """
+    symbol = row.get("contract_symbol")
+    try:
+        engine.trading_client.get_open_position(symbol)
+        return {
+            "contract_symbol": symbol,
+            "status": "mismatch",
+            "detail": "marked closed here but broker still shows an open position for this contract",
+        }
+    except Exception:
+        return {"contract_symbol": symbol, "status": "verified_closed"}
+
+
+def _resolve_engine_for_row(row: dict) -> ORBEngine:
+    strategy_id = row.get("strategy_id")
+    if strategy_id and strategy_id in _engines:
+        return _engines[strategy_id]
+    return _get_or_create_immediate_engine(row["ticker"], bool(row["paper_mode"]))
+
+
+@strategy_bp.route("/trades/reconcile", methods=["POST"])
+def reconcile_trades():
+    """
+    Pull-to-refresh reconciliation for the Trade Log screen.
+
+    Two passes:
+      1. Every orb_trades row still marked open gets cross-referenced against
+         Alpaca's real position state and closed out here if the broker
+         disagrees (_reconcile_trade_with_broker) — covers a position closed
+         directly on Alpaca, bypassing this app entirely.
+      2. Every OTHER trade from today (already marked closed) gets spot-
+         checked the other direction: is the broker still showing an open
+         position for it? That would mean this app's "closed" record is
+         wrong. Read-only — flagged as a mismatch for manual review, never
+         auto-modified (see _verify_closed_trade_with_broker for why).
+    """
+    open_rows = logger_svc.get_open_trades()
+    todays_rows = logger_svc.get_trades(limit=500, trade_date=date.today().isoformat())
+    open_ids = {r["id"] for r in open_rows}
+    closed_today_rows = [r for r in todays_rows if r.get("exit_time") and r["id"] not in open_ids]
+
+    results = []
+    for row in open_rows:
+        try:
+            engine = _resolve_engine_for_row(row)
+            results.append(_reconcile_trade_with_broker(row, engine))
+        except Exception as e:
+            logger.error(
+                "[reconcile] failed for %s (id=%s): %s",
+                row.get("contract_symbol"), row.get("id"), e, exc_info=True,
+            )
+            results.append({"contract_symbol": row.get("contract_symbol"), "status": "error", "error": str(e)})
+
+    verify_results = []
+    for row in closed_today_rows:
+        try:
+            engine = _resolve_engine_for_row(row)
+            verify_results.append(_verify_closed_trade_with_broker(row, engine))
+        except Exception as e:
+            logger.error(
+                "[reconcile] verify failed for %s (id=%s): %s",
+                row.get("contract_symbol"), row.get("id"), e, exc_info=True,
+            )
+            verify_results.append({"contract_symbol": row.get("contract_symbol"), "status": "error", "error": str(e)})
+
+    return jsonify({
+        "success": True,
+        "checked_open": len(open_rows),
+        "checked_closed_today": len(closed_today_rows),
+        "reconciled": [r for r in results if r["status"] == "reconciled"],
+        "still_open": [r for r in results if r["status"] == "still_open"],
+        "mismatches": [r for r in verify_results if r["status"] == "mismatch"],
+        "errors": [r for r in results + verify_results if r["status"] == "error"],
+    })
 
 
 # ── Multi-strategy CRUD ────────────────────────────────────────────────────────

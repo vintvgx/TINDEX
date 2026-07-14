@@ -7,6 +7,7 @@ they are never duplicated across the process.
 
 import asyncio
 import threading
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
@@ -35,6 +36,20 @@ OPTIONS_MONITOR_TASK = None
 orb_lock = threading.Lock()
 options_monitor_lock = threading.Lock()
 
+# "Live since" per service, for the admin status screen — set on a genuine
+# start (not on an "already running" no-op), cleared on stop. A plain dict is
+# fine here: every read/write already happens under the matching service's
+# own lock (orb_lock / options_monitor_lock).
+SERVICE_LIVE_SINCE: dict[str, str] = {}
+
+
+def _mark_live(name: str):
+    SERVICE_LIVE_SINCE[name] = datetime.now(timezone.utc).isoformat()
+
+
+def _mark_stopped(name: str):
+    SERVICE_LIVE_SINCE.pop(name, None)
+
 
 # ── Service factory ──────────────────────────────────────────────────────────
 
@@ -48,17 +63,17 @@ def get_orb_service(provider: str = "alpaca") -> OrbService:
 def start_orb_service(provider: str = "alpaca", debug_mode: bool = False,
                        notify: bool = True) -> dict:
     """
-    Core start logic shared by the /tindex/orb/start route, app.py's boot-time
-    auto-start, and the watchdog's auto-restart (see scheduler.py). A single
-    entry point here means all three can never race each other into creating
-    duplicate OrbService instances/threads — the whole check-then-create
-    sequence is under orb_lock, not just the "already running" read.
+    Core start logic shared by the /tindex/orb/start route and app.py's
+    boot-time auto-start. A single entry point here means the two can never
+    race each other into creating duplicate OrbService instances/threads —
+    the whole check-then-create sequence is under orb_lock, not just the
+    "already running" read.
 
-    notify=False is used by app.py's boot-time auto-start and the watchdog's
-    auto-restart — a silent self-heal (which could fire on any redeploy, not
-    just once a day) should be logged, not re-sent as if it were the normal
-    morning "ORB Service + Engine started" push. Only the explicit
-    /tindex/orb/start route (the 9:20 AM cron, or a manual call) notifies.
+    notify=False is used by app.py's boot-time auto-start — a silent
+    self-heal (which could fire on any redeploy, not just once a day) should
+    be logged, not re-sent as if it were the normal morning "ORB Service +
+    Engine started" push. Only the explicit /tindex/orb/start route (the
+    9:20 AM cron, or a manual call) notifies.
     """
     global ORB_SERVICE, ORB_TASK
     with orb_lock:
@@ -75,6 +90,7 @@ def start_orb_service(provider: str = "alpaca", debug_mode: bool = False,
 
         ORB_TASK = threading.Thread(target=run_orb, daemon=True)
         ORB_TASK.start()
+        _mark_live("orb")
 
     # Ensure strategy engines and review scheduler are live
     try:
@@ -122,6 +138,7 @@ def stop_orb_monitoring():
             if ORB_SERVICE and ORB_SERVICE.is_running:
                 asyncio.run(ORB_SERVICE.stop())
                 ORB_SERVICE = None
+                _mark_stopped("orb")
                 return jsonify({"success": True, "message": "ORB monitoring stopped"})
         return jsonify({"message": "ORB service not running"})
     except Exception as e:
@@ -131,17 +148,15 @@ def stop_orb_monitoring():
 
 # Seconds without a bar (during market hours) before the feed is considered
 # stale rather than just quiet. Bars arrive roughly every 60s per ticker;
-# 180s gives room for an occasional slow tick without false-alarming.
-# Shared with the watchdog (scheduler.py) so the health badge and the
-# auto-restart trigger on the exact same definition of "stale".
+# 180s gives room for an occasional slow tick without false-alarming. Used by
+# the /tindex/orb/status health check (surfaced on the admin status screen) —
+# purely informational now that the auto-restart watchdog has been removed.
 STALE_FEED_THRESHOLD_SEC = 180
 
 
 def get_orb_health() -> dict:
     """
-    Shared by the /tindex/orb/status route and the watchdog (scheduler.py) —
-    a single definition of "healthy" so the UI badge and the auto-restart
-    decision can never disagree with each other.
+    Backing data for /tindex/orb/status and the admin status screen.
 
     is_running=True alone is NOT sufficient — the 2026-07-09 outage showed
     OrbService reporting itself as running (and firing the "started" push)
@@ -150,7 +165,7 @@ def get_orb_health() -> dict:
     """
     with orb_lock:
         if not (ORB_SERVICE and hasattr(ORB_SERVICE, "is_running") and ORB_SERVICE.is_running):
-            return {"running": False, "healthy": False}
+            return {"running": False, "healthy": False, "live_since": None}
 
         from services.utils.orb_data_hub import get_orb_data_hub
         hub = get_orb_data_hub()
@@ -168,6 +183,7 @@ def get_orb_health() -> dict:
             "seconds_since_last_bar": stale_secs,
             "market_hours": market_hours,
             "healthy": not stale,
+            "live_since": SERVICE_LIVE_SINCE.get("orb"),
         }
 
 
@@ -176,64 +192,18 @@ def get_orb_status():
     return jsonify(get_orb_health())
 
 
-def restart_orb_if_unhealthy() -> dict:
-    """
-    Watchdog entry point — call periodically (see the pg_cron sweep migration)
-    to detect and recover from the two failure modes that can leave the hub
-    dark for the rest of a session: never running at all, or (the actual
-    2026-07-09 incident) running with a dead stream underneath it.
-
-    The "running but stale" case needs an explicit stop() first: start_orb_service()
-    early-returns "already running" whenever ORB_SERVICE.is_running is True,
-    which is exactly the state a stale-but-alive service is stuck in — it never
-    crashed at the Python level, it just stopped receiving bars.
-
-    NOTE: this will also restart a service an operator deliberately stopped via
-    POST /tindex/orb/stop for maintenance — there's no separate "intentionally
-    off" flag distinct from "crashed". Acceptable given the sweep interval is a
-    few minutes and a deliberate stop is a rare, actively-watched action; flag
-    this trade-off if that ever changes.
-    """
-    global ORB_SERVICE
-    health = get_orb_health()
-    if health.get("healthy"):
-        return {"action": "none", "health": health}
-
-    was_running_but_stale = health.get("running") is True
-    if was_running_but_stale:
-        logger.warning(
-            "[ORB Watchdog] Feed stale for %.0fs while reporting running=True — force-restarting",
-            health.get("seconds_since_last_bar") or -1,
-        )
-        with orb_lock:
-            try:
-                if ORB_SERVICE:
-                    # notify=False — this stop is immediately followed by an
-                    # automatic restart (below) within the same watchdog sweep,
-                    # not a state the user needs to react to. Previously this
-                    # always notified while the restart's own "started" push
-                    # was already suppressed (notify=False), so a flapping feed
-                    # produced a stream of "stopped" pushes with no matching
-                    # "started" push ever confirming recovery.
-                    asyncio.run(ORB_SERVICE.stop(notify=False))
-            except Exception as e:
-                logger.error("[ORB Watchdog] stop() during forced restart failed: %s", e)
-            ORB_SERVICE = None
-    else:
-        logger.warning("[ORB Watchdog] Hub not running — restarting")
-
-    result = start_orb_service(notify=False)
-    return {"action": "restarted", "was_stale": was_running_but_stale, "health": health, "result": result}
-
-
-@bp.route("/tindex/orb/watchdog", methods=["POST"])
-def orb_watchdog_sweep():
-    """Stateless endpoint for the periodic pg_cron watchdog call."""
-    try:
-        return jsonify(restart_orb_if_unhealthy())
-    except Exception as e:
-        logger.error("[ORB Watchdog] Sweep failed: %s", e)
-        return jsonify({"error": str(e)}), 500
+# Automated force-restart (the "watchdog") was removed 2026-07-14. It was
+# meant to recover a stale/dead feed, but ended up causing more damage than
+# it prevented: every restart it triggered risked losing in-memory exit-
+# management state for open positions (see
+# docs/incidents/2026-07-14-position-lost-on-restart.md), and — until the
+# same-day event-loop/connection-limit fixes — could itself hammer Alpaca's
+# stream with duplicate connection attempts. The service has a known,
+# fixed operating window (9:30-16:00 ET); the admin status screen
+# (mobile: Profile → Admin → Service Status) plus existing push notifications
+# now cover the "is something actually wrong" visibility this was meant to
+# provide, with a human deciding whether/when to restart instead of an
+# unattended process doing it every 2 minutes.
 
 
 # ── Options contract monitor routes ──────────────────────────────────────────
@@ -265,6 +235,7 @@ def start_contracts_monitor():
 
     OPTIONS_MONITOR_TASK = threading.Thread(target=run_monitor, daemon=True)
     OPTIONS_MONITOR_TASK.start()
+    _mark_live("contracts")
 
     message = "Options contract monitor started"
     if debug_mode:
@@ -280,6 +251,7 @@ def stop_contracts_monitor():
             asyncio.run(OPTIONS_MONITOR_SERVICE.stop())
             reset_options_contract_monitor()
             OPTIONS_MONITOR_SERVICE = None
+            _mark_stopped("contracts")
             return jsonify({"success": True, "message": "Options contract monitor stopped"})
     return jsonify({"message": "Options contract monitor not running"})
 
@@ -288,8 +260,13 @@ def stop_contracts_monitor():
 def get_contracts_monitor_status():
     with options_monitor_lock:
         if OPTIONS_MONITOR_SERVICE and hasattr(OPTIONS_MONITOR_SERVICE, "is_running") and OPTIONS_MONITOR_SERVICE.is_running:
-            return jsonify({"running": True, "poll_interval_seconds": 300, "market_hours_only": True})
-    return jsonify({"running": False})
+            return jsonify({
+                "running": True,
+                "poll_interval_seconds": 300,
+                "market_hours_only": True,
+                "live_since": SERVICE_LIVE_SINCE.get("contracts"),
+            })
+    return jsonify({"running": False, "live_since": None})
 
 
 # ── Unified service management ─────────────────────────────────────────────────
@@ -309,6 +286,7 @@ def _svc_start_orb(debug: bool = False, provider: str = "alpaca", **_) -> dict:
 
     ORB_TASK = threading.Thread(target=_run, daemon=True)
     ORB_TASK.start()
+    _mark_live("orb")
 
     try:
         from services.strategy.scheduler import init_scheduler as _init_sched
@@ -332,6 +310,7 @@ def _svc_stop_orb(**_) -> dict:
         if ORB_SERVICE and ORB_SERVICE.is_running:
             asyncio.run(ORB_SERVICE.stop())
             ORB_SERVICE = None
+            _mark_stopped("orb")
             return {"success": True, "message": "ORB monitoring stopped"}
     return {"success": True, "message": "ORB not running"}
 
@@ -344,8 +323,10 @@ def _svc_status_orb() -> dict:
                 "calculation_phase": getattr(ORB_SERVICE, "calculation_phase", False),
                 "active_tickers": list(getattr(ORB_SERVICE, "active_tickers", set())),
                 "orb_ranges_count": len(getattr(ORB_SERVICE, "orb_ranges", {})),
+                "live_since": SERVICE_LIVE_SINCE.get("orb"),
+                "toggle": True,
             }
-    return {"running": False}
+    return {"running": False, "live_since": None, "toggle": True}
 
 
 def _svc_start_contracts(debug: bool = False, **_) -> dict:
@@ -365,6 +346,7 @@ def _svc_start_contracts(debug: bool = False, **_) -> dict:
 
     OPTIONS_MONITOR_TASK = threading.Thread(target=_run, daemon=True)
     OPTIONS_MONITOR_TASK.start()
+    _mark_live("contracts")
     msg = "Contracts monitor started"
     if debug:
         msg += " [debug]"
@@ -378,6 +360,7 @@ def _svc_stop_contracts(**_) -> dict:
             asyncio.run(OPTIONS_MONITOR_SERVICE.stop())
             reset_options_contract_monitor()
             OPTIONS_MONITOR_SERVICE = None
+            _mark_stopped("contracts")
             return {"success": True, "message": "Contracts monitor stopped"}
     return {"success": True, "message": "Contracts monitor not running"}
 
@@ -385,8 +368,56 @@ def _svc_stop_contracts(**_) -> dict:
 def _svc_status_contracts() -> dict:
     with options_monitor_lock:
         if OPTIONS_MONITOR_SERVICE and getattr(OPTIONS_MONITOR_SERVICE, "is_running", False):
-            return {"running": True, "poll_interval_seconds": 300, "market_hours_only": True}
-    return {"running": False}
+            return {
+                "running": True,
+                "poll_interval_seconds": 300,
+                "market_hours_only": True,
+                "live_since": SERVICE_LIVE_SINCE.get("contracts"),
+                "toggle": True,
+            }
+    return {"running": False, "live_since": None, "toggle": True}
+
+
+# ── Always-on infra streams ──────────────────────────────────────────────────
+# No start/stop toggle by design: open positions' stop-loss/TP monitoring
+# (option_quote_stream) and every live-price UI (price_stream, social_signals_
+# stream) depend on these running continuously. A toggle here would be an
+# easy way to accidentally blind a live trade — status-only, on purpose.
+
+def _get_option_stream_status() -> dict:
+    try:
+        from routes.strategy_routes import _stream_manager
+        if _stream_manager is None:
+            return {"running": False, "toggle": False}
+        thread = getattr(_stream_manager, "_thread", None)
+        running = bool(getattr(_stream_manager, "_started", False) and thread and thread.is_alive())
+        return {"running": running, "toggle": False}
+    except Exception as exc:
+        return {"running": False, "toggle": False, "error": str(exc)}
+
+
+def _get_price_stream_status() -> dict:
+    try:
+        from services.websocket.price_stream_service import price_stream
+        return {
+            "running": bool(getattr(price_stream, "_running", False)),
+            "clients": len(getattr(price_stream, "_queues", [])),
+            "toggle": False,
+        }
+    except Exception as exc:
+        return {"running": False, "toggle": False, "error": str(exc)}
+
+
+def _get_social_signals_stream_status() -> dict:
+    try:
+        from services.websocket.social_signals_stream import social_signals_stream
+        return {
+            "running": bool(getattr(social_signals_stream, "_running", False)),
+            "clients": len(getattr(social_signals_stream, "_queues", [])),
+            "toggle": False,
+        }
+    except Exception as exc:
+        return {"running": False, "toggle": False, "error": str(exc)}
 
 
 SERVICE_REGISTRY: dict = {
@@ -449,6 +480,15 @@ def stop_services():
 
 @bp.route("/services/status", methods=["GET"])
 def get_services_status():
+    """
+    Backing data for the Profile → Admin → Service Status screen. Combines
+    the toggle-able services (SERVICE_REGISTRY) with the always-on infra
+    streams that active positions depend on (status-only, no toggle — see
+    the comment above _get_option_stream_status). Social signal ingest is
+    intentionally NOT included here — it's a separate, explicitly-triggered
+    service (see routes/social_routes.py docstring); the frontend hits
+    /social-signals/status directly for it.
+    """
     status: dict = {}
     for name, (_, _, status_fn) in SERVICE_REGISTRY.items():
         try:
@@ -456,4 +496,9 @@ def get_services_status():
         except Exception as exc:
             logger.error("[services/status] %s error: %s", name, exc)
             status[name] = {"running": False, "error": str(exc)}
+
+    status["option_quote_stream"] = _get_option_stream_status()
+    status["price_stream"] = _get_price_stream_status()
+    status["social_signals_price_stream"] = _get_social_signals_stream_status()
+
     return jsonify(status)

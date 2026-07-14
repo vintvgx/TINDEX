@@ -206,7 +206,11 @@ class TradeLogger:
                   strategy_id: Optional[str] = None,
                   paper_mode: bool = True,
                   trade_type: str = "STRATEGY",
-                  trading_client=None) -> Optional[str]:
+                  trading_client=None,
+                  exit_overrides: Optional[dict] = None,
+                  hard_stop_price: Optional[float] = None,
+                  tp1_price: Optional[float] = None,
+                  tp2_price: Optional[float] = None) -> Optional[str]:
         # Snapshot account equity right as the position opens — the baseline
         # `log_exit` compares against when the trade fully closes, so the
         # Trade Log can show this trade's real account-level impact rather
@@ -234,34 +238,53 @@ class TradeLogger:
             "strategy_id":            strategy_id,
             "paper_mode":             paper_mode,
             "trade_type":             trade_type,
+            # Exact levels/overrides at entry — lets a restart reconstruct this
+            # position's exit management precisely instead of just re-deriving
+            # a named profile's *default* thresholds (which would silently
+            # widen/change the stop for a manually-overridden trade). See
+            # docs/incidents/2026-07-14-position-lost-on-restart.md.
+            "exit_overrides":         exit_overrides,
+            "hard_stop_price":        hard_stop_price,
+            "tp1_price":              tp1_price,
+            "tp2_price":              tp2_price,
         }
         if account_balance_before is not None:
             row["account_balance_before"] = account_balance_before
 
-        # exit_stages / account_balance_before require DB migrations — try with
-        # both first, then progressively drop whichever column is missing
-        # (pre-migration safety net, same pattern as the existing exit_stages fallback).
-        full_row = dict(row, exit_stages=[])
-        candidates = [full_row]
-        if "account_balance_before" in full_row:
-            candidates.append({k: v for k, v in full_row.items() if k != "account_balance_before"})
-        candidates.append(row)  # neither exit_stages nor account_balance_before
+        # Several columns here require DB migrations that may not have run yet
+        # (exit_stages, account_balance_before, and the recovery fields above)
+        # — progressively drop whichever named group of columns triggers a
+        # "column not found" style error, rather than failing the whole insert
+        # (and losing the trade record) over a migration that hasn't landed.
+        optional_groups = [
+            ("exit_stages",),
+            ("account_balance_before",),
+            ("exit_overrides", "hard_stop_price", "tp1_price", "tp2_price"),
+        ]
+        attempt_row = dict(row, exit_stages=[])
+        remaining_groups = list(optional_groups)
 
-        for attempt_row in candidates:
+        while True:
             try:
                 res = self.client.table("orb_trades").insert(attempt_row).execute()
-                if res.data:
-                    return res.data[0]["id"]
-                return None
+                return res.data[0]["id"] if res.data else None
             except Exception as e:
                 err_str = str(e)
-                is_last = attempt_row is candidates[-1]
-                if is_last or ("exit_stages" not in err_str and "account_balance_before" not in err_str):
+                dropped = False
+                for group in list(remaining_groups):
+                    if any(col in err_str for col in group):
+                        for col in group:
+                            attempt_row.pop(col, None)
+                        remaining_groups.remove(group)
+                        dropped = True
+                        logger.warning(
+                            "[TradeLogger] log_entry: column(s) %s missing — "
+                            "retrying without them (run Supabase migration to fix)", group,
+                        )
+                        break
+                if not dropped:
                     logger.error("[TradeLogger] log_entry failed: %s", e)
                     return None
-                logger.warning("[TradeLogger] log_entry: column missing — "
-                               "retrying with fewer fields (run Supabase migration to fix)")
-        return None
 
     def log_exit(self, contract_symbol: str, exit_reason: str,
                  exit_premium: Optional[float], qty_closed: int, profile: str,
@@ -388,6 +411,27 @@ class TradeLogger:
             return q.execute().data or []
         except Exception as e:
             logger.error("[TradeLogger] get_trades failed: %s", e)
+            return []
+
+    def get_open_trades(self) -> list[dict]:
+        """
+        Every orb_trades row with no exit_time yet — i.e. still open at the
+        broker. Scanned once at boot to reattach exit-management state to
+        whatever's actually still open, so a restart can never again leave a
+        real position invisible and unmonitored in this app while it's still
+        live at Alpaca. See docs/incidents/2026-07-14-position-lost-on-restart.md.
+        """
+        try:
+            res = (
+                self.client.table("orb_trades")
+                .select("*")
+                .is_("exit_time", "null")
+                .order("entry_time")
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error("[TradeLogger] get_open_trades failed: %s", e)
             return []
 
     def reconcile_orphaned_trades(self):
