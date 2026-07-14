@@ -145,13 +145,29 @@ def recover_open_positions():
     docs/incidents/2026-07-14-position-lost-on-restart.md. This function is
     the fix: nothing here is optional or best-effort — every open position
     found gets its exit management reattached before this function returns.
+
+    IMPORTANT: every candidate row is cross-checked against Alpaca before
+    recovery. A stale DB row (exit_time still NULL from a previous session
+    that crashed, or an option that expired/closed outside the app) must NOT
+    be recovered — doing so sets trade_taken=True for a dead contract, which
+    simultaneously (a) prevents the engine from entering any new trade that
+    day and (b) causes /strategy/positions to call get_open_position() for a
+    contract that no longer exists, making every UI poll return active=False
+    and the position invisible on every screen (Home, Live Positions, Strategy).
     """
+    # Close expired-option rows first so they don't appear in get_open_trades()
+    # and never trigger an unnecessary broker lookup below.
+    try:
+        logger_svc.reconcile_orphaned_trades()
+    except Exception as e:
+        logger.warning("[strategy] Position recovery: reconcile_orphaned_trades failed: %s", e)
+
     rows = logger_svc.get_open_trades()
     if not rows:
         logger.info("[strategy] Position recovery: no open positions found")
         return
 
-    logger.warning("[strategy] Position recovery: %d open position(s) found — reattaching", len(rows))
+    logger.warning("[strategy] Position recovery: %d open position(s) found — verifying with broker", len(rows))
     recovered = 0
     for row in rows:
         try:
@@ -163,6 +179,23 @@ def recover_open_positions():
                 # strategy that's since been deleted) — recover it into an
                 # immediate engine keyed the same way a live one would be.
                 engine = _get_or_create_immediate_engine(row["ticker"], bool(row["paper_mode"]))
+
+            # Verify the position actually exists at Alpaca before touching
+            # engine state. A stale row (crashed/missed exit, option closed at
+            # the broker directly, or a prior-day row whose expiry isn't in the
+            # past yet) must be reconciled (DB row closed), NOT recovered —
+            # otherwise trade_taken=True is set for a dead contract, new
+            # breakouts are silently blocked, and every /strategy/positions
+            # poll returns active=False, making the position invisible on all
+            # three UI screens (Home, Live Positions, Strategy).
+            broker_result = _reconcile_trade_with_broker(row, engine)
+            if broker_result["status"] != "still_open":
+                logger.warning(
+                    "[strategy] Position recovery: %s not found at broker "
+                    "(status=%s) — stale DB row closed, skipping recovery",
+                    row.get("contract_symbol"), broker_result["status"],
+                )
+                continue
 
             if engine.trade_taken:
                 # Engine already has a live position recorded (e.g. it was
@@ -1458,7 +1491,14 @@ def _engine_position_response(engine: ORBEngine):
     try:
         pos = engine.trading_client.get_open_position(engine.contract_symbol)
         em  = engine.exit_manager
-        current_price   = float(pos.current_price)
+        # Alpaca can return None for current_price on illiquid/freshly-opened
+        # options (no recent trade print). Fall back to the engine's own
+        # streamed mid-price so a missing broker quote doesn't collapse the
+        # whole response to active=False via a TypeError on float(None).
+        raw_price = pos.current_price
+        if raw_price is None:
+            raw_price = getattr(engine, '_current_option_price', None)
+        current_price   = float(raw_price) if raw_price is not None else 0.0
         entry_p         = em.entry_premium if em else 0
         qty_rem         = em.qty_remaining if em else 0
         unrealized_pnl  = (current_price - entry_p) * qty_rem * 100
