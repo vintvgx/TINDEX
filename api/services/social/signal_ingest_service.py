@@ -261,14 +261,14 @@ class SignalIngestService:
         entry_price = prices.get(contract_symbol)
 
         owner = await loop.run_in_executor(None, lambda: (
-            self.supabase.table("tracked_options_contracts")
-            .select("user_id").limit(1).execute()
+            self.supabase.table("user_profiles")
+            .select("id").limit(1).execute()
         ))
         if not owner.data:
-            logger.error("SignalIngestService: no existing tracked_options_contracts "
-                         "row to infer user_id from — cannot insert without one")
+            logger.error("SignalIngestService: no user_profiles row to attach "
+                         "the tracked contract to — cannot insert without one")
             return None
-        user_id = owner.data[0]["user_id"]
+        user_id = owner.data[0]["id"]
 
         insert_row = {
             "user_id": user_id,
