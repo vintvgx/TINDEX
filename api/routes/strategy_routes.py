@@ -640,7 +640,7 @@ def sweep_pending_confirmations():
 
 @strategy_bp.route("/configs/<strategy_id>/pending/<pending_id>/approve", methods=["POST"])
 def approve_pending_confirmation(strategy_id: str, pending_id: str):
-    """Body: { hard_stop?, tp1?, tp2? } — optional user-edited overrides."""
+    """Body: { hard_stop?, tp1?, tp2?, qty? } — optional user-edited overrides."""
     engine = _resolve_any_engine(strategy_id)
     if not engine:
         # No live engine to ask (e.g. the strategy was deleted after the
@@ -656,6 +656,8 @@ def approve_pending_confirmation(strategy_id: str, pending_id: str):
         key: float(data[key]) for key in ("hard_stop", "tp1", "tp2")
         if data.get(key) is not None
     }
+    if data.get("qty") is not None:
+        overrides["qty"] = int(data["qty"])
     try:
         result = engine.approve_pending_entry(pending_id, overrides or None)
     except Exception as e:
@@ -1411,47 +1413,83 @@ def get_review(review_date: str):
 @strategy_bp.route("/review/generate", methods=["POST"])
 def trigger_review():
     """
-    Manually generate (or re-generate) one account's daily performance review.
+    Generate the daily performance review(s) and save to Supabase.
     Body: { "date": "YYYY-MM-DD", "paper_mode": true|false }
       - date defaults to today if omitted.
-      - paper_mode defaults to true if omitted (paper first, matches how the
-        4:15 PM scheduler orders the two — see scheduler._run_daily_review).
-    Useful when the 4:15 PM scheduler missed due to a Railway restart.
+      - paper_mode omitted (the normal case — this is what the single Supabase
+        pg_cron job at 4:15 PM ET calls with no body): generates BOTH paper
+        and live, saves both, and sends exactly ONE push notification
+        combining both accounts' trade count and net P&L. Previously each
+        account fired its own notification, AND a separate in-process
+        APScheduler job did the same thing independently at the same time —
+        together producing 3-4 near-duplicate pushes for one day's review
+        (2026-07-15). pg_cron is now the only trigger, and this one call
+        covers both accounts, so exactly one notification goes out per day.
+      - paper_mode explicit (true|false): generates only that one account
+        and sends its own labeled notification — for manually re-generating
+        a single account's review (e.g. after fixing bad trade data), not
+        for the scheduled path.
     """
     from datetime import date as _date
     from services.strategy.review_generator import ReviewGenerator
     from services.supabase.supabase_service import get_supabase_service
+    from services.strategy.notifier import StrategyNotifier
 
     body = request.get_json(silent=True) or {}
     date_str = body.get("date")
-    paper_mode = bool(body.get("paper_mode", True))
     try:
         session_date = _date.fromisoformat(date_str) if date_str else _date.today()
     except ValueError:
         return jsonify({"success": False, "error": f"Invalid date: {date_str}"}), 400
 
-    try:
-        sb = get_supabase_service().client
-        gen = ReviewGenerator(sb)
-        content, meta = gen.generate(session_date, paper_mode)
-        trades = gen._fetch_trades(session_date, paper_mode)
-        gen.save_to_supabase(session_date, content, trades, meta, paper_mode)
+    sb = get_supabase_service().client
+    gen = ReviewGenerator(sb)
 
-        from services.strategy.notifier import StrategyNotifier
-        StrategyNotifier(sb).notify_review_ready(
-            str(session_date), meta["trade_count"], meta["net_pnl"], paper_mode,
-        )
+    if "paper_mode" in body:
+        paper_mode = bool(body["paper_mode"])
+        try:
+            content, meta = gen.generate(session_date, paper_mode)
+            trades = gen._fetch_trades(session_date, paper_mode)
+            gen.save_to_supabase(session_date, content, trades, meta, paper_mode)
+            StrategyNotifier(sb).notify_review_ready(
+                str(session_date), meta["trade_count"], meta["net_pnl"], paper_mode,
+            )
+            return jsonify({
+                "success": True,
+                "date": str(session_date),
+                "paper_mode": paper_mode,
+                "meta": meta,
+                "preview": content[:500] + ("..." if len(content) > 500 else ""),
+            })
+        except Exception as e:
+            logger.error("[strategy/review/generate] Failed: %s", e, exc_info=True)
+            return jsonify({"success": False, "error": str(e)}), 500
 
-        return jsonify({
-            "success": True,
-            "date": str(session_date),
-            "paper_mode": paper_mode,
-            "meta": meta,
-            "preview": content[:500] + ("..." if len(content) > 500 else ""),
-        })
-    except Exception as e:
-        logger.error("[strategy/review/generate] Failed: %s", e, exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+    # Default path: both accounts, one combined notification.
+    results = {}
+    for mode in (True, False):
+        label = "paper" if mode else "live"
+        try:
+            content, meta = gen.generate(session_date, mode)
+            trades = gen._fetch_trades(session_date, mode)
+            gen.save_to_supabase(session_date, content, trades, meta, mode)
+            results[label] = {"meta": meta, "preview": content[:500] + ("..." if len(content) > 500 else "")}
+        except Exception as e:
+            logger.error("[strategy/review/generate] %s review failed: %s", label, e, exc_info=True)
+            results[label] = {"error": str(e)}
+
+    total_trades = sum(r["meta"]["trade_count"] for r in results.values() if "meta" in r)
+    total_pnl     = sum(r["meta"]["net_pnl"] for r in results.values() if "meta" in r)
+
+    if any("meta" in r for r in results.values()):
+        StrategyNotifier(sb).notify_review_ready_combined(str(session_date), total_trades, total_pnl)
+
+    return jsonify({
+        "success": any("meta" in r for r in results.values()),
+        "date": str(session_date),
+        "combined": {"trade_count": total_trades, "net_pnl": total_pnl},
+        "results": results,
+    })
 
 
 # ── EMA / Technical data ──────────────────────────────────────────────────────

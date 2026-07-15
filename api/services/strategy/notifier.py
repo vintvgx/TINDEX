@@ -405,13 +405,30 @@ class StrategyNotifier:
 
     def notify_review_ready(self, review_date: str, trade_count: int, net_pnl: float,
                              paper_mode: bool = True):
-        """Daily performance review finished generating and saving."""
+        """Daily performance review finished generating and saving for ONE account.
+        Used only for manual single-account regeneration — the scheduled path
+        calls notify_review_ready_combined instead so only one push goes out
+        per day covering both accounts."""
         pnl_emoji = "📈" if net_pnl >= 0 else "📉"
         label = "Paper" if paper_mode else "Live"
         self._dispatch(
             title=f"{pnl_emoji} {label} Daily Review ready — {review_date}",
             body=f"{trade_count} trade(s) · Net P&L {'+' if net_pnl >= 0 else '-'}${abs(net_pnl):,.2f}",
             data={"screen": "daily_review", "review_date": review_date, "paper_mode": paper_mode},
+            priority=P_INFO,
+        )
+
+    def notify_review_ready_combined(self, review_date: str, total_trade_count: int,
+                                      total_net_pnl: float):
+        """
+        Both accounts' daily reviews finished — one notification covering
+        both, not one per account. See /strategy/review/generate.
+        """
+        pnl_emoji = "📈" if total_net_pnl >= 0 else "📉"
+        self._dispatch(
+            title=f"{pnl_emoji} Daily Review ready — {review_date}",
+            body=f"{total_trade_count} trade(s) · Net P&L {'+' if total_net_pnl >= 0 else '-'}${abs(total_net_pnl):,.2f}",
+            data={"screen": "daily_review", "review_date": review_date},
             priority=P_INFO,
         )
 

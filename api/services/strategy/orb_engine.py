@@ -1260,8 +1260,10 @@ class ORBEngine:
                                overrides: dict | None = None) -> dict:
         """
         User tapped Enter in the confirmation modal. Submits the order using the
-        exact contract/qty/profile already shown to the user, then applies any
-        user-edited SL/TP1/TP2 on top of the real fill.
+        exact contract/profile already shown to the user (qty defaults to what
+        was shown too, unless the user changed it in the modal — see the
+        "qty" key in overrides), then applies any user-edited SL/TP1/TP2 on top
+        of the real fill.
 
         NOTE: guarded by _tick_lock so a near-simultaneous approve+skip (or
         approve racing the expiry sweep) can't both act on the same pending row.
@@ -1284,6 +1286,25 @@ class ORBEngine:
             qty               = pc["_qty"]
             effective_profile = pc["_effective_profile"]
             direction         = pc["direction"]
+
+            # qty is an entry-time decision (how many contracts the order
+            # itself buys), not a post-fill exit-level tweak like hard_stop/
+            # tp1/tp2 — pulled out of `overrides` here, before _execute_entry,
+            # rather than left for the apply_overrides() call below (which
+            # only knows about exit levels).
+            if overrides and overrides.get("qty") is not None:
+                try:
+                    requested_qty = int(overrides.pop("qty"))
+                    if requested_qty > 0:
+                        qty = requested_qty
+                    else:
+                        self.debug.emit("WARN",
+                            f"Approve requested qty={requested_qty} (must be > 0) — "
+                            f"using original qty={qty} instead")
+                except (TypeError, ValueError):
+                    self.debug.emit("WARN",
+                        f"Approve requested a non-numeric qty override — using "
+                        f"original qty={qty} instead")
 
             if self.stream_manager:
                 self.stream_manager.unsubscribe(contract["symbol"], self._on_pending_quote)

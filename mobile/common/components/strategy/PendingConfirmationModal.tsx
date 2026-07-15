@@ -42,6 +42,7 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
   const [stopVal, setStopVal] = useState(pending.hard_stop.toFixed(2));
   const [tp1Val, setTp1Val]   = useState(pending.tp1.toFixed(2));
   const [tp2Val, setTp2Val]   = useState(pending.tp2 != null ? pending.tp2.toFixed(2) : '');
+  const [qty, setQty]         = useState(pending.qty);
   const touched = useRef({ hard_stop: false, tp1: false, tp2: false });
 
   const [, forceTick] = useState(0);
@@ -51,6 +52,7 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
     setStopVal(pending.hard_stop.toFixed(2));
     setTp1Val(pending.tp1.toFixed(2));
     setTp2Val(pending.tp2 != null ? pending.tp2.toFixed(2) : '');
+    setQty(pending.qty);
     touched.current = { hard_stop: false, tp1: false, tp2: false };
   }, [pending.id]);
 
@@ -77,10 +79,11 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
   const isBusy = approving || skipping;
 
   const handleEnter = () => {
-    const overrides: { hard_stop?: number; tp1?: number; tp2?: number } = {};
+    const overrides: { hard_stop?: number; tp1?: number; tp2?: number; qty?: number } = {};
     if (touched.current.hard_stop) overrides.hard_stop = parseFloat(stopVal);
     if (touched.current.tp1) overrides.tp1 = parseFloat(tp1Val);
     if (touched.current.tp2 && tp2Val) overrides.tp2 = parseFloat(tp2Val);
+    if (qty !== pending.qty) overrides.qty = qty;
 
     approve(
       { strategy_id: pending.strategy_id, pending_id: pending.id, ...overrides },
@@ -152,11 +155,40 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
               ${livePremium.toFixed(2)}
             </Text>
             <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }} numberOfLines={1}>
-              {pending.contract_symbol} · ${pending.strike} strike · qty {pending.qty}
+              {pending.contract_symbol} · ${pending.strike} strike
             </Text>
             <Text style={{ color: colors.warning, fontSize: 12, marginTop: 8, fontWeight: '600' }}>
               Expires in {fmtCountdown(pending.expires_at)}
             </Text>
+          </View>
+
+          {/* Contracts */}
+          <FieldLabel text="CONTRACTS" colors={colors} />
+          <View style={{
+            flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+            backgroundColor: colors.surface, borderRadius: 12, padding: 10, marginBottom: 16,
+            borderWidth: 1, borderColor: colors.border,
+          }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
+              Signal default: {pending.qty}
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+              <TouchableOpacity
+                onPress={() => setQty(q => Math.max(1, q - 1))}
+                style={{ width: 36, height: 36, borderRadius: 9, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}
+              >
+                <Text style={{ color: colors.text, fontSize: 18, fontWeight: '700' }}>−</Text>
+              </TouchableOpacity>
+              <Text style={{ color: colors.text, fontSize: 18, fontWeight: '700', minWidth: 24, textAlign: 'center' }}>
+                {qty}
+              </Text>
+              <TouchableOpacity
+                onPress={() => setQty(q => q + 1)}
+                style={{ width: 36, height: 36, borderRadius: 9, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' }}
+              >
+                <Text style={{ color: colors.text, fontSize: 18, fontWeight: '700' }}>+</Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Stop Loss */}

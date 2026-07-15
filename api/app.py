@@ -189,23 +189,18 @@ try:
     except Exception as _recover_err:
         logger.error("[App] Position recovery failed: %s", _recover_err, exc_info=True)
 
-    # Schedule the 4:15 PM ET daily review at startup so it survives Railway restarts.
-    # Previously this was only registered inside /tindex/orb/start — meaning a mid-day
-    # server restart would silently drop the job and produce no review that day.
-    try:
-        from services.strategy.scheduler import schedule_daily_review as _sched_review
-        from services.supabase.supabase_service import get_supabase_service as _get_sb
-        _sched_review(_get_sb().client)
-        logger.info("[App] Daily review job registered at startup")
-    except Exception as _rev_err:
-        logger.warning("[App] Daily review scheduler registration failed: %s", _rev_err)
-
-    try:
-        from services.strategy.scheduler import schedule_zero_dte_scans as _sched_zero_dte
-        _sched_zero_dte(_get_sb().client)
-        logger.info("[App] 0DTE scan jobs registered at startup")
-    except Exception as _zdre:
-        logger.warning("[App] 0DTE scan scheduler failed: %s", _zdre)
+    # The daily review used to ALSO be scheduled here via an in-process
+    # APScheduler job (schedule_daily_review), on top of the Supabase pg_cron
+    # job that already hits /strategy/review/generate at 4:15 PM ET — both
+    # firing around the same time produced duplicate "Daily Review ready"
+    # push notifications (2026-07-15). pg_cron is strictly better here (an
+    # external trigger, not an in-process job that dies with the process) so
+    # it's now the only path — removed the in-process registration entirely.
+    #
+    # The 0DTE scan scheduler (schedule_zero_dte_scans) is removed for the
+    # same reason it's no longer needed: the Unusual Whales / 0DTE watchlist
+    # feature is being retired (2026-07-15) — its Supabase pg_cron jobs were
+    # unscheduled directly; see supabase/migrations/20260715_remove_zero_dte_and_dedupe_review_cron.sql.
 
     # Auto-start the ORB data hub on every process boot — not a replacement for
     # the 9:20 AM daily cron that hits /tindex/orb/start, but a self-healing

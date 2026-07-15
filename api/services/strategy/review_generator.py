@@ -7,7 +7,8 @@ performance review. Saves the result to the performance_reviews table so
 the mobile app can display it.
 
 Designed to be called from two places:
-  1. scheduler.py — _run_daily_review() at 4:15 PM ET (automated)
+  1. routes/strategy_routes.py — /strategy/review/generate, hit by a single
+     Supabase pg_cron job at 4:15 PM ET (automated)
   2. scripts/daily_review.py — manual or local-cron run, also writes to disk
 """
 

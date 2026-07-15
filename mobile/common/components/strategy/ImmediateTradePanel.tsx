@@ -22,20 +22,31 @@ interface Props {
 }
 
 // ── Expiration targeting ──────────────────────────────────────────────────────
-// SPY/QQQ/IWM list expirations on a Mon/Wed/Fri cadence (matches EOD_CLOSE_TIMES
-// in api/services/strategy/orb_engine.py — the same three tickers the ORB engine
-// treats specially). Single stocks only ever list standard Friday weeklies —
-// "today" is essentially never a listed expiration for them, which is why this
-// panel used to show an empty chain for any non-ETF ticker.
+// SPY/QQQ/IWM list a DAILY expiration every weekday (0DTE Mon-Fri) — this used
+// to be restricted to a Mon/Wed/Fri-only set, which was correct years ago but
+// is now stale: it meant a Tue/Thu attempt skipped that day's real 0DTE chain
+// entirely and silently jumped to the next Mon/Wed/Fri match instead (e.g.
+// trading on Tuesday would show Wednesday's contracts) — diagnosed 2026-07-15.
+// Single stocks only ever list standard Friday weeklies — "today" is
+// essentially never a listed expiration for them, which is why this panel
+// used to show an empty chain for any non-ETF ticker.
 const ETF_TICKERS = new Set(['SPY', 'QQQ', 'IWM']);
 // Date.getUTCDay(): 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
-const ETF_EXPIRY_WEEKDAYS   = new Set([1, 3, 5]); // Mon/Wed/Fri
-const STOCK_EXPIRY_WEEKDAYS = new Set([5]);       // Friday weeklies
+const ETF_EXPIRY_WEEKDAYS   = new Set([1, 2, 3, 4, 5]); // Mon-Fri — daily 0DTE
+const STOCK_EXPIRY_WEEKDAYS = new Set([5]);             // Friday weeklies
 
 function addDays(iso: string, days: number): string {
   const d = new Date(iso + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().split('T')[0];
+}
+
+function fmtExpiryLabel(iso: string, todayIso: string): string {
+  if (iso === todayIso) return 'Today (0DTE)';
+  const d = new Date(iso + 'T00:00:00Z');
+  const weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+  const md = d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', timeZone: 'UTC' });
+  return `${weekday} ${md}`;
 }
 
 /**
@@ -162,10 +173,35 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   const chain        = data?.success ? data.data : null;
   const currentPrice = chain?.current_price ?? 0;
 
+  // Every expiration actually available for this ticker's cadence — lets the
+  // user pick a specific date instead of only ever trusting the "nearest
+  // match" auto-pick, which is exactly what silently substituted the wrong
+  // day's chain (see the ETF_EXPIRY_WEEKDAYS comment above).
+  const availableExpirations = useMemo(() => {
+    if (!chain) return [];
+    const allowedWeekdays = ETF_TICKERS.has(ticker.toUpperCase())
+      ? ETF_EXPIRY_WEEKDAYS
+      : STOCK_EXPIRY_WEEKDAYS;
+    return [...chain.expirations_fetched]
+      .filter(d => allowedWeekdays.has(new Date(d + 'T00:00:00Z').getUTCDay()))
+      .sort();
+  }, [chain, ticker]);
+
+  const [manualExpiration, setManualExpiration] = useState<string | null>(null);
+
+  // Reset the manual pick whenever the ticker changes — a date chosen for one
+  // ticker's chain has no meaning for another.
+  useEffect(() => {
+    setManualExpiration(null);
+  }, [ticker]);
+
   const targetExpiration = useMemo(() => {
+    if (manualExpiration && availableExpirations.includes(manualExpiration)) {
+      return manualExpiration;
+    }
     if (!chain) return null;
     return pickTargetExpiration(ticker, chain.expirations_fetched);
-  }, [chain, ticker]);
+  }, [manualExpiration, availableExpirations, chain, ticker]);
 
   const sideContracts = useMemo(() => {
     if (!chain || !targetExpiration) return [];
@@ -534,6 +570,40 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
             </Text>
           )}
         </View>
+
+        {/* Expiration date — pick a specific date instead of only trusting
+            the auto "nearest match" (the auto-pick is what silently showed
+            the wrong day's chain — see ETF_EXPIRY_WEEKDAYS above). */}
+        {availableExpirations.length > 0 && (
+          <View>
+            <Text style={[styles.controlLabel, { color: colors.tabBarInactive, marginTop: 4 }]}>EXPIRATION</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {availableExpirations.map(exp => {
+                  const active = exp === targetExpiration;
+                  return (
+                    <TouchableOpacity
+                      key={exp}
+                      onPress={() => setManualExpiration(exp)}
+                      activeOpacity={0.8}
+                      style={[
+                        styles.expiryChip,
+                        {
+                          backgroundColor: active ? colors.accent + '22' : colors.card,
+                          borderColor: active ? colors.accent : colors.border,
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.expiryChipText, { color: active ? colors.accent : colors.text }]}>
+                        {fmtExpiryLabel(exp, today)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          </View>
+        )}
       </View>
 
       {/* Column headers */}
@@ -620,6 +690,9 @@ const styles = StyleSheet.create({
   toggleBtn:  { paddingHorizontal: 18, paddingVertical: 6, borderRadius: 100 },
   toggleText: { fontSize: 13, fontWeight: '600' },
   priceText:  { fontSize: 13, fontWeight: '600', flex: 1, textAlign: 'right' },
+
+  expiryChip:     { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 100, borderWidth: 1 },
+  expiryChipText: { fontSize: 12, fontWeight: '700' },
 
   colHeaderRow: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth },
   colHead:      { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },

@@ -92,15 +92,21 @@ def start_orb_service(provider: str = "alpaca", debug_mode: bool = False,
         ORB_TASK.start()
         _mark_live("orb")
 
-    # Ensure strategy engines and review scheduler are live
+    # Ensure strategy engines are live. The "started" notification used to be
+    # sent via next(iter(_engines.values())).notifier — meaning it silently
+    # never fired at all whenever _engines was empty (no saved strategies
+    # configured, e.g. immediate-trade-only usage), since the whole call was
+    # gated on _engines being non-empty first. StrategyNotifier only needs a
+    # Supabase client, not an existing engine, so it's constructed directly
+    # here instead — decoupled from whether any strategy exists.
     try:
-        from services.strategy.scheduler import init_scheduler as _init_sched, schedule_daily_review as _sched_review
+        from services.strategy.scheduler import init_scheduler as _init_sched
+        from services.strategy.notifier import StrategyNotifier
         from routes.strategy_routes import _engines
         for _eng in _engines.values():
             _init_sched(_eng)
-        if notify and _engines:
-            next(iter(_engines.values())).notifier.notify_start(provider)
-        _sched_review(get_supabase_service().client)
+        if notify:
+            StrategyNotifier(get_supabase_service().client).notify_start(provider)
     except Exception as _e:
         logger.warning("[ORB Start] Engine check failed: %s", _e)
 
@@ -290,11 +296,16 @@ def _svc_start_orb(debug: bool = False, provider: str = "alpaca", **_) -> dict:
 
     try:
         from services.strategy.scheduler import init_scheduler as _init_sched
+        from services.strategy.notifier import StrategyNotifier
         from routes.strategy_routes import _engines
         for _eng in _engines.values():
             _init_sched(_eng)
-        if _engines:
-            next(iter(_engines.values())).notifier.notify_start(provider)
+        # Same fix as start_orb_service() above: StrategyNotifier only needs
+        # a Supabase client, not an existing engine, so it's constructed
+        # directly rather than borrowed from next(iter(_engines.values())) —
+        # that used to mean this never notified at all when _engines was
+        # empty (no saved strategies configured).
+        StrategyNotifier(get_supabase_service().client).notify_start(provider)
     except Exception as _e:
         logger.warning("[ORB Start] Engine check failed: %s", _e)
 
