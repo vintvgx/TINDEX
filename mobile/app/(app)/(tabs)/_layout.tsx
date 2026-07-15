@@ -74,7 +74,6 @@ function Shell() {
             <Tabs.Screen name="notifications" options={{ href: null }} />
             <Tabs.Screen name="search" options={{ href: null }} />
             <Tabs.Screen name="watchlists" options={{ href: null }} />
-            <Tabs.Screen name="zero_dte_watchlist" options={{ href: null }} />
             <Tabs.Screen name="signals" options={{ href: null }} />
           </Tabs>
         </SafeAreaInsetsContext.Provider>

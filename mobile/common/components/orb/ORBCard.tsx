@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { AnimatedNumber } from './AnimatedNumber';
@@ -7,15 +7,6 @@ import type { GapTrendContext } from '@/common/types/orb';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useTickerTechnicals } from '@/hooks/queries/technicals/useTickerTechnicals';
 import { EMAZoneBadge } from '@/common/components/shared/EMAZoneBadge';
-import { Ionicons } from '@expo/vector-icons';
-import { FlowAboutModal } from './FlowAboutModal';
-
-export interface FlowSummary {
-  callPct: number;
-  putPct: number;
-  totalAlerts: number;
-  topUnusualScore: number;
-}
 
 interface ORBCardProps {
   data: ORBMonitoringState;
@@ -23,7 +14,6 @@ interface ORBCardProps {
   orbRange?: GapTrendContext | null;
   fullWidth?: boolean;
   livePrice?: number | null;
-  flowSummary?: FlowSummary | null;
 }
 
 const getBreakoutColor = (breakoutType: string, colors: ReturnType<typeof useThemeColors>): string => {
@@ -39,10 +29,9 @@ const getBreakoutColor = (breakoutType: string, colors: ReturnType<typeof useThe
   }
 };
 
-export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullWidth = false, livePrice, flowSummary }) => {
+export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullWidth = false, livePrice }) => {
   const colors = useThemeColors();
   const { data: tech } = useTickerTechnicals(data.ticker);
-  const [showFlowAbout, setShowFlowAbout] = useState(false);
 
   const orbHigh = data.orb_high ?? 0;
   const orbLow = data.orb_low ?? 0;
@@ -58,15 +47,6 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
 
   const breakoutColor = getBreakoutColor(data.breakout_type, colors);
   const hasBreakout = data.breakout_type !== 'none';
-
-  const showFlow = !!flowSummary && flowSummary.totalAlerts > 0;
-  const flowBullish = showFlow && flowSummary!.callPct > flowSummary!.putPct;
-  const flowPillColor = flowBullish ? colors.success : colors.error;
-  const flowPillLabel = showFlow
-    ? flowBullish
-      ? `▲ CALL ${flowSummary!.callPct}%`
-      : `▼ PUT ${flowSummary!.putPct}%`
-    : '';
 
   return (
     <TouchableOpacity
@@ -204,51 +184,6 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
         </View>
       )}
 
-      {/* Flow summary strip */}
-      {showFlow && (
-        <View style={{ marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.separator }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <TouchableOpacity
-              onPress={(e) => { e.stopPropagation(); setShowFlowAbout(true); }}
-              hitSlop={10}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
-            >
-              <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '500' }}>⚡ Flow</Text>
-              <Ionicons name="information-circle-outline" size={13} color={colors.textTertiary} />
-            </TouchableOpacity>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <View style={{
-                paddingHorizontal: 8,
-                paddingVertical: 3,
-                borderRadius: 20,
-                backgroundColor: flowPillColor + '18',
-                borderWidth: 1,
-                borderColor: flowPillColor + '40',
-              }}>
-                <Text style={{ color: flowPillColor, fontSize: 11, fontWeight: '700' }}>
-                  {flowPillLabel}
-                </Text>
-              </View>
-              {flowSummary!.topUnusualScore > 70 && (
-                <View style={{
-                  paddingHorizontal: 7,
-                  paddingVertical: 3,
-                  borderRadius: 20,
-                  backgroundColor: colors.accent + '18',
-                  borderWidth: 1,
-                  borderColor: colors.accent + '40',
-                }}>
-                  <Text style={{ color: colors.accent, fontSize: 11, fontWeight: '700' }}>
-                    {Math.round(flowSummary!.topUnusualScore)} UW
-                  </Text>
-                </View>
-              )}
-            </View>
-          </View>
-        </View>
-      )}
-
-      <FlowAboutModal visible={showFlowAbout} onClose={() => setShowFlowAbout(false)} />
     </TouchableOpacity>
   );
 };

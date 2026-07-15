@@ -4,11 +4,10 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { FlowFeed } from '@/common/components/options/FlowFeed';
 import type { SwingScore } from '@/common/types/swing';
 import { TIER_COLORS } from '@/common/types/swing';
 
-type Tab = 'Overview' | 'Flow';
+type Tab = 'Overview';
 
 interface Props {
   item: SwingScore | null;
@@ -63,7 +62,7 @@ export function SwingDetailModal({ item, visible, onClose, onEnter, onWatch }: P
 
         {/* Tab Bar */}
         <View style={{ flexDirection: 'row', borderBottomWidth: 1, borderColor: colors.border }}>
-          {(['Overview', 'Flow'] as Tab[]).map((t) => (
+          {(['Overview'] as Tab[]).map((t) => (
             <TouchableOpacity
               key={t}
               onPress={() => setTab(t)}
@@ -135,12 +134,6 @@ export function SwingDetailModal({ item, visible, onClose, onEnter, onWatch }: P
               <Text style={{ color: colors.text, fontSize: 15, fontWeight: '600' }}>Add to Watchlist</Text>
             </TouchableOpacity>
           </ScrollView>
-        )}
-
-        {tab === 'Flow' && (
-          <View style={{ flex: 1 }}>
-            <FlowFeed ticker={item.ticker} />
-          </View>
         )}
       </SafeAreaView>
     </Modal>

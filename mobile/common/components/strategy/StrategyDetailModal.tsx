@@ -91,12 +91,6 @@ export function StrategyDetailModal({ visible, config, profiles, colors, onClose
                 colors={colors}
                 dim={!config.confirm_entry}
               />
-              <Pill
-                label={config.flow_gate_enabled ? 'Flow Gate On' : 'Flow Gate Off'}
-                color={config.flow_gate_enabled ? '#5856D6' : colors.tabBarInactive}
-                colors={colors}
-                dim={!config.flow_gate_enabled}
-              />
             </View>
           </View>
 

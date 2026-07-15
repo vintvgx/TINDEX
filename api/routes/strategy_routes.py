@@ -401,7 +401,7 @@ def create_config():
             "profile", "trade_days", "strategy_name", "capital_limit",
             "bypass_breakout_window", "custom_thresholds", "exit_overrides",
             "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
-            "flow_gate_enabled", "confirm_entry",
+            "confirm_entry",
         ) if k in data
     }}
     config.pop("id", None)   # force new UUID
@@ -441,7 +441,7 @@ def update_config(strategy_id: str):
                "profile", "trade_days", "strategy_name", "capital_limit",
                "bypass_breakout_window", "custom_thresholds", "exit_overrides",
                "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
-               "flow_gate_enabled", "confirm_entry"}
+               "confirm_entry"}
     for key in allowed:
         if key in data:
             engine.config[key] = data[key]
@@ -820,7 +820,7 @@ def set_debug_mode():
 def immediate_trade(strategy_id: str):
     """
     Submit a manual conviction trade for a user-chosen 0DTE contract, skipping the
-    breakout wait / sentiment / flow filters. Body:
+    breakout wait / sentiment filters. Body:
       {direction: "CALL"|"PUT", contract_symbol, qty?, profile?}
     """
     engine = _engines.get(strategy_id)

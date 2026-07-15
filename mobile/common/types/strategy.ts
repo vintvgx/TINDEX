@@ -92,7 +92,6 @@ export interface StrategyConfig {
   otm_fib_level: OtmFibLevel;
   smart_contracts: boolean;
   debug_mode: boolean;
-  flow_gate_enabled: boolean;
   confirm_entry: boolean;
   has_position?: boolean;
   qty_remaining?: number | null;
