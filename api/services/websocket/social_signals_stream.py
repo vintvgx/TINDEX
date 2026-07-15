@@ -17,14 +17,18 @@ minor connection hiccup into the sustained connect/disconnect "flicker"
 this was built to fix. One shared loop can't compound that way: N clients
 connecting or reconnecting never changes how many background threads exist.
 
-Deliberately owns its own OptionStreamManager rather than reusing app.py's
-ORB-engine one — this service must keep working even if ORB engine
-initialisation fails for an unrelated reason (they used to be accidentally
-coupled: this route was registered inside the same try/except block as ORB
-engine setup, so an ORB-side failure silently meant the route was never
-registered at all). The cost is a second Alpaca option-data-stream
-connection instead of sharing one; Alpaca supports multiple concurrent
-connections per account, so this is a reasonable trade for real isolation.
+Shares app.py's single OptionStreamManager (injected via set_stream_manager()
+before start() is called) rather than owning a second one — this account's
+Alpaca plan allows only ONE live option-stream connection per API key. An
+earlier version opened its own manager for isolation from ORB-engine init
+failures, but two managers meant two competing connections: Alpaca rejected
+the second with "connection limit exceeded", and alpaca-py's reconnect loop
+then retried in a tight, backoff-free spin that ran up real Railway
+compute/network cost. Isolation from ORB engine init is preserved a
+different way: the shared manager is constructed at module scope in app.py,
+before the ORB engine's try/except block, so its construction can't be taken
+down by an ORB-side failure — only injection into this service needs to
+happen before start(), which app.py does unconditionally.
 """
 
 import json
@@ -46,7 +50,11 @@ class SocialSignalsStreamService:
         self._queues: list[queue.Queue] = []
         self._queues_lock = threading.Lock()
         self._running = False
-        self._stream_manager = None  # lazy — see _ensure_stream_manager
+        self._stream_manager = None  # injected — see set_stream_manager
+
+    def set_stream_manager(self, manager):
+        """Inject the shared OptionStreamManager. Must be called before start()."""
+        self._stream_manager = manager
 
     def start(self):
         if self._running:
@@ -57,8 +65,10 @@ class SocialSignalsStreamService:
 
     def _ensure_stream_manager(self):
         if self._stream_manager is None:
-            from services.strategy.option_stream import OptionStreamManager
-            self._stream_manager = OptionStreamManager()
+            raise RuntimeError(
+                "SocialSignalsStreamService.set_stream_manager() was never called — "
+                "no shared OptionStreamManager available"
+            )
         return self._stream_manager
 
     # ── per-connection queue registration ─────────────────────────────

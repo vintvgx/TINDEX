@@ -30,7 +30,20 @@ def log_response_info(response):
 from services.websocket.price_stream_service import price_stream
 price_stream.start()
 
+# Single shared Alpaca option-data-stream connection for the whole process.
+# Constructed here (module scope, before the ORB engine's try/except below)
+# so a failure initialising ORB engines can never take this down — but its
+# construction itself is just object setup (no network I/O), so it's safe to
+# create unconditionally rather than tucking it inside a try/except. Do not
+# create a second OptionStreamManager anywhere else: this account's Alpaca
+# plan allows only one live connection per API key, and a second one causes
+# a "connection limit exceeded" reconnect storm (see
+# services/websocket/social_signals_stream.py's docstring for the incident).
+from services.strategy.option_stream import OptionStreamManager
+_option_stream_manager = OptionStreamManager()
+
 from services.websocket.social_signals_stream import social_signals_stream
+social_signals_stream.set_stream_manager(_option_stream_manager)
 social_signals_stream.start()
 
 
@@ -145,10 +158,11 @@ try:
     from services.strategy.orb_engine import ORBEngine, STRATEGY_DEFAULTS
     from services.strategy.trade_logger import TradeLogger as StrategyLogger
     from services.strategy.scheduler import init_scheduler as init_strategy_scheduler
-    from services.strategy.option_stream import OptionStreamManager
     from routes.strategy_routes import strategy_bp, init_routes as init_strategy_routes
 
-    _option_stream_manager = OptionStreamManager()
+    # _option_stream_manager is the single shared OptionStreamManager created
+    # above (module scope) — reused here, not recreated, to keep exactly one
+    # live Alpaca option-stream connection for the whole process.
 
     def _build_strategy_engines() -> dict:
         svc_logger = StrategyLogger()
