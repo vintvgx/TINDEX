@@ -41,6 +41,9 @@ interface LivePositionPanelProps {
   ticker: string;
   paperMode?: boolean;
   onExitPress: () => void;
+  /** Opens the add-to-position (average down/up) modal. Omit to hide the button
+   *  entirely — used by surfaces that don't yet support adding to a position. */
+  onAddPress?: () => void;
   colors: any;
 }
 
@@ -55,7 +58,7 @@ interface LivePositionPanelProps {
  */
 export function LivePositionPanel({
   live, staticFallback, streaming, isMock, accentColor,
-  strategyId, ticker, paperMode, onExitPress, colors,
+  strategyId, ticker, paperMode, onExitPress, onAddPress, colors,
 }: LivePositionPanelProps) {
   const [expanded, setExpanded] = useState(false);
   const toggleExpanded = useCallback(() => {
@@ -182,6 +185,16 @@ export function LivePositionPanel({
             tp2_hit={display.tp2_hit}
             style={{ flex: 1 }}
           />
+        )}
+        {!isMock && onAddPress && (
+          <TouchableOpacity
+            onPress={onAddPress}
+            activeOpacity={0.8}
+            style={[styles.exitBtn, { flex: 1, marginTop: 0, borderColor: accentColor + '55', backgroundColor: accentColor + '14' }]}
+          >
+            <Ionicons name="add-circle-outline" size={16} color={accentColor} />
+            <Text style={[styles.exitBtnText, { color: accentColor }]}>Add</Text>
+          </TouchableOpacity>
         )}
         {!isMock && (
           <TouchableOpacity

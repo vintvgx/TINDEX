@@ -106,6 +106,15 @@ def _eod_reset(engine):
     NOTE: Fires at 15:30 ET on trade days (after all per-ticker EOD closes).
     """
     if engine.trade_taken and engine.contract_symbol:
+        # NO_STOP_LOSS positions opt out of every automatic exit, including this
+        # hard backstop — see profiles.py's disable_eod_close. Skip entirely
+        # rather than closing; ExitManager.evaluate() already skips its own
+        # EOD_CLOSE branch for the same flag, so this cron must agree or the
+        # position gets force-closed here anyway despite the profile's promise.
+        if engine.exit_manager and engine.exit_manager.profile.get("disable_eod_close"):
+            logger.info("[Scheduler] EOD close skipped for %s — NO_STOP_LOSS position held open",
+                        getattr(engine, "strategy_id", None) or engine.ticker)
+            return
         contract_symbol = engine.contract_symbol
         qty_closed = engine.exit_manager.qty_remaining if engine.exit_manager else 0
 

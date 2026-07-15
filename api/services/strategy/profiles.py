@@ -172,6 +172,39 @@ PROFILES = {
     },
     # ── IMMEDIATE TRADE PROFILES ──────────────────────────────────────────────────
 
+    # ─── NO_STOP_LOSS — Fully manual, hold until sold ────────────────────────────
+    # No automatic exit of any kind: max_loss_pct=1.0 means hard_stop computes to
+    # entry*0=0 (never triggers on a real quote), tp1/tp2 multiples are unreachable,
+    # and disable_eod_close=True skips BOTH the ExitManager.evaluate() EOD_CLOSE
+    # branch AND the separate scheduler._eod_reset() 15:30 ET hard-close cron (see
+    # scheduler.py) — the two are independent mechanisms and both must respect this
+    # flag for "hold until I sell" to actually mean never, not just "not before 3:30".
+    # qty_contracts=1 by design — no-stop-loss risk should default to the smallest
+    # possible size; submit_manual_trade only overrides qty if the caller passes one.
+    "NO_STOP_LOSS": {
+        "qty_contracts":           1,
+        "use_tp2":                 False,
+        "max_loss_pct":            1.0,
+        "tp1_mult":                999.0,
+        "tp2_mult":                999.0,
+        "tp1_close_pct":           0.00,
+        "tp2_close_pct":           0.00,
+        "runner_trail_pct":        0.00,
+        "runner_mode":             "trail",
+        "disable_eod_close":       True,
+        "consol_exit":             False,
+        "volume_exit":             False,
+        "consol_range_pct":        0.0008,
+        "consol_bars":             4,
+        "volume_exit_threshold":   0.20,
+        "strike_offset_min":       0.50,
+        "strike_offset_max":       2.00,
+        "target_delta_min":        0.38,
+        "target_delta_max":        0.58,
+        "eod_buffer_minutes":      25,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        50,
+    },
     # ─── SCALPER — Quick locks, tight trail ──────────────────────────────────────
     "SCALPER": {
         "qty_contracts":           3,
@@ -452,6 +485,7 @@ _DISPLAY_NAMES = {
     "OTM_RUNNER":     "OTM Runner",
     "OTM_CONVICTION": "OTM Conviction",
     "MANUAL":         "Manual",
+    "NO_STOP_LOSS":   "No Stop Loss",
 }
 
 _EMOJIS = {
@@ -470,6 +504,7 @@ _EMOJIS = {
     "OTM_RUNNER":     "🚀",
     "OTM_CONVICTION": "🎯",
     "MANUAL":         "✋",
+    "NO_STOP_LOSS":   "🧗",
 }
 
 
@@ -509,6 +544,7 @@ def describe_profile(key: str, custom_thresholds: dict | None = None) -> dict:
         "ALL_IN":          "High",
         "OTM_RUNNER":      "High",
         "OTM_CONVICTION":  "Med-High",
+        "NO_STOP_LOSS":    "Unbounded",
     }.get(k, "Custom")
     has_runner = (not p.get("use_tp2", True)) or p["tp2_close_pct"] < 1.0
     return {

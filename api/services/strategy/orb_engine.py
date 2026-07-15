@@ -1842,6 +1842,86 @@ class ORBEngine:
                 "qty_remaining": 0 if closed_all else new_remaining,
             }
 
+    def add_to_position(self, qty: int) -> dict:
+        """
+        Buy `qty` more of the currently-open contract to average down/up, and
+        re-anchor entry_premium to the blended (qty-weighted) fill price.
+
+        hard_stop/tp1/tp2 are recomputed from the new blended entry via the same
+        compute_exit_levels() a fresh entry uses, so a NO_STOP_LOSS add stays at
+        hard_stop=0 while a normal profile's SL/TP move with the new cost basis.
+        tp1_hit/tp2_hit/be_stop_active are left untouched — those already-banked
+        partial closes happened on the contracts held before this add and can't
+        be un-fired; only the confirm-tick counter and trail anchor reset, so a
+        fresh TP1 confirmation is required at the new (moved) tp1 level.
+
+        Called by POST /strategy/positions/<id>/add. Returns
+        {"status": "ok"|"error", "message", "qty_added"?, "new_entry_premium"?,
+        "qty_remaining"?}.
+        """
+        with self._tick_lock:
+            if not self.trade_taken or not self.contract_symbol or not self.exit_manager:
+                return {"status": "error", "message": "No active position to add to"}
+            qty = int(qty)
+            if qty < 1:
+                return {"status": "error", "message": "qty must be at least 1"}
+
+            em = self.exit_manager
+            contract = self.contract_symbol
+
+            acct = self.get_account_info()
+            if acct:
+                quote = self._resolve_contract(contract, self.position)
+                ask = quote["ask"] if quote else None
+                if ask:
+                    required = qty * ask * 100
+                    buying_power = acct["options_buying_power"]
+                    if required > buying_power:
+                        msg = f"Insufficient capital — need ${required:.0f}, have ${buying_power:.0f}"
+                        self.debug.emit("ERROR", f"Add-to-position blocked — {msg}")
+                        return {"status": "error", "message": msg}
+
+            self.debug.emit("INFO", f"Add-to-position requested — buy {qty} more of {contract}")
+            try:
+                order_req = MarketOrderRequest(
+                    symbol=contract, qty=qty, side=OrderSide.BUY, time_in_force=TimeInForce.DAY,
+                )
+                submitted = self.trading_client.submit_order(order_req)
+            except Exception as e:
+                self.debug.emit("ERROR", f"Add-to-position order failed: {e}")
+                return {"status": "error", "message": f"Order submission failed: {e}"}
+
+            fallback_ask = quote["ask"] if acct and quote else em.entry_premium
+            fill_price = self._resolve_entry_premium(submitted, fallback_ask)
+
+            old_qty_held = em.qty_remaining
+            old_entry    = em.entry_premium
+            new_qty_held = old_qty_held + qty
+            blended_entry = ((old_entry * old_qty_held) + (fill_price * qty)) / new_qty_held
+
+            em.entry_premium = blended_entry
+            em.qty          += qty
+            em.qty_remaining = new_qty_held
+            em.hard_stop, em.tp1, em.tp2 = compute_exit_levels(blended_entry, em.profile)
+            em.runner_trail  = blended_entry
+            em._tp1_ticks    = 0
+
+            self.debug.emit(
+                "INFO",
+                f"Added {qty} of {contract} @ ${fill_price:.2f} — entry ${old_entry:.2f}→"
+                f"${blended_entry:.2f}, qty {old_qty_held}→{new_qty_held}, "
+                f"new SL=${em.hard_stop:.2f} TP1=${em.tp1:.2f} TP2=${em.tp2:.2f}",
+            )
+            return {
+                "status":            "ok",
+                "message":           f"Added {qty} contract(s) of {contract} @ ${fill_price:.2f}",
+                "qty_added":         qty,
+                "fill_price":        round(fill_price, 4),
+                "new_entry_premium": round(blended_entry, 4),
+                "qty_remaining":     new_qty_held,
+                "exit_state":        em.to_dict(),
+            }
+
     def _on_stream_quote(self, mid: float):
         """
         Callback invoked by OptionStreamManager on every bid/ask update.

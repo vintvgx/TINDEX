@@ -128,8 +128,9 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   const [manualSlPct, setManualSlPct]   = useState(30);
   const [autoSelected, setAutoSelected] = useState(false);
 
-  const profile   = IMMEDIATE_PROFILES[profileIndex];
-  const isManual  = profile.isManual === true;
+  const profile      = IMMEDIATE_PROFILES[profileIndex];
+  const isManual     = profile.isManual === true;
+  const isNoStopLoss = profile.isNoStopLoss === true;
 
   const handleProfileSelect = (idx: number) => {
     setProfileIndex(idx);
@@ -243,8 +244,8 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
         qty,
         profile:         profile.key,
         paper_mode:      paperMode,
-        consol_exit:     isManual ? false : consolExit,
-        volume_exit:     isManual ? false : volumeExit,
+        consol_exit:     (isManual || isNoStopLoss) ? false : consolExit,
+        volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
         ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
       },
       {
@@ -265,13 +266,25 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
 
   const confirmSubmit = () => {
     if (!ticker || !selected) return;
+    const profileNote = isNoStopLoss
+      ? '\n\n⚠️ No Stop Loss — this contract will NOT auto-close for any reason, including end of day. It expires today (0DTE) if you don\'t sell it.'
+      : isManual ? `\nStop Loss: −${manualSlPct}%` : '';
     if (!paperMode) {
       Alert.alert(
         'Submit LIVE Order',
-        `This will buy ${qty} × ${selected.symbol} with REAL money immediately.\n\nProfile: ${profile.emoji} ${profile.name}${isManual ? `\nStop Loss: −${manualSlPct}%` : ''}`,
+        `This will buy ${qty} × ${selected.symbol} with REAL money immediately.\n\nProfile: ${profile.emoji} ${profile.name}${profileNote}`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Submit', style: 'destructive', onPress: doSubmit },
+        ],
+      );
+    } else if (isNoStopLoss) {
+      Alert.alert(
+        `${profile.emoji} No Stop Loss`,
+        `This will buy ${qty} × ${selected.symbol}.${profileNote}`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Submit', onPress: doSubmit },
         ],
       );
     } else {
@@ -365,7 +378,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
         <View>
           <Text style={[styles.footerLabel, { color: colors.tabBarInactive, marginBottom: 2 }]}>CONTRACTS</Text>
           <Text style={[styles.qtyHint, { color: colors.tabBarInactive }]}>
-            Default for {profile.name}: {profile.qty}
+            {isNoStopLoss ? 'No stop loss — size carefully' : `Default for ${profile.name}: ${profile.qty}`}
           </Text>
         </View>
         <View style={styles.qtyGroup}>
@@ -385,8 +398,8 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
         </View>
       </View>
 
-      {/* Auto exit toggles — hidden for MANUAL (manual controls own exit) */}
-      {!isManual && (
+      {/* Auto exit toggles — hidden for MANUAL/NO_STOP_LOSS (no automatic exit to configure) */}
+      {!isManual && !isNoStopLoss && (
         <View>
           <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>EXIT CONTROLS</Text>
           <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -435,6 +448,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
             <Text style={[styles.submitText, { color: paperMode ? colors.accentForeground : '#fff' }]}>
               {paperMode ? '' : 'LIVE '}Buy {qty} {selected.option_type} · {profile.emoji} {profile.name}
               {isManual ? ` · SL −${manualSlPct}%` : ''}
+              {isNoStopLoss ? ' · no auto exit' : ''}
             </Text>
           </>
         )}

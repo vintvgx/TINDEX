@@ -8,11 +8,50 @@ import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useStrategyPositions } from '@/hooks/queries/strategy/useStrategyPosition';
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
+import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { LivePositionPanel } from '@/common/components/strategy/LivePositionPanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
-import type { FibLevels } from '@/common/types/strategy';
+import { AddContractModal } from '@/common/components/strategy/AddContractModal';
+import type { FibLevels, ImmediatePosition } from '@/common/types/strategy';
+
+/**
+ * /strategy/immediate-positions now returns the same shape /strategy/positions
+ * does (active, hard_stop, tp1, tp2, qty_total, fib_levels, ...) — see that
+ * route's docstring — but the ImmediatePosition TS type still only declares
+ * the older, narrower field set the "Immediate Trades" dashboard card reads
+ * (pnl/pnl_pct/mid_price). This reads the extra fields off the same runtime
+ * object rather than widening ImmediatePosition, so dashboard.tsx's usage is
+ * untouched.
+ */
+function toPositionEntry(pos: ImmediatePosition): PositionEntry {
+  const full = pos as ImmediatePosition & Partial<PositionEntry>;
+  return {
+    strategy_id:        pos.strategy_id,
+    strategy_name:       full.strategy_name ?? '',
+    active:              full.active ?? true,
+    paper_mode:          pos.paper_mode,
+    ticker:              pos.ticker,
+    profile:             pos.profile,
+    direction:           pos.direction,
+    contract:            pos.contract,
+    qty_remaining:       pos.qty_remaining,
+    qty_total:           full.qty_total,
+    entry_premium:       pos.entry_premium ?? undefined,
+    current_price:       full.current_price ?? pos.mid_price ?? undefined,
+    unrealized_pnl:      full.unrealized_pnl ?? pos.pnl ?? undefined,
+    unrealized_pnl_pct:  full.unrealized_pnl_pct ?? pos.pnl_pct ?? undefined,
+    hard_stop:           full.hard_stop,
+    tp1:                 full.tp1,
+    tp2:                 full.tp2,
+    tp1_hit:             pos.tp1_hit,
+    tp2_hit:             pos.tp2_hit,
+    be_stop_active:      full.be_stop_active,
+    runner_trail:        full.runner_trail,
+    fib_levels:          full.fib_levels,
+  };
+}
 
 const MOCK_POSITIONS: PositionEntry[] = [
   {
@@ -60,7 +99,14 @@ export default function PositionScreen({ embedded = false }: Props) {
   const [showMock, setShowMock] = useState(false);
   const [mode, setMode] = useState<'live' | 'paper'>('live');
 
-  const { data: livePositions = [], isLoading } = useStrategyPositions();
+  const { data: stratPositions = [], isLoading: stratLoading } = useStrategyPositions();
+  // Ad-hoc immediate trades (not tied to a saved strategy) — merged in so Live
+  // Positions shows every open trade, not just saved-strategy ones. Before this,
+  // an immediate trade was visible on Dashboard but invisible here, which meant
+  // it couldn't be edited (SL/TP) or exited from this screen at all.
+  const { data: immPositions = [], isLoading: immLoading } = useImmediatePositions();
+  const isLoading = stratLoading || immLoading;
+  const livePositions = [...stratPositions, ...immPositions.map(toPositionEntry)];
   // Both accounts, each built from its own dedicated paper/live TradingClient
   // (unlike /strategy/account, which resolved to "whichever saved strategy
   // engine happens to be first" — unrelated to which account an active trade
@@ -237,6 +283,7 @@ export default function PositionScreen({ embedded = false }: Props) {
 function PositionRow({ pos, showMock, colors }: { pos: PositionEntry; showMock: boolean; colors: any }) {
   const { data: live, connected } = useStrategyLivePrice(pos.strategy_id, pos.active && !showMock);
   const [exitOpen, setExitOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const accentColor = pos.direction === 'CALL' ? colors.success : colors.error;
 
   return (
@@ -277,6 +324,7 @@ function PositionRow({ pos, showMock, colors }: { pos: PositionEntry; showMock: 
         ticker={pos.ticker}
         paperMode={pos.paper_mode}
         onExitPress={() => setExitOpen(true)}
+        onAddPress={showMock ? undefined : () => setAddOpen(true)}
         colors={colors}
       />
 
@@ -311,6 +359,20 @@ function PositionRow({ pos, showMock, colors }: { pos: PositionEntry; showMock: 
           qtyRemaining={live?.qty_remaining ?? pos.qty_remaining ?? 1}
           paperMode={pos.paper_mode}
           onClose={() => setExitOpen(false)}
+        />
+      )}
+      {!showMock && (
+        <AddContractModal
+          visible={addOpen}
+          colors={colors}
+          strategyId={pos.strategy_id}
+          ticker={pos.ticker}
+          contract={live?.contract ?? pos.contract}
+          qtyHeld={live?.qty_remaining ?? pos.qty_remaining ?? 0}
+          entryPremium={live?.entry_premium ?? pos.entry_premium}
+          midPrice={live?.mid_price ?? pos.current_price}
+          paperMode={pos.paper_mode}
+          onClose={() => setAddOpen(false)}
         />
       )}
     </View>

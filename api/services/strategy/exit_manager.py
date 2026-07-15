@@ -92,12 +92,18 @@ class ExitManager:
         self._cascade_close_pct    = profile.get("cascade_close_pct", 0.50)
         self._cascade_last_price   = None
 
+        # NO_STOP_LOSS: fully manual, hold until sold — even past EOD. The
+        # separate scheduler._eod_reset() cron backstop also checks this flag
+        # (see scheduler.py); both must agree or "hold until I sell" would
+        # still get silently force-closed at 15:30 ET.
+        self._disable_eod_close = profile.get("disable_eod_close", False)
+
     def evaluate(self, current_option_price: float,
                  current_underlying_price: float = None,
                  current_volume: float = None) -> dict:
         now_et = datetime.now(ET).time()
 
-        if now_et >= self.eod_close_time:
+        if not self._disable_eod_close and now_et >= self.eod_close_time:
             return self._action("CLOSE_ALL", self.qty_remaining, "EOD_CLOSE")
 
         # Premium-based stop. Before TP1: hard stop at entry × (1 - max_loss_pct).

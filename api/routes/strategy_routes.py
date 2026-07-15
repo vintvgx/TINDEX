@@ -574,6 +574,29 @@ def sell_position(strategy_id: str):
     return jsonify(result), code
 
 
+@strategy_bp.route("/positions/<strategy_id>/add", methods=["POST"])
+def add_to_position(strategy_id: str):
+    """
+    Buy more of the currently-open contract to average down/up. Works for both
+    saved strategies and ad-hoc immediate-trade engines (resolved by id), live
+    or paper. Body: {qty} — required, >= 1.
+    """
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        return jsonify({"status": "error", "message": "Position not found"}), 404
+    data = request.get_json() or {}
+    qty = data.get("qty")
+    if qty is None:
+        return jsonify({"status": "error", "message": "qty is required"}), 400
+    try:
+        qty = int(qty)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "qty must be an integer"}), 400
+    result = engine.add_to_position(qty)
+    code = 200 if result.get("status") == "ok" else 409
+    return jsonify(result), code
+
+
 @strategy_bp.route("/configs/<strategy_id>/exits", methods=["PATCH"])
 def update_strategy_exits(strategy_id: str):
     """
@@ -845,15 +868,24 @@ def immediate_trade_by_ticker():
         return jsonify({"status": "error",
                         "message": "ticker, direction and contract_symbol are required"}), 400
 
+    profile_key = data.get("profile")
+    is_no_stop_loss = (profile_key or "").upper() == "NO_STOP_LOSS"
+
     exit_overrides = {}
-    if "consol_exit" in data:
-        exit_overrides["consol_exit"] = bool(data["consol_exit"])
-    if "volume_exit" in data:
-        exit_overrides["volume_exit"] = bool(data["volume_exit"])
-    if "max_loss_pct" in data:
-        val = float(data["max_loss_pct"])
-        if 0.05 <= val <= 0.95:   # sanity clamp: 5%–95%
-            exit_overrides["max_loss_pct"] = val
+    # NO_STOP_LOSS means NO automatic exit of any kind — consol/volume exit
+    # and max_loss_pct overrides are intentionally ignored for it rather than
+    # merged in, so a client can't accidentally (or a stale UI can't) partially
+    # re-enable an automatic close on a position the user explicitly chose to
+    # hold with zero automatic exits.
+    if not is_no_stop_loss:
+        if "consol_exit" in data:
+            exit_overrides["consol_exit"] = bool(data["consol_exit"])
+        if "volume_exit" in data:
+            exit_overrides["volume_exit"] = bool(data["volume_exit"])
+        if "max_loss_pct" in data:
+            val = float(data["max_loss_pct"])
+            if 0.05 <= val <= 0.95:   # sanity clamp: 5%–95%
+                exit_overrides["max_loss_pct"] = val
 
     engine = _get_or_create_immediate_engine(ticker, paper_mode)
     result = _submit_manual_trade_bounded(
@@ -874,35 +906,31 @@ def immediate_trade_by_ticker():
 def immediate_positions():
     """
     Open positions across all immediate-trade engines, for the "Immediate Trades"
-    section. Live P&L is computed from the latest streamed option mid-price.
+    section AND the Live Positions tab (which merges this with /positions so
+    ad-hoc trades are editable/exitable there too — see position.tsx).
+
+    Reuses _engine_position_response() — the same builder /positions uses — so
+    the shape (hard_stop, tp1, tp2, active, qty_total, fib_levels, ...) matches
+    saved-strategy positions exactly; EditExitsButton/ExitTradeModal need those
+    fields and previously only got them for saved strategies. pnl/pnl_pct/
+    mid_price are also kept as aliases of unrealized_pnl/unrealized_pnl_pct/
+    current_price for the existing "Immediate Trades" dashboard card, which
+    reads the old field names.
     """
     out = []
     for eng in _immediate_engines.values():
         if not eng.trade_taken or not eng.contract_symbol:
             continue
-        em      = eng.exit_manager
-        entry_p = em.entry_premium if em else None
-        qty_rem = em.qty_remaining if em else 0
-        mid     = getattr(eng, "_current_option_price", None)
-        pnl = pnl_pct = None
-        if mid is not None and entry_p:
-            pnl     = round((mid - entry_p) * qty_rem * 100, 2)
-            pnl_pct = round(((mid - entry_p) / entry_p * 100) if entry_p > 0 else 0, 2)
-        out.append({
-            "strategy_id":   eng.strategy_id,
-            "ticker":        eng.ticker,
-            "paper_mode":    eng.paper,
-            "direction":     eng.position,
-            "contract":      eng.contract_symbol,
-            "profile":       eng.profile_key,
-            "qty_remaining": qty_rem,
-            "entry_premium": entry_p,
-            "mid_price":     round(mid, 4) if mid is not None else None,
-            "pnl":           pnl,
-            "pnl_pct":       pnl_pct,
-            "tp1_hit":       em.tp1_hit if em else False,
-            "tp2_hit":       em.tp2_hit if em else False,
-        })
+        try:
+            pos = _engine_position_response(eng).get_json()
+        except Exception:
+            continue
+        pos["strategy_id"]   = eng.strategy_id
+        pos["strategy_name"] = getattr(eng, "strategy_name", "")
+        pos["pnl"]           = pos.get("unrealized_pnl")
+        pos["pnl_pct"]       = pos.get("unrealized_pnl_pct")
+        pos["mid_price"]     = pos.get("current_price")
+        out.append(pos)
     return jsonify({"positions": out})
 
 
