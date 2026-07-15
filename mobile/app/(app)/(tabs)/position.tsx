@@ -8,7 +8,7 @@ import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useStrategyPositions } from '@/hooks/queries/strategy/useStrategyPosition';
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
-import { useAlpacaAccount } from '@/hooks/queries/strategy/useAlpacaAccount';
+import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { LivePositionPanel } from '@/common/components/strategy/LivePositionPanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
@@ -61,7 +61,14 @@ export default function PositionScreen({ embedded = false }: Props) {
   const [mode, setMode] = useState<'live' | 'paper'>('live');
 
   const { data: livePositions = [], isLoading } = useStrategyPositions();
-  const { data: account } = useAlpacaAccount();
+  // Both accounts, each built from its own dedicated paper/live TradingClient
+  // (unlike /strategy/account, which resolved to "whichever saved strategy
+  // engine happens to be first" — unrelated to which account an active trade
+  // was actually in, and the reason the balance shown here could silently be
+  // the wrong account's the whole session). Picking by `mode` below means
+  // this always matches what's actually being viewed.
+  const { data: accounts } = useAlpacaBothAccounts();
+  const account = accounts ? (mode === 'live' ? accounts.live : accounts.paper) : undefined;
 
   const positions         = showMock ? MOCK_POSITIONS : livePositions;
   const activePositions   = positions.filter(p => p.active);
@@ -69,6 +76,8 @@ export default function PositionScreen({ embedded = false }: Props) {
     mode === 'live' ? !p.paper_mode : !!p.paper_mode,
   );
   const activeCount = filteredPositions.length;
+
+  const toggleMode = () => setMode(m => (m === 'live' ? 'paper' : 'live'));
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -110,12 +119,17 @@ export default function PositionScreen({ embedded = false }: Props) {
         </TouchableOpacity>
       </View>
 
-      {/* ── Account bar (sticky) ── */}
-      {account && (
-        <View style={[styles.accountBar, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+      {/* ── Account bar (sticky) — tap to toggle Live/Paper ── */}
+      {account?.available && (
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={toggleMode}
+          style={[styles.accountBar, { backgroundColor: colors.card, borderBottomColor: colors.border }]}
+        >
           <AccountStat
-            label={account.paper_mode ? 'Paper Equity' : 'Live Equity'}
+            label={mode === 'live' ? 'Live Equity' : 'Paper Equity'}
             value={`$${account.equity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+            color={mode === 'live' ? '#30D158' : '#FF9F0A'}
             colors={colors}
           />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
@@ -131,7 +145,8 @@ export default function PositionScreen({ embedded = false }: Props) {
             value={String(account.day_trade_count)}
             colors={colors}
           />
-        </View>
+          <Ionicons name="swap-horizontal" size={16} color={colors.tabBarInactive} style={{ marginLeft: 4 }} />
+        </TouchableOpacity>
       )}
 
       {/* ── LIVE / PAPER toggle ── */}
