@@ -120,6 +120,7 @@ export const ServiceStatusModal: React.FC<ServiceStatusModalProps> = ({ visible,
   const { data: ingest } = useSocialIngestStatus({ alwaysPoll: visible });
   const startIngest = useStartSocialIngest();
   const stopIngest = useStopSocialIngest();
+  const ingestAccountErrors = (ingest?.accounts ?? []).filter((a) => a.last_poll_error);
 
   const toggleService = (name: 'orb' | 'contracts', next: boolean) => {
     const mutation = next ? startServices : stopServices;
@@ -216,8 +217,29 @@ export const ServiceStatusModal: React.FC<ServiceStatusModalProps> = ({ visible,
               toggle={ingest?.toggle ?? true}
               busy={ingestBusy}
               onToggle={toggleIngest}
+              extra={ingest?.last_poll_summary ?? undefined}
             />
           </View>
+
+          {ingestAccountErrors.length > 0 && (
+            <View
+              style={{
+                marginHorizontal: 16,
+                marginTop: 10,
+                padding: 12,
+                borderRadius: 12,
+                backgroundColor: colors.errorBg,
+                borderWidth: 1,
+                borderColor: colors.error,
+              }}
+            >
+              {ingestAccountErrors.map((a) => (
+                <Text key={a.id} style={{ color: colors.error, fontSize: 12, marginBottom: 2 }}>
+                  @{a.handle}: {a.last_poll_error}
+                </Text>
+              ))}
+            </View>
+          )}
 
           <Text
             style={{

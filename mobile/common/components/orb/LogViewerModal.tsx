@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
   Modal,
   TouchableOpacity,
   ScrollView,
+  FlatList,
   StatusBar,
   TextInput,
 } from 'react-native';
@@ -65,6 +66,43 @@ const getLogLevelBg = (level: LogEntry['level']): string => {
   }
 };
 
+/**
+ * Memoized so FlatList can skip re-rendering rows whose underlying log entry
+ * hasn't changed — with a growing, frequently-polled log list, an inline
+ * (non-memoized) renderItem would re-render every visible row on every poll
+ * tick regardless of whether that row's data actually changed.
+ */
+const LogRow = React.memo(function LogRow({ log }: { log: LogEntry }) {
+  return (
+    <View
+      className={`mb-2 p-3 rounded-lg border-l-4 ${getLogLevelBg(log.level)}`}
+      style={{ borderLeftColor: getLogLevelColor(log.level) }}
+    >
+      <View className="flex-row items-center justify-between mb-1">
+        <View className="flex-row items-center" style={{ gap: 8 }}>
+          <Text className="text-xs font-bold uppercase" style={{ color: getLogLevelColor(log.level) }}>
+            {log.level}
+          </Text>
+          <Text className="text-gray-500 text-xs">{formatTimestamp(log.timestamp)}</Text>
+        </View>
+      </View>
+      <Text className="text-white text-sm font-mono" selectable>
+        {log.message}
+      </Text>
+      {log.data && log.data.length > 0 && (
+        <View className="mt-2 bg-gray-900/50 rounded p-2">
+          <Text className="text-gray-400 text-xs mb-1">Additional Data:</Text>
+          {log.data.map((item, index) => (
+            <Text key={index} className="text-gray-300 text-xs font-mono" selectable>
+              {typeof item === 'object' ? JSON.stringify(item, null, 2) : String(item)}
+            </Text>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+});
+
 export const LogViewerModal: React.FC<LogViewerModalProps> = ({
   visible,
   onClose,
@@ -72,7 +110,7 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [filter, setFilter] = useState<'all' | LogEntry['level']>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const scrollViewRef = useRef<ScrollView>(null);
+  const listRef = useRef<FlatList<LogEntry>>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const previousLogCountRef = useRef(0);
@@ -106,8 +144,11 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
     // Initial load
     updateLogs();
 
-    // Auto-refresh every 500ms when modal is visible
-    const interval = setInterval(updateLogs, 500);
+    // Auto-refresh every 1s when modal is visible. Was 500ms — halving the
+    // poll rate roughly halves how often the (now much larger, since the
+    // merge-not-overwrite fix in LogService actually retains history) log
+    // list gets re-rendered.
+    const interval = setInterval(updateLogs, 1000);
 
     return () => clearInterval(interval);
   }, [visible]);
@@ -118,22 +159,22 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
       hasScrolledOnOpen.current = false;
       return;
     }
-    if (visible && logs.length > 0 && !hasScrolledOnOpen.current && scrollViewRef.current) {
+    if (visible && logs.length > 0 && !hasScrolledOnOpen.current && listRef.current) {
       hasScrolledOnOpen.current = true;
       setTimeout(() => {
-        scrollViewRef.current?.scrollToEnd({ animated: false });
+        listRef.current?.scrollToEnd({ animated: false });
       }, 100);
     }
   }, [visible, logs.length]);
 
   // Auto-scroll to bottom when new logs arrive, but only if user is at bottom
   useEffect(() => {
-    if (autoScroll && isAtBottom && logs.length > 0 && scrollViewRef.current) {
+    if (autoScroll && isAtBottom && logs.length > 0 && listRef.current) {
       const previousCount = previousLogCountRef.current;
       // Only auto-scroll if new logs were added (compare current count to previous)
       if (logs.length > previousCount) {
         setTimeout(() => {
-          scrollViewRef.current?.scrollToEnd({ animated: true });
+          listRef.current?.scrollToEnd({ animated: true });
         }, 100);
         // Update the ref after scrolling
         previousLogCountRef.current = logs.length;
@@ -151,24 +192,35 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
     setIsAtBottom(isNearBottom);
   };
 
-  // Filter logs based on selected filter and search query
-  const filteredLogs = logs.filter((log) => {
-    // Apply level filter
-    if (filter !== 'all' && log.level !== filter) {
-      return false;
-    }
+  // Filter logs based on selected filter and search query. Memoized — with
+  // up to maxLogs (3,000) entries and a 1s poll tick, re-filtering on every
+  // render (as this used to) was a real cost on top of the render itself.
+  const filteredLogs = useMemo(() => {
+    return logs.filter((log) => {
+      if (filter !== 'all' && log.level !== filter) {
+        return false;
+      }
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        return (
+          log.message.toLowerCase().includes(query) ||
+          log.level.toLowerCase().includes(query)
+        );
+      }
+      return true;
+    });
+  }, [logs, filter, searchQuery]);
 
-    // Apply search filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      return (
-        log.message.toLowerCase().includes(query) ||
-        log.level.toLowerCase().includes(query)
-      );
+  // Per-level counts for the filter chips — one pass instead of the 6
+  // separate logs.filter(...).length calls (one per level button) this used
+  // to do inline in the render body, every render.
+  const levelCounts = useMemo(() => {
+    const counts: Partial<Record<LogEntry['level'], number>> = {};
+    for (const log of logs) {
+      counts[log.level] = (counts[log.level] ?? 0) + 1;
     }
-
-    return true;
-  });
+    return counts;
+  }, [logs]);
 
   const handleClearLogs = async () => {
     await logService.clearLogs();
@@ -183,7 +235,7 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
     <Modal
       visible={visible}
       animationType="slide"
-      presentationStyle="fullScreen"
+      presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
       <View style={{ flex: 1, backgroundColor: '#000', paddingTop: insets.top, paddingBottom: insets.bottom }}>
@@ -272,8 +324,7 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
                         }}
                       >
                         {level === 'all' ? 'All' : level}
-                        {level !== 'all' &&
-                          ` (${logs.filter((l) => l.level === level).length})`}
+                        {level !== 'all' && ` (${levelCounts[level] ?? 0})`}
                       </Text>
                     </TouchableOpacity>
                   )
@@ -305,15 +356,29 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
           </View>
         </View>
 
-        {/* Logs List */}
-        <ScrollView
-          ref={scrollViewRef}
+        {/*
+          Logs List — a virtualized FlatList, not a ScrollView. A ScrollView
+          mounts every child eagerly with no windowing; with up to maxLogs
+          (3,000) entries, each rendering a JSON.stringify'd "Additional Data"
+          block, that was enough non-virtualized native view creation on a
+          1s-ish poll tick to freeze the UI thread — this is what was
+          reported as "app logs is making my app freeze." FlatList only
+          renders what's near-visible.
+        */}
+        <FlatList
+          ref={listRef}
+          data={filteredLogs}
+          keyExtractor={(log) => log.id}
+          renderItem={({ item }) => <LogRow log={item} />}
           className="flex-1"
-          contentContainerStyle={{ padding: 16 }}
+          contentContainerStyle={{ padding: 16, flexGrow: 1 }}
           onScroll={handleScroll}
           scrollEventThrottle={400}
-        >
-          {filteredLogs.length === 0 ? (
+          initialNumToRender={30}
+          maxToRenderPerBatch={20}
+          windowSize={7}
+          removeClippedSubviews
+          ListEmptyComponent={
             <View className="flex-1 justify-center items-center py-20">
               <Ionicons name="document-text-outline" size={48} color="#6B7280" />
               <Text className="text-gray-400 text-center mt-4">
@@ -322,53 +387,8 @@ export const LogViewerModal: React.FC<LogViewerModalProps> = ({
                   : 'No logs yet'}
               </Text>
             </View>
-          ) : (
-            filteredLogs.map((log) => (
-              <View
-                key={log.id}
-                className={`mb-2 p-3 rounded-lg border-l-4 ${getLogLevelBg(
-                  log.level
-                )}`}
-                style={{
-                  borderLeftColor: getLogLevelColor(log.level),
-                }}
-              >
-                <View className="flex-row items-center justify-between mb-1">
-                  <View className="flex-row items-center" style={{ gap: 8 }}>
-                    <Text
-                      className="text-xs font-bold uppercase"
-                      style={{ color: getLogLevelColor(log.level) }}
-                    >
-                      {log.level}
-                    </Text>
-                    <Text className="text-gray-500 text-xs">
-                      {formatTimestamp(log.timestamp)}
-                    </Text>
-                  </View>
-                </View>
-                <Text className="text-white text-sm font-mono" selectable>
-                  {log.message}
-                </Text>
-                {log.data && log.data.length > 0 && (
-                  <View className="mt-2 bg-gray-900/50 rounded p-2">
-                    <Text className="text-gray-400 text-xs mb-1">Additional Data:</Text>
-                    {log.data.map((item, index) => (
-                      <Text
-                        key={index}
-                        className="text-gray-300 text-xs font-mono"
-                        selectable
-                      >
-                        {typeof item === 'object'
-                          ? JSON.stringify(item, null, 2)
-                          : String(item)}
-                      </Text>
-                    ))}
-                  </View>
-                )}
-              </View>
-            ))
-          )}
-        </ScrollView>
+          }
+        />
       </View>
     </Modal>
   );

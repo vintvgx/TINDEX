@@ -117,6 +117,9 @@ def stop_signal_ingest():
 def signal_ingest_status():
     with ingest_lock:
         running = bool(INGEST_SERVICE and getattr(INGEST_SERVICE, "is_running", False))
+        last_poll_at = getattr(INGEST_SERVICE, "last_poll_at", None) if INGEST_SERVICE else None
+        last_poll_summary = getattr(INGEST_SERVICE, "last_poll_summary", None) if INGEST_SERVICE else None
+        account_errors = dict(getattr(INGEST_SERVICE, "last_account_errors", {})) if INGEST_SERVICE else {}
     try:
         sb = get_supabase_service().client
         accounts = (
@@ -125,6 +128,12 @@ def signal_ingest_status():
             .execute()
             .data or []
         )
+        # Surface the poll-loop debug state per account — the mobile app's
+        # Log Viewer only captures client-side console output, so this is
+        # the only visibility into backend ingest activity available from
+        # the phone without Railway log access.
+        for a in accounts:
+            a["last_poll_error"] = account_errors.get(a["id"])
         has_token = bool(os.getenv("X_API_BEARER_TOKEN"))
     except Exception as e:
         logger.error("[social-signals/status] %s", e)
@@ -132,6 +141,8 @@ def signal_ingest_status():
     return jsonify({
         "running": running,
         "live_since": _INGEST_LIVE_SINCE if running else None,
+        "last_poll_at": last_poll_at.isoformat() if last_poll_at else None,
+        "last_poll_summary": last_poll_summary,
         "toggle": True,
         "has_bearer_token": has_token,
         "accounts": accounts,

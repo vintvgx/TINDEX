@@ -29,7 +29,14 @@ interface SerializedLogEntry {
 
 class LogService {
   private logs: LogEntry[] = [];
-  private maxLogs: number = 100000; // Maximum number of logs to keep
+  // Was 100,000 — the whole array gets JSON.stringify'd and rewritten to
+  // disk on every debounced save, and read back in full on every launch.
+  // At 100k entries that read (kicked off from the constructor, before
+  // almost anything else has run) can take long enough to widen the
+  // startup race window that used to make initialize() silently discard
+  // logs (see initialize()). 3,000 is still far more than a debug session
+  // needs and keeps that read fast.
+  private maxLogs: number = 3000;
   private logFilePath: string;
   private saveTimeout: NodeJS.Timeout | null = null;
   private isInitialized: boolean = false;
@@ -60,6 +67,15 @@ class LogService {
 
     // Intercept console methods
     this.setupInterceptors();
+
+    // Proof-of-life entry, written directly to the in-memory array —
+    // deliberately bypassing console.* entirely. If this line never shows
+    // up in the Log Viewer, the bug is upstream of console interception
+    // (the modal isn't reading this same singleton instance, or the
+    // array/render path itself is broken) rather than in setupInterceptors().
+    // If it DOES show up but nothing else does, console.log/warn/error/info/
+    // debug calls genuinely aren't reaching addLog() — see setupInterceptors.
+    this.addLog('info', ['[LogService] singleton constructed']);
   }
 
   /**
@@ -68,16 +84,27 @@ class LogService {
   private async initialize(): Promise<void> {
     try {
       const fileInfo = await FileSystem.getInfoAsync(this.logFilePath);
-      
+
       if (fileInfo.exists) {
         const fileContent = await FileSystem.readAsStringAsync(this.logFilePath);
         const serializedLogs: SerializedLogEntry[] = JSON.parse(fileContent);
-        
+
         // Deserialize logs (convert ISO strings back to Date objects)
-        this.logs = serializedLogs.map((log) => ({
+        const loadedLogs = serializedLogs.map((log) => ({
           ...log,
           timestamp: new Date(log.timestamp),
         }));
+
+        // MERGE, do not replace: getInfoAsync + readAsStringAsync are async
+        // bridge calls, and console.log/warn/error calls made anywhere in
+        // the app during this window (which can genuinely take a while once
+        // the persisted file has grown large — see maxLogs) were already
+        // pushed onto this.logs by addLog(). Overwriting this.logs here, as
+        // this used to do, silently discarded every one of those — which on
+        // a real device is most of the app's startup logging, since this
+        // read is kicked off from the constructor before almost anything
+        // else has had a chance to run.
+        this.logs = [...loadedLogs, ...this.logs];
 
         // Ensure we don't exceed maxLogs
         if (this.logs.length > this.maxLogs) {
@@ -87,10 +114,11 @@ class LogService {
         }
       }
     } catch (error) {
-      // If file doesn't exist or is corrupted, start with empty logs
+      // If the file doesn't exist or is corrupted, just skip loading history —
+      // do NOT reset this.logs to [] here, that would wipe out everything
+      // captured since construction for the same reason overwriting did above.
       // Silently fail to prevent breaking app initialization
       this.originalConsole.error('Error initializing LogService from file:', error);
-      this.logs = [];
     } finally {
       this.isInitialized = true;
     }

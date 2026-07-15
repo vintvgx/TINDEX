@@ -58,6 +58,15 @@ class SignalIngestService:
         self.is_running = False
         self._rate_limited_until: Optional[datetime] = None
 
+        # In-memory debug surface for the admin/social-signals status screen —
+        # the mobile app's Log Viewer only captures client-side console
+        # output, so it has no visibility into this backend poll loop at all.
+        # Exposing these via /social-signals/status is the only way to
+        # "watch" ingest activity from the phone without Railway log access.
+        self.last_poll_at: Optional[datetime] = None
+        self.last_poll_summary: Optional[str] = None
+        self.last_account_errors: dict[str, str] = {}  # account_id -> error message
+
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
     async def start(self):
@@ -111,8 +120,10 @@ class SignalIngestService:
     # ── Poll cycle ───────────────────────────────────────────────────────────
 
     async def _poll_cycle(self):
+        self.last_poll_at = datetime.now(timezone.utc)
         accounts = await self._load_active_accounts()
         if not accounts:
+            self.last_poll_summary = "0 accounts resolved (check x_user_id lookups below)"
             return
 
         loop = asyncio.get_event_loop()
@@ -133,10 +144,12 @@ class SignalIngestService:
             None, lambda: self.x_client.search_recent(query, since_id)
         )
         if not tweets:
+            self.last_poll_summary = f"0 new tweets across {len(accounts)} account(s)"
             return
 
         logger.info("SignalIngestService: %d new tweet(s) across %d account(s)",
                      len(tweets), len(accounts))
+        self.last_poll_summary = f"{len(tweets)} new tweet(s) across {len(accounts)} account(s)"
 
         by_author = {a.get("x_user_id"): a for a in accounts if a.get("x_user_id")}
         latest_per_account: dict[str, str] = {}
@@ -321,12 +334,24 @@ class SignalIngestService:
                 uid = await loop.run_in_executor(None, lambda h=a["handle"]: self.x_client.lookup_user_id(h))
                 if uid:
                     a["x_user_id"] = uid
+                    self.last_account_errors.pop(a["id"], None)
                     await loop.run_in_executor(None, lambda aid=a["id"], u=uid: (
                         self.supabase.table("social_signal_accounts")
                         .update({"x_user_id": u}).eq("id", aid).execute()
                     ))
+                else:
+                    # Lookup call succeeded but X has no user for this handle —
+                    # most likely a typo (e.g. "optionsbuffet" vs the real
+                    # "OptionsBuffett") rather than an API failure, so this
+                    # would otherwise silently drop the account from every
+                    # poll forever with zero visibility.
+                    msg = f"X API returned no user for @{a['handle']} — check the handle spelling"
+                    self.last_account_errors[a["id"]] = msg
+                    logger.warning("SignalIngestService: %s", msg)
             except Exception as e:
-                logger.warning("SignalIngestService: could not resolve @%s: %s", a["handle"], e)
+                msg = f"lookup_user_id(@{a['handle']}) failed: {e}"
+                self.last_account_errors[a["id"]] = msg
+                logger.warning("SignalIngestService: %s", msg)
 
         return [a for a in accounts if a.get("x_user_id")]
 
