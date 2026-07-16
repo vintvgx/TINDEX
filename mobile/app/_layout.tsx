@@ -165,18 +165,19 @@ function AppContent() {
           return;
         }
 
-        // Handle contract price alert notifications
+        // Handle contract price alert notifications — Contracts is now the
+        // 3rd page of the Home tab's pager, not its own top-level tab.
         if (data.type === 'contract_price_alert') {
-          router.push('/(app)/(tabs)/options');
+          router.push({ pathname: '/(app)/(tabs)/feed', params: { section: 'contracts' } });
           return;
         }
 
         // confirm_entry gate: the modal itself is driven by polling
         // (PendingConfirmationProvider) so it appears regardless of which
         // screen is active — this tap handler is just a convenience deep
-        // link to the strategy tab where that modal naturally surfaces.
+        // link to the ORB tab's Strategy page where that modal naturally surfaces.
         if (data.type === 'confirm_entry') {
-          router.push('/(app)/(tabs)/strategy');
+          router.push({ pathname: '/(app)/(tabs)/orb', params: { section: 'strategy' } });
           return;
         }
 

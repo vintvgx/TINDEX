@@ -6,14 +6,52 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useToast } from '@/common/components/ui/Toast';
 import { useStrategyPositions } from '@/hooks/queries/strategy/useStrategyPosition';
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
-import { useAlpacaAccount } from '@/hooks/queries/strategy/useAlpacaAccount';
-import { useForceClosePosition } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
-import { PositionCard } from '@/common/components/strategy/PositionCard';
-import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
-import type { FibLevels } from '@/common/types/strategy';
+import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
+import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import { LivePositionPanel } from '@/common/components/strategy/LivePositionPanel';
+import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
+import { AddContractModal } from '@/common/components/strategy/AddContractModal';
+import type { FibLevels, ImmediatePosition } from '@/common/types/strategy';
+
+/**
+ * /strategy/immediate-positions now returns the same shape /strategy/positions
+ * does (active, hard_stop, tp1, tp2, qty_total, fib_levels, ...) — see that
+ * route's docstring — but the ImmediatePosition TS type still only declares
+ * the older, narrower field set the "Immediate Trades" dashboard card reads
+ * (pnl/pnl_pct/mid_price). This reads the extra fields off the same runtime
+ * object rather than widening ImmediatePosition, so dashboard.tsx's usage is
+ * untouched.
+ */
+function toPositionEntry(pos: ImmediatePosition): PositionEntry {
+  const full = pos as ImmediatePosition & Partial<PositionEntry>;
+  return {
+    strategy_id:        pos.strategy_id,
+    strategy_name:       full.strategy_name ?? '',
+    active:              full.active ?? true,
+    paper_mode:          pos.paper_mode,
+    ticker:              pos.ticker,
+    profile:             pos.profile,
+    direction:           pos.direction,
+    contract:            pos.contract,
+    qty_remaining:       pos.qty_remaining,
+    qty_total:           full.qty_total,
+    entry_premium:       pos.entry_premium ?? undefined,
+    current_price:       full.current_price ?? pos.mid_price ?? undefined,
+    unrealized_pnl:      full.unrealized_pnl ?? pos.pnl ?? undefined,
+    unrealized_pnl_pct:  full.unrealized_pnl_pct ?? pos.pnl_pct ?? undefined,
+    hard_stop:           full.hard_stop,
+    tp1:                 full.tp1,
+    tp2:                 full.tp2,
+    tp1_hit:             pos.tp1_hit,
+    tp2_hit:             pos.tp2_hit,
+    be_stop_active:      full.be_stop_active,
+    runner_trail:        full.runner_trail,
+    fib_levels:          full.fib_levels,
+  };
+}
 
 const MOCK_POSITIONS: PositionEntry[] = [
   {
@@ -46,15 +84,37 @@ const MOCK_POSITIONS: PositionEntry[] = [
   },
 ];
 
-export default function PositionScreen() {
+interface Props {
+  /**
+   * True when rendered as a SegmentedPager scene (Home/Accounts tabs) instead
+   * of a standalone pushed route — hides the back arrow (there's nothing to
+   * pop back to within a pager page) and the redundant title (the segment
+   * pill above already names this page).
+   */
+  embedded?: boolean;
+}
+
+export default function PositionScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
-  const toast  = useToast();
   const [showMock, setShowMock] = useState(false);
   const [mode, setMode] = useState<'live' | 'paper'>('live');
 
-  const { data: livePositions = [], isLoading } = useStrategyPositions();
-  const { data: account } = useAlpacaAccount();
-  const { mutate: forceClose } = useForceClosePosition();
+  const { data: stratPositions = [], isLoading: stratLoading } = useStrategyPositions();
+  // Ad-hoc immediate trades (not tied to a saved strategy) — merged in so Live
+  // Positions shows every open trade, not just saved-strategy ones. Before this,
+  // an immediate trade was visible on Dashboard but invisible here, which meant
+  // it couldn't be edited (SL/TP) or exited from this screen at all.
+  const { data: immPositions = [], isLoading: immLoading } = useImmediatePositions();
+  const isLoading = stratLoading || immLoading;
+  const livePositions = [...stratPositions, ...immPositions.map(toPositionEntry)];
+  // Both accounts, each built from its own dedicated paper/live TradingClient
+  // (unlike /strategy/account, which resolved to "whichever saved strategy
+  // engine happens to be first" — unrelated to which account an active trade
+  // was actually in, and the reason the balance shown here could silently be
+  // the wrong account's the whole session). Picking by `mode` below means
+  // this always matches what's actually being viewed.
+  const { data: accounts } = useAlpacaBothAccounts();
+  const account = accounts ? (mode === 'live' ? accounts.live : accounts.paper) : undefined;
 
   const positions         = showMock ? MOCK_POSITIONS : livePositions;
   const activePositions   = positions.filter(p => p.active);
@@ -63,24 +123,23 @@ export default function PositionScreen() {
   );
   const activeCount = filteredPositions.length;
 
-  const handleForceClose = (strategyId: string) => {
-    forceClose(strategyId, {
-      onSuccess: () => toast.success('Position closed'),
-      onError:   () => toast.error('Close failed — check Alpaca manually'),
-    });
-  };
+  const toggleMode = () => setMode(m => (m === 'live' ? 'paper' : 'live'));
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
 
       {/* ── Sticky header ── */}
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.headerSide}>
-          <Ionicons name="arrow-back" size={22} color={colors.text} />
-        </TouchableOpacity>
+        {embedded ? (
+          <View style={styles.headerSide} />
+        ) : (
+          <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.headerSide}>
+            <Ionicons name="arrow-back" size={22} color={colors.text} />
+          </TouchableOpacity>
+        )}
 
         <View style={styles.headerCenter}>
-          <Text style={[styles.title, { color: colors.text }]}>Live Positions</Text>
+          {!embedded && <Text style={[styles.title, { color: colors.text }]}>Live Positions</Text>}
           {activeCount > 0 && (
             <View style={[styles.activeBadge, { backgroundColor: colors.success + '22' }]}>
               <View style={[styles.liveDot, { backgroundColor: colors.success }]} />
@@ -106,12 +165,17 @@ export default function PositionScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* ── Account bar (sticky) ── */}
-      {account && (
-        <View style={[styles.accountBar, { backgroundColor: colors.card, borderBottomColor: colors.border }]}>
+      {/* ── Account bar (sticky) — tap to toggle Live/Paper ── */}
+      {account?.available && (
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={toggleMode}
+          style={[styles.accountBar, { backgroundColor: colors.card, borderBottomColor: colors.border }]}
+        >
           <AccountStat
-            label={account.paper_mode ? 'Paper Equity' : 'Live Equity'}
+            label={mode === 'live' ? 'Live Equity' : 'Paper Equity'}
             value={`$${account.equity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+            color={mode === 'live' ? '#30D158' : '#FF9F0A'}
             colors={colors}
           />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
@@ -127,7 +191,8 @@ export default function PositionScreen() {
             value={String(account.day_trade_count)}
             colors={colors}
           />
-        </View>
+          <Ionicons name="swap-horizontal" size={16} color={colors.tabBarInactive} style={{ marginLeft: 4 }} />
+        </TouchableOpacity>
       )}
 
       {/* ── LIVE / PAPER toggle ── */}
@@ -200,66 +265,117 @@ export default function PositionScreen() {
         ) : (
           filteredPositions
             .map(pos => (
-              <View key={pos.strategy_id} style={styles.positionBlock}>
-
-                {/* Strategy label row */}
-                <View style={styles.stratLabelRow}>
-                  <Text style={[styles.stratTicker, { color: colors.text }]}>{pos.ticker}</Text>
-                  {pos.strategy_name ? (
-                    <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>{pos.strategy_name}</Text>
-                  ) : null}
-                  {pos.paper_mode && (
-                    <View style={[styles.paperBadge, { backgroundColor: '#FF9F0A22' }]}>
-                      <Text style={[styles.paperBadgeText, { color: '#FF9F0A' }]}>PAPER</Text>
-                    </View>
-                  )}
-                </View>
-
-                <PositionCard
-                  position={pos}
-                  onForceClose={pos.active && !showMock ? () => handleForceClose(pos.strategy_id) : undefined}
-                />
-                {pos.active && !showMock && (
-                  <EditExitsButton
-                    mode="orb"
-                    strategy_id={pos.strategy_id}
-                    ticker={pos.ticker}
-                    hard_stop={pos.hard_stop ?? 0}
-                    tp1={pos.tp1 ?? 0}
-                    tp2={pos.tp2}
-                    entry_premium={pos.entry_premium ?? 0}
-                    tp1_hit={pos.tp1_hit}
-                    tp2_hit={pos.tp2_hit}
-                    style={{ alignSelf: 'stretch', marginTop: 8 }}
-                  />
-                )}
-
-                {/* Fib levels */}
-                {pos.fib_levels && (
-                  <View style={[styles.fibCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    <Text style={[styles.fibTitle, { color: colors.tabBarInactive }]}>Fibonacci Levels</Text>
-                    <View style={styles.fibGrid}>
-                      {Object.entries(pos.fib_levels)
-                        .filter(([k]) => !['orh', 'orl', 'mid'].includes(k))
-                        .map(([key, val]) => (
-                          <View key={key} style={styles.fibItem}>
-                            <Text style={[styles.fibKey, { color: colors.tabBarInactive }]}>
-                              {key.replace('_', ' ').replace('up', '↑').replace('dn', '↓')}
-                            </Text>
-                            <Text style={[styles.fibVal, { color: colors.text }]}>
-                              ${(val as number).toFixed(2)}
-                            </Text>
-                          </View>
-                        ))}
-                    </View>
-                  </View>
-                )}
-              </View>
+              <PositionRow key={pos.strategy_id} pos={pos} showMock={showMock} colors={colors} />
             ))
         )}
         <View style={{ height: 100 }} />
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+// ── PositionRow ────────────────────────────────────────────────────────────────
+// Owns the live-price WS subscription + exit-modal state for one position —
+// same shape as strategy.tsx's StrategyCard/ImmediatePositionCard, so each
+// row here needs its own component (hooks can't be called per-item inside
+// a parent's .map()).
+
+function PositionRow({ pos, showMock, colors }: { pos: PositionEntry; showMock: boolean; colors: any }) {
+  const { data: live, connected } = useStrategyLivePrice(pos.strategy_id, pos.active && !showMock);
+  const [exitOpen, setExitOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const accentColor = pos.direction === 'CALL' ? colors.success : colors.error;
+
+  return (
+    <View style={styles.positionBlock}>
+      {/* Strategy label row */}
+      <View style={styles.stratLabelRow}>
+        <Text style={[styles.stratTicker, { color: colors.text }]}>{pos.ticker}</Text>
+        {pos.strategy_name ? (
+          <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>{pos.strategy_name}</Text>
+        ) : null}
+        {pos.paper_mode && (
+          <View style={[styles.paperBadge, { backgroundColor: '#FF9F0A22' }]}>
+            <Text style={[styles.paperBadgeText, { color: '#FF9F0A' }]}>PAPER</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Same live-position display used for an active trade within Strategy */}
+      <LivePositionPanel
+        live={live}
+        staticFallback={{
+          contract:      pos.contract,
+          entry_premium: pos.entry_premium,
+          mid_price:     pos.current_price,
+          qty_remaining: pos.qty_remaining,
+          pnl:           pos.unrealized_pnl,
+          pnl_pct:       pos.unrealized_pnl_pct,
+          hard_stop:     pos.hard_stop,
+          tp1:           pos.tp1,
+          tp2:           pos.tp2,
+          tp1_hit:       pos.tp1_hit,
+          tp2_hit:       pos.tp2_hit,
+        }}
+        streaming={connected}
+        isMock={showMock}
+        accentColor={accentColor}
+        strategyId={pos.strategy_id}
+        ticker={pos.ticker}
+        paperMode={pos.paper_mode}
+        onExitPress={() => setExitOpen(true)}
+        onAddPress={showMock ? undefined : () => setAddOpen(true)}
+        colors={colors}
+      />
+
+      {/* Fib levels */}
+      {pos.fib_levels && (
+        <View style={[styles.fibCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.fibTitle, { color: colors.tabBarInactive }]}>Fibonacci Levels</Text>
+          <View style={styles.fibGrid}>
+            {Object.entries(pos.fib_levels)
+              .filter(([k]) => !['orh', 'orl', 'mid'].includes(k))
+              .map(([key, val]) => (
+                <View key={key} style={styles.fibItem}>
+                  <Text style={[styles.fibKey, { color: colors.tabBarInactive }]}>
+                    {key.replace('_', ' ').replace('up', '↑').replace('dn', '↓')}
+                  </Text>
+                  <Text style={[styles.fibVal, { color: colors.text }]}>
+                    ${(val as number).toFixed(2)}
+                  </Text>
+                </View>
+              ))}
+          </View>
+        </View>
+      )}
+
+      {!showMock && (
+        <ExitTradeModal
+          visible={exitOpen}
+          colors={colors}
+          strategyId={pos.strategy_id}
+          ticker={pos.ticker}
+          contract={live?.contract ?? pos.contract}
+          qtyRemaining={live?.qty_remaining ?? pos.qty_remaining ?? 1}
+          paperMode={pos.paper_mode}
+          onClose={() => setExitOpen(false)}
+        />
+      )}
+      {!showMock && (
+        <AddContractModal
+          visible={addOpen}
+          colors={colors}
+          strategyId={pos.strategy_id}
+          ticker={pos.ticker}
+          contract={live?.contract ?? pos.contract}
+          qtyHeld={live?.qty_remaining ?? pos.qty_remaining ?? 0}
+          entryPremium={live?.entry_premium ?? pos.entry_premium}
+          midPrice={live?.mid_price ?? pos.current_price}
+          paperMode={pos.paper_mode}
+          onClose={() => setAddOpen(false)}
+        />
+      )}
+    </View>
   );
 }
 

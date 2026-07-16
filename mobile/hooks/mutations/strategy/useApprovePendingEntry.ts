@@ -8,6 +8,7 @@ interface ApprovePendingEntryPayload {
   hard_stop?: number;
   tp1?: number;
   tp2?: number;
+  qty?: number;
 }
 
 export function useApprovePendingEntry() {

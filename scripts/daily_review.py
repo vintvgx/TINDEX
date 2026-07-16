@@ -70,26 +70,27 @@ def main():
 
     sb = create_client(url, key)
 
-    # ── Generate review ───────────────────────────────────────────────────────
-    logger.info("Generating review for %s …", session_date)
-    gen = ReviewGenerator(sb)
-    content, meta = gen.generate(session_date)
-
-    logger.info(
-        "Review generated — %d trades, net P&L $%.2f, win rate %.1f%%",
-        meta["trade_count"], meta["net_pnl"], meta["win_rate"],
-    )
-
-    # ── Write to disk ─────────────────────────────────────────────────────────
+    # ── Generate review (paper + live, fully decoupled) ──────────────────────
     REVIEW_DIR.mkdir(parents=True, exist_ok=True)
-    filename = REVIEW_DIR / f"trade-review-{session_date}.md"
-    filename.write_text(content, encoding="utf-8")
-    logger.info("Written → %s", filename)
+    gen = ReviewGenerator(sb)
 
-    # ── Save to Supabase ──────────────────────────────────────────────────────
-    if not args.no_supabase_save:
-        trades = gen._fetch_trades(session_date)
-        gen.save_to_supabase(session_date, content, trades, meta)
+    for paper_mode in (True, False):
+        label = "paper" if paper_mode else "live"
+        logger.info("Generating %s review for %s …", label, session_date)
+        content, meta = gen.generate(session_date, paper_mode)
+
+        logger.info(
+            "%s review generated — %d trades, net P&L $%.2f, win rate %.1f%%",
+            label.capitalize(), meta["trade_count"], meta["net_pnl"], meta["win_rate"],
+        )
+
+        filename = REVIEW_DIR / f"trade-review-{session_date}-{label}.md"
+        filename.write_text(content, encoding="utf-8")
+        logger.info("Written → %s", filename)
+
+        if not args.no_supabase_save:
+            trades = gen._fetch_trades(session_date, paper_mode)
+            gen.save_to_supabase(session_date, content, trades, meta, paper_mode)
 
 
 if __name__ == "__main__":

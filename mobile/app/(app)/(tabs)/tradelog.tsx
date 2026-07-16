@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator, LayoutAnimation, Platform, UIManager } from 'react-native';
+import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -8,9 +8,13 @@ import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
 import { useStrategyStats, useStrategyStatsByProfile, useStrategyPerformance } from '@/hooks/queries/strategy/useStrategyStats';
 import { useStrategyDebugLogs } from '@/hooks/queries/strategy/useStrategyDebugLogs';
 import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
+import { useAlpacaAccountsHistory } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { useReconcileTrades } from '@/hooks/mutations/strategy/useReconcileTrades';
+import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { useQuery } from '@tanstack/react-query';
 import type { ProfileKey, ORBTrade, StrategyStats, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel, TradeType, ExitStage } from '@/common/types/strategy';
 import { formatContractSymbol } from '@/lib/formatContract';
+import { useToast } from '@/common/components/ui/Toast';
 
 const TODAY = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
 
@@ -85,14 +89,24 @@ function useSkippedSessions() {
   });
 }
 
-export default function TradeLogScreen() {
+interface Props {
+  /** True when rendered as a SegmentedPager scene (ORB tab) — hides the back
+   *  arrow and the redundant title (the segment pill above already names it). */
+  embedded?: boolean;
+}
+
+export default function TradeLogScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
+  const toast = useToast();
   const [filter, setFilter]         = useState<Filter>('ALL');
   const [dateFilter, setDateFilter] = useState<DateFilter>('ALL');
   const [tab, setTab]               = useState<Tab>('log');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [mode, setMode]             = useState<AccountMode>('live');
+  const [refreshing, setRefreshing] = useState(false);
 
   const tradeDate = dateFilter === 'TODAY' ? TODAY : null;
+  const wantPaper = mode === 'paper';
 
   const { data: trades,  isLoading: tradesLoading } = useStrategyTrades({
     profile: filter, limit: 100, trade_date: tradeDate,
@@ -102,6 +116,45 @@ export default function TradeLogScreen() {
   const { data: performance }                       = useStrategyPerformance();
   const { data: skipped }                           = useSkippedSessions();
   const { data: sessionStates }                     = useStrategySessionState();
+  const { data: acctHistory }                       = useAlpacaAccountsHistory();
+  const reconcileTrades                             = useReconcileTrades();
+
+  // Pull-to-refresh doesn't just refetch — it cross-references every still-
+  // open trade against Alpaca's real position state first, so a position
+  // closed directly on Alpaca (bypassing this app) gets its exit data filled
+  // in instead of sitting "open" forever with no P/L. See
+  // docs/incidents/2026-07-14-position-lost-on-restart.md.
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const result = await reconcileTrades.mutateAsync();
+      if (result.mismatches.length > 0) {
+        toast.error(
+          `${result.mismatches.length} trade(s) marked closed but still open at the broker — check manually`,
+        );
+      } else if (result.reconciled.length > 0) {
+        toast.info(`Reconciled ${result.reconciled.length} trade(s) from Alpaca`);
+      } else if (result.errors.length > 0) {
+        toast.error(`${result.errors.length} trade(s) failed to reconcile`);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Reconcile failed');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Trades don't carry which account they trace back to except via
+  // `paper_mode` — split here so the toggle mirrors position.tsx/strategy.tsx.
+  const modeTrades = useMemo(
+    () => (trades ?? []).filter(t => !!t.paper_mode === wantPaper),
+    [trades, wantPaper],
+  );
+  const modeCounts = useMemo(() => ({
+    live:  (trades ?? []).filter(t => !t.paper_mode).length,
+    paper: (trades ?? []).filter(t => !!t.paper_mode).length,
+  }), [trades]);
+  const modeAccountEquity = wantPaper ? acctHistory?.paper?.equity : acctHistory?.live?.equity;
 
   const haltedEngines = useMemo(() => {
     if (!sessionStates) return [];
@@ -112,13 +165,15 @@ export default function TradeLogScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
 
       {/* Sticky header */}
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
-          <Ionicons name="arrow-back" size={22} color={colors.text} />
-        </TouchableOpacity>
-        <Text style={[styles.title, { color: colors.text }]}>Trade Log & Stats</Text>
-        <View style={{ width: 22 }} />
-      </View>
+      {!embedded && (
+        <View style={[styles.header, { borderBottomColor: colors.border }]}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={12}>
+            <Ionicons name="arrow-back" size={22} color={colors.text} />
+          </TouchableOpacity>
+          <Text style={[styles.title, { color: colors.text }]}>Trade Log & Stats</Text>
+          <View style={{ width: 22 }} />
+        </View>
+      )}
 
       {/* Tab toggle (sticky) */}
       <View style={[styles.tabToggleWrap, { backgroundColor: colors.background }]}>
@@ -137,6 +192,11 @@ export default function TradeLogScreen() {
         </View>
       </View>
 
+      {/* Live/Paper account toggle — same pattern as position.tsx/strategy.tsx */}
+      {tab === 'log' && (
+        <LiveModeToggle mode={mode} onChange={setMode} counts={modeCounts} colors={colors} />
+      )}
+
       {/* Session halt banner */}
       {haltedEngines.length > 0 && (
         <View style={{ backgroundColor: '#7f1d1d', paddingHorizontal: 16, paddingVertical: 10,
@@ -152,7 +212,13 @@ export default function TradeLogScreen() {
       {tab === 'debug' ? (
         <DebugLogPanel colors={colors} />
       ) : (
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={colors.accent} />
+        }
+      >
 
         {/* Date + Profile filter row */}
         <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 12 }}>
@@ -198,16 +264,20 @@ export default function TradeLogScreen() {
             <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
           ) : (
             <>
-              {(!trades || trades.length === 0) && (
-                <Text style={[styles.empty, { color: colors.tabBarInactive }]}>No trades yet</Text>
+              {modeTrades.length === 0 && (
+                <Text style={[styles.empty, { color: colors.tabBarInactive }]}>
+                  No {mode} trades yet
+                </Text>
               )}
-              {trades?.map(trade => (
+              {modeTrades.map(trade => (
                 <TradeRow
                   key={trade.id}
                   trade={trade}
                   colors={colors}
                   expanded={expandedId === trade.id}
                   onToggle={() => setExpandedId(id => id === trade.id ? null : trade.id)}
+                  accountEquity={modeAccountEquity}
+                  accountLabel={mode === 'live' ? 'Live' : 'Paper'}
                 />
               ))}
 
@@ -270,6 +340,8 @@ const EXIT_REASON_LABELS: Record<string, string> = {
   FORCE_CLOSE:       'Force Closed',
   MANUAL_EXIT:         'Manual Exit',
   REVERSAL_TIME_CUT:   'Reversal Bleed Stop (20m)',
+  'RECONCILED FROM ALPACA':         'Exit Reason: Reconciled from Alpaca',
+  'UNKNOWN — RECONCILED FROM ALPACA': 'Exit Reason: Unknown — pulled from Alpaca',
 };
 
 const fmtEt = (iso: string): string => {
@@ -405,6 +477,14 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
         value={`${trade.qty_entered} entered · ${trade.qty_exited} exited`}
         colors={colors}
       />
+      {trade.account_balance_before != null && trade.account_balance_after != null && (
+        <DetailRow
+          label="Account Balance"
+          value={`$${trade.account_balance_before.toFixed(2)} → $${trade.account_balance_after.toFixed(2)}`}
+          valueColor={pnlColor}
+          colors={colors}
+        />
+      )}
 
       {/* Per-stage exit breakdown */}
       {trade.exit_stages && trade.exit_stages.length > 0 && (
@@ -468,9 +548,14 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
 // ── TradeRow ──────────────────────────────────────────────────────────────────
 
 const TradeRow = ({
-  trade, colors, expanded, onToggle,
+  trade, colors, expanded, onToggle, accountEquity, accountLabel,
 }: {
   trade: ORBTrade; colors: any; expanded: boolean; onToggle: () => void;
+  /** Current equity of the account this trade belongs to (paper or live),
+   *  so the card can show how this trade's realized P&L relates to the
+   *  account's current total, not just the trade in isolation. */
+  accountEquity?: number;
+  accountLabel?: string;
 }) => {
   const pnl          = trade.pnl ?? 0;
   const isOpen       = trade.exit_time == null;
@@ -539,6 +624,23 @@ const TradeRow = ({
             ${trade.entry_premium?.toFixed(2) ?? '—'} → {trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—'}
             {exitLabel ? `  ·  ${exitLabel}` : ''}
           </Text>
+
+          {/* Real account-level impact of this trade, snapshotted at entry and
+              exit — e.g. "$300.12 → $240.12  ·  -$60.00 account swing". Only
+              present for trades logged after this tracking was added; older
+              trades fall back to the current-balance approximation below. */}
+          {!isOpen && trade.account_balance_change != null ? (
+            <Text style={[styles.tradeAcctRef, { color: colors.tabBarInactive }]} numberOfLines={1}>
+              {trade.account_balance_before != null && trade.account_balance_after != null
+                ? `$${trade.account_balance_before.toFixed(2)} → $${trade.account_balance_after.toFixed(2)}  ·  `
+                : ''}
+              {trade.account_balance_change >= 0 ? '+' : '-'}${Math.abs(trade.account_balance_change).toFixed(2)} account swing
+            </Text>
+          ) : !isOpen && accountEquity != null && (
+            <Text style={[styles.tradeAcctRef, { color: colors.tabBarInactive }]} numberOfLines={1}>
+              {pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toFixed(2)} of ${accountEquity.toFixed(2)} {accountLabel} balance
+            </Text>
+          )}
         </View>
 
         {/* P&L */}
@@ -856,6 +958,7 @@ const styles = StyleSheet.create({
   tagText:  { fontSize: 9, fontWeight: '800', letterSpacing: 0.4 },
   tradeContract: { fontSize: 12, fontWeight: '600' },
   tradeMeta: { fontSize: 11 },
+  tradeAcctRef: { fontSize: 10.5, marginTop: 1, fontStyle: 'italic' },
   tradeRight: { alignItems: 'flex-end', justifyContent: 'center', gap: 4 },
   tradePnl:  { fontSize: 18, fontWeight: '800', letterSpacing: 0.2 },
   pnlPctPill: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },

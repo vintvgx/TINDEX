@@ -7,22 +7,40 @@ export interface ORBServiceStatus {
   calculation_phase?: boolean;
   active_tickers?: string[];
   orb_ranges_count?: number;
+  live_since?: string | null;
+  toggle?: boolean;
 }
 
 export interface ContractsServiceStatus {
   running: boolean;
   poll_interval_seconds?: number;
   market_hours_only?: boolean;
+  live_since?: string | null;
+  toggle?: boolean;
+}
+
+/** Always-on infra streams — status-only, no start/stop toggle (see backend). */
+export interface InfraStreamStatus {
+  running: boolean;
+  clients?: number;
+  toggle?: boolean;
+  error?: string;
 }
 
 export interface ServicesStatus {
   orb: ORBServiceStatus;
   contracts: ContractsServiceStatus;
+  option_quote_stream: InfraStreamStatus;
+  price_stream: InfraStreamStatus;
+  social_signals_price_stream: InfraStreamStatus;
 }
 
 const FALLBACK: ServicesStatus = {
-  orb: { running: false },
-  contracts: { running: false },
+  orb: { running: false, toggle: true },
+  contracts: { running: false, toggle: true },
+  option_quote_stream: { running: false, toggle: false },
+  price_stream: { running: false, toggle: false },
+  social_signals_price_stream: { running: false, toggle: false },
 };
 
 function isWithinServiceHours(): boolean {
@@ -49,11 +67,15 @@ function isWithinServiceHours(): boolean {
 }
 
 /**
- * Poll /services/status during market hours (9 AM – 5 PM ET).
- * Returns combined status for all registered backend services.
+ * Poll /services/status. By default only polls during market hours (9 AM –
+ * 5 PM ET), matching the existing in-app status indicators this hook backs.
+ * Pass `alwaysPoll: true` for the admin Service Status screen — the whole
+ * point of that screen is to show what's running (or silently isn't) at any
+ * time of day, not just during the trading session.
  * React Query deduplicates this across components — safe to call from multiple screens.
  */
-export function useServicesStatus() {
+export function useServicesStatus(options: { alwaysPoll?: boolean } = {}) {
+  const { alwaysPoll = false } = options;
   const [isServiceHours, setIsServiceHours] = useState(() => isWithinServiceHours());
 
   useEffect(() => {
@@ -61,6 +83,8 @@ export function useServicesStatus() {
     const id = setInterval(() => setIsServiceHours(isWithinServiceHours()), 60_000);
     return () => clearInterval(id);
   }, []);
+
+  const shouldPoll = alwaysPoll || isServiceHours;
 
   return useQuery<ServicesStatus>({
     queryKey: ['services-status'],
@@ -71,9 +95,9 @@ export function useServicesStatus() {
       if (!res.ok) throw new Error(`Services status fetch failed: ${res.statusText}`);
       return res.json();
     },
-    enabled: isServiceHours,
-    staleTime: 30_000,
-    refetchInterval: isServiceHours ? 10_000 : false,
+    enabled: shouldPoll,
+    staleTime: 10_000,
+    refetchInterval: shouldPoll ? 10_000 : false,
     placeholderData: FALLBACK,
     retry: 2,
     retryDelay: 1000,

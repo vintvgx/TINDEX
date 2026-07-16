@@ -216,21 +216,21 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
       maxContentHeight={120}
     >
       {selectedDate && (
-        <Text className="text-gray-400 text-sm mb-4">
+        <Text className="text-gray-600 dark:text-gray-400 text-sm mb-4">
           Date: {format(selectedDate, "MMMM d, yyyy")}
         </Text>
       )}
 
       {/* Toggle: Trade | Option */}
-      <View className="flex-row rounded-xl bg-gray-800 p-1 mb-6">
+      <View className="flex-row rounded-xl bg-gray-100 dark:bg-gray-800 p-1 mb-6">
         <TouchableOpacity
           onPress={() => setMode("trade")}
           className={`flex-1 py-3 rounded-lg items-center ${
-            mode === "trade" ? "bg-gray-700" : "bg-transparent"
+            mode === "trade" ? "bg-white dark:bg-gray-700" : "bg-transparent"
           }`}
         >
           <Text
-            className={`font-semibold ${mode === "trade" ? "text-white" : "text-gray-500"}`}
+            className={`font-semibold ${mode === "trade" ? "text-black dark:text-white" : "text-gray-500"}`}
           >
             Trade
           </Text>
@@ -238,11 +238,11 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
         <TouchableOpacity
           onPress={() => setMode("option")}
           className={`flex-1 py-3 rounded-lg items-center ${
-            mode === "option" ? "bg-gray-700" : "bg-transparent"
+            mode === "option" ? "bg-white dark:bg-gray-700" : "bg-transparent"
           }`}
         >
           <Text
-            className={`font-semibold ${mode === "option" ? "text-white" : "text-gray-500"}`}
+            className={`font-semibold ${mode === "option" ? "text-black dark:text-white" : "text-gray-500"}`}
           >
             Option
           </Text>
@@ -251,7 +251,7 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
 
       {/* Ticker (both) */}
       <View className="mb-4">
-        <Text className="text-base font-semibold text-white mb-2">Ticker *</Text>
+        <Text className="text-base font-semibold text-black dark:text-white mb-2">Ticker *</Text>
         <TextInput
           value={ticker}
           onChangeText={(t) => {
@@ -262,7 +262,7 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
           placeholderTextColor="#6b7280"
           autoCapitalize="characters"
           autoCorrect={false}
-          className="border border-gray-700 rounded-lg p-4 text-base text-white bg-gray-800"
+          className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 text-base text-black dark:text-white bg-gray-100 dark:bg-gray-800"
           editable={!isSubmitting}
         />
       </View>
@@ -271,11 +271,11 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
         <>
           <View className="mb-4">
             <View className="flex-row items-center justify-between mb-2">
-              <Text className="text-base font-semibold text-white">Price per share *</Text>
+              <Text className="text-base font-semibold text-black dark:text-white">Price per share *</Text>
               {isTickerPriceLoading && (
                 <View className="flex-row items-center">
                   <ActivityIndicator size="small" color="#9ca3af" />
-                  <Text className="text-xs text-gray-400 ml-2">Fetching current price…</Text>
+                  <Text className="text-xs text-gray-600 dark:text-gray-400 ml-2">Fetching current price…</Text>
                 </View>
               )}
             </View>
@@ -288,12 +288,12 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
               placeholder="0.00"
               keyboardType="decimal-pad"
               placeholderTextColor="#6b7280"
-              className="border border-gray-700 rounded-lg p-4 text-base text-white bg-gray-800"
+              className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 text-base text-black dark:text-white bg-gray-100 dark:bg-gray-800"
               editable={!isSubmitting}
             />
           </View>
           <View className="mb-4">
-            <Text className="text-base font-semibold text-white mb-2">Shares *</Text>
+            <Text className="text-base font-semibold text-black dark:text-white mb-2">Shares *</Text>
             <TextInput
               value={shares}
               onChangeText={(t) => {
@@ -303,14 +303,14 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
               placeholder="0"
               keyboardType="number-pad"
               placeholderTextColor="#6b7280"
-              className="border border-gray-700 rounded-lg p-4 text-base text-white bg-gray-800"
+              className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 text-base text-black dark:text-white bg-gray-100 dark:bg-gray-800"
               editable={!isSubmitting}
             />
           </View>
           {tradeEstimatedCost != null && (
-            <View className="mb-4 rounded-lg bg-gray-800/80 p-4 border border-gray-700">
-              <Text className="text-gray-400 text-sm mb-1">Estimated cost</Text>
-              <Text className="text-white text-xl font-bold">
+            <View className="mb-4 rounded-lg bg-gray-100/80 dark:bg-gray-800/80 p-4 border border-gray-200 dark:border-gray-700">
+              <Text className="text-gray-600 dark:text-gray-400 text-sm mb-1">Estimated cost</Text>
+              <Text className="text-black dark:text-white text-xl font-bold">
                 ${tradeEstimatedCost.toFixed(2)}
               </Text>
             </View>
@@ -319,8 +319,8 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
       ) : (
         <>
           <View className="mb-4">
-            <Text className="text-base font-semibold text-white mb-2">Type</Text>
-            <View className="flex-row rounded-lg bg-gray-800 border border-gray-700 p-1">
+            <Text className="text-base font-semibold text-black dark:text-white mb-2">Type</Text>
+            <View className="flex-row rounded-lg bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 p-1">
               <TouchableOpacity
                 onPress={() => setOptionType("CALL")}
                 className={`flex-1 py-3 rounded-md items-center ${
@@ -352,7 +352,7 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
             </View>
           </View>
           <View className="mb-4">
-            <Text className="text-base font-semibold text-white mb-2">Strike *</Text>
+            <Text className="text-base font-semibold text-black dark:text-white mb-2">Strike *</Text>
             <TextInput
               value={strike}
               onChangeText={(t) => {
@@ -362,12 +362,12 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
               placeholder="e.g. 150.00"
               keyboardType="decimal-pad"
               placeholderTextColor="#6b7280"
-              className="border border-gray-700 rounded-lg p-4 text-base text-white bg-gray-800"
+              className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 text-base text-black dark:text-white bg-gray-100 dark:bg-gray-800"
               editable={!isSubmitting}
             />
           </View>
           <View className="mb-4">
-            <Text className="text-base font-semibold text-white mb-2">Expiration (YYYY-MM-DD) *</Text>
+            <Text className="text-base font-semibold text-black dark:text-white mb-2">Expiration (YYYY-MM-DD) *</Text>
             <TextInput
               value={expirationDate}
               onChangeText={(t) => {
@@ -376,12 +376,12 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
               }}
               placeholder="2025-03-21"
               placeholderTextColor="#6b7280"
-              className="border border-gray-700 rounded-lg p-4 text-base text-white bg-gray-800"
+              className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 text-base text-black dark:text-white bg-gray-100 dark:bg-gray-800"
               editable={!isSubmitting}
             />
           </View>
           <View className="mb-4">
-            <Text className="text-base font-semibold text-white mb-2">Premium per contract *</Text>
+            <Text className="text-base font-semibold text-black dark:text-white mb-2">Premium per contract *</Text>
             <TextInput
               value={premiumPerContract}
               onChangeText={(t) => {
@@ -391,13 +391,13 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
               placeholder="e.g. 2.50"
               keyboardType="decimal-pad"
               placeholderTextColor="#6b7280"
-              className="border border-gray-700 rounded-lg p-4 text-base text-white bg-gray-800"
+              className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 text-base text-black dark:text-white bg-gray-100 dark:bg-gray-800"
               editable={!isSubmitting}
             />
             <Text className="text-gray-500 text-xs mt-1">Price paid per contract ($)</Text>
           </View>
           <View className="mb-4">
-            <Text className="text-base font-semibold text-white mb-2">Contracts *</Text>
+            <Text className="text-base font-semibold text-black dark:text-white mb-2">Contracts *</Text>
             <TextInput
               value={contracts}
               onChangeText={(t) => {
@@ -407,14 +407,14 @@ export const NewTradeModal: React.FC<NewTradeModalProps> = ({
               placeholder="1"
               keyboardType="number-pad"
               placeholderTextColor="#6b7280"
-              className="border border-gray-700 rounded-lg p-4 text-base text-white bg-gray-800"
+              className="border border-gray-300 dark:border-gray-700 rounded-lg p-4 text-base text-black dark:text-white bg-gray-100 dark:bg-gray-800"
               editable={!isSubmitting}
             />
           </View>
           {optionEstimatedCost != null && (
-            <View className="mb-4 rounded-lg bg-gray-800/80 p-4 border border-gray-700">
-              <Text className="text-gray-400 text-sm mb-1">Estimated cost (premium × 100 × contracts)</Text>
-              <Text className="text-white text-xl font-bold">
+            <View className="mb-4 rounded-lg bg-gray-100/80 dark:bg-gray-800/80 p-4 border border-gray-200 dark:border-gray-700">
+              <Text className="text-gray-600 dark:text-gray-400 text-sm mb-1">Estimated cost (premium × 100 × contracts)</Text>
+              <Text className="text-black dark:text-white text-xl font-bold">
                 ${optionEstimatedCost.toFixed(2)}
               </Text>
             </View>

@@ -57,7 +57,9 @@ export interface NotificationPreferences {
   feed_updates: boolean;
   messages: boolean;
   mentions: boolean;
-  orb_alerts: boolean
+  orb_alerts: boolean;
+  /** Contract call-outs scraped from watched X/Twitter accounts (@OptionsBuffett, @FL0WG0D). */
+  flow_signals: boolean;
 //   market_news: boolean;
 //   price_alerts: boolean;
 //   daily_summary: boolean;

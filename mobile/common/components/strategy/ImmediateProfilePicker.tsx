@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { ProfileKey } from '@/common/types/strategy';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
@@ -24,6 +24,10 @@ export interface ImmediateProfile {
   description: string;
   isManual?: boolean;
   isOtmProfile?: boolean;
+  /** No automatic exit of any kind — not even EOD close. Locks qty to 1 and
+   *  hides every auto-exit control (SL picker, consol/volume toggles) since
+   *  none of them apply. See profiles.py's NO_STOP_LOSS for the backend side. */
+  isNoStopLoss?: boolean;
 }
 
 export const IMMEDIATE_PROFILES: ImmediateProfile[] = [
@@ -118,6 +122,18 @@ export const IMMEDIATE_PROFILES: ImmediateProfile[] = [
     description: 'You control the exit. Set your stop loss below — nothing else closes automatically.',
     isManual: true,
   },
+  {
+    key: 'NO_STOP_LOSS',
+    emoji: '🧗',
+    name: 'No Stop Loss',
+    qty: 1,
+    maxLoss: 0,
+    tp1: 0,
+    tp2: 0,
+    risk: 'Unbounded',
+    description: 'No stop loss, no take profit, no EOD close — holds the contract(s) until you manually sell. Defaults to 1 contract.',
+    isNoStopLoss: true,
+  },
 ];
 
 export const DEFAULT_PROFILE_INDEX = 2; // MOMENTUM
@@ -180,7 +196,9 @@ export function ProfileDropdown({
         <View style={{ flex: 1 }}>
           <Text style={[s.ddTriggerName, { color: colors.text }]}>{profile.name}</Text>
           <Text style={[s.ddTriggerSub, { color: colors.tabBarInactive }]} numberOfLines={1}>
-            {profile.isManual
+            {profile.isNoStopLoss
+              ? 'No auto exit — hold until you sell'
+              : profile.isManual
               ? 'Manual exit — SL only'
               : `Stop −${profile.maxLoss}%  ·  TP1 +${profile.tp1}%  ·  ${profile.tp2 > 0 ? `TP2 +${profile.tp2}%` : 'Runner'}`}
           </Text>
@@ -196,15 +214,19 @@ export function ProfileDropdown({
         />
       </TouchableOpacity>
 
-      {/* Expanded list */}
+      {/* Expanded list — scrollable: 11 profiles no longer fit on screen at once,
+          and a plain View here used to silently clip/hide whichever ones didn't
+          (including No Stop Loss, last in the list) with no way to reach them. */}
       {open && (
         <View style={[s.ddList, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <ScrollView style={s.ddScroll} nestedScrollEnabled keyboardShouldPersistTaps="handled">
           {IMMEDIATE_PROFILES.map((p, i) => {
             const active = i === selectedIndex;
             const rc = riskColor(p.risk, colors);
             const prevProfile = i > 0 ? IMMEDIATE_PROFILES[i - 1] : null;
             const showOtmHeader = p.isOtmProfile && !prevProfile?.isOtmProfile;
             const showManualHeader = p.isManual && !prevProfile?.isManual;
+            const showNoStopLossHeader = p.isNoStopLoss && !prevProfile?.isNoStopLoss;
             return (
               <View key={p.key}>
                 {showOtmHeader && (
@@ -218,6 +240,13 @@ export function ProfileDropdown({
                   <View style={[s.ddSectionHeader, { borderTopColor: colors.border, borderBottomColor: colors.border }]}>
                     <View style={[s.ddSectionDivider, { backgroundColor: colors.border }]} />
                     <Text style={[s.ddSectionLabel, { color: colors.tabBarInactive }]}>MANUAL CONTROL</Text>
+                    <View style={[s.ddSectionDivider, { backgroundColor: colors.border }]} />
+                  </View>
+                )}
+                {showNoStopLossHeader && (
+                  <View style={[s.ddSectionHeader, { borderTopColor: colors.border, borderBottomColor: colors.border }]}>
+                    <View style={[s.ddSectionDivider, { backgroundColor: colors.border }]} />
+                    <Text style={[s.ddSectionLabel, { color: colors.tabBarInactive }]}>NO AUTO EXIT</Text>
                     <View style={[s.ddSectionDivider, { backgroundColor: colors.border }]} />
                   </View>
                 )}
@@ -242,7 +271,7 @@ export function ProfileDropdown({
                   </View>
                 </View>
                 <Text style={[s.ddItemDesc, { color: colors.tabBarInactive }]}>{p.description}</Text>
-                {!p.isManual && (
+                {!p.isManual && !p.isNoStopLoss && (
                   <View style={s.ddItemStats}>
                     <DDStat label="Max Loss" value={`−${p.maxLoss}%`} color="#EF4444" colors={colors} />
                     <DDStat label="TP1"      value={`+${p.tp1}%`}   color="#22C55E" colors={colors} />
@@ -262,10 +291,19 @@ export function ProfileDropdown({
                     <DDStat label="Qty" value={String(p.qty)} colors={colors} />
                   </View>
                 )}
+                {p.isNoStopLoss && (
+                  <View style={s.ddItemStats}>
+                    <DDStat label="Stop Loss" value="None" color={colors.tabBarInactive} colors={colors} />
+                    <DDStat label="TP1 / TP2" value="None" color={colors.tabBarInactive} colors={colors} />
+                    <DDStat label="EOD Close" value="None" color={colors.tabBarInactive} colors={colors} />
+                    <DDStat label="Qty" value={`${p.qty} (default)`} colors={colors} />
+                  </View>
+                )}
               </TouchableOpacity>
               </View>
             );
           })}
+        </ScrollView>
         </View>
       )}
     </View>
@@ -377,7 +415,8 @@ const s = StyleSheet.create({
   ddTriggerSub:   { fontSize: 11 },
   ddRiskBadge:    { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
   ddRiskText:     { fontSize: 10, fontWeight: '700' },
-  ddList:         { borderRadius: 12, borderWidth: 1, overflow: 'hidden', marginTop: 6 },
+  ddList:         { borderRadius: 12, borderWidth: 1, overflow: 'hidden', marginTop: 6, maxHeight: 420 },
+  ddScroll:       { maxHeight: 420 },
   ddItem:         { padding: 12, borderBottomWidth: StyleSheet.hairlineWidth },
   ddItemHeader:   { flexDirection: 'row', alignItems: 'center', marginBottom: 3, gap: 6 },
   ddItemEmoji:    { fontSize: 16 },

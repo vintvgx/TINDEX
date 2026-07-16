@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
+  Switch,
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,10 +17,13 @@ import { NotificationRecord } from '@/common/types/notifications/notificationMod
 import { formatDistanceToNow } from 'date-fns';
 import { ORBNotificationModal, ORBBreakoutNotificationData } from '@/common/components/FEED/modals/ORBNotificationModal';
 import { useThemeColors } from '@/lib/useColorScheme';
+import { useAuth } from '@/common/utils/context/auth/AuthContext';
+import { NotificationService } from '@/common/services/NotificationService';
 
 const NotificationsScreen = () => {
   const colors = useThemeColors();
   const { toTicker } = useBaseNavigation();
+  const { authState: { user } } = useAuth();
 
   const { notifications, isLoading, error, refetch, markAsRead, markAllAsRead, unreadCount } =
     useNotificationHistory();
@@ -29,6 +33,31 @@ const NotificationsScreen = () => {
   const [orbNotificationData, setOrbNotificationData] = useState<ORBBreakoutNotificationData | null>(null);
   const [orbNotificationTitle, setOrbNotificationTitle] = useState<string | undefined>();
   const [orbNotificationBody, setOrbNotificationBody] = useState<string | undefined>();
+
+  // Flow signal notifications (contracts scraped from watched X accounts) —
+  // defaults to on until the user's own preference row says otherwise.
+  const [flowSignalsEnabled, setFlowSignalsEnabled] = useState(true);
+  const [flowPrefLoading, setFlowPrefLoading] = useState(false);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    NotificationService.getNotificationPreferences(user.id).then(prefs => {
+      if (prefs && prefs.flow_signals === false) setFlowSignalsEnabled(false);
+    });
+  }, [user?.id]);
+
+  const handleToggleFlowSignals = async (next: boolean) => {
+    setFlowSignalsEnabled(next); // optimistic
+    if (!user?.id) return;
+    setFlowPrefLoading(true);
+    try {
+      await NotificationService.updateNotificationPreferences(user.id, { flow_signals: next });
+    } catch {
+      setFlowSignalsEnabled(!next); // revert on failure
+    } finally {
+      setFlowPrefLoading(false);
+    }
+  };
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -273,6 +302,32 @@ const NotificationsScreen = () => {
             <Text style={{ color: colors.accent, fontSize: 14, fontWeight: '600' }}>Mark all read</Text>
           </TouchableOpacity>
         )}
+      </View>
+
+      {/* Notification type settings */}
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingHorizontal: 24,
+          paddingVertical: 14,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.separator,
+        }}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: colors.text, fontSize: 15, fontWeight: '600' }}>Flow Signals</Text>
+          <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+            Contract call-outs from watched X accounts
+          </Text>
+        </View>
+        <Switch
+          value={flowSignalsEnabled}
+          onValueChange={handleToggleFlowSignals}
+          disabled={flowPrefLoading}
+          thumbColor={flowSignalsEnabled ? '#FF9500' : '#ccc'}
+          trackColor={{ true: '#FF950055', false: colors.border }}
+        />
       </View>
 
       <FlatList

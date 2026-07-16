@@ -169,11 +169,23 @@ class OptionStreamManager:
     # ── Internal ───────────────────────────────────────────────────────────────
 
     def _ensure_started(self):
-        if self._started:
+        # `_started` alone can't detect a dead connection — it's set once and
+        # never reset, so if the background thread dies for any reason (a
+        # dropped WS connection, a transient network blip), every future call
+        # here saw _started=True and early-returned, leaving every subsequent
+        # subscribe()/verify_stream() silently calling into a stream that no
+        # longer exists. Every entry from that point on would fail stream
+        # verification after its full 8s timeout — a wall that never heals
+        # itself short of a full process restart. Checking thread liveness
+        # (not just the flag) lets a dead stream actually be restarted.
+        if self._started and self._thread and self._thread.is_alive():
             return
         with self._start_lock:
-            if self._started:
+            if self._started and self._thread and self._thread.is_alive():
                 return
+            if self._started:
+                logger.warning("[OptionStream] background thread died — restarting")
+                self._started = False
             try:
                 self._stream = OptionDataStream(self._api_key, self._secret)
                 self._thread = threading.Thread(

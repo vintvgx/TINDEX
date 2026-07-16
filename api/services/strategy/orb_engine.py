@@ -986,6 +986,17 @@ class ORBEngine:
                 strategy_id=log_strategy_id,
                 paper_mode=self.paper,
                 trade_type=trade_type,
+                trading_client=self.trading_client,
+                # Full effective profile snapshot (not just the named profile
+                # key) + the exact computed levels — so a restart can recover
+                # this exact position's exit management, including any
+                # manual/custom override, rather than re-deriving a named
+                # profile's defaults. See
+                # docs/incidents/2026-07-14-position-lost-on-restart.md.
+                exit_overrides=effective_profile,
+                hard_stop_price=self.exit_manager.hard_stop,
+                tp1_price=self.exit_manager.tp1,
+                tp2_price=self.exit_manager.tp2,
             )
             if self.active_trade_id is None:
                 self.debug.emit("ERROR",
@@ -1014,6 +1025,112 @@ class ORBEngine:
             logger.error("[ORBEngine] Order failed: %s", e)
             self.debug.emit("ERROR", f"Order submission failed: {e}")
             raise
+
+    def recover_position(self, row: dict) -> bool:
+        """
+        Reattach exit management to a position that's still open at the broker
+        but whose in-memory state was lost to a process restart — every
+        ORBEngine/ExitManager is plain in-memory Python state with no recovery
+        path before this, so a restart mid-position meant it silently stopped
+        being displayed AND stopped being monitored (no stop-loss, no TP) even
+        though the real Alpaca position was untouched. See
+        docs/incidents/2026-07-14-position-lost-on-restart.md — this is what
+        cost real money on 2026-07-13. Called once per open orb_trades row at
+        boot, before this engine (or a freshly-created immediate engine) has
+        taken any other action.
+
+        `row` is a full orb_trades row (TradeLogger.get_open_trades()).
+        Returns False (and does nothing) if there's nothing left to recover —
+        e.g. qty_exited already caught up to qty_entered despite exit_time
+        being null (shouldn't happen, but never re-arm a closed position).
+        """
+        qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
+        if qty_remaining <= 0:
+            return False
+
+        self.position          = row["direction"]
+        self.contract_symbol   = row["contract_symbol"]
+        self.trade_taken       = True
+        self._trade_was_taken_today = True
+        self.active_trade_id   = row["id"]
+        self.profile_key       = row.get("profile") or self.profile_key
+        try:
+            self.session_date = datetime.strptime(row["trade_date"], "%Y-%m-%d").date()
+        except Exception:
+            self.session_date = self.session_date or datetime.now(ET).date()
+
+        # Prefer the exact effective-profile snapshot captured at entry
+        # (post-2026-07-14 trades) over re-deriving the named profile's
+        # *default* thresholds — a manual/custom override wouldn't otherwise
+        # be recoverable from just the profile key.
+        profile = row.get("exit_overrides") or get_profile(self.profile_key)
+        fib_levels = dict(row.get("fib_targets") or {})
+        fib_levels.setdefault("orh", row.get("orh"))
+        fib_levels.setdefault("orl", row.get("orl"))
+        eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:58")
+
+        self.exit_manager = ExitManager(
+            entry_premium=float(row["entry_premium"]),
+            qty=int(row["qty_entered"]),
+            fib_levels=fib_levels,
+            direction=row["direction"],
+            eod_close_time=eod_time,
+            profile=profile,
+        )
+        self.exit_manager.qty_remaining = qty_remaining
+        try:
+            self.exit_manager.entry_time = datetime.fromisoformat(
+                row["entry_time"].replace("Z", "+00:00")
+            ).astimezone(ET)
+        except Exception:
+            pass  # keep ExitManager's own now() default — only affects hold-time-gated exits, not the stop
+
+        # Restore stop/TP progress so a restart never silently reverts to a
+        # wider stop or re-fires an already-completed TP1/TP2.
+        stages = row.get("exit_stages") or []
+        reasons_hit = {s.get("reason") for s in stages}
+        if "TP1" in reasons_hit or row.get("tp1_premium") is not None:
+            self.exit_manager.tp1_hit = True
+            self.exit_manager.be_stop_active = True
+        if {"TP2", "TP2_FULL_CLOSE"} & reasons_hit or row.get("tp2_premium") is not None:
+            self.exit_manager.tp2_hit = True
+
+        # Exact persisted levels win over whatever the reconstructed profile
+        # would recompute — except the breakeven stop, which must reflect the
+        # TP1-hit state restored just above (a stale pre-TP1 hard_stop_price
+        # would otherwise re-widen the stop past where it had already moved).
+        if self.exit_manager.be_stop_active:
+            self.exit_manager.hard_stop = self.exit_manager.entry_premium
+        elif row.get("hard_stop_price") is not None:
+            self.exit_manager.hard_stop = float(row["hard_stop_price"])
+        if row.get("tp1_price") is not None:
+            self.exit_manager.tp1 = float(row["tp1_price"])
+        if row.get("tp2_price") is not None:
+            self.exit_manager.tp2 = float(row["tp2_price"])
+
+        if self.stream_manager:
+            self.stream_manager.subscribe(self.contract_symbol, self._on_stream_quote)
+
+        logger.warning(
+            "[ORBEngine] RECOVERED open position after restart: %s %s qty=%d "
+            "entry=$%.2f stop=$%.2f (tp1_hit=%s tp2_hit=%s)",
+            row["direction"], self.contract_symbol, qty_remaining,
+            row["entry_premium"], self.exit_manager.hard_stop,
+            self.exit_manager.tp1_hit, self.exit_manager.tp2_hit,
+        )
+        self.debug.emit(
+            "WARN",
+            f"Recovered open position after restart: {self.contract_symbol} "
+            f"qty={qty_remaining} — stop-loss monitoring resumed",
+        )
+        self.notifier.notify_position_recovered(
+            ticker=self.ticker,
+            contract_symbol=self.contract_symbol,
+            direction=row["direction"],
+            qty=qty_remaining,
+            entry_premium=float(row["entry_premium"]),
+        )
+        return True
 
     # ── Confirm-entry gate ───────────────────────────────────────────────────────
 
@@ -1143,8 +1260,10 @@ class ORBEngine:
                                overrides: dict | None = None) -> dict:
         """
         User tapped Enter in the confirmation modal. Submits the order using the
-        exact contract/qty/profile already shown to the user, then applies any
-        user-edited SL/TP1/TP2 on top of the real fill.
+        exact contract/profile already shown to the user (qty defaults to what
+        was shown too, unless the user changed it in the modal — see the
+        "qty" key in overrides), then applies any user-edited SL/TP1/TP2 on top
+        of the real fill.
 
         NOTE: guarded by _tick_lock so a near-simultaneous approve+skip (or
         approve racing the expiry sweep) can't both act on the same pending row.
@@ -1167,6 +1286,25 @@ class ORBEngine:
             qty               = pc["_qty"]
             effective_profile = pc["_effective_profile"]
             direction         = pc["direction"]
+
+            # qty is an entry-time decision (how many contracts the order
+            # itself buys), not a post-fill exit-level tweak like hard_stop/
+            # tp1/tp2 — pulled out of `overrides` here, before _execute_entry,
+            # rather than left for the apply_overrides() call below (which
+            # only knows about exit levels).
+            if overrides and overrides.get("qty") is not None:
+                try:
+                    requested_qty = int(overrides.pop("qty"))
+                    if requested_qty > 0:
+                        qty = requested_qty
+                    else:
+                        self.debug.emit("WARN",
+                            f"Approve requested qty={requested_qty} (must be > 0) — "
+                            f"using original qty={qty} instead")
+                except (TypeError, ValueError):
+                    self.debug.emit("WARN",
+                        f"Approve requested a non-numeric qty override — using "
+                        f"original qty={qty} instead")
 
             if self.stream_manager:
                 self.stream_manager.unsubscribe(contract["symbol"], self._on_pending_quote)
@@ -1641,6 +1779,7 @@ class ORBEngine:
                 profile=self.profile_key,
                 strategy_id=self.strategy_id,
                 underlying_price_exit=current_price,
+                trading_client=self.trading_client,
             )
             self.notifier.notify_exit(
                 ticker=self.ticker,
@@ -1701,6 +1840,86 @@ class ORBEngine:
                 "message":       f"Sold {want} contract(s) of {contract}",
                 "qty_sold":      want,
                 "qty_remaining": 0 if closed_all else new_remaining,
+            }
+
+    def add_to_position(self, qty: int) -> dict:
+        """
+        Buy `qty` more of the currently-open contract to average down/up, and
+        re-anchor entry_premium to the blended (qty-weighted) fill price.
+
+        hard_stop/tp1/tp2 are recomputed from the new blended entry via the same
+        compute_exit_levels() a fresh entry uses, so a NO_STOP_LOSS add stays at
+        hard_stop=0 while a normal profile's SL/TP move with the new cost basis.
+        tp1_hit/tp2_hit/be_stop_active are left untouched — those already-banked
+        partial closes happened on the contracts held before this add and can't
+        be un-fired; only the confirm-tick counter and trail anchor reset, so a
+        fresh TP1 confirmation is required at the new (moved) tp1 level.
+
+        Called by POST /strategy/positions/<id>/add. Returns
+        {"status": "ok"|"error", "message", "qty_added"?, "new_entry_premium"?,
+        "qty_remaining"?}.
+        """
+        with self._tick_lock:
+            if not self.trade_taken or not self.contract_symbol or not self.exit_manager:
+                return {"status": "error", "message": "No active position to add to"}
+            qty = int(qty)
+            if qty < 1:
+                return {"status": "error", "message": "qty must be at least 1"}
+
+            em = self.exit_manager
+            contract = self.contract_symbol
+
+            acct = self.get_account_info()
+            if acct:
+                quote = self._resolve_contract(contract, self.position)
+                ask = quote["ask"] if quote else None
+                if ask:
+                    required = qty * ask * 100
+                    buying_power = acct["options_buying_power"]
+                    if required > buying_power:
+                        msg = f"Insufficient capital — need ${required:.0f}, have ${buying_power:.0f}"
+                        self.debug.emit("ERROR", f"Add-to-position blocked — {msg}")
+                        return {"status": "error", "message": msg}
+
+            self.debug.emit("INFO", f"Add-to-position requested — buy {qty} more of {contract}")
+            try:
+                order_req = MarketOrderRequest(
+                    symbol=contract, qty=qty, side=OrderSide.BUY, time_in_force=TimeInForce.DAY,
+                )
+                submitted = self.trading_client.submit_order(order_req)
+            except Exception as e:
+                self.debug.emit("ERROR", f"Add-to-position order failed: {e}")
+                return {"status": "error", "message": f"Order submission failed: {e}"}
+
+            fallback_ask = quote["ask"] if acct and quote else em.entry_premium
+            fill_price = self._resolve_entry_premium(submitted, fallback_ask)
+
+            old_qty_held = em.qty_remaining
+            old_entry    = em.entry_premium
+            new_qty_held = old_qty_held + qty
+            blended_entry = ((old_entry * old_qty_held) + (fill_price * qty)) / new_qty_held
+
+            em.entry_premium = blended_entry
+            em.qty          += qty
+            em.qty_remaining = new_qty_held
+            em.hard_stop, em.tp1, em.tp2 = compute_exit_levels(blended_entry, em.profile)
+            em.runner_trail  = blended_entry
+            em._tp1_ticks    = 0
+
+            self.debug.emit(
+                "INFO",
+                f"Added {qty} of {contract} @ ${fill_price:.2f} — entry ${old_entry:.2f}→"
+                f"${blended_entry:.2f}, qty {old_qty_held}→{new_qty_held}, "
+                f"new SL=${em.hard_stop:.2f} TP1=${em.tp1:.2f} TP2=${em.tp2:.2f}",
+            )
+            return {
+                "status":            "ok",
+                "message":           f"Added {qty} contract(s) of {contract} @ ${fill_price:.2f}",
+                "qty_added":         qty,
+                "fill_price":        round(fill_price, 4),
+                "new_entry_premium": round(blended_entry, 4),
+                "qty_remaining":     new_qty_held,
+                "exit_state":        em.to_dict(),
             }
 
     def _on_stream_quote(self, mid: float):

@@ -22,15 +22,18 @@ interface Props {
 }
 
 // ── Expiration targeting ──────────────────────────────────────────────────────
-// SPY/QQQ/IWM list expirations on a Mon/Wed/Fri cadence (matches EOD_CLOSE_TIMES
-// in api/services/strategy/orb_engine.py — the same three tickers the ORB engine
-// treats specially). Single stocks only ever list standard Friday weeklies —
-// "today" is essentially never a listed expiration for them, which is why this
-// panel used to show an empty chain for any non-ETF ticker.
+// SPY/QQQ/IWM list a DAILY expiration every weekday (0DTE Mon-Fri) — this used
+// to be restricted to a Mon/Wed/Fri-only set, which was correct years ago but
+// is now stale: it meant a Tue/Thu attempt skipped that day's real 0DTE chain
+// entirely and silently jumped to the next Mon/Wed/Fri match instead (e.g.
+// trading on Tuesday would show Wednesday's contracts) — diagnosed 2026-07-15.
+// Single stocks only ever list standard Friday weeklies — "today" is
+// essentially never a listed expiration for them, which is why this panel
+// used to show an empty chain for any non-ETF ticker.
 const ETF_TICKERS = new Set(['SPY', 'QQQ', 'IWM']);
 // Date.getUTCDay(): 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
-const ETF_EXPIRY_WEEKDAYS   = new Set([1, 3, 5]); // Mon/Wed/Fri
-const STOCK_EXPIRY_WEEKDAYS = new Set([5]);       // Friday weeklies
+const ETF_EXPIRY_WEEKDAYS   = new Set([1, 2, 3, 4, 5]); // Mon-Fri — daily 0DTE
+const STOCK_EXPIRY_WEEKDAYS = new Set([5]);             // Friday weeklies
 
 function addDays(iso: string, days: number): string {
   const d = new Date(iso + 'T00:00:00Z');
@@ -38,27 +41,28 @@ function addDays(iso: string, days: number): string {
   return d.toISOString().split('T')[0];
 }
 
+function fmtExpiryLabel(iso: string, todayIso: string): string {
+  if (iso === todayIso) return 'Today (0DTE)';
+  const d = new Date(iso + 'T00:00:00Z');
+  const weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+  const md = d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', timeZone: 'UTC' });
+  return `${weekday} ${md}`;
+}
+
 /**
- * Expirations matching the ticker's expected cadence, nearest first — the
- * set shown by the expiration picker. Falls back to every available
- * expiration if none match the cadence (holiday shift, data gap) — never
- * leave the picker empty when the provider did return something.
+ * Pick the nearest expiration matching the ticker's expected cadence from
+ * whatever the chain actually returned. Falls back to the single nearest
+ * expiration overall if none match the cadence (holiday shift, data gap) —
+ * never show an empty chain when the provider did return something.
  */
-function pickCadenceExpirations(ticker: string, available: string[]): string[] {
-  if (!available.length) return [];
+function pickTargetExpiration(ticker: string, available: string[]): string | null {
+  if (!available.length) return null;
   const allowedWeekdays = ETF_TICKERS.has(ticker.toUpperCase())
     ? ETF_EXPIRY_WEEKDAYS
     : STOCK_EXPIRY_WEEKDAYS;
   const sorted = [...available].sort();
   const matching = sorted.filter(d => allowedWeekdays.has(new Date(d + 'T00:00:00Z').getUTCDay()));
-  return matching.length > 0 ? matching : sorted;
-}
-
-// "2026-07-17" → "Fri 7/17"
-function formatExpirationChip(iso: string): string {
-  const d = new Date(iso + 'T00:00:00Z');
-  const weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
-  return `${weekday} ${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+  return matching[0] ?? sorted[0];
 }
 
 // ── Chain helpers ─────────────────────────────────────────────────────────────
@@ -124,8 +128,9 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   const [manualSlPct, setManualSlPct]   = useState(30);
   const [autoSelected, setAutoSelected] = useState(false);
 
-  const profile   = IMMEDIATE_PROFILES[profileIndex];
-  const isManual  = profile.isManual === true;
+  const profile      = IMMEDIATE_PROFILES[profileIndex];
+  const isManual     = profile.isManual === true;
+  const isNoStopLoss = profile.isNoStopLoss === true;
 
   const handleProfileSelect = (idx: number) => {
     setProfileIndex(idx);
@@ -153,65 +158,57 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   }, [tickerOptions, ticker]);
 
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
-  const [selectedExpiration, setSelectedExpiration] = useState<string | null>(null);
-
-  // ── Step 1: discovery — ETFs (SPY/QQQ/IWM) may not have a fresh expiration
-  // on any given day, and stocks never expire same-day at all, so fetch a
-  // 2-week window just to see which expirations actually exist. A small limit
-  // is enough here — this query is only ever read for expirations_fetched
-  // (and current_price), never for the actual contract list. Using it for
-  // contracts too was the previous bug: the backend keeps only the top-N
-  // strikes nearest current price ACROSS ALL expirations in the window
-  // combined, so a stock's correct Friday could appear in expirations_fetched
-  // while its actual contracts got crowded out by a nearer expiration's
-  // strikes — "no EOW contracts" even though that Friday genuinely exists.
+  // ETFs (SPY/QQQ/IWM) may not have a fresh expiration on any given day, and
+  // stocks never expire same-day at all — fetch a 2-week window and pick the
+  // nearest expiration that actually exists and matches the ticker's cadence,
+  // rather than assuming "today" is always a listed expiration.
   const queryWindowEnd = useMemo(() => addDays(today, 14), [today]);
-  const { data: discoveryData } = useOptionsQuery(
-    visible && ticker ? ticker : '',
-    { limit: 20, expiration_date_gte: today, expiration_date_lte: queryWindowEnd },
-    15000,
-  );
-  const discoveryChain = discoveryData?.success ? discoveryData.data : null;
-
-  // Expirations matching this ticker's cadence (Mon/Wed/Fri for SPY/QQQ/IWM,
-  // Friday weeklies for everything else), nearest first — the set the picker
-  // below shows and the user can override, not just an auto-pick.
-  const pickableExpirations = useMemo(() => {
-    if (!discoveryChain) return [];
-    return pickCadenceExpirations(ticker, discoveryChain.expirations_fetched);
-  }, [discoveryChain, ticker]);
-
-  // Default to the nearest matching expiration whenever the ticker changes or
-  // the current selection is no longer in the available set; otherwise leave
-  // the user's explicit choice alone.
-  useEffect(() => {
-    if (pickableExpirations.length === 0) { setSelectedExpiration(null); return; }
-    if (!selectedExpiration || !pickableExpirations.includes(selectedExpiration)) {
-      setSelectedExpiration(pickableExpirations[0]);
-    }
-  // Only re-run when the available set changes, not on every render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickableExpirations]);
-
-  // ── Step 2: the real chain, scoped to exactly the chosen expiration — so
-  // the backend's top-100-nearest-to-price limit applies within that one
-  // date only, guaranteeing complete strikes for it.
   const { data, isLoading, error } = useOptionsQuery(
-    visible && ticker && selectedExpiration ? ticker : '',
-    { limit: 100, expiration_date_gte: selectedExpiration ?? today, expiration_date_lte: selectedExpiration ?? today },
+    visible && ticker ? ticker : '',
+    { limit: 100, expiration_date_gte: today, expiration_date_lte: queryWindowEnd },
     4000,
   );
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
   const chain        = data?.success ? data.data : null;
-  const currentPrice = chain?.current_price ?? discoveryChain?.current_price ?? 0;
+  const currentPrice = chain?.current_price ?? 0;
+
+  // Every expiration actually available for this ticker's cadence — lets the
+  // user pick a specific date instead of only ever trusting the "nearest
+  // match" auto-pick, which is exactly what silently substituted the wrong
+  // day's chain (see the ETF_EXPIRY_WEEKDAYS comment above).
+  const availableExpirations = useMemo(() => {
+    if (!chain) return [];
+    const allowedWeekdays = ETF_TICKERS.has(ticker.toUpperCase())
+      ? ETF_EXPIRY_WEEKDAYS
+      : STOCK_EXPIRY_WEEKDAYS;
+    return [...chain.expirations_fetched]
+      .filter(d => allowedWeekdays.has(new Date(d + 'T00:00:00Z').getUTCDay()))
+      .sort();
+  }, [chain, ticker]);
+
+  const [manualExpiration, setManualExpiration] = useState<string | null>(null);
+
+  // Reset the manual pick whenever the ticker changes — a date chosen for one
+  // ticker's chain has no meaning for another.
+  useEffect(() => {
+    setManualExpiration(null);
+  }, [ticker]);
+
+  const targetExpiration = useMemo(() => {
+    if (manualExpiration && availableExpirations.includes(manualExpiration)) {
+      return manualExpiration;
+    }
+    if (!chain) return null;
+    return pickTargetExpiration(ticker, chain.expirations_fetched);
+  }, [manualExpiration, availableExpirations, chain, ticker]);
 
   const sideContracts = useMemo(() => {
-    if (!chain || !selectedExpiration) return [];
+    if (!chain || !targetExpiration) return [];
     const list = side === 'CALL' ? chain.calls : chain.puts;
-    return list.filter(c => c.expiration === selectedExpiration);
-  }, [chain, side, selectedExpiration]);
+    return list.filter(c => c.expiration === targetExpiration);
+  }, [chain, side, targetExpiration]);
 
   const rows = useMemo(() => buildRows(sideContracts, currentPrice, side), [sideContracts, currentPrice, side]);
 
@@ -247,8 +244,8 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
         qty,
         profile:         profile.key,
         paper_mode:      paperMode,
-        consol_exit:     isManual ? false : consolExit,
-        volume_exit:     isManual ? false : volumeExit,
+        consol_exit:     (isManual || isNoStopLoss) ? false : consolExit,
+        volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
         ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
       },
       {
@@ -269,13 +266,25 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
 
   const confirmSubmit = () => {
     if (!ticker || !selected) return;
+    const profileNote = isNoStopLoss
+      ? '\n\n⚠️ No Stop Loss — this contract will NOT auto-close for any reason, including end of day. It expires today (0DTE) if you don\'t sell it.'
+      : isManual ? `\nStop Loss: −${manualSlPct}%` : '';
     if (!paperMode) {
       Alert.alert(
         'Submit LIVE Order',
-        `This will buy ${qty} × ${selected.symbol} with REAL money immediately.\n\nProfile: ${profile.emoji} ${profile.name}${isManual ? `\nStop Loss: −${manualSlPct}%` : ''}`,
+        `This will buy ${qty} × ${selected.symbol} with REAL money immediately.\n\nProfile: ${profile.emoji} ${profile.name}${profileNote}`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Submit', style: 'destructive', onPress: doSubmit },
+        ],
+      );
+    } else if (isNoStopLoss) {
+      Alert.alert(
+        `${profile.emoji} No Stop Loss`,
+        `This will buy ${qty} × ${selected.symbol}.${profileNote}`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Submit', onPress: doSubmit },
         ],
       );
     } else {
@@ -369,7 +378,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
         <View>
           <Text style={[styles.footerLabel, { color: colors.tabBarInactive, marginBottom: 2 }]}>CONTRACTS</Text>
           <Text style={[styles.qtyHint, { color: colors.tabBarInactive }]}>
-            Default for {profile.name}: {profile.qty}
+            {isNoStopLoss ? 'No stop loss — size carefully' : `Default for ${profile.name}: ${profile.qty}`}
           </Text>
         </View>
         <View style={styles.qtyGroup}>
@@ -389,8 +398,8 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
         </View>
       </View>
 
-      {/* Auto exit toggles — hidden for MANUAL (manual controls own exit) */}
-      {!isManual && (
+      {/* Auto exit toggles — hidden for MANUAL/NO_STOP_LOSS (no automatic exit to configure) */}
+      {!isManual && !isNoStopLoss && (
         <View>
           <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>EXIT CONTROLS</Text>
           <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -439,6 +448,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
             <Text style={[styles.submitText, { color: paperMode ? colors.accentForeground : '#fff' }]}>
               {paperMode ? '' : 'LIVE '}Buy {qty} {selected.option_type} · {profile.emoji} {profile.name}
               {isManual ? ` · SL −${manualSlPct}%` : ''}
+              {isNoStopLoss ? ' · no auto exit' : ''}
             </Text>
           </>
         )}
@@ -548,34 +558,6 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
           </View>
         )}
 
-        {/* Expiration picker — Mon/Wed/Fri for ETFs, Friday weeklies for
-            stocks. Defaults to the nearest, but explicitly overridable. */}
-        {pickableExpirations.length > 0 && (
-          <View style={{ marginTop: 10 }}>
-            <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>EXPIRATION</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 2 }}>
-              {pickableExpirations.map(exp => {
-                const active = selectedExpiration === exp;
-                return (
-                  <TouchableOpacity
-                    key={exp}
-                    onPress={() => { setSelectedExpiration(exp); setSelected(null); }}
-                    activeOpacity={0.75}
-                    style={[
-                      styles.expChip,
-                      { borderColor: active ? colors.accent : colors.border, backgroundColor: active ? colors.accent + '1A' : colors.card },
-                    ]}
-                  >
-                    <Text style={[styles.expChipText, { color: active ? colors.accent : colors.text }]}>
-                      {formatExpirationChip(exp)}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        )}
-
         {/* Calls / Puts + price */}
         <View style={styles.controlRow}>
           <View style={[styles.toggle, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -602,6 +584,40 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
             </Text>
           )}
         </View>
+
+        {/* Expiration date — pick a specific date instead of only trusting
+            the auto "nearest match" (the auto-pick is what silently showed
+            the wrong day's chain — see ETF_EXPIRY_WEEKDAYS above). */}
+        {availableExpirations.length > 0 && (
+          <View>
+            <Text style={[styles.controlLabel, { color: colors.tabBarInactive, marginTop: 4 }]}>EXPIRATION</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {availableExpirations.map(exp => {
+                  const active = exp === targetExpiration;
+                  return (
+                    <TouchableOpacity
+                      key={exp}
+                      onPress={() => setManualExpiration(exp)}
+                      activeOpacity={0.8}
+                      style={[
+                        styles.expiryChip,
+                        {
+                          backgroundColor: active ? colors.accent + '22' : colors.card,
+                          borderColor: active ? colors.accent : colors.border,
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.expiryChipText, { color: active ? colors.accent : colors.text }]}>
+                        {fmtExpiryLabel(exp, today)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          </View>
+        )}
       </View>
 
       {/* Column headers */}
@@ -633,7 +649,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
           <Text style={[styles.emptyText, { color: colors.text }]}>No contracts found</Text>
           <Text style={[styles.emptySub, { color: colors.tabBarInactive }]}>
             No {side === 'CALL' ? 'calls' : 'puts'} found for {ticker || 'this ticker'}
-            {selectedExpiration ? ` expiring ${selectedExpiration}` : ' in the nearest expirations'}.
+            {targetExpiration ? ` expiring ${targetExpiration}` : ' in the nearest expirations'}.
           </Text>
         </View>
       ) : (
@@ -689,8 +705,8 @@ const styles = StyleSheet.create({
   toggleText: { fontSize: 13, fontWeight: '600' },
   priceText:  { fontSize: 13, fontWeight: '600', flex: 1, textAlign: 'right' },
 
-  expChip:     { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, borderWidth: 1 },
-  expChipText: { fontSize: 12, fontWeight: '700' },
+  expiryChip:     { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 100, borderWidth: 1 },
+  expiryChipText: { fontSize: 12, fontWeight: '700' },
 
   colHeaderRow: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth },
   colHead:      { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },

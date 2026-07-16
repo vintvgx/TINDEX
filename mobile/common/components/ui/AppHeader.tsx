@@ -1,20 +1,19 @@
 /**
  * AppHeader — global top bar shown on every tab screen, beneath the TickerTape.
  *
- * Layout mirrors CollectPure: ☰ hamburger (opens the left DrawerMenu) · centered
- * wordmark logo · a right action (notifications bell with unread badge).
+ * Astor-style layout: logo/wordmark on the left (the menu is now its own
+ * bottom tab instead of a hamburger-opened drawer) · a right action
+ * (notifications bell with unread badge).
  */
 import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useDrawer } from '@/lib/DrawerContext';
 import { useNotificationHistory } from '@/hooks/queries/notifications/useNotificationHistory';
 
 export function AppHeader() {
   const colors = useThemeColors();
-  const { openDrawer } = useDrawer();
   const { unreadCount } = useNotificationHistory();
 
   return (
@@ -24,18 +23,7 @@ export function AppHeader() {
         { backgroundColor: colors.headerBg, borderBottomColor: colors.headerBorder },
       ]}
     >
-      {/* Hamburger */}
-      <Pressable
-        onPress={openDrawer}
-        hitSlop={10}
-        style={styles.iconBtn}
-        accessibilityRole="button"
-        accessibilityLabel="Open menu"
-      >
-        <Ionicons name="menu" size={26} color={colors.text} />
-      </Pressable>
-
-      {/* Centered wordmark */}
+      {/* Left-aligned wordmark */}
       <View style={styles.logo} pointerEvents="none">
         <Ionicons name="sparkles" size={16} color={colors.brand} style={{ marginRight: 6 }} />
         <Text style={[styles.logoText, { color: colors.text }]}>tindex</Text>
@@ -76,12 +64,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   logo: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
     flexDirection: 'row',
+    alignItems: 'center',
   },
   logoText: {
     fontSize: 22,

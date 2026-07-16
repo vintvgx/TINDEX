@@ -106,6 +106,15 @@ def _eod_reset(engine):
     NOTE: Fires at 15:30 ET on trade days (after all per-ticker EOD closes).
     """
     if engine.trade_taken and engine.contract_symbol:
+        # NO_STOP_LOSS positions opt out of every automatic exit, including this
+        # hard backstop — see profiles.py's disable_eod_close. Skip entirely
+        # rather than closing; ExitManager.evaluate() already skips its own
+        # EOD_CLOSE branch for the same flag, so this cron must agree or the
+        # position gets force-closed here anyway despite the profile's promise.
+        if engine.exit_manager and engine.exit_manager.profile.get("disable_eod_close"):
+            logger.info("[Scheduler] EOD close skipped for %s — NO_STOP_LOSS position held open",
+                        getattr(engine, "strategy_id", None) or engine.ticker)
+            return
         contract_symbol = engine.contract_symbol
         qty_closed = engine.exit_manager.qty_remaining if engine.exit_manager else 0
 
@@ -125,6 +134,7 @@ def _eod_reset(engine):
                 qty_closed,
                 engine.profile_key,
                 strategy_id=engine.strategy_id,
+                trading_client=engine.trading_client,
             )
             engine.notifier.notify_exit(
                 ticker=engine.ticker,
@@ -169,98 +179,6 @@ def schedule_eod_close(engine):
         id=job_id, replace_existing=True,
     )
     logger.info("[Scheduler] EOD-only hard-close scheduled for %s (%s)", sid, engine.ticker)
-
-
-def schedule_daily_review(supabase_client):
-    """
-    Register a single 4:15 PM ET mon–fri job that generates the daily trade
-    review and saves it to Supabase. Safe to call multiple times — the job ID
-    is fixed so it is replaced, never duplicated.
-
-    Call once at app startup after the Supabase client is ready:
-        from services.strategy.scheduler import schedule_daily_review
-        schedule_daily_review(sb_client)
-    """
-    sched = get_scheduler()
-    if not sched:
-        logger.warning("[Scheduler] APScheduler not available — daily review not scheduled")
-        return
-    if not sched.running:
-        sched.start()
-
-    sched.add_job(
-        lambda: _run_daily_review(supabase_client),
-        CronTrigger(day_of_week="mon-fri", hour=16, minute=15, timezone=ET),
-        id="job_daily_review",
-        replace_existing=True,
-    )
-    logger.info("[Scheduler] Daily review job scheduled at 4:15 PM ET mon–fri")
-
-
-def _run_daily_review(supabase_client):
-    """
-    EOD review job: query today's trades, call Claude, save to Supabase.
-    Errors are caught and logged so they never surface as unhandled exceptions
-    in the scheduler thread.
-    """
-    from services.strategy.review_generator import ReviewGenerator
-    from services.strategy.notifier import StrategyNotifier
-    from datetime import date as _date
-    try:
-        gen      = ReviewGenerator(supabase_client)
-        today    = _date.today()
-        content, meta = gen.generate(today)
-        trades   = gen._fetch_trades(today)
-        gen.save_to_supabase(today, content, trades, meta)
-        logger.info(
-            "[Scheduler] Daily review complete — %d trades, net P&L $%.2f",
-            meta["trade_count"], meta["net_pnl"],
-        )
-        StrategyNotifier(supabase_client).notify_review_ready(
-            str(today), meta["trade_count"], meta["net_pnl"],
-        )
-    except Exception as e:
-        logger.error("[Scheduler] Daily review job failed: %s", e)
-
-
-def schedule_zero_dte_scans(supabase_client):
-    """
-    Register 5 intraday cron jobs for the 0DTE watchlist scanner.
-    Scan windows: 9:45, 10:30, 11:30, 12:30, 13:30 ET (Mon–Fri).
-    Safe to call multiple times — fixed job IDs prevent duplication.
-    """
-    sched = get_scheduler()
-    if not sched:
-        logger.warning("[Scheduler] APScheduler not available — 0DTE scans not scheduled")
-        return
-    if not sched.running:
-        sched.start()
-
-    windows = [(9, 45), (10, 30), (11, 30), (12, 30), (13, 30)]
-    for hour, minute in windows:
-        job_id = f"job_zero_dte_{hour:02d}{minute:02d}"
-        sched.add_job(
-            lambda h=hour, m=minute: _run_zero_dte_scan(supabase_client),
-            CronTrigger(day_of_week="mon-fri", hour=hour, minute=minute, timezone=ET),
-            id=job_id,
-            replace_existing=True,
-        )
-    logger.info("[Scheduler] 0DTE scan jobs registered at %s ET mon–fri",
-                ", ".join(f"{h:02d}:{m:02d}" for h, m in windows))
-
-
-def _run_zero_dte_scan(supabase_client):
-    try:
-        from services.zero_dte.zero_dte_service import get_zero_dte_scanner
-        scanner = get_zero_dte_scanner(supabase_client)
-        result  = scanner.run_scan()
-        meta    = result.get("meta", {})
-        logger.info(
-            "[Scheduler] 0DTE scan: %d surfaced, %d min remaining",
-            meta.get("surfaced", 0), meta.get("minutes_remaining", 0),
-        )
-    except Exception as e:
-        logger.error("[Scheduler] 0DTE scan failed: %s", e)
 
 
 def init_scheduler(engine):

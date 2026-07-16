@@ -150,16 +150,16 @@ const ModalContent: React.FC<ModalContentProps> = ({
 }) => {
   return (
     <Pressable
-      className="w-full bg-gray-900/95 rounded-2xl overflow-hidden border border-gray-800"
+      className="w-full bg-white dark:bg-gray-900/95 rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800"
       onPress={(e) => e.stopPropagation()}
     >
       {/* Header */}
-      <View className="bg-gray-900 pt-6 pb-4 px-6 border-b border-gray-800">
+      <View className="bg-white dark:bg-gray-900 pt-6 pb-4 px-6 border-b border-gray-200 dark:border-gray-800">
         <View className="flex-row justify-between items-center">
-          <Text className="text-xl font-bold text-white">{headerText}</Text>
+          <Text className="text-xl font-bold text-black dark:text-white">{headerText}</Text>
           <Pressable
             onPress={onClose}
-            className="bg-gray-800 rounded-full p-2"
+            className="bg-gray-200 dark:bg-gray-800 rounded-full p-2"
             disabled={closeButtonDisabled}
           >
             <Ionicons name="close" size={24} color="#9ca3af" />
@@ -184,7 +184,7 @@ const ModalContent: React.FC<ModalContentProps> = ({
             onPress={onSubmit}
             disabled={isSubmitDisabled}
             className={`rounded-lg p-4 flex-row justify-center items-center ${
-              isSubmitDisabled ? "bg-gray-700" : "bg-blue-500"
+              isSubmitDisabled ? "bg-gray-300 dark:bg-gray-700" : "bg-blue-500"
             }`}
           >
             {isSubmitting ? (

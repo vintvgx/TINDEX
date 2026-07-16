@@ -18,6 +18,13 @@ export interface AccountHistoryEntry {
   pnl_week_pct?: number | null;
   pnl_month?: number | null;
   pnl_month_pct?: number | null;
+  pnl_ytd?: number | null;
+  pnl_ytd_pct?: number | null;
+  pnl_all_time?: number | null;
+  pnl_all_time_pct?: number | null;
+  total_deposited?: number;
+  total_withdrawn?: number;
+  net_contributions?: number;
   paper_mode?: boolean;
   error?: string;
 }

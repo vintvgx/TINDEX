@@ -8,7 +8,7 @@ operate on the first engine for backwards compatibility with old clients.
 
 import logging
 import concurrent.futures
-from datetime import datetime
+from datetime import date, datetime
 
 from flask import Blueprint, jsonify, request
 from services.strategy.trade_logger import TradeLogger
@@ -125,6 +125,250 @@ def _get_or_create_immediate_engine(ticker: str, paper_mode: bool) -> ORBEngine:
         schedule_eod_close(eng)                # EOD backstop so 0DTE positions flatten
         logger.info("[strategy] Created immediate engine %s", key)
     return eng
+
+
+def recover_open_positions():
+    """
+    Scan for any position still open at the broker (orb_trades with no
+    exit_time) and reattach exit management to it — called once at boot,
+    after init_routes() so _engines/_stream_manager are ready.
+
+    Before this existed, every ORBEngine/ExitManager was pure in-memory
+    state with no way to reconstruct itself: a restart mid-position (a
+    redeploy, a crash, anything) silently wiped out both the "is this
+    position even displayed" state AND the "is anything watching this
+    position's stop-loss" state, while the real position sat untouched at
+    the broker. That's what happened on 2026-07-13 — an open IWM put with a
+    stop that should have fired never got the chance to, because the engine
+    managing it no longer existed after a restart, and had to be closed
+    manually through Alpaca directly. See
+    docs/incidents/2026-07-14-position-lost-on-restart.md. This function is
+    the fix: nothing here is optional or best-effort — every open position
+    found gets its exit management reattached before this function returns.
+
+    IMPORTANT: every candidate row is cross-checked against Alpaca before
+    recovery. A stale DB row (exit_time still NULL from a previous session
+    that crashed, or an option that expired/closed outside the app) must NOT
+    be recovered — doing so sets trade_taken=True for a dead contract, which
+    simultaneously (a) prevents the engine from entering any new trade that
+    day and (b) causes /strategy/positions to call get_open_position() for a
+    contract that no longer exists, making every UI poll return active=False
+    and the position invisible on every screen (Home, Live Positions, Strategy).
+    """
+    # Close expired-option rows first so they don't appear in get_open_trades()
+    # and never trigger an unnecessary broker lookup below.
+    try:
+        logger_svc.reconcile_orphaned_trades()
+    except Exception as e:
+        logger.warning("[strategy] Position recovery: reconcile_orphaned_trades failed: %s", e)
+
+    rows = logger_svc.get_open_trades()
+    if not rows:
+        logger.info("[strategy] Position recovery: no open positions found")
+        return
+
+    logger.warning("[strategy] Position recovery: %d open position(s) found — verifying with broker", len(rows))
+    recovered = 0
+    for row in rows:
+        try:
+            strategy_id = row.get("strategy_id")
+            if strategy_id and strategy_id in _engines:
+                engine = _engines[strategy_id]
+            else:
+                # No saved-strategy match (immediate/manual trade, or a
+                # strategy that's since been deleted) — recover it into an
+                # immediate engine keyed the same way a live one would be.
+                engine = _get_or_create_immediate_engine(row["ticker"], bool(row["paper_mode"]))
+
+            # Verify the position actually exists at Alpaca before touching
+            # engine state. A stale row (crashed/missed exit, option closed at
+            # the broker directly, or a prior-day row whose expiry isn't in the
+            # past yet) must be reconciled (DB row closed), NOT recovered —
+            # otherwise trade_taken=True is set for a dead contract, new
+            # breakouts are silently blocked, and every /strategy/positions
+            # poll returns active=False, making the position invisible on all
+            # three UI screens (Home, Live Positions, Strategy).
+            broker_result = _reconcile_trade_with_broker(row, engine)
+            if broker_result["status"] != "still_open":
+                logger.warning(
+                    "[strategy] Position recovery: %s not found at broker "
+                    "(status=%s) — stale DB row closed, skipping recovery",
+                    row.get("contract_symbol"), broker_result["status"],
+                )
+                continue
+
+            if engine.trade_taken:
+                # Engine already has a live position recorded (e.g. it was
+                # created moments ago by this same recovery pass for another
+                # row, or somehow already re-entered) — never clobber it.
+                logger.warning(
+                    "[strategy] Position recovery: engine for %s already has an "
+                    "active trade — skipping row %s to avoid overwriting live state",
+                    row.get("ticker"), row.get("id"),
+                )
+                continue
+
+            if engine.recover_position(row):
+                recovered += 1
+        except Exception as e:
+            logger.error(
+                "[strategy] Position recovery FAILED for %s %s (id=%s): %s — "
+                "this position is still open at the broker but is NOT being "
+                "monitored by this app. Check it manually.",
+                row.get("ticker"), row.get("contract_symbol"), row.get("id"), e,
+                exc_info=True,
+            )
+
+    logger.warning("[strategy] Position recovery complete: %d/%d reattached", recovered, len(rows))
+
+
+def _reconcile_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
+    """
+    Cross-reference one still-open orb_trades row against Alpaca's actual
+    position state for the contract. Handles the case this app has no other
+    way to detect: a position closed directly on Alpaca (bypassing this app
+    entirely), which otherwise leaves the row stuck "open" forever with no
+    exit data, and — worse — leaves engine.exit_manager still armed and
+    evaluating stop/TP against live quotes for a position that no longer
+    exists. See docs/incidents/2026-07-14-position-lost-on-restart.md; this
+    closes the other half of that gap (broker-truth, not just restart-truth).
+    """
+    symbol = row.get("contract_symbol")
+    try:
+        engine.trading_client.get_open_position(symbol)
+        return {"contract_symbol": symbol, "status": "still_open"}
+    except Exception:
+        pass  # not found at the broker -> already closed there
+
+    qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
+    if qty_remaining <= 0:
+        return {"contract_symbol": symbol, "status": "already_closed"}
+
+    exit_price = None
+    exit_reason = "UNKNOWN — RECONCILED FROM ALPACA"
+    try:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus, OrderSide
+
+        orders = engine.trading_client.get_orders(GetOrdersRequest(
+            symbols=[symbol], status=QueryOrderStatus.CLOSED, side=OrderSide.SELL, limit=10,
+        ))
+        filled = [o for o in orders if getattr(o, "filled_avg_price", None) is not None]
+        filled.sort(key=lambda o: o.filled_at or datetime.min, reverse=True)
+        if filled:
+            exit_price = float(filled[0].filled_avg_price)
+            exit_reason = "RECONCILED FROM ALPACA"
+    except Exception as e:
+        logger.warning("[reconcile] order lookup failed for %s: %s", symbol, e)
+
+    # Fall back to entry_premium (pnl=0) when the real fill can't be found —
+    # same convention TradeLogger.reconcile_orphaned_trades already uses for
+    # "we know it closed but not at what price" rather than fabricating a
+    # gain/loss that didn't happen.
+    logger_svc.log_exit(
+        symbol, exit_reason,
+        exit_price if exit_price is not None else row.get("entry_premium"),
+        qty_remaining, row.get("profile"),
+        strategy_id=row.get("strategy_id"), trading_client=engine.trading_client,
+    )
+
+    if engine.contract_symbol == symbol:
+        try:
+            engine.reset_session()
+        except Exception:
+            logger.warning("[reconcile] engine.reset_session() failed for %s", symbol, exc_info=True)
+
+    return {
+        "contract_symbol": symbol,
+        "status": "reconciled",
+        "exit_reason": exit_reason,
+        "exit_premium": exit_price,
+    }
+
+
+def _verify_closed_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
+    """
+    Sanity-check a trade orb_trades already marked closed today: confirm the
+    broker agrees nothing is open for that contract anymore. Unlike
+    _reconcile_trade_with_broker, this never writes anything — a closed row's
+    qty/pnl math can't be safely rewritten after the fact (e.g. a same-day
+    re-entry into the same contract would make "is there an open position for
+    this symbol" ambiguous as to which trade it belongs to). A mismatch here
+    just means "look at this one manually," not "let me fix it for you."
+    """
+    symbol = row.get("contract_symbol")
+    try:
+        engine.trading_client.get_open_position(symbol)
+        return {
+            "contract_symbol": symbol,
+            "status": "mismatch",
+            "detail": "marked closed here but broker still shows an open position for this contract",
+        }
+    except Exception:
+        return {"contract_symbol": symbol, "status": "verified_closed"}
+
+
+def _resolve_engine_for_row(row: dict) -> ORBEngine:
+    strategy_id = row.get("strategy_id")
+    if strategy_id and strategy_id in _engines:
+        return _engines[strategy_id]
+    return _get_or_create_immediate_engine(row["ticker"], bool(row["paper_mode"]))
+
+
+@strategy_bp.route("/trades/reconcile", methods=["POST"])
+def reconcile_trades():
+    """
+    Pull-to-refresh reconciliation for the Trade Log screen.
+
+    Two passes:
+      1. Every orb_trades row still marked open gets cross-referenced against
+         Alpaca's real position state and closed out here if the broker
+         disagrees (_reconcile_trade_with_broker) — covers a position closed
+         directly on Alpaca, bypassing this app entirely.
+      2. Every OTHER trade from today (already marked closed) gets spot-
+         checked the other direction: is the broker still showing an open
+         position for it? That would mean this app's "closed" record is
+         wrong. Read-only — flagged as a mismatch for manual review, never
+         auto-modified (see _verify_closed_trade_with_broker for why).
+    """
+    open_rows = logger_svc.get_open_trades()
+    todays_rows = logger_svc.get_trades(limit=500, trade_date=date.today().isoformat())
+    open_ids = {r["id"] for r in open_rows}
+    closed_today_rows = [r for r in todays_rows if r.get("exit_time") and r["id"] not in open_ids]
+
+    results = []
+    for row in open_rows:
+        try:
+            engine = _resolve_engine_for_row(row)
+            results.append(_reconcile_trade_with_broker(row, engine))
+        except Exception as e:
+            logger.error(
+                "[reconcile] failed for %s (id=%s): %s",
+                row.get("contract_symbol"), row.get("id"), e, exc_info=True,
+            )
+            results.append({"contract_symbol": row.get("contract_symbol"), "status": "error", "error": str(e)})
+
+    verify_results = []
+    for row in closed_today_rows:
+        try:
+            engine = _resolve_engine_for_row(row)
+            verify_results.append(_verify_closed_trade_with_broker(row, engine))
+        except Exception as e:
+            logger.error(
+                "[reconcile] verify failed for %s (id=%s): %s",
+                row.get("contract_symbol"), row.get("id"), e, exc_info=True,
+            )
+            verify_results.append({"contract_symbol": row.get("contract_symbol"), "status": "error", "error": str(e)})
+
+    return jsonify({
+        "success": True,
+        "checked_open": len(open_rows),
+        "checked_closed_today": len(closed_today_rows),
+        "reconciled": [r for r in results if r["status"] == "reconciled"],
+        "still_open": [r for r in results if r["status"] == "still_open"],
+        "mismatches": [r for r in verify_results if r["status"] == "mismatch"],
+        "errors": [r for r in results + verify_results if r["status"] == "error"],
+    })
 
 
 # ── Multi-strategy CRUD ────────────────────────────────────────────────────────
@@ -294,6 +538,7 @@ def force_close_strategy(strategy_id: str):
             engine.contract_symbol, "MANUAL_CLOSE", exit_price,
             qty, engine.profile_key,
             strategy_id=engine.strategy_id,
+            trading_client=engine.trading_client,
         )
         engine.notifier.notify_exit(
             ticker=engine.ticker,
@@ -325,6 +570,29 @@ def sell_position(strategy_id: str):
     data = request.get_json() or {}
     qty = data.get("qty")
     result = engine.submit_manual_exit(int(qty) if qty is not None else None)
+    code = 200 if result.get("status") == "ok" else 409
+    return jsonify(result), code
+
+
+@strategy_bp.route("/positions/<strategy_id>/add", methods=["POST"])
+def add_to_position(strategy_id: str):
+    """
+    Buy more of the currently-open contract to average down/up. Works for both
+    saved strategies and ad-hoc immediate-trade engines (resolved by id), live
+    or paper. Body: {qty} — required, >= 1.
+    """
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        return jsonify({"status": "error", "message": "Position not found"}), 404
+    data = request.get_json() or {}
+    qty = data.get("qty")
+    if qty is None:
+        return jsonify({"status": "error", "message": "qty is required"}), 400
+    try:
+        qty = int(qty)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "qty must be an integer"}), 400
+    result = engine.add_to_position(qty)
     code = 200 if result.get("status") == "ok" else 409
     return jsonify(result), code
 
@@ -395,7 +663,7 @@ def sweep_pending_confirmations():
 
 @strategy_bp.route("/configs/<strategy_id>/pending/<pending_id>/approve", methods=["POST"])
 def approve_pending_confirmation(strategy_id: str, pending_id: str):
-    """Body: { hard_stop?, tp1?, tp2? } — optional user-edited overrides."""
+    """Body: { hard_stop?, tp1?, tp2?, qty? } — optional user-edited overrides."""
     engine = _resolve_any_engine(strategy_id)
     if not engine:
         # No live engine to ask (e.g. the strategy was deleted after the
@@ -411,6 +679,8 @@ def approve_pending_confirmation(strategy_id: str, pending_id: str):
         key: float(data[key]) for key in ("hard_stop", "tp1", "tp2")
         if data.get(key) is not None
     }
+    if data.get("qty") is not None:
+        overrides["qty"] = int(data["qty"])
     try:
         result = engine.approve_pending_entry(pending_id, overrides or None)
     except Exception as e:
@@ -598,15 +868,24 @@ def immediate_trade_by_ticker():
         return jsonify({"status": "error",
                         "message": "ticker, direction and contract_symbol are required"}), 400
 
+    profile_key = data.get("profile")
+    is_no_stop_loss = (profile_key or "").upper() == "NO_STOP_LOSS"
+
     exit_overrides = {}
-    if "consol_exit" in data:
-        exit_overrides["consol_exit"] = bool(data["consol_exit"])
-    if "volume_exit" in data:
-        exit_overrides["volume_exit"] = bool(data["volume_exit"])
-    if "max_loss_pct" in data:
-        val = float(data["max_loss_pct"])
-        if 0.05 <= val <= 0.95:   # sanity clamp: 5%–95%
-            exit_overrides["max_loss_pct"] = val
+    # NO_STOP_LOSS means NO automatic exit of any kind — consol/volume exit
+    # and max_loss_pct overrides are intentionally ignored for it rather than
+    # merged in, so a client can't accidentally (or a stale UI can't) partially
+    # re-enable an automatic close on a position the user explicitly chose to
+    # hold with zero automatic exits.
+    if not is_no_stop_loss:
+        if "consol_exit" in data:
+            exit_overrides["consol_exit"] = bool(data["consol_exit"])
+        if "volume_exit" in data:
+            exit_overrides["volume_exit"] = bool(data["volume_exit"])
+        if "max_loss_pct" in data:
+            val = float(data["max_loss_pct"])
+            if 0.05 <= val <= 0.95:   # sanity clamp: 5%–95%
+                exit_overrides["max_loss_pct"] = val
 
     engine = _get_or_create_immediate_engine(ticker, paper_mode)
     result = _submit_manual_trade_bounded(
@@ -627,35 +906,31 @@ def immediate_trade_by_ticker():
 def immediate_positions():
     """
     Open positions across all immediate-trade engines, for the "Immediate Trades"
-    section. Live P&L is computed from the latest streamed option mid-price.
+    section AND the Live Positions tab (which merges this with /positions so
+    ad-hoc trades are editable/exitable there too — see position.tsx).
+
+    Reuses _engine_position_response() — the same builder /positions uses — so
+    the shape (hard_stop, tp1, tp2, active, qty_total, fib_levels, ...) matches
+    saved-strategy positions exactly; EditExitsButton/ExitTradeModal need those
+    fields and previously only got them for saved strategies. pnl/pnl_pct/
+    mid_price are also kept as aliases of unrealized_pnl/unrealized_pnl_pct/
+    current_price for the existing "Immediate Trades" dashboard card, which
+    reads the old field names.
     """
     out = []
     for eng in _immediate_engines.values():
         if not eng.trade_taken or not eng.contract_symbol:
             continue
-        em      = eng.exit_manager
-        entry_p = em.entry_premium if em else None
-        qty_rem = em.qty_remaining if em else 0
-        mid     = getattr(eng, "_current_option_price", None)
-        pnl = pnl_pct = None
-        if mid is not None and entry_p:
-            pnl     = round((mid - entry_p) * qty_rem * 100, 2)
-            pnl_pct = round(((mid - entry_p) / entry_p * 100) if entry_p > 0 else 0, 2)
-        out.append({
-            "strategy_id":   eng.strategy_id,
-            "ticker":        eng.ticker,
-            "paper_mode":    eng.paper,
-            "direction":     eng.position,
-            "contract":      eng.contract_symbol,
-            "profile":       eng.profile_key,
-            "qty_remaining": qty_rem,
-            "entry_premium": entry_p,
-            "mid_price":     round(mid, 4) if mid is not None else None,
-            "pnl":           pnl,
-            "pnl_pct":       pnl_pct,
-            "tp1_hit":       em.tp1_hit if em else False,
-            "tp2_hit":       em.tp2_hit if em else False,
-        })
+        try:
+            pos = _engine_position_response(eng).get_json()
+        except Exception:
+            continue
+        pos["strategy_id"]   = eng.strategy_id
+        pos["strategy_name"] = getattr(eng, "strategy_name", "")
+        pos["pnl"]           = pos.get("unrealized_pnl")
+        pos["pnl_pct"]       = pos.get("unrealized_pnl_pct")
+        pos["mid_price"]     = pos.get("current_price")
+        out.append(pos)
     return jsonify({"positions": out})
 
 
@@ -765,9 +1040,39 @@ def get_both_accounts():
 
 @strategy_bp.route("/accounts/history", methods=["GET"])
 def get_accounts_history():
-    """Return period P&L (today / week / month) for paper and live accounts."""
+    """
+    Return period P&L (today / week / month / YTD / all-time) plus deposit
+    tracking for paper and live accounts.
+
+    Correctness notes (fixed 2026-07-12 — this endpoint previously crashed on
+    every call and silently degraded to "no data"):
+      - `client.get_portfolio_history(...)` takes its request object
+        POSITIONALLY. The old code passed `filter=None`, a kwarg that doesn't
+        exist on this method — every call raised, was swallowed by a bare
+        `except Exception`, and week/month always came back None (hence
+        "This Week" spinning forever in the app — the query had already
+        resolved to `available: True` with no data, not an actual loading state).
+      - Week/month used to be computed from raw EQUITY deltas, which counts
+        deposits as if they were trading profit. Alpaca's `profit_loss` array
+        already excludes cashflow (deposits/withdrawals) — using it instead is
+        what actually answers "what did my trades do", not "what did my
+        balance do" (a $100 deposit is not $100 of P&L).
+    """
     import os
+    from datetime import date as _date
     from alpaca.trading.client import TradingClient
+    from alpaca.trading.requests import GetPortfolioHistoryRequest
+    from alpaca.trading.enums import ActivityType
+
+    def _nearest_index_on_or_before(timestamps: list, target_ts: float) -> int:
+        """Index of the latest daily bar at/before target_ts, clamped to [0, len-1]."""
+        idx = 0
+        for i, ts in enumerate(timestamps):
+            if ts <= target_ts:
+                idx = i
+            else:
+                break
+        return idx
 
     def _fetch_with_history(paper: bool) -> dict:
         try:
@@ -781,41 +1086,93 @@ def get_accounts_history():
             pnl_today   = equity - last_equity
             pnl_today_pct = (pnl_today / last_equity * 100) if last_equity > 0 else 0
 
-            # Fetch 1-month of daily history to derive week/month P&L.
-            try:
-                hist = client.get_portfolio_history(filter=None)
-                # alpaca-py returns PortfolioHistory with .equity (list) and .profit_loss
-                equities = [float(e) for e in (hist.equity or []) if e is not None]
-            except Exception:
-                equities = []
-
+            # One daily-granularity fetch spanning the account's full life —
+            # every other period (week/month/YTD/all-time) is a slice of it,
+            # so this is the only history call we need to make.
             pnl_week = pnl_week_pct = None
             pnl_month = pnl_month_pct = None
+            pnl_ytd = pnl_ytd_pct = None
+            pnl_all_time = pnl_all_time_pct = None
+            total_deposited = total_withdrawn = 0.0
 
-            if equities:
-                # Week: compare current equity to 5 trading days ago (or earliest available)
-                week_idx = max(0, len(equities) - 6)
-                week_start = equities[week_idx]
-                if week_start > 0:
-                    pnl_week     = round(equity - week_start, 2)
-                    pnl_week_pct = round((equity - week_start) / week_start * 100, 3)
+            try:
+                # `cashflow_types` must be requested explicitly — Alpaca omits
+                # the cashflow dict entirely otherwise (confirmed against
+                # alpaca-py 0.43.2's GetPortfolioHistoryRequest, which defaults
+                # cashflow_types to None).
+                hist = client.get_portfolio_history(
+                    GetPortfolioHistoryRequest(
+                        period="all", timeframe="1D",
+                        cashflow_types=f"{ActivityType.CSD.value},{ActivityType.CSW.value}",
+                    )
+                )
+                timestamps = list(hist.timestamp or [])
+                equities   = [float(e) if e is not None else None for e in (hist.equity or [])]
+                pls        = [float(p) if p is not None else None for p in (hist.profit_loss or [])]
+                cashflow   = hist.cashflow or {}
 
-                # Month: compare to first available equity in the series
-                month_start = equities[0]
-                if month_start > 0:
-                    pnl_month     = round(equity - month_start, 2)
-                    pnl_month_pct = round((equity - month_start) / month_start * 100, 3)
+                for activity, values in cashflow.items():
+                    total = sum(float(v) for v in values if v is not None)
+                    key_name = activity.value if hasattr(activity, "value") else str(activity)
+                    if key_name == "CSD":
+                        total_deposited += total
+                    elif key_name == "CSW":
+                        total_withdrawn += abs(total)
+
+                if timestamps and pls:
+                    now_ts = timestamps[-1]
+                    latest_pl = next((p for p in reversed(pls) if p is not None), None)
+
+                    def _period_pnl(days_ago: int | None, boundary_ts: float | None = None):
+                        if latest_pl is None:
+                            return None, None
+                        target = boundary_ts if boundary_ts is not None else now_ts - days_ago * 86400
+                        idx = _nearest_index_on_or_before(timestamps, target)
+                        base_pl     = pls[idx]
+                        base_equity = equities[idx]
+                        if base_pl is None or base_equity is None or base_equity <= 0:
+                            return None, None
+                        delta = round(latest_pl - base_pl, 2)
+                        pct   = round(delta / base_equity * 100, 3)
+                        return delta, pct
+
+                    pnl_week,  pnl_week_pct  = _period_pnl(7)
+                    pnl_month, pnl_month_pct = _period_pnl(30)
+
+                    jan1 = _date(_date.today().year, 1, 1)
+                    jan1_ts = __import__("time").mktime(jan1.timetuple())
+                    pnl_ytd, pnl_ytd_pct = _period_pnl(None, boundary_ts=jan1_ts)
+
+                    # All-time: delta from the very first recorded day (index 0)
+                    # — this is "P&L since the account started", excluding every
+                    # deposit/withdrawal along the way.
+                    if pls[0] is not None and equities[0] and equities[0] > 0:
+                        pnl_all_time = round(latest_pl - pls[0], 2)
+                    # % on total capital actually contributed, not on a fluctuating
+                    # equity base — matches how a user thinks about "my return":
+                    # gained/lost X% of the money I actually put in.
+                    if pnl_all_time is not None and total_deposited > 0:
+                        pnl_all_time_pct = round(pnl_all_time / total_deposited * 100, 3)
+            except Exception as hist_err:
+                logger.warning("[strategy] Portfolio history fetch failed (paper=%s): %s", paper, hist_err)
 
             return {
-                "available":      True,
-                "equity":         equity,
-                "pnl_today":      round(pnl_today, 2),
-                "pnl_today_pct":  round(pnl_today_pct, 3),
-                "pnl_week":       pnl_week,
-                "pnl_week_pct":   pnl_week_pct,
-                "pnl_month":      pnl_month,
-                "pnl_month_pct":  pnl_month_pct,
-                "paper_mode":     paper,
+                "available":         True,
+                "equity":            equity,
+                "pnl_today":         round(pnl_today, 2),
+                "pnl_today_pct":     round(pnl_today_pct, 3),
+                "pnl_week":          pnl_week,
+                "pnl_week_pct":      pnl_week_pct,
+                "pnl_month":         pnl_month,
+                "pnl_month_pct":     pnl_month_pct,
+                "pnl_ytd":           pnl_ytd,
+                "pnl_ytd_pct":       pnl_ytd_pct,
+                "pnl_all_time":      pnl_all_time,
+                "pnl_all_time_pct":  pnl_all_time_pct,
+                "total_deposited":   round(total_deposited, 2),
+                "total_withdrawn":   round(total_withdrawn, 2),
+                "net_contributions": round(total_deposited - total_withdrawn, 2),
+                "paper_mode":        paper,
             }
         except Exception as e:
             return {"available": False, "paper_mode": paper, "error": str(e)}
@@ -1016,21 +1373,31 @@ def run_simulation():
 
 # ── Performance reviews ───────────────────────────────────────────────────────
 
+def _parse_paper_mode_arg(raw: str | None, default: bool = True) -> bool:
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("false", "0", "no")
+
+
 @strategy_bp.route("/review/list", methods=["GET"])
 def list_reviews():
-    """Return recent daily review summaries (no markdown/trades for list efficiency)."""
+    """
+    Return recent daily review summaries (no markdown/trades for list efficiency).
+    Reviews are decoupled per account — pass ?paper_mode=true|false to scope
+    the list to one account; omit to get both (e.g. for a combined calendar).
+    """
     from services.supabase.supabase_service import get_supabase_service
     limit = min(int(request.args.get("limit", 30)), 90)
+    paper_mode_arg = request.args.get("paper_mode")
     try:
-        rows = (
+        q = (
             get_supabase_service().client
             .table("performance_reviews")
-            .select("review_date, net_pnl, trade_count, win_rate, winners, losers, created_at")
-            .order("review_date", desc=True)
-            .limit(limit)
-            .execute()
-            .data or []
+            .select("review_date, paper_mode, net_pnl, trade_count, win_rate, winners, losers, created_at")
         )
+        if paper_mode_arg is not None:
+            q = q.eq("paper_mode", _parse_paper_mode_arg(paper_mode_arg))
+        rows = q.order("review_date", desc=True).limit(limit).execute().data or []
         for row in rows:
             row["is_reviewed"] = True
         return jsonify({"success": True, "data": rows, "count": len(rows)})
@@ -1041,14 +1408,22 @@ def list_reviews():
 
 @strategy_bp.route("/review/<review_date>", methods=["GET"])
 def get_review(review_date: str):
-    """Return full review for a date including markdown and trades_json."""
+    """
+    Return full review for a date including markdown and trades_json.
+    A date can now have both a paper and a live review — pass
+    ?paper_mode=true|false to pick one. Defaults to paper_mode=true, matching
+    how pre-decoupling single-review dates were saved (see migration
+    20260712_performance_reviews_decouple_paper_live.sql).
+    """
     from services.supabase.supabase_service import get_supabase_service
+    paper_mode = _parse_paper_mode_arg(request.args.get("paper_mode"))
     try:
         rows = (
             get_supabase_service().client
             .table("performance_reviews")
             .select("*")
             .eq("review_date", review_date)
+            .eq("paper_mode", paper_mode)
             .limit(1)
             .execute()
             .data or []
@@ -1066,13 +1441,27 @@ def get_review(review_date: str):
 @strategy_bp.route("/review/generate", methods=["POST"])
 def trigger_review():
     """
-    Manually generate (or re-generate) the daily performance review.
-    Body: { "date": "YYYY-MM-DD" }  — defaults to today if omitted.
-    Useful when the 4:15 PM scheduler missed due to a Railway restart.
+    Generate the daily performance review(s) and save to Supabase.
+    Body: { "date": "YYYY-MM-DD", "paper_mode": true|false }
+      - date defaults to today if omitted.
+      - paper_mode omitted (the normal case — this is what the single Supabase
+        pg_cron job at 4:15 PM ET calls with no body): generates BOTH paper
+        and live, saves both, and sends exactly ONE push notification
+        combining both accounts' trade count and net P&L. Previously each
+        account fired its own notification, AND a separate in-process
+        APScheduler job did the same thing independently at the same time —
+        together producing 3-4 near-duplicate pushes for one day's review
+        (2026-07-15). pg_cron is now the only trigger, and this one call
+        covers both accounts, so exactly one notification goes out per day.
+      - paper_mode explicit (true|false): generates only that one account
+        and sends its own labeled notification — for manually re-generating
+        a single account's review (e.g. after fixing bad trade data), not
+        for the scheduled path.
     """
     from datetime import date as _date
     from services.strategy.review_generator import ReviewGenerator
     from services.supabase.supabase_service import get_supabase_service
+    from services.strategy.notifier import StrategyNotifier
 
     body = request.get_json(silent=True) or {}
     date_str = body.get("date")
@@ -1081,25 +1470,54 @@ def trigger_review():
     except ValueError:
         return jsonify({"success": False, "error": f"Invalid date: {date_str}"}), 400
 
-    try:
-        sb = get_supabase_service().client
-        gen = ReviewGenerator(sb)
-        content, meta = gen.generate(session_date)
-        trades = gen._fetch_trades(session_date)
-        gen.save_to_supabase(session_date, content, trades, meta)
+    sb = get_supabase_service().client
+    gen = ReviewGenerator(sb)
 
-        from services.strategy.notifier import StrategyNotifier
-        StrategyNotifier(sb).notify_review_ready(str(session_date), meta["trade_count"], meta["net_pnl"])
+    if "paper_mode" in body:
+        paper_mode = bool(body["paper_mode"])
+        try:
+            content, meta = gen.generate(session_date, paper_mode)
+            trades = gen._fetch_trades(session_date, paper_mode)
+            gen.save_to_supabase(session_date, content, trades, meta, paper_mode)
+            StrategyNotifier(sb).notify_review_ready(
+                str(session_date), meta["trade_count"], meta["net_pnl"], paper_mode,
+            )
+            return jsonify({
+                "success": True,
+                "date": str(session_date),
+                "paper_mode": paper_mode,
+                "meta": meta,
+                "preview": content[:500] + ("..." if len(content) > 500 else ""),
+            })
+        except Exception as e:
+            logger.error("[strategy/review/generate] Failed: %s", e, exc_info=True)
+            return jsonify({"success": False, "error": str(e)}), 500
 
-        return jsonify({
-            "success": True,
-            "date": str(session_date),
-            "meta": meta,
-            "preview": content[:500] + ("..." if len(content) > 500 else ""),
-        })
-    except Exception as e:
-        logger.error("[strategy/review/generate] Failed: %s", e, exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+    # Default path: both accounts, one combined notification.
+    results = {}
+    for mode in (True, False):
+        label = "paper" if mode else "live"
+        try:
+            content, meta = gen.generate(session_date, mode)
+            trades = gen._fetch_trades(session_date, mode)
+            gen.save_to_supabase(session_date, content, trades, meta, mode)
+            results[label] = {"meta": meta, "preview": content[:500] + ("..." if len(content) > 500 else "")}
+        except Exception as e:
+            logger.error("[strategy/review/generate] %s review failed: %s", label, e, exc_info=True)
+            results[label] = {"error": str(e)}
+
+    total_trades = sum(r["meta"]["trade_count"] for r in results.values() if "meta" in r)
+    total_pnl     = sum(r["meta"]["net_pnl"] for r in results.values() if "meta" in r)
+
+    if any("meta" in r for r in results.values()):
+        StrategyNotifier(sb).notify_review_ready_combined(str(session_date), total_trades, total_pnl)
+
+    return jsonify({
+        "success": any("meta" in r for r in results.values()),
+        "date": str(session_date),
+        "combined": {"trade_count": total_trades, "net_pnl": total_pnl},
+        "results": results,
+    })
 
 
 # ── EMA / Technical data ──────────────────────────────────────────────────────
@@ -1139,7 +1557,14 @@ def _engine_position_response(engine: ORBEngine):
     try:
         pos = engine.trading_client.get_open_position(engine.contract_symbol)
         em  = engine.exit_manager
-        current_price   = float(pos.current_price)
+        # Alpaca can return None for current_price on illiquid/freshly-opened
+        # options (no recent trade print). Fall back to the engine's own
+        # streamed mid-price so a missing broker quote doesn't collapse the
+        # whole response to active=False via a TypeError on float(None).
+        raw_price = pos.current_price
+        if raw_price is None:
+            raw_price = getattr(engine, '_current_option_price', None)
+        current_price   = float(raw_price) if raw_price is not None else 0.0
         entry_p         = em.entry_premium if em else 0
         qty_rem         = em.qty_remaining if em else 0
         unrealized_pnl  = (current_price - entry_p) * qty_rem * 100

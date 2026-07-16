@@ -37,8 +37,9 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
 
-  const profile  = IMMEDIATE_PROFILES[profileIndex];
-  const isManual = profile.isManual === true;
+  const profile      = IMMEDIATE_PROFILES[profileIndex];
+  const isManual     = profile.isManual === true;
+  const isNoStopLoss = profile.isNoStopLoss === true;
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
@@ -73,8 +74,8 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
         qty,
         profile:         profile.key,
         paper_mode:      paperMode,
-        consol_exit:     isManual ? false : consolExit,
-        volume_exit:     isManual ? false : volumeExit,
+        consol_exit:     (isManual || isNoStopLoss) ? false : consolExit,
+        volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
         ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
       },
       {
@@ -85,6 +86,17 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
   };
 
   const handleSubmitPress = () => {
+    if (isNoStopLoss) {
+      Alert.alert(
+        `${profile.emoji} No Stop Loss`,
+        `Enter ${contract?.option_type} ${contract?.symbol} × ${qty}?\n\n⚠️ This will NOT auto-close for any reason, including end of day — it expires today (0DTE) if you don't sell it.${!paperMode ? '\n\nThis is a LIVE order with REAL money.' : ''}`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Trade', style: paperMode ? 'default' : 'destructive', onPress: doSubmit },
+        ],
+      );
+      return;
+    }
     if (paperMode) { doSubmit(); return; }
     Alert.alert(
       'Trade LIVE',
@@ -149,7 +161,9 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
           )}
 
           {/* Qty */}
-          <Text style={[s.label, { color: colors.tabBarInactive }]}>CONTRACTS</Text>
+          <Text style={[s.label, { color: colors.tabBarInactive }]}>
+            CONTRACTS{isNoStopLoss ? ' — no stop loss, size carefully' : ''}
+          </Text>
           <View style={[s.qtyRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <TouchableOpacity
               onPress={() => setQty(q => Math.max(1, q - 1))}
@@ -171,8 +185,8 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
             </Text>
           </View>
 
-          {/* Exit toggles — hidden for MANUAL, which only has the SL above */}
-          {!isManual && (
+          {/* Exit toggles — hidden for MANUAL/NO_STOP_LOSS (no automatic exit to configure) */}
+          {!isManual && !isNoStopLoss && (
             <>
               <Text style={[s.label, { color: colors.tabBarInactive, marginTop: 18 }]}>EXTRA EXITS</Text>
               <View style={[s.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>

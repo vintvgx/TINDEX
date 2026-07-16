@@ -30,6 +30,49 @@ def log_response_info(response):
 from services.websocket.price_stream_service import price_stream
 price_stream.start()
 
+# Single shared Alpaca option-data-stream connection for the whole process.
+# Constructed here (module scope, before the ORB engine's try/except below)
+# so a failure initialising ORB engines can never take this down — but its
+# construction itself is just object setup (no network I/O), so it's safe to
+# create unconditionally rather than tucking it inside a try/except. Do not
+# create a second OptionStreamManager anywhere else: this account's Alpaca
+# plan allows only one live connection per API key, and a second one causes
+# a "connection limit exceeded" reconnect storm (see
+# services/websocket/social_signals_stream.py's docstring for the incident).
+from services.strategy.option_stream import OptionStreamManager
+_option_stream_manager = OptionStreamManager()
+
+from services.websocket.social_signals_stream import social_signals_stream
+social_signals_stream.set_stream_manager(_option_stream_manager)
+social_signals_stream.start()
+
+
+@sock.route("/ws/social-signals/live")
+def ws_social_signals_live(ws):
+    """
+    Live mid-price ticks for every currently-tracked social-signal contract —
+    one shared connection per client, fanned out from social_signals_stream's
+    single background broadcast loop (see that module's docstring for why
+    this isn't one poll-loop-per-connection, and why this route is registered
+    here at module scope rather than nested inside the ORB engine's
+    try/except below — a failure initialising ORB engines must never be able
+    to silently take the social-signals stream down with it).
+    """
+    import queue as _queue
+
+    client_q = social_signals_stream.add_client()
+    try:
+        while True:
+            try:
+                msg = client_q.get(timeout=30)
+                ws.send(msg)
+            except _queue.Empty:
+                ws.send(json.dumps({"type": "ping"}))
+    except Exception as exc:
+        logger.debug("[WS/social-signals] connection ended: %s", exc)
+    finally:
+        social_signals_stream.remove_client(client_q)
+
 
 # ── Blueprints ─────────────────────────────────────────────────────────────────
 
@@ -42,6 +85,7 @@ from routes.agent_routes import bp as agent_bp
 from routes.flow_routes import bp as flow_bp
 from routes.swing_routes import bp as swing_bp
 from routes.zero_dte_routes import bp as zero_dte_bp
+from routes.social_routes import bp as social_bp
 
 app.register_blueprint(ticker_bp)
 app.register_blueprint(yahoo_bp)
@@ -51,6 +95,7 @@ app.register_blueprint(portfolio_bp)
 app.register_blueprint(agent_bp)
 app.register_blueprint(flow_bp)
 app.register_blueprint(swing_bp)
+app.register_blueprint(social_bp)
 app.register_blueprint(zero_dte_bp)
 
 
@@ -113,10 +158,11 @@ try:
     from services.strategy.orb_engine import ORBEngine, STRATEGY_DEFAULTS
     from services.strategy.trade_logger import TradeLogger as StrategyLogger
     from services.strategy.scheduler import init_scheduler as init_strategy_scheduler
-    from services.strategy.option_stream import OptionStreamManager
     from routes.strategy_routes import strategy_bp, init_routes as init_strategy_routes
 
-    _option_stream_manager = OptionStreamManager()
+    # _option_stream_manager is the single shared OptionStreamManager created
+    # above (module scope) — reused here, not recreated, to keep exactly one
+    # live Alpaca option-stream connection for the whole process.
 
     def _build_strategy_engines() -> dict:
         svc_logger = StrategyLogger()
@@ -142,23 +188,33 @@ try:
     init_strategy_routes(_strategy_engines, stream_manager=_option_stream_manager)
     logger.info("[App] ORB strategy engines initialised (%d configs)", len(_strategy_engines))
 
-    # Schedule the 4:15 PM ET daily review at startup so it survives Railway restarts.
-    # Previously this was only registered inside /tindex/orb/start — meaning a mid-day
-    # server restart would silently drop the job and produce no review that day.
+    # Reattach exit management to any position still open at the broker —
+    # unconditional, every boot, regardless of time of day. Before this, a
+    # restart mid-position silently dropped it from both display and stop-
+    # loss/TP monitoring while the real Alpaca position sat untouched — that
+    # cost real money on 2026-07-13. See
+    # docs/incidents/2026-07-14-position-lost-on-restart.md. Not wrapped in
+    # its own try/except beyond what recover_open_positions() already does
+    # internally per-row — a failure recovering one position must never
+    # silently skip the rest.
     try:
-        from services.strategy.scheduler import schedule_daily_review as _sched_review
-        from services.supabase.supabase_service import get_supabase_service as _get_sb
-        _sched_review(_get_sb().client)
-        logger.info("[App] Daily review job registered at startup")
-    except Exception as _rev_err:
-        logger.warning("[App] Daily review scheduler registration failed: %s", _rev_err)
+        from routes.strategy_routes import recover_open_positions as _recover_positions
+        _recover_positions()
+    except Exception as _recover_err:
+        logger.error("[App] Position recovery failed: %s", _recover_err, exc_info=True)
 
-    try:
-        from services.strategy.scheduler import schedule_zero_dte_scans as _sched_zero_dte
-        _sched_zero_dte(_get_sb().client)
-        logger.info("[App] 0DTE scan jobs registered at startup")
-    except Exception as _zdre:
-        logger.warning("[App] 0DTE scan scheduler failed: %s", _zdre)
+    # The daily review used to ALSO be scheduled here via an in-process
+    # APScheduler job (schedule_daily_review), on top of the Supabase pg_cron
+    # job that already hits /strategy/review/generate at 4:15 PM ET — both
+    # firing around the same time produced duplicate "Daily Review ready"
+    # push notifications (2026-07-15). pg_cron is strictly better here (an
+    # external trigger, not an in-process job that dies with the process) so
+    # it's now the only path — removed the in-process registration entirely.
+    #
+    # The 0DTE scan scheduler (schedule_zero_dte_scans) is removed for the
+    # same reason it's no longer needed: the Unusual Whales / 0DTE watchlist
+    # feature is being retired (2026-07-15) — its Supabase pg_cron jobs were
+    # unscheduled directly; see supabase/migrations/20260715_remove_zero_dte_and_dedupe_review_cron.sql.
 
     # Auto-start the ORB data hub on every process boot — not a replacement for
     # the 9:20 AM daily cron that hits /tindex/orb/start, but a self-healing

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { SafeAreaView, Text, View, Pressable, TouchableOpacity, ScrollView } from 'react-native';
 import { ORBAdminModal } from '@/common/components/admin/ORBAdminModal';
+import { ServiceStatusModal } from '@/common/components/admin/ServiceStatusModal';
 import { LogViewerModal } from '@/common/components/orb/LogViewerModal';
 import { ThemeToggle } from '@/common/components/ThemeToggle';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -13,12 +14,14 @@ const ProfileScreen = () => {
   const colors = useThemeColors();
   const [adminModalVisible, setAdminModalVisible] = useState(false);
   const [logViewerVisible, setLogViewerVisible] = useState(false);
+  const [serviceStatusVisible, setServiceStatusVisible] = useState(false);
   const toast = useToast();
 
   const email = user?.email || 'User';
   const initials = email.substring(0, 2).toUpperCase();
 
   const menuItems = [
+    { icon: 'pulse-outline' as const, label: 'Service Status', onPress: () => setServiceStatusVisible(true) },
     { icon: 'shield-outline' as const, label: 'Admin Panel', onPress: () => setAdminModalVisible(true) },
     { icon: 'document-text-outline' as const, label: 'View Logs', onPress: () => setLogViewerVisible(true) },
   ];
@@ -222,6 +225,10 @@ const ProfileScreen = () => {
       <LogViewerModal
         visible={logViewerVisible}
         onClose={() => setLogViewerVisible(false)}
+      />
+      <ServiceStatusModal
+        visible={serviceStatusVisible}
+        onClose={() => setServiceStatusVisible(false)}
       />
     </SafeAreaView>
   );

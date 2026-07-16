@@ -16,10 +16,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
+import { usePathname } from 'expo-router';
 import { useTickerSearch } from '@/hooks/queries/ticker/useTickerSearch';
 import type { SearchHistoryItem } from '@/common/types/blogPosts/ticker';
 import { useThemeColors } from '@/lib/useColorScheme';
 import useBaseNavigation from '@/hooks/navigation/useBaseNavigation';
+import { useOptionsTicker } from '@/lib/optionsTickerContext';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const HISTORY_KEY = 'ticker_search_history';
@@ -33,6 +35,8 @@ interface SearchBottomSheetProps {
 export const SearchBottomSheet: React.FC<SearchBottomSheetProps> = ({ visible, onClose }) => {
   const colors = useThemeColors();
   const { toTicker } = useBaseNavigation();
+  const pathname = usePathname();
+  const { setOptionsTicker } = useOptionsTicker();
   const [searchText, setSearchText] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [history, setHistory] = useState<SearchHistoryItem[]>([]);
@@ -82,9 +86,17 @@ export const SearchBottomSheet: React.FC<SearchBottomSheetProps> = ({ visible, o
         setHistory(updated);
       } catch {}
       onClose();
-      toTicker(item.ticker);
+      // On the Contracts page, look up the searched stock's option chain in
+      // place instead of navigating away to the generic ticker detail
+      // screen — options.tsx already reads its active ticker from this same
+      // shared context (useOptionsTicker), it just never got set from here.
+      if (pathname?.includes('/options')) {
+        setOptionsTicker(item.ticker.toUpperCase());
+      } else {
+        toTicker(item.ticker);
+      }
     },
-    [history, onClose, toTicker],
+    [history, onClose, toTicker, pathname, setOptionsTicker],
   );
 
   const displayItems: SearchHistoryItem[] = [];

@@ -186,6 +186,18 @@ class TradeLogger:
 
     # ── Trade logging ───────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _fetch_equity(trading_client) -> Optional[float]:
+        """Best-effort current account equity for the account behind `trading_client`.
+        Never raises — a snapshot failure shouldn't block trade logging."""
+        if trading_client is None:
+            return None
+        try:
+            return float(trading_client.get_account().equity)
+        except Exception as e:
+            logger.warning("[TradeLogger] equity snapshot failed: %s", e)
+            return None
+
     def log_entry(self, ticker: str, direction: str, contract: dict,
                   entry_premium: float, orh: float, orl: float,
                   fib_levels: dict, session_date, profile: str, qty: int,
@@ -193,7 +205,18 @@ class TradeLogger:
                   vix_at_entry: Optional[float] = None,
                   strategy_id: Optional[str] = None,
                   paper_mode: bool = True,
-                  trade_type: str = "STRATEGY") -> Optional[str]:
+                  trade_type: str = "STRATEGY",
+                  trading_client=None,
+                  exit_overrides: Optional[dict] = None,
+                  hard_stop_price: Optional[float] = None,
+                  tp1_price: Optional[float] = None,
+                  tp2_price: Optional[float] = None) -> Optional[str]:
+        # Snapshot account equity right as the position opens — the baseline
+        # `log_exit` compares against when the trade fully closes, so the
+        # Trade Log can show this trade's real account-level impact rather
+        # than just its own entry/exit premium math.
+        account_balance_before = self._fetch_equity(trading_client)
+
         row = {
             "trade_date":             str(session_date),
             "ticker":                 ticker,
@@ -215,39 +238,82 @@ class TradeLogger:
             "strategy_id":            strategy_id,
             "paper_mode":             paper_mode,
             "trade_type":             trade_type,
+            # Exact levels/overrides at entry — lets a restart reconstruct this
+            # position's exit management precisely instead of just re-deriving
+            # a named profile's *default* thresholds (which would silently
+            # widen/change the stop for a manually-overridden trade). See
+            # docs/incidents/2026-07-14-position-lost-on-restart.md.
+            "exit_overrides":         exit_overrides,
+            "hard_stop_price":        hard_stop_price,
+            "tp1_price":              tp1_price,
+            "tp2_price":              tp2_price,
         }
-        # exit_stages requires a DB migration — try first, fall back to insert without it
-        # if the column doesn't exist yet (pre-migration safety net).
-        for attempt_row in (dict(row, exit_stages=[]), row):
+        if account_balance_before is not None:
+            row["account_balance_before"] = account_balance_before
+
+        # Several columns here require DB migrations that may not have run yet
+        # (exit_stages, account_balance_before, and the recovery fields above)
+        # — progressively drop whichever named group of columns triggers a
+        # "column not found" style error, rather than failing the whole insert
+        # (and losing the trade record) over a migration that hasn't landed.
+        optional_groups = [
+            ("exit_stages",),
+            ("account_balance_before",),
+            ("exit_overrides", "hard_stop_price", "tp1_price", "tp2_price"),
+        ]
+        attempt_row = dict(row, exit_stages=[])
+        remaining_groups = list(optional_groups)
+
+        while True:
             try:
                 res = self.client.table("orb_trades").insert(attempt_row).execute()
-                if res.data:
-                    return res.data[0]["id"]
-                return None
+                return res.data[0]["id"] if res.data else None
             except Exception as e:
                 err_str = str(e)
-                if attempt_row is row or "exit_stages" not in err_str:
+                dropped = False
+                for group in list(remaining_groups):
+                    if any(col in err_str for col in group):
+                        for col in group:
+                            attempt_row.pop(col, None)
+                        remaining_groups.remove(group)
+                        dropped = True
+                        logger.warning(
+                            "[TradeLogger] log_entry: column(s) %s missing — "
+                            "retrying without them (run Supabase migration to fix)", group,
+                        )
+                        break
+                if not dropped:
                     logger.error("[TradeLogger] log_entry failed: %s", e)
                     return None
-                logger.warning("[TradeLogger] log_entry: exit_stages column missing — "
-                               "retrying without it (run Supabase migration to fix)")
-        return None
 
     def log_exit(self, contract_symbol: str, exit_reason: str,
                  exit_premium: Optional[float], qty_closed: int, profile: str,
                  strategy_id: str = None,
-                 underlying_price_exit: Optional[float] = None):
+                 underlying_price_exit: Optional[float] = None,
+                 trading_client=None):
         try:
             # Fetch the open trade — do NOT filter by exit_time so that partial
             # exits after TP1 (which already set exit_time) are still found.
-            res = (
-                self.client.table("orb_trades")
-                .select("id, entry_premium, qty_entered, qty_exited, pnl, exit_stages")
-                .eq("contract_symbol", contract_symbol)
-                .order("entry_time", desc=True)
-                .limit(1)
-                .execute()
-            )
+            # `account_balance_before` may not exist yet pre-migration — fall
+            # back to the column set that's guaranteed to be there.
+            try:
+                res = (
+                    self.client.table("orb_trades")
+                    .select("id, entry_premium, qty_entered, qty_exited, pnl, exit_stages, account_balance_before")
+                    .eq("contract_symbol", contract_symbol)
+                    .order("entry_time", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+            except Exception:
+                res = (
+                    self.client.table("orb_trades")
+                    .select("id, entry_premium, qty_entered, qty_exited, pnl, exit_stages")
+                    .eq("contract_symbol", contract_symbol)
+                    .order("entry_time", desc=True)
+                    .limit(1)
+                    .execute()
+                )
             if not res.data:
                 return
 
@@ -298,7 +364,28 @@ class TradeLogger:
             if is_fully_closed:
                 update["exit_time"] = datetime.utcnow().isoformat()
 
-            self.client.table("orb_trades").update(update).eq("id", row["id"]).execute()
+                # Real account-level impact of this trade's full life, not just
+                # its own premium math — only possible for trades that captured
+                # a `account_balance_before` snapshot at entry (i.e. going forward).
+                account_balance_before = row.get("account_balance_before")
+                if account_balance_before is not None:
+                    account_balance_after = self._fetch_equity(trading_client)
+                    if account_balance_after is not None:
+                        update["account_balance_after"]  = round(account_balance_after, 2)
+                        update["account_balance_change"] = round(account_balance_after - account_balance_before, 2)
+
+            # account_balance_after/change require a DB migration — try with them
+            # first, fall back to the base update if the columns don't exist yet.
+            try:
+                self.client.table("orb_trades").update(update).eq("id", row["id"]).execute()
+            except Exception as e:
+                if "account_balance_after" not in str(e) and "account_balance_change" not in str(e):
+                    raise
+                stripped = {k: v for k, v in update.items()
+                            if k not in ("account_balance_after", "account_balance_change")}
+                logger.warning("[TradeLogger] log_exit: account_balance columns missing — "
+                               "retrying without them (run Supabase migration to fix)")
+                self.client.table("orb_trades").update(stripped).eq("id", row["id"]).execute()
 
             q = self.client.table("orb_session").update({"trade_taken": True}).eq(
                 "session_date", str(date.today())
@@ -324,6 +411,27 @@ class TradeLogger:
             return q.execute().data or []
         except Exception as e:
             logger.error("[TradeLogger] get_trades failed: %s", e)
+            return []
+
+    def get_open_trades(self) -> list[dict]:
+        """
+        Every orb_trades row with no exit_time yet — i.e. still open at the
+        broker. Scanned once at boot to reattach exit-management state to
+        whatever's actually still open, so a restart can never again leave a
+        real position invisible and unmonitored in this app while it's still
+        live at Alpaca. See docs/incidents/2026-07-14-position-lost-on-restart.md.
+        """
+        try:
+            res = (
+                self.client.table("orb_trades")
+                .select("*")
+                .is_("exit_time", "null")
+                .order("entry_time")
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error("[TradeLogger] get_open_trades failed: %s", e)
             return []
 
     def reconcile_orphaned_trades(self):

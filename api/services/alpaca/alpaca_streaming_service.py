@@ -59,6 +59,7 @@ class AlpacaStreamingService(StockStreamingService):
         
         self._stock_stream: Optional[StockDataStream] = None
         self._stream_task: Optional[asyncio.Task] = None
+        self._stream_loop: Optional[asyncio.AbstractEventLoop] = None
         self._bar_handler_callback: Optional[Callable[[StockBar], None]] = None
     
     def _create_stock_stream(self):
@@ -279,8 +280,16 @@ class AlpacaStreamingService(StockStreamingService):
                 return False
             
             logger.info("Starting Alpaca WebSocket stream...")
-            
-            # Start the stream in a background task
+
+            # Start the stream in a background task. Record the loop it's
+            # actually running on — every OrbService.start() runs in its own
+            # dedicated background thread with its own fresh event loop
+            # (asyncio.new_event_loop(), see monitoring_routes.py), so this is
+            # NEVER the same loop that a later stop() call runs on (stop() is
+            # invoked via asyncio.run(...) from a Flask request thread, which
+            # creates yet another new loop). stop_stream() needs this to
+            # actually reach the running task instead of silently giving up.
+            self._stream_loop = asyncio.get_running_loop()
             self._stream_task = asyncio.create_task(self._stock_stream._run_forever())
             self._is_running = True
             
@@ -298,10 +307,35 @@ class AlpacaStreamingService(StockStreamingService):
             self._is_running = False
             return False
     
+    async def _cancel_and_close(self, stream_task: "asyncio.Task") -> None:
+        """The actual teardown — cancel the running task, wait for it, close
+        the connection. MUST run on the same event loop that started the
+        stream (self._stream_loop) — see stop_stream() for why."""
+        stream_task.cancel()
+        try:
+            await asyncio.wait_for(stream_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            logger.warning("Alpaca stream task cancellation timed out")
+        except asyncio.CancelledError:
+            logger.info("Alpaca stream task cancelled successfully")
+        except Exception as e:
+            logger.error(f"Error awaiting Alpaca stream task cancellation: {e}", exc_info=True)
+
+        await self.unsubscribe()
+
+        if self._stock_stream:
+            try:
+                await asyncio.wait_for(self._stock_stream.close(), timeout=5.0)
+                logger.info("Alpaca stock stream connection closed")
+            except asyncio.TimeoutError:
+                logger.warning("Alpaca stream close timed out")
+            except Exception as e:
+                logger.error(f"Error closing Alpaca stock stream: {e}")
+
     async def stop_stream(self) -> bool:
         """
         Stop the Alpaca WebSocket stream and clean up resources.
-        
+
         Returns:
             True if stream stopped successfully, False otherwise
         """
@@ -309,65 +343,61 @@ class AlpacaStreamingService(StockStreamingService):
             if not self._is_running:
                 logger.info("Alpaca stream was never started, skipping cleanup")
                 return True
-            
-            # Cancel the stream task first
+
             if self._stream_task is not None:
-                logger.info("Cancelling Alpaca stream task")
                 stream_task = self._stream_task
                 self._stream_task = None  # Clear reference immediately to prevent reuse
-                
-                # Cancel the task
-                stream_task.cancel()
-                
-                # Try to await cancellation, but handle event loop mismatches gracefully
-                try:
-                    # Check if task's loop matches current loop
-                    current_loop = asyncio.get_running_loop()
-                    task_loop = getattr(stream_task, '_loop', None)
-                    
-                    if task_loop is not None and task_loop is not current_loop:
-                        logger.warning(
-                            f"Stream task attached to different event loop. "
-                            f"Task loop: {task_loop}, Current loop: {current_loop}. "
-                            f"Cancelling without awaiting."
-                        )
-                    else:
-                        # Safe to await - same loop or no loop info
-                        try:
-                            await asyncio.wait_for(stream_task, timeout=2.0)
-                        except asyncio.TimeoutError:
-                            logger.warning("Alpaca stream task cancellation timed out")
-                        except asyncio.CancelledError:
-                            logger.info("Alpaca stream task cancelled successfully")
-                except RuntimeError as e:
-                    # Handle "attached to a different loop" error gracefully
-                    if "different loop" in str(e).lower() or "attached to" in str(e).lower():
-                        logger.warning(
-                            f"Stream task attached to different event loop, skipping await: {e}"
-                        )
-                    else:
-                        raise
-                except Exception as e:
-                    logger.error(f"Error awaiting Alpaca stream task cancellation: {e}", exc_info=True)
-            
-            # Unsubscribe from all tickers
-            await self.unsubscribe()
-            
-            # Close the stream connection
-            if self._stock_stream:
-                try:
-                    await asyncio.wait_for(
-                        self._stock_stream.close(),
-                        timeout=5.0
+
+                current_loop = asyncio.get_running_loop()
+                stream_loop = self._stream_loop
+
+                if stream_loop is not None and stream_loop is not current_loop and stream_loop.is_running():
+                    # This is the normal case, not an edge case: every
+                    # OrbService.start() runs in its own dedicated thread with
+                    # its own fresh event loop, and stop() is called via
+                    # asyncio.run(...) from a Flask request thread — a THIRD,
+                    # unrelated loop. Actually cancelling and closing the
+                    # connection has to happen on stream_loop itself.
+                    #
+                    # Previously this branch just logged a warning and gave up
+                    # without awaiting anything — meaning the old stream's
+                    # _run_forever() task, and its own internal reconnect loop,
+                    # kept running forever, orphaned, on a thread nothing was
+                    # tracking anymore. Every restart (including every watchdog
+                    # cycle) left one more of these behind; each one kept
+                    # retrying its connection to Alpaca indefinitely, and since
+                    # Alpaca allows only one live connection per account for
+                    # this feed, enough accumulated zombies is exactly what
+                    # produces a flood of "connection limit exceeded" / HTTP 429
+                    # rejections — including against the *new*, legitimate
+                    # connection this stop() is making room for.
+                    logger.info("Cancelling Alpaca stream task on its own event loop")
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._cancel_and_close(stream_task), stream_loop
                     )
-                    logger.info("Alpaca stock stream connection closed")
-                except asyncio.TimeoutError:
-                    logger.warning("Alpaca stream close timed out")
+                    try:
+                        await current_loop.run_in_executor(None, future.result, 8.0)
+                    except Exception as e:
+                        logger.error(
+                            f"Cross-loop stream teardown failed or timed out: {e}", exc_info=True
+                        )
+                else:
+                    logger.info("Cancelling Alpaca stream task")
+                    await self._cancel_and_close(stream_task)
+            elif self._stock_stream:
+                # No task on record (shouldn't normally happen — start_stream()
+                # always sets both together) but a stream object still exists;
+                # fall back to at least unsubscribing/closing it directly rather
+                # than silently leaving it referenced with nothing tearing it down.
+                await self.unsubscribe()
+                try:
+                    await asyncio.wait_for(self._stock_stream.close(), timeout=5.0)
                 except Exception as e:
                     logger.error(f"Error closing Alpaca stock stream: {e}")
-            
+
             self._is_running = False
             self._stock_stream = None
+            self._stream_loop = None
             self._bar_handler_callback = None
             
             logger.info("Alpaca stream stopped successfully")

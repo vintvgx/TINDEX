@@ -10,6 +10,9 @@ import type { ReviewTrade } from '@/common/types/review';
 
 interface Props {
   date: string | null;
+  /** Which account's review to show — reviews are fully decoupled per
+   *  account, so a date can have a live review, a paper review, or both. */
+  paperMode: boolean;
   visible: boolean;
   onClose: () => void;
 }
@@ -217,9 +220,9 @@ function MarkdownSection({ parsed, colors }: {
 }
 
 // ── Main modal ────────────────────────────────────────────────────────────────
-export function ReviewDetailModal({ date, visible, onClose }: Props) {
+export function ReviewDetailModal({ date, paperMode, visible, onClose }: Props) {
   const colors = useThemeColors();
-  const { data, isLoading, error } = usePerformanceReview(date);
+  const { data, isLoading, error } = usePerformanceReview(date, paperMode);
   const review = data?.data;
 
   const parsedMd = useMemo(
@@ -245,7 +248,17 @@ export function ReviewDetailModal({ date, visible, onClose }: Props) {
             <Ionicons name="close" size={24} color={colors.text} />
           </TouchableOpacity>
           <View style={{ flex: 1 }}>
-            <Text style={{ color: colors.text, fontSize: 18, fontWeight: '800' }}>Daily Review</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={{ color: colors.text, fontSize: 18, fontWeight: '800' }}>Daily Review</Text>
+              <View style={{
+                backgroundColor: (paperMode ? '#FF9F0A' : colors.success) + '22',
+                borderRadius: 5, paddingHorizontal: 7, paddingVertical: 2,
+              }}>
+                <Text style={{ color: paperMode ? '#FF9F0A' : colors.success, fontSize: 10, fontWeight: '700' }}>
+                  {paperMode ? 'PAPER' : 'LIVE'}
+                </Text>
+              </View>
+            </View>
             <Text style={{ color: colors.textTertiary, fontSize: 12 }}>{date ?? '—'}</Text>
           </View>
           {review && (
