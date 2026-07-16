@@ -5,7 +5,7 @@
  */
 export type PositionType = "long" | "short";
 export type PortfolioStatus = "open" | "closed" | "partial";
-export type PortfolioStrategy = "ORB" | "swing" | "scalp";
+export type PortfolioStrategy = "ORB" | "scalp";
 
 export interface PortfolioPosition {
   id: string;

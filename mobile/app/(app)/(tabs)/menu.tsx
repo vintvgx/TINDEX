@@ -37,13 +37,6 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    title: 'Swing Trading',
-    beta: true,
-    items: [
-      { label: 'Swing Trade Scan', route: '/(app)/(tabs)/swing' },
-    ],
-  },
-  {
     title: 'Settings',
     items: [
       { label: 'Profile & Settings', route: '/(app)/(tabs)/profile' },

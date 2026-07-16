@@ -4,7 +4,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useToast } from '@/common/components/ui/Toast';
 import { useUpdateStrategyExits } from '@/hooks/mutations/strategy/useUpdateStrategyExits';
-import { useUpdateSwingExits } from '@/hooks/mutations/swing/useUpdateSwingExits';
 import { EditExitsModal, type ExitEditMode } from '@/common/components/shared/EditExitsModal';
 
 interface BaseProps {
@@ -24,12 +23,7 @@ interface OrbProps extends BaseProps {
   strategy_id: string;
 }
 
-interface SwingProps extends BaseProps {
-  mode: 'swing';
-  position_id: string;
-}
-
-type Props = OrbProps | SwingProps;
+type Props = OrbProps;
 
 export function EditExitsButton(props: Props) {
   const { ticker, hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit, label, style } = props;
@@ -37,10 +31,9 @@ export function EditExitsButton(props: Props) {
   const toast = useToast();
   const [open, setOpen] = useState(false);
 
-  const orbMutation   = useUpdateStrategyExits();
-  const swingMutation = useUpdateSwingExits();
+  const orbMutation = useUpdateStrategyExits();
 
-  const isPending = props.mode === 'orb' ? orbMutation.isPending : swingMutation.isPending;
+  const isPending = orbMutation.isPending;
 
   const handleSubmit = async (payload: {
     hard_stop?: number;
@@ -49,11 +42,7 @@ export function EditExitsButton(props: Props) {
     tp1_pct?: number;
     tp2_pct?: number;
   }) => {
-    if (props.mode === 'orb') {
-      await orbMutation.mutateAsync({ strategy_id: props.strategy_id, ...payload });
-    } else {
-      await swingMutation.mutateAsync({ position_id: props.position_id, ...payload });
-    }
+    await orbMutation.mutateAsync({ strategy_id: props.strategy_id, ...payload });
     toast.success('Stop & targets updated');
     setOpen(false);
   };
@@ -73,7 +62,7 @@ export function EditExitsButton(props: Props) {
         visible={open}
         onClose={() => setOpen(false)}
         mode={props.mode as ExitEditMode}
-        positionId={props.mode === 'orb' ? props.strategy_id : props.position_id}
+        positionId={props.strategy_id}
         ticker={ticker}
         current={{ hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit }}
         onSubmit={handleSubmit}

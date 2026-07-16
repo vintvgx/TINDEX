@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS public.portfolio_positions (
   opened_at      timestamptz NOT NULL DEFAULT now(),
   closed_at      timestamptz NULL,
   realized_pnl   numeric(20, 4) NULL,
-  strategy       text NOT NULL DEFAULT 'swing' CHECK (strategy IN ('ORB', 'swing', 'scalp')),
+  strategy       text NOT NULL DEFAULT 'scalp' CHECK (strategy IN ('ORB', 'scalp')),
 
   UNIQUE(user_id, ticker)
 );
