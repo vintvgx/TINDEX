@@ -13,9 +13,25 @@ import { useOrbHubHealth } from '@/hooks/queries/orb/useOrbHubHealth';
 export function OrbHubHealthBanner({ colors }: { colors: any }) {
   const { data } = useOrbHubHealth();
 
-  if (!data || data.healthy) return null;
+  if (!data) return null;
 
-  const stale = data.running && data.market_hours;
+  // Outside market hours, the feed correctly isn't running — that's not a
+  // problem worth a red warning, but the user still wants to see *why*
+  // nothing's armed rather than the banner just vanishing.
+  if (!data.market_hours) {
+    return (
+      <View style={[styles.banner, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Ionicons name="moon-outline" size={18} color={colors.tabBarInactive} style={{ marginTop: 1 }} />
+        <Text style={[styles.text, { color: colors.tabBarInactive }]}>
+          Outside market hours — the live data feed isn't running until the next session.
+        </Text>
+      </View>
+    );
+  }
+
+  if (data.healthy) return null;
+
+  const stale = data.running;
   const message = stale
     ? `Live data feed appears stale (no bars in ${Math.round((data.seconds_since_last_bar ?? 0) / 60)}m) — strategies may not detect breakouts. Auto-recovery is running; check back shortly.`
     : 'Live data feed is not running — strategies cannot detect breakouts until it restarts.';

@@ -24,6 +24,7 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { useWatchlists } from '@/hooks/queries/watchlist/useWatchlist';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
+import { useOrbHubHealth } from '@/hooks/queries/orb/useOrbHubHealth';
 import type { WatchlistStock } from '@/common/types/watchlist';
 
 // Live-stream symbols (SPY arrives on its own field; the rest via livePrices).
@@ -85,9 +86,19 @@ export function TickerTape() {
   const mode = MODES[modeIndex];
 
   // ── Data sources ──────────────────────────────────────────────────────────
-  const { livePrices, spy, vix, sentiment, connected } = useMarketStream(STREAM_TICKERS);
+  const { livePrices, spy, vix, sentiment } = useMarketStream(STREAM_TICKERS);
   const { data: watchlists, isLoading: watchlistsLoading } = useWatchlists();
   const { data: orbData } = useORBMonitoringState(false, false);
+  // This dot used to reflect the price-stream websocket (`connected`), which
+  // is trivially green whenever the backend process is up — it said nothing
+  // about whether the ORB breakout-detection hub was actually alive, which is
+  // exactly what silently died on 2026-07-09 while this dot stayed green all
+  // day. Wired to the same health check as the Strategies screen's banner.
+  const { data: orbHealth } = useOrbHubHealth();
+  const orbDotColor = !orbHealth ? colors.tapeMuted
+    : !orbHealth.market_hours ? '#F59E0B'   // outside hours — informational, not a fault
+    : orbHealth.healthy       ? colors.tapeUp
+    :                           colors.tapeDown;
 
   const orbMap = useMemo(() => {
     const m = new Map<string, { high: number | null; low: number | null }>();
@@ -208,7 +219,7 @@ export function TickerTape() {
   return (
     <View style={{ backgroundColor: colors.tape, paddingTop: insets.top }}>
       <Pressable style={styles.tape} onPress={cycle} accessibilityRole="button" accessibilityLabel={`Ticker tape: ${mode.label}. Tap to change.`}>
-        <View style={[styles.liveDot, { backgroundColor: connected ? colors.tapeUp : colors.tapeMuted }]} />
+        <View style={[styles.liveDot, { backgroundColor: orbDotColor }]} />
 
         {/* Marquee */}
         <Animated.View style={[styles.track, { opacity: contentOpacity, transform: [{ translateX }] }]}>
