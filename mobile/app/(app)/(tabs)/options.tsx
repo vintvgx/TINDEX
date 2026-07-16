@@ -273,6 +273,13 @@ const OptionsScreen = () => {
   const [detailTrackedPrice, setDetailTrackedPrice] = useState<number | null>(null);
   const [detailLiveContractPrice, setDetailLiveContractPrice] = useState<number | null>(null);
   const [tradeSheetVisible, setTradeSheetVisible] = useState(false);
+  // Snapshot of the contract/price at the moment Trade is pressed — kept
+  // separate from detailContract because opening the trade sheet closes the
+  // detail modal first (RN can't reliably present a second native Modal while
+  // one is still visible), which would otherwise null out detailContract
+  // before TradeContractSheet ever gets to read it.
+  const [tradeSheetContract, setTradeSheetContract] = useState<OptionsContract | null>(null);
+  const [tradeSheetCurrentPrice, setTradeSheetCurrentPrice] = useState(0);
 
   // Service status (shared React Query cache — no extra network call if ORB screen is mounted)
   const { data: servicesStatus } = useServicesStatus();
@@ -504,6 +511,17 @@ const OptionsScreen = () => {
     setDetailTrackedPrice(null);
     setDetailLiveContractPrice(null);
   }, []);
+
+  const handleTradePress = useCallback(() => {
+    if (!detailContract) return;
+    setTradeSheetContract(detailContract);
+    setTradeSheetCurrentPrice(detailCurrentPrice);
+    closeDetail();
+    // RN can't reliably present a second native Modal while the first is
+    // still mid-dismiss-animation — a same-tick state swap silently no-ops
+    // on iOS. Wait for the close animation (~300ms) to actually finish first.
+    setTimeout(() => setTradeSheetVisible(true), 350);
+  }, [detailContract, detailCurrentPrice, closeDetail]);
 
   // ── Chain render helpers ─────────────────────────────────────────────────────
 
@@ -948,7 +966,7 @@ const OptionsScreen = () => {
           isUntracking={untrackContract.isPending}
           trackedPrice={detailTrackedId ? detailTrackedPrice : null}
           liveContractPrice={detailTrackedId ? detailLiveContractPrice : null}
-          onTrade={() => setTradeSheetVisible(true)}
+          onTrade={handleTradePress}
         />
       )}
 
@@ -956,9 +974,9 @@ const OptionsScreen = () => {
         visible={tradeSheetVisible}
         onClose={() => setTradeSheetVisible(false)}
         colors={colors}
-        ticker={detailContract?.ticker || activeTicker}
-        contract={detailContract}
-        currentPrice={detailCurrentPrice}
+        ticker={tradeSheetContract?.ticker || activeTicker}
+        contract={tradeSheetContract}
+        currentPrice={tradeSheetCurrentPrice}
       />
     </SafeAreaView>
   );
