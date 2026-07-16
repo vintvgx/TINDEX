@@ -6,7 +6,6 @@ import * as SecureStore from 'expo-secure-store';
 import { Ionicons } from '@expo/vector-icons';
 import { useORBMonitoringState, ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useORBRanges } from '@/hooks/queries/orb/useORBRanges';
-import { useORBFlowSummaries } from '@/hooks/queries/flow/useORBFlowSummaries';
 import { ORBCardGrid } from '@/common/components/orb/ORBCardGrid';
 import { ORBDetailModal } from '@/common/components/orb/ORBDetailModal';
 import { WatchlistsModal } from '@/common/components/watchlist/WatchlistsModal';
@@ -111,10 +110,6 @@ const ORBScreen = () => {
   console.log('[ORB] calling useMarketStream, tickers:', orbTickers.length);
   const { livePrices, vix, spy, sentiment, connected } = useMarketStream(orbTickers);
   console.log('[ORB] useMarketStream OK');
-
-  console.log('[ORB] calling useORBFlowSummaries');
-  const flowSummaries = useORBFlowSummaries(orbTickers);
-  console.log('[ORB] useORBFlowSummaries OK');
 
   const transformedORBData = useMemo(() => {
     if (!orbData) return [];
@@ -229,7 +224,6 @@ const ORBScreen = () => {
           rangesByTicker={rangesByTicker}
           gridLayout={gridLayout}
           livePrices={livePrices}
-          flowSummaries={flowSummaries}
         />
       </View>
 

@@ -8,7 +8,7 @@ import { useThemeColors } from '@/lib/useColorScheme';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type ExitEditMode = 'swing' | 'orb';
+export type ExitEditMode = 'orb';
 
 export interface CurrentExits {
   hard_stop: number;       // absolute premium price
@@ -23,17 +23,13 @@ interface Props {
   visible: boolean;
   onClose: () => void;
   mode: ExitEditMode;
-  positionId: string;       // strategy_id for ORB, position uuid for swing
-  userId?: string;          // required for swing
+  positionId: string;       // strategy_id for ORB
   ticker: string;
   current: CurrentExits;
   onSubmit: (payload: {
     hard_stop?: number;
     tp1?: number;
     tp2?: number;
-    // swing-specific: percentages derived from abs prices
-    tp1_pct?: number;
-    tp2_pct?: number;
   }) => Promise<void>;
   isLoading?: boolean;
 }
@@ -87,17 +83,10 @@ export function EditExitsModal({
       return;
     }
 
-    // For swing, convert absolute prices → percentages (backend expects pct)
     const payload: Parameters<typeof onSubmit>[0] = {};
     if (stop !== undefined && !isNaN(stop)) payload.hard_stop = stop;
-    if (tp1 !== undefined && !isNaN(tp1)) {
-      payload.tp1 = tp1;
-      if (mode === 'swing' && entry > 0) payload.tp1_pct = parseFloat(((tp1 - entry) / entry).toFixed(4));
-    }
-    if (tp2 !== undefined && !isNaN(tp2)) {
-      payload.tp2 = tp2;
-      if (mode === 'swing' && entry > 0) payload.tp2_pct = parseFloat(((tp2 - entry) / entry).toFixed(4));
-    }
+    if (tp1 !== undefined && !isNaN(tp1)) payload.tp1 = tp1;
+    if (tp2 !== undefined && !isNaN(tp2)) payload.tp2 = tp2;
 
     if (!Object.keys(payload).length) {
       Alert.alert('No changes', 'Enter at least one value to update.');
@@ -124,7 +113,7 @@ export function EditExitsModal({
           <View style={{ flex: 1 }}>
             <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700' }}>Edit Stop / Target</Text>
             <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 1 }}>
-              {ticker} · entry ${entry.toFixed(2)} · {mode === 'orb' ? '0DTE' : 'Swing'}
+              {ticker} · entry ${entry.toFixed(2)} · 0DTE
             </Text>
           </View>
         </View>

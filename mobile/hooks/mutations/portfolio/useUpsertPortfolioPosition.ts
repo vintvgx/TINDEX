@@ -31,7 +31,7 @@ export function useUpsertPortfolioPosition() {
         shares,
         average_cost,
         position_type: payload.position_type ?? "long",
-        strategy: payload.strategy ?? "swing",
+        strategy: payload.strategy ?? "scalp",
       };
       if (payload.opened_at) row.opened_at = payload.opened_at;
 

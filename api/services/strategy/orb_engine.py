@@ -51,7 +51,6 @@ STRATEGY_DEFAULTS = {
     "otm_fib_level":           "1.0",
     "debug_mode":              False,
     "smart_contracts":         False,
-    "flow_gate_enabled":       True,   # False = flow is informational only, never blocks entry
     "confirm_entry":           False,  # True = pause for user approval before every auto entry
     "id":                      None,
 }
@@ -109,7 +108,6 @@ class ORBEngine:
         self.otm_fib_level           = self.config.get("otm_fib_level", "1.0")
         self.smart_contracts         = self.config.get("smart_contracts", False)
         self.debug_enabled           = self.config.get("debug_mode", False)
-        self.flow_gate_enabled       = self.config.get("flow_gate_enabled", True)
         self.confirm_entry           = self.config.get("confirm_entry", False)
         custom_thresholds            = self.config.get("custom_thresholds")
         exit_overrides               = self.config.get("exit_overrides")
@@ -667,9 +665,8 @@ class ORBEngine:
 
     def _enter_trade(self, direction: str, trigger_price: float):
         """
-        Run flow confirmation, select a contract, validate buying power, and
-        submit a market order via Alpaca.  Sets trade state and initialises
-        ExitManager on success.
+        Select a contract, validate buying power, and submit a market order
+        via Alpaca.  Sets trade state and initialises ExitManager on success.
 
         NOTE: Called by on_price_tick when price closes above ORH (CALL) or
         below ORL (PUT) for the first time in the session.
@@ -704,24 +701,6 @@ class ORBEngine:
                 f"RE_ENTRY_COOLDOWN ({direction} — {cooldown_min - elapsed}m remaining)",
             )
             return
-
-        uw_key = os.getenv("UNUSUAL_WHALES_KEY")
-        flow_agrees = self.sentiment.confirm_with_flow(self.ticker, direction, uw_key)
-        if not flow_agrees:
-            if self.flow_gate_enabled:
-                logger.info("[ORBEngine] Flow gate blocked %s %s entry", self.ticker, direction)
-                self.debug.emit("ERROR", f"Entry blocked — flow gate ({direction})")
-                self.notifier.notify_flow_blocked(self.ticker, direction)
-                return
-            else:
-                # Gate disabled — notify for awareness but don't block the trade.
-                logger.info("[ORBEngine] Flow mismatch for %s %s — gate disabled, proceeding",
-                            self.ticker, direction)
-                self.debug.emit("WARN",
-                    f"Flow disagrees with {direction} but flow_gate_enabled=False — entering anyway")
-                self.notifier.notify_flow_blocked(self.ticker, direction)
-        else:
-            self.debug.emit("INFO", f"Flow confirmed for {direction}")
 
         # VWAP soft confirmation (log only — does not block entry)
         if self.session_vwap is not None:
@@ -1436,7 +1415,7 @@ class ORBEngine:
                             exit_overrides: dict | None = None) -> dict:
         """
         Immediately submit a conviction trade for a user-chosen 0DTE contract,
-        skipping the breakout wait / sentiment / flow filters. Exits are managed
+        skipping the breakout wait / sentiment filters. Exits are managed
         by the chosen profile (premium-based TP/SL), exactly like an auto trade.
 
         Returns {"status": "ok"|"error", "message": ...}. Called by the
@@ -2250,7 +2229,6 @@ class ORBEngine:
             "trade_days":                 list(self.trade_days),
             "paper_mode":                 self.paper,
             "debug_mode":                 self.debug_enabled,
-            "flow_gate_enabled":          self.flow_gate_enabled,
             "orh":                        self.orh,
             "orl":                        self.orl,
             "orb_range":                  self.orb_range,

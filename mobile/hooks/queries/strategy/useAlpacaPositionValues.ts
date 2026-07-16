@@ -29,7 +29,7 @@ export interface AlpacaPositionsResponse {
 /**
  * Fast poll of Alpaca open positions (market values updated by the broker).
  *
- * Enable this whenever the user has active ORB/swing/0DTE positions.
+ * Enable this whenever the user has active ORB/0DTE positions.
  * When enabled, refetches every 5 s so the derived equity display stays current
  * without relying on the slower /accounts/both endpoint.
  *

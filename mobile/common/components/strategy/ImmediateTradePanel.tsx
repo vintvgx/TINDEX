@@ -22,19 +22,14 @@ interface Props {
 }
 
 // ── Expiration targeting ──────────────────────────────────────────────────────
-// SPY/QQQ/IWM list a DAILY expiration every weekday (0DTE Mon-Fri) — this used
-// to be restricted to a Mon/Wed/Fri-only set, which was correct years ago but
-// is now stale: it meant a Tue/Thu attempt skipped that day's real 0DTE chain
-// entirely and silently jumped to the next Mon/Wed/Fri match instead (e.g.
-// trading on Tuesday would show Wednesday's contracts) — diagnosed 2026-07-15.
-// Single stocks only ever list standard Friday weeklies — "today" is
-// essentially never a listed expiration for them, which is why this panel
-// used to show an empty chain for any non-ETF ticker.
-const ETF_TICKERS = new Set(['SPY', 'QQQ', 'IWM']);
-// Date.getUTCDay(): 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
-const ETF_EXPIRY_WEEKDAYS   = new Set([1, 2, 3, 4, 5]); // Mon-Fri — daily 0DTE
-const STOCK_EXPIRY_WEEKDAYS = new Set([5]);             // Friday weeklies
-
+// Which expirations exist varies by ticker and changes over time (SPY/QQQ/IWM
+// list a daily 0DTE Mon-Fri; many liquid single stocks like NVDA/TSLA/AAPL now
+// list Mon/Wed/Fri, not just the old Friday-only weekly) — this used to
+// hardcode a fixed weekday set per ticker class, which silently discarded any
+// real expiration the chain returned that didn't match the assumed cadence
+// (e.g. NVDA's Mon/Wed contracts were dropped, leaving only Friday visible).
+// The chain endpoint (`expirations_fetched`) is the source of truth for what's
+// actually listed, so trust it directly instead of re-deriving cadence here.
 function addDays(iso: string, days: number): string {
   const d = new Date(iso + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() + days);
@@ -50,19 +45,11 @@ function fmtExpiryLabel(iso: string, todayIso: string): string {
 }
 
 /**
- * Pick the nearest expiration matching the ticker's expected cadence from
- * whatever the chain actually returned. Falls back to the single nearest
- * expiration overall if none match the cadence (holiday shift, data gap) —
- * never show an empty chain when the provider did return something.
+ * Pick the nearest expiration from whatever the chain actually returned.
  */
-function pickTargetExpiration(ticker: string, available: string[]): string | null {
+function pickTargetExpiration(available: string[]): string | null {
   if (!available.length) return null;
-  const allowedWeekdays = ETF_TICKERS.has(ticker.toUpperCase())
-    ? ETF_EXPIRY_WEEKDAYS
-    : STOCK_EXPIRY_WEEKDAYS;
-  const sorted = [...available].sort();
-  const matching = sorted.filter(d => allowedWeekdays.has(new Date(d + 'T00:00:00Z').getUTCDay()));
-  return matching[0] ?? sorted[0];
+  return [...available].sort()[0];
 }
 
 // ── Chain helpers ─────────────────────────────────────────────────────────────
@@ -174,19 +161,14 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   const chain        = data?.success ? data.data : null;
   const currentPrice = chain?.current_price ?? 0;
 
-  // Every expiration actually available for this ticker's cadence — lets the
-  // user pick a specific date instead of only ever trusting the "nearest
-  // match" auto-pick, which is exactly what silently substituted the wrong
-  // day's chain (see the ETF_EXPIRY_WEEKDAYS comment above).
+  // Every expiration actually available for this ticker, straight from the
+  // chain — lets the user pick a specific date instead of only ever trusting
+  // the "nearest match" auto-pick, which is what used to silently substitute
+  // the wrong day's chain (see the comment above pickTargetExpiration).
   const availableExpirations = useMemo(() => {
     if (!chain) return [];
-    const allowedWeekdays = ETF_TICKERS.has(ticker.toUpperCase())
-      ? ETF_EXPIRY_WEEKDAYS
-      : STOCK_EXPIRY_WEEKDAYS;
-    return [...chain.expirations_fetched]
-      .filter(d => allowedWeekdays.has(new Date(d + 'T00:00:00Z').getUTCDay()))
-      .sort();
-  }, [chain, ticker]);
+    return [...chain.expirations_fetched].sort();
+  }, [chain]);
 
   const [manualExpiration, setManualExpiration] = useState<string | null>(null);
 
@@ -201,8 +183,8 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
       return manualExpiration;
     }
     if (!chain) return null;
-    return pickTargetExpiration(ticker, chain.expirations_fetched);
-  }, [manualExpiration, availableExpirations, chain, ticker]);
+    return pickTargetExpiration(chain.expirations_fetched);
+  }, [manualExpiration, availableExpirations, chain]);
 
   const sideContracts = useMemo(() => {
     if (!chain || !targetExpiration) return [];
@@ -587,7 +569,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
 
         {/* Expiration date — pick a specific date instead of only trusting
             the auto "nearest match" (the auto-pick is what silently showed
-            the wrong day's chain — see ETF_EXPIRY_WEEKDAYS above). */}
+            the wrong day's chain — see pickTargetExpiration above). */}
         {availableExpirations.length > 0 && (
           <View>
             <Text style={[styles.controlLabel, { color: colors.tabBarInactive, marginTop: 4 }]}>EXPIRATION</Text>

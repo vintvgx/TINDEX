@@ -12,7 +12,7 @@ engine events fire simultaneously. Priority tiers:
   0 — TRADE_EXIT   (HARD_STOP / TP1 / TP2 / EOD close — money moved)
   1 — TRADE_ENTRY  (order placed — position open)
   2 — OPERATIONAL  (stream failure / no contract / capital warning)
-  3 — MARKET       (retest armed / 30-min timer update / flow blocked)
+  3 — MARKET       (retest armed / 30-min timer update / social signal)
   4 — INFO         (session armed / skip / no trade / service start)
 
 Within the same tier, notifications are delivered in chronological order
@@ -93,15 +93,6 @@ class StrategyNotifier:
         self._worker.start()
 
     # ── Public event methods ────────────────────────────────────────────────────
-    def notify_flow_blocked(self, ticker: str, direction: str):
-        """Entry blocked by Unusual Whales flow confirmation."""
-        self._dispatch(
-            title=f"{ticker} — Flow mismatch",
-            body=f"Breakout detected ({direction}) but options flow disagrees. Entry skipped.",
-            data={"screen": "tradelog"},
-            priority=P_MARKET,
-        )
-
     def notify_position_recovered(self, ticker: str, contract_symbol: str, direction: str,
                                    qty: int, entry_premium: float):
         """

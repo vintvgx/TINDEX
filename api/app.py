@@ -82,9 +82,7 @@ from routes.monitoring_routes import bp as monitoring_bp
 from routes.options_routes import bp as options_bp
 from routes.portfolio_routes import bp as portfolio_bp
 from routes.agent_routes import bp as agent_bp
-from routes.flow_routes import bp as flow_bp
 from routes.swing_routes import bp as swing_bp
-from routes.zero_dte_routes import bp as zero_dte_bp
 from routes.social_routes import bp as social_bp
 
 app.register_blueprint(ticker_bp)
@@ -93,10 +91,8 @@ app.register_blueprint(monitoring_bp)
 app.register_blueprint(options_bp)
 app.register_blueprint(portfolio_bp)
 app.register_blueprint(agent_bp)
-app.register_blueprint(flow_bp)
 app.register_blueprint(swing_bp)
 app.register_blueprint(social_bp)
-app.register_blueprint(zero_dte_bp)
 
 
 # ── WebSocket: live price stream ───────────────────────────────────────────────
@@ -211,10 +207,13 @@ try:
     # external trigger, not an in-process job that dies with the process) so
     # it's now the only path — removed the in-process registration entirely.
     #
-    # The 0DTE scan scheduler (schedule_zero_dte_scans) is removed for the
-    # same reason it's no longer needed: the Unusual Whales / 0DTE watchlist
-    # feature is being retired (2026-07-15) — its Supabase pg_cron jobs were
-    # unscheduled directly; see supabase/migrations/20260715_remove_zero_dte_and_dedupe_review_cron.sql.
+    # The 0DTE scan scheduler (schedule_zero_dte_scans) was removed on
+    # 2026-07-15 — its Supabase pg_cron jobs were unscheduled directly, see
+    # supabase/migrations/20260715_remove_zero_dte_cron.sql. The Unusual
+    # Whales-fed 0DTE watchlist feature itself (routes/zero_dte_routes.py,
+    # services/zero_dte/) has since been removed entirely along with all
+    # other Unusual Whales integration, following cancellation of the
+    # Unusual Whales subscription.
 
     # Auto-start the ORB data hub on every process boot — not a replacement for
     # the 9:20 AM daily cron that hits /tindex/orb/start, but a self-healing

@@ -130,18 +130,18 @@ class SwingPipeline:
         cfg = _load_config(self._sb) if self._sb else dict(_DEFAULT_CONFIG)
 
         # ── Stage 1: fetch UW flows ───────────────────────────────────────────
-        from services.unusual_whales.unusual_whales_service import get_unusual_whales_service
-        uw_svc = get_unusual_whales_service()
-        if not uw_svc._available():
-            msg = "Unusual Whales API key not configured — swing pipeline aborted"
-            logger.error("[SwingPipeline] %s", msg)
-            duration = round(time.time() - t0, 2)
-            self._persist(scan_date, [], [msg], 0, 0, 0, 0, 0, duration)
-            return {"success": False, "error": msg, "surfaced": [], "meta": {}}
-
-        raw_flows = self._fetch_uw_flows(uw_svc, limit=200)
-        uw_count = len(raw_flows)
-        logger.info("[SwingPipeline] UW returned %d raw flows", uw_count)
+        # The Unusual Whales integration (services/unusual_whales/) was removed
+        # on 2026-07-15 following cancellation of the Unusual Whales
+        # subscription — this pipeline has no other data source, so it aborts
+        # cleanly here exactly as it already did whenever the UW API key was
+        # absent. The rest of the funnel (DTE filter, scoring, tiering,
+        # persistence) is left in place, not deleted, in case this pipeline is
+        # re-pointed at a different flow-data provider later.
+        msg = "Unusual Whales integration removed — swing pipeline aborted"
+        logger.error("[SwingPipeline] %s", msg)
+        duration = round(time.time() - t0, 2)
+        self._persist(scan_date, [], [msg], 0, 0, 0, 0, 0, duration)
+        return {"success": False, "error": msg, "surfaced": [], "meta": {}}
 
         # ── Stage 2: DTE filter ───────────────────────────────────────────────
         swing_flows = self._filter_swing_dte(raw_flows, scan_date, cfg["dte_min"], cfg["dte_max"])

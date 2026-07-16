@@ -69,12 +69,10 @@ function Shell() {
             {/* Menu-only destinations */}
             <Tabs.Screen name="track" options={{ href: null }} />
             <Tabs.Screen name="track-legacy" options={{ href: null }} />
-            <Tabs.Screen name="swing" options={{ href: null }} />
             <Tabs.Screen name="profile" options={{ href: null }} />
             <Tabs.Screen name="notifications" options={{ href: null }} />
             <Tabs.Screen name="search" options={{ href: null }} />
             <Tabs.Screen name="watchlists" options={{ href: null }} />
-            <Tabs.Screen name="zero_dte_watchlist" options={{ href: null }} />
             <Tabs.Screen name="signals" options={{ href: null }} />
           </Tabs>
         </SafeAreaInsetsContext.Provider>

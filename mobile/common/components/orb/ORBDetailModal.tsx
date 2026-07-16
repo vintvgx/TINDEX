@@ -17,7 +17,6 @@ import { GapTrendBadges } from './GapTrendBadges';
 import type { GapTrendContext } from '@/common/types/orb';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
-import { FlowFeed } from '@/common/components/options/FlowFeed';
 import { useTickerTechnicals } from '@/hooks/queries/technicals/useTickerTechnicals';
 import { EMAZoneBadge } from '@/common/components/shared/EMAZoneBadge';
 
@@ -31,7 +30,7 @@ interface ORBDetailModalProps {
   gapTrendContext?: GapTrendContext | null;
 }
 
-type Tab = 'Overview' | 'Levels' | 'Details' | 'Flow';
+type Tab = 'Overview' | 'Levels' | 'Details';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -316,12 +315,6 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   };
 
   // ── Tab content ────────────────────────────────────────────────────────────
-
-  const FlowTab = () => (
-    <View style={{ flex: 1 }}>
-      <FlowFeed ticker={data.ticker} />
-    </View>
-  );
 
   const OverviewTab = () => (
     <View style={styles.tabContent}>
@@ -635,7 +628,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
 
         {/* Tab bar */}
         <View style={[styles.tabRow, { borderBottomColor: colors.separator }]}>
-          {(['Overview', 'Levels', 'Details', 'Flow'] as Tab[]).map(tab => {
+          {(['Overview', 'Levels', 'Details'] as Tab[]).map(tab => {
             const active = activeTab === tab;
             return (
               <TouchableOpacity
@@ -657,7 +650,6 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
           {activeTab === 'Overview' && <OverviewTab />}
           {activeTab === 'Levels' && <LevelsTab />}
           {activeTab === 'Details' && <DetailsTab />}
-          {activeTab === 'Flow' && <FlowTab />}
         </View>
 
       </SafeAreaView>

@@ -25,13 +25,12 @@ import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useServicesStatus } from '@/hooks/queries/services/useServicesStatus';
 import { useScoreContract } from '@/hooks/mutations/agent/useScoreContract';
 import { useToast } from '@/common/components/ui/Toast';
-import { FlowFeed } from '@/common/components/options/FlowFeed';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type OptionSide = 'CALL' | 'PUT';
 type DatePreset = '1W' | '2W' | '1M' | '3M';
-type ScreenView = 'chain' | 'watchlist' | 'flow';
+type ScreenView = 'chain' | 'watchlist';
 
 type TableRow =
   | { type: 'contract'; data: OptionsContract; isITM: boolean }
@@ -263,7 +262,6 @@ const OptionsScreen = () => {
   const [side, setSide] = useState<OptionSide>('CALL');
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
   const [useMockData, setUseMockData] = useState(false);
-  const [useFlowMockData, setUseFlowMockData] = useState(false);
   const [datePreset, setDatePreset] = useState<DatePreset>('1M');
   const [marketStatus, setMarketStatus] = useState(() => getMarketStatus());
   const prevTickerRef = useRef('');
@@ -629,8 +627,6 @@ const OptionsScreen = () => {
               ? `${activeTicker} · $${currentPrice.toFixed(2)}`
               : view === 'watchlist'
               ? `${watchlistCount} contract${watchlistCount !== 1 ? 's' : ''} tracked`
-              : view === 'flow'
-              ? activeTicker ? `${activeTicker} option flow` : 'Global option flow'
               : 'Enter a ticker in the search bar'}
           </Text>
         </View>
@@ -681,42 +677,14 @@ const OptionsScreen = () => {
             </TouchableOpacity>
           )}
 
-          {/* Mock toggle (flow only) */}
-          {view === 'flow' && (
-            <TouchableOpacity
-              onPress={() => setUseFlowMockData(m => !m)}
-              activeOpacity={0.75}
-              style={{
-                paddingHorizontal: 12,
-                paddingVertical: 7,
-                backgroundColor: useFlowMockData ? colors.accent + '22' : colors.iconButton,
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: useFlowMockData ? colors.accent + '66' : colors.iconButtonBorder,
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 5,
-              }}
-            >
-              <Ionicons
-                name="flask-outline"
-                size={14}
-                color={useFlowMockData ? colors.accent : colors.textSecondary}
-              />
-              <Text style={{ color: useFlowMockData ? colors.accent : colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
-                Mock
-              </Text>
-            </TouchableOpacity>
-          )}
         </View>
       </View>
 
-      {/* ── View toggle: Chain / Watchlist / Flow ── */}
+      {/* ── View toggle: Chain / Watchlist ── */}
       <View style={[viewToggle.container, { borderBottomColor: colors.separator }]}>
         {([
           { id: 'watchlist', icon: 'bookmark-outline', label: 'Watchlist' },
           { id: 'chain',     icon: 'layers-outline',   label: 'Chain' },
-          { id: 'flow',      icon: 'pulse-outline',     label: 'Flow' },
         ] as { id: ScreenView; icon: string; label: string }[]).map(v => {
           const active = view === v.id;
           return (
@@ -750,30 +718,7 @@ const OptionsScreen = () => {
         })}
       </View>
 
-      {/* ── Flow view ── */}
-      {view === 'flow' ? (
-        <View style={{ flex: 1 }}>
-          {useFlowMockData && (
-            <View style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              backgroundColor: colors.warningBg,
-              paddingHorizontal: 16,
-              paddingVertical: 8,
-              gap: 6,
-            }}>
-              <Ionicons name="flask" size={13} color={colors.warning} />
-              <Text style={{ color: colors.warning, fontSize: 12, fontWeight: '600', flex: 1 }}>
-                Mock flow data — for demonstration only
-              </Text>
-              <TouchableOpacity onPress={() => setUseFlowMockData(false)} hitSlop={8}>
-                <Ionicons name="close" size={14} color={colors.warning} />
-              </TouchableOpacity>
-            </View>
-          )}
-          <FlowFeed ticker={activeTicker || null} useMockData={useFlowMockData} />
-        </View>
-      ) : view === 'watchlist' ? (
+      {view === 'watchlist' ? (
         <TrackedContractsList
           onContractPress={openWatchlistDetail}
           activeTicker={activeTicker || undefined}

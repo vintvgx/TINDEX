@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, ActivityIndicator, FlatList } from 'react-native';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
-import { ORBCard, type FlowSummary } from './ORBCard';
+import { ORBCard } from './ORBCard';
 import type { ORBRange } from '@/common/types/orb';
 import type { ORBGridLayout } from './ORBMenu';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -14,7 +14,6 @@ interface ORBCardGridProps {
   rangesByTicker?: Record<string, ORBRange>;
   gridLayout?: ORBGridLayout;
   livePrices?: Record<string, number>;
-  flowSummaries?: Record<string, FlowSummary>;
 }
 
 const formatDateTime = (date: Date): string =>
@@ -36,7 +35,6 @@ export const ORBCardGrid: React.FC<ORBCardGridProps> = ({
   rangesByTicker,
   gridLayout = '2x2',
   livePrices = {},
-  flowSummaries = {},
 }) => {
   const colors = useThemeColors();
 
@@ -101,7 +99,6 @@ export const ORBCardGrid: React.FC<ORBCardGridProps> = ({
           orbRange={rangesByTicker?.[item.ticker]}
           fullWidth={fullWidth}
           livePrice={livePrices[item.ticker] ?? null}
-          flowSummary={flowSummaries[item.ticker] ?? null}
         />
       )}
       contentContainerStyle={{ padding: 16, paddingBottom: 170 }}
