@@ -117,6 +117,25 @@ class SignalIngestService:
         base = HOT_WINDOW_INTERVAL_SECONDS if self._is_hot_window() else COOL_WINDOW_INTERVAL_SECONDS
         return base + random.uniform(0, JITTER_SECONDS)
 
+    @staticmethod
+    def _tweet_market_date(tweet: Tweet):
+        """The Eastern-time calendar date the tweet was posted on — used as
+        contract_parser's "today" reference so a bare date like "7/15" resolves
+        relative to when the tweet went out, not whenever this poll cycle happens
+        to run. Using the server's wall-clock date instead rolls any bare date
+        that's already passed a full year forward (e.g. a same-day "7/15" tweet
+        processed on 7/16 was resolving to 7/15 of *next* year), producing an
+        OCC symbol for a contract that doesn't exist and never gets a price.
+        """
+        if tweet.created_at:
+            try:
+                return datetime.fromisoformat(
+                    tweet.created_at.replace("Z", "+00:00")
+                ).astimezone(ET).date()
+            except ValueError:
+                pass
+        return datetime.now(ET).date()
+
     # ── Poll cycle ───────────────────────────────────────────────────────────
 
     async def _poll_cycle(self):
@@ -206,7 +225,7 @@ class SignalIngestService:
             ))
             return
 
-        contract = parse_tweet(tweet.text)
+        contract = parse_tweet(tweet.text, today=self._tweet_market_date(tweet))
 
         row = {
             "account_id": account["id"],
