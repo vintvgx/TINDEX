@@ -953,6 +953,11 @@ class ORBEngine:
                 self.session_date = today_et
 
             eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:58")
+            try:
+                _, expiry_str = self._parse_occ_symbol(contract["symbol"])
+                is_zero_dte = datetime.strptime(expiry_str, "%Y-%m-%d").date() <= today_et
+            except Exception:
+                is_zero_dte = True  # unparseable — fail closed/safe, same as the stream-verify fix
             self.exit_manager = ExitManager(
                 entry_premium=entry_premium,
                 qty=qty,
@@ -960,6 +965,7 @@ class ORBEngine:
                 direction=direction,
                 eod_close_time=eod_time,
                 profile=effective_profile,
+                is_zero_dte=is_zero_dte,
             )
 
             # Use the override key when the user selected a profile at trade time
@@ -1117,6 +1123,11 @@ class ORBEngine:
         fib_levels.setdefault("orh", row.get("orh"))
         fib_levels.setdefault("orl", row.get("orl"))
         eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:58")
+        try:
+            _, expiry_str = self._parse_occ_symbol(row["contract_symbol"])
+            is_zero_dte = datetime.strptime(expiry_str, "%Y-%m-%d").date() <= datetime.now(ET).date()
+        except Exception:
+            is_zero_dte = True  # unparseable — fail closed/safe, same as the stream-verify fix
 
         self.exit_manager = ExitManager(
             entry_premium=entry_premium,
@@ -1125,6 +1136,7 @@ class ORBEngine:
             direction=row["direction"],
             eod_close_time=eod_time,
             profile=profile,
+            is_zero_dte=is_zero_dte,
         )
         self.exit_manager.qty_remaining = qty_remaining
         try:

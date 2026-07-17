@@ -115,6 +115,29 @@ def _eod_reset(engine):
             logger.info("[Scheduler] EOD close skipped for %s — NO_STOP_LOSS position held open",
                         getattr(engine, "strategy_id", None) or engine.ticker)
             return
+
+        # This job only exists to flatten a 0DTE contract before it expires
+        # worthless at market close — it must NOT force-close a swing/LEAPS
+        # position that has weeks/months of runway left just because this
+        # cron fires every trading day at 15:30 ET. Saved-strategy (auto)
+        # engines only ever enter same-day 0DTE contracts, so this check is a
+        # no-op for them; it only changes behavior for immediate-trade
+        # engines, which schedule_eod_close's docstring already assumed were
+        # always 0DTE — no longer true now that immediate trades can target
+        # any expiration. See the 2026-07-17 incident where this forced an
+        # IBM Aug 21 and NFLX Sep 18 swing position closed same-day.
+        try:
+            _, expiry_str = engine._parse_occ_symbol(engine.contract_symbol)
+            expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            is_zero_dte = expiry_date <= datetime.now(ET).date()
+        except Exception:
+            is_zero_dte = True  # unparseable — fail closed, same convention as the stream-verify fix
+        if not is_zero_dte:
+            logger.info("[Scheduler] EOD close skipped for %s — %s expires %s, not 0DTE",
+                        getattr(engine, "strategy_id", None) or engine.ticker,
+                        engine.contract_symbol, expiry_str)
+            return
+
         contract_symbol = engine.contract_symbol
         qty_closed = engine.exit_manager.qty_remaining if engine.exit_manager else 0
 

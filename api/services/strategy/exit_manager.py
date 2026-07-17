@@ -48,7 +48,8 @@ def compute_exit_levels(entry_premium: float, profile: dict) -> tuple[float, flo
 
 class ExitManager:
     def __init__(self, entry_premium: float, qty: int, fib_levels: dict,
-                 direction: str, eod_close_time: str, profile: dict):
+                 direction: str, eod_close_time: str, profile: dict,
+                 is_zero_dte: bool = True):
         self.entry_premium  = entry_premium
         self.qty            = qty
         self.qty_remaining  = qty
@@ -98,12 +99,22 @@ class ExitManager:
         # still get silently force-closed at 15:30 ET.
         self._disable_eod_close = profile.get("disable_eod_close", False)
 
+        # EOD_CLOSE below only makes sense for a 0DTE contract — flattening a
+        # swing/LEAPS hold every single day at eod_close_time just because the
+        # clock crossed that time-of-day would silently sell a multi-week
+        # position out from under the user (2026-07-17 incident: an IBM Aug 21
+        # and NFLX Sep 18 swing position both force-closed same-day). Defaults
+        # True so any caller that doesn't pass this explicitly keeps the
+        # original, safer 0DTE behavior. scheduler._eod_reset() has the same
+        # gate for its own daily-cron backstop — both must agree.
+        self._is_zero_dte = is_zero_dte
+
     def evaluate(self, current_option_price: float,
                  current_underlying_price: float = None,
                  current_volume: float = None) -> dict:
         now_et = datetime.now(ET).time()
 
-        if not self._disable_eod_close and now_et >= self.eod_close_time:
+        if self._is_zero_dte and not self._disable_eod_close and now_et >= self.eod_close_time:
             return self._action("CLOSE_ALL", self.qty_remaining, "EOD_CLOSE")
 
         # Premium-based stop. Before TP1: hard stop at entry × (1 - max_loss_pct).
