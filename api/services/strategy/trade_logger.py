@@ -507,6 +507,29 @@ class TradeLogger:
             logger.error("[TradeLogger] get_open_trades failed: %s", e)
             return []
 
+    def mark_expiry_reminder_sent(self, trade_id: str, milestone: str,
+                                   already_sent: list[str]) -> bool:
+        """
+        Append `milestone` to an open trade's expiry_reminders_sent list so
+        scheduler.check_expiry_reminders() never re-sends the same reminder on
+        a later daily run. `already_sent` is whatever the caller already read
+        for this row — passed in rather than re-fetched so this stays a single
+        write, not a read-modify-write race against itself.
+        """
+        try:
+            updated = list(already_sent) + [milestone]
+            res = (
+                self.client.table("orb_trades")
+                .update({"expiry_reminders_sent": updated})
+                .eq("id", trade_id)
+                .execute()
+            )
+            return bool(res.data)
+        except Exception as e:
+            logger.error("[TradeLogger] mark_expiry_reminder_sent failed for %s/%s: %s",
+                         trade_id, milestone, e)
+            return False
+
     def reconcile_orphaned_trades(self):
         """
         Close any orb_trades rows that are still open (exit_time IS NULL) but
