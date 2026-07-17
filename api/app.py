@@ -244,6 +244,17 @@ try:
     except Exception as _social_boot_err:
         logger.warning("[App] Social signal ingest auto-start at boot failed: %s", _social_boot_err)
 
+    # Same self-heal, same reason, for the options contract monitor — it also
+    # had no boot-time backstop, so a mid-session redeploy silently stopped
+    # monitoring every tracked contract until someone noticed and manually hit
+    # /contracts/monitor/start.
+    try:
+        from routes.monitoring_routes import start_contracts_monitor_core as _start_contracts_monitor
+        _start_contracts_result = _start_contracts_monitor()
+        logger.info("[App] Options contract monitor auto-start at boot: %s", _start_contracts_result.get("message"))
+    except Exception as _contracts_boot_err:
+        logger.warning("[App] Options contract monitor auto-start at boot failed: %s", _contracts_boot_err)
+
     @sock.route("/ws/strategy/<strategy_id>/live")
     def ws_strategy_live(ws, strategy_id: str):
         import queue as _queue
