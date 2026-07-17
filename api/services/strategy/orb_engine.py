@@ -1512,13 +1512,16 @@ class ORBEngine:
         except Exception as e:
             logger.debug("[ORBEngine] market clock check failed, continuing: %s", e)
 
-        # No new manual entries in the final 30 minutes of the session — 0DTE
-        # theta/gamma in this window punishes discretionary entries too
-        # consistently to allow them (2026-07-06 daily review recommendation #4).
+        # Cutoff moved from 3:00 PM to 4:05 PM ET at the user's request — that's
+        # after the 4:00 PM market close, so combined with the is_open check
+        # above this no longer blocks anything during regular trading hours.
+        # Was originally a 30-min pre-close cutoff (2026-07-06 daily review
+        # recommendation #4, 0DTE theta/gamma risk); left in place rather than
+        # removed in case a tighter cutoff is wanted again later.
         now_et = datetime.now(ET)
-        cutoff = now_et.replace(hour=15, minute=0, second=0, microsecond=0)
+        cutoff = now_et.replace(hour=16, minute=5, second=0, microsecond=0)
         if now_et >= cutoff:
-            msg = "Manual trades are disabled in the final 30 minutes of the session (after 3:00 PM ET)"
+            msg = "Manual trades are disabled after 4:05 PM ET"
             self.debug.emit("WARN", f"Manual trade blocked — {msg}")
             return {"status": "error", "message": msg}
 

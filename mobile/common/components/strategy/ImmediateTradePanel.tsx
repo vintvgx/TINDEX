@@ -187,7 +187,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   // still showed up in expirations_fetched — i.e. the date would be tappable
   // but silently show "no contracts found." Scoping query 2 to one exact date
   // avoids that regardless of how wide the browsing range is.
-  const { data: rangeData } = useOptionsQuery(
+  const { data: rangeData, isLoading: rangeLoading, isFetching: rangeFetching } = useOptionsQuery(
     visible && ticker ? ticker : '',
     { limit: 1, expiration_date_gte: rangeGte, expiration_date_lte: rangeLte },
   );
@@ -216,13 +216,22 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   // see the comment on query 1 for why this is scoped to one exact date
   // rather than filtered client-side out of query 1's (potentially wide)
   // window.
-  const { data, isLoading, error } = useOptionsQuery(
+  const { data, isLoading, isFetching, error } = useOptionsQuery(
     visible && ticker && targetExpiration ? ticker : '',
     targetExpiration
       ? { limit: 100, expiration_date_gte: targetExpiration, expiration_date_lte: targetExpiration }
       : undefined,
     4000,
   );
+
+  // Covers every "the chain the user is about to see is still in flight"
+  // case, not just query 2's own fetch: switching range/ticker refetches
+  // query 1 first, during which targetExpiration can be briefly null (query
+  // 2 disabled, so its own isLoading/isFetching stay false) — without this,
+  // that gap rendered "No contracts found" for a frame before the real chain
+  // arrived.
+  const contractsLoading =
+    isLoading || isFetching || rangeLoading || rangeFetching || (!!ticker && !targetExpiration);
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
@@ -675,7 +684,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
       </View>
 
       {/* Column headers */}
-      {!isLoading && !showError && rows.length > 0 && (
+      {!contractsLoading && !showError && rows.length > 0 && (
         <View style={[styles.colHeaderRow, { backgroundColor: colors.surface, borderBottomColor: colors.separator }]}>
           <Text style={[styles.colHead, { width: COL.strike, color: colors.textTertiary }]}>Strike</Text>
           <Text style={[styles.colHead, { width: COL.bid,    color: colors.success }]}>Bid</Text>
@@ -687,7 +696,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
       )}
 
       {/* Chain */}
-      {isLoading ? (
+      {contractsLoading ? (
         <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
       ) : showError ? (
         <View style={styles.centered}>
