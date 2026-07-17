@@ -19,7 +19,7 @@ import {
 } from '@/common/components/FEED/modals/ORBNotificationModal';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ImmediatePosition } from '@/common/types/strategy';
-import { formatContractSymbolShort } from '@/lib/formatContract';
+import { formatContractSymbolShort, getTradeHorizon, TRADE_HORIZON_RANK } from '@/lib/formatContract';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -121,6 +121,11 @@ function StrategyPositionCard({
                 {isLive ? 'LIVE' : 'PAPER'}
               </Text>
             </View>
+            {pos.contract && getTradeHorizon(pos.contract) === 'SWING' && (
+              <View style={[styles.badge, { backgroundColor: '#6366F122' }]}>
+                <Text style={[styles.badgeText, { color: '#6366F1' }]}>SWING</Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -221,6 +226,11 @@ function ImmediatePositionCard({
                 {isLive ? 'LIVE' : 'PAPER'}
               </Text>
             </View>
+            {pos.contract && getTradeHorizon(pos.contract) === 'SWING' && (
+              <View style={[styles.badge, { backgroundColor: '#6366F122' }]}>
+                <Text style={[styles.badgeText, { color: '#6366F1' }]}>SWING</Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -350,6 +360,30 @@ const DashboardScreen = () => {
   const paperStrat = useMemo(() => activeStrat.filter(p => p.paper_mode !== false),  [activeStrat]);
   const liveImm    = useMemo(() => activeImm.filter(p => p.paper_mode === false),    [activeImm]);
   const paperImm   = useMemo(() => activeImm.filter(p => p.paper_mode !== false),    [activeImm]);
+
+  // Combined + sorted so a swing trade never ranks above a 0DTE/weekly one —
+  // sort is stable, so saved-strategy vs immediate order is otherwise
+  // unchanged within the same horizon tier.
+  type CombinedPos = { kind: 'strat'; pos: PositionEntry } | { kind: 'imm'; pos: ImmediatePosition };
+  const byHorizon = (items: CombinedPos[]) =>
+    [...items].sort((a, b) =>
+      TRADE_HORIZON_RANK[getTradeHorizon(a.pos.contract ?? '')] -
+      TRADE_HORIZON_RANK[getTradeHorizon(b.pos.contract ?? '')],
+    );
+  const liveCombined = useMemo(
+    () => byHorizon([
+      ...liveStrat.map(pos => ({ kind: 'strat' as const, pos })),
+      ...liveImm.map(pos => ({ kind: 'imm' as const, pos })),
+    ]),
+    [liveStrat, liveImm],
+  );
+  const paperCombined = useMemo(
+    () => byHorizon([
+      ...paperStrat.map(pos => ({ kind: 'strat' as const, pos })),
+      ...paperImm.map(pos => ({ kind: 'imm' as const, pos })),
+    ]),
+    [paperStrat, paperImm],
+  );
 
   const totalLive   = liveStrat.length + liveImm.length;
   const totalPaper  = paperStrat.length + paperImm.length;
@@ -531,11 +565,10 @@ const DashboardScreen = () => {
                     {totalLive} active
                   </Text>
                 </View>
-                {liveStrat.map(pos => (
-                  <StrategyPositionCard key={pos.strategy_id} pos={pos} colors={colors} onExit={setExitTarget} />
-                ))}
-                {liveImm.map(pos => (
-                  <ImmediatePositionCard key={pos.strategy_id} pos={pos} colors={colors} onExit={setExitTarget} />
+                {liveCombined.map(item => item.kind === 'strat' ? (
+                  <StrategyPositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
+                ) : (
+                  <ImmediatePositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
                 ))}
               </>
             )}
@@ -550,11 +583,10 @@ const DashboardScreen = () => {
                     {totalPaper} active
                   </Text>
                 </View>
-                {paperStrat.map(pos => (
-                  <StrategyPositionCard key={pos.strategy_id} pos={pos} colors={colors} onExit={setExitTarget} />
-                ))}
-                {paperImm.map(pos => (
-                  <ImmediatePositionCard key={pos.strategy_id} pos={pos} colors={colors} onExit={setExitTarget} />
+                {paperCombined.map(item => item.kind === 'strat' ? (
+                  <StrategyPositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
+                ) : (
+                  <ImmediatePositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
                 ))}
               </>
             )}

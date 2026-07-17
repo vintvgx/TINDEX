@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
-import { formatContractSymbolShort } from '@/lib/formatContract';
+import { formatContractSymbolShort, getTradeHorizon } from '@/lib/formatContract';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 
 /** LivePriceData plus the market_value the header displays — computed via
@@ -109,6 +109,11 @@ export function LivePositionPanel({
             <Text style={[styles.liveContract, { color: colors.tabBarInactive }]}>
               {formatContractSymbolShort(display.contract)}
             </Text>
+          )}
+          {display && getTradeHorizon(display.contract) === 'SWING' && (
+            <View style={[styles.swingBadge, { backgroundColor: '#A855F722' }]}>
+              <Text style={[styles.swingBadgeText, { color: '#A855F7' }]}>SWING</Text>
+            </View>
           )}
         </View>
         {display && (
@@ -276,6 +281,8 @@ const styles = StyleSheet.create({
   statusDot:       { width: 6, height: 6, borderRadius: 3 },
   liveLabel:       { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
   liveContract:    { fontSize: 11, fontFamily: 'monospace' },
+  swingBadge:      { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 },
+  swingBadgeText:  { fontSize: 9, fontWeight: '700', letterSpacing: 0.4 },
   livePnlValue:    { fontSize: 15, fontWeight: '700' },
   pnlPctPill:      { borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 },
   pnlPctText:      { fontSize: 10, fontWeight: '700' },

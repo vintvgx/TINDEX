@@ -15,6 +15,7 @@ import { LivePositionPanel } from '@/common/components/strategy/LivePositionPane
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { AddContractModal } from '@/common/components/strategy/AddContractModal';
 import type { FibLevels, ImmediatePosition } from '@/common/types/strategy';
+import { TRADE_HORIZON_RANK, getTradeHorizon } from '@/lib/formatContract';
 
 /**
  * /strategy/immediate-positions now returns the same shape /strategy/positions
@@ -118,9 +119,15 @@ export default function PositionScreen({ embedded = false }: Props) {
 
   const positions         = showMock ? MOCK_POSITIONS : livePositions;
   const activePositions   = positions.filter(p => p.active);
-  const filteredPositions = activePositions.filter(p =>
-    mode === 'live' ? !p.paper_mode : !!p.paper_mode,
-  );
+  // 0DTE/weekly positions need more immediate attention than a swing trade's,
+  // so they always list first — sort is stable, so relative order within the
+  // same horizon (e.g. saved-strategy vs immediate) is otherwise unchanged.
+  const filteredPositions = activePositions
+    .filter(p => (mode === 'live' ? !p.paper_mode : !!p.paper_mode))
+    .sort((a, b) =>
+      TRADE_HORIZON_RANK[getTradeHorizon(a.contract ?? '')] -
+      TRADE_HORIZON_RANK[getTradeHorizon(b.contract ?? '')],
+    );
   const activeCount = filteredPositions.length;
 
   const toggleMode = () => setMode(m => (m === 'live' ? 'paper' : 'live'));

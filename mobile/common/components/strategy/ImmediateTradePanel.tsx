@@ -38,10 +38,14 @@ function addDays(iso: string, days: number): string {
 
 function fmtExpiryLabel(iso: string, todayIso: string): string {
   if (iso === todayIso) return 'Today (0DTE)';
-  const d = new Date(iso + 'T00:00:00Z');
+  const d   = new Date(iso + 'T00:00:00Z');
+  const now = new Date(todayIso + 'T00:00:00Z');
+  // A far-dated (3M/LEAPS) chip needs the year — "Fri 1/2" is ambiguous
+  // between this January and next without it.
+  const showYear = d.getUTCFullYear() !== now.getUTCFullYear();
   const weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
   const md = d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', timeZone: 'UTC' });
-  return `${weekday} ${md}`;
+  return showYear ? `${weekday} ${md}/${String(d.getUTCFullYear()).slice(2)}` : `${weekday} ${md}`;
 }
 
 /**
@@ -51,6 +55,23 @@ function pickTargetExpiration(available: string[]): string | null {
   if (!available.length) return null;
   return [...available].sort()[0];
 }
+
+// ── Expiration range ──────────────────────────────────────────────────────────
+// How far out to look for expirations. Kept as a few fixed buckets rather than
+// a calendar picker: real option expirations are sparse, irregular dates
+// (weeklies, then monthlies, then LEAPS), so a calendar would render mostly
+// disabled days. "2W" covers same-week/near-term ORB-style trades; "3M"
+// reaches ordinary monthly swing trades (e.g. an Aug expiration held for
+// weeks); "LEAPS" reaches far-dated contracts (e.g. Jan next year) without
+// mixing them into the same fetch as the liquid near-term chain — see the
+// two-query split below for why that mixing mattered.
+type ExpirationRange = '2W' | '3M' | 'LEAPS';
+const RANGE_LABELS: Record<ExpirationRange, string> = { '2W': '2W', '3M': '3M', LEAPS: 'LEAPS' };
+const RANGE_WINDOW_DAYS: Record<ExpirationRange, { gte: number; lte: number }> = {
+  '2W':    { gte: 0,   lte: 14 },
+  '3M':    { gte: 0,   lte: 100 },
+  LEAPS:   { gte: 100, lte: 730 },
+};
 
 // ── Chain helpers ─────────────────────────────────────────────────────────────
 
@@ -149,14 +170,57 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   }, [tickerOptions, ticker]);
 
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
-  // ETFs (SPY/QQQ/IWM) may not have a fresh expiration on any given day, and
-  // stocks never expire same-day at all — fetch a 2-week window and pick the
-  // nearest expiration that actually exists and matches the ticker's cadence,
-  // rather than assuming "today" is always a listed expiration.
-  const queryWindowEnd = useMemo(() => addDays(today, 14), [today]);
-  const { data, isLoading, error } = useOptionsQuery(
+
+  const [expirationRange, setExpirationRange] = useState<ExpirationRange>('2W');
+  const rangeWindow = RANGE_WINDOW_DAYS[expirationRange];
+  const rangeGte = useMemo(() => addDays(today, rangeWindow.gte), [today, rangeWindow.gte]);
+  const rangeLte = useMemo(() => addDays(today, rangeWindow.lte), [today, rangeWindow.lte]);
+
+  // Query 1: which expirations exist in the selected range. limit=1 since only
+  // `expirations_fetched` is needed here — the actual contract list for
+  // whichever date gets picked comes from query 2 below, scoped to just that
+  // one expiration. Splitting these matters once the range widens past a
+  // couple weeks: the chain endpoint picks its `limit` contracts by nearest-
+  // to-current-price ACROSS THE WHOLE WINDOW combined, so a single query
+  // spanning (say) 2W-LEAPS would let near-term weeklies crowd out a
+  // far-dated expiration's own strikes entirely, even though that far date
+  // still showed up in expirations_fetched — i.e. the date would be tappable
+  // but silently show "no contracts found." Scoping query 2 to one exact date
+  // avoids that regardless of how wide the browsing range is.
+  const { data: rangeData } = useOptionsQuery(
     visible && ticker ? ticker : '',
-    { limit: 100, expiration_date_gte: today, expiration_date_lte: queryWindowEnd },
+    { limit: 1, expiration_date_gte: rangeGte, expiration_date_lte: rangeLte },
+  );
+
+  const availableExpirations = useMemo(() => {
+    if (!rangeData?.success) return [];
+    return [...rangeData.data.expirations_fetched].sort();
+  }, [rangeData]);
+
+  const [manualExpiration, setManualExpiration] = useState<string | null>(null);
+
+  // Reset the manual pick whenever the ticker or range changes — a date
+  // chosen for one ticker/range has no meaning for another.
+  useEffect(() => {
+    setManualExpiration(null);
+  }, [ticker, expirationRange]);
+
+  const targetExpiration = useMemo(() => {
+    if (manualExpiration && availableExpirations.includes(manualExpiration)) {
+      return manualExpiration;
+    }
+    return pickTargetExpiration(availableExpirations);
+  }, [manualExpiration, availableExpirations]);
+
+  // Query 2: the full, live-polled contract list for ONLY targetExpiration —
+  // see the comment on query 1 for why this is scoped to one exact date
+  // rather than filtered client-side out of query 1's (potentially wide)
+  // window.
+  const { data, isLoading, error } = useOptionsQuery(
+    visible && ticker && targetExpiration ? ticker : '',
+    targetExpiration
+      ? { limit: 100, expiration_date_gte: targetExpiration, expiration_date_lte: targetExpiration }
+      : undefined,
     4000,
   );
 
@@ -165,36 +229,10 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   const chain        = data?.success ? data.data : null;
   const currentPrice = chain?.current_price ?? 0;
 
-  // Every expiration actually available for this ticker, straight from the
-  // chain — lets the user pick a specific date instead of only ever trusting
-  // the "nearest match" auto-pick, which is what used to silently substitute
-  // the wrong day's chain (see the comment above pickTargetExpiration).
-  const availableExpirations = useMemo(() => {
-    if (!chain) return [];
-    return [...chain.expirations_fetched].sort();
-  }, [chain]);
-
-  const [manualExpiration, setManualExpiration] = useState<string | null>(null);
-
-  // Reset the manual pick whenever the ticker changes — a date chosen for one
-  // ticker's chain has no meaning for another.
-  useEffect(() => {
-    setManualExpiration(null);
-  }, [ticker]);
-
-  const targetExpiration = useMemo(() => {
-    if (manualExpiration && availableExpirations.includes(manualExpiration)) {
-      return manualExpiration;
-    }
-    if (!chain) return null;
-    return pickTargetExpiration(chain.expirations_fetched);
-  }, [manualExpiration, availableExpirations, chain]);
-
   const sideContracts = useMemo(() => {
-    if (!chain || !targetExpiration) return [];
-    const list = side === 'CALL' ? chain.calls : chain.puts;
-    return list.filter(c => c.expiration === targetExpiration);
-  }, [chain, side, targetExpiration]);
+    if (!chain) return [];
+    return side === 'CALL' ? chain.calls : chain.puts;
+  }, [chain, side]);
 
   const rows = useMemo(() => buildRows(sideContracts, currentPrice, side), [sideContracts, currentPrice, side]);
 
@@ -576,10 +614,33 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
 
         {/* Expiration date — pick a specific date instead of only trusting
             the auto "nearest match" (the auto-pick is what silently showed
-            the wrong day's chain — see pickTargetExpiration above). */}
-        {availableExpirations.length > 0 && (
-          <View>
+            the wrong day's chain — see pickTargetExpiration above). The range
+            toggle controls how far out to look before picking a date — a
+            calendar would show mostly disabled days since real expirations
+            are sparse, so this stays a chip list, just fed from a wider or
+            narrower window. */}
+        <View>
+          <View style={styles.expirationHeaderRow}>
             <Text style={[styles.controlLabel, { color: colors.tabBarInactive, marginTop: 4 }]}>EXPIRATION</Text>
+            <View style={[styles.rangeToggle, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              {(Object.keys(RANGE_LABELS) as ExpirationRange[]).map(r => {
+                const active = expirationRange === r;
+                return (
+                  <TouchableOpacity
+                    key={r}
+                    onPress={() => setExpirationRange(r)}
+                    activeOpacity={0.8}
+                    style={[styles.rangeBtn, { backgroundColor: active ? colors.surfaceTertiary : 'transparent' }]}
+                  >
+                    <Text style={[styles.rangeBtnText, { color: active ? colors.accent : colors.textSecondary }]}>
+                      {RANGE_LABELS[r]}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+          {availableExpirations.length > 0 ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 {availableExpirations.map(exp => {
@@ -605,8 +666,12 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
                 })}
               </View>
             </ScrollView>
-          </View>
-        )}
+          ) : (
+            <Text style={[styles.emptySub, { color: colors.tabBarInactive, textAlign: 'left', paddingTop: 0 }]}>
+              No {ticker || 'this ticker'} expirations found in this range.
+            </Text>
+          )}
+        </View>
       </View>
 
       {/* Column headers */}
@@ -696,6 +761,11 @@ const styles = StyleSheet.create({
 
   expiryChip:     { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 100, borderWidth: 1 },
   expiryChipText: { fontSize: 12, fontWeight: '700' },
+
+  expirationHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  rangeToggle:    { flexDirection: 'row', borderRadius: 100, padding: 2, borderWidth: 1 },
+  rangeBtn:       { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 100 },
+  rangeBtnText:   { fontSize: 11, fontWeight: '700' },
 
   colHeaderRow: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth },
   colHead:      { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },

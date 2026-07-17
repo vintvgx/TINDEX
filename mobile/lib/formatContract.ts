@@ -45,6 +45,53 @@ export function parseContractSymbol(symbol: string): ParsedContract | null {
   return { ticker, year, month, day, type: type as 'C' | 'P', strike, expiry, isZeroDTE };
 }
 
+export type TradeHorizon = 'ODTE' | 'WEEKLY' | 'SWING';
+
+/**
+ * Sort rank so 0DTE/weekly positions always list above swing trades in any
+ * combined position list — a multi-day hold's SL/TP levels don't need the
+ * same minute-to-minute attention a same-day or weekly contract does, and
+ * shouldn't crowd it out at the top of the list.
+ */
+export const TRADE_HORIZON_RANK: Record<TradeHorizon, number> = { ODTE: 0, WEEKLY: 1, SWING: 2 };
+
+/**
+ * Classifies a contract's holding-period bucket from days between `from` (the
+ * entry date) and expiry: 0 days → 0DTE, 1-7 → WEEKLY, 8+ → SWING (an
+ * intentional multi-day/LEAPS hold). Unknown/unparseable symbols default to
+ * ODTE — the most urgent bucket — so a bad symbol never accidentally hides a
+ * position at the bottom of a sorted list.
+ *
+ * `from` defaults to today, which is what an OPEN position wants (it
+ * classifies by days remaining). A CLOSED trade must instead pass its own
+ * entry date — the classification is fixed at entry and shouldn't flip to
+ * 0DTE just because expiry is now in the past.
+ */
+export function getTradeHorizon(symbol: string, from?: string | Date): TradeHorizon {
+  const parsed = parseContractSymbol(symbol);
+  if (!parsed) return 'ODTE';
+
+  let refYear: number, refMonth: number, refDay: number;
+  if (typeof from === 'string') {
+    // Parse the "YYYY-MM-DD" calendar date directly instead of routing
+    // through `new Date(string)` (which parses as UTC midnight) plus local
+    // getters — that combination silently shifts the day back for anyone
+    // west of UTC, which is exactly the class of TZ bug that mis-dated
+    // trades in the backend earlier (see the session_date fix).
+    const [y, m, d] = from.slice(0, 10).split('-').map(Number);
+    refYear = y; refMonth = m - 1; refDay = d;
+  } else {
+    const ref = from ?? new Date();
+    refYear = ref.getFullYear(); refMonth = ref.getMonth(); refDay = ref.getDate();
+  }
+  const refUTCms    = Date.UTC(refYear, refMonth, refDay);
+  const expiryUTCms = Date.UTC(parsed.year, parsed.month - 1, parsed.day);
+  const daysToExpiry = Math.round((expiryUTCms - refUTCms) / 86_400_000);
+  if (daysToExpiry <= 0) return 'ODTE';
+  if (daysToExpiry <= 7) return 'WEEKLY';
+  return 'SWING';
+}
+
 function fmtStrike(strike: number): string {
   if (strike % 1 === 0)      return `$${strike}`;
   if (strike % 0.5 === 0)    return `$${strike.toFixed(1)}`;
