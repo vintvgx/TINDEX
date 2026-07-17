@@ -93,19 +93,27 @@ _INGEST_LIVE_SINCE: str | None = None
 
 # ── Ingest service lifecycle ─────────────────────────────────────────────────
 
-@bp.route("/social-signals/start", methods=["POST"])
-@_logged_route
-def start_signal_ingest():
-    global INGEST_SERVICE, INGEST_TASK
+def start_signal_ingest_core() -> tuple[dict, int]:
+    """
+    Core start logic shared by the /social-signals/start route and app.py's
+    boot-time auto-start — same fix as monitoring_routes.py's
+    start_orb_service (see its docstring / the 2026-07-09 incident it cites).
+    INGEST_SERVICE is a plain in-process global with no daily cron backstop
+    at all (unlike ORB's 9:20 AM cron), so any mid-session Railway restart
+    (redeploy, platform restart, crash) wipes it to None with nothing to
+    bring it back until someone notices ingestion silently stopped and
+    manually hits /social-signals/start again.
+    """
+    global INGEST_SERVICE, INGEST_TASK, _INGEST_LIVE_SINCE
 
     with ingest_lock:
         if INGEST_SERVICE and INGEST_SERVICE.is_running:
-            return jsonify({"message": "Social signal ingest already running"})
+            return {"message": "Social signal ingest already running"}, 200
 
     try:
         INGEST_SERVICE = get_signal_ingest_service()
     except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return {"success": False, "error": str(e)}, 500
 
     def run():
         if INGEST_SERVICE is not None:
@@ -115,10 +123,16 @@ def start_signal_ingest():
 
     INGEST_TASK = threading.Thread(target=run, daemon=True)
     INGEST_TASK.start()
-    global _INGEST_LIVE_SINCE
     _INGEST_LIVE_SINCE = datetime.now(timezone.utc).isoformat()
 
-    return jsonify({"success": True, "message": "Social signal ingest started"})
+    return {"success": True, "message": "Social signal ingest started"}, 200
+
+
+@bp.route("/social-signals/start", methods=["POST"])
+@_logged_route
+def start_signal_ingest():
+    body, status = start_signal_ingest_core()
+    return jsonify(body), status
 
 
 @bp.route("/social-signals/stop", methods=["POST"])

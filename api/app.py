@@ -232,6 +232,18 @@ try:
     except Exception as _orb_boot_err:
         logger.warning("[App] ORB hub auto-start at boot failed: %s", _orb_boot_err)
 
+    # Same self-heal, same reason, for the social-signal ingest loop — it had
+    # no boot-time backstop at all until now, so it silently stopped polling
+    # on every redeploy and stayed off until someone noticed and manually hit
+    # /social-signals/start (2026-07-17 incident: ~15 same-day deploys left
+    # it dead for hours with zero visible symptom in the app).
+    try:
+        from routes.social_routes import start_signal_ingest_core as _start_social_ingest
+        _start_social_result, _ = _start_social_ingest()
+        logger.info("[App] Social signal ingest auto-start at boot: %s", _start_social_result.get("message"))
+    except Exception as _social_boot_err:
+        logger.warning("[App] Social signal ingest auto-start at boot failed: %s", _social_boot_err)
+
     @sock.route("/ws/strategy/<strategy_id>/live")
     def ws_strategy_live(ws, strategy_id: str):
         import queue as _queue
