@@ -39,7 +39,7 @@ class ORBErrorBoundary extends Component<
   }
 }
 
-const ORB_GRID_LAYOUT_KEY = '@alethia/orb_grid_layout';
+const ORB_GRID_LAYOUT_KEY = 'alethia.orb_grid_layout';
 
 const ORBScreen = () => {
   console.log('[ORB] render start');
