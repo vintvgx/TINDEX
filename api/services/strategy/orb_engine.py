@@ -197,13 +197,21 @@ class ORBEngine:
         self._retest_max_dist      = 0.0    # max extension past level (confirms real breakout)
         self._retest_trigger_price = None
         self._retest_deadline      = None
+        # Number of times the watch has been re-armed after an invalidation (not
+        # a timeout — timeout is a hard bound and always ends the watch). Capped
+        # at profile["max_retest_attempts"] before falling back to _cancel_retest.
+        self._retest_attempt       = 0
         # Bar-close confirmation pending (used when profile bar_close_confirm == True).
-        # After the 3-minute OrbService confirmation fires, entry is deferred until the
-        # next 1-minute bar CLOSES above ORH (CALL) or below ORL (PUT).  A single tick
-        # or wick above the level cannot trigger entry — the bar body must close outside.
+        # After the 3-minute OrbService confirmation fires, entry is deferred until a
+        # 1-minute bar CLOSES above ORH (CALL) or below ORL (PUT).  A single tick or
+        # wick above the level cannot trigger entry — the bar body must close outside.
+        # A failed bar re-arms (up to profile["max_retest_attempts"]) instead of
+        # giving up outright — same reasoning as the ORH/ORL retest cap.
         self._bar_confirm_pending   = False
         self._bar_confirm_direction = None   # "CALL" | "PUT"
         self._bar_confirm_price     = None   # underlying price at the time of the signal
+        self._bar_confirm_attempt   = 0      # failed bar-closes so far, capped by max_retest_attempts
+        self._bar_confirm_extension = None   # best price reached (correct side) since pending started
         # confirm_entry gate: set while a candidate trade is awaiting user
         # approval via the app (see _pause_for_confirmation / approve_pending_entry
         # / skip_pending_entry). None when no confirmation is outstanding.
@@ -331,12 +339,6 @@ class ORBEngine:
                                    f"ORL={self.orl:.2f} VWAP={self.session_vwap}",
                         {"vix": result["vix"], "sentiment": result["sentiment"],
                          "fib_levels": {k: round(v, 2) for k, v in self.fib_levels.items()}})
-        self.notifier.notify_session_armed(
-            ticker=self.ticker,
-            orh=self.orh,
-            orl=self.orl,
-            profile_key=self.profile_key,
-        )
         return True
 
     # ── Step 2: Called every minute after ORB is set ──────────────────────────
@@ -495,6 +497,8 @@ class ORBEngine:
                 self._bar_confirm_pending   = True
                 self._bar_confirm_direction = direction
                 self._bar_confirm_price     = price
+                self._bar_confirm_attempt   = 0
+                self._bar_confirm_extension = price
                 side_str = "above ORH" if direction == "CALL" else "below ORL"
                 self.debug.emit("INFO",
                     f"3-min breakout confirmed ({direction} @ {price:.2f}) — "
@@ -560,18 +564,12 @@ class ORBEngine:
         self._retest_max_dist      = 0.0
         self._retest_trigger_price = breakout_price
         self._retest_deadline      = retest_deadline
+        self._retest_attempt       = 0
 
         self.debug.emit("INFO",
             f"RETEST armed: watching for {direction} retest of {level:.2f} "
             f"(breakout @ {breakout_price:.2f}) "
             f"until {retest_deadline.strftime('%H:%M ET')}")
-        self.notifier.notify_retest_watching(
-            ticker=self.ticker,
-            direction=direction,
-            level=level,
-            breakout_price=breakout_price,
-            profile_key=self.profile_key,
-        )
 
     def _check_retest(self, current_price: float, now_et):
         """
@@ -589,14 +587,10 @@ class ORBEngine:
         # Invalidation: price closed significantly through the level the wrong way
         INVALID_PCT = 0.0015   # 0.15%
         if direction == "CALL" and current_price < level * (1 - INVALID_PCT):
-            self.debug.emit("WARN",
-                f"RETEST invalidated — price {current_price:.2f} fell through ORH {level:.2f}")
-            self._cancel_retest("RETEST_INVALIDATED")
+            self._handle_retest_invalidated(direction, level, current_price, "fell through ORH")
             return
         if direction == "PUT" and current_price > level * (1 + INVALID_PCT):
-            self.debug.emit("WARN",
-                f"RETEST invalidated — price {current_price:.2f} rose through ORL {level:.2f}")
-            self._cancel_retest("RETEST_INVALIDATED")
+            self._handle_retest_invalidated(direction, level, current_price, "rose through ORL")
             return
 
         # Timeout
@@ -626,6 +620,33 @@ class ORBEngine:
                 f"held level {level:.2f} after extending {self._retest_max_dist:.3f}")
             self._awaiting_retest = False
             self._enter_trade(direction, current_price)
+
+    def _handle_retest_invalidated(self, direction: str, level: float, current_price: float, reason_str: str):
+        """
+        Price closed back through the level the wrong way while awaiting a
+        retest. Re-arm and keep watching (within the same overall deadline)
+        up to profile["max_retest_attempts"] times before giving up — mirrors
+        the OrbService-level fix so a single failed retest attempt doesn't
+        permanently kill the session the way it used to.
+
+        Timeout is NOT retried here — the deadline is already the bound on how
+        long we'll wait; capping retries only bounds how many times a fresh
+        extension-and-pullback cycle gets tried within that window.
+        """
+        max_attempts = self.profile.get("max_retest_attempts", 1)
+        if self._retest_attempt >= max_attempts:
+            self.debug.emit("WARN",
+                f"RETEST invalidated — price {current_price:.2f} {reason_str} {level:.2f} — "
+                f"exhausted after {self._retest_attempt} retest(s), giving up")
+            self._cancel_retest("RETEST_INVALIDATED")
+            return
+
+        self._retest_attempt  += 1
+        self._retest_max_dist  = 0.0
+        self.debug.emit("WARN",
+            f"RETEST invalidated — price {current_price:.2f} {reason_str} {level:.2f} — "
+            f"re-armed (attempt {self._retest_attempt}/{max_attempts}), still watching "
+            f"until {self._retest_deadline.strftime('%H:%M ET')}")
 
     def _cancel_retest(self, reason: str):
         """Reset retest watch state and skip the session."""
@@ -684,10 +705,6 @@ class ORBEngine:
                 f"(session P&L: ${self._session_realized_pnl:.0f}). "
                 f"Strategy paused for today.",
             )
-            self.notifier.notify_skip(
-                self.ticker,
-                f"DAILY_LOSS_LIMIT (session P&L: ${self._session_realized_pnl:.0f})",
-            )
             return
 
         if self._check_reentry_cooldown(direction):
@@ -696,9 +713,10 @@ class ORBEngine:
             elapsed = int(
                 (datetime.now(ET) - last["time"]).total_seconds() / 60
             ) if last.get("time") else 0
-            self.notifier.notify_skip(
-                self.ticker,
-                f"RE_ENTRY_COOLDOWN ({direction} — {cooldown_min - elapsed}m remaining)",
+            self.debug.emit(
+                "WARN",
+                f"Entry blocked — re-entry cooldown ({direction}, "
+                f"{cooldown_min - elapsed}m remaining)",
             )
             return
 
@@ -2020,15 +2038,35 @@ class ORBEngine:
             return
 
         # Bar-close confirmation: after the 3-minute OrbService signal the engine
-        # waits for the first 1-minute bar to CLOSE on the correct side of the ORH/ORL
-        # before entering.  A wick or momentary tick above the level is not enough.
+        # waits for a 1-minute bar to CLOSE on the correct side of the ORH/ORL
+        # before entering. A wick or momentary tick above the level is not enough.
+        # A failed bar re-arms (up to max_retest_attempts) rather than giving up
+        # after a single fakeout bar — mirrors the ORH/ORL retest cap upstream.
         if getattr(self, "_bar_confirm_pending", False) and not self.trade_taken:
             direction = self._bar_confirm_direction or ""
             orh = self.orh or 0.0
             orl = self.orl or 0.0
-            confirmed = bar.close > orh if direction == "CALL" else bar.close < orl
-            level_str = f"{orh:.2f}" if direction == "CALL" else f"{orl:.2f}"
+            level = orh if direction == "CALL" else orl
+            level_str = f"{level:.2f}"
             side_str  = "above ORH" if direction == "CALL" else "below ORL"
+            confirmed = bar.close > level if direction == "CALL" else bar.close < level
+
+            # Track the best price reached (correct side) even on a bar that
+            # ultimately closes back inside the range — purely informational,
+            # but useful in the debug log to see how close a retry came.
+            touched_correct_side = (
+                (direction == "CALL" and bar.high is not None and bar.high > level) or
+                (direction == "PUT" and bar.low is not None and bar.low < level)
+            )
+            if touched_correct_side:
+                touch_price = bar.high if direction == "CALL" else bar.low
+                if self._bar_confirm_extension is None:
+                    self._bar_confirm_extension = touch_price
+                elif direction == "CALL":
+                    self._bar_confirm_extension = max(self._bar_confirm_extension, touch_price)
+                else:
+                    self._bar_confirm_extension = min(self._bar_confirm_extension, touch_price)
+
             if confirmed:
                 self.debug.emit("SUCCESS",
                     f"Bar-close confirmed {direction} breakout — "
@@ -2036,14 +2074,25 @@ class ORBEngine:
                 self._bar_confirm_pending   = False
                 self._bar_confirm_direction = None
                 self._enter_trade(direction, bar.close)
-            else:
+                return
+
+            max_attempts = self.profile.get("max_retest_attempts", 1)
+            if self._bar_confirm_attempt >= max_attempts:
                 self.debug.emit("WARN",
                     f"Bar-close fakeout — {direction} pending but bar closed at "
-                    f"{bar.close:.2f}, did not clear {'ORH' if direction == 'CALL' else 'ORL'} "
-                    f"{level_str} — entry cancelled")
+                    f"{bar.close:.2f}, did not clear {level_str} — exhausted after "
+                    f"{self._bar_confirm_attempt} retry(ies), entry cancelled")
                 self._bar_confirm_pending   = False
                 self._bar_confirm_direction = None
                 self._bar_confirm_price     = None
+                self._bar_confirm_extension = None
+            else:
+                self._bar_confirm_attempt += 1
+                self.debug.emit("WARN",
+                    f"Bar-close fakeout — {direction} pending but bar closed at "
+                    f"{bar.close:.2f}, did not clear {level_str} — re-armed "
+                    f"(attempt {self._bar_confirm_attempt}/{max_attempts}), "
+                    f"best reach so far {self._bar_confirm_extension:.2f}")
             return
 
         self.on_price_tick(

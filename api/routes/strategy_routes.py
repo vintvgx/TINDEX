@@ -1479,9 +1479,6 @@ def trigger_review():
             content, meta = gen.generate(session_date, paper_mode)
             trades = gen._fetch_trades(session_date, paper_mode)
             gen.save_to_supabase(session_date, content, trades, meta, paper_mode)
-            StrategyNotifier(sb).notify_review_ready(
-                str(session_date), meta["trade_count"], meta["net_pnl"], paper_mode,
-            )
             return jsonify({
                 "success": True,
                 "date": str(session_date),

@@ -133,6 +133,7 @@ PROFILES = {
         "vix_max_override": 25,
         "entry_mode": "BREAK",
         "bar_close_confirm": True,  # wait for a bar to CLOSE above ORH before entering; blocks fakeout/wick entries
+        "max_retest_attempts": 1,  # re-arm once after a failed bar-close before giving up on the session
         "daily_loss_limit": 500,
         "re_entry_cooldown_min": 30,
     },
@@ -423,6 +424,7 @@ PROFILES = {
         "vix_max_override": 28,
         "entry_mode": "RETEST",
         "retest_window_min": 60,
+        "max_retest_attempts": 1,   # re-arm once after an invalidated retest before giving up on the session
         "daily_loss_limit":       400,
         "re_entry_cooldown_min":  60,
     },

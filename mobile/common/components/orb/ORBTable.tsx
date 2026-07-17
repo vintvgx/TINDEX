@@ -62,8 +62,11 @@ const getBreakoutColor = (breakoutType: string): string => {
     case 'Bearish':
     case 'Confirmed Bearish':
       return 'text-red-500';
-    case 'invalidated':
+    case 'Retesting Bullish':
+    case 'Retesting Bearish':
       return 'text-yellow-500';
+    case 'invalidated':
+      return 'text-gray-400';
     case 'reversal':
       return 'text-purple-500';
     default:
@@ -84,8 +87,11 @@ const getBreakoutBadgeColor = (breakoutType: string): string => {
       return 'bg-red-500/20 border-red-500/50';
     case 'Confirmed Bearish':
       return 'bg-red-500/30 border-red-500';
-    case 'invalidated':
+    case 'Retesting Bullish':
+    case 'Retesting Bearish':
       return 'bg-yellow-500/20 border-yellow-500/50';
+    case 'invalidated':
+      return 'bg-gray-700/40 border-gray-600/50';
     case 'reversal':
       return 'bg-purple-500/20 border-purple-500/50';
     default:

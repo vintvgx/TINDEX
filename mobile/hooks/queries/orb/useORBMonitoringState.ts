@@ -36,7 +36,7 @@ export interface ORBMonitoringState {
   orb_high: number | null;
   orb_low: number | null;
   current_price: number | null;
-  breakout_type: 'none' | 'invalidated' | 'Bullish' | 'Bearish' | 'Confirmed Bullish' | 'Confirmed Bearish' | 'reversal' | 'Offline';
+  breakout_type: 'none' | 'invalidated' | 'Bullish' | 'Bearish' | 'Retesting Bullish' | 'Retesting Bearish' | 'Confirmed Bullish' | 'Confirmed Bearish' | 'reversal' | 'Offline';
   breakout_price: number | null;
   volume: number | null;
   tracking: string | null;

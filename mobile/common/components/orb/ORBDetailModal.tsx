@@ -7,11 +7,13 @@ import {
   ScrollView,
   ActivityIndicator,
   StyleSheet,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useUnfollowTickerORB } from '@/hooks/mutations/orb/useSetORBMonitoringActiveMutation';
+import { useIsFollowingORB, useUpdateORBNotificationTypes } from '@/hooks/mutations/ticker/tickerORB';
 import { AnimatedNumber } from './AnimatedNumber';
 import { GapTrendBadges } from './GapTrendBadges';
 import type { GapTrendContext } from '@/common/types/orb';
@@ -73,9 +75,10 @@ const getFibLevels = (orbHigh: number, orbLow: number) => {
 };
 
 const getBreakoutColor = (type: string, colors: ReturnType<typeof useThemeColors>) => {
+  if (type.startsWith('Retesting')) return '#F59E0B';
   if (type.includes('Bullish')) return colors.success;
   if (type.includes('Bearish')) return colors.error;
-  if (type === 'invalidated') return '#F59E0B';
+  if (type === 'invalidated') return colors.textTertiary;
   if (type === 'reversal') return '#8B5CF6';
   return colors.textTertiary;
 };
@@ -86,7 +89,9 @@ const getBreakoutLabel = (type: string): string => {
     case 'Confirmed Bullish': return 'Confirmed Bullish ✓';
     case 'Bearish': return 'Bearish Breakdown';
     case 'Confirmed Bearish': return 'Confirmed Bearish ✓';
-    case 'invalidated': return 'Breakout Invalidated';
+    case 'Retesting Bullish': return 'Retesting High (Bullish)';
+    case 'Retesting Bearish': return 'Retesting Low (Bearish)';
+    case 'invalidated': return 'Breakout Exhausted';
     case 'reversal': return 'Reversal Detected';
     default: return 'No Breakout';
   }
@@ -119,6 +124,8 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   const { authState: { user } } = useAuth();
   const [activeTab, setActiveTab] = useState<Tab>('Overview');
   const { data: tech } = useTickerTechnicals(data?.ticker ?? null);
+  const { data: followState } = useIsFollowingORB(data?.ticker ?? '');
+  const updateNotificationTypes = useUpdateORBNotificationTypes(data?.ticker ?? '');
 
   const handleUnfollow = () => {
     if (!data?.ticker) return;
@@ -154,6 +161,12 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   const priceColor = isAboveHigh ? colors.success : isBelowLow ? colors.error : colors.text;
   const bkColor = getBreakoutColor(data.breakout_type, colors);
   const hasBreakout = data.breakout_type !== 'none';
+
+  // Notification-type toggles default to on (matches the DB column defaults)
+  // until the follow row loads.
+  const notifyConfirmed = followState?.notify_confirmed_breakout ?? true;
+  const notifyReversal = followState?.notify_reversal ?? true;
+  const notifAllOn = notifyConfirmed && notifyReversal;
 
   // Position label
   const distFromORH = isAboveHigh ? currentPrice - orbHigh : null;
@@ -552,6 +565,57 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
         </View>
       )}
 
+      {/* Notification preferences — only meaningful for an actively followed ticker */}
+      {followState?.orb_enabled && (
+        <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={styles.notifCardHeader}>
+            <Text style={[styles.cardTitle, { color: colors.textTertiary, marginBottom: 0 }]}>Notifications</Text>
+            <TouchableOpacity
+              onPress={() => updateNotificationTypes.mutate({
+                notify_confirmed_breakout: !notifAllOn,
+                notify_reversal: !notifAllOn,
+              })}
+              disabled={updateNotificationTypes.isPending}
+              hitSlop={6}
+            >
+              <Text style={[styles.notifSelectAll, { color: colors.accent }]}>
+                {notifAllOn ? 'Deselect All' : 'Select All'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.notifRow}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={[styles.rowLabel, { color: colors.text, fontWeight: '600' }]}>Breakout Confirmed</Text>
+              <Text style={[styles.notifDesc, { color: colors.textTertiary }]}>
+                Push when a break holds through confirmation — the actionable entry signal.
+              </Text>
+            </View>
+            <Switch
+              value={notifyConfirmed}
+              onValueChange={(v) => updateNotificationTypes.mutate({ notify_confirmed_breakout: v })}
+              disabled={updateNotificationTypes.isPending}
+              trackColor={{ true: colors.accent, false: colors.border }}
+            />
+          </View>
+          <Divider colors={colors} />
+          <View style={styles.notifRow}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={[styles.rowLabel, { color: colors.text, fontWeight: '600' }]}>Reversal Detected</Text>
+              <Text style={[styles.notifDesc, { color: colors.textTertiary }]}>
+                Push when a confirmed breakout fails and reverses direction.
+              </Text>
+            </View>
+            <Switch
+              value={notifyReversal}
+              onValueChange={(v) => updateNotificationTypes.mutate({ notify_reversal: v })}
+              disabled={updateNotificationTypes.isPending}
+              trackColor={{ true: colors.accent, false: colors.border }}
+            />
+          </View>
+        </View>
+      )}
+
       {/* Unfollow / navigate actions */}
       <View style={{ gap: 10 }}>
         {data.monitoring_active && (
@@ -836,6 +900,15 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   rowLabel: { fontSize: 13, fontWeight: '500' },
   rowValue: { fontSize: 15, fontWeight: '600' },
+
+  // Notification preferences card
+  notifCardHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  notifSelectAll: { fontSize: 12, fontWeight: '600' },
+  notifRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8 },
+  notifDesc: { fontSize: 11.5, fontWeight: '400', marginTop: 2, lineHeight: 15 },
 
   // EMA panel
   techPanel:  { marginTop: 4, backgroundColor: '#0F172A', borderRadius: 10, padding: 12, gap: 8 },

@@ -95,6 +95,7 @@ export default function SignalsScreen({ embedded = false }: Props) {
                   colors={colors}
                   onEnter={() => setEnterContract(c)}
                   onRemove={() => removeContract.mutate(c.id)}
+                  removing={removeContract.isPending && removeContract.variables === c.id}
                 />
               ))}
             </View>
