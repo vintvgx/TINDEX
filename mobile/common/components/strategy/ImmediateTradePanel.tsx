@@ -80,11 +80,15 @@ const buildRows = (contracts: OptionsContract[], price: number, side: OptionSide
       ...sorted.filter(c => c.strike < price).map(c => ({ type: 'contract' as const, data: c, isITM: true })),
     ];
   }
-  const sorted = [...contracts].sort((a, b) => a.strike - b.strike);
+  // Puts sort descending too, same as calls, so the strike column always reads
+  // high-to-low top-to-bottom regardless of which side is toggled — previously
+  // this sorted ascending, which flipped reading direction when switching from
+  // Calls to Puts.
+  const sorted = [...contracts].sort((a, b) => b.strike - a.strike);
   return [
-    ...sorted.filter(c => c.strike <= price).map(c => ({ type: 'contract' as const, data: c, isITM: false })),
-    { type: 'separator' as const, price },
     ...sorted.filter(c => c.strike > price).map(c => ({ type: 'contract' as const, data: c, isITM: true })),
+    { type: 'separator' as const, price },
+    ...sorted.filter(c => c.strike <= price).map(c => ({ type: 'contract' as const, data: c, isITM: false })),
   ];
 };
 
@@ -103,7 +107,7 @@ const asOpportunity = (c: OptionsContract): OptionsOpportunity => ({
 export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }: Props) {
   const toast = useToast();
   const [ticker, setTicker]             = useState<string>('');
-  const [tickerOpen, setTickerOpen]     = useState(false);
+  const [tickerSearchOpen, setTickerSearchOpen] = useState(false);
   const [tickerInput, setTickerInput]   = useState('');
   const [paperMode, setPaperMode]       = useState(true);
   const [side, setSide]                 = useState<OptionSide>('CALL');
@@ -442,50 +446,48 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
     <View style={{ flex: 1 }}>
       {/* Controls */}
       <View style={styles.controls}>
-        <View style={styles.controlRow}>
-          {/* Ticker */}
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>TICKER</Text>
+        <View>
+          {/* Ticker — a chip per ORB-monitored ticker plus a search toggle for
+              anything else, in place of the old open/close accordion menu. */}
+          <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>TICKER</Text>
+          <View style={styles.tickerRow}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {tickerOptions.map(t => {
+                  const active = ticker === t;
+                  return (
+                    <TouchableOpacity
+                      key={t}
+                      onPress={() => { setTicker(t); setSelected(null); setTickerSearchOpen(false); }}
+                      activeOpacity={0.8}
+                      style={[styles.tickerChip, { backgroundColor: active ? colors.accent + '22' : colors.card, borderColor: active ? colors.accent : colors.border }]}
+                    >
+                      <Text style={[styles.tickerChipText, { color: active ? colors.accent : colors.text }]}>{t}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+                {/* Custom ticker entered via search — shown as its own selected
+                    chip once picked, since it won't be in tickerOptions. */}
+                {!!ticker && !tickerOptions.includes(ticker) && (
+                  <View style={[styles.tickerChip, { backgroundColor: colors.accent + '22', borderColor: colors.accent }]}>
+                    <Text style={[styles.tickerChipText, { color: colors.accent }]}>{ticker}</Text>
+                  </View>
+                )}
+              </View>
+            </ScrollView>
             <TouchableOpacity
-              onPress={() => setTickerOpen(o => !o)}
+              onPress={() => setTickerSearchOpen(o => !o)}
               activeOpacity={0.7}
-              style={[styles.tickerSelect, { backgroundColor: colors.card, borderColor: colors.border }]}
+              style={[styles.tickerSearchToggle, { backgroundColor: tickerSearchOpen ? colors.accent + '22' : colors.card, borderColor: tickerSearchOpen ? colors.accent : colors.border }]}
             >
-              <Text style={[styles.tickerSelectText, { color: colors.text }]}>{ticker || '—'}</Text>
-              <Ionicons name={tickerOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.tabBarInactive} />
+              <Ionicons name="search" size={16} color={tickerSearchOpen ? colors.accent : colors.tabBarInactive} />
             </TouchableOpacity>
           </View>
 
-          {/* Paper / Live */}
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>ACCOUNT</Text>
-            <View style={[styles.accountToggle, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              {([['Paper', true], ['Live', false]] as const).map(([label, isPaper]) => {
-                const active = paperMode === isPaper;
-                const tint = isPaper ? '#FF9F0A' : colors.error;
-                return (
-                  <TouchableOpacity
-                    key={label}
-                    onPress={() => setPaperMode(isPaper)}
-                    activeOpacity={0.8}
-                    style={[styles.accountBtn, active && { backgroundColor: tint + '22', borderRadius: 8 }]}
-                  >
-                    <Text style={[styles.accountText, { color: active ? tint : colors.tabBarInactive, fontWeight: active ? '700' : '500' }]}>
-                      {label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        </View>
-
-        {/* Ticker dropdown */}
-        {tickerOpen && (
-          <View style={[styles.tickerMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {/* Free-text entry — tickerOptions only lists ORB-monitored tickers
-                (effectively SPY/QQQ/IWM today), so this is the only way to reach
-                any other stock. Same 1-5 alpha validation the backend applies. */}
+          {/* Free-text entry — tickerOptions only lists ORB-monitored tickers
+              (effectively SPY/QQQ/IWM today), so this is the only way to reach
+              any other stock. Same 1-5 alpha validation the backend applies. */}
+          {tickerSearchOpen && (
             <View style={styles.tickerSearchRow}>
               <TextInput
                 value={tickerInput}
@@ -494,11 +496,12 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
                 placeholderTextColor={colors.tabBarInactive}
                 autoCapitalize="characters"
                 autoCorrect={false}
+                autoFocus
                 style={[styles.tickerSearchInput, { color: colors.text, borderColor: colors.border }]}
                 onSubmitEditing={() => {
                   if (!tickerInput) return;
                   setTicker(tickerInput);
-                  setTickerOpen(false);
+                  setTickerSearchOpen(false);
                   setSelected(null);
                   setTickerInput('');
                 }}
@@ -508,7 +511,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
                 onPress={() => {
                   if (!tickerInput) return;
                   setTicker(tickerInput);
-                  setTickerOpen(false);
+                  setTickerSearchOpen(false);
                   setSelected(null);
                   setTickerInput('');
                 }}
@@ -518,27 +521,31 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
                 <Ionicons name="arrow-forward" size={16} color={colors.iconButton ?? '#fff'} />
               </TouchableOpacity>
             </View>
+          )}
+        </View>
 
-            <ScrollView style={{ maxHeight: 160 }} keyboardShouldPersistTaps="handled">
-              {tickerOptions.map(t => {
-                const sel = ticker === t;
-                return (
-                  <TouchableOpacity
-                    key={t}
-                    onPress={() => { setTicker(t); setTickerOpen(false); setSelected(null); }}
-                    activeOpacity={0.7}
-                    style={[styles.tickerMenuItem, sel && { backgroundColor: colors.accent + '1A' }]}
-                  >
-                    <Text style={[styles.tickerMenuItemText, { color: sel ? colors.accent : colors.text, fontWeight: sel ? '700' : '500' }]}>
-                      {t}
-                    </Text>
-                    {sel && <Ionicons name="checkmark" size={16} color={colors.accent} />}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
+        {/* Paper / Live */}
+        <View>
+          <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>ACCOUNT</Text>
+          <View style={[styles.accountToggle, styles.accountToggleFull, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            {([['Paper', true], ['Live', false]] as const).map(([label, isPaper]) => {
+              const active = paperMode === isPaper;
+              const tint = isPaper ? '#FF9F0A' : colors.error;
+              return (
+                <TouchableOpacity
+                  key={label}
+                  onPress={() => setPaperMode(isPaper)}
+                  activeOpacity={0.8}
+                  style={[styles.accountBtn, active && { backgroundColor: tint + '22', borderRadius: 8 }]}
+                >
+                  <Text style={[styles.accountText, { color: active ? tint : colors.tabBarInactive, fontWeight: active ? '700' : '500' }]}>
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
-        )}
+        </View>
 
         {/* Calls / Puts + price */}
         <View style={styles.controlRow}>
@@ -669,16 +676,16 @@ const styles = StyleSheet.create({
   controlRow:   { flexDirection: 'row', alignItems: 'center', gap: 12 },
   controlLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 6 },
 
-  tickerSelect:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1 },
-  tickerSelectText:  { fontSize: 15, fontWeight: '700' },
-  tickerMenu:        { borderRadius: 10, borderWidth: 1, overflow: 'hidden' },
-  tickerMenuItem:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12 },
-  tickerMenuItemText:{ fontSize: 14 },
-  tickerSearchRow:   { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10 },
+  tickerRow:         { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  tickerChip:        { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 100, borderWidth: 1 },
+  tickerChipText:    { fontSize: 14, fontWeight: '700' },
+  tickerSearchToggle:{ width: 36, height: 36, borderRadius: 100, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  tickerSearchRow:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
   tickerSearchInput: { flex: 1, fontSize: 14, fontWeight: '600', borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9 },
   tickerSearchGo:    { width: 36, height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
 
   accountToggle: { flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3 },
+  accountToggleFull: { width: '100%' },
   accountBtn:    { flex: 1, alignItems: 'center', paddingVertical: 7 },
   accountText:   { fontSize: 13 },
 

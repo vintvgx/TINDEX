@@ -286,6 +286,54 @@ class TradeLogger:
                     logger.error("[TradeLogger] log_entry failed: %s", e)
                     return None
 
+    def log_add_to_position(self, trade_id: str, entry_premium: float, qty_entered: int,
+                            hard_stop_price: Optional[float] = None,
+                            tp1_price: Optional[float] = None,
+                            tp2_price: Optional[float] = None) -> None:
+        """
+        Re-anchor an already-open orb_trades row after add_to_position() blends
+        the entry premium/qty in the live ExitManager, so the persisted row never
+        diverges from the engine's in-memory state. Without this, log_exit()
+        later recomputes realized P&L from the row's original (pre-add)
+        entry_premium/qty_entered, silently corrupting the Trade Log for any
+        position that had contracts added to it. See docs/incidents/
+        2026-07-14-position-lost-on-restart.md for why exit_overrides / the
+        hard_stop / tp1 / tp2 columns exist alongside entry_premium here.
+        """
+        update = {
+            "entry_premium": entry_premium,
+            "qty_entered":   qty_entered,
+        }
+        if hard_stop_price is not None:
+            update["hard_stop_price"] = hard_stop_price
+        if tp1_price is not None:
+            update["tp1_price"] = tp1_price
+        if tp2_price is not None:
+            update["tp2_price"] = tp2_price
+
+        try:
+            self.client.table("orb_trades").update(update).eq("id", trade_id).execute()
+        except Exception as e:
+            err_str = str(e)
+            # hard_stop_price/tp1_price/tp2_price require a DB migration that may
+            # not have run yet — fall back to just entry_premium/qty_entered so
+            # the P&L-critical fields still persist even if the recovery-level
+            # columns aren't available.
+            if any(col in err_str for col in ("hard_stop_price", "tp1_price", "tp2_price")):
+                logger.warning(
+                    "[TradeLogger] log_add_to_position: recovery column(s) missing — "
+                    "retrying with entry_premium/qty_entered only (run Supabase migration to fix)"
+                )
+                try:
+                    self.client.table("orb_trades").update({
+                        "entry_premium": entry_premium,
+                        "qty_entered":   qty_entered,
+                    }).eq("id", trade_id).execute()
+                except Exception as e2:
+                    logger.error("[TradeLogger] log_add_to_position failed: %s", e2)
+            else:
+                logger.error("[TradeLogger] log_add_to_position failed: %s", e)
+
     def log_exit(self, contract_symbol: str, exit_reason: str,
                  exit_premium: Optional[float], qty_closed: int, profile: str,
                  strategy_id: str = None,

@@ -1903,6 +1903,20 @@ class ORBEngine:
             em.runner_trail  = blended_entry
             em._tp1_ticks    = 0
 
+            # Persist the blend to orb_trades too, not just the in-memory
+            # ExitManager — otherwise log_exit() later recomputes realized P&L
+            # from the row's stale pre-add entry_premium/qty_entered, corrupting
+            # the Trade Log for this trade once it closes.
+            if self.active_trade_id:
+                self.logger.log_add_to_position(
+                    trade_id=self.active_trade_id,
+                    entry_premium=blended_entry,
+                    qty_entered=em.qty,
+                    hard_stop_price=em.hard_stop,
+                    tp1_price=em.tp1,
+                    tp2_price=em.tp2,
+                )
+
             self.debug.emit(
                 "INFO",
                 f"Added {qty} of {contract} @ ${fill_price:.2f} — entry ${old_entry:.2f}→"

@@ -27,6 +27,16 @@ import { formatContractSymbolShort } from '@/lib/formatContract';
 
 const WATCHED_TICKERS = ['SPY', 'IWM', 'QQQ'];
 
+// ORB-covered ETFs always sort first (alphabetically among themselves), then
+// everything else alphabetically — so the tickers the strategy actually
+// monitors don't get buried in an alphabetical list of ad-hoc symbols.
+function etfsFirstComparator(a: string, b: string): number {
+  const aEtf = WATCHED_TICKERS.includes(a);
+  const bEtf = WATCHED_TICKERS.includes(b);
+  if (aEtf !== bEtf) return aEtf ? -1 : 1;
+  return a.localeCompare(b);
+}
+
 const SENTIMENT_COLOR: Record<string, string> = {
   green:  '#30D158',
   gray:   '#8E8E93',
@@ -377,7 +387,7 @@ const DashboardScreen = () => {
   const tickerOptions = useMemo(() => {
     const fromOrb = (orbData ?? []).map((d: any) => d.ticker as string).filter(Boolean);
     const all = Array.from(new Set(fromOrb.length ? fromOrb : ['SPY', 'QQQ', 'IWM']));
-    return all.sort();
+    return all.sort(etfsFirstComparator);
   }, [orbData]);
 
   // ── Panel / exit state ────────────────────────────────────────────────────

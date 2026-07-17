@@ -595,7 +595,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
               value={notifyConfirmed}
               onValueChange={(v) => updateNotificationTypes.mutate({ notify_confirmed_breakout: v })}
               disabled={updateNotificationTypes.isPending}
-              trackColor={{ true: colors.accent, false: colors.border }}
+              trackColor={{ true: colors.success, false: colors.border }}
             />
           </View>
           <Divider colors={colors} />
@@ -610,7 +610,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
               value={notifyReversal}
               onValueChange={(v) => updateNotificationTypes.mutate({ notify_reversal: v })}
               disabled={updateNotificationTypes.isPending}
-              trackColor={{ true: colors.accent, false: colors.border }}
+              trackColor={{ true: colors.success, false: colors.border }}
             />
           </View>
         </View>

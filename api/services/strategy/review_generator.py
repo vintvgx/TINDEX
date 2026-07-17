@@ -61,6 +61,37 @@ OTM_CONVICTION — 6 contracts, higher-confidence OTM play ($0.25-$0.40 contract
                TP2 +200% (close 50% of remainder), be_hold runner, max_loss 55%,
                window 240 min.
 
+─── Trade Entry Types ────────────────────────────────────────────────────────
+Every trade is tagged STRATEGY or IMMEDIATE in the data below — treat them as
+two different categories of decision, not one blended population:
+
+STRATEGY  — Entered automatically by the ORB engine when a profile's signal
+            fired (breakout, retest, cascade, etc. per the Profile Summary
+            above). Judge these against their profile's designed behaviour:
+            did the entry, sizing, and exit match what the profile specifies?
+
+IMMEDIATE — Entered manually by the trader, on purpose, specifically because
+            no automated strategy signal fired that session (or the trader
+            chose to act ahead of / instead of one). This is a deliberate
+            discretionary trade taken with the sole goal of making a profit —
+            it is NOT a deviation, error, or something to flag as confusing
+            just because it lacks a profile or breakout trigger. Never
+            criticize an IMMEDIATE trade for "not waiting for a signal" —
+            that was never the premise of the trade.
+
+            Instead, judge each IMMEDIATE trade purely on the market context
+            and outcome data provided: entry/exit timing, underlying price
+            vs. ORH/ORL, VIX at entry, the intraday trend implied by the
+            entry/exit prices, position size, exit discipline, and realized
+            P&L. Give a direct verdict — good trade or bad trade — and
+            explain why using that data, so the trader can learn what to
+            repeat or avoid next time. Fair, data-grounded criticism is still
+            welcome (e.g. "entered into a range-bound chop with no
+            directional edge" or "sized too large relative to the day's
+            realized move") — the critique must be grounded in what actually
+            happened, never in the trade's failure to match a strategy
+            profile it was never meant to follow.
+
 ─── Exit Reason Glossary ────────────────────────────────────────────────────
 HARD_STOP           Full stop before TP1. Worst outcome — full position loss.
 BREAKEVEN_STOP      Runner hit entry price after TP1. Net positive or flat.
@@ -86,9 +117,10 @@ document. Use this exact structure:
 
 ## Session Scorecard
 
-| # | Ticker | Profile | Dir | Entry | Exit | Qty | P&L | Exit Reason | Duration |
-|---|---|---|---|---|---|---|---|---|---|
-[one row per trade]
+| # | Ticker | Type | Profile | Dir | Entry | Exit | Qty | P&L | Exit Reason | Duration |
+|---|---|---|---|---|---|---|---|---|---|---|
+[one row per trade — Type is STRATEGY or IMMEDIATE; for IMMEDIATE trades the
+Profile column may read "—" since no profile signal drove the entry]
 
 **Gross winners:** +${sum_winners}
 **Gross losers:** -${sum_losers}
@@ -106,8 +138,14 @@ gap-and-reverse, trending breakout, range-bound, VIX conditions, etc.]
 
 ## Trade-by-Trade Breakdown
 
-[For each trade: one tight paragraph. What happened, why the exit fired,
-whether the profile behaved as designed, and what it cost or earned.]
+[For each trade, one tight paragraph, and open by naming its entry type:
+ - STRATEGY trades: what happened, why the exit fired, whether the profile
+   behaved as designed, and what it cost or earned.
+ - IMMEDIATE trades: what happened, and a direct verdict — good or bad
+   discretionary decision — grounded in entry timing, price-action context
+   (ORH/ORL, underlying trend, VIX), and exit discipline. Do not comment on
+   the absence of a strategy signal; that was the intended premise of the
+   trade, not a gap to explain.]
 
 ---
 
@@ -123,8 +161,11 @@ whether the profile behaved as designed, and what it cost or earned.]
 
 ## Profile Assessment
 
-[For each profile that traded: one paragraph assessing whether it behaved
-as designed, any anomalies, and whether the profile config is appropriate.]
+[For each PROFILE that traded (STRATEGY trades only — IMMEDIATE trades have
+no profile to assess): one paragraph assessing whether it behaved as
+designed, any anomalies, and whether the profile config is appropriate. If
+IMMEDIATE trades happened today, note that they're covered separately above
+and in the recommendations below, not here.]
 
 ---
 
@@ -132,7 +173,11 @@ as designed, any anomalies, and whether the profile config is appropriate.]
 
 [Numbered list, most impactful first. Each item must be specific and
 actionable: a concrete parameter change, a behaviour to watch, or a
-structural adjustment to the strategy.]
+structural adjustment to the strategy. Separate STRATEGY-related items
+(profile/parameter changes) from IMMEDIATE-trade items (discretionary
+judgment patterns to repeat or avoid — entry timing habits, sizing
+discipline, market conditions to favor or skip) and label each item
+accordingly so the trader knows which kind of decision it applies to.]
 
 __MODE_CLOSING_NOTE__
 """.strip()
@@ -225,7 +270,7 @@ class ReviewGenerator:
                     "entry_premium, exit_premium, qty_entered, qty_exited, "
                     "pnl, pnl_pct, exit_reason, entry_time, exit_time, "
                     "underlying_price_entry, underlying_price_exit, "
-                    "vix_at_entry, orh, orl, exit_stages, paper_mode"
+                    "vix_at_entry, orh, orl, exit_stages, paper_mode, trade_type"
                 )
                 .eq("trade_date", str(session_date))
                 .eq("paper_mode", paper_mode)
@@ -341,8 +386,18 @@ class ReviewGenerator:
                 )
             stages_str = "\n  Exit stages:\n" + "\n".join(parts)
         exit_str = f"${exit_p:.2f}" if exit_p is not None else "n/a"
+        trade_type = t.get("trade_type") or "STRATEGY"
+        entry_type_str = (
+            "IMMEDIATE (manual discretionary entry — taken because no "
+            "strategy signal fired; judge on market context and outcome, "
+            "not on the absence of a signal)"
+            if trade_type == "IMMEDIATE"
+            else "STRATEGY (automated ORB breakout entry)"
+        )
+        profile_str = t.get("profile") or ("—" if trade_type == "IMMEDIATE" else "?")
         return (
-            f"Trade {idx}: {t.get('ticker') or '?'} {t.get('profile') or '?'} {t.get('direction') or '?'}\n"
+            f"Trade {idx}: {t.get('ticker') or '?'} {profile_str} {t.get('direction') or '?'}\n"
+            f"  Entry Type: {entry_type_str}\n"
             f"  Contract: {t.get('contract_symbol') or '?'}  Strike: ${t.get('strike') or '?'}\n"
             f"  Entry: ${entry_p:.2f} × {t.get('qty_entered') or 0} @ {entry_t}\n"
             f"  Underlying at entry: {self._fv(t.get('underlying_price_entry'))}\n"

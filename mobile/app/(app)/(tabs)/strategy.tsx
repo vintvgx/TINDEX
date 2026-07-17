@@ -38,6 +38,16 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
 
+// ORB-covered ETFs always sort first (alphabetically among themselves), then
+// everything else alphabetically — so the tickers the strategy actually
+// monitors don't get buried in an alphabetical list of ad-hoc symbols.
+function etfsFirstComparator(a: string, b: string): number {
+  const aEtf = FALLBACK_TICKERS.includes(a);
+  const bEtf = FALLBACK_TICKERS.includes(b);
+  if (aEtf !== bEtf) return aEtf ? -1 : 1;
+  return a.localeCompare(b);
+}
+
 type TradingMode = 'paper' | 'live' | 'off';
 
 const MODE_META: Record<TradingMode, { label: string; icon: string; color: string }> = {
@@ -168,7 +178,7 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
       .map(s => s.ticker)
       .filter((t): t is string => !!t);
     const unique = Array.from(new Set(tickers.length ? tickers : FALLBACK_TICKERS));
-    return unique.sort();
+    return unique.sort(etfsFirstComparator);
   }, [monitoringState]);
 
   // Today's completed trades (exit_time is set = fully closed)
