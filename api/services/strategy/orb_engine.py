@@ -1576,8 +1576,26 @@ class ORBEngine:
                     f"Capital OK — ask=${ask:.2f} qty={qty} cost=${required:.0f} "
                     f"buying_power=${buying_power:.0f}")
 
-        # Verify the option can be streamed (same blind-trade guard as auto entry).
-        if self.stream_manager:
+        # Verify the option can be streamed (same blind-trade guard as auto entry)
+        # — but only for 0DTE. That guard exists because a 0DTE contract's price
+        # can move fast enough that entering without a live tick is genuinely
+        # blind; a multi-day swing/LEAPS hold has no such urgency, and a lower-
+        # volume far-dated contract may simply not print a WS tick within 8s
+        # even though it's perfectly tradeable off the REST snapshot bid/ask
+        # already fetched above. Gating swing entries on this blocked every one
+        # of them with "Real-time stream unavailable" (2026-07-17 incident) even
+        # though the stream is still subscribed normally right after entry, for
+        # ongoing exit management, regardless of this pre-check.
+        try:
+            _, expiry_str = self._parse_occ_symbol(contract["symbol"])
+            days_to_expiry = (
+                datetime.strptime(expiry_str, "%Y-%m-%d").date() - datetime.now(ET).date()
+            ).days
+        except Exception:
+            days_to_expiry = 0  # unparseable — treat as 0DTE, the stricter/safer default
+        is_zero_dte = days_to_expiry <= 0
+
+        if is_zero_dte and self.stream_manager:
             self.debug.emit("INFO",
                 f"Verifying stream for {contract['symbol']} (timeout=8s) ...")
             if not self.stream_manager.verify_stream(contract["symbol"], timeout=8.0):
