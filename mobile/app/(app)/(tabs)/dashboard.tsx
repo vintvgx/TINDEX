@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, SafeAreaView,
   ActivityIndicator, RefreshControl, StyleSheet,
-  Modal, KeyboardAvoidingView, Platform, StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -14,7 +13,6 @@ import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySes
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useOrbServiceAlert } from '@/hooks/useOrbServiceAlert';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
-import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import {
   ORBNotificationModal,
   type ORBBreakoutNotificationData,
@@ -26,16 +24,6 @@ import { formatContractSymbolShort } from '@/lib/formatContract';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const WATCHED_TICKERS = ['SPY', 'IWM', 'QQQ'];
-
-// ORB-covered ETFs always sort first (alphabetically among themselves), then
-// everything else alphabetically — so the tickers the strategy actually
-// monitors don't get buried in an alphabetical list of ad-hoc symbols.
-function etfsFirstComparator(a: string, b: string): number {
-  const aEtf = WATCHED_TICKERS.includes(a);
-  const bEtf = WATCHED_TICKERS.includes(b);
-  if (aEtf !== bEtf) return aEtf ? -1 : 1;
-  return a.localeCompare(b);
-}
 
 const SENTIMENT_COLOR: Record<string, string> = {
   green:  '#30D158',
@@ -383,15 +371,7 @@ const DashboardScreen = () => {
     return vals.reduce((a, b) => a + b, 0);
   }, [sessionStates]);
 
-  // ── Ticker options for immediate trade panel ────────────────────────────
-  const tickerOptions = useMemo(() => {
-    const fromOrb = (orbData ?? []).map((d: any) => d.ticker as string).filter(Boolean);
-    const all = Array.from(new Set(fromOrb.length ? fromOrb : ['SPY', 'QQQ', 'IWM']));
-    return all.sort(etfsFirstComparator);
-  }, [orbData]);
-
   // ── Panel / exit state ────────────────────────────────────────────────────
-  const [tradePanelVisible, setTradePanelVisible] = useState(false);
   const [exitTarget, setExitTarget] = useState<ExitTarget | null>(null);
 
   // ── ORB notification modal ────────────────────────────────────────────────
@@ -458,15 +438,6 @@ const DashboardScreen = () => {
                 </Text>
               </View>
             )}
-            <TouchableOpacity
-              onPress={() => setTradePanelVisible(true)}
-              style={[styles.quickTradeBtn, { backgroundColor: colors.accent }]}
-            >
-              <Ionicons name="flash" size={14} color={colors.accentForeground} />
-              <Text style={[styles.quickTradeBtnText, { color: colors.accentForeground }]}>
-                Trade
-              </Text>
-            </TouchableOpacity>
           </View>
         </View>
 
@@ -610,41 +581,6 @@ const DashboardScreen = () => {
         />
       )}
 
-      {/* ── Immediate trade panel — full pageSheet modal ─────────────────── */}
-      <Modal
-        visible={tradePanelVisible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => { setTradePanelVisible(false); refresh(); }}
-      >
-        <StatusBar barStyle="light-content" />
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={[styles.panelModal, { backgroundColor: colors.background }]}
-        >
-          {/* Header */}
-          <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
-            <TouchableOpacity
-              onPress={() => { setTradePanelVisible(false); refresh(); }}
-              hitSlop={12}
-              style={{ width: 64 }}
-            >
-              <Text style={[styles.panelClose, { color: colors.accent }]}>Close</Text>
-            </TouchableOpacity>
-            <Text style={[styles.panelTitle, { color: colors.text }]}>Immediate Trade</Text>
-            <View style={{ width: 64 }} />
-          </View>
-
-          {/* Panel fills the rest */}
-          <ImmediateTradePanel
-            colors={colors}
-            tickerOptions={tickerOptions}
-            visible={tradePanelVisible}
-            onClose={() => { setTradePanelVisible(false); refresh(); }}
-          />
-        </KeyboardAvoidingView>
-      </Modal>
-
       {/* ── ORB notification modal ───────────────────────────────────────── */}
       <ORBNotificationModal
         visible={orbNotificationModalVisible}
@@ -677,9 +613,6 @@ const styles = StyleSheet.create({
   headerRight:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
   streamDot:     { width: 6, height: 6, borderRadius: 3 },
   streamLabel:   { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
-  quickTradeBtn: { flexDirection: 'row', alignItems: 'center', gap: 4,
-                   paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10 },
-  quickTradeBtnText: { fontSize: 13, fontWeight: '700' },
   sessionPnlBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   sessionPnlText:  { fontSize: 12, fontWeight: '700' },
 
@@ -701,14 +634,6 @@ const styles = StyleSheet.create({
                    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   activeDot:     { width: 5, height: 5, borderRadius: 3 },
   activeBadgeText: { fontSize: 10, fontWeight: '700' },
-
-  // ── Trade panel modal ──
-  panelModal:    { flex: 1 },
-  panelHeader:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-                   paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12,
-                   borderBottomWidth: StyleSheet.hairlineWidth },
-  panelClose:    { fontSize: 15, fontWeight: '600' },
-  panelTitle:    { fontSize: 17, fontWeight: '700', textAlign: 'center' },
 
   tilesRow:      { paddingBottom: 4, paddingRight: 4 },
   tile:          { borderRadius: 14, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 14,

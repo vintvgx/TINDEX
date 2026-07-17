@@ -2,19 +2,43 @@
  * AppHeader — global top bar shown on every tab screen, beneath the TickerTape.
  *
  * Astor-style layout: logo/wordmark on the left (the menu is now its own
- * bottom tab instead of a hamburger-opened drawer) · a right action
- * (notifications bell with unread badge).
+ * bottom tab instead of a hamburger-opened drawer) · a quick immediate-trade
+ * entry on the right, reachable from anywhere in the app instead of the
+ * dashboard screen alone. Notifications moved to their own screen under
+ * Menu (with an unread-count badge there) to make room for it.
  */
-import React from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import {
+  View, Text, TouchableOpacity, StyleSheet,
+  Modal, KeyboardAvoidingView, Platform, StatusBar,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useNotificationHistory } from '@/hooks/queries/notifications/useNotificationHistory';
+import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
+import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
+
+const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
+
+// ORB-covered ETFs always sort first (alphabetically among themselves), then
+// everything else alphabetically — so the tickers the strategy actually
+// monitors don't get buried in an alphabetical list of followed symbols.
+function etfsFirstComparator(a: string, b: string): number {
+  const aEtf = FALLBACK_TICKERS.includes(a);
+  const bEtf = FALLBACK_TICKERS.includes(b);
+  if (aEtf !== bEtf) return aEtf ? -1 : 1;
+  return a.localeCompare(b);
+}
 
 export function AppHeader() {
   const colors = useThemeColors();
-  const { unreadCount } = useNotificationHistory();
+  const { data: followedTickers } = useUserORBFollows();
+  const [tradePanelVisible, setTradePanelVisible] = useState(false);
+
+  const tickerOptions = useMemo(() => {
+    const followed = (followedTickers ?? []).map((f: any) => f.ticker as string).filter(Boolean);
+    const unique = Array.from(new Set(followed.length ? followed : FALLBACK_TICKERS));
+    return unique.sort(etfsFirstComparator);
+  }, [followedTickers]);
 
   return (
     <View
@@ -29,21 +53,51 @@ export function AppHeader() {
         <Text style={[styles.logoText, { color: colors.text }]}>tindex</Text>
       </View>
 
-      {/* Notifications */}
-      <Pressable
-        onPress={() => router.push('/(app)/(tabs)/notifications')}
-        hitSlop={10}
-        style={styles.iconBtn}
+      {/* Quick immediate trade */}
+      <TouchableOpacity
+        onPress={() => setTradePanelVisible(true)}
+        style={[styles.quickTradeBtn, { backgroundColor: colors.accent }]}
         accessibilityRole="button"
-        accessibilityLabel="Notifications"
+        accessibilityLabel="Immediate trade"
       >
-        <Ionicons name="notifications-outline" size={23} color={colors.text} />
-        {unreadCount > 0 && (
-          <View style={[styles.badge, { backgroundColor: colors.badge }]}>
-            <Text style={styles.badgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+        <Ionicons name="flash" size={14} color={colors.accentForeground} />
+        <Text style={[styles.quickTradeBtnText, { color: colors.accentForeground }]}>
+          Trade
+        </Text>
+      </TouchableOpacity>
+
+      {/* Immediate trade panel — full pageSheet modal, reachable from any screen */}
+      <Modal
+        visible={tradePanelVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setTradePanelVisible(false)}
+      >
+        <StatusBar barStyle="light-content" />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={[styles.panelModal, { backgroundColor: colors.background }]}
+        >
+          <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity
+              onPress={() => setTradePanelVisible(false)}
+              hitSlop={12}
+              style={{ width: 64 }}
+            >
+              <Text style={[styles.panelClose, { color: colors.accent }]}>Close</Text>
+            </TouchableOpacity>
+            <Text style={[styles.panelTitle, { color: colors.text }]}>Immediate Trade</Text>
+            <View style={{ width: 64 }} />
           </View>
-        )}
-      </Pressable>
+
+          <ImmediateTradePanel
+            colors={colors}
+            tickerOptions={tickerOptions}
+            visible={tradePanelVisible}
+            onClose={() => setTradePanelVisible(false)}
+          />
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -57,12 +111,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  iconBtn: {
-    width: 40,
-    height: 40,
+  quickTradeBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
   },
+  quickTradeBtnText: { fontSize: 13, fontWeight: '700' },
+  panelModal: { flex: 1 },
+  panelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  panelClose: { fontSize: 15, fontWeight: '600' },
+  panelTitle: { fontSize: 17, fontWeight: '700', textAlign: 'center' },
   logo: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -71,21 +140,5 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
     letterSpacing: -0.5,
-  },
-  badge: {
-    position: 'absolute',
-    top: 4,
-    right: 4,
-    borderRadius: 9,
-    minWidth: 16,
-    height: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 3,
-  },
-  badgeText: {
-    color: '#fff',
-    fontSize: 9,
-    fontWeight: '700',
   },
 });
