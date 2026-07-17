@@ -351,32 +351,42 @@ class TradeLogger:
                  exit_premium: Optional[float], qty_closed: int, profile: str,
                  strategy_id: str = None,
                  underlying_price_exit: Optional[float] = None,
-                 trading_client=None):
+                 trading_client=None,
+                 trade_id: Optional[str] = None) -> bool:
+        """
+        Returns True only if a row was actually found and updated.
+
+        trade_id: the exact orb_trades row to close out. Always pass this when
+        the caller already knows it (self.active_trade_id / row["id"] — every
+        call site does). Without it, this used to fall back to "whichever row
+        for this contract_symbol has the most recent entry_time" — harmless
+        when a symbol trades once a day, but silently wrong the moment two
+        rows ever share a symbol (e.g. a stuck/duplicate "still open" row that
+        keeps getting reconciled): the exit would land on some OTHER row
+        instead of the one that actually triggered it, corrupting that
+        unrelated trade's pnl/qty_exited/account_balance_after while the real
+        stale row never gets its exit_time set — so it re-triggers the exact
+        same bogus "reconcile" on every future restart. See the 2026-07-17
+        IWM $296C incident (duplicate "Reconciled from Alpaca" stages and a
+        nonsense account-balance swing from a mismatched trading_client).
+        """
         try:
             # Fetch the open trade — do NOT filter by exit_time so that partial
             # exits after TP1 (which already set exit_time) are still found.
             # `account_balance_before` may not exist yet pre-migration — fall
             # back to the column set that's guaranteed to be there.
+            cols = "id, entry_premium, qty_entered, qty_exited, pnl, exit_stages, account_balance_before"
+            cols_fallback = "id, entry_premium, qty_entered, qty_exited, pnl, exit_stages"
             try:
-                res = (
-                    self.client.table("orb_trades")
-                    .select("id, entry_premium, qty_entered, qty_exited, pnl, exit_stages, account_balance_before")
-                    .eq("contract_symbol", contract_symbol)
-                    .order("entry_time", desc=True)
-                    .limit(1)
-                    .execute()
-                )
+                q = self.client.table("orb_trades").select(cols)
+                q = q.eq("id", trade_id) if trade_id else q.eq("contract_symbol", contract_symbol)
+                res = q.order("entry_time", desc=True).limit(1).execute()
             except Exception:
-                res = (
-                    self.client.table("orb_trades")
-                    .select("id, entry_premium, qty_entered, qty_exited, pnl, exit_stages")
-                    .eq("contract_symbol", contract_symbol)
-                    .order("entry_time", desc=True)
-                    .limit(1)
-                    .execute()
-                )
+                q = self.client.table("orb_trades").select(cols_fallback)
+                q = q.eq("id", trade_id) if trade_id else q.eq("contract_symbol", contract_symbol)
+                res = q.order("entry_time", desc=True).limit(1).execute()
             if not res.data:
-                return
+                return False
 
             row = res.data[0]
             entry_p      = row["entry_premium"] or 0
@@ -454,8 +464,10 @@ class TradeLogger:
             if strategy_id:
                 q = q.eq("strategy_id", strategy_id)
             q.execute()
+            return True
         except Exception as e:
             logger.error("[TradeLogger] log_exit failed: %s", e)
+            return False
 
     # ── Reads ───────────────────────────────────────────────────────────────────
 

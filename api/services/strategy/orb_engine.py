@@ -937,7 +937,20 @@ class ORBEngine:
             self.trade_entry_time = datetime.now(ET)
             self.timer_notified   = False
             self._active_trade_pnl = 0.0  # reset accumulator for this trade
-            self.session_date     = self.session_date or datetime.now(ET).date()
+            # `or` alone isn't enough here: immediate-trade engines are created
+            # with active=False/trade_days=[] specifically so they're NEVER put
+            # on the daily calculate_orb() schedule (that's the only other place
+            # session_date gets refreshed) — so a long-lived immediate engine
+            # (one that traded on a prior calendar day and was never restarted,
+            # e.g. after the boot auto-start changes reduced restarts) would
+            # keep re-using yesterday's session_date forever, mis-dating every
+            # trade_date this trade logs under and making it invisible to any
+            # "today" filter. Always refresh once the calendar day has actually
+            # rolled over. See the 2026-07-17 "profitable META trade missing
+            # from Trade Log" incident.
+            today_et = datetime.now(ET).date()
+            if self.session_date != today_et:
+                self.session_date = today_et
 
             eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:58")
             self.exit_manager = ExitManager(
@@ -1816,6 +1829,7 @@ class ORBEngine:
                 strategy_id=self.strategy_id,
                 underlying_price_exit=current_price,
                 trading_client=self.trading_client,
+                trade_id=self.active_trade_id,
             )
             self.notifier.notify_exit(
                 ticker=self.ticker,

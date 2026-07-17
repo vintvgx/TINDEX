@@ -279,12 +279,19 @@ def _reconcile_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
     # same convention TradeLogger.reconcile_orphaned_trades already uses for
     # "we know it closed but not at what price" rather than fabricating a
     # gain/loss that didn't happen.
-    logger_svc.log_exit(
+    exit_persisted = logger_svc.log_exit(
         symbol, exit_reason,
         exit_price if exit_price is not None else row.get("entry_premium"),
         qty_remaining, row.get("profile"),
         strategy_id=row.get("strategy_id"), trading_client=engine.trading_client,
+        trade_id=row.get("id"),
     )
+    if not exit_persisted:
+        logger.error(
+            "[reconcile] log_exit did not persist for %s (id=%s) — this row will "
+            "still show as open next time and re-trigger reconciliation",
+            symbol, row.get("id"),
+        )
 
     if engine.contract_symbol == symbol:
         try:
@@ -294,7 +301,7 @@ def _reconcile_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
 
     return {
         "contract_symbol": symbol,
-        "status": "reconciled",
+        "status": "reconciled" if exit_persisted else "reconcile_failed",
         "exit_reason": exit_reason,
         "exit_premium": exit_price,
     }
@@ -553,6 +560,7 @@ def force_close_strategy(strategy_id: str):
             qty, engine.profile_key,
             strategy_id=engine.strategy_id,
             trading_client=engine.trading_client,
+            trade_id=engine.active_trade_id,
         )
         engine.notifier.notify_exit(
             ticker=engine.ticker,

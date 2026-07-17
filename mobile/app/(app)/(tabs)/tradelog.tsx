@@ -16,7 +16,12 @@ import type { ProfileKey, ORBTrade, StrategyStats, StrategyPerformance, RatingBr
 import { formatContractSymbol } from '@/lib/formatContract';
 import { useToast } from '@/common/components/ui/Toast';
 
-const TODAY = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
+// ET calendar date, not UTC — trade_date is always stamped from the ET session
+// date server-side (see ORBEngine._execute_entry), so a UTC-based "today" here
+// would silently exclude trades (or include the wrong ones) for hours around
+// each ET midnight, and would only happen to agree with the server the rest
+// of the day by coincidence. 'en-CA' formats as YYYY-MM-DD directly.
+const TODAY = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
