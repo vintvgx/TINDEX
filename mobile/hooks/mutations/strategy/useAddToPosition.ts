@@ -8,6 +8,11 @@ interface AddToPositionResult {
   fill_price?: number;
   new_entry_premium?: number;
   qty_remaining?: number;
+  /** False means the order filled at the broker but the server failed to
+   *  persist the new qty/entry to the DB — a restart before the next
+   *  successful write will revert the displayed qty. Surface this loudly;
+   *  don't just treat the mutation as a plain success. */
+  db_persisted?: boolean;
 }
 
 /**

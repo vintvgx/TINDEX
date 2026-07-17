@@ -1023,7 +1023,8 @@ class ORBEngine:
             self.debug.emit("ERROR", f"Order submission failed: {e}")
             raise
 
-    def recover_position(self, row: dict) -> bool:
+    def recover_position(self, row: dict, broker_qty: float | None = None,
+                          broker_avg_entry_price: float | None = None) -> bool:
         """
         Reattach exit management to a position that's still open at the broker
         but whose in-memory state was lost to a process restart — every
@@ -1040,8 +1041,46 @@ class ORBEngine:
         Returns False (and does nothing) if there's nothing left to recover —
         e.g. qty_exited already caught up to qty_entered despite exit_time
         being null (shouldn't happen, but never re-arm a closed position).
+
+        broker_qty / broker_avg_entry_price: the position's actual qty and
+        cost basis at Alpaca (from _reconcile_trade_with_broker), used as
+        ground truth over the DB row when they disagree. Without this, a
+        divergence between what add_to_position() blended in memory and what
+        it actually persisted (a DB write can fail silently after the broker
+        order already filled) gets baked back in on every restart — the app
+        would keep showing a stale qty/entry forever even though Alpaca has
+        always known the real numbers. See the 2026-07-17 8-contracts-added-
+        showed-2-after-restart incident.
         """
-        qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
+        db_qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
+        qty_remaining = db_qty_remaining
+        entry_premium = float(row["entry_premium"])
+        qty_entered = int(row["qty_entered"])
+
+        if broker_qty is not None:
+            broker_qty_int = int(round(broker_qty))
+            if broker_qty_int != db_qty_remaining:
+                logger.warning(
+                    "[ORBEngine] Position recovery: %s broker qty=%d != DB "
+                    "qty_remaining=%d (qty_entered=%s qty_exited=%s) — trusting "
+                    "Alpaca as ground truth and correcting the DB row",
+                    row.get("contract_symbol"), broker_qty_int, db_qty_remaining,
+                    row.get("qty_entered"), row.get("qty_exited"),
+                )
+                qty_remaining = broker_qty_int
+                qty_entered = broker_qty_int + int(row.get("qty_exited") or 0)
+                if broker_avg_entry_price:
+                    entry_premium = broker_avg_entry_price
+                try:
+                    self.logger.log_add_to_position(
+                        trade_id=row["id"], entry_premium=entry_premium, qty_entered=qty_entered,
+                    )
+                except Exception:
+                    logger.error(
+                        "[ORBEngine] Failed to persist broker-reconciled qty for %s",
+                        row.get("contract_symbol"), exc_info=True,
+                    )
+
         if qty_remaining <= 0:
             return False
 
@@ -1067,8 +1106,8 @@ class ORBEngine:
         eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:58")
 
         self.exit_manager = ExitManager(
-            entry_premium=float(row["entry_premium"]),
-            qty=int(row["qty_entered"]),
+            entry_premium=entry_premium,
+            qty=qty_entered,
             fib_levels=fib_levels,
             direction=row["direction"],
             eod_close_time=eod_time,
@@ -1906,9 +1945,15 @@ class ORBEngine:
             # Persist the blend to orb_trades too, not just the in-memory
             # ExitManager — otherwise log_exit() later recomputes realized P&L
             # from the row's stale pre-add entry_premium/qty_entered, corrupting
-            # the Trade Log for this trade once it closes.
+            # the Trade Log for this trade once it closes. This write is also
+            # what a restart's recover_position() reads back — if it silently
+            # fails, the order still filled at the broker and this response
+            # still reports success, but a restart before the next successful
+            # DB write will show the OLD qty. See docs/incidents/
+            # 2026-07-17-add-to-position-lost-on-restart.md.
+            db_persisted = False
             if self.active_trade_id:
-                self.logger.log_add_to_position(
+                db_persisted = self.logger.log_add_to_position(
                     trade_id=self.active_trade_id,
                     entry_premium=blended_entry,
                     qty_entered=em.qty,
@@ -1916,6 +1961,16 @@ class ORBEngine:
                     tp1_price=em.tp1,
                     tp2_price=em.tp2,
                 )
+
+            if not db_persisted:
+                msg = (
+                    f"Add-to-position filled at the broker (qty {old_qty_held}→{new_qty_held} "
+                    f"of {contract}) but the DB row did NOT persist the new qty/entry — a "
+                    f"restart before the next successful write will show qty={old_qty_held} "
+                    f"again. Check Railway logs / Supabase connectivity."
+                )
+                logger.error("[ORBEngine] %s", msg)
+                self.debug.emit("ERROR", msg)
 
             self.debug.emit(
                 "INFO",
@@ -1930,6 +1985,7 @@ class ORBEngine:
                 "fill_price":        round(fill_price, 4),
                 "new_entry_premium": round(blended_entry, 4),
                 "qty_remaining":     new_qty_held,
+                "db_persisted":      db_persisted,
                 "exit_state":        em.to_dict(),
             }
 

@@ -289,7 +289,7 @@ class TradeLogger:
     def log_add_to_position(self, trade_id: str, entry_premium: float, qty_entered: int,
                             hard_stop_price: Optional[float] = None,
                             tp1_price: Optional[float] = None,
-                            tp2_price: Optional[float] = None) -> None:
+                            tp2_price: Optional[float] = None) -> bool:
         """
         Re-anchor an already-open orb_trades row after add_to_position() blends
         the entry premium/qty in the live ExitManager, so the persisted row never
@@ -299,6 +299,13 @@ class TradeLogger:
         position that had contracts added to it. See docs/incidents/
         2026-07-14-position-lost-on-restart.md for why exit_overrides / the
         hard_stop / tp1 / tp2 columns exist alongside entry_premium here.
+
+        Returns True only if the row was actually updated. The caller (engine
+        add_to_position()) surfaces a False return as a loud debug-tab error —
+        previously a failed write here was only ever a server-log line, so the
+        DB row could silently drift from Alpaca's real position and nothing
+        would catch it until the next restart re-applied the stale qty. See
+        the 2026-07-17 "8 contracts added, showed 2 after restart" incident.
         """
         update = {
             "entry_premium": entry_premium,
@@ -312,7 +319,10 @@ class TradeLogger:
             update["tp2_price"] = tp2_price
 
         try:
-            self.client.table("orb_trades").update(update).eq("id", trade_id).execute()
+            res = self.client.table("orb_trades").update(update).eq("id", trade_id).execute()
+            # A zero-row match (e.g. a stale/wrong trade_id) doesn't raise —
+            # treat it as a failure too, since it means nothing was persisted.
+            return bool(res.data)
         except Exception as e:
             err_str = str(e)
             # hard_stop_price/tp1_price/tp2_price require a DB migration that may
@@ -325,14 +335,17 @@ class TradeLogger:
                     "retrying with entry_premium/qty_entered only (run Supabase migration to fix)"
                 )
                 try:
-                    self.client.table("orb_trades").update({
+                    res2 = self.client.table("orb_trades").update({
                         "entry_premium": entry_premium,
                         "qty_entered":   qty_entered,
                     }).eq("id", trade_id).execute()
+                    return bool(res2.data)
                 except Exception as e2:
                     logger.error("[TradeLogger] log_add_to_position failed: %s", e2)
+                    return False
             else:
                 logger.error("[TradeLogger] log_add_to_position failed: %s", e)
+                return False
 
     def log_exit(self, contract_symbol: str, exit_reason: str,
                  exit_premium: Optional[float], qty_closed: int, profile: str,

@@ -208,7 +208,11 @@ def recover_open_positions():
                 )
                 continue
 
-            if engine.recover_position(row):
+            if engine.recover_position(
+                row,
+                broker_qty=broker_result.get("broker_qty"),
+                broker_avg_entry_price=broker_result.get("broker_avg_entry_price"),
+            ):
                 recovered += 1
         except Exception as e:
             logger.error(
@@ -235,8 +239,18 @@ def _reconcile_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
     """
     symbol = row.get("contract_symbol")
     try:
-        engine.trading_client.get_open_position(symbol)
-        return {"contract_symbol": symbol, "status": "still_open"}
+        position = engine.trading_client.get_open_position(symbol)
+        # Return the broker's actual qty/avg-entry-price too — not just proof
+        # the position exists. recover_position() uses these as ground truth
+        # over the DB row, since qty_entered/entry_premium can silently drift
+        # from what's really at the broker (e.g. an add_to_position() DB write
+        # that failed after the order itself already filled).
+        return {
+            "contract_symbol":        symbol,
+            "status":                 "still_open",
+            "broker_qty":             float(position.qty),
+            "broker_avg_entry_price": float(position.avg_entry_price),
+        }
     except Exception:
         pass  # not found at the broker -> already closed there
 
