@@ -11,6 +11,7 @@ import { signOut } from '@/common/utils/auth/function';
 import { useAppColorScheme } from '@/lib/useColorScheme';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
+import { useNotificationHistory } from '@/hooks/queries/notifications/useNotificationHistory';
 
 interface NavItem {
   label: string;
@@ -33,7 +34,7 @@ const SECTIONS: NavSection[] = [
     items: [
       { label: 'Watchlists', route: '/(app)/(tabs)/watchlists' },
       { label: 'Track Portfolio', route: '/(app)/(tabs)/track' },
-      { label: 'Alerts', route: '/(app)/(tabs)/notifications' },
+      { label: 'Notifications', route: '/(app)/(tabs)/notifications' },
     ],
   },
   {
@@ -50,6 +51,7 @@ export default function MenuScreen() {
   const { isDarkColorScheme, toggleColorScheme } = useAppColorScheme();
   const [searchOpen, setSearchOpen] = useState(false);
   const tabBarHeight = useFloatingTabBarHeight();
+  const { unreadCount } = useNotificationHistory();
 
   const go = (route: string) => router.push(route as any);
 
@@ -134,7 +136,16 @@ export default function MenuScreen() {
                     { backgroundColor: pressed ? colors.surface : 'transparent' },
                   ]}
                 >
-                  <Text style={[styles.rowLabel, { color: colors.text }]}>{item.label}</Text>
+                  <View style={styles.rowLabelWrap}>
+                    <Text style={[styles.rowLabel, { color: colors.text }]}>{item.label}</Text>
+                    {item.label === 'Notifications' && unreadCount > 0 && (
+                      <View style={[styles.rowBadge, { backgroundColor: colors.badge }]}>
+                        <Text style={styles.rowBadgeText}>
+                          {unreadCount > 99 ? '99+' : unreadCount}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
                 </Pressable>
               ))}
             </View>
@@ -261,7 +272,17 @@ const styles = StyleSheet.create({
   rowLast: {
     borderBottomWidth: 0,
   },
+  rowLabelWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   rowLabel: { fontSize: 17, fontWeight: '500', letterSpacing: -0.2 },
+  rowBadge: {
+    borderRadius: 9,
+    minWidth: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
+  rowBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
 
   footer: {
     paddingHorizontal: H_PADDING,

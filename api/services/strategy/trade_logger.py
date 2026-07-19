@@ -286,36 +286,107 @@ class TradeLogger:
                     logger.error("[TradeLogger] log_entry failed: %s", e)
                     return None
 
+    def log_add_to_position(self, trade_id: str, entry_premium: float, qty_entered: int,
+                            hard_stop_price: Optional[float] = None,
+                            tp1_price: Optional[float] = None,
+                            tp2_price: Optional[float] = None) -> bool:
+        """
+        Re-anchor an already-open orb_trades row after add_to_position() blends
+        the entry premium/qty in the live ExitManager, so the persisted row never
+        diverges from the engine's in-memory state. Without this, log_exit()
+        later recomputes realized P&L from the row's original (pre-add)
+        entry_premium/qty_entered, silently corrupting the Trade Log for any
+        position that had contracts added to it. See docs/incidents/
+        2026-07-14-position-lost-on-restart.md for why exit_overrides / the
+        hard_stop / tp1 / tp2 columns exist alongside entry_premium here.
+
+        Returns True only if the row was actually updated. The caller (engine
+        add_to_position()) surfaces a False return as a loud debug-tab error —
+        previously a failed write here was only ever a server-log line, so the
+        DB row could silently drift from Alpaca's real position and nothing
+        would catch it until the next restart re-applied the stale qty. See
+        the 2026-07-17 "8 contracts added, showed 2 after restart" incident.
+        """
+        update = {
+            "entry_premium": entry_premium,
+            "qty_entered":   qty_entered,
+        }
+        if hard_stop_price is not None:
+            update["hard_stop_price"] = hard_stop_price
+        if tp1_price is not None:
+            update["tp1_price"] = tp1_price
+        if tp2_price is not None:
+            update["tp2_price"] = tp2_price
+
+        try:
+            res = self.client.table("orb_trades").update(update).eq("id", trade_id).execute()
+            # A zero-row match (e.g. a stale/wrong trade_id) doesn't raise —
+            # treat it as a failure too, since it means nothing was persisted.
+            return bool(res.data)
+        except Exception as e:
+            err_str = str(e)
+            # hard_stop_price/tp1_price/tp2_price require a DB migration that may
+            # not have run yet — fall back to just entry_premium/qty_entered so
+            # the P&L-critical fields still persist even if the recovery-level
+            # columns aren't available.
+            if any(col in err_str for col in ("hard_stop_price", "tp1_price", "tp2_price")):
+                logger.warning(
+                    "[TradeLogger] log_add_to_position: recovery column(s) missing — "
+                    "retrying with entry_premium/qty_entered only (run Supabase migration to fix)"
+                )
+                try:
+                    res2 = self.client.table("orb_trades").update({
+                        "entry_premium": entry_premium,
+                        "qty_entered":   qty_entered,
+                    }).eq("id", trade_id).execute()
+                    return bool(res2.data)
+                except Exception as e2:
+                    logger.error("[TradeLogger] log_add_to_position failed: %s", e2)
+                    return False
+            else:
+                logger.error("[TradeLogger] log_add_to_position failed: %s", e)
+                return False
+
     def log_exit(self, contract_symbol: str, exit_reason: str,
                  exit_premium: Optional[float], qty_closed: int, profile: str,
                  strategy_id: str = None,
                  underlying_price_exit: Optional[float] = None,
-                 trading_client=None):
+                 trading_client=None,
+                 trade_id: Optional[str] = None) -> bool:
+        """
+        Returns True only if a row was actually found and updated.
+
+        trade_id: the exact orb_trades row to close out. Always pass this when
+        the caller already knows it (self.active_trade_id / row["id"] — every
+        call site does). Without it, this used to fall back to "whichever row
+        for this contract_symbol has the most recent entry_time" — harmless
+        when a symbol trades once a day, but silently wrong the moment two
+        rows ever share a symbol (e.g. a stuck/duplicate "still open" row that
+        keeps getting reconciled): the exit would land on some OTHER row
+        instead of the one that actually triggered it, corrupting that
+        unrelated trade's pnl/qty_exited/account_balance_after while the real
+        stale row never gets its exit_time set — so it re-triggers the exact
+        same bogus "reconcile" on every future restart. See the 2026-07-17
+        IWM $296C incident (duplicate "Reconciled from Alpaca" stages and a
+        nonsense account-balance swing from a mismatched trading_client).
+        """
         try:
             # Fetch the open trade — do NOT filter by exit_time so that partial
             # exits after TP1 (which already set exit_time) are still found.
             # `account_balance_before` may not exist yet pre-migration — fall
             # back to the column set that's guaranteed to be there.
+            cols = "id, entry_premium, qty_entered, qty_exited, pnl, exit_stages, account_balance_before"
+            cols_fallback = "id, entry_premium, qty_entered, qty_exited, pnl, exit_stages"
             try:
-                res = (
-                    self.client.table("orb_trades")
-                    .select("id, entry_premium, qty_entered, qty_exited, pnl, exit_stages, account_balance_before")
-                    .eq("contract_symbol", contract_symbol)
-                    .order("entry_time", desc=True)
-                    .limit(1)
-                    .execute()
-                )
+                q = self.client.table("orb_trades").select(cols)
+                q = q.eq("id", trade_id) if trade_id else q.eq("contract_symbol", contract_symbol)
+                res = q.order("entry_time", desc=True).limit(1).execute()
             except Exception:
-                res = (
-                    self.client.table("orb_trades")
-                    .select("id, entry_premium, qty_entered, qty_exited, pnl, exit_stages")
-                    .eq("contract_symbol", contract_symbol)
-                    .order("entry_time", desc=True)
-                    .limit(1)
-                    .execute()
-                )
+                q = self.client.table("orb_trades").select(cols_fallback)
+                q = q.eq("id", trade_id) if trade_id else q.eq("contract_symbol", contract_symbol)
+                res = q.order("entry_time", desc=True).limit(1).execute()
             if not res.data:
-                return
+                return False
 
             row = res.data[0]
             entry_p      = row["entry_premium"] or 0
@@ -393,8 +464,10 @@ class TradeLogger:
             if strategy_id:
                 q = q.eq("strategy_id", strategy_id)
             q.execute()
+            return True
         except Exception as e:
             logger.error("[TradeLogger] log_exit failed: %s", e)
+            return False
 
     # ── Reads ───────────────────────────────────────────────────────────────────
 
@@ -433,6 +506,29 @@ class TradeLogger:
         except Exception as e:
             logger.error("[TradeLogger] get_open_trades failed: %s", e)
             return []
+
+    def mark_expiry_reminder_sent(self, trade_id: str, milestone: str,
+                                   already_sent: list[str]) -> bool:
+        """
+        Append `milestone` to an open trade's expiry_reminders_sent list so
+        scheduler.check_expiry_reminders() never re-sends the same reminder on
+        a later daily run. `already_sent` is whatever the caller already read
+        for this row — passed in rather than re-fetched so this stays a single
+        write, not a read-modify-write race against itself.
+        """
+        try:
+            updated = list(already_sent) + [milestone]
+            res = (
+                self.client.table("orb_trades")
+                .update({"expiry_reminders_sent": updated})
+                .eq("id", trade_id)
+                .execute()
+            )
+            return bool(res.data)
+        except Exception as e:
+            logger.error("[TradeLogger] mark_expiry_reminder_sent failed for %s/%s: %s",
+                         trade_id, milestone, e)
+            return False
 
     def reconcile_orphaned_trades(self):
         """

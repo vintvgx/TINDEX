@@ -46,7 +46,14 @@ export function AddContractModal({
       { strategyId, qty },
       {
         onSuccess: (r) => {
-          toast.success(r.message || 'Added to position');
+          if (r.db_persisted === false) {
+            // Order filled at the broker but the server couldn't save the new
+            // qty/entry — don't show a plain success, or a restart before the
+            // next successful write will silently revert the displayed qty.
+            toast.error('Added, but failed to save — restart may revert this. Check server logs.');
+          } else {
+            toast.success(r.message || 'Added to position');
+          }
           onClose();
         },
         onError: (e) => toast.error(e.message || 'Add failed'),

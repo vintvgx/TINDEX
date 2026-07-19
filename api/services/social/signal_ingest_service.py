@@ -259,62 +259,86 @@ class SignalIngestService:
 
     async def _track_and_notify(self, account: dict, tweet: Tweet,
                                  contract, contract_symbol: str) -> Optional[str]:
+        """
+        Creates one tracked_options_contracts row PER USER who follows this
+        account — not one shared row. Previously this attached every tracked
+        contract to an arbitrary user_profiles row (whichever came back first
+        from an unfiltered query), because there was no per-user follow
+        relationship to look up an owner from at all.
+
+        Returns one representative tracked_id (the first row touched) for
+        social_signal_tweets.tracked_contract_id, which is a single-id audit
+        column, not a fan-out list — that table is a parse-history log, not
+        the per-user ownership source of truth (tracked_options_contracts.user_id
+        is that source of truth).
+        """
         loop = asyncio.get_event_loop()
 
-        from datetime import date as _date
-        dup = await loop.run_in_executor(None, lambda: (
-            self.supabase.table("tracked_options_contracts")
-            .select("id")
-            .eq("contract_symbol", contract_symbol)
-            .eq("tracked_from_source", "social_signal")
-            .gte("created_at", _date.today().isoformat())
-            .limit(1)
+        followers = await loop.run_in_executor(None, lambda: (
+            self.supabase.table("user_social_signal_follows")
+            .select("user_id")
+            .eq("account_id", account["id"])
             .execute()
         ))
-        if dup.data:
-            return dup.data[0]["id"]
+        follower_ids = [f["user_id"] for f in (followers.data or [])]
+        if not follower_ids:
+            logger.warning("SignalIngestService: %s has no followers — skipping "
+                            "tracked-contract creation for %s", account["handle"], contract_symbol)
+            return None
+
+        from datetime import date as _date
+        today = _date.today().isoformat()
 
         from services.alpaca.alpaca_option_service import get_alpaca_option_service
         option_service = get_alpaca_option_service()
         prices = await option_service.get_contract_prices_batch([contract_symbol])
         entry_price = prices.get(contract_symbol)
 
-        owner = await loop.run_in_executor(None, lambda: (
-            self.supabase.table("user_profiles")
-            .select("id").limit(1).execute()
-        ))
-        if not owner.data:
-            logger.error("SignalIngestService: no user_profiles row to attach "
-                         "the tracked contract to — cannot insert without one")
-            return None
-        user_id = owner.data[0]["id"]
+        representative_id: Optional[str] = None
+        for user_id in follower_ids:
+            dup = await loop.run_in_executor(None, lambda uid=user_id: (
+                self.supabase.table("tracked_options_contracts")
+                .select("id")
+                .eq("contract_symbol", contract_symbol)
+                .eq("tracked_from_source", "social_signal")
+                .eq("user_id", uid)
+                .gte("created_at", today)
+                .limit(1)
+                .execute()
+            ))
+            if dup.data:
+                if representative_id is None:
+                    representative_id = dup.data[0]["id"]
+                continue
 
-        insert_row = {
-            "user_id": user_id,
-            "ticker": contract.ticker,
-            "contract_symbol": contract_symbol,
-            "option_type": contract.option_type,
-            "strike": contract.strike,
-            "expiration_date": contract.expiry,
-            "tracking_snapshot": {
-                "source": "social_signal",
-                "parser": "text",
-                "account_handle": account["handle"],
-                "tweet_id": tweet.tweet_id,
-                "tweet_url": f"https://x.com/{account['handle']}/status/{tweet.tweet_id}",
-                "parse_method": contract.method,
-            },
-            "status": "tracking",
-            "tracked_from_source": "social_signal",
-            "tracking_reason": f"@{account['handle']}: \"{tweet.text[:200]}\"",
-            "tracked_entry_price": entry_price,
-        }
-        res = await loop.run_in_executor(None, lambda: (
-            self.supabase.table("tracked_options_contracts").insert(insert_row).execute()
-        ))
-        if not res.data:
+            insert_row = {
+                "user_id": user_id,
+                "ticker": contract.ticker,
+                "contract_symbol": contract_symbol,
+                "option_type": contract.option_type,
+                "strike": contract.strike,
+                "expiration_date": contract.expiry,
+                "tracking_snapshot": {
+                    "source": "social_signal",
+                    "parser": "text",
+                    "account_handle": account["handle"],
+                    "tweet_id": tweet.tweet_id,
+                    "tweet_url": f"https://x.com/{account['handle']}/status/{tweet.tweet_id}",
+                    "parse_method": contract.method,
+                },
+                "status": "tracking",
+                "tracked_from_source": "social_signal",
+                "tracking_reason": f"@{account['handle']}: \"{tweet.text[:200]}\"",
+                "tracked_entry_price": entry_price,
+            }
+            res = await loop.run_in_executor(None, lambda row=insert_row: (
+                self.supabase.table("tracked_options_contracts").insert(row).execute()
+            ))
+            if res.data and representative_id is None:
+                representative_id = res.data[0]["id"]
+
+        if representative_id is None:
             return None
-        tracked_id = res.data[0]["id"]
 
         from services.strategy.notifier import StrategyNotifier
         StrategyNotifier(self.supabase).notify_social_signal(
@@ -326,7 +350,7 @@ class SignalIngestService:
             tweet_text=tweet.text,
             tweet_url=f"https://x.com/{account['handle']}/status/{tweet.tweet_id}",
         )
-        return tracked_id
+        return representative_id
 
     # ── Database helpers ─────────────────────────────────────────────────────
 
@@ -343,6 +367,25 @@ class SignalIngestService:
 
         result = await loop.run_in_executor(None, fetch)
         accounts = result.data or []
+        if not accounts:
+            return []
+
+        # Only poll accounts at least one user actually follows now —
+        # user_social_signal_follows is what makes a follow per-user; an
+        # account nobody follows anymore (everyone unfollowed) shouldn't keep
+        # spending X API budget just because `active` wasn't flipped off.
+        def fetch_followed_ids():
+            return (
+                self.supabase.table("user_social_signal_follows")
+                .select("account_id")
+                .in_("account_id", [a["id"] for a in accounts])
+                .execute()
+            )
+        followed = await loop.run_in_executor(None, fetch_followed_ids)
+        followed_ids = {f["account_id"] for f in (followed.data or [])}
+        accounts = [a for a in accounts if a["id"] in followed_ids]
+        if not accounts:
+            return []
 
         # x_user_id is resolved lazily here (not at follow-time in the route)
         # so an account can be marked active before its id lookup succeeds —

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { formatContractSymbol } from '@/lib/formatContract';
 import type { SocialSignalContract } from '@/common/types/social';
@@ -10,9 +10,10 @@ interface Props {
   colors: any;
   onEnter: () => void;
   onRemove: () => void;
+  removing?: boolean;
 }
 
-export function SignalCard({ contract, livePrice, colors, onEnter, onRemove }: Props) {
+export function SignalCard({ contract, livePrice, colors, onEnter, onRemove, removing = false }: Props) {
   const entry = contract.tracked_entry_price;
   // Prefer the live WS tick; fall back to the 5-min-poll-backed current_price
   // (OptionsContractMonitorService) so the card still shows something useful
@@ -35,8 +36,12 @@ export function SignalCard({ contract, livePrice, colors, onEnter, onRemove }: P
             <Text style={[styles.dirText, { color: dirColor }]}>{contract.option_type}</Text>
           </View>
         </View>
-        <TouchableOpacity onPress={onRemove} hitSlop={8}>
-          <Ionicons name="close" size={18} color={colors.tabBarInactive} />
+        <TouchableOpacity onPress={onRemove} disabled={removing} hitSlop={8}>
+          {removing ? (
+            <ActivityIndicator size="small" color={colors.tabBarInactive} />
+          ) : (
+            <Ionicons name="close" size={18} color={colors.tabBarInactive} />
+          )}
         </TouchableOpacity>
       </View>
 

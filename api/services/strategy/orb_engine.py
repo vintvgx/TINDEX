@@ -197,13 +197,21 @@ class ORBEngine:
         self._retest_max_dist      = 0.0    # max extension past level (confirms real breakout)
         self._retest_trigger_price = None
         self._retest_deadline      = None
+        # Number of times the watch has been re-armed after an invalidation (not
+        # a timeout — timeout is a hard bound and always ends the watch). Capped
+        # at profile["max_retest_attempts"] before falling back to _cancel_retest.
+        self._retest_attempt       = 0
         # Bar-close confirmation pending (used when profile bar_close_confirm == True).
-        # After the 3-minute OrbService confirmation fires, entry is deferred until the
-        # next 1-minute bar CLOSES above ORH (CALL) or below ORL (PUT).  A single tick
-        # or wick above the level cannot trigger entry — the bar body must close outside.
+        # After the 3-minute OrbService confirmation fires, entry is deferred until a
+        # 1-minute bar CLOSES above ORH (CALL) or below ORL (PUT).  A single tick or
+        # wick above the level cannot trigger entry — the bar body must close outside.
+        # A failed bar re-arms (up to profile["max_retest_attempts"]) instead of
+        # giving up outright — same reasoning as the ORH/ORL retest cap.
         self._bar_confirm_pending   = False
         self._bar_confirm_direction = None   # "CALL" | "PUT"
         self._bar_confirm_price     = None   # underlying price at the time of the signal
+        self._bar_confirm_attempt   = 0      # failed bar-closes so far, capped by max_retest_attempts
+        self._bar_confirm_extension = None   # best price reached (correct side) since pending started
         # confirm_entry gate: set while a candidate trade is awaiting user
         # approval via the app (see _pause_for_confirmation / approve_pending_entry
         # / skip_pending_entry). None when no confirmation is outstanding.
@@ -331,12 +339,6 @@ class ORBEngine:
                                    f"ORL={self.orl:.2f} VWAP={self.session_vwap}",
                         {"vix": result["vix"], "sentiment": result["sentiment"],
                          "fib_levels": {k: round(v, 2) for k, v in self.fib_levels.items()}})
-        self.notifier.notify_session_armed(
-            ticker=self.ticker,
-            orh=self.orh,
-            orl=self.orl,
-            profile_key=self.profile_key,
-        )
         return True
 
     # ── Step 2: Called every minute after ORB is set ──────────────────────────
@@ -495,6 +497,8 @@ class ORBEngine:
                 self._bar_confirm_pending   = True
                 self._bar_confirm_direction = direction
                 self._bar_confirm_price     = price
+                self._bar_confirm_attempt   = 0
+                self._bar_confirm_extension = price
                 side_str = "above ORH" if direction == "CALL" else "below ORL"
                 self.debug.emit("INFO",
                     f"3-min breakout confirmed ({direction} @ {price:.2f}) — "
@@ -560,18 +564,12 @@ class ORBEngine:
         self._retest_max_dist      = 0.0
         self._retest_trigger_price = breakout_price
         self._retest_deadline      = retest_deadline
+        self._retest_attempt       = 0
 
         self.debug.emit("INFO",
             f"RETEST armed: watching for {direction} retest of {level:.2f} "
             f"(breakout @ {breakout_price:.2f}) "
             f"until {retest_deadline.strftime('%H:%M ET')}")
-        self.notifier.notify_retest_watching(
-            ticker=self.ticker,
-            direction=direction,
-            level=level,
-            breakout_price=breakout_price,
-            profile_key=self.profile_key,
-        )
 
     def _check_retest(self, current_price: float, now_et):
         """
@@ -589,14 +587,10 @@ class ORBEngine:
         # Invalidation: price closed significantly through the level the wrong way
         INVALID_PCT = 0.0015   # 0.15%
         if direction == "CALL" and current_price < level * (1 - INVALID_PCT):
-            self.debug.emit("WARN",
-                f"RETEST invalidated — price {current_price:.2f} fell through ORH {level:.2f}")
-            self._cancel_retest("RETEST_INVALIDATED")
+            self._handle_retest_invalidated(direction, level, current_price, "fell through ORH")
             return
         if direction == "PUT" and current_price > level * (1 + INVALID_PCT):
-            self.debug.emit("WARN",
-                f"RETEST invalidated — price {current_price:.2f} rose through ORL {level:.2f}")
-            self._cancel_retest("RETEST_INVALIDATED")
+            self._handle_retest_invalidated(direction, level, current_price, "rose through ORL")
             return
 
         # Timeout
@@ -626,6 +620,33 @@ class ORBEngine:
                 f"held level {level:.2f} after extending {self._retest_max_dist:.3f}")
             self._awaiting_retest = False
             self._enter_trade(direction, current_price)
+
+    def _handle_retest_invalidated(self, direction: str, level: float, current_price: float, reason_str: str):
+        """
+        Price closed back through the level the wrong way while awaiting a
+        retest. Re-arm and keep watching (within the same overall deadline)
+        up to profile["max_retest_attempts"] times before giving up — mirrors
+        the OrbService-level fix so a single failed retest attempt doesn't
+        permanently kill the session the way it used to.
+
+        Timeout is NOT retried here — the deadline is already the bound on how
+        long we'll wait; capping retries only bounds how many times a fresh
+        extension-and-pullback cycle gets tried within that window.
+        """
+        max_attempts = self.profile.get("max_retest_attempts", 1)
+        if self._retest_attempt >= max_attempts:
+            self.debug.emit("WARN",
+                f"RETEST invalidated — price {current_price:.2f} {reason_str} {level:.2f} — "
+                f"exhausted after {self._retest_attempt} retest(s), giving up")
+            self._cancel_retest("RETEST_INVALIDATED")
+            return
+
+        self._retest_attempt  += 1
+        self._retest_max_dist  = 0.0
+        self.debug.emit("WARN",
+            f"RETEST invalidated — price {current_price:.2f} {reason_str} {level:.2f} — "
+            f"re-armed (attempt {self._retest_attempt}/{max_attempts}), still watching "
+            f"until {self._retest_deadline.strftime('%H:%M ET')}")
 
     def _cancel_retest(self, reason: str):
         """Reset retest watch state and skip the session."""
@@ -684,10 +705,6 @@ class ORBEngine:
                 f"(session P&L: ${self._session_realized_pnl:.0f}). "
                 f"Strategy paused for today.",
             )
-            self.notifier.notify_skip(
-                self.ticker,
-                f"DAILY_LOSS_LIMIT (session P&L: ${self._session_realized_pnl:.0f})",
-            )
             return
 
         if self._check_reentry_cooldown(direction):
@@ -696,9 +713,10 @@ class ORBEngine:
             elapsed = int(
                 (datetime.now(ET) - last["time"]).total_seconds() / 60
             ) if last.get("time") else 0
-            self.notifier.notify_skip(
-                self.ticker,
-                f"RE_ENTRY_COOLDOWN ({direction} — {cooldown_min - elapsed}m remaining)",
+            self.debug.emit(
+                "WARN",
+                f"Entry blocked — re-entry cooldown ({direction}, "
+                f"{cooldown_min - elapsed}m remaining)",
             )
             return
 
@@ -919,9 +937,27 @@ class ORBEngine:
             self.trade_entry_time = datetime.now(ET)
             self.timer_notified   = False
             self._active_trade_pnl = 0.0  # reset accumulator for this trade
-            self.session_date     = self.session_date or datetime.now(ET).date()
+            # `or` alone isn't enough here: immediate-trade engines are created
+            # with active=False/trade_days=[] specifically so they're NEVER put
+            # on the daily calculate_orb() schedule (that's the only other place
+            # session_date gets refreshed) — so a long-lived immediate engine
+            # (one that traded on a prior calendar day and was never restarted,
+            # e.g. after the boot auto-start changes reduced restarts) would
+            # keep re-using yesterday's session_date forever, mis-dating every
+            # trade_date this trade logs under and making it invisible to any
+            # "today" filter. Always refresh once the calendar day has actually
+            # rolled over. See the 2026-07-17 "profitable META trade missing
+            # from Trade Log" incident.
+            today_et = datetime.now(ET).date()
+            if self.session_date != today_et:
+                self.session_date = today_et
 
             eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:58")
+            try:
+                _, expiry_str = self._parse_occ_symbol(contract["symbol"])
+                is_zero_dte = datetime.strptime(expiry_str, "%Y-%m-%d").date() <= today_et
+            except Exception:
+                is_zero_dte = True  # unparseable — fail closed/safe, same as the stream-verify fix
             self.exit_manager = ExitManager(
                 entry_premium=entry_premium,
                 qty=qty,
@@ -929,6 +965,7 @@ class ORBEngine:
                 direction=direction,
                 eod_close_time=eod_time,
                 profile=effective_profile,
+                is_zero_dte=is_zero_dte,
             )
 
             # Use the override key when the user selected a profile at trade time
@@ -1005,7 +1042,8 @@ class ORBEngine:
             self.debug.emit("ERROR", f"Order submission failed: {e}")
             raise
 
-    def recover_position(self, row: dict) -> bool:
+    def recover_position(self, row: dict, broker_qty: float | None = None,
+                          broker_avg_entry_price: float | None = None) -> bool:
         """
         Reattach exit management to a position that's still open at the broker
         but whose in-memory state was lost to a process restart — every
@@ -1022,8 +1060,46 @@ class ORBEngine:
         Returns False (and does nothing) if there's nothing left to recover —
         e.g. qty_exited already caught up to qty_entered despite exit_time
         being null (shouldn't happen, but never re-arm a closed position).
+
+        broker_qty / broker_avg_entry_price: the position's actual qty and
+        cost basis at Alpaca (from _reconcile_trade_with_broker), used as
+        ground truth over the DB row when they disagree. Without this, a
+        divergence between what add_to_position() blended in memory and what
+        it actually persisted (a DB write can fail silently after the broker
+        order already filled) gets baked back in on every restart — the app
+        would keep showing a stale qty/entry forever even though Alpaca has
+        always known the real numbers. See the 2026-07-17 8-contracts-added-
+        showed-2-after-restart incident.
         """
-        qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
+        db_qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
+        qty_remaining = db_qty_remaining
+        entry_premium = float(row["entry_premium"])
+        qty_entered = int(row["qty_entered"])
+
+        if broker_qty is not None:
+            broker_qty_int = int(round(broker_qty))
+            if broker_qty_int != db_qty_remaining:
+                logger.warning(
+                    "[ORBEngine] Position recovery: %s broker qty=%d != DB "
+                    "qty_remaining=%d (qty_entered=%s qty_exited=%s) — trusting "
+                    "Alpaca as ground truth and correcting the DB row",
+                    row.get("contract_symbol"), broker_qty_int, db_qty_remaining,
+                    row.get("qty_entered"), row.get("qty_exited"),
+                )
+                qty_remaining = broker_qty_int
+                qty_entered = broker_qty_int + int(row.get("qty_exited") or 0)
+                if broker_avg_entry_price:
+                    entry_premium = broker_avg_entry_price
+                try:
+                    self.logger.log_add_to_position(
+                        trade_id=row["id"], entry_premium=entry_premium, qty_entered=qty_entered,
+                    )
+                except Exception:
+                    logger.error(
+                        "[ORBEngine] Failed to persist broker-reconciled qty for %s",
+                        row.get("contract_symbol"), exc_info=True,
+                    )
+
         if qty_remaining <= 0:
             return False
 
@@ -1047,14 +1123,20 @@ class ORBEngine:
         fib_levels.setdefault("orh", row.get("orh"))
         fib_levels.setdefault("orl", row.get("orl"))
         eod_time = EOD_CLOSE_TIMES.get(self.ticker, "15:58")
+        try:
+            _, expiry_str = self._parse_occ_symbol(row["contract_symbol"])
+            is_zero_dte = datetime.strptime(expiry_str, "%Y-%m-%d").date() <= datetime.now(ET).date()
+        except Exception:
+            is_zero_dte = True  # unparseable — fail closed/safe, same as the stream-verify fix
 
         self.exit_manager = ExitManager(
-            entry_premium=float(row["entry_premium"]),
-            qty=int(row["qty_entered"]),
+            entry_premium=entry_premium,
+            qty=qty_entered,
             fib_levels=fib_levels,
             direction=row["direction"],
             eod_close_time=eod_time,
             profile=profile,
+            is_zero_dte=is_zero_dte,
         )
         self.exit_manager.qty_remaining = qty_remaining
         try:
@@ -1442,13 +1524,16 @@ class ORBEngine:
         except Exception as e:
             logger.debug("[ORBEngine] market clock check failed, continuing: %s", e)
 
-        # No new manual entries in the final 30 minutes of the session — 0DTE
-        # theta/gamma in this window punishes discretionary entries too
-        # consistently to allow them (2026-07-06 daily review recommendation #4).
+        # Cutoff moved from 3:00 PM to 4:05 PM ET at the user's request — that's
+        # after the 4:00 PM market close, so combined with the is_open check
+        # above this no longer blocks anything during regular trading hours.
+        # Was originally a 30-min pre-close cutoff (2026-07-06 daily review
+        # recommendation #4, 0DTE theta/gamma risk); left in place rather than
+        # removed in case a tighter cutoff is wanted again later.
         now_et = datetime.now(ET)
-        cutoff = now_et.replace(hour=15, minute=0, second=0, microsecond=0)
+        cutoff = now_et.replace(hour=16, minute=5, second=0, microsecond=0)
         if now_et >= cutoff:
-            msg = "Manual trades are disabled in the final 30 minutes of the session (after 3:00 PM ET)"
+            msg = "Manual trades are disabled after 4:05 PM ET"
             self.debug.emit("WARN", f"Manual trade blocked — {msg}")
             return {"status": "error", "message": msg}
 
@@ -1503,8 +1588,26 @@ class ORBEngine:
                     f"Capital OK — ask=${ask:.2f} qty={qty} cost=${required:.0f} "
                     f"buying_power=${buying_power:.0f}")
 
-        # Verify the option can be streamed (same blind-trade guard as auto entry).
-        if self.stream_manager:
+        # Verify the option can be streamed (same blind-trade guard as auto entry)
+        # — but only for 0DTE. That guard exists because a 0DTE contract's price
+        # can move fast enough that entering without a live tick is genuinely
+        # blind; a multi-day swing/LEAPS hold has no such urgency, and a lower-
+        # volume far-dated contract may simply not print a WS tick within 8s
+        # even though it's perfectly tradeable off the REST snapshot bid/ask
+        # already fetched above. Gating swing entries on this blocked every one
+        # of them with "Real-time stream unavailable" (2026-07-17 incident) even
+        # though the stream is still subscribed normally right after entry, for
+        # ongoing exit management, regardless of this pre-check.
+        try:
+            _, expiry_str = self._parse_occ_symbol(contract["symbol"])
+            days_to_expiry = (
+                datetime.strptime(expiry_str, "%Y-%m-%d").date() - datetime.now(ET).date()
+            ).days
+        except Exception:
+            days_to_expiry = 0  # unparseable — treat as 0DTE, the stricter/safer default
+        is_zero_dte = days_to_expiry <= 0
+
+        if is_zero_dte and self.stream_manager:
             self.debug.emit("INFO",
                 f"Verifying stream for {contract['symbol']} (timeout=8s) ...")
             if not self.stream_manager.verify_stream(contract["symbol"], timeout=8.0):
@@ -1759,6 +1862,7 @@ class ORBEngine:
                 strategy_id=self.strategy_id,
                 underlying_price_exit=current_price,
                 trading_client=self.trading_client,
+                trade_id=self.active_trade_id,
             )
             self.notifier.notify_exit(
                 ticker=self.ticker,
@@ -1885,6 +1989,36 @@ class ORBEngine:
             em.runner_trail  = blended_entry
             em._tp1_ticks    = 0
 
+            # Persist the blend to orb_trades too, not just the in-memory
+            # ExitManager — otherwise log_exit() later recomputes realized P&L
+            # from the row's stale pre-add entry_premium/qty_entered, corrupting
+            # the Trade Log for this trade once it closes. This write is also
+            # what a restart's recover_position() reads back — if it silently
+            # fails, the order still filled at the broker and this response
+            # still reports success, but a restart before the next successful
+            # DB write will show the OLD qty. See docs/incidents/
+            # 2026-07-17-add-to-position-lost-on-restart.md.
+            db_persisted = False
+            if self.active_trade_id:
+                db_persisted = self.logger.log_add_to_position(
+                    trade_id=self.active_trade_id,
+                    entry_premium=blended_entry,
+                    qty_entered=em.qty,
+                    hard_stop_price=em.hard_stop,
+                    tp1_price=em.tp1,
+                    tp2_price=em.tp2,
+                )
+
+            if not db_persisted:
+                msg = (
+                    f"Add-to-position filled at the broker (qty {old_qty_held}→{new_qty_held} "
+                    f"of {contract}) but the DB row did NOT persist the new qty/entry — a "
+                    f"restart before the next successful write will show qty={old_qty_held} "
+                    f"again. Check Railway logs / Supabase connectivity."
+                )
+                logger.error("[ORBEngine] %s", msg)
+                self.debug.emit("ERROR", msg)
+
             self.debug.emit(
                 "INFO",
                 f"Added {qty} of {contract} @ ${fill_price:.2f} — entry ${old_entry:.2f}→"
@@ -1898,6 +2032,7 @@ class ORBEngine:
                 "fill_price":        round(fill_price, 4),
                 "new_entry_premium": round(blended_entry, 4),
                 "qty_remaining":     new_qty_held,
+                "db_persisted":      db_persisted,
                 "exit_state":        em.to_dict(),
             }
 
@@ -2020,15 +2155,35 @@ class ORBEngine:
             return
 
         # Bar-close confirmation: after the 3-minute OrbService signal the engine
-        # waits for the first 1-minute bar to CLOSE on the correct side of the ORH/ORL
-        # before entering.  A wick or momentary tick above the level is not enough.
+        # waits for a 1-minute bar to CLOSE on the correct side of the ORH/ORL
+        # before entering. A wick or momentary tick above the level is not enough.
+        # A failed bar re-arms (up to max_retest_attempts) rather than giving up
+        # after a single fakeout bar — mirrors the ORH/ORL retest cap upstream.
         if getattr(self, "_bar_confirm_pending", False) and not self.trade_taken:
             direction = self._bar_confirm_direction or ""
             orh = self.orh or 0.0
             orl = self.orl or 0.0
-            confirmed = bar.close > orh if direction == "CALL" else bar.close < orl
-            level_str = f"{orh:.2f}" if direction == "CALL" else f"{orl:.2f}"
+            level = orh if direction == "CALL" else orl
+            level_str = f"{level:.2f}"
             side_str  = "above ORH" if direction == "CALL" else "below ORL"
+            confirmed = bar.close > level if direction == "CALL" else bar.close < level
+
+            # Track the best price reached (correct side) even on a bar that
+            # ultimately closes back inside the range — purely informational,
+            # but useful in the debug log to see how close a retry came.
+            touched_correct_side = (
+                (direction == "CALL" and bar.high is not None and bar.high > level) or
+                (direction == "PUT" and bar.low is not None and bar.low < level)
+            )
+            if touched_correct_side:
+                touch_price = bar.high if direction == "CALL" else bar.low
+                if self._bar_confirm_extension is None:
+                    self._bar_confirm_extension = touch_price
+                elif direction == "CALL":
+                    self._bar_confirm_extension = max(self._bar_confirm_extension, touch_price)
+                else:
+                    self._bar_confirm_extension = min(self._bar_confirm_extension, touch_price)
+
             if confirmed:
                 self.debug.emit("SUCCESS",
                     f"Bar-close confirmed {direction} breakout — "
@@ -2036,14 +2191,25 @@ class ORBEngine:
                 self._bar_confirm_pending   = False
                 self._bar_confirm_direction = None
                 self._enter_trade(direction, bar.close)
-            else:
+                return
+
+            max_attempts = self.profile.get("max_retest_attempts", 1)
+            if self._bar_confirm_attempt >= max_attempts:
                 self.debug.emit("WARN",
                     f"Bar-close fakeout — {direction} pending but bar closed at "
-                    f"{bar.close:.2f}, did not clear {'ORH' if direction == 'CALL' else 'ORL'} "
-                    f"{level_str} — entry cancelled")
+                    f"{bar.close:.2f}, did not clear {level_str} — exhausted after "
+                    f"{self._bar_confirm_attempt} retry(ies), entry cancelled")
                 self._bar_confirm_pending   = False
                 self._bar_confirm_direction = None
                 self._bar_confirm_price     = None
+                self._bar_confirm_extension = None
+            else:
+                self._bar_confirm_attempt += 1
+                self.debug.emit("WARN",
+                    f"Bar-close fakeout — {direction} pending but bar closed at "
+                    f"{bar.close:.2f}, did not clear {level_str} — re-armed "
+                    f"(attempt {self._bar_confirm_attempt}/{max_attempts}), "
+                    f"best reach so far {self._bar_confirm_extension:.2f}")
             return
 
         self.on_price_tick(

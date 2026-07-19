@@ -2,7 +2,6 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, SafeAreaView,
   ActivityIndicator, RefreshControl, StyleSheet,
-  Modal, KeyboardAvoidingView, Platform, StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -14,14 +13,13 @@ import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySes
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useOrbServiceAlert } from '@/hooks/useOrbServiceAlert';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
-import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import {
   ORBNotificationModal,
   type ORBBreakoutNotificationData,
 } from '@/common/components/FEED/modals/ORBNotificationModal';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ImmediatePosition } from '@/common/types/strategy';
-import { formatContractSymbolShort } from '@/lib/formatContract';
+import { formatContractSymbolShort, getTradeHorizon, TRADE_HORIZON_RANK } from '@/lib/formatContract';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -123,6 +121,11 @@ function StrategyPositionCard({
                 {isLive ? 'LIVE' : 'PAPER'}
               </Text>
             </View>
+            {pos.contract && getTradeHorizon(pos.contract) === 'SWING' && (
+              <View style={[styles.badge, { backgroundColor: '#6366F122' }]}>
+                <Text style={[styles.badgeText, { color: '#6366F1' }]}>SWING</Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -223,6 +226,11 @@ function ImmediatePositionCard({
                 {isLive ? 'LIVE' : 'PAPER'}
               </Text>
             </View>
+            {pos.contract && getTradeHorizon(pos.contract) === 'SWING' && (
+              <View style={[styles.badge, { backgroundColor: '#6366F122' }]}>
+                <Text style={[styles.badgeText, { color: '#6366F1' }]}>SWING</Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -353,6 +361,30 @@ const DashboardScreen = () => {
   const liveImm    = useMemo(() => activeImm.filter(p => p.paper_mode === false),    [activeImm]);
   const paperImm   = useMemo(() => activeImm.filter(p => p.paper_mode !== false),    [activeImm]);
 
+  // Combined + sorted so a swing trade never ranks above a 0DTE/weekly one —
+  // sort is stable, so saved-strategy vs immediate order is otherwise
+  // unchanged within the same horizon tier.
+  type CombinedPos = { kind: 'strat'; pos: PositionEntry } | { kind: 'imm'; pos: ImmediatePosition };
+  const byHorizon = (items: CombinedPos[]) =>
+    [...items].sort((a, b) =>
+      TRADE_HORIZON_RANK[getTradeHorizon(a.pos.contract ?? '')] -
+      TRADE_HORIZON_RANK[getTradeHorizon(b.pos.contract ?? '')],
+    );
+  const liveCombined = useMemo(
+    () => byHorizon([
+      ...liveStrat.map(pos => ({ kind: 'strat' as const, pos })),
+      ...liveImm.map(pos => ({ kind: 'imm' as const, pos })),
+    ]),
+    [liveStrat, liveImm],
+  );
+  const paperCombined = useMemo(
+    () => byHorizon([
+      ...paperStrat.map(pos => ({ kind: 'strat' as const, pos })),
+      ...paperImm.map(pos => ({ kind: 'imm' as const, pos })),
+    ]),
+    [paperStrat, paperImm],
+  );
+
   const totalLive   = liveStrat.length + liveImm.length;
   const totalPaper  = paperStrat.length + paperImm.length;
   const totalActive = totalLive + totalPaper;
@@ -373,15 +405,7 @@ const DashboardScreen = () => {
     return vals.reduce((a, b) => a + b, 0);
   }, [sessionStates]);
 
-  // ── Ticker options for immediate trade panel ────────────────────────────
-  const tickerOptions = useMemo(() => {
-    const fromOrb = (orbData ?? []).map((d: any) => d.ticker as string).filter(Boolean);
-    const all = Array.from(new Set(fromOrb.length ? fromOrb : ['SPY', 'QQQ', 'IWM']));
-    return all.sort();
-  }, [orbData]);
-
   // ── Panel / exit state ────────────────────────────────────────────────────
-  const [tradePanelVisible, setTradePanelVisible] = useState(false);
   const [exitTarget, setExitTarget] = useState<ExitTarget | null>(null);
 
   // ── ORB notification modal ────────────────────────────────────────────────
@@ -448,15 +472,6 @@ const DashboardScreen = () => {
                 </Text>
               </View>
             )}
-            <TouchableOpacity
-              onPress={() => setTradePanelVisible(true)}
-              style={[styles.quickTradeBtn, { backgroundColor: colors.accent }]}
-            >
-              <Ionicons name="flash" size={14} color={colors.accentForeground} />
-              <Text style={[styles.quickTradeBtnText, { color: colors.accentForeground }]}>
-                Trade
-              </Text>
-            </TouchableOpacity>
           </View>
         </View>
 
@@ -550,11 +565,10 @@ const DashboardScreen = () => {
                     {totalLive} active
                   </Text>
                 </View>
-                {liveStrat.map(pos => (
-                  <StrategyPositionCard key={pos.strategy_id} pos={pos} colors={colors} onExit={setExitTarget} />
-                ))}
-                {liveImm.map(pos => (
-                  <ImmediatePositionCard key={pos.strategy_id} pos={pos} colors={colors} onExit={setExitTarget} />
+                {liveCombined.map(item => item.kind === 'strat' ? (
+                  <StrategyPositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
+                ) : (
+                  <ImmediatePositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
                 ))}
               </>
             )}
@@ -569,11 +583,10 @@ const DashboardScreen = () => {
                     {totalPaper} active
                   </Text>
                 </View>
-                {paperStrat.map(pos => (
-                  <StrategyPositionCard key={pos.strategy_id} pos={pos} colors={colors} onExit={setExitTarget} />
-                ))}
-                {paperImm.map(pos => (
-                  <ImmediatePositionCard key={pos.strategy_id} pos={pos} colors={colors} onExit={setExitTarget} />
+                {paperCombined.map(item => item.kind === 'strat' ? (
+                  <StrategyPositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
+                ) : (
+                  <ImmediatePositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
                 ))}
               </>
             )}
@@ -599,41 +612,6 @@ const DashboardScreen = () => {
           }}
         />
       )}
-
-      {/* ── Immediate trade panel — full pageSheet modal ─────────────────── */}
-      <Modal
-        visible={tradePanelVisible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => { setTradePanelVisible(false); refresh(); }}
-      >
-        <StatusBar barStyle="light-content" />
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={[styles.panelModal, { backgroundColor: colors.background }]}
-        >
-          {/* Header */}
-          <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
-            <TouchableOpacity
-              onPress={() => { setTradePanelVisible(false); refresh(); }}
-              hitSlop={12}
-              style={{ width: 64 }}
-            >
-              <Text style={[styles.panelClose, { color: colors.accent }]}>Close</Text>
-            </TouchableOpacity>
-            <Text style={[styles.panelTitle, { color: colors.text }]}>Immediate Trade</Text>
-            <View style={{ width: 64 }} />
-          </View>
-
-          {/* Panel fills the rest */}
-          <ImmediateTradePanel
-            colors={colors}
-            tickerOptions={tickerOptions}
-            visible={tradePanelVisible}
-            onClose={() => { setTradePanelVisible(false); refresh(); }}
-          />
-        </KeyboardAvoidingView>
-      </Modal>
 
       {/* ── ORB notification modal ───────────────────────────────────────── */}
       <ORBNotificationModal
@@ -667,9 +645,6 @@ const styles = StyleSheet.create({
   headerRight:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
   streamDot:     { width: 6, height: 6, borderRadius: 3 },
   streamLabel:   { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
-  quickTradeBtn: { flexDirection: 'row', alignItems: 'center', gap: 4,
-                   paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10 },
-  quickTradeBtnText: { fontSize: 13, fontWeight: '700' },
   sessionPnlBadge: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   sessionPnlText:  { fontSize: 12, fontWeight: '700' },
 
@@ -691,14 +666,6 @@ const styles = StyleSheet.create({
                    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   activeDot:     { width: 5, height: 5, borderRadius: 3 },
   activeBadgeText: { fontSize: 10, fontWeight: '700' },
-
-  // ── Trade panel modal ──
-  panelModal:    { flex: 1 },
-  panelHeader:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-                   paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12,
-                   borderBottomWidth: StyleSheet.hairlineWidth },
-  panelClose:    { fontSize: 15, fontWeight: '600' },
-  panelTitle:    { fontSize: 17, fontWeight: '700', textAlign: 'center' },
 
   tilesRow:      { paddingBottom: 4, paddingRight: 4 },
   tile:          { borderRadius: 14, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 14,

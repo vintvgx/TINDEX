@@ -304,6 +304,28 @@ class StrategyNotifier:
             priority=P_MARKET,
         )
 
+    def notify_expiry_reminder(self, contract_symbol: str, days_to_expiry: int,
+                                milestone: str, qty: int, direction: str):
+        """
+        Heads-up that an open (typically swing/LEAPS) position is approaching
+        its own expiration — purely informational, no automatic action taken.
+        Added after EOD auto-close was scoped to 0DTE-only (2026-07-17): the
+        app no longer force-closes a multi-day hold, so this is the
+        replacement safety net — a reminder, not a forced exit.
+        """
+        milestone_label = {
+            "week":     "expires this week",
+            "two_day":  "expires in 2 days",
+            "one_day":  "expires tomorrow",
+        }.get(milestone, f"expires in {days_to_expiry}d")
+        readable = _fmt_contract(contract_symbol)
+        self._dispatch(
+            title=f"⏳ {readable} — {milestone_label}",
+            body=f"{direction} · {qty} contract(s) · {days_to_expiry} day(s) to expiration.",
+            data={"screen": "position", "symbol": contract_symbol, "type": "expiry_reminder"},
+            priority=P_MARKET,
+        )
+
     def notify_stream_failed(self, ticker: str, contract_symbol: str):
         """Option stream could not be verified — trade skipped."""
         self._dispatch(

@@ -112,6 +112,8 @@ export function useToggleORBFollow(ticker?: string) {
             ticker: normalizedTicker,
             orb_enabled: true,
             notification_enabled: true,
+            notify_confirmed_breakout: true,
+            notify_reversal: true,
           })
           .select()
           .single();
@@ -161,7 +163,7 @@ export function useUserORBFollows() {
 }
 
 /**
- * Hook to manage notification settings for ORB follows
+ * Hook to manage the overall notification switch for an ORB follow
  */
 export function useUpdateORBNotifications(ticker: string) {
   const {
@@ -177,6 +179,52 @@ export function useUpdateORBNotifications(ticker: string) {
         .from("user_stock_follows")
         .update({
           notification_enabled: notificationEnabled,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", user.id)
+        .eq("ticker", ticker.toUpperCase())
+        .eq("orb_enabled", true)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["followTickerORB", ticker, user?.id],
+      });
+    },
+  });
+}
+
+/** Per-ticker notification types a user can independently enable/disable. */
+export interface ORBNotificationTypePrefs {
+  notify_confirmed_breakout: boolean;
+  notify_reversal: boolean;
+}
+
+/**
+ * Hook to manage which specific notification types fire for a single followed
+ * ORB ticker (e.g. "Breakout Confirmed" vs "Reversal Detected"). Distinct from
+ * useUpdateORBNotifications, which is the coarse on/off switch for the follow
+ * as a whole — these two columns gate individual push types on the backend
+ * (see OrbService.get_eligible_users' notification_type param).
+ */
+export function useUpdateORBNotificationTypes(ticker: string) {
+  const {
+    authState: { user },
+  } = useAuth();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (prefs: Partial<ORBNotificationTypePrefs>) => {
+      if (!user) throw new Error("User not authenticated");
+
+      const { data, error } = await supabase
+        .from("user_stock_follows")
+        .update({
+          ...prefs,
           updated_at: new Date().toISOString(),
         })
         .eq("user_id", user.id)

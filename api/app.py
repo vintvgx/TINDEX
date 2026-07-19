@@ -232,6 +232,40 @@ try:
     except Exception as _orb_boot_err:
         logger.warning("[App] ORB hub auto-start at boot failed: %s", _orb_boot_err)
 
+    # Same self-heal, same reason, for the social-signal ingest loop — it had
+    # no boot-time backstop at all until now, so it silently stopped polling
+    # on every redeploy and stayed off until someone noticed and manually hit
+    # /social-signals/start (2026-07-17 incident: ~15 same-day deploys left
+    # it dead for hours with zero visible symptom in the app).
+    try:
+        from routes.social_routes import start_signal_ingest_core as _start_social_ingest
+        _start_social_result, _ = _start_social_ingest()
+        logger.info("[App] Social signal ingest auto-start at boot: %s", _start_social_result.get("message"))
+    except Exception as _social_boot_err:
+        logger.warning("[App] Social signal ingest auto-start at boot failed: %s", _social_boot_err)
+
+    # Same self-heal, same reason, for the options contract monitor — it also
+    # had no boot-time backstop, so a mid-session redeploy silently stopped
+    # monitoring every tracked contract until someone noticed and manually hit
+    # /contracts/monitor/start.
+    try:
+        from routes.monitoring_routes import start_contracts_monitor_core as _start_contracts_monitor
+        _start_contracts_result = _start_contracts_monitor()
+        logger.info("[App] Options contract monitor auto-start at boot: %s", _start_contracts_result.get("message"))
+    except Exception as _contracts_boot_err:
+        logger.warning("[App] Options contract monitor auto-start at boot failed: %s", _contracts_boot_err)
+
+    # Daily 9 AM ET heads-up (1 day / 2 days / this week) for any open position
+    # approaching its own expiration — the replacement for the blanket EOD
+    # auto-close now that it's scoped to 0DTE only (2026-07-17). A single
+    # global job, not per-engine, since it scans every open orb_trades row.
+    try:
+        from services.strategy.scheduler import schedule_expiry_reminders as _schedule_expiry_reminders
+        _schedule_expiry_reminders()
+        logger.info("[App] Expiry reminder job scheduled at boot")
+    except Exception as _expiry_boot_err:
+        logger.warning("[App] Expiry reminder job scheduling failed: %s", _expiry_boot_err)
+
     @sock.route("/ws/strategy/<strategy_id>/live")
     def ws_strategy_live(ws, strategy_id: str):
         import queue as _queue

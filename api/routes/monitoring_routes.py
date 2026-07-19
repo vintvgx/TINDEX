@@ -214,20 +214,22 @@ def get_orb_status():
 
 # ── Options contract monitor routes ──────────────────────────────────────────
 
-@bp.route("/contracts/monitor/start", methods=["POST"])
-def start_contracts_monitor():
+def start_contracts_monitor_core(debug_mode: bool = False) -> dict:
+    """
+    Core start logic shared by the /contracts/monitor/start route and app.py's
+    boot-time auto-start — same fix as start_orb_service /
+    start_signal_ingest_core above/in social_routes.py (see start_orb_service's
+    docstring for the 2026-07-09 incident this pattern exists to prevent).
+    OPTIONS_MONITOR_SERVICE is a plain in-process global with no cron backstop,
+    so a mid-session Railway restart (redeploy, platform restart, crash) wipes
+    it to None with nothing to bring it back until someone notices tracked
+    contracts have stopped being monitored and manually hits this route again.
+    """
     global OPTIONS_MONITOR_SERVICE, OPTIONS_MONITOR_TASK
-
-    debug_mode = request.args.get("debug", "").lower() == "true"
-    try:
-        body = request.get_json(silent=True) or {}
-        debug_mode = debug_mode or bool(body.get("debug", False))
-    except Exception:
-        pass
 
     with options_monitor_lock:
         if OPTIONS_MONITOR_SERVICE and OPTIONS_MONITOR_SERVICE.is_running:
-            return jsonify({"message": "Options contract monitor already running"})
+            return {"message": "Options contract monitor already running", "already_running": True}
 
     OPTIONS_MONITOR_SERVICE = get_options_contract_monitor()
     if debug_mode:
@@ -246,7 +248,20 @@ def start_contracts_monitor():
     message = "Options contract monitor started"
     if debug_mode:
         message += " (DEBUG MODE: market hours check bypassed)"
-    return jsonify({"success": True, "message": message, "debug_mode": debug_mode})
+    return {"success": True, "message": message, "debug_mode": debug_mode}
+
+
+@bp.route("/contracts/monitor/start", methods=["POST"])
+def start_contracts_monitor():
+    debug_mode = request.args.get("debug", "").lower() == "true"
+    try:
+        body = request.get_json(silent=True) or {}
+        debug_mode = debug_mode or bool(body.get("debug", False))
+    except Exception:
+        pass
+
+    result = start_contracts_monitor_core(debug_mode=debug_mode)
+    return jsonify(result)
 
 
 @bp.route("/contracts/monitor/stop", methods=["POST"])

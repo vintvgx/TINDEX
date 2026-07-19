@@ -208,7 +208,11 @@ def recover_open_positions():
                 )
                 continue
 
-            if engine.recover_position(row):
+            if engine.recover_position(
+                row,
+                broker_qty=broker_result.get("broker_qty"),
+                broker_avg_entry_price=broker_result.get("broker_avg_entry_price"),
+            ):
                 recovered += 1
         except Exception as e:
             logger.error(
@@ -235,8 +239,18 @@ def _reconcile_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
     """
     symbol = row.get("contract_symbol")
     try:
-        engine.trading_client.get_open_position(symbol)
-        return {"contract_symbol": symbol, "status": "still_open"}
+        position = engine.trading_client.get_open_position(symbol)
+        # Return the broker's actual qty/avg-entry-price too — not just proof
+        # the position exists. recover_position() uses these as ground truth
+        # over the DB row, since qty_entered/entry_premium can silently drift
+        # from what's really at the broker (e.g. an add_to_position() DB write
+        # that failed after the order itself already filled).
+        return {
+            "contract_symbol":        symbol,
+            "status":                 "still_open",
+            "broker_qty":             float(position.qty),
+            "broker_avg_entry_price": float(position.avg_entry_price),
+        }
     except Exception:
         pass  # not found at the broker -> already closed there
 
@@ -265,12 +279,19 @@ def _reconcile_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
     # same convention TradeLogger.reconcile_orphaned_trades already uses for
     # "we know it closed but not at what price" rather than fabricating a
     # gain/loss that didn't happen.
-    logger_svc.log_exit(
+    exit_persisted = logger_svc.log_exit(
         symbol, exit_reason,
         exit_price if exit_price is not None else row.get("entry_premium"),
         qty_remaining, row.get("profile"),
         strategy_id=row.get("strategy_id"), trading_client=engine.trading_client,
+        trade_id=row.get("id"),
     )
+    if not exit_persisted:
+        logger.error(
+            "[reconcile] log_exit did not persist for %s (id=%s) — this row will "
+            "still show as open next time and re-trigger reconciliation",
+            symbol, row.get("id"),
+        )
 
     if engine.contract_symbol == symbol:
         try:
@@ -280,7 +301,7 @@ def _reconcile_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
 
     return {
         "contract_symbol": symbol,
-        "status": "reconciled",
+        "status": "reconciled" if exit_persisted else "reconcile_failed",
         "exit_reason": exit_reason,
         "exit_premium": exit_price,
     }
@@ -539,6 +560,7 @@ def force_close_strategy(strategy_id: str):
             qty, engine.profile_key,
             strategy_id=engine.strategy_id,
             trading_client=engine.trading_client,
+            trade_id=engine.active_trade_id,
         )
         engine.notifier.notify_exit(
             ticker=engine.ticker,
@@ -1479,9 +1501,6 @@ def trigger_review():
             content, meta = gen.generate(session_date, paper_mode)
             trades = gen._fetch_trades(session_date, paper_mode)
             gen.save_to_supabase(session_date, content, trades, meta, paper_mode)
-            StrategyNotifier(sb).notify_review_ready(
-                str(session_date), meta["trade_count"], meta["net_pnl"], paper_mode,
-            )
             return jsonify({
                 "success": True,
                 "date": str(session_date),

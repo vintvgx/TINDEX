@@ -132,10 +132,7 @@ class OrbService:
         
         # Expo push URL
         self.expo_push_url = "https://exp.host/--/api/v2/push/send"
-        
-        # Breakout confirmation timers: {ticker: asyncio.Task}
-        self._confirmation_timers: Dict[str, asyncio.Task] = {}
-    
+
         # Bar history for VWAP calculation and reversal detection
         # {ticker: [StockBar, ...]} - stores recent bars (max 100 bars per ticker)
         self._bar_history: Dict[str, list] = {}
@@ -163,6 +160,21 @@ class OrbService:
         self._rev_state: Dict[str, Dict] = {}
         # Minimum composite score (out of 5) required to fire a reversal entry.
         self._reversal_fire_threshold = 3
+
+        # Retest/reclaim state machine: replaces the old one-way high_broken/
+        # low_broken latch. Per ticker, per side ("high"/"low"):
+        #   UNBROKEN -> BROKEN (first break, needs 3-min hold) -> CONFIRMED
+        #                  |
+        #                  v (price falls back inside range before confirming)
+        #             RETESTING (re-armed, capped at _max_retest_attempts) -> CONFIRMED
+        #                  |
+        #                  v (cap exhausted)
+        #             EXHAUSTED (dead for the rest of the session)
+        # {ticker: {"high": {...}, "low": {...}}}
+        self._retest_state: Dict[str, Dict] = {}
+        # One retry after the first invalidation before a level is written off
+        # for the rest of the session — bounds re-arming against choppy PA.
+        self._max_retest_attempts = 1
     
     def get_current_et_time(self) -> datetime:
         """Get current time in ET timezone"""
@@ -1186,11 +1198,12 @@ class OrbService:
             # Get current state from cache (NO DATABASE CALL)
             cache_state = self._state_cache.get_or_create_state(ticker, trade_date)
             
-            # Maintain backward compatibility with monitoring_state dict for breakout tracking
+            # Maintain backward compatibility with monitoring_state dict (still read
+            # by record_breakout()/the reversal-reset path and mirrored to the cache
+            # for the ORBDetailModal "High/Low Broken" badges).
             if ticker not in self.monitoring_state:
                 self.monitoring_state[ticker] = {"high_broken": cache_state.high_broken, "low_broken": cache_state.low_broken}
-            state = self.monitoring_state[ticker]
-            
+
             # PRIORITY 1: Check if price is currently Bullish (above ORH) or Bearish (below ORL)
             # This takes priority over reversal detection
 
@@ -1198,37 +1211,28 @@ class OrbService:
             is_above_orb_high = current_price > float(orb_high)
             is_below_orb_low = current_price < float(orb_low)
             is_within_orb = float(orb_low) <= current_price <= float(orb_high)
-            
-            # Update breakout_type based on current price position (prioritize this)
-            breakout_type_to_set = None
-            if is_above_orb_high:
-                # Price is above ORB high - set to Bullish
-                breakout_type_to_set = "Bullish"
-                # Mark high as broken if not already
-                if not state["high_broken"]:
-                    logger.info(
-                        f"[BREAKOUT DETECTED] {ticker} above ORB high! "
-                        f"Current Price={current_price:.2f}, ORB High={orb_high:.2f}"
-                    )
-                    await self.record_breakout(ticker, "above", bar_close, bar_data=stock_bar)
-            elif is_below_orb_low:
-                # Price is below ORB low - set to Bearish
-                breakout_type_to_set = "Bearish"
-                # Mark low as broken if not already
-                if not state["low_broken"]:
-                    logger.info(
-                        f"[BREAKOUT DETECTED] {ticker} below ORB low! "
-                        f"Current Price={current_price:.2f}, ORB Low={orb_low:.2f}"
-                    )
-                    await self.record_breakout(ticker, "below", bar_close, bar_data=stock_bar)
-            elif is_within_orb:
+
+            # Bar-driven break/retest/confirm state machine — every bar re-evaluates
+            # both sides so a fresh cross into either direction is picked up the
+            # instant it happens (no separate sleeping timer task to race with).
+            high_label = await self._process_breakout_side(
+                ticker, "high", is_above_orb_high, current_price,
+                bar_close, stock_bar, orb_high, orb_low,
+            )
+            low_label = await self._process_breakout_side(
+                ticker, "low", is_below_orb_low, current_price,
+                bar_close, stock_bar, orb_high, orb_low,
+            )
+            breakout_type_to_set = high_label or low_label
+
+            if breakout_type_to_set is None and is_within_orb:
                 # Price is within ORB - MUST set to "none" or keep reversal if active
                 # Never show Bullish/Bearish when price is within ORB
                 # Get current state from cache (NO DATABASE CALL)
                 current_state = self._state_cache.get_state(ticker, trade_date)
-                
+
                 current_breakout_type = current_state.breakout_type if current_state else None
-                
+
                 # If price is within ORB, only keep "reversal" if active, otherwise set to "none"
                 # Never keep "Bullish" or "Bearish" when price is within ORB
                 if current_breakout_type == "reversal":
@@ -1329,6 +1333,8 @@ class OrbService:
                         if ticker in self.monitoring_state:
                             self.monitoring_state[ticker]["high_broken"] = False
                             self.monitoring_state[ticker]["low_broken"] = False
+                        self._reset_side_state(ticker, "high")
+                        self._reset_side_state(ticker, "low")
                         self._state_cache.update_state(
                             ticker=ticker,
                             trade_date=trade_date,
@@ -1339,15 +1345,173 @@ class OrbService:
                         )
                         self._rev_state.pop(ticker, None)
     
+    def _reset_side_state(self, ticker: str, side: str) -> None:
+        """Reset one side (high/low) of the retest state machine back to UNBROKEN."""
+        self._retest_state.setdefault(ticker, {})[side] = {
+            "state": "UNBROKEN",
+            "extension": None,
+            "retest_count": 0,
+            "confirm_deadline": None,
+            "reclaim_bar_seen": False,
+        }
+
+    def _get_side_state(self, ticker: str, side: str) -> Dict:
+        """Per-ticker, per-direction retest state. Lazily created as UNBROKEN."""
+        ticker_state = self._retest_state.setdefault(ticker, {})
+        if side not in ticker_state:
+            self._reset_side_state(ticker, side)
+        return ticker_state[side]
+
+    async def _process_breakout_side(
+        self,
+        ticker: str,
+        side: str,
+        is_over: bool,
+        current_price: float,
+        bar_close: Decimal,
+        stock_bar: StockBar,
+        orb_high: float,
+        orb_low: float,
+    ) -> Optional[str]:
+        """
+        Bar-driven break/retest/confirm state machine for one ORB level (ORH or
+        ORL). Runs on every bar so invalidation and confirmation are detected as
+        soon as a bar shows them, rather than sampling price once at a fixed
+        timer expiry. See the UNBROKEN -> BROKEN -> RETESTING -> CONFIRMED /
+        EXHAUSTED diagram on self._retest_state.
+
+        Confirmation rules:
+        - Original break (first attempt this session): must hold outside the
+          range for a full 3 minutes — no other signal exists yet to trust it.
+        - Retest reclaim that clears the prior extension (the highest/lowest
+          point the price reached before it got rejected): confirms immediately
+          — clearing that level is itself the confirmation signal, no need to
+          re-derive it with a timer.
+        - Retest reclaim that merely crosses back over ORH/ORL without clearing
+          the prior extension: needs one full bar close on the correct side
+          before confirming, cheaper than the original 3-minute wait since this
+          attempt already has more information behind it than the first break.
+
+        Returns the breakout_type label to display for this bar, or None if
+        nothing changed (caller leaves the existing display state alone).
+        """
+        st = self._get_side_state(ticker, side)
+        if st["state"] in ("CONFIRMED", "EXHAUSTED"):
+            # CONFIRMED is owned by the separate reversal-scoring pathway from
+            # here on; EXHAUSTED never re-arms — that's the whole point of the cap.
+            return None
+
+        bullish = side == "high"
+        direction = "above" if bullish else "below"
+        display_label = "Bullish" if bullish else "Bearish"
+
+        if is_over:
+            # Track the running extension (best price reached) continuously —
+            # this is the benchmark a later retest must reclaim to fast-confirm.
+            if st["extension"] is None:
+                st["extension"] = current_price
+            elif bullish:
+                st["extension"] = max(st["extension"], current_price)
+            else:
+                st["extension"] = min(st["extension"], current_price)
+
+            if st["state"] == "UNBROKEN":
+                st["state"] = "BROKEN"
+                st["confirm_deadline"] = self.get_current_et_time() + timedelta(seconds=180)
+                logger.info(
+                    f"[BREAKOUT DETECTED] {ticker} {direction} ORB! "
+                    f"Current Price={current_price:.2f}"
+                )
+                await self.record_breakout(ticker, direction, bar_close, bar_data=stock_bar)
+                return display_label
+
+            if st["state"] == "BROKEN":
+                if self.get_current_et_time() >= st["confirm_deadline"]:
+                    await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
+                    st["state"] = "CONFIRMED"
+                    return f"Confirmed {display_label}"
+                return None  # still waiting out the original 3-minute hold
+
+            if st["state"] == "RETESTING":
+                reclaimed_extension = (
+                    current_price >= st["extension"] if bullish else current_price <= st["extension"]
+                )
+                if reclaimed_extension:
+                    # Didn't just reclaim the level — erased the entire rejection.
+                    # That's self-confirming; no need to also wait out a bar.
+                    await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
+                    st["state"] = "CONFIRMED"
+                    return f"Confirmed {display_label}"
+                if not st["reclaim_bar_seen"]:
+                    st["reclaim_bar_seen"] = True
+                    return f"Retesting {display_label}"
+                await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
+                st["state"] = "CONFIRMED"
+                return f"Confirmed {display_label}"
+
+        else:
+            # Price is back on the wrong side of the level for this direction.
+            if st["state"] in ("BROKEN", "RETESTING"):
+                st["reclaim_bar_seen"] = False
+                if st["retest_count"] >= self._max_retest_attempts:
+                    st["state"] = "EXHAUSTED"
+                    logger.info(
+                        f"[RETEST] {ticker} {direction} exhausted after "
+                        f"{st['retest_count']} retest(s) — no further re-arm this session"
+                    )
+                    return "invalidated"
+                st["retest_count"] += 1
+                st["state"] = "RETESTING"
+                logger.info(
+                    f"[RETEST] {ticker} {direction} invalidated — re-armed "
+                    f"(attempt {st['retest_count']}/{self._max_retest_attempts}), "
+                    f"extension so far {st['extension']:.2f}"
+                )
+                return f"Retesting {display_label}"
+
+        return None
+
+    async def _confirm_breakout(self, ticker: str, direction: str, current_price: float, orb_high: float, orb_low: float):
+        """
+        Fire entry: publish to the strategy engines, arm reversal scoring, and
+        send the (single, actionable) confirmation push. Shared by the original
+        3-minute hold and the retest fast-confirm paths — the engines don't care
+        which path produced the confirmation, only that one did.
+        """
+        engine_direction = "CALL" if direction == "above" else "PUT"
+        logger.info(
+            f"[BREAKOUT CONFIRMED] {ticker} {direction} confirmed @ ${current_price:.2f} "
+            f"(ORB High=${orb_high:.2f}, ORB Low=${orb_low:.2f})"
+        )
+
+        self._hub.publish_breakout_confirmed(ticker, engine_direction, float(current_price))
+
+        # Arm reversal scoring for this ticker. Per-bar scoring starts on the
+        # next bar via handle_bar → _score_reversal. Clears any stale state
+        # from a previous breakout on the same day.
+        self._rev_state[ticker] = {
+            "direction":          engine_direction,
+            "score":              0,
+            "signals_hit":        set(),
+            "max_extension":      0.0,
+            "consec_wrong_side":  0,
+            "bars_counted":       0,
+            "fired":              False,
+            "worst_wrong_close":  None,
+            "prev_wrong_close":   None,
+            "consec_recovery":    0,
+        }
+        logger.info("[REV] %s reversal scoring armed (original=%s)", ticker, engine_direction)
+
+        await self.send_confirmation_notification(ticker, direction, current_price, orb_high, orb_low)
+
     async def record_breakout(self, ticker: str, breakout_type: str, price: Decimal, bar_data: Optional[StockBar] = None):
         """
-        Record a breakout event and trigger notifications with enhanced breakout analysis.
-        
-        Architecture:
-        - Evaluates breakout quality using BreakoutConfirmation
-        - Fetches market data (VWAP, ATR, avg volume) for scoring
-        - Sends initial notification with detailed metrics
-        - Starts 3-minute confirmation timer
+        Record a breakout event: log it to orb_breakouts for analytics and
+        update monitoring state. Does NOT notify or start a confirmation timer
+        — confirmation is now driven per-bar by _process_breakout_side(), and
+        per-transition push notifications were removed in favor of the ORB
+        card reflecting live state via Supabase realtime.
         """
         try:
             trade_date = self.get_current_et_time().date()
@@ -1404,18 +1568,7 @@ class OrbService:
                 breakout_record["prior_day_trend"] = prior_day_trend
                 breakout_record["trend_continuation"] = trend_continuation
                 breakout_record["breakout_aligns_gap"] = breakout_aligns_gap
-            
-            gap_context = None
-            if gap_direction is not None:
-                gap_context = {
-                    "gap_percent": orb_data.get("gap_percent"),
-                    "gap_points": orb_data.get("gap_points"),
-                    "gap_direction": gap_direction,
-                    "prior_day_trend": prior_day_trend,
-                    "trend_continuation": trend_continuation,
-                    "breakout_aligns_gap": breakout_aligns_gap,
-                }
-            
+
             logger.info(f"[DB SAVE] Recording breakout: {breakout_record}")
             
             self.supabase.table("orb_breakouts").insert(breakout_record).execute()
@@ -1451,26 +1604,6 @@ class OrbService:
             # Publish the breakout state to the hub (informational for engines).
             self._publish_orb_status_to_hub(ticker, breakout=breakout_type, last_price=breakout_price)
 
-            # Send initial notification with enhanced breakout data
-            await self.send_notifications(
-                ticker,
-                breakout_type,
-                price,
-                breakout_analysis=breakout_analysis,
-                orb_high=orb_high,
-                orb_low=orb_low,
-                gap_context=gap_context,
-            )
-            
-            # Start 3-minute confirmation timer
-            if ticker in self._confirmation_timers:
-                self._confirmation_timers[ticker].cancel()
-            
-            confirmation_task = asyncio.create_task(
-                self._wait_for_confirmation(ticker, breakout_type, orb_high, orb_low)
-            )
-            self._confirmation_timers[ticker] = confirmation_task
-            
             logger.info(
                 f"[BREAKOUT RECORDED] {ticker} broke {breakout_type} ORB at ${breakout_price:.2f} "
                 f"(ORB High=${orb_high:.2f}, ORB Low=${orb_low:.2f}) "
@@ -1579,7 +1712,7 @@ class OrbService:
     ):
         """Send push notification about reversal detection."""
         try:
-            eligible_users = await self.get_eligible_users(ticker)
+            eligible_users = await self.get_eligible_users(ticker, "reversal")
             
             if not eligible_users:
                 return
@@ -1648,135 +1781,28 @@ class OrbService:
         except Exception as e:
             logger.error(f"Error sending reversal notifications for {ticker}: {e}")
     
-    async def _wait_for_confirmation(self, ticker: str, breakout_type: str, orb_high: float, orb_low: float, breakout_timer: int = 180):
+    async def get_eligible_users(self, ticker: str, notification_type: Optional[str] = None) -> list:
         """
-        Wait 3 minutes after breakout, then check if price closed outside ORB.
-        If confirmed, send BREAKOUT CONFIRMED notification.
+        Get eligible users for ORB notifications for a given ticker.
+
+        notification_type — None (any follow), "confirmed_breakout", or
+        "reversal". When given, also requires the matching per-ticker
+        notify_confirmed_breakout / notify_reversal column on
+        user_stock_follows, so a user can opt out of one notification type
+        for a specific ticker without unfollowing it or muting everything.
         """
         try:
-            await asyncio.sleep(breakout_timer)
-            
-            if ticker not in self.orb_ranges:
-                logger.info(f"[CONFIRMATION] {ticker} no longer in monitoring, skipping confirmation")
-                return
-            
-            # Fetch current price to check if breakout is confirmed.
-            # Use the live Alpaca bar price already maintained in the state cache
-            # (updated every bar in handle_bar) instead of yfinance — yfinance's
-            # `.info` call is slow, frequently rate-limited, and can silently
-            # return None or a stale quote, which previously meant confirmation
-            # (and therefore entry) just never fired with no visible error.
-            try:
-                trade_date = self.get_current_et_time().date()
-                cached_state = self._state_cache.get_state(ticker, trade_date)
-                current_price = cached_state.current_price if cached_state else None
-
-                if current_price is None:
-                    logger.warning(
-                        f"[CONFIRMATION] No cached price for {ticker}, falling back to yfinance"
-                    )
-                    loop = asyncio.get_event_loop()
-                    def get_current_price():
-                        stock = yf.Ticker(ticker)
-                        info = stock.info
-                        return info.get("currentPrice") or info.get("regularMarketPrice")
-
-                    current_price = await loop.run_in_executor(None, get_current_price)
-
-                if current_price is None:
-                    logger.warning(f"[CONFIRMATION] Could not fetch current price for {ticker}")
-                    return
-                
-                # Check if breakout is confirmed (price still outside ORB)
-                is_confirmed = False
-                if breakout_type == "above":
-                    is_confirmed = current_price > orb_high
-                else:
-                    is_confirmed = current_price < orb_low
-                
-                if is_confirmed:
-                    logger.info(
-                        f"[BREAKOUT CONFIRMED] {ticker} breakout confirmed after 3 minutes. "
-                        f"Price: ${current_price:.2f}, ORB High: ${orb_high:.2f}, ORB Low: ${orb_low:.2f}"
-                    )
-
-                    # Invoke the strategy engine: a confirmed 3-min breakout is the
-                    # sole entry trigger. Engines subscribed to this ticker enter the
-                    # trade using their own ORB/fib; the hub keeps streaming bars for
-                    # exit management. Runs regardless of user follows.
-                    direction = "CALL" if breakout_type == "above" else "PUT"
-                    self._hub.publish_breakout_confirmed(ticker, direction, float(current_price))
-
-                    # Arm reversal scoring for this ticker. Per-bar scoring starts on
-                    # the next bar via handle_bar → _score_reversal. Clears any stale
-                    # state from a previous breakout on the same day.
-                    self._rev_state[ticker] = {
-                        "direction":          direction,
-                        "score":              0,
-                        "signals_hit":        set(),
-                        "max_extension":      0.0,
-                        "consec_wrong_side":  0,
-                        "bars_counted":       0,
-                        "fired":              False,
-                        "worst_wrong_close":  None,
-                        "prev_wrong_close":   None,
-                        "consec_recovery":    0,
-                    }
-                    logger.info("[REV] %s reversal scoring armed (original=%s)", ticker, direction)
-
-                    breakout_type_display = "Confirmed Bullish" if breakout_type == "above" else "Confirmed Bearish"
-                    trade_date = self.get_current_et_time().date()
-                    # Update cache state (NO DATABASE CALL)
-                    self._state_cache.update_state(
-                        ticker=ticker,
-                        trade_date=trade_date,
-                        current_price=current_price,
-                        breakout_type=breakout_type_display,
-                        orb_high=orb_high,
-                        orb_low=orb_low,
-                        timestamp=self.get_current_et_time().isoformat(),
-                    )
-                    await self.send_confirmation_notification(ticker, breakout_type, current_price, orb_high, orb_low)
-                else:
-                    logger.info(
-                        f"[BREAKOUT INVALIDATED] {ticker} price returned inside ORB. "
-                        f"Price: ${current_price:.2f}, ORB High: ${orb_high:.2f}, ORB Low: ${orb_low:.2f}"
-                    )
-                    trade_date = self.get_current_et_time().date()
-                    # Update cache state (NO DATABASE CALL)
-                    self._state_cache.update_state(
-                        ticker=ticker,
-                        trade_date=trade_date,
-                        current_price=current_price,
-                        breakout_type="invalidated",
-                        breakout_price=None,
-                        orb_high=orb_high,
-                        orb_low=orb_low,
-                        timestamp=self.get_current_et_time().isoformat(),
-                    )
-                    await self.send_invalidation_notification(ticker, breakout_type, current_price, orb_high, orb_low)
-                    
-            except Exception as e:
-                logger.error(f"Error checking confirmation for {ticker}: {e}")
-                
-        except asyncio.CancelledError:
-            logger.info(f"[CONFIRMATION] Timer cancelled for {ticker}")
-        except Exception as e:
-            logger.error(f"Error in confirmation timer for {ticker}: {e}")
-        finally:
-            if ticker in self._confirmation_timers:
-                del self._confirmation_timers[ticker]
-    
-    async def get_eligible_users(self, ticker: str) -> list:
-        """Get eligible users for ORB notifications for a given ticker."""
-        try:
-            users_response = (
+            query = (
                 self.supabase.table("user_stock_follows")
                 .select("user_id")
                 .eq("ticker", ticker)
                 .eq("orb_enabled", True)
-                .execute()
             )
+            if notification_type == "confirmed_breakout":
+                query = query.eq("notify_confirmed_breakout", True)
+            elif notification_type == "reversal":
+                query = query.eq("notify_reversal", True)
+            users_response = query.execute()
             
             if not users_response.data:
                 logger.info(f"No users following {ticker} with ORB enabled")
@@ -1815,7 +1841,7 @@ class OrbService:
     async def send_confirmation_notification(self, ticker: str, breakout_type: str, price: float, orb_high: float, orb_low: float):
         """Send BREAKOUT CONFIRMED notification after 3-minute validation"""
         try:
-            eligible_users = await self.get_eligible_users(ticker)
+            eligible_users = await self.get_eligible_users(ticker, "confirmed_breakout")
             
             if not eligible_users:
                 return
@@ -1870,226 +1896,6 @@ class OrbService:
             
         except Exception as e:
             logger.error(f"Error sending confirmation notifications for {ticker}: {e}")
-    
-    async def send_invalidation_notification(self, ticker: str, breakout_type: str, price: float, orb_high: float, orb_low: float):
-        """Send BREAKOUT INVALIDATED notification when price returns inside ORB after 3-minute timer."""
-        try:
-            eligible_users = await self.get_eligible_users(ticker)
-            
-            if not eligible_users:
-                return
-            
-            direction_text = "BULLISH" if breakout_type == "above" else "BEARISH"
-            
-            notification_tasks = []
-            for user in eligible_users:
-                message_title = f"⚠️ {ticker} BREAKOUT INVALIDATED"
-                message_body = (
-                    f"{ticker} {direction_text} breakout invalidated after 3-minute close. "
-                    f"Price returned inside ORB range. Current: ${price:.2f}"
-                )
-                
-                message = {
-                    "sound": "default",
-                    "title": message_title,
-                    "body": message_body,
-                    "data": {
-                        "type": "orb_breakout_invalidated",
-                        "ticker": ticker,
-                        "breakout_type": breakout_type,
-                        "price": price,
-                        "orb_high": orb_high,
-                        "orb_low": orb_low,
-                        "screen": "ticker",
-                        "timestamp": self.get_current_et_time().isoformat()
-                    },
-                    "badge": 1,
-                    "priority": "high",
-                    "channelId": "orb-alerts",
-                }
-                
-                task = self._send_push_notification(
-                    user=user,
-                    message=message,
-                    ticker=ticker,
-                    breakout_type=breakout_type,
-                    price=Decimal(str(price))
-                )
-                notification_tasks.append(task)
-            
-            results = await asyncio.gather(*notification_tasks, return_exceptions=True)
-            successful = sum(1 for r in results if r is True)
-            failed = len(results) - successful
-            
-            logger.info(
-                f"Breakout invalidation notifications sent for {ticker}: "
-                f"{successful} successful, {failed} failed"
-            )
-            
-        except Exception as e:
-            logger.error(f"Error sending invalidation notifications for {ticker}: {e}")
-    
-    def _format_gap_trend_line(
-        self,
-        ticker: str,
-        breakout_type: str,
-        gap_context: Optional[Dict],
-    ) -> str:
-        """Format one-line gap/prior-day/continuation for notification body."""
-        if not gap_context:
-            return ""
-        direction_char = "↑" if breakout_type == "above" else "↓"
-        gap_dir = gap_context.get("gap_direction")
-        gap_pct = gap_context.get("gap_percent")
-        gap_pts = gap_context.get("gap_points")
-        prior_trend = gap_context.get("prior_day_trend")
-        breakout_aligns = gap_context.get("breakout_aligns_gap")
-        if gap_dir == "flat":
-            gap_str = "Flat"
-        elif gap_pct is not None and gap_pts is not None:
-            gap_str = f"{gap_pct:+.1f}% ({gap_pts:+.1f} pts)"
-        else:
-            gap_str = str(gap_pct) if gap_pct is not None else "—"
-        prior_str = (prior_trend or "—").capitalize()
-        if breakout_aligns is True:
-            suffix = "Continuation ✓"
-        elif breakout_aligns is False:
-            suffix = "Against Gap ⚠"
-        else:
-            suffix = "—"
-        return f"{ticker} ORB Break {direction_char} | Gap: {gap_str} | Prior Day: {prior_str} | {suffix}"
-
-    async def send_notifications(
-        self,
-        ticker: str,
-        breakout_type: str,
-        price: Decimal,
-        breakout_analysis: Optional[Dict] = None,
-        orb_high: Optional[float] = None,
-        orb_low: Optional[float] = None,
-        gap_context: Optional[Dict] = None,
-    ):
-        """Send push notifications with enhanced breakout data and optional gap/trend context."""
-        try:
-            eligible_users = await self.get_eligible_users(ticker)
-            
-            if not eligible_users:
-                return
-            
-            price_float = float(price) if isinstance(price, Decimal) else price
-            
-            gap_trend_line = self._format_gap_trend_line(ticker, breakout_type, gap_context)
-            
-            # Build enhanced notification if breakout analysis is available
-            if breakout_analysis and breakout_analysis.get("signal"):
-                signal = breakout_analysis.get("signal", "")
-                score = breakout_analysis.get("score", 0)
-                confidence = breakout_analysis.get("confidence", "MEDIUM")
-                reasons = breakout_analysis.get("reasons", [])
-                entry_price = breakout_analysis.get("entry_price", price_float)
-                stop_loss = breakout_analysis.get("stop_loss", orb_low if breakout_type == "above" else orb_high)
-                risk_per_share = breakout_analysis.get("risk_per_share", 0)
-                
-                emoji = "🟢" if signal == "BULLISH" else "🔴"
-                message_title = f"{emoji} {ticker} ORB BREAKOUT ({confidence} CONFIDENCE - {score}/100)"
-                
-                direction_text = "BULLISH (Call opportunity)" if signal == "BULLISH" else "BEARISH (Put opportunity)"
-                body_lines = []
-                if gap_trend_line:
-                    body_lines.append(gap_trend_line)
-                    body_lines.append("")
-                body_lines.extend([
-                    f"Direction: {direction_text}",
-                    f"Entry: ${entry_price:.2f}",
-                    f"ORB High: ${orb_high:.2f}" if orb_high else "",
-                    f"ORB Low: ${orb_low:.2f}" if orb_low else "",
-                    f"Stop Loss: ${stop_loss:.2f} ({'ORL' if signal == 'BULLISH' else 'ORH'})" if stop_loss else "",
-                    "",
-                ])
-                
-                for reason in reasons:
-                    if reason.startswith("⚠️"):
-                        body_lines.append(reason)
-                    else:
-                        body_lines.append(f"✓ {reason}")
-                
-                if risk_per_share > 0:
-                    body_lines.append("")
-                    body_lines.append(f"Risk: ${risk_per_share:.2f} per share")
-                
-                message_body = "\n".join([line for line in body_lines if line])
-                
-            else:
-                message_title = f"🚨 ORB Alert: {ticker}"
-                direction = "above ORB high" if breakout_type == "above" else "below ORB low"
-                message_body = (
-                    f"{gap_trend_line}\n\n" if gap_trend_line
-                    else ""
-                ) + f"{ticker} broke {direction} at ${price_float:.2f}"
-            
-            notification_tasks = []
-            for user in eligible_users:
-                message = {
-                    "sound": "default",
-                    "title": message_title,
-                    "body": message_body,
-                    "data": {
-                        "type": "orb_breakout",
-                        "ticker": ticker,
-                        "breakout_type": breakout_type,
-                        "price": price_float,
-                        "screen": "ticker",
-                        "timestamp": self.get_current_et_time().isoformat()
-                    },
-                    "badge": 1,
-                    "priority": "high",
-                    "channelId": "orb-alerts",
-                }
-                
-                if breakout_analysis:
-                    message["data"].update({
-                        "breakout_analysis": breakout_analysis,
-                        "orb_high": orb_high,
-                        "orb_low": orb_low,
-                        "confidence": breakout_analysis.get("confidence"),
-                        "score": breakout_analysis.get("score"),
-                        "reasons": breakout_analysis.get("reasons", []),
-                        "entry_price": breakout_analysis.get("entry_price", price_float),
-                        "stop_loss": breakout_analysis.get("stop_loss"),
-                        "risk_per_share": breakout_analysis.get("risk_per_share", 0),
-                        "rvol": breakout_analysis.get("rvol", 0),
-                        "vwap_aligned": breakout_analysis.get("vwap_aligned", False)
-                    })
-                if gap_context:
-                    message["data"].update({
-                        "gap_percent": gap_context.get("gap_percent"),
-                        "gap_points": gap_context.get("gap_points"),
-                        "gap_direction": gap_context.get("gap_direction"),
-                        "prior_day_trend": gap_context.get("prior_day_trend"),
-                        "trend_continuation": gap_context.get("trend_continuation"),
-                        "breakout_aligns_gap": gap_context.get("breakout_aligns_gap"),
-                    })
-                
-                task = self._send_push_notification(
-                    user=user,
-                    message=message,
-                    ticker=ticker,
-                    breakout_type=breakout_type,
-                    price=price
-                )
-                notification_tasks.append(task)
-            
-            results = await asyncio.gather(*notification_tasks, return_exceptions=True)
-            successful = sum(1 for r in results if r is True)
-            failed = len(results) - successful
-            
-            logger.info(
-                f"ORB notifications sent for {ticker}: "
-                f"{successful} successful, {failed} failed"
-            )
-            
-        except Exception as e:
-            logger.error(f"Error sending notifications for {ticker}: {e}")
     
     async def _send_push_notification(
         self,
@@ -2321,6 +2127,7 @@ class OrbService:
                         self.calculation_phase = True
                         self.orb_ranges.clear()
                         self.monitoring_state.clear()
+                        self._retest_state.clear()
                         self._bars_received_count = 0
                         
                         tickers = await self.load_followed_stocks()
@@ -2535,11 +2342,6 @@ class OrbService:
         # Engines must stop acting/notifying once the bar feed is gone.
         self._hub.set_service_running(False)
 
-        # Cancel all confirmation timers
-        for ticker, timer_task in list(self._confirmation_timers.items()):
-            timer_task.cancel()
-        self._confirmation_timers.clear()
-        
         # Cancel and wait for all bar handling tasks
         if self._bar_tasks:
             logger.info(f"Cancelling {len(self._bar_tasks)} bar handling tasks...")

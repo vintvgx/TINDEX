@@ -29,7 +29,7 @@ import { useUpdateProfileMutation } from '@/hooks/mutations/auth/useUpdateProfil
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const CONFIG_KEY = '@alethia/feed_pulse_strip_v2';
+const CONFIG_KEY = 'alethia.feed_pulse_strip_v2';
 
 // Always-available base tickers (shown even without ORB monitoring)
 const BASE_TICKERS = ['SPY', 'QQQ', 'IWM'];

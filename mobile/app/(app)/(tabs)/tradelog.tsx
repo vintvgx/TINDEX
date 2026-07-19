@@ -13,10 +13,15 @@ import { useReconcileTrades } from '@/hooks/mutations/strategy/useReconcileTrade
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { useQuery } from '@tanstack/react-query';
 import type { ProfileKey, ORBTrade, StrategyStats, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel, TradeType, ExitStage } from '@/common/types/strategy';
-import { formatContractSymbol } from '@/lib/formatContract';
+import { formatContractSymbol, getTradeHorizon } from '@/lib/formatContract';
 import { useToast } from '@/common/components/ui/Toast';
 
-const TODAY = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
+// ET calendar date, not UTC — trade_date is always stamped from the ET session
+// date server-side (see ORBEngine._execute_entry), so a UTC-based "today" here
+// would silently exclude trades (or include the wrong ones) for hours around
+// each ET midnight, and would only happen to agree with the server the rest
+// of the day by coincidence. 'en-CA' formats as YYYY-MM-DD directly.
+const TODAY = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -568,6 +573,9 @@ const TradeRow = ({
   const profileEmoji = PROFILE_EMOJI[trade.profile] ?? '📊';
   const isLive       = trade.paper_mode === false;
   const isImmediate  = trade.trade_type === 'IMMEDIATE';
+  // Classified from the trade's own entry date, not today — otherwise a
+  // closed trade whose expiry is now in the past would always read as 0DTE.
+  const isSwing      = getTradeHorizon(trade.contract_symbol, trade.trade_date) === 'SWING';
   const isCall       = trade.direction === 'CALL';
   const dirColor     = isCall ? colors.success : colors.error;
 
@@ -610,6 +618,11 @@ const TradeRow = ({
             {isImmediate && (
               <View style={[styles.tag, { backgroundColor: colors.accent + '1A' }]}>
                 <Text style={[styles.tagText, { color: colors.accent }]}>IMMED</Text>
+              </View>
+            )}
+            {isSwing && (
+              <View style={[styles.tag, { backgroundColor: '#6366F11A' }]}>
+                <Text style={[styles.tagText, { color: '#6366F1' }]}>SWING</Text>
               </View>
             )}
           </View>

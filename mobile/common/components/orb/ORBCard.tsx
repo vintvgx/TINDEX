@@ -22,7 +22,9 @@ const getBreakoutColor = (breakoutType: string, colors: ReturnType<typeof useThe
     case 'Confirmed Bullish': return colors.success;
     case 'Bearish':
     case 'Confirmed Bearish': return colors.error;
-    case 'invalidated': return colors.warning;
+    case 'Retesting Bullish':
+    case 'Retesting Bearish': return colors.warning;
+    case 'invalidated': return colors.textTertiary;
     case 'reversal': return '#5856D6';
     case 'Offline': return colors.textTertiary;
     default: return colors.textSecondary;

@@ -61,6 +61,29 @@ INGEST_SERVICE = None
 INGEST_TASK = None
 ingest_lock = threading.Lock()
 
+
+def _require_authenticated_user_id():
+    """Return (user_id, error_response). error_response is a Flask tuple when auth fails.
+    Same pattern as swing_routes.py — resolves the real user id from a verified
+    Supabase access token rather than trusting a client-supplied id."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None, (jsonify({"success": False, "error": "Authorization required"}), 401)
+
+    token = auth_header.removeprefix("Bearer ").strip()
+    if not token:
+        return None, (jsonify({"success": False, "error": "Authorization required"}), 401)
+
+    try:
+        user_id = get_supabase_service().resolve_authenticated_user_id(token)
+        return user_id, None
+    except ValueError as e:
+        logger.warning("[social/auth] token validation failed: %s", e)
+        return None, (jsonify({"success": False, "error": str(e)}), 401)
+    except Exception as e:
+        logger.error("[social/auth] unexpected auth failure: %s", e, exc_info=True)
+        return None, (jsonify({"success": False, "error": "Authentication failed"}), 401)
+
 # "Live since" for the admin status screen — same pattern as monitoring_
 # routes.py's SERVICE_LIVE_SINCE, kept local since this service is
 # deliberately not wired into that module's SERVICE_REGISTRY (see module
@@ -70,19 +93,27 @@ _INGEST_LIVE_SINCE: str | None = None
 
 # ── Ingest service lifecycle ─────────────────────────────────────────────────
 
-@bp.route("/social-signals/start", methods=["POST"])
-@_logged_route
-def start_signal_ingest():
-    global INGEST_SERVICE, INGEST_TASK
+def start_signal_ingest_core() -> tuple[dict, int]:
+    """
+    Core start logic shared by the /social-signals/start route and app.py's
+    boot-time auto-start — same fix as monitoring_routes.py's
+    start_orb_service (see its docstring / the 2026-07-09 incident it cites).
+    INGEST_SERVICE is a plain in-process global with no daily cron backstop
+    at all (unlike ORB's 9:20 AM cron), so any mid-session Railway restart
+    (redeploy, platform restart, crash) wipes it to None with nothing to
+    bring it back until someone notices ingestion silently stopped and
+    manually hits /social-signals/start again.
+    """
+    global INGEST_SERVICE, INGEST_TASK, _INGEST_LIVE_SINCE
 
     with ingest_lock:
         if INGEST_SERVICE and INGEST_SERVICE.is_running:
-            return jsonify({"message": "Social signal ingest already running"})
+            return {"message": "Social signal ingest already running"}, 200
 
     try:
         INGEST_SERVICE = get_signal_ingest_service()
     except ValueError as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        return {"success": False, "error": str(e)}, 500
 
     def run():
         if INGEST_SERVICE is not None:
@@ -92,10 +123,16 @@ def start_signal_ingest():
 
     INGEST_TASK = threading.Thread(target=run, daemon=True)
     INGEST_TASK.start()
-    global _INGEST_LIVE_SINCE
     _INGEST_LIVE_SINCE = datetime.now(timezone.utc).isoformat()
 
-    return jsonify({"success": True, "message": "Social signal ingest started"})
+    return {"success": True, "message": "Social signal ingest started"}, 200
+
+
+@bp.route("/social-signals/start", methods=["POST"])
+@_logged_route
+def start_signal_ingest():
+    body, status = start_signal_ingest_core()
+    return jsonify(body), status
 
 
 @bp.route("/social-signals/stop", methods=["POST"])
@@ -154,11 +191,29 @@ def signal_ingest_status():
 @bp.route("/social-signals/accounts", methods=["GET"])
 @_logged_route
 def list_accounts():
+    """Accounts the calling user follows — not the whole global registry
+    (social_signal_accounts is shared/deduped across all users for X API
+    efficiency, but a given user should only see their own follows)."""
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
     try:
         sb = get_supabase_service().client
+        follows = (
+            sb.table("user_social_signal_follows")
+            .select("account_id")
+            .eq("user_id", user_id)
+            .execute()
+            .data or []
+        )
+        account_ids = [f["account_id"] for f in follows]
+        if not account_ids:
+            return jsonify({"success": True, "data": []})
+
         rows = (
             sb.table("social_signal_accounts")
             .select("id, handle, label, active, parse_keywords, last_seen_tweet_id, last_polled_at, created_at")
+            .in_("id", account_ids)
             .order("created_at")
             .execute()
             .data or []
@@ -177,7 +232,16 @@ def follow_account():
     Resolves the handle via X's User: Read lookup immediately so a typo'd or
     nonexistent handle fails fast with a clear error, rather than silently
     sitting in the DB never matching any tweets.
+
+    social_signal_accounts is upserted globally (one row per distinct handle,
+    shared across every user who follows it, so the poll loop only queries X
+    once per handle) — the per-user relationship is the
+    user_social_signal_follows row created below.
     """
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
+
     body = request.get_json(silent=True) or {}
     handle = (body.get("handle") or "").strip().lstrip("@")
     if not handle:
@@ -187,17 +251,26 @@ def follow_account():
     try:
         sb = get_supabase_service().client
         client = XApiClient(sb)
-        user_id = client.lookup_user_id(handle)
-        if user_id is None:
+        x_user_id = client.lookup_user_id(handle)
+        if x_user_id is None:
             return jsonify({"success": False, "error": f"@{handle} not found on X"}), 404
 
         res = sb.table("social_signal_accounts").upsert({
             "handle": handle,
-            "x_user_id": user_id,
+            "x_user_id": x_user_id,
             "active": True,
             "parse_keywords": parse_keywords,
         }, on_conflict="handle").execute()
-        return jsonify({"success": True, "data": res.data[0] if res.data else None})
+        account = res.data[0] if res.data else None
+        if not account:
+            return jsonify({"success": False, "error": "Failed to upsert account"}), 500
+
+        sb.table("user_social_signal_follows").upsert({
+            "user_id": user_id,
+            "account_id": account["id"],
+        }, on_conflict="user_id,account_id").execute()
+
+        return jsonify({"success": True, "data": account})
     except XApiAuthError as e:
         return jsonify({"success": False, "error": str(e)}), 502
     except Exception as e:
@@ -208,7 +281,18 @@ def follow_account():
 @bp.route("/social-signals/accounts/<account_id>", methods=["PATCH"])
 @_logged_route
 def update_account(account_id: str):
-    """Body: { "active"?: bool, "parse_keywords"?: [str, ...] }"""
+    """
+    Body: { "active"?: bool, "parse_keywords"?: [str, ...] }
+
+    active/parse_keywords are still fields on the shared social_signal_accounts
+    row (parsing/polling config, not per-user state) — only require that the
+    caller actually follows this account before letting them change it, so an
+    authenticated-but-unrelated user can't repurpose someone else's account.
+    """
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
+
     body = request.get_json(silent=True) or {}
     patch = {}
     if "active" in body:
@@ -220,6 +304,17 @@ def update_account(account_id: str):
 
     try:
         sb = get_supabase_service().client
+        follow = (
+            sb.table("user_social_signal_follows")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("account_id", account_id)
+            .limit(1)
+            .execute()
+        )
+        if not follow.data:
+            return jsonify({"success": False, "error": "You don't follow this account"}), 403
+
         res = sb.table("social_signal_accounts").update(patch).eq("id", account_id).execute()
         if not res.data:
             return jsonify({"success": False, "error": "account not found"}), 404
@@ -232,9 +327,31 @@ def update_account(account_id: str):
 @bp.route("/social-signals/accounts/<account_id>", methods=["DELETE"])
 @_logged_route
 def unfollow_account(account_id: str):
+    """
+    Removes only the caller's follow — never the shared social_signal_accounts
+    row itself (deleting that would unfollow the account for every other user
+    following the same handle). If this was the last follower, deactivate the
+    account so the poll loop stops spending X API budget on it, but leave the
+    row itself in place — deleting it would orphan social_signal_tweets'
+    account_id foreign key for any of its already-parsed tweet history.
+    """
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
     try:
         sb = get_supabase_service().client
-        sb.table("social_signal_accounts").delete().eq("id", account_id).execute()
+        sb.table("user_social_signal_follows").delete().eq("user_id", user_id).eq("account_id", account_id).execute()
+
+        remaining = (
+            sb.table("user_social_signal_follows")
+            .select("id")
+            .eq("account_id", account_id)
+            .limit(1)
+            .execute()
+        )
+        if not remaining.data:
+            sb.table("social_signal_accounts").update({"active": False}).eq("id", account_id).execute()
+
         return jsonify({"success": True})
     except Exception as e:
         logger.error("[social-signals/accounts DELETE] %s", e, exc_info=True)
@@ -268,14 +385,18 @@ def list_social_signal_tweets():
 @bp.route("/social-signals/contracts", methods=["GET"])
 @_logged_route
 def list_social_signal_contracts():
-    """tracked_options_contracts rows sourced from social_signal — the
-    Signal Cards list the app surfaces to the user."""
+    """tracked_options_contracts rows sourced from social_signal, scoped to
+    the caller — the Signal Cards list the app surfaces to the user."""
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
     try:
         sb = get_supabase_service().client
         rows = (
             sb.table("tracked_options_contracts")
             .select("*")
             .eq("tracked_from_source", "social_signal")
+            .eq("user_id", user_id)
             .order("created_at", desc=True)
             .execute()
             .data or []
@@ -290,12 +411,17 @@ def list_social_signal_contracts():
 @_logged_route
 def remove_social_signal_contract(contract_id: str):
     """User removes a card — mirrors 'cancelled' rather than deleting the
-    row outright, matching tracked_options_contracts' existing lifecycle."""
+    row outright, matching tracked_options_contracts' existing lifecycle.
+    Scoped to the caller's own contract — previously this had no user check
+    at all, so any authenticated caller could cancel any user's contract."""
+    user_id, auth_error = _require_authenticated_user_id()
+    if auth_error:
+        return auth_error
     try:
         sb = get_supabase_service().client
         res = sb.table("tracked_options_contracts").update(
             {"status": "cancelled"}
-        ).eq("id", contract_id).eq("tracked_from_source", "social_signal").execute()
+        ).eq("id", contract_id).eq("tracked_from_source", "social_signal").eq("user_id", user_id).execute()
         if not res.data:
             return jsonify({"success": False, "error": "contract not found"}), 404
         return jsonify({"success": True})

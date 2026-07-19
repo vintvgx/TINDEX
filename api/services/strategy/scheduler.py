@@ -115,6 +115,29 @@ def _eod_reset(engine):
             logger.info("[Scheduler] EOD close skipped for %s — NO_STOP_LOSS position held open",
                         getattr(engine, "strategy_id", None) or engine.ticker)
             return
+
+        # This job only exists to flatten a 0DTE contract before it expires
+        # worthless at market close — it must NOT force-close a swing/LEAPS
+        # position that has weeks/months of runway left just because this
+        # cron fires every trading day at 15:30 ET. Saved-strategy (auto)
+        # engines only ever enter same-day 0DTE contracts, so this check is a
+        # no-op for them; it only changes behavior for immediate-trade
+        # engines, which schedule_eod_close's docstring already assumed were
+        # always 0DTE — no longer true now that immediate trades can target
+        # any expiration. See the 2026-07-17 incident where this forced an
+        # IBM Aug 21 and NFLX Sep 18 swing position closed same-day.
+        try:
+            _, expiry_str = engine._parse_occ_symbol(engine.contract_symbol)
+            expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            is_zero_dte = expiry_date <= datetime.now(ET).date()
+        except Exception:
+            is_zero_dte = True  # unparseable — fail closed, same convention as the stream-verify fix
+        if not is_zero_dte:
+            logger.info("[Scheduler] EOD close skipped for %s — %s expires %s, not 0DTE",
+                        getattr(engine, "strategy_id", None) or engine.ticker,
+                        engine.contract_symbol, expiry_str)
+            return
+
         contract_symbol = engine.contract_symbol
         qty_closed = engine.exit_manager.qty_remaining if engine.exit_manager else 0
 
@@ -135,6 +158,7 @@ def _eod_reset(engine):
                 engine.profile_key,
                 strategy_id=engine.strategy_id,
                 trading_client=engine.trading_client,
+                trade_id=engine.active_trade_id,
             )
             engine.notifier.notify_exit(
                 ticker=engine.ticker,
@@ -146,16 +170,6 @@ def _eod_reset(engine):
             )
         except Exception as ex:
             logger.error("[Scheduler] EOD log/notify failed: %s", ex)
-    elif engine.orh and not engine.session_skipped and not getattr(engine, "_trade_was_taken_today", False):
-        # Session was armed, watched all day, and no trade was entered at all.
-        # Suppress this if a trade was taken and closed earlier — _trade_was_taken_today
-        # stays True even after the position closes, unlike trade_taken which resets.
-        engine.notifier.notify_no_trade_eod(
-            ticker=engine.ticker,
-            profile_key=engine.profile_key,
-            orh=engine.orh,
-            orl=engine.orl,
-        )
     engine.reset_session()
 
 
@@ -206,5 +220,93 @@ def init_scheduler(engine):
         if orb_calc_dt <= now_et <= eod_dt:
             logger.info("[Scheduler] Late start — triggering calculate_orb now for %s", engine.ticker)
             threading.Thread(target=engine.calculate_orb, daemon=True).start()
+
+
+# ── Expiry reminders (swing/LEAPS heads-up, not a forced close) ────────────────
+# Milestones, checked in order of urgency — days_to_expiry is calendar days,
+# so a milestone can be skipped over a weekend (e.g. a Monday expiry means
+# Friday's check sees 3 days left, not 2 or 1). That's fine: there's no
+# trading day in between to act on it anyway, and "week" already caught it.
+_EXPIRY_MILESTONES = [
+    ("one_day", 1),
+    ("two_day", 2),
+    ("week",    7),
+]
+
+
+def check_expiry_reminders():
+    """
+    Daily check across EVERY open orb_trades row (any engine, saved-strategy
+    or immediate) for one of three heads-up milestones: 1 day, 2 days, or
+    within the week of expiration. Purely informational — no position is
+    touched. Added as the replacement for the old blanket EOD auto-close once
+    that was scoped to 0DTE-only (2026-07-17): a swing/LEAPS holder still gets
+    *some* warning as expiry approaches, just not a forced exit.
+
+    Each (trade, milestone) fires at most once — expiry_reminders_sent on the
+    row tracks which milestones already went out, so re-running this (or a
+    Railway restart) never re-sends the same reminder.
+    """
+    from services.strategy.orb_engine import ORBEngine
+    from services.strategy.trade_logger import TradeLogger
+    from services.strategy.notifier import StrategyNotifier
+    from services.supabase.supabase_service import get_supabase_service
+
+    logger_svc = TradeLogger()
+    notifier = StrategyNotifier(get_supabase_service().client)
+    today_et = datetime.now(ET).date()
+
+    rows = logger_svc.get_open_trades()
+    for row in rows:
+        try:
+            _, expiry_str = ORBEngine._parse_occ_symbol(row["contract_symbol"])
+            expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            days_to_expiry = (expiry_date - today_et).days
+            if days_to_expiry <= 0:
+                continue  # 0DTE / already past — not what this reminder is for
+
+            already_sent = row.get("expiry_reminders_sent") or []
+            milestone = next(
+                (m for m, threshold in _EXPIRY_MILESTONES
+                 if days_to_expiry <= threshold and m not in already_sent),
+                None,
+            )
+            if not milestone:
+                continue
+
+            qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
+            if qty_remaining <= 0:
+                continue
+
+            notifier.notify_expiry_reminder(
+                contract_symbol=row["contract_symbol"],
+                days_to_expiry=days_to_expiry,
+                milestone=milestone,
+                qty=qty_remaining,
+                direction=row["direction"],
+            )
+            logger_svc.mark_expiry_reminder_sent(row["id"], milestone, already_sent)
+        except Exception as e:
+            logger.error("[Scheduler] check_expiry_reminders failed for %s (id=%s): %s",
+                         row.get("contract_symbol"), row.get("id"), e, exc_info=True)
+
+
+def schedule_expiry_reminders():
+    """
+    One global daily job (not per-engine) — 9:00 AM ET, mon-fri, well before
+    the open so a swing-trade holder sees it first thing. Call once at boot.
+    """
+    sched = get_scheduler()
+    if not sched:
+        logger.warning("[Scheduler] APScheduler not available — expiry reminders not scheduled")
+        return
+    if not sched.running:
+        sched.start()
+    sched.add_job(
+        check_expiry_reminders,
+        CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=ET),
+        id="job_expiry_reminders", replace_existing=True,
+    )
+    logger.info("[Scheduler] Expiry reminder check scheduled (daily 9:00 AM ET)")
 
     return sched

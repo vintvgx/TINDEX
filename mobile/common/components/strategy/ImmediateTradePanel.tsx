@@ -38,10 +38,14 @@ function addDays(iso: string, days: number): string {
 
 function fmtExpiryLabel(iso: string, todayIso: string): string {
   if (iso === todayIso) return 'Today (0DTE)';
-  const d = new Date(iso + 'T00:00:00Z');
+  const d   = new Date(iso + 'T00:00:00Z');
+  const now = new Date(todayIso + 'T00:00:00Z');
+  // A far-dated (3M/LEAPS) chip needs the year — "Fri 1/2" is ambiguous
+  // between this January and next without it.
+  const showYear = d.getUTCFullYear() !== now.getUTCFullYear();
   const weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
   const md = d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', timeZone: 'UTC' });
-  return `${weekday} ${md}`;
+  return showYear ? `${weekday} ${md}/${String(d.getUTCFullYear()).slice(2)}` : `${weekday} ${md}`;
 }
 
 /**
@@ -51,6 +55,23 @@ function pickTargetExpiration(available: string[]): string | null {
   if (!available.length) return null;
   return [...available].sort()[0];
 }
+
+// ── Expiration range ──────────────────────────────────────────────────────────
+// How far out to look for expirations. Kept as a few fixed buckets rather than
+// a calendar picker: real option expirations are sparse, irregular dates
+// (weeklies, then monthlies, then LEAPS), so a calendar would render mostly
+// disabled days. "2W" covers same-week/near-term ORB-style trades; "3M"
+// reaches ordinary monthly swing trades (e.g. an Aug expiration held for
+// weeks); "LEAPS" reaches far-dated contracts (e.g. Jan next year) without
+// mixing them into the same fetch as the liquid near-term chain — see the
+// two-query split below for why that mixing mattered.
+type ExpirationRange = '2W' | '3M' | 'LEAPS';
+const RANGE_LABELS: Record<ExpirationRange, string> = { '2W': '2W', '3M': '3M', LEAPS: 'LEAPS' };
+const RANGE_WINDOW_DAYS: Record<ExpirationRange, { gte: number; lte: number }> = {
+  '2W':    { gte: 0,   lte: 14 },
+  '3M':    { gte: 0,   lte: 100 },
+  LEAPS:   { gte: 100, lte: 730 },
+};
 
 // ── Chain helpers ─────────────────────────────────────────────────────────────
 
@@ -80,11 +101,15 @@ const buildRows = (contracts: OptionsContract[], price: number, side: OptionSide
       ...sorted.filter(c => c.strike < price).map(c => ({ type: 'contract' as const, data: c, isITM: true })),
     ];
   }
-  const sorted = [...contracts].sort((a, b) => a.strike - b.strike);
+  // Puts sort descending too, same as calls, so the strike column always reads
+  // high-to-low top-to-bottom regardless of which side is toggled — previously
+  // this sorted ascending, which flipped reading direction when switching from
+  // Calls to Puts.
+  const sorted = [...contracts].sort((a, b) => b.strike - a.strike);
   return [
-    ...sorted.filter(c => c.strike <= price).map(c => ({ type: 'contract' as const, data: c, isITM: false })),
-    { type: 'separator' as const, price },
     ...sorted.filter(c => c.strike > price).map(c => ({ type: 'contract' as const, data: c, isITM: true })),
+    { type: 'separator' as const, price },
+    ...sorted.filter(c => c.strike <= price).map(c => ({ type: 'contract' as const, data: c, isITM: false })),
   ];
 };
 
@@ -103,7 +128,7 @@ const asOpportunity = (c: OptionsContract): OptionsOpportunity => ({
 export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }: Props) {
   const toast = useToast();
   const [ticker, setTicker]             = useState<string>('');
-  const [tickerOpen, setTickerOpen]     = useState(false);
+  const [tickerSearchOpen, setTickerSearchOpen] = useState(false);
   const [tickerInput, setTickerInput]   = useState('');
   const [paperMode, setPaperMode]       = useState(true);
   const [side, setSide]                 = useState<OptionSide>('CALL');
@@ -145,52 +170,78 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   }, [tickerOptions, ticker]);
 
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
-  // ETFs (SPY/QQQ/IWM) may not have a fresh expiration on any given day, and
-  // stocks never expire same-day at all — fetch a 2-week window and pick the
-  // nearest expiration that actually exists and matches the ticker's cadence,
-  // rather than assuming "today" is always a listed expiration.
-  const queryWindowEnd = useMemo(() => addDays(today, 14), [today]);
-  const { data, isLoading, error } = useOptionsQuery(
+
+  const [expirationRange, setExpirationRange] = useState<ExpirationRange>('2W');
+  const rangeWindow = RANGE_WINDOW_DAYS[expirationRange];
+  const rangeGte = useMemo(() => addDays(today, rangeWindow.gte), [today, rangeWindow.gte]);
+  const rangeLte = useMemo(() => addDays(today, rangeWindow.lte), [today, rangeWindow.lte]);
+
+  // Query 1: which expirations exist in the selected range. limit=1 since only
+  // `expirations_fetched` is needed here — the actual contract list for
+  // whichever date gets picked comes from query 2 below, scoped to just that
+  // one expiration. Splitting these matters once the range widens past a
+  // couple weeks: the chain endpoint picks its `limit` contracts by nearest-
+  // to-current-price ACROSS THE WHOLE WINDOW combined, so a single query
+  // spanning (say) 2W-LEAPS would let near-term weeklies crowd out a
+  // far-dated expiration's own strikes entirely, even though that far date
+  // still showed up in expirations_fetched — i.e. the date would be tappable
+  // but silently show "no contracts found." Scoping query 2 to one exact date
+  // avoids that regardless of how wide the browsing range is.
+  const { data: rangeData, isLoading: rangeLoading, isFetching: rangeFetching } = useOptionsQuery(
     visible && ticker ? ticker : '',
-    { limit: 100, expiration_date_gte: today, expiration_date_lte: queryWindowEnd },
+    { limit: 1, expiration_date_gte: rangeGte, expiration_date_lte: rangeLte },
+  );
+
+  const availableExpirations = useMemo(() => {
+    if (!rangeData?.success) return [];
+    return [...rangeData.data.expirations_fetched].sort();
+  }, [rangeData]);
+
+  const [manualExpiration, setManualExpiration] = useState<string | null>(null);
+
+  // Reset the manual pick whenever the ticker or range changes — a date
+  // chosen for one ticker/range has no meaning for another.
+  useEffect(() => {
+    setManualExpiration(null);
+  }, [ticker, expirationRange]);
+
+  const targetExpiration = useMemo(() => {
+    if (manualExpiration && availableExpirations.includes(manualExpiration)) {
+      return manualExpiration;
+    }
+    return pickTargetExpiration(availableExpirations);
+  }, [manualExpiration, availableExpirations]);
+
+  // Query 2: the full, live-polled contract list for ONLY targetExpiration —
+  // see the comment on query 1 for why this is scoped to one exact date
+  // rather than filtered client-side out of query 1's (potentially wide)
+  // window.
+  const { data, isLoading, isFetching, error } = useOptionsQuery(
+    visible && ticker && targetExpiration ? ticker : '',
+    targetExpiration
+      ? { limit: 100, expiration_date_gte: targetExpiration, expiration_date_lte: targetExpiration }
+      : undefined,
     4000,
   );
+
+  // Covers every "the chain the user is about to see is still in flight"
+  // case, not just query 2's own fetch: switching range/ticker refetches
+  // query 1 first, during which targetExpiration can be briefly null (query
+  // 2 disabled, so its own isLoading/isFetching stay false) — without this,
+  // that gap rendered "No contracts found" for a frame before the real chain
+  // arrived.
+  const contractsLoading =
+    isLoading || isFetching || rangeLoading || rangeFetching || (!!ticker && !targetExpiration);
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
   const chain        = data?.success ? data.data : null;
   const currentPrice = chain?.current_price ?? 0;
 
-  // Every expiration actually available for this ticker, straight from the
-  // chain — lets the user pick a specific date instead of only ever trusting
-  // the "nearest match" auto-pick, which is what used to silently substitute
-  // the wrong day's chain (see the comment above pickTargetExpiration).
-  const availableExpirations = useMemo(() => {
-    if (!chain) return [];
-    return [...chain.expirations_fetched].sort();
-  }, [chain]);
-
-  const [manualExpiration, setManualExpiration] = useState<string | null>(null);
-
-  // Reset the manual pick whenever the ticker changes — a date chosen for one
-  // ticker's chain has no meaning for another.
-  useEffect(() => {
-    setManualExpiration(null);
-  }, [ticker]);
-
-  const targetExpiration = useMemo(() => {
-    if (manualExpiration && availableExpirations.includes(manualExpiration)) {
-      return manualExpiration;
-    }
-    if (!chain) return null;
-    return pickTargetExpiration(chain.expirations_fetched);
-  }, [manualExpiration, availableExpirations, chain]);
-
   const sideContracts = useMemo(() => {
-    if (!chain || !targetExpiration) return [];
-    const list = side === 'CALL' ? chain.calls : chain.puts;
-    return list.filter(c => c.expiration === targetExpiration);
-  }, [chain, side, targetExpiration]);
+    if (!chain) return [];
+    return side === 'CALL' ? chain.calls : chain.puts;
+  }, [chain, side]);
 
   const rows = useMemo(() => buildRows(sideContracts, currentPrice, side), [sideContracts, currentPrice, side]);
 
@@ -442,50 +493,48 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
     <View style={{ flex: 1 }}>
       {/* Controls */}
       <View style={styles.controls}>
-        <View style={styles.controlRow}>
-          {/* Ticker */}
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>TICKER</Text>
+        <View>
+          {/* Ticker — a chip per ORB-monitored ticker plus a search toggle for
+              anything else, in place of the old open/close accordion menu. */}
+          <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>TICKER</Text>
+          <View style={styles.tickerRow}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {tickerOptions.map(t => {
+                  const active = ticker === t;
+                  return (
+                    <TouchableOpacity
+                      key={t}
+                      onPress={() => { setTicker(t); setSelected(null); setTickerSearchOpen(false); }}
+                      activeOpacity={0.8}
+                      style={[styles.tickerChip, { backgroundColor: active ? colors.accent + '22' : colors.card, borderColor: active ? colors.accent : colors.border }]}
+                    >
+                      <Text style={[styles.tickerChipText, { color: active ? colors.accent : colors.text }]}>{t}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+                {/* Custom ticker entered via search — shown as its own selected
+                    chip once picked, since it won't be in tickerOptions. */}
+                {!!ticker && !tickerOptions.includes(ticker) && (
+                  <View style={[styles.tickerChip, { backgroundColor: colors.accent + '22', borderColor: colors.accent }]}>
+                    <Text style={[styles.tickerChipText, { color: colors.accent }]}>{ticker}</Text>
+                  </View>
+                )}
+              </View>
+            </ScrollView>
             <TouchableOpacity
-              onPress={() => setTickerOpen(o => !o)}
+              onPress={() => setTickerSearchOpen(o => !o)}
               activeOpacity={0.7}
-              style={[styles.tickerSelect, { backgroundColor: colors.card, borderColor: colors.border }]}
+              style={[styles.tickerSearchToggle, { backgroundColor: tickerSearchOpen ? colors.accent + '22' : colors.card, borderColor: tickerSearchOpen ? colors.accent : colors.border }]}
             >
-              <Text style={[styles.tickerSelectText, { color: colors.text }]}>{ticker || '—'}</Text>
-              <Ionicons name={tickerOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.tabBarInactive} />
+              <Ionicons name="search" size={16} color={tickerSearchOpen ? colors.accent : colors.tabBarInactive} />
             </TouchableOpacity>
           </View>
 
-          {/* Paper / Live */}
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>ACCOUNT</Text>
-            <View style={[styles.accountToggle, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              {([['Paper', true], ['Live', false]] as const).map(([label, isPaper]) => {
-                const active = paperMode === isPaper;
-                const tint = isPaper ? '#FF9F0A' : colors.error;
-                return (
-                  <TouchableOpacity
-                    key={label}
-                    onPress={() => setPaperMode(isPaper)}
-                    activeOpacity={0.8}
-                    style={[styles.accountBtn, active && { backgroundColor: tint + '22', borderRadius: 8 }]}
-                  >
-                    <Text style={[styles.accountText, { color: active ? tint : colors.tabBarInactive, fontWeight: active ? '700' : '500' }]}>
-                      {label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        </View>
-
-        {/* Ticker dropdown */}
-        {tickerOpen && (
-          <View style={[styles.tickerMenu, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {/* Free-text entry — tickerOptions only lists ORB-monitored tickers
-                (effectively SPY/QQQ/IWM today), so this is the only way to reach
-                any other stock. Same 1-5 alpha validation the backend applies. */}
+          {/* Free-text entry — tickerOptions only lists ORB-monitored tickers
+              (effectively SPY/QQQ/IWM today), so this is the only way to reach
+              any other stock. Same 1-5 alpha validation the backend applies. */}
+          {tickerSearchOpen && (
             <View style={styles.tickerSearchRow}>
               <TextInput
                 value={tickerInput}
@@ -494,11 +543,12 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
                 placeholderTextColor={colors.tabBarInactive}
                 autoCapitalize="characters"
                 autoCorrect={false}
+                autoFocus
                 style={[styles.tickerSearchInput, { color: colors.text, borderColor: colors.border }]}
                 onSubmitEditing={() => {
                   if (!tickerInput) return;
                   setTicker(tickerInput);
-                  setTickerOpen(false);
+                  setTickerSearchOpen(false);
                   setSelected(null);
                   setTickerInput('');
                 }}
@@ -508,7 +558,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
                 onPress={() => {
                   if (!tickerInput) return;
                   setTicker(tickerInput);
-                  setTickerOpen(false);
+                  setTickerSearchOpen(false);
                   setSelected(null);
                   setTickerInput('');
                 }}
@@ -518,27 +568,31 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
                 <Ionicons name="arrow-forward" size={16} color={colors.iconButton ?? '#fff'} />
               </TouchableOpacity>
             </View>
+          )}
+        </View>
 
-            <ScrollView style={{ maxHeight: 160 }} keyboardShouldPersistTaps="handled">
-              {tickerOptions.map(t => {
-                const sel = ticker === t;
-                return (
-                  <TouchableOpacity
-                    key={t}
-                    onPress={() => { setTicker(t); setTickerOpen(false); setSelected(null); }}
-                    activeOpacity={0.7}
-                    style={[styles.tickerMenuItem, sel && { backgroundColor: colors.accent + '1A' }]}
-                  >
-                    <Text style={[styles.tickerMenuItemText, { color: sel ? colors.accent : colors.text, fontWeight: sel ? '700' : '500' }]}>
-                      {t}
-                    </Text>
-                    {sel && <Ionicons name="checkmark" size={16} color={colors.accent} />}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
+        {/* Paper / Live */}
+        <View>
+          <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>ACCOUNT</Text>
+          <View style={[styles.accountToggle, styles.accountToggleFull, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            {([['Paper', true], ['Live', false]] as const).map(([label, isPaper]) => {
+              const active = paperMode === isPaper;
+              const tint = isPaper ? '#FF9F0A' : colors.error;
+              return (
+                <TouchableOpacity
+                  key={label}
+                  onPress={() => setPaperMode(isPaper)}
+                  activeOpacity={0.8}
+                  style={[styles.accountBtn, active && { backgroundColor: tint + '22', borderRadius: 8 }]}
+                >
+                  <Text style={[styles.accountText, { color: active ? tint : colors.tabBarInactive, fontWeight: active ? '700' : '500' }]}>
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
-        )}
+        </View>
 
         {/* Calls / Puts + price */}
         <View style={styles.controlRow}>
@@ -569,10 +623,33 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
 
         {/* Expiration date — pick a specific date instead of only trusting
             the auto "nearest match" (the auto-pick is what silently showed
-            the wrong day's chain — see pickTargetExpiration above). */}
-        {availableExpirations.length > 0 && (
-          <View>
+            the wrong day's chain — see pickTargetExpiration above). The range
+            toggle controls how far out to look before picking a date — a
+            calendar would show mostly disabled days since real expirations
+            are sparse, so this stays a chip list, just fed from a wider or
+            narrower window. */}
+        <View>
+          <View style={styles.expirationHeaderRow}>
             <Text style={[styles.controlLabel, { color: colors.tabBarInactive, marginTop: 4 }]}>EXPIRATION</Text>
+            <View style={[styles.rangeToggle, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              {(Object.keys(RANGE_LABELS) as ExpirationRange[]).map(r => {
+                const active = expirationRange === r;
+                return (
+                  <TouchableOpacity
+                    key={r}
+                    onPress={() => setExpirationRange(r)}
+                    activeOpacity={0.8}
+                    style={[styles.rangeBtn, { backgroundColor: active ? colors.surfaceTertiary : 'transparent' }]}
+                  >
+                    <Text style={[styles.rangeBtnText, { color: active ? colors.accent : colors.textSecondary }]}>
+                      {RANGE_LABELS[r]}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+          {availableExpirations.length > 0 ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 {availableExpirations.map(exp => {
@@ -598,12 +675,16 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
                 })}
               </View>
             </ScrollView>
-          </View>
-        )}
+          ) : (
+            <Text style={[styles.emptySub, { color: colors.tabBarInactive, textAlign: 'left', paddingTop: 0 }]}>
+              No {ticker || 'this ticker'} expirations found in this range.
+            </Text>
+          )}
+        </View>
       </View>
 
       {/* Column headers */}
-      {!isLoading && !showError && rows.length > 0 && (
+      {!contractsLoading && !showError && rows.length > 0 && (
         <View style={[styles.colHeaderRow, { backgroundColor: colors.surface, borderBottomColor: colors.separator }]}>
           <Text style={[styles.colHead, { width: COL.strike, color: colors.textTertiary }]}>Strike</Text>
           <Text style={[styles.colHead, { width: COL.bid,    color: colors.success }]}>Bid</Text>
@@ -615,7 +696,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
       )}
 
       {/* Chain */}
-      {isLoading ? (
+      {contractsLoading ? (
         <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
       ) : showError ? (
         <View style={styles.centered}>
@@ -669,16 +750,16 @@ const styles = StyleSheet.create({
   controlRow:   { flexDirection: 'row', alignItems: 'center', gap: 12 },
   controlLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 6 },
 
-  tickerSelect:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1 },
-  tickerSelectText:  { fontSize: 15, fontWeight: '700' },
-  tickerMenu:        { borderRadius: 10, borderWidth: 1, overflow: 'hidden' },
-  tickerMenuItem:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12 },
-  tickerMenuItemText:{ fontSize: 14 },
-  tickerSearchRow:   { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10 },
+  tickerRow:         { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  tickerChip:        { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 100, borderWidth: 1 },
+  tickerChipText:    { fontSize: 14, fontWeight: '700' },
+  tickerSearchToggle:{ width: 36, height: 36, borderRadius: 100, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  tickerSearchRow:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
   tickerSearchInput: { flex: 1, fontSize: 14, fontWeight: '600', borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9 },
   tickerSearchGo:    { width: 36, height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
 
   accountToggle: { flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3 },
+  accountToggleFull: { width: '100%' },
   accountBtn:    { flex: 1, alignItems: 'center', paddingVertical: 7 },
   accountText:   { fontSize: 13 },
 
@@ -689,6 +770,11 @@ const styles = StyleSheet.create({
 
   expiryChip:     { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 100, borderWidth: 1 },
   expiryChipText: { fontSize: 12, fontWeight: '700' },
+
+  expirationHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  rangeToggle:    { flexDirection: 'row', borderRadius: 100, padding: 2, borderWidth: 1 },
+  rangeBtn:       { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 100 },
+  rangeBtnText:   { fontSize: 11, fontWeight: '700' },
 
   colHeaderRow: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth },
   colHead:      { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
