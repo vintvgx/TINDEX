@@ -19,4 +19,7 @@ alter table orb_monitoring_state
     'Confirmed Bullish'::text,
     'Confirmed Bearish'::text,
     'reversal'::text
-  ]));
+  ])) not valid;
+
+alter table orb_monitoring_state
+  validate constraint orb_monitoring_state_breakout_type_check;
