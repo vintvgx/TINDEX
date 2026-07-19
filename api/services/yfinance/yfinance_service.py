@@ -28,14 +28,23 @@ def get_historical_prices(ticker: str, period_key: str) -> dict:
         period_key: One of PERIOD_MAP's keys (e.g. "1D", "1Y"); falls back to "1M"
 
     Returns:
-        Dict with "dates", "prices", "volumes" lists (empty lists on failure)
+        Dict with "dates", "prices" (closes), "volumes", plus "opens"/"highs"/"lows"
+        so the mobile chart can render candlesticks (empty lists on failure)
     """
     period, interval = PERIOD_MAP.get(period_key, PERIOD_MAP["1M"])
     try:
         hist = yf.Ticker(ticker).history(period=period, interval=interval)
+        # Intraday intervals can include rows with NaN prices (halts, thin
+        # bars at the session edges). NaN isn't valid JSON and breaks the
+        # mobile JSON.parse, so drop those rows before serializing.
+        if not hist.empty and "Close" in hist.columns:
+            hist = hist.dropna(subset=["Close"])
     except Exception as e:
         logger.warning(f"Failed to get historical prices for {ticker} ({period_key}): {str(e)}")
         hist = pd.DataFrame()
+
+    def _col(name: str) -> list:
+        return hist[name].tolist() if not hist.empty and name in hist.columns else []
 
     return {
         "dates": (
@@ -43,8 +52,11 @@ def get_historical_prices(ticker: str, period_key: str) -> dict:
             if not hist.empty and hasattr(hist.index, "strftime")
             else []
         ),
-        "prices": hist["Close"].tolist() if not hist.empty and "Close" in hist.columns else [],
-        "volumes": hist["Volume"].tolist() if not hist.empty and "Volume" in hist.columns else [],
+        "prices": _col("Close"),
+        "volumes": _col("Volume"),
+        "opens": _col("Open"),
+        "highs": _col("High"),
+        "lows": _col("Low"),
     }
 
 
