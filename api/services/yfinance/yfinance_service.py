@@ -9,6 +9,46 @@ from urllib.parse import urlparse
 
 logger = get_logger(__name__)
 
+# Maps a chart timeframe key to the (period, interval) args yfinance expects.
+PERIOD_MAP = {
+    "1D": ("1d", "5m"),
+    "1W": ("5d", "30m"),
+    "1M": ("1mo", "1d"),
+    "3M": ("3mo", "1d"),
+    "YTD": ("ytd", "1d"),
+    "1Y": ("1y", "1d"),
+    "5Y": ("5y", "1wk"),
+}
+
+
+def get_historical_prices(ticker: str, period_key: str) -> dict:
+    """
+    Fetch a single timeframe's historical price series for the chart.
+
+    Args:
+        ticker: The stock ticker
+        period_key: One of PERIOD_MAP's keys (e.g. "1D", "1Y"); falls back to "1M"
+
+    Returns:
+        Dict with "dates", "prices", "volumes" lists (empty lists on failure)
+    """
+    period, interval = PERIOD_MAP.get(period_key, PERIOD_MAP["1M"])
+    try:
+        hist = yf.Ticker(ticker).history(period=period, interval=interval)
+    except Exception as e:
+        logger.warning(f"Failed to get historical prices for {ticker} ({period_key}): {str(e)}")
+        hist = pd.DataFrame()
+
+    return {
+        "dates": (
+            hist.index.strftime("%Y-%m-%dT%H:%M:%S%z").tolist()
+            if not hist.empty and hasattr(hist.index, "strftime")
+            else []
+        ),
+        "prices": hist["Close"].tolist() if not hist.empty and "Close" in hist.columns else [],
+        "volumes": hist["Volume"].tolist() if not hist.empty and "Volume" in hist.columns else [],
+    }
+
 
 def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_options_analysis: bool | None = True) -> dict:
     """

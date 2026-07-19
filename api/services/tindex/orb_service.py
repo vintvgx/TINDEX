@@ -1223,7 +1223,9 @@ class OrbService:
                 ticker, "low", is_below_orb_low, current_price,
                 bar_close, stock_bar, orb_high, orb_low,
             )
-            breakout_type_to_set = high_label or low_label
+            breakout_type_to_set = self._pick_breakout_label(
+                high_label, low_label, is_above_orb_high, is_below_orb_low,
+            )
 
             if breakout_type_to_set is None and is_within_orb:
                 # Price is within ORB - MUST set to "none" or keep reversal if active
@@ -1362,6 +1364,28 @@ class OrbService:
             self._reset_side_state(ticker, side)
         return ticker_state[side]
 
+    @staticmethod
+    def _confirmed_breakout_label(side: str) -> str:
+        return "Confirmed Bullish" if side == "high" else "Confirmed Bearish"
+
+    @staticmethod
+    def _pick_breakout_label(
+        high_label: Optional[str],
+        low_label: Optional[str],
+        is_above_orb_high: bool,
+        is_below_orb_low: bool,
+    ) -> Optional[str]:
+        """Prefer the label for the side price is actually on — avoids high_label
+        winning on full-bar whipsaws when the bearish side confirmed."""
+        if is_below_orb_low and low_label:
+            return low_label
+        if is_above_orb_high and high_label:
+            return high_label
+        for label in (low_label, high_label):
+            if label and label.startswith("Confirmed"):
+                return label
+        return high_label or low_label
+
     async def _process_breakout_side(
         self,
         ticker: str,
@@ -1427,9 +1451,9 @@ class OrbService:
 
             if st["state"] == "BROKEN":
                 if self.get_current_et_time() >= st["confirm_deadline"]:
-                    await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
                     st["state"] = "CONFIRMED"
-                    return f"Confirmed {display_label}"
+                    await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
+                    return self._confirmed_breakout_label(side)
                 return None  # still waiting out the original 3-minute hold
 
             if st["state"] == "RETESTING":
@@ -1439,15 +1463,15 @@ class OrbService:
                 if reclaimed_extension:
                     # Didn't just reclaim the level — erased the entire rejection.
                     # That's self-confirming; no need to also wait out a bar.
-                    await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
                     st["state"] = "CONFIRMED"
-                    return f"Confirmed {display_label}"
+                    await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
+                    return self._confirmed_breakout_label(side)
                 if not st["reclaim_bar_seen"]:
                     st["reclaim_bar_seen"] = True
                     return f"Retesting {display_label}"
-                await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
                 st["state"] = "CONFIRMED"
-                return f"Confirmed {display_label}"
+                await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
+                return self._confirmed_breakout_label(side)
 
         else:
             # Price is back on the wrong side of the level for this direction.

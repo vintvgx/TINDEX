@@ -201,6 +201,9 @@ class ORBEngine:
         # a timeout — timeout is a hard bound and always ends the watch). Capped
         # at profile["max_retest_attempts"] before falling back to _cancel_retest.
         self._retest_attempt       = 0
+        # True once price has extended past MIN_EXT_PCT in the current cycle —
+        # gates invalidation so the same adverse move can't burn multiple retries.
+        self._retest_invalidation_eligible = False
         # Bar-close confirmation pending (used when profile bar_close_confirm == True).
         # After the 3-minute OrbService confirmation fires, entry is deferred until a
         # 1-minute bar CLOSES above ORH (CALL) or below ORL (PUT).  A single tick or
@@ -565,6 +568,7 @@ class ORBEngine:
         self._retest_trigger_price = breakout_price
         self._retest_deadline      = retest_deadline
         self._retest_attempt       = 0
+        self._retest_invalidation_eligible = False
 
         self.debug.emit("INFO",
             f"RETEST armed: watching for {direction} retest of {level:.2f} "
@@ -578,20 +582,14 @@ class ORBEngine:
         """
         direction = self._retest_direction
         level     = self._retest_level
+        MIN_EXT_PCT = 0.0008   # 0.08% past the level
 
         # Track max extension past the level
         dist = (current_price - level) if direction == "CALL" else (level - current_price)
         if dist > self._retest_max_dist:
             self._retest_max_dist = dist
-
-        # Invalidation: price closed significantly through the level the wrong way
-        INVALID_PCT = 0.0015   # 0.15%
-        if direction == "CALL" and current_price < level * (1 - INVALID_PCT):
-            self._handle_retest_invalidated(direction, level, current_price, "fell through ORH")
-            return
-        if direction == "PUT" and current_price > level * (1 + INVALID_PCT):
-            self._handle_retest_invalidated(direction, level, current_price, "rose through ORL")
-            return
+        if self._retest_max_dist >= level * MIN_EXT_PCT:
+            self._retest_invalidation_eligible = True
 
         # Timeout
         if now_et > self._retest_deadline:
@@ -599,8 +597,19 @@ class ORBEngine:
             self._cancel_retest("RETEST_TIMEOUT")
             return
 
+        # Invalidation: price closed significantly through the level the wrong way
+        INVALID_PCT = 0.0015   # 0.15%
+        invalidated = (
+            (direction == "CALL" and current_price < level * (1 - INVALID_PCT)) or
+            (direction == "PUT" and current_price > level * (1 + INVALID_PCT))
+        )
+        if invalidated:
+            if self._retest_invalidation_eligible:
+                reason = "fell through ORH" if direction == "CALL" else "rose through ORL"
+                self._handle_retest_invalidated(direction, level, current_price, reason)
+            return
+
         # Need enough extension to confirm it was a real breakout (not just a tick)
-        MIN_EXT_PCT = 0.0008   # 0.08% past the level
         if self._retest_max_dist < level * MIN_EXT_PCT:
             return  # not extended far enough yet
 
@@ -629,6 +638,10 @@ class ORBEngine:
         the OrbService-level fix so a single failed retest attempt doesn't
         permanently kill the session the way it used to.
 
+        Only called when the current extension/pullback cycle had already
+        reached MIN_EXT_PCT (_retest_invalidation_eligible); staying beyond
+        the invalidation threshold on subsequent ticks does not re-enter here.
+
         Timeout is NOT retried here — the deadline is already the bound on how
         long we'll wait; capping retries only bounds how many times a fresh
         extension-and-pullback cycle gets tried within that window.
@@ -643,6 +656,7 @@ class ORBEngine:
 
         self._retest_attempt  += 1
         self._retest_max_dist  = 0.0
+        self._retest_invalidation_eligible = False
         self.debug.emit("WARN",
             f"RETEST invalidated — price {current_price:.2f} {reason_str} {level:.2f} — "
             f"re-armed (attempt {self._retest_attempt}/{max_attempts}), still watching "
@@ -655,6 +669,7 @@ class ORBEngine:
         self._retest_level     = None
         self._retest_max_dist  = 0.0
         self._retest_deadline  = None
+        self._retest_invalidation_eligible = False
         self._skip(reason)
 
     # ── Entry ──────────────────────────────────────────────────────────────────

@@ -15,7 +15,8 @@ from services.anthropic.anthropic_service import anthropic_service
 from services.supabase.supabase_service import get_supabase_service
 from services.utils.research_service import get_research_service
 from services.utils.blog_generation_service import get_blog_service
-from utils.cache import TrendingStocksCache
+from services.yfinance.yfinance_service import get_historical_prices, PERIOD_MAP
+from utils.cache import TrendingStocksCache, GenericTTLCache
 
 import requests as _requests
 from bs4 import BeautifulSoup
@@ -26,6 +27,17 @@ bp = Blueprint("ticker", __name__)
 
 _trending_cache = TrendingStocksCache()
 _TRENDING_CACHE_TTL = 90
+
+_history_cache = GenericTTLCache()
+_HISTORY_CACHE_TTL = {
+    "1D": 30,
+    "1W": 60,
+    "1M": 300,
+    "3M": 300,
+    "YTD": 300,
+    "1Y": 300,
+    "5Y": 300,
+}
 
 
 # ── Data classes ────────────────────────────────────────────────────────────────
@@ -124,6 +136,33 @@ def get_ticker_data(ticker: str):
     except Exception as e:
         logger.error("Ticker research failed for ticker '%s': %s", ticker, e, exc_info=True)
         return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
+
+
+@bp.route("/ticker/<ticker>/history", methods=["POST"])
+def get_ticker_history(ticker: str):
+    try:
+        ticker = ticker.strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({"success": False, "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."}), 400
+
+        data = request.get_json() or {}
+        period = data.get("period", "1M")
+        if period not in PERIOD_MAP:
+            return jsonify({"success": False, "error": f"Invalid period. Must be one of: {', '.join(PERIOD_MAP.keys())}"}), 400
+
+        cache_key = f"{ticker}_{period}"
+        cached_data = _history_cache.get(cache_key)
+        if cached_data:
+            return jsonify({"success": True, "data": cached_data, "period": period, "timestamp": time.time(), "from_cache": True})
+
+        historical_data = get_historical_prices(ticker, period)
+        _history_cache.set(cache_key, historical_data, _HISTORY_CACHE_TTL.get(period, 60))
+
+        return jsonify({"success": True, "data": historical_data, "period": period, "timestamp": time.time(), "from_cache": False})
+
+    except Exception as e:
+        logger.error("Ticker history fetch failed for ticker '%s': %s", ticker, e, exc_info=True)
+        return jsonify({"success": False, "error": f"History fetch failed: {str(e)}"}), 500
 
 
 @bp.route("/search/<ticker>", methods=["POST"])

@@ -236,7 +236,9 @@ def follow_account():
     social_signal_accounts is upserted globally (one row per distinct handle,
     shared across every user who follows it, so the poll loop only queries X
     once per handle) — the per-user relationship is the
-    user_social_signal_follows row created below.
+    user_social_signal_follows row created below. parse_keywords is only
+    written when the shared account row is first created; following an
+    existing handle never overwrites another follower's keyword config.
     """
     user_id, auth_error = _require_authenticated_user_id()
     if auth_error:
@@ -255,12 +257,24 @@ def follow_account():
         if x_user_id is None:
             return jsonify({"success": False, "error": f"@{handle} not found on X"}), 404
 
-        res = sb.table("social_signal_accounts").upsert({
+        existing = (
+            sb.table("social_signal_accounts")
+            .select("id")
+            .eq("handle", handle)
+            .limit(1)
+            .execute()
+        )
+        account_payload = {
             "handle": handle,
             "x_user_id": x_user_id,
             "active": True,
-            "parse_keywords": parse_keywords,
-        }, on_conflict="handle").execute()
+        }
+        if not existing.data:
+            account_payload["parse_keywords"] = parse_keywords
+
+        res = sb.table("social_signal_accounts").upsert(
+            account_payload, on_conflict="handle"
+        ).execute()
         account = res.data[0] if res.data else None
         if not account:
             return jsonify({"success": False, "error": "Failed to upsert account"}), 500
