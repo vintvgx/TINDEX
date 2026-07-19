@@ -5,8 +5,6 @@ from log.logging_config import get_logger
 
 from datetime import datetime, timedelta, timezone
 
-from urllib.parse import urlparse
-
 logger = get_logger(__name__)
 
 # Maps a chart timeframe key to the (period, interval) args yfinance expects.
@@ -96,8 +94,14 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_opt
             logger.warning(f"Failed to get recommendations for {topic}: {str(e)}")
             recommendations_list = []
 
-        # Get current price and change
-        current_price = info.get("currentPrice", 0)
+        # Get current price and change.
+        # ETFs (and some other non-equity tickers) don't populate "currentPrice" —
+        # that field is equity-specific — so it comes back 0/missing. Fall back to
+        # "regularMarketPrice", then to the most recent trading day's close from
+        # the historical data already fetched above, before giving up at 0.
+        current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+        if not current_price and not hist.empty and "Close" in hist.columns:
+            current_price = float(hist["Close"].iloc[-1])
         previous_close = info.get("previousClose", current_price)
         price_change = current_price - previous_close
         price_change_percent = (
@@ -239,15 +243,16 @@ def perform_yfinance_search(ticker: str) -> dict:
             logger.warning(f"Failed to get basic info for {ticker}: {str(e)}")
             info = {}
 
-        # Get current price and change
-        current_price = info.get("currentPrice", 0)
+        # Get current price and change. See perform_yfinance_research for why
+        # ETFs need the "regularMarketPrice" fallback.
+        current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
         previous_close = info.get("previousClose", current_price)
         price_change = current_price - previous_close
         price_change_percent = (
             (price_change / previous_close * 100) if previous_close else 0
         )
 
-        
+
         search_data = {
             "ticker": ticker,
             "company_name": info.get("longName", info.get("shortName", ticker)),
@@ -379,18 +384,21 @@ def analyze_sentiment(research_data: dict) -> dict:
 
 
 def get_company_logo(info: dict, ticker: str) -> str:
-    """Get company logo URL with fallbacks."""
-    
+    """Get company logo URL with fallbacks.
+
+    Clearbit's free logo API (the previous primary source here) is no longer
+    reliably reachable, so Financial Modeling Prep's ticker-keyed logo CDN —
+    confirmed working and doesn't depend on yfinance having a `website` field —
+    is used instead. The frontend falls back to a text placeholder if a given
+    ticker has no logo there (FMP 404s rather than erroring).
+    """
+
     # Try yFinance logo_url first
     logo_url = info.get("logo_url")
     if logo_url:
         return logo_url
-    
-    # Try Clearbit with company website
-    website = info.get("website")
-    if website:
-        domain = urlparse(website).netloc or website
-        return f"https://logo.clearbit.com/{domain}"
-    
-    # Fallback to a default or placeholder
-    return "https://craftsnippets.com/articles_images/placeholder/placeholder.jpg" 
+
+    if ticker:
+        return f"https://financialmodelingprep.com/image-stock/{ticker.upper()}.png"
+
+    return "https://craftsnippets.com/articles_images/placeholder/placeholder.jpg"
