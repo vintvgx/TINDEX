@@ -9,8 +9,9 @@
 -- if/when you want it live; that path now correctly creates this row itself.
 
 insert into user_social_signal_follows (user_id, account_id)
-values (
+select
   '262c8cc2-4ded-449b-a8be-0bab40d06ef4',  -- your user_id, confirmed against tracked_options_contracts.user_id
   'c105d3b2-2a4e-4145-aa55-71338386cf4c'   -- OptionsBuffett
-)
+where exists (select 1 from auth.users where id = '262c8cc2-4ded-449b-a8be-0bab40d06ef4')
+  and exists (select 1 from social_signal_accounts where id = 'c105d3b2-2a4e-4145-aa55-71338386cf4c')
 on conflict (user_id, account_id) do nothing;
