@@ -144,17 +144,30 @@ class ORBEngine:
         if self._subscribed_ticker != self.ticker or self._subscription_type != new_sub_type:
             if self._subscribed_ticker is not None:
                 self._hub.unsubscribe(self._subscribed_ticker, self.on_bar)
+                self._hub.unsubscribe(self._subscribed_ticker, self._on_retest_event)
                 if self._subscription_type == "reversal":
                     self._hub.unsubscribe(self._subscribed_ticker, self.on_reversal_confirmed)
                 else:
                     self._hub.unsubscribe(self._subscribed_ticker, self.on_breakout_confirmed)
             self._hub.subscribe_bar(self.ticker, self.on_bar)
+            self._hub.subscribe_retest_events(self.ticker, self._on_retest_event)
             if is_reversal_profile:
                 self._hub.subscribe_reversal(self.ticker, self.on_reversal_confirmed)
             else:
                 self._hub.subscribe_breakout(self.ticker, self.on_breakout_confirmed)
             self._subscribed_ticker = self.ticker
             self._subscription_type = new_sub_type
+
+        # Register this ticker's retest-attempt tolerance with the hub — the
+        # breakout-confirmation state machine (orb_service.py) reads this
+        # instead of a single hardcoded value shared by every ticker/profile,
+        # so a patient profile (e.g. Trend Rider) can tolerate more pre-
+        # breakout chop than a scalping profile on the same ticker would want
+        # (2026-07-20: a clean IWM bearish break never confirmed because the
+        # ticker-wide cap of 1 had already been exhausted by earlier chop).
+        self._hub.set_max_retest_attempts(
+            self.ticker, self.profile.get("max_retest_attempts", 1),
+        )
 
         # Tag every persisted debug row with this engine's identity.
         self.debug.set_context(strategy_id=self.strategy_id, ticker=self.ticker,
@@ -260,6 +273,13 @@ class ORBEngine:
         # observing the close. Unsubscribes any leftover stream callback too.
         self.reset_session()
         self.session_date = now_et.date()
+
+        # Re-register this ticker's retest-attempt tolerance every day — the
+        # hub clears its whole registry at the start of each ORB calculation
+        # window (orb_service.py), and _apply_config only runs once at
+        # construction/config-reload time, not daily, so without this the
+        # registration would only ever survive the first day after a restart.
+        self._hub.set_max_retest_attempts(self.ticker, self.profile.get("max_retest_attempts", 1))
 
         # Close any open trades from prior expired sessions (crash/redeploy guard).
         self.logger.reconcile_orphaned_trades()
@@ -444,6 +464,16 @@ class ORBEngine:
             return
 
     # ── Service-driven entry ─────────────────────────────────────────────────────
+
+    def _on_retest_event(self, level: str, message: str):
+        """
+        Hub callback: OrbService's breakout-confirmation state machine changed
+        state for this ticker (break detected, invalidated/re-armed, exhausted,
+        confirmed). Previously this only ever reached server-side logs, so a
+        session that got capped out — like IWM on 2026-07-20 — was invisible
+        from the app; now it shows up in the Debug tab like everything else.
+        """
+        self.debug.emit(level, message)
 
     def on_breakout_confirmed(self, direction: str, price: float):
         """
@@ -2330,6 +2360,7 @@ class ORBEngine:
         """
         if self._subscribed_ticker is not None:
             self._hub.unsubscribe(self._subscribed_ticker, self.on_bar)
+            self._hub.unsubscribe(self._subscribed_ticker, self._on_retest_event)
             if self._subscription_type == "reversal":
                 self._hub.unsubscribe(self._subscribed_ticker, self.on_reversal_confirmed)
             else:

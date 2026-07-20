@@ -74,6 +74,21 @@ class OrbDataHub:
         # configured with the REVERSAL profile listen on this channel — regular
         # breakout engines are unaffected.
         self._reversal_subs: dict[str, list[Callable[[str, float], None]]] = defaultdict(list)
+        # Retest-event subscribers: OrbService publishes here on every retest
+        # state transition (break detected, invalidated/re-armed, exhausted,
+        # confirmed) so engines can surface it to their own Debug tab — this
+        # pipeline previously only logged server-side, so a session that got
+        # capped out had zero visibility from the app. cb(level, message).
+        self._retest_event_subs: dict[str, list[Callable[[str, str], None]]] = defaultdict(list)
+        # Per-ticker max retest attempts, registered by whichever strategy
+        # engines are currently watching that ticker (the highest value among
+        # them wins) and read by OrbService's breakout-confirmation state
+        # machine. Previously this was a single hardcoded value (1) shared by
+        # every ticker and every profile, with no way for a patient strategy
+        # (e.g. Trend Rider) to tolerate more pre-breakout chop than a
+        # scalping profile on the same ticker would want. Defaults to 1 for
+        # any ticker no engine has registered a preference for.
+        self._max_retest_attempts: dict[str, int] = {}
         # Whether OrbService (the bar feed) is currently running. Engines depend on
         # it for price data, so they stay silent / keep the session armed when it
         # is False (e.g. right after a redeploy, before the service has started).
@@ -114,11 +129,19 @@ class OrbDataHub:
                 self._reversal_subs[ticker].append(cb)
         logger.info("[OrbDataHub] reversal subscriber added for %s", ticker)
 
-    def unsubscribe(self, ticker: str, cb: Callable) -> None:
-        """Remove a callback from bar, ORB, breakout, and reversal subscriptions."""
+    def subscribe_retest_events(self, ticker: str, cb: Callable[[str, str], None]) -> None:
+        """Register a retest-event callback: cb(level, message) — level is a
+        debug-log level string ("INFO"/"WARN"/"SUCCESS"), message is
+        human-readable, meant to be passed straight to engine.debug.emit()."""
         with self._lock:
-            for registry in (self._bar_subs, self._orb_subs,
-                             self._breakout_subs, self._reversal_subs):
+            if cb not in self._retest_event_subs[ticker]:
+                self._retest_event_subs[ticker].append(cb)
+
+    def unsubscribe(self, ticker: str, cb: Callable) -> None:
+        """Remove a callback from bar, ORB, breakout, reversal, and retest-event subscriptions."""
+        with self._lock:
+            for registry in (self._bar_subs, self._orb_subs, self._breakout_subs,
+                             self._reversal_subs, self._retest_event_subs):
                 if cb in registry.get(ticker, []):
                     registry[ticker].remove(cb)
         logger.info("[OrbDataHub] subscriber removed for %s", ticker)
@@ -191,6 +214,43 @@ class OrbDataHub:
             except Exception as e:
                 logger.error("[OrbDataHub] reversal subscriber error for %s: %s",
                              ticker, e, exc_info=True)
+
+    def publish_retest_event(self, ticker: str, level: str, message: str) -> None:
+        """Fan out one retest-state-machine transition to every engine watching
+        this ticker's Debug tab. Best-effort — a subscriber error here must
+        never break the breakout pipeline itself."""
+        with self._lock:
+            listeners = list(self._retest_event_subs.get(ticker, ()))
+        for cb in listeners:
+            try:
+                cb(level, message)
+            except Exception as e:
+                logger.error("[OrbDataHub] retest-event subscriber error for %s: %s",
+                             ticker, e, exc_info=True)
+
+    # ── Per-ticker retest-attempt cap ─────────────────────────────────────────
+
+    def set_max_retest_attempts(self, ticker: str, attempts: int) -> None:
+        """Register the highest max_retest_attempts among strategies currently
+        watching `ticker` — called by ORBEngine whenever its config is applied.
+        Monotonic (only raises, never lowers) within a session; the daily
+        clear_max_retest_attempts() call bounds how stale a lowered/removed
+        strategy's registration can get to at most one trading day."""
+        with self._lock:
+            current = self._max_retest_attempts.get(ticker, 0)
+            if attempts > current:
+                self._max_retest_attempts[ticker] = attempts
+
+    def get_max_retest_attempts(self, ticker: str, default: int = 1) -> int:
+        with self._lock:
+            return self._max_retest_attempts.get(ticker, default)
+
+    def clear_max_retest_attempts(self) -> None:
+        """Called once daily (alongside the retest-state reset) so a strategy
+        that's since been deleted or turned down can't keep a ticker's cap
+        artificially high forever."""
+        with self._lock:
+            self._max_retest_attempts.clear()
 
     # ── Queries (called by ORBEngine) ────────────────────────────────────────
 
