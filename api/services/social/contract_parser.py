@@ -56,13 +56,28 @@ def _next_weekday_on_or_after(d: date, target_weekday: int) -> date:
 
 
 def _resolve_bare_date(month: int, day: int, year: Optional[int], today: date) -> Optional[str]:
-    """'7/10' with no year -> this year, or next year if that date's already past."""
+    """
+    '7/10' with no year -> this year, unless the date is so far in the past
+    that it can only mean a wrap into next year (posted in late December
+    about an early-January date).
+
+    Previously any bare date even one day in the past rolled forward a full
+    year — these accounts almost always post about today or very recently,
+    so a date '1 day ago' is virtually always a stale reference or typo, not
+    a signal for a contract expiring 12 months out. That bug produced a
+    NVDA contract dated a year in the future from a tweet that said "7/15"
+    the day after ("2026-07-16 ... 7/15" -> wrongly resolved to
+    "2027-07-15" instead of "2026-07-15"), which the contract module's own
+    docstring explicitly says not to do ("never fabricates a ... expiry it
+    isn't reasonably sure of"). 30 days safely separates "posted about
+    yesterday" from a genuine December->January wraparound.
+    """
     try:
         y = year if year else today.year
         if year and year < 100:
             y = 2000 + year
         d = date(y, month, day)
-        if not year and d < today:
+        if not year and d < today and (today - d).days > 30:
             d = date(y + 1, month, day)
         return d.isoformat()
     except ValueError:
