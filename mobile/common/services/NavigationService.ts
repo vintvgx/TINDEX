@@ -1,4 +1,5 @@
 import { router } from 'expo-router';
+import TickerSheetService from './TickerSheetService';
 
 /**
  * NavigationService - Singleton service for managing app navigation
@@ -30,17 +31,21 @@ class NavigationService {
   // ==================== SCREEN NAVIGATION METHODS ====================
 
   /**
-   * Navigate to ticker detail screen
+   * Open the ticker detail bottom sheet
    * @param ticker - Stock ticker symbol
+   *
+   * Opens the global TickerSheetProvider modal (see TickerSheetService)
+   * rather than pushing a route, so the ticker view can appear instantly
+   * as a sheet over whatever screen is currently active.
    */
   toTicker(ticker: string): void {
     if (!ticker || typeof ticker !== 'string') {
       console.warn('NavigationService.toTicker: Invalid ticker provided');
       return;
     }
-    
+
     try {
-      router.push(`/ticker/${ticker.toUpperCase()}`);
+      TickerSheetService.getInstance().open(ticker.toUpperCase());
     } catch (error) {
       console.error('NavigationService.toTicker: Navigation failed', error);
     }

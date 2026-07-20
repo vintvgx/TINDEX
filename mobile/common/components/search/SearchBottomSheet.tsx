@@ -5,7 +5,6 @@ import {
   TextInput,
   FlatList,
   TouchableOpacity,
-  Image,
   Modal,
   Animated,
   Dimensions,
@@ -22,6 +21,7 @@ import type { SearchHistoryItem } from '@/common/types/blogPosts/ticker';
 import { useThemeColors } from '@/lib/useColorScheme';
 import useBaseNavigation from '@/hooks/navigation/useBaseNavigation';
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
+import { TickerLogo } from '@/common/components/ui/TickerLogo';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const HISTORY_KEY = 'ticker_search_history';
@@ -78,6 +78,13 @@ export const SearchBottomSheet: React.FC<SearchBottomSheetProps> = ({ visible, o
     } catch {}
   };
 
+  const handleClearHistory = async () => {
+    setHistory([]);
+    try {
+      await SecureStore.deleteItemAsync(HISTORY_KEY);
+    } catch {}
+  };
+
   const handleSelect = useCallback(
     async (item: SearchHistoryItem) => {
       const updated = [item, ...history.filter(h => h.ticker !== item.ticker)].slice(0, MAX_HISTORY);
@@ -115,35 +122,20 @@ export const SearchBottomSheet: React.FC<SearchBottomSheetProps> = ({ visible, o
   }
 
   const renderItem = ({ item }: { item: SearchHistoryItem }) => {
-    const pos = item.price_change_percent >= 0;
-    const changeColor = pos ? colors.success : colors.error;
     return (
       <TouchableOpacity
         onPress={() => handleSelect(item)}
         activeOpacity={0.72}
         style={[styles.resultRow, { backgroundColor: colors.surface, borderColor: colors.border }]}
       >
-        <View style={[styles.logoBox, { backgroundColor: colors.surfaceSecondary }]}>
-          {item.logo_url ? (
-            <Image source={{ uri: item.logo_url }} style={styles.logo} resizeMode="contain" />
-          ) : (
-            <Text style={[styles.logoText, { color: colors.textSecondary }]}>{item.ticker[0]}</Text>
-          )}
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.tickerLabel, { color: colors.textSecondary }]}>{item.ticker}</Text>
-          <Text style={[styles.companyName, { color: colors.text }]} numberOfLines={1}>
+        <TickerLogo uri={item.logo_url} ticker={item.ticker} size={44} borderRadius={10} />
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={[styles.tickerLabel, { color: colors.text }]}>{item.ticker}</Text>
+          <Text style={[styles.companyName, { color: colors.textSecondary }]} numberOfLines={1}>
             {item.company_name}
           </Text>
         </View>
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[styles.price, { color: colors.text }]}>
-            ${(item.current_price ?? 0).toFixed(2)}
-          </Text>
-          <Text style={[styles.change, { color: changeColor }]}>
-            {pos ? '+' : ''}{item.price_change_percent.toFixed(2)}%
-          </Text>
-        </View>
+        <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
       </TouchableOpacity>
     );
   };
@@ -158,10 +150,11 @@ export const SearchBottomSheet: React.FC<SearchBottomSheetProps> = ({ visible, o
         ]}
       >
         <SafeAreaView style={{ flex: 1 }} edges={['left', 'right', 'bottom']}>
-          <View style={styles.handle} />
-
-          {/* Search input */}
-          <View style={styles.inputWrap}>
+          {/* Close + search input row */}
+          <View style={styles.topRow}>
+            <TouchableOpacity onPress={onClose} hitSlop={10} style={styles.closeBtn}>
+              <Ionicons name="close" size={24} color={colors.text} />
+            </TouchableOpacity>
             <View style={[styles.inputRow, { backgroundColor: colors.surface, borderColor: colors.border }]}>
               <Ionicons name="search" size={17} color={colors.textSecondary} style={{ marginRight: 8 }} />
               <TextInput
@@ -185,7 +178,12 @@ export const SearchBottomSheet: React.FC<SearchBottomSheetProps> = ({ visible, o
           </View>
 
           {!debouncedSearch && history.length > 0 && (
-            <Text style={[styles.sectionLabel, { color: colors.textTertiary }]}>Recent Searches</Text>
+            <View style={styles.sectionRow}>
+              <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Recent</Text>
+              <TouchableOpacity onPress={handleClearHistory} hitSlop={8}>
+                <Text style={[styles.clearLabel, { color: colors.accent }]}>Clear</Text>
+              </TouchableOpacity>
+            </View>
           )}
 
           {isLoading ? (
@@ -227,17 +225,17 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
   },
-  handle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#3A3A3C',
-    alignSelf: 'center',
-    marginTop: 12,
-    marginBottom: 8,
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    marginBottom: 18,
+    gap: 10,
   },
-  inputWrap: { paddingHorizontal: 16, marginBottom: 14 },
+  closeBtn: { padding: 2 },
   inputRow: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: 14,
@@ -246,14 +244,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   input: { flex: 1, fontSize: 16 },
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
+  sectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     marginHorizontal: 16,
     marginBottom: 10,
   },
+  sectionLabel: { fontSize: 14, fontWeight: '500' },
+  clearLabel: { fontSize: 14, fontWeight: '600' },
   list: { paddingHorizontal: 16, paddingBottom: 40 },
   resultRow: {
     flexDirection: 'row',
@@ -263,21 +262,8 @@ const styles = StyleSheet.create({
     marginBottom: 9,
     borderWidth: 1,
   },
-  logoBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-    overflow: 'hidden',
-  },
-  logo: { width: '100%', height: '100%' },
-  logoText: { fontSize: 16, fontWeight: '700' },
-  tickerLabel: { fontSize: 11, fontWeight: '600', marginBottom: 2 },
-  companyName: { fontSize: 14, fontWeight: '600' },
-  price: { fontSize: 15, fontWeight: '700', marginBottom: 3 },
-  change: { fontSize: 12, fontWeight: '600' },
+  tickerLabel: { fontSize: 17, fontWeight: '700', marginBottom: 2 },
+  companyName: { fontSize: 13, fontWeight: '500' },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
   emptyText: { fontSize: 15, marginTop: 12 },
 });

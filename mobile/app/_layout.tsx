@@ -14,6 +14,7 @@ import { ThemeProvider as AppThemeProvider } from "@/lib/ThemeContext";
 import { useAppColorScheme } from "@/lib/useColorScheme";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useFonts } from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
@@ -31,6 +32,7 @@ import "@/common/services/LogService";
 import LoadingScreen from "@/common/components/LoadingScreen";
 import { ToastProvider } from "@/common/components/ui/Toast";
 import { PendingConfirmationProvider } from "@/common/components/strategy/PendingConfirmationProvider";
+import { TickerSheetProvider } from "@/common/utils/context/ticker/TickerSheetProvider";
 import { FONT_ASSETS } from "@/lib/typography";
 
 import { applyGlobalFont } from "@/lib/applyGlobalFont";
@@ -97,15 +99,17 @@ export default function RootLayout() {
 
   // Render the AuthProvider, once font is loaded
   return (
-    <SafeAreaProvider>
-      <QueryClientProvider client={queryClient}>
-        <AppThemeProvider>
-          <AuthProvider>
-            <AppContent />
-          </AuthProvider>
-        </AppThemeProvider>
-      </QueryClientProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <QueryClientProvider client={queryClient}>
+          <AppThemeProvider>
+            <AuthProvider>
+              <AppContent />
+            </AuthProvider>
+          </AppThemeProvider>
+        </QueryClientProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
@@ -216,7 +220,9 @@ function AppContent() {
     <ToastProvider>
       <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
         <PendingConfirmationProvider>
-          <Slot />
+          <TickerSheetProvider>
+            <Slot />
+          </TickerSheetProvider>
         </PendingConfirmationProvider>
         <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
       </ThemeProvider>

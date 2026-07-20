@@ -6,25 +6,13 @@ import type React from "react";
 import { View, Text } from "react-native";
 import { AppStoreCard } from "@/common/components/ui/AppStoreCard";
 import type { TickerData } from "@/common/types/blogPosts/ticker";
+import { formatMarketCap } from "@/common/utils/format/marketCap";
 
 interface FinancialsTabProps {
   stockData: TickerData;
 }
 
 export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
-  // Helper function to format market cap
-  const formatMarketCap = (marketCap: number): string => {
-    if (marketCap >= 1000000000000) {
-      return `$${(marketCap / 1000000000000).toFixed(1)}T`;
-    } else if (marketCap >= 1000000000) {
-      return `$${(marketCap / 1000000000).toFixed(1)}B`;
-    } else if (marketCap >= 1000000) {
-      return `$${(marketCap / 1000000).toFixed(1)}M`;
-    } else {
-      return `$${marketCap.toLocaleString()}`;
-    }
-  };
-
   return (
     <>
       {/* Key Metrics */}

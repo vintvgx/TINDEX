@@ -87,7 +87,7 @@ const generateMockTickerData = (ticker: string): TickerData => {
       currency: "USD",
       exchange: "NASDAQ",
       website: "https://apple.com",
-      logo_url: "https://logo.clearbit.com/apple.com",
+      logo_url: "https://financialmodelingprep.com/image-stock/AAPL.png",
       employees: 164000,
       beta: 1.29,
       debt_to_equity: 1.73,
@@ -109,7 +109,7 @@ const generateMockTickerData = (ticker: string): TickerData => {
       currency: "USD",
       exchange: "NASDAQ",
       website: "https://tesla.com",
-      logo_url: "https://logo.clearbit.com/tesla.com",
+      logo_url: "https://financialmodelingprep.com/image-stock/TSLA.png",
       employees: 140000,
       beta: 2.24,
       debt_to_equity: 0.17,
@@ -131,7 +131,7 @@ const generateMockTickerData = (ticker: string): TickerData => {
       currency: "USD",
       exchange: "NASDAQ",
       website: "https://nvidia.com",
-      logo_url: "https://logo.clearbit.com/nvidia.com",
+      logo_url: "https://financialmodelingprep.com/image-stock/NVDA.png",
       employees: 29000,
       beta: 1.68,
       debt_to_equity: 0.23,
@@ -170,6 +170,11 @@ const generateMockTickerData = (ticker: string): TickerData => {
   const basePrice = Math.random() * 200 + 50; // Random price between 50-250
   const priceChange = (Math.random() - 0.5) * 20; // Random change between -10 to +10
   const priceChangePercent = (priceChange / basePrice) * 100;
+  const website = mockData[ticker]?.website || `https://${ticker.toLowerCase()}.com`;
+  // Mirrors the backend's logo source (api/services/yfinance/yfinance_service.py's
+  // get_company_logo) so mock data still renders a logo when the live API is unreachable.
+  const logoUrl =
+    mockData[ticker]?.logo_url || `https://financialmodelingprep.com/image-stock/${ticker.toUpperCase()}.png`;
 
   const specificData = mockData[ticker] || {
     company_name: `${ticker} Corporation`,
@@ -283,6 +288,7 @@ const generateMockTickerData = (ticker: string): TickerData => {
       volumes: historicalVolumes
     },
     industry: specificData.industry || "Technology",
+    logo_url: logoUrl,
     market_cap: specificData.market_cap || Math.floor(Math.random() * 500000000000) + 50000000000,
     market_state: Math.random() > 0.5 ? "OPEN" : "CLOSED",
     news_data: newsData,
@@ -309,7 +315,7 @@ const generateMockTickerData = (ticker: string): TickerData => {
     sentiment_score: sentimentScore,
     ticker,
     volume: Math.floor(Math.random() * 10000000) + 1000000,
-    website: specificData.website || `https://${ticker.toLowerCase()}.com`,
+    website,
     year_high: basePrice + Math.random() * 50,
     year_low: basePrice - Math.random() * 30,
   };
