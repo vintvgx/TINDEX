@@ -27,6 +27,11 @@ interface Props {
   ticker: string;
   colors: any;
   visible: boolean;
+  /** Paper/live selection — lifted up to the parent (ImmediateTradePanel) so
+   *  the toggle can live above the ticker picker, and so the same value
+   *  drives a persistent background tint across both this screen and the
+   *  confirm modal. See ImmediateTradePanel for why this moved out of here. */
+  paperMode: boolean;
   /** Called after a trade submission resolves (success or failure) — a toast has already been shown. */
   onSubmitted?: () => void;
 }
@@ -126,9 +131,8 @@ const asOpportunity = (c: OptionsContract): OptionsOpportunity => ({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function OptionsChainPicker({ ticker, colors, visible, onSubmitted }: Props) {
+export function OptionsChainPicker({ ticker, colors, visible, paperMode, onSubmitted }: Props) {
   const toast = useToast();
-  const [paperMode, setPaperMode]       = useState(true);
   const [side, setSide]                 = useState<OptionSide>('CALL');
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [selected, setSelected]         = useState<OptionsContract | null>(null);
@@ -386,6 +390,14 @@ export function OptionsChainPicker({ ticker, colors, visible, onSubmitted }: Pro
 
   const showError = !!error || (data && !data.success);
 
+  // Matches the app-wide paper/live convention used on Dashboard/Live
+  // Positions/Trade Log — amber for paper, green for live. Applied as a
+  // persistent, subtle background wash rather than just the small toggle
+  // pill, so which mode is selected stays visible in peripheral vision
+  // through the whole chain-browsing screen and the confirm modal — the
+  // toggle alone was easy to glance past and buy into the wrong account.
+  const modeTint = paperMode ? '#FF9F0A' : '#30D158';
+
   const detailFooter = selected ? (
     <View style={{ gap: 12 }}>
       {/* Profile dropdown */}
@@ -483,15 +495,15 @@ export function OptionsChainPicker({ ticker, colors, visible, onSubmitted }: Pro
         disabled={isPending}
         activeOpacity={0.85}
         style={[styles.submitBtn, {
-          backgroundColor: isPending ? colors.border : (paperMode ? colors.accent : colors.error),
+          backgroundColor: isPending ? colors.border : modeTint,
         }]}
       >
         {isPending ? (
-          <ActivityIndicator color={paperMode ? colors.accentForeground : '#fff'} />
+          <ActivityIndicator color="#fff" />
         ) : (
           <>
-            <Ionicons name="flash" size={18} color={paperMode ? colors.accentForeground : '#fff'} />
-            <Text style={[styles.submitText, { color: paperMode ? colors.accentForeground : '#fff' }]}>
+            <Ionicons name="flash" size={18} color="#fff" />
+            <Text style={[styles.submitText, { color: '#fff' }]}>
               {paperMode ? '' : 'LIVE '}Buy {qty} {selected.option_type} · {profile.emoji} {profile.name}
               {isManual ? ` · SL −${manualSlPct}%` : ''}
               {isNoStopLoss ? ' · no auto exit' : ''}
@@ -503,32 +515,9 @@ export function OptionsChainPicker({ ticker, colors, visible, onSubmitted }: Pro
   ) : null;
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: modeTint + '0A' }}>
       {/* Controls */}
       <View style={styles.controls}>
-        {/* Paper / Live */}
-        <View>
-          <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>ACCOUNT</Text>
-          <View style={[styles.accountToggle, styles.accountToggleFull, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {([['Paper', true], ['Live', false]] as const).map(([label, isPaper]) => {
-              const active = paperMode === isPaper;
-              const tint = isPaper ? '#FF9F0A' : colors.error;
-              return (
-                <TouchableOpacity
-                  key={label}
-                  onPress={() => setPaperMode(isPaper)}
-                  activeOpacity={0.8}
-                  style={[styles.accountBtn, active && { backgroundColor: tint + '22', borderRadius: 8 }]}
-                >
-                  <Text style={[styles.accountText, { color: active ? tint : colors.tabBarInactive, fontWeight: active ? '700' : '500' }]}>
-                    {label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
         {/* Calls / Puts + price */}
         <View style={styles.controlRow}>
           <View style={[styles.toggle, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -680,6 +669,7 @@ export function OptionsChainPicker({ ticker, colors, visible, onSubmitted }: Pro
           ticker={ticker}
           currentPrice={currentPrice}
           footer={detailFooter}
+          tintColor={modeTint}
         />
       )}
     </View>
@@ -690,11 +680,6 @@ const styles = StyleSheet.create({
   controls:     { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, gap: 10 },
   controlRow:   { flexDirection: 'row', alignItems: 'center', gap: 12 },
   controlLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 6 },
-
-  accountToggle: { flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3 },
-  accountToggleFull: { width: '100%' },
-  accountBtn:    { flex: 1, alignItems: 'center', paddingVertical: 7 },
-  accountText:   { fontSize: 13 },
 
   toggle:     { flexDirection: 'row', alignSelf: 'flex-start', borderRadius: 100, padding: 3, borderWidth: 1 },
   toggleBtn:  { paddingHorizontal: 18, paddingVertical: 6, borderRadius: 100 },

@@ -35,6 +35,16 @@ interface Props {
    * footer already takes full ownership of the bottom bar.
    */
   onTrade?: () => void;
+  /**
+   * Optional full-screen background tint (e.g. paper/live mode color from an
+   * immediate-trade flow) — a subtle wash behind the whole modal so the mode
+   * a caller is trading in stays visible on the confirm screen, not just the
+   * screen before it. Deliberately generic (a raw color, not a paperMode
+   * boolean) so this modal — also used for plain watchlist tracking, which
+   * has no paper/live concept at all — stays decoupled from the trading
+   * domain; callers that don't trade just never pass this.
+   */
+  tintColor?: string;
 }
 
 const fc = (v: number) =>
@@ -67,10 +77,16 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
   liveContractPrice = null,
   footer,
   onTrade,
+  tintColor,
 }) => {
   const colors = useThemeColors();
   const [greeksInfoOpen, setGreeksInfoOpen] = useState(false);
   if (!contract) return null;
+
+  // Subtle wash, not a solid fill — this covers the whole scrollable content
+  // area (lots of text/rows), unlike the small badges elsewhere that use a
+  // much stronger tint at '12'-'25' alpha.
+  const rootBg = tintColor ? tintColor + '0A' : colors.background;
 
   // Change vs. the initial tracked price — use liveContractPrice so it
   // mirrors the card exactly (null when no live data → change row hidden).
@@ -103,7 +119,7 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: rootBg }}>
         {/* ── Header ── */}
         <View style={[s.header, { borderBottomColor: colors.separator }]}>
           <View style={{ flex: 1 }}>
@@ -328,7 +344,7 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
         </ScrollView>
 
         {/* ── Bottom action ── */}
-        <View style={[s.bottomBar, { backgroundColor: colors.background, borderTopColor: colors.separator }]}>
+        <View style={[s.bottomBar, { backgroundColor: rootBg, borderTopColor: colors.separator }]}>
           {footer ? footer : (
             <View style={{ flexDirection: 'row', gap: 10 }}>
               {isTracked ? (

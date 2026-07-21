@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { OptionsChainPicker } from '@/common/components/strategy/OptionsChainPicker';
+import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 
 interface Props {
   colors: any;
@@ -18,19 +19,54 @@ interface Props {
 
 export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }: Props) {
   const [ticker, setTicker]             = useState<string>('');
-  const [tickerSearchOpen, setTickerSearchOpen] = useState(false);
-  const [tickerInput, setTickerInput]   = useState('');
+  const [searchOpen, setSearchOpen]     = useState(false);
+  // Lifted up from OptionsChainPicker so the toggle can sit above the ticker
+  // picker (per user request, after accidentally buying paper contracts
+  // meant to be live) and so the same value drives one continuous background
+  // tint across this screen, the chain screen, and the confirm modal —
+  // rather than a small easy-to-glance-past pill being the only cue.
+  const [paperMode, setPaperMode]       = useState(true);
 
   useEffect(() => {
     if (!ticker && tickerOptions.length) setTicker(tickerOptions[0]);
   }, [tickerOptions, ticker]);
 
+  // Matches the app-wide paper/live convention used on Dashboard/Live
+  // Positions/Trade Log — amber for paper, green for live.
+  const modeTint = paperMode ? '#FF9F0A' : '#30D158';
+
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: modeTint + '0A' }}>
       <View style={styles.controls}>
-        {/* Ticker — a chip per ORB-monitored ticker plus a search toggle for
-            anything else, in place of the old open/close accordion menu. */}
-        <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>TICKER</Text>
+        {/* Paper / Live — above the ticker picker so it's the first thing
+            tapped/seen, not something that can be scrolled past unnoticed. */}
+        <Text style={[styles.controlLabel, { color: colors.tabBarInactive }]}>ACCOUNT</Text>
+        <View style={[styles.accountToggle, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          {([['Paper', true], ['Live', false]] as const).map(([label, isPaper]) => {
+            const active = paperMode === isPaper;
+            const tint = isPaper ? '#FF9F0A' : '#30D158';
+            return (
+              <TouchableOpacity
+                key={label}
+                onPress={() => setPaperMode(isPaper)}
+                activeOpacity={0.8}
+                style={[styles.accountBtn, active && { backgroundColor: tint + '22', borderRadius: 8 }]}
+              >
+                <Text style={[styles.accountText, { color: active ? tint : colors.tabBarInactive, fontWeight: active ? '700' : '500' }]}>
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* Ticker — a chip per ORB-monitored ticker plus a search button for
+            anything else. The search button opens the same live-search sheet
+            used everywhere else in the app (debounced auto-search, tap a
+            result to select) instead of a bare text field the user had to
+            type a full symbol into and then press a separate "go" button for
+            — that extra press was the complaint this replaced. */}
+        <Text style={[styles.controlLabel, { color: colors.tabBarInactive, marginTop: 4 }]}>TICKER</Text>
         <View style={styles.tickerRow}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
             <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -39,7 +75,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
                 return (
                   <TouchableOpacity
                     key={t}
-                    onPress={() => { setTicker(t); setTickerSearchOpen(false); }}
+                    onPress={() => setTicker(t)}
                     activeOpacity={0.8}
                     style={[styles.tickerChip, { backgroundColor: active ? colors.accent + '22' : colors.card, borderColor: active ? colors.accent : colors.border }]}
                   >
@@ -47,8 +83,8 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
                   </TouchableOpacity>
                 );
               })}
-              {/* Custom ticker entered via search — shown as its own selected
-                  chip once picked, since it won't be in tickerOptions. */}
+              {/* Custom ticker picked via search — shown as its own selected
+                  chip since it won't be in tickerOptions. */}
               {!!ticker && !tickerOptions.includes(ticker) && (
                 <View style={[styles.tickerChip, { backgroundColor: colors.accent + '22', borderColor: colors.accent }]}>
                   <Text style={[styles.tickerChipText, { color: colors.accent }]}>{ticker}</Text>
@@ -57,53 +93,22 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
             </View>
           </ScrollView>
           <TouchableOpacity
-            onPress={() => setTickerSearchOpen(o => !o)}
+            onPress={() => setSearchOpen(true)}
             activeOpacity={0.7}
-            style={[styles.tickerSearchToggle, { backgroundColor: tickerSearchOpen ? colors.accent + '22' : colors.card, borderColor: tickerSearchOpen ? colors.accent : colors.border }]}
+            style={[styles.tickerSearchToggle, { backgroundColor: colors.card, borderColor: colors.border }]}
           >
-            <Ionicons name="search" size={16} color={tickerSearchOpen ? colors.accent : colors.tabBarInactive} />
+            <Ionicons name="search" size={16} color={colors.tabBarInactive} />
           </TouchableOpacity>
         </View>
-
-        {/* Free-text entry — tickerOptions only lists ORB-monitored tickers
-            (effectively SPY/QQQ/IWM today), so this is the only way to reach
-            any other stock. Same 1-5 alpha validation the backend applies. */}
-        {tickerSearchOpen && (
-          <View style={styles.tickerSearchRow}>
-            <TextInput
-              value={tickerInput}
-              onChangeText={t => setTickerInput(t.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 5))}
-              placeholder="Type any ticker (e.g. AAPL)"
-              placeholderTextColor={colors.tabBarInactive}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              autoFocus
-              style={[styles.tickerSearchInput, { color: colors.text, borderColor: colors.border }]}
-              onSubmitEditing={() => {
-                if (!tickerInput) return;
-                setTicker(tickerInput);
-                setTickerSearchOpen(false);
-                setTickerInput('');
-              }}
-              returnKeyType="go"
-            />
-            <TouchableOpacity
-              onPress={() => {
-                if (!tickerInput) return;
-                setTicker(tickerInput);
-                setTickerSearchOpen(false);
-                setTickerInput('');
-              }}
-              disabled={!tickerInput}
-              style={[styles.tickerSearchGo, { backgroundColor: tickerInput ? colors.accent : colors.border }]}
-            >
-              <Ionicons name="arrow-forward" size={16} color={colors.iconButton ?? '#fff'} />
-            </TouchableOpacity>
-          </View>
-        )}
       </View>
 
-      <OptionsChainPicker ticker={ticker} colors={colors} visible={visible} onSubmitted={onClose} />
+      <SearchBottomSheet
+        visible={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onSelectTicker={t => setTicker(t)}
+      />
+
+      <OptionsChainPicker ticker={ticker} colors={colors} visible={visible} paperMode={paperMode} onSubmitted={onClose} />
     </View>
   );
 }
@@ -112,11 +117,12 @@ const styles = StyleSheet.create({
   controls:     { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, gap: 10 },
   controlLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 6 },
 
+  accountToggle: { flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3, width: '100%' },
+  accountBtn:    { flex: 1, alignItems: 'center', paddingVertical: 7 },
+  accountText:   { fontSize: 13 },
+
   tickerRow:         { flexDirection: 'row', alignItems: 'center', gap: 8 },
   tickerChip:        { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 100, borderWidth: 1 },
   tickerChipText:    { fontSize: 14, fontWeight: '700' },
   tickerSearchToggle:{ width: 36, height: 36, borderRadius: 100, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  tickerSearchRow:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
-  tickerSearchInput: { flex: 1, fontSize: 14, fontWeight: '600', borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9 },
-  tickerSearchGo:    { width: 36, height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
 });

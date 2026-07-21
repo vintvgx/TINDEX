@@ -30,9 +30,17 @@ const MAX_HISTORY = 10;
 interface SearchBottomSheetProps {
   visible: boolean;
   onClose: () => void;
+  /**
+   * When provided, selecting a result calls this instead of navigating to
+   * the ticker detail screen — lets any picker (e.g. ImmediateTradePanel's
+   * ticker chooser) reuse this same live-search UI (debounced auto-search +
+   * tap-to-select, no separate "go" button) instead of a bespoke text input.
+   * History is still recorded either way.
+   */
+  onSelectTicker?: (ticker: string) => void;
 }
 
-export const SearchBottomSheet: React.FC<SearchBottomSheetProps> = ({ visible, onClose }) => {
+export const SearchBottomSheet: React.FC<SearchBottomSheetProps> = ({ visible, onClose, onSelectTicker }) => {
   const colors = useThemeColors();
   const { toTicker } = useBaseNavigation();
   const pathname = usePathname();
@@ -93,6 +101,10 @@ export const SearchBottomSheet: React.FC<SearchBottomSheetProps> = ({ visible, o
         setHistory(updated);
       } catch {}
       onClose();
+      if (onSelectTicker) {
+        onSelectTicker(item.ticker.toUpperCase());
+        return;
+      }
       // On the Contracts page, look up the searched stock's option chain in
       // place instead of navigating away to the generic ticker detail
       // screen — options.tsx already reads its active ticker from this same
@@ -103,7 +115,7 @@ export const SearchBottomSheet: React.FC<SearchBottomSheetProps> = ({ visible, o
         toTicker(item.ticker);
       }
     },
-    [history, onClose, toTicker, pathname, setOptionsTicker],
+    [history, onClose, toTicker, pathname, setOptionsTicker, onSelectTicker],
   );
 
   const displayItems: SearchHistoryItem[] = [];

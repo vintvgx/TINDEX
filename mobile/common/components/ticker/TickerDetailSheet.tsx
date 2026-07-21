@@ -35,6 +35,10 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
   const [subScreen, setSubScreen] = useState<SubScreen>(null);
   const [scrubPoint, setScrubPoint] = useState<ScrubPoint | null>(null);
   const [fullScreenChart, setFullScreenChart] = useState(false);
+  // Own paper/live toggle for the Contracts tab — OptionsChainPicker no
+  // longer owns this itself (see ImmediateTradePanel for why it moved up:
+  // a persistent background tint needs a value from above it to apply to).
+  const [paperMode, setPaperMode] = useState(true);
 
   const { data: tickerResponse, isLoading, isRefetching, refetch } = useTickerQuery(ticker);
   const stockData = tickerResponse?.data;
@@ -97,12 +101,37 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
           (stockData.has_options === false ? (
             <EmptyState icon="analytics-outline" message="This ticker does not have options trading available." />
           ) : (
-            <OptionsChainPicker
-              ticker={ticker}
-              colors={colors}
-              visible={subScreen === 'contracts'}
-              onSubmitted={() => setSubScreen(null)}
-            />
+            <>
+              <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+                <View style={{ flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3, backgroundColor: colors.card, borderColor: colors.border }}>
+                  {([['Paper', true], ['Live', false]] as const).map(([label, isPaper]) => {
+                    const active = paperMode === isPaper;
+                    const tint = isPaper ? '#FF9F0A' : '#30D158';
+                    return (
+                      <Pressable
+                        key={label}
+                        onPress={() => setPaperMode(isPaper)}
+                        style={[
+                          { flex: 1, alignItems: 'center', paddingVertical: 7 },
+                          active && { backgroundColor: tint + '22', borderRadius: 8 },
+                        ]}
+                      >
+                        <Text style={{ fontSize: 13, color: active ? tint : colors.tabBarInactive, fontWeight: active ? '700' : '500' }}>
+                          {label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+              <OptionsChainPicker
+                ticker={ticker}
+                colors={colors}
+                visible={subScreen === 'contracts'}
+                paperMode={paperMode}
+                onSubmitted={() => setSubScreen(null)}
+              />
+            </>
           ))}
         {subScreen === 'insights' && <ScrollView contentContainerStyle={{ padding: 20 }}><AnalyticsTab stockData={stockData} /></ScrollView>}
         {subScreen === 'financials' && <ScrollView contentContainerStyle={{ padding: 20 }}><FinancialsTab stockData={stockData} /></ScrollView>}
