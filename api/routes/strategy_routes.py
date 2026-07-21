@@ -256,6 +256,21 @@ def _reconcile_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
 
     qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
     if qty_remaining <= 0:
+        # qty_exited already accounts for the full position (e.g. a partial-
+        # exit write that landed twice, or a prior interrupted close) but
+        # exit_time was never stamped — this row came from get_open_trades(),
+        # i.e. exit_time IS NULL, so without this it stays "open" forever with
+        # every future reconcile pass silently no-op'ing on it (nothing left
+        # to exit, by qty). Stamp exit_time now so it stops appearing open;
+        # don't touch pnl/qty_exited since they're already accounted for.
+        try:
+            logger_svc.client.table("orb_trades").update({
+                "exit_time": datetime.utcnow().isoformat(),
+                "exit_reason": row.get("exit_reason") or "RECONCILED — QTY ALREADY ZERO",
+            }).eq("id", row["id"]).execute()
+        except Exception as e:
+            logger.error("[reconcile] failed to stamp exit_time for zero-qty row %s: %s",
+                         row.get("id"), e)
         return {"contract_symbol": symbol, "status": "already_closed"}
 
     exit_price = None
@@ -275,13 +290,28 @@ def _reconcile_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
     except Exception as e:
         logger.warning("[reconcile] order lookup failed for %s: %s", symbol, e)
 
-    # Fall back to entry_premium (pnl=0) when the real fill can't be found —
-    # same convention TradeLogger.reconcile_orphaned_trades already uses for
-    # "we know it closed but not at what price" rather than fabricating a
-    # gain/loss that didn't happen.
+    # No sell fill found. If the contract's expiry has passed, the broker
+    # having no position AND no sell order overwhelmingly means it expired
+    # worthless — record the real loss (exit_premium=0), not a fictitious
+    # breakeven. Previously this always fell back to entry_premium (pnl=0)
+    # regardless of expiry, which silently turned every unmonitored expired
+    # contract into a fake $0 close (and hid it from win/loss stats, since
+    # pnl=0 counts as neither). Only genuinely unexplained closures (not yet
+    # expired, no fill found) still fall back to entry_premium — we don't
+    # know what happened there, so we don't guess a loss that may not have
+    # occurred. NOTE: doesn't cover ITM auto-exercise (Alpaca converts to a
+    # stock position rather than the contract vanishing) — a real edge case
+    # this heuristic can't distinguish from a plain worthless expiration.
+    expiry = row.get("expiry")
+    is_expired = bool(expiry) and expiry <= date.today().isoformat()
+    if exit_price is None and is_expired:
+        exit_price = 0.0
+        exit_reason = "EXPIRED_WORTHLESS"
+    exit_price_final = exit_price if exit_price is not None else row.get("entry_premium")
+
     exit_persisted = logger_svc.log_exit(
         symbol, exit_reason,
-        exit_price if exit_price is not None else row.get("entry_premium"),
+        exit_price_final,
         qty_remaining, row.get("profile"),
         strategy_id=row.get("strategy_id"), trading_client=engine.trading_client,
         trade_id=row.get("id"),

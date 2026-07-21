@@ -1,6 +1,6 @@
 import type React from 'react';
 import { Fragment, useMemo, useState, useCallback } from 'react';
-import { View, Text, Pressable, LayoutChangeEvent } from 'react-native';
+import { View, Text, Pressable, LayoutChangeEvent, SafeAreaView } from 'react-native';
 import Svg, { Path, Rect, Line, Circle, Defs, LinearGradient, Stop, Text as SvgText } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSharedValue, runOnJS } from 'react-native-reanimated';
@@ -360,7 +360,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const candleW = scale ? Math.max(1, Math.min(scale.step * 0.65, 12)) : 0;
 
   return (
-    <View>
+    <SafeAreaView>
       {/* Top row: chart-mode toggle (left) + date / scrub label (right).
           Fixed height so scrubbing never reflows the chart below. */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', height: 26, marginBottom: 6 }}>
@@ -700,6 +700,6 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           );
         })}
       </View>
-    </View>
+    </SafeAreaView>
   );
 };

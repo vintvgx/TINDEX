@@ -533,16 +533,34 @@ class TradeLogger:
     def reconcile_orphaned_trades(self):
         """
         Close any orb_trades rows that are still open (exit_time IS NULL) but
-        whose expiry date is in the past. This catches trades that were never
-        properly closed due to a crash or redeploy.
+        whose expiry date is today or earlier. This catches trades that were
+        never properly closed due to a crash/redeploy, or an option that just
+        ran out the clock (no tick-driven exit ever fires for an untraded
+        0DTE contract — expiration isn't a fill event, so nothing else in the
+        app notices).
+
+        Uses .lte (not .lt) so a contract expiring TODAY is caught the same
+        day, not the day after — the previous off-by-one meant an option that
+        expired this afternoon would still show "open" until tomorrow's run.
+
+        Recorded as a full loss of the premium paid (exit_premium=0,
+        qty_exited=full remaining qty), since an expired contract with no
+        broker record of a sell fill overwhelmingly means it expired
+        worthless — the same convention _reconcile_trade_with_broker uses.
+        Previously this recorded a fictitious $0 P&L "close" with
+        qty_exited=0, which not only misreported the loss but also excluded
+        the trade from win/loss stats entirely (pnl=0 counts as neither).
+        NOTE: doesn't cover the rarer case of an ITM auto-exercise (Alpaca
+        assigns/converts to a stock position instead of the contract just
+        vanishing) — that shows up as a broker mismatch elsewhere, not here.
         """
         try:
             today = date.today().isoformat()
             res = (
                 self.client.table("orb_trades")
-                .select("id, contract_symbol, entry_premium, expiry")
+                .select("id, contract_symbol, entry_premium, qty_entered, qty_exited, expiry")
                 .is_("exit_time", "null")
-                .lt("expiry", today)
+                .lte("expiry", today)
                 .execute()
             )
             rows = res.data or []
@@ -550,17 +568,21 @@ class TradeLogger:
                 return
             now = datetime.utcnow().isoformat()
             for row in rows:
+                entry_premium = row.get("entry_premium") or 0
+                qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
+                loss = round(entry_premium * qty_remaining * 100, 2)
                 self.client.table("orb_trades").update({
                     "exit_time":    now,
-                    "exit_premium": row.get("entry_premium"),
-                    "exit_reason":  "EOD_HARD_CLOSE",
-                    "pnl":          0.0,
-                    "pnl_pct":      0.0,
-                    "qty_exited":   0,
+                    "exit_premium": 0.0,
+                    "exit_reason":  "EXPIRED_WORTHLESS",
+                    "pnl":          -loss,
+                    "pnl_pct":      -100.0 if entry_premium else 0.0,
+                    "qty_exited":   row["qty_entered"],
                 }).eq("id", row["id"]).execute()
                 logger.warning(
-                    "[TradeLogger] Orphaned trade reconciled: %s (id=%s)",
-                    row.get("contract_symbol"), row["id"],
+                    "[TradeLogger] Orphaned trade reconciled as expired worthless: %s "
+                    "(id=%s, loss=$%.2f)",
+                    row.get("contract_symbol"), row["id"], loss,
                 )
             logger.info("[TradeLogger] Reconciled %d orphaned trade(s)", len(rows))
         except Exception as e:

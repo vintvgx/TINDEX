@@ -130,10 +130,10 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
   // Glass styling derived from the active theme.
   const blurTint: 'light' | 'dark' = isDark ? 'dark' : 'light';
   const glassBorder   = isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.12)';
-  const glassFallback = isDark ? 'rgba(28,28,30,0.35)' : 'rgba(255,255,255,0.45)';
+  const glassFallback = isDark ? 'rgba(22,23,29,0.35)' : 'rgba(250,249,245,0.45)';
   // When the search field is focused, lay a near-opaque themed sheet behind the
   // text so it stays legible against busy content showing through the glass.
-  const focusOverlay  = isDark ? 'rgba(28,28,30,0.88)' : 'rgba(255,255,255,0.92)';
+  const focusOverlay  = isDark ? 'rgba(22,23,29,0.88)' : 'rgba(250,249,245,0.92)';
 
   useEffect(() => {
     bottomPaddingRef.current = bottomPadding;

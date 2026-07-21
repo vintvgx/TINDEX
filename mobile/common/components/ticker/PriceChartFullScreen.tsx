@@ -102,8 +102,8 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
       statusBarTranslucent
       onRequestClose={onClose}
     >
-      <StatusBar barStyle={colors.background === '#FFFFFF' ? 'dark-content' : 'light-content'} />
-      <SafeAreaView edges={['top', 'bottom']} style={{ flex: 1, backgroundColor: colors.background }}>
+      <StatusBar barStyle={colors.isDark ? 'light-content' : 'dark-content'} />
+      <SafeAreaView  style={{ flex: 1, backgroundColor: colors.background }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 }}>
           <Pressable onPress={onClose} hitSlop={10} style={{ padding: 4 }}>
             <Ionicons name="chevron-back" size={24} color={colors.text} />

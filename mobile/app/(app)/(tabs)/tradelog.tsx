@@ -347,6 +347,8 @@ const EXIT_REASON_LABELS: Record<string, string> = {
   REVERSAL_TIME_CUT:   'Reversal Bleed Stop (20m)',
   'RECONCILED FROM ALPACA':         'Exit Reason: Reconciled from Alpaca',
   'UNKNOWN — RECONCILED FROM ALPACA': 'Exit Reason: Unknown — pulled from Alpaca',
+  EXPIRED_WORTHLESS: 'Expired Worthless',
+  'RECONCILED — QTY ALREADY ZERO': 'Reconciled — Already Closed',
 };
 
 const fmtEt = (iso: string): string => {
