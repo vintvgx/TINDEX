@@ -1351,30 +1351,47 @@ def get_performance():
 @strategy_bp.route("/simulate", methods=["POST"])
 def run_simulation():
     """
-    POST { "scenario": "profit"|"loss", "strategy_id": "<uuid>" (optional) }
+    POST { "scenario": "profit"|"loss"|"reversal",
+           "strategy_id": "<uuid>" (optional),
+           "profile": "<ORB profile key>" (optional, default THUNDER_CAT),
+           "suppress_push": bool (optional, default false) }
 
-    Starts a 10-tick synthetic session (6 s/tick, ~60 s total) that fires
-    real Expo push notifications and WebSocket fan-outs to any client
-    connected on /ws/strategy/<id>/live.  No Alpaca orders, no Supabase writes.
+    Starts a 10-tick synthetic session (6 s/tick, ~60 s total) that fans out
+    over WebSocket to any client connected on /ws/strategy/<id>/live, and —
+    unless suppress_push is set — fires real Expo push notifications.
+    No Alpaca orders, no Supabase writes.
+
+    strategy_id is optional: when omitted, falls back to an existing engine
+    or a throwaway IWM engine (same ad-hoc pattern as the immediate-trade
+    flow — never auto-trades, no strategy config required), so this is
+    reachable from a standalone "Run Simulation" entry point with no
+    pre-configured strategy.
     """
-    from services.strategy.simulation import SimulationRunner
+    from services.strategy.simulation import SimulationRunner, VALID_SIM_PROFILES, _build_pre_entry_history, SIM_ORH, SIM_ORL
 
-    data        = request.get_json() or {}
-    scenario    = data.get("scenario", "profit")
-    strategy_id = data.get("strategy_id")
+    data          = request.get_json() or {}
+    scenario      = data.get("scenario", "profit")
+    strategy_id   = data.get("strategy_id")
+    profile       = data.get("profile", "THUNDER_CAT")
+    suppress_push = bool(data.get("suppress_push", False))
 
     if scenario not in ("profit", "loss", "reversal"):
         return jsonify({"error": "scenario must be 'profit', 'loss', or 'reversal'"}), 400
 
-    engine = _engines.get(strategy_id) if strategy_id else _first_engine()
-    if not engine:
+    if profile not in VALID_SIM_PROFILES:
         return jsonify({
-            "error": "No strategy engine running — add a strategy first",
-        }), 404
+            "error": f"profile must be one of: {', '.join(VALID_SIM_PROFILES)}",
+        }), 400
 
-    active_sid = strategy_id or next(iter(_engines))
-    runner = SimulationRunner(engine)
-    if not runner.start(scenario):
+    engine = _engines.get(strategy_id) if strategy_id else (
+        _first_engine() or _get_or_create_immediate_engine("IWM", paper_mode=True)
+    )
+    if strategy_id and not engine:
+        return jsonify({"error": "Strategy not found"}), 404
+
+    active_sid = strategy_id or getattr(engine, "strategy_id", None)
+    runner = SimulationRunner(engine, suppress_push=suppress_push)
+    if not runner.start(scenario, profile_key=profile):
         return jsonify({"error": "A simulation is already running"}), 409
 
     duration = 90 if scenario == "reversal" else 60
@@ -1387,7 +1404,10 @@ def run_simulation():
         "ticks":            ticks,
         "ticker":           "IWM",
         "entry_premium":    1.50,
-        "profile":          "THUNDER_CAT",
+        "profile":          profile,
+        "orb_high":         SIM_ORH,
+        "orb_low":          SIM_ORL,
+        "history":          _build_pre_entry_history(SIM_ORH, SIM_ORL),
     }), 202
 
 
