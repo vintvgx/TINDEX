@@ -183,9 +183,10 @@ class OptionStreamManager:
         with self._start_lock:
             if self._started and self._thread and self._thread.is_alive():
                 return
-            if self._started:
+            was_running = self._started
+            if was_running:
                 logger.warning("[OptionStream] background thread died — restarting")
-                self._started = False
+            self._started = False
             try:
                 self._stream = OptionDataStream(self._api_key, self._secret)
                 self._thread = threading.Thread(
@@ -198,6 +199,29 @@ class OptionStreamManager:
                 logger.info("[OptionStream] WebSocket thread started")
             except Exception as ex:
                 logger.error("[OptionStream] Failed to start: %s", ex)
+                return
+
+            if was_running:
+                # A brand-new OptionDataStream instance starts with zero
+                # subscriptions of its own — the normal alpaca-py reconnect
+                # loop (_run_forever) re-subscribes automatically on an
+                # ordinary WS drop, but that only works because it reconnects
+                # the SAME instance; here we had to build a whole new one
+                # because the background thread itself died. Without this,
+                # every symbol tracked in self._callbacks from before the
+                # crash — including a still-open swing/LEAPS position's price
+                # feed — would silently go stale forever, since nothing else
+                # ever calls subscribe() again for an already-open position.
+                with self._lock:
+                    symbols = list(self._callbacks.keys())
+                for symbol in symbols:
+                    threading.Thread(
+                        target=self._safe_subscribe_quotes, args=(symbol,),
+                        daemon=True, name=f"OptionStream-resub-{symbol}",
+                    ).start()
+                if symbols:
+                    logger.info("[OptionStream] Re-subscribing %d symbol(s) after "
+                                "restart: %s", len(symbols), symbols)
 
     def _make_handler(self, symbol: str):
         """Return an async quote handler that fans out to all registered callbacks."""

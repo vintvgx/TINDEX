@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, LayoutAnim
 import { Ionicons } from '@expo/vector-icons';
 import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
 import { formatContractSymbolShort, getTradeHorizon } from '@/lib/formatContract';
+import { isMarketHours } from '@/lib/marketHours';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 
 /** LivePriceData plus the market_value the header displays — computed via
@@ -95,7 +96,12 @@ export function LivePositionPanel({
     ? (display.pnl >= 0 ? colors.success : colors.error)
     : colors.tabBarInactive;
 
-  const statusLabel = isMock ? 'PREVIEW' : streaming ? 'LIVE' : 'CONNECTING';
+  // Outside market hours there's nothing to connect to — a swing/LEAPS
+  // position held overnight or over a weekend would otherwise show
+  // "CONNECTING" indefinitely, which reads as something being wrong rather
+  // than the market simply being closed.
+  const marketOpen  = isMarketHours();
+  const statusLabel = isMock ? 'PREVIEW' : streaming ? 'LIVE' : marketOpen ? 'CONNECTING' : 'MARKET CLOSED';
   const statusColor = isMock ? colors.accent : streaming ? colors.success : colors.tabBarInactive;
 
   return (
