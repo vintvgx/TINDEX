@@ -9,13 +9,13 @@ import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet'
 import { AgentModal } from '@/common/components/agent/AgentModal';
 import { useToast } from '@/common/components/ui/Toast';
 
-const VISIBLE_ROUTE_ORDER = ['feed', 'orb', 'accounts', 'menu'] as const;
+const VISIBLE_ROUTE_ORDER = ['feed', 'orb', 'accounts', 'profile'] as const;
 
 const ROUTE_TITLES: Record<string, string> = {
   feed: 'Home',
   orb: 'ORB',
   accounts: 'Accounts',
-  menu: 'Menu',
+  profile: 'Profile',
 };
 
 const SEARCH_RADIUS = 22;
@@ -192,8 +192,8 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
         return <Ionicons name="pulse-outline" size={20} color={color} />;
       case 'accounts':
         return <Ionicons name="wallet-outline" size={20} color={color} />;
-      case 'menu':
-        return <Ionicons name="menu-outline" size={22} color={color} />;
+      case 'profile':
+        return <Ionicons name="person-outline" size={20} color={color} />;
       default:
         return null;
     }

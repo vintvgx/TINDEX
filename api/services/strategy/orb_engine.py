@@ -2129,32 +2129,20 @@ class ORBEngine:
                 except Exception:
                     pass
 
-    # Skip reasons that are data/lifecycle artifacts (no price feed) rather than a
-    # real "we had data but chose not to trade" decision. These never notify — they
-    # spam the user on every redeploy after the ORB window.
-    _SILENT_SKIP_REASONS = frozenset({"NO_DATA"})
-
     def _skip(self, reason: str):
         """
         Mark the session as skipped with a reason code and persist to Supabase.
 
         NOTE: Called by calculate_orb and on_price_tick whenever a filter or
         time-limit condition prevents trading for the rest of the session.
+        No push notification fires here — a skip is visible on demand via the
+        Trade Log's "no-trade sessions" list and the Debug tab, which is
+        enough; a push per skipped session/profile/ticker was repetitive.
         """
         self.session_skipped = True
         self.skip_reason = reason
         self.logger.log_skip(self.ticker, reason, self.session_date, self.profile_key,
                              strategy_id=self.strategy_id)
-        # Suppress the push when (a) the bar feed is down — the skip is an artifact of
-        # the outage, not a trading decision — or (b) the reason is a data/lifecycle
-        # artifact (NO_DATA). Otherwise notify as normal.
-        if not self._hub.is_service_running():
-            logger.info("[ORBEngine] Suppressing skip notification (%s) — service not running",
-                        reason)
-        elif reason in self._SILENT_SKIP_REASONS:
-            logger.info("[ORBEngine] Suppressing skip notification (%s) — data artifact", reason)
-        else:
-            self.notifier.notify_skip(self.ticker, reason)
         logger.info("[ORBEngine] Session skipped: %s", reason)
         self.debug.emit("WARN", f"Session skipped: {reason}")
 

@@ -25,6 +25,26 @@ export interface AdvancedScrubPoint {
 
 type ChartMode = 'line' | 'candle';
 
+/** A labeled horizontal level — e.g. entry/TP1/TP2/stop for a simulation or
+ *  a live position. Visually distinct from the ORB band's solid lines
+ *  (dashed, label anchored on the left so it doesn't collide with the
+ *  ORH/ORL pills already anchored on the right). */
+export interface ChartReferenceLine {
+  label: string;
+  price: number;
+  color?: string;
+  dash?: string;
+}
+
+/** A point-in-time annotation — e.g. "TP1 hit" at the bar where it fired.
+ *  `index` must be a valid index into the chart's `data` arrays. */
+export interface ChartEventMarker {
+  index: number;
+  price: number;
+  label: string;
+  color?: string;
+}
+
 interface AdvancedPriceChartProps {
   data: TickerHistoryData | undefined;
   isLoading?: boolean;
@@ -46,6 +66,11 @@ interface AdvancedPriceChartProps {
    * "in progress" in the same sense a 5m bar during market hours is.
    */
   livePrice?: number | null;
+  /** Labeled horizontal levels (e.g. entry/TP1/TP2/stop). Folded into the
+   *  y-axis domain so a level is never clipped off-canvas. */
+  referenceLines?: ChartReferenceLine[] | null;
+  /** Point-in-time annotations drawn on top of the price marks. */
+  eventMarkers?: ChartEventMarker[] | null;
 }
 
 // ── Layout constants ─────────────────────────────────────────────────────
@@ -121,6 +146,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   orbRange,
   showOrbRange,
   livePrice,
+  referenceLines,
+  eventMarkers,
 }) => {
   const colors = useThemeColors();
   const [width, setWidth] = useState(0);
@@ -205,6 +232,14 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
       min = Math.min(min, orbRange.low);
       max = Math.max(max, orbRange.high);
     }
+    // Reference lines (entry/TP/stop) must stay visible even before price
+    // has actually approached them — same reasoning as the ORB band above.
+    if (referenceLines?.length) {
+      for (const line of referenceLines) {
+        min = Math.min(min, line.price);
+        max = Math.max(max, line.price);
+      }
+    }
     const pad = (max - min) * 0.06 || 1;
     const lo = min - pad;
     const hi = max + pad;
@@ -228,7 +263,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     const maxVolume = volumes.length ? Math.max(...volumes) : 0;
 
     return { lo, hi, step, xForIndex, yForPrice, yTicks, xTicks, maxVolume };
-  }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange]);
+  }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, referenceLines]);
 
   // Line-mode path built from closes — the last point tracks the live tick.
   const { linePath, areaPath } = useMemo(() => {
@@ -476,6 +511,27 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                 </>
               )}
 
+              {/* Reference lines — e.g. entry/TP1/TP2/stop for a simulation
+                  or live position. Dashed + left-anchored labels, distinct
+                  from the ORB band's solid lines + right-anchored pills. */}
+              {referenceLines?.map((line) => {
+                const y = scale.yForPrice(line.price);
+                const color = line.color ?? colors.textSecondary;
+                return (
+                  <Fragment key={`ref-${line.label}`}>
+                    <Line
+                      x1={0} x2={plotW} y1={y} y2={y}
+                      stroke={color} strokeWidth={1.25}
+                      strokeDasharray={line.dash ?? '4,4'}
+                    />
+                    <Rect x={4} y={y - 15} width={line.label.length * 6 + 44} height={16} rx={4} fill={colors.background} opacity={0.85} />
+                    <SvgText x={8} y={y - 3} fill={color} fontSize={10.5} fontWeight="700">
+                      {`${line.label} ${formatAxisPrice(line.price)}`}
+                    </SvgText>
+                  </Fragment>
+                );
+              })}
+
               {/* Price marks */}
               {mode === 'line' ? (
                 <>
@@ -502,6 +558,32 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                   );
                 })
               )}
+
+              {/* Event markers — point-in-time annotations (e.g. "TP1 hit")
+                  drawn on top of the candles/line, below the volume pane. */}
+              {eventMarkers?.map((marker, i) => {
+                if (marker.index < 0 || marker.index >= ePrices.length) return null;
+                const x = scale.xForIndex(marker.index);
+                const y = scale.yForPrice(marker.price);
+                const color = marker.color ?? colors.accent;
+                const labelW = marker.label.length * 6 + 12;
+                return (
+                  <Fragment key={`marker-${i}`}>
+                    <Circle cx={x} cy={y} r={4} fill={color} stroke={colors.background} strokeWidth={1.5} />
+                    <Rect
+                      x={Math.min(Math.max(x - labelW / 2, 0), plotW - labelW)}
+                      y={y - 22} width={labelW} height={15} rx={4} fill={color}
+                    />
+                    <SvgText
+                      x={Math.min(Math.max(x, labelW / 2), plotW - labelW / 2)}
+                      y={y - 11}
+                      fill="#FFFFFF" fontSize={9.5} fontWeight="700" textAnchor="middle"
+                    >
+                      {marker.label}
+                    </SvgText>
+                  </Fragment>
+                );
+              })}
 
               {/* Volume pane, bars colored by bar direction */}
               {scale.maxVolume > 0 &&

@@ -146,45 +146,6 @@ class StrategyNotifier:
             priority=P_MARKET,
         )
 
-    def notify_no_trade_eod(self, ticker: str, profile_key: str, orh: float, orl: float):
-        """Session closed at EOD with no entry taken."""
-        self._dispatch(
-            title=f"{ticker} — No trade today  [{profile_key}]",
-            body=f"Watched ORH ${orh:.2f} / ORL ${orl:.2f} — no breakout triggered.",
-            data={"screen": "tradelog"},
-            priority=P_INFO,
-        )
-
-    def notify_skip(self, ticker: str, reason: str):
-        """Session skipped before ORB could be evaluated."""
-        # For dynamic reasons (e.g. "RE_ENTRY_COOLDOWN (CALL — 32m remaining)"),
-        # check prefix first so the detail is preserved in the body.
-        _prefix_map = {
-            "RE_ENTRY_COOLDOWN":  "re-entry cooldown active",
-            "DAILY_LOSS_LIMIT":   "daily loss limit reached — session halted",
-        }
-        _exact_map = {
-            "NOT_TRADE_DAY":                "not a scheduled trade day",
-            "STRATEGY_DISABLED":            "strategy is disabled",
-            "NO_DATA":                      "no price data available",
-            "ORB_RANGE_TOO_TIGHT":          "ORB range too tight",
-            "VIX_TOO_LOW":                  "VIX too low",
-            "VIX_TOO_HIGH":                 "VIX too high",
-            "MACRO_EVENT":                  "macro event today",
-            "BREAKOUT_TIME_LIMIT_EXCEEDED": "breakout window expired",
-            "RETEST_TIMEOUT":               "retest timed out",
-            "RETEST_INVALIDATED":           "retest invalidated — price crossed level",
-        }
-        prefix_hit = next((v for k, v in _prefix_map.items() if reason.startswith(k)), None)
-        readable = prefix_hit or _exact_map.get(reason, reason)
-
-        self._dispatch(
-            title=f"No trade — {ticker}",
-            body=f"Session skipped: {readable}.",
-            data={"screen": "tradelog", "reason": reason},
-            priority=P_INFO,
-        )
-
     def notify_no_contract(self, ticker: str):
         """No suitable options contract was found for the breakout."""
         self._dispatch(

@@ -1,20 +1,14 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React from 'react';
 import {
   ActivityIndicator, Modal, Platform, ScrollView,
   Text, TouchableOpacity, View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useRunSimulation, type SimScenario } from '@/hooks/mutations/strategy/useRunSimulation';
-import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import type { SimScenario } from '@/hooks/mutations/strategy/useRunSimulation';
+import { useSimulationRunner, type SimLeg } from '@/hooks/useSimulationRunner';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
-
-interface SimEvent {
-  tick:  number;
-  label: string;
-  color: string;
-}
 
 interface Props {
   visible:    boolean;
@@ -22,14 +16,11 @@ interface Props {
   strategyId: string | undefined;
 }
 
-type Phase   = 'pick' | 'running' | 'done';
-type SimLeg  = 'call' | 'put';
-
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const SECONDS_PER_TICK = 6;
 
-const PROFIT_PREVIEW = [
+export const PROFIT_PREVIEW = [
   { min: 'Min 3',  desc: 'TP1 hit → 3 contracts closed @ $2.25 (+50%)' },
   { min: 'Min 5',  desc: '30-min update notification fires' },
   { min: 'Min 6',  desc: 'TP2 hit → runner continues @ $3.00 (+100%)' },
@@ -37,13 +28,13 @@ const PROFIT_PREVIEW = [
   { min: 'Min 10', desc: 'Trailing stop fires — fully closed' },
 ];
 
-const LOSS_PREVIEW = [
+export const LOSS_PREVIEW = [
   { min: 'Min 1',   desc: 'Price begins declining' },
   { min: 'Min 2–3', desc: 'Continues lower, approaching hard stop' },
   { min: 'Min 4',   desc: 'Hard stop hit → full close @ $0.95 (−35%)' },
 ];
 
-const REVERSAL_PREVIEW = [
+export const REVERSAL_PREVIEW = [
   { min: 'Min 1–3', desc: 'CALL entered, price declines toward stop' },
   { min: 'Min 4',   desc: 'Hard stop triggered — CALL exits at −$330' },
   { min: 'Min 4',   desc: 'Reversal detected → PUT entered @ $1.50' },
@@ -55,175 +46,15 @@ const REVERSAL_PREVIEW = [
 
 export function SimulationModal({ visible, onClose, strategyId }: Props) {
   const colors = useThemeColors();
-  const { mutate: runSim, isPending } = useRunSimulation();
+  const {
+    phase, scenario, events, elapsed, currentTick, totalTicks,
+    simLeg, callPnl, displayLive, isPending, handleStart: runnerStart, handleClose: runnerClose,
+  } = useSimulationRunner({ strategyId });
 
-  const [phase, setPhase]             = useState<Phase>('pick');
-  const [scenario, setScenario]       = useState<SimScenario | null>(null);
-  const [liveStratId, setLiveStratId] = useState<string | undefined>(strategyId);
-  const [events, setEvents]           = useState<SimEvent[]>([]);
-  const [elapsed, setElapsed]         = useState(0);
-  const [currentTick, setCurrentTick] = useState(0);
-  const [totalTicks, setTotalTicks]   = useState(10);
-
-  // Reversal-specific state
-  const [simLeg, setSimLeg]       = useState<SimLeg>('call');
-  const [callPnl, setCallPnl]     = useState<number>(0);
-
-  // Snapshot of live data for the current run — cleared on every new start
-  // so stale data from the previous run never leaks into the UI.
-  const [displayLive, setDisplayLive] = useState<any>(null);
-
-  const timerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
-  const prevLive  = useRef<any>(null);
-  const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const { data: live, connected } = useStrategyLivePrice(
-    liveStratId,
-    phase === 'running',
-  );
-
-  // ── Sync live → displayLive (current run only) ─────────────────────────────
-
-  useEffect(() => {
-    if (!live || phase !== 'running') return;
-    setDisplayLive(live);
-  }, [live, phase]);
-
-  // ── Watch incoming WS messages ─────────────────────────────────────────────
-
-  useEffect(() => {
-    if (!live || phase !== 'running') return;
-    const msg = live as any;
-
-    // Advance tick counter
-    if (msg.sim_tick != null && msg.sim_tick !== currentTick) {
-      setCurrentTick(msg.sim_tick);
-    }
-    if (msg.sim_total != null) {
-      setTotalTicks(msg.sim_total);
-    }
-
-    // Track reversal leg transitions
-    if (msg.sim_leg != null) {
-      if (msg.sim_leg === 'put' && simLeg !== 'put') {
-        setSimLeg('put');
-        // call_pnl comes embedded in the first PUT-leg message
-        if (msg.call_pnl != null) setCallPnl(msg.call_pnl);
-      } else if (msg.sim_leg === 'call' && simLeg !== 'call') {
-        setSimLeg('call');
-      }
-    }
-
-    // Detect flag transitions → event log entries
-    const prev = prevLive.current;
-    if (!prev?.tp1_hit && live.tp1_hit) {
-      const legLabel = scenario === 'reversal' ? ' (PUT)' : '';
-      addEvent(msg.sim_tick ?? 3, `TP1 hit — partial close 3 contracts${legLabel}`, colors.success);
-    }
-    if (!prev?.tp2_hit && live.tp2_hit) {
-      const legLabel = scenario === 'reversal' ? ' (PUT)' : '';
-      addEvent(msg.sim_tick ?? 6, `TP2 hit — partial close 1 contract${legLabel}`, colors.success);
-    }
-    if (prev && prev.qty_remaining > 0 && live.qty_remaining === 0 && live.tp2_hit) {
-      addEvent(msg.sim_tick ?? 10, 'Runner trail stop — fully closed', '#FFD60A');
-    }
-    if (prev && prev.qty_remaining > 0 && live.qty_remaining === 0 && !live.tp1_hit) {
-      const isReversalCall = scenario === 'reversal' && msg.sim_leg === 'call';
-      addEvent(
-        msg.sim_tick ?? 4,
-        isReversalCall ? 'CALL hard stop — reversal signal sent' : 'Hard stop hit — fully closed',
-        colors.error,
-      );
-      if (isReversalCall) {
-        addEvent(msg.sim_tick ?? 4, 'PUT entered @ $1.50 — reversal trade live', '#FFD60A');
-      }
-    }
-
-    prevLive.current = { ...live };
-  }, [live]);
-
-  // ── Watch for simulation completion ───────────────────────────────────────
-
-  useEffect(() => {
-    if (phase !== 'running' || !live) return;
-    const msg   = live as any;
-    const isEnd = msg.sim_tick >= msg.sim_total && msg.sim_leg !== 'call';
-    const allClosed = live.qty_remaining === 0;
-    if (!isEnd && !allClosed) return;
-    if (doneTimer.current) return;
-
-    doneTimer.current = setTimeout(() => {
-      setPhase('done');
-      if (timerRef.current) clearInterval(timerRef.current);
-    }, 2000);
-    return () => {
-      if (doneTimer.current) { clearTimeout(doneTimer.current); doneTimer.current = null; }
-    };
-  }, [live, phase]);
-
-  function addEvent(tick: number, label: string, color: string) {
-    setEvents(prev => [...prev, { tick, label, color }]);
-  }
-
-  // ── Start ──────────────────────────────────────────────────────────────────
-
-  const handleStart = useCallback((chosen: SimScenario) => {
-    // Clear all state from any previous run before starting
-    if (timerRef.current)  clearInterval(timerRef.current);
-    if (doneTimer.current) clearTimeout(doneTimer.current);
-    timerRef.current  = null;
-    doneTimer.current = null;
-
-    setScenario(chosen);
-    setPhase('running');
-    setCurrentTick(0);
-    setTotalTicks(chosen === 'loss' ? 4 : 10);
-    setElapsed(0);
-    setDisplayLive(null);    // clear stale data from previous run
-    setSimLeg('call');
-    setCallPnl(0);
-    prevLive.current = null;
-    setEvents([{
-      tick:  0,
-      label: chosen === 'reversal'
-        ? 'CALL entered — IWM 221C @ $1.50'
-        : 'Trade entered — IWM 221C @ $1.50',
-      color: colors.accent,
-    }]);
-
-    runSim(
-      { scenario: chosen, strategy_id: strategyId },
-      {
-        onSuccess: (res) => {
-          setLiveStratId(res.strategy_id);
-          timerRef.current = setInterval(() =>
-            setElapsed(e => e + 1), 1000);
-        },
-        onError: () => setPhase('pick'),
-      },
-    );
-  }, [strategyId, runSim, colors.accent]);
-
-  // ── Close / reset ──────────────────────────────────────────────────────────
-
-  const handleClose = () => {
-    if (timerRef.current)  clearInterval(timerRef.current);
-    if (doneTimer.current) clearTimeout(doneTimer.current);
-    timerRef.current  = null;
-    doneTimer.current = null;
-
-    setPhase('pick');
-    setScenario(null);
-    setEvents([]);
-    setElapsed(0);
-    setCurrentTick(0);
-    setTotalTicks(10);
-    setDisplayLive(null);
-    setSimLeg('call');
-    setCallPnl(0);
-    prevLive.current = null;
-    onClose();
-  };
+  // strategy.tsx's entry point keeps real push notifications (suppressPush
+  // omitted/false) — only the standalone SimulationChartScreen suppresses them.
+  const handleStart = (chosen: SimScenario) => runnerStart(chosen);
+  const handleClose = () => { runnerClose(); onClose(); };
 
   const pnl      = displayLive?.pnl ?? 0;
   const netPnl   = scenario === 'reversal' && simLeg === 'put' ? callPnl + pnl : pnl;
@@ -502,7 +333,7 @@ export function SimulationModal({ visible, onClose, strategyId }: Props) {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function scenarioLabel(s: SimScenario): string {
+export function scenarioLabel(s: SimScenario): string {
   if (s === 'profit')   return '📈 Profitable';
   if (s === 'loss')     return '📉 Loss';
   if (s === 'reversal') return '🔄 Reversal';
@@ -511,7 +342,7 @@ function scenarioLabel(s: SimScenario): string {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function ScenarioLabel({ text, colors }: { text: string; colors: any }) {
+export function ScenarioLabel({ text, colors }: { text: string; colors: any }) {
   return (
     <Text style={{
       color: colors.textTertiary, fontSize: 11, fontWeight: '700',
@@ -522,7 +353,7 @@ function ScenarioLabel({ text, colors }: { text: string; colors: any }) {
   );
 }
 
-function ScenarioCard({
+export function ScenarioCard({
   emoji, title, subtitle, accentColor, items, disabled, colors, onPress,
 }: {
   emoji: string; title: string; subtitle: string;
@@ -571,7 +402,7 @@ function ScenarioCard({
   );
 }
 
-function LegBadge({
+export function LegBadge({
   label, active, done, colors,
 }: { label: string; active: boolean; done: boolean; colors: any }) {
   const color = label === 'CALL' ? colors.error : colors.success;
@@ -589,7 +420,7 @@ function LegBadge({
   );
 }
 
-function TickTimeline({
+export function TickTimeline({
   currentTick, totalTicks, scenario, simLeg, colors,
 }: {
   currentTick: number;
@@ -651,7 +482,7 @@ function TickTimeline({
   );
 }
 
-function Stat({ label, value, color }: { label: string; value: string; color: string }) {
+export function Stat({ label, value, color }: { label: string; value: string; color: string }) {
   return (
     <View style={{ alignItems: 'center' }}>
       <Text style={{ color: '#8E8E93', fontSize: 10, fontWeight: '600', marginBottom: 3 }}>
@@ -662,7 +493,7 @@ function Stat({ label, value, color }: { label: string; value: string; color: st
   );
 }
 
-function LevelPill({ label, value, hit = false, isStop = false, colors }: {
+export function LevelPill({ label, value, hit = false, isStop = false, colors }: {
   label: string; value: string; hit?: boolean; isStop?: boolean; colors: any;
 }) {
   const color = isStop ? colors.error : (hit ? colors.success : colors.textTertiary);

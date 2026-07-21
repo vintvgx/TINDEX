@@ -14,6 +14,24 @@ export interface LivePriceData {
   hard_stop:     number;
   tp1:           number;
   tp2:           number;
+  // ── Simulation-only fields (all optional — absent on a real live position) ──
+  sim?:               boolean;
+  sim_tick?:          number;
+  sim_total?:         number;
+  sim_scenario?:      string;
+  sim_leg?:           'call' | 'put';
+  call_pnl?:          number;
+  /** Synthetic IWM underlying price mapped from the option premium — see
+   *  api/services/strategy/simulation.py's _underlying_at. Feeds the
+   *  simulation chart's candles/reference lines, which plot on a real
+   *  price axis rather than the raw option premium. */
+  underlying_price?:  number;
+  entry_underlying?:  number;
+  tp1_underlying?:    number;
+  tp2_underlying?:    number;
+  /** Recomputed every tick — moves to entry_underlying once TP1 fires
+   *  (breakeven stop), same as hard_stop does on the premium side. */
+  stop_underlying?:   number;
 }
 
 interface UseStrategyLivePriceResult {

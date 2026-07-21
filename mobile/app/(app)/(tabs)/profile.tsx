@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
-import { SafeAreaView, Text, View, Pressable, TouchableOpacity, ScrollView } from 'react-native';
+import { SafeAreaView, Text, View, Pressable, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { router } from 'expo-router';
 import { ORBAdminModal } from '@/common/components/admin/ORBAdminModal';
 import { ServiceStatusModal } from '@/common/components/admin/ServiceStatusModal';
 import { LogViewerModal } from '@/common/components/orb/LogViewerModal';
@@ -8,17 +9,45 @@ import { ThemeToggle } from '@/common/components/ThemeToggle';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
+import { useNotificationHistory } from '@/hooks/queries/notifications/useNotificationHistory';
+import { signOut } from '@/common/utils/auth/function';
 
 const ProfileScreen = () => {
-  const { authState: { user } } = useAuth();
+  const { authState: { isAuthenticated, user } } = useAuth();
   const colors = useThemeColors();
   const [adminModalVisible, setAdminModalVisible] = useState(false);
   const [logViewerVisible, setLogViewerVisible] = useState(false);
   const [serviceStatusVisible, setServiceStatusVisible] = useState(false);
   const toast = useToast();
+  const { unreadCount } = useNotificationHistory();
 
   const email = user?.email || 'User';
   const initials = email.substring(0, 2).toUpperCase();
+
+  const go = (route: string) => router.push(route as any);
+
+  const handleSignOut = () => {
+    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign Out',
+        style: 'destructive',
+        onPress: async () => {
+          try { await signOut(); }
+          catch { Alert.alert('Sign Out Failed', 'Please try again.'); }
+        },
+      },
+    ]);
+  };
+
+  // Moved from the old Menu tab (menu.tsx, removed) — this screen is now
+  // that tab's replacement, so these navigable rows live here instead.
+  const accountItems = [
+    { icon: 'layers-outline' as const, label: 'Watchlists', onPress: () => go('/(app)/(tabs)/watchlists') },
+    { icon: 'briefcase-outline' as const, label: 'Track Portfolio', onPress: () => go('/(app)/(tabs)/track') },
+    { icon: 'notifications-outline' as const, label: 'Notifications', onPress: () => go('/(app)/(tabs)/notifications'), badge: unreadCount },
+    { icon: 'flask-outline' as const, label: 'Run Simulation', onPress: () => go('/(app)/(tabs)/simulation') },
+  ];
 
   const menuItems = [
     { icon: 'pulse-outline' as const, label: 'Service Status', onPress: () => setServiceStatusVisible(true) },
@@ -107,6 +136,84 @@ const ProfileScreen = () => {
             {email.split('@')[0]}
           </Text>
           <Text style={{ color: colors.textSecondary, fontSize: 14 }}>{email}</Text>
+        </View>
+
+        {/* Account section — moved from the old Menu tab */}
+        <View style={{ paddingHorizontal: 20, marginBottom: 24 }}>
+          <Text
+            style={{
+              color: colors.textTertiary,
+              fontSize: 12,
+              fontWeight: '600',
+              textTransform: 'uppercase',
+              letterSpacing: 0.8,
+              marginBottom: 8,
+              paddingHorizontal: 4,
+            }}
+          >
+            Account
+          </Text>
+          <View
+            style={{
+              backgroundColor: colors.surface,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: colors.border,
+              overflow: 'hidden',
+            }}
+          >
+            {accountItems.map((item, index) => (
+              <TouchableOpacity
+                key={item.label}
+                onPress={item.onPress}
+                activeOpacity={0.7}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  paddingHorizontal: 16,
+                  paddingVertical: 14,
+                  borderBottomWidth: index < accountItems.length - 1 ? 1 : 0,
+                  borderBottomColor: colors.separator,
+                }}
+              >
+                <View
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 10,
+                    backgroundColor: colors.iconButton,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginRight: 12,
+                  }}
+                >
+                  <Ionicons name={item.icon} size={17} color={colors.textSecondary} />
+                </View>
+                <Text style={{ flex: 1, color: colors.text, fontSize: 15, fontWeight: '500' }}>
+                  {item.label}
+                </Text>
+                {!!item.badge && (
+                  <View
+                    style={{
+                      backgroundColor: colors.badge,
+                      borderRadius: 9,
+                      minWidth: 18,
+                      height: 18,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      paddingHorizontal: 5,
+                      marginRight: 8,
+                    }}
+                  >
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>
+                      {item.badge > 99 ? '99+' : item.badge}
+                    </Text>
+                  </View>
+                )}
+                <Ionicons name="chevron-forward" size={15} color={colors.textTertiary} />
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
         {/* Menu section */}
@@ -209,6 +316,41 @@ const ProfileScreen = () => {
               </TouchableOpacity>
             ))}
           </View>
+        </View>
+
+        {/* Sign out — moved from the old Menu tab's footer */}
+        <View style={{ paddingHorizontal: 20, marginBottom: 24 }}>
+          {isAuthenticated ? (
+            <TouchableOpacity
+              onPress={handleSignOut}
+              activeOpacity={0.7}
+              style={{
+                alignItems: 'center',
+                paddingVertical: 14,
+                borderRadius: 16,
+                borderWidth: 1,
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+              }}
+            >
+              <Text style={{ color: colors.error, fontSize: 15, fontWeight: '600' }}>Sign Out</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              onPress={() => go('/(public)/auth')}
+              activeOpacity={0.7}
+              style={{
+                alignItems: 'center',
+                paddingVertical: 14,
+                borderRadius: 16,
+                borderWidth: 1,
+                backgroundColor: colors.surface,
+                borderColor: colors.border,
+              }}
+            >
+              <Text style={{ color: colors.text, fontSize: 15, fontWeight: '600' }}>Login</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* App version */}

@@ -62,6 +62,9 @@ export interface StrategyProfile {
   tp2_pct: number;        // integer percent, e.g. 100
   runner: boolean;
   use_tp2: boolean;
+  /** "trail" (high-water-mark trailing stop) or "be_hold" (rides to TP2/
+   *  breakeven-stop/EOD, no trail) — see profiles.py's describe_profile(). */
+  runner_mode?: 'trail' | 'be_hold';
   risk_level: 'Low' | 'Medium' | 'High' | 'Medium-High' | 'Custom';
   vix_max: number;
   breakout_limit_min: number;
