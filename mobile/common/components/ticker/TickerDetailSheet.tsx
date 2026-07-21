@@ -129,6 +129,7 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
                 colors={colors}
                 visible={subScreen === 'contracts'}
                 paperMode={paperMode}
+                onChangePaperMode={setPaperMode}
                 onSubmitted={() => setSubScreen(null)}
               />
             </>

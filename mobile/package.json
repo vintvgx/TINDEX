@@ -1,7 +1,7 @@
 {
   "name": "mobile",
   "main": "expo-router/entry",
-  "version": "0.4.06",
+  "version": "0.4.08",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",

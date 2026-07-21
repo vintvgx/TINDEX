@@ -5,6 +5,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useThemeColors } from '@/lib/useColorScheme';
+import { blendHex } from '@/lib/colorBlend';
 import type { OptionsOpportunity } from '@/common/types/blogPosts/ticker';
 
 interface Props {
@@ -83,10 +84,13 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
   const [greeksInfoOpen, setGreeksInfoOpen] = useState(false);
   if (!contract) return null;
 
-  // Subtle wash, not a solid fill — this covers the whole scrollable content
-  // area (lots of text/rows), unlike the small badges elsewhere that use a
-  // much stronger tint at '12'-'25' alpha.
-  const rootBg = tintColor ? tintColor + '0A' : colors.background;
+  // A fully opaque blend, not a semi-transparent overlay — this modal is its
+  // own independent native Modal with nothing else behind it, so a
+  // "transparent" tint would show the OS's own default backdrop through
+  // instead of the app's actual theme (this is what broke dark mode here:
+  // the backdrop is a fixed light color regardless of app theme). Blending
+  // into colors.background directly keeps it correct in both themes.
+  const rootBg = tintColor ? blendHex(colors.background, tintColor, 0.08) : colors.background;
 
   // Change vs. the initial tracked price — use liveContractPrice so it
   // mirrors the card exactly (null when no live data → change row hidden).

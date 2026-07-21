@@ -8,6 +8,7 @@ import { useToast } from '@/common/components/ui/Toast';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
 import { useImmediateTradeByTicker } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
 import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsContractDetailModal';
+import { blendHex } from '@/lib/colorBlend';
 import type { OptionsContract, OptionsOpportunity } from '@/common/types/blogPosts/ticker';
 import {
   IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
@@ -32,6 +33,11 @@ interface Props {
    *  drives a persistent background tint across both this screen and the
    *  confirm modal. See ImmediateTradePanel for why this moved out of here. */
   paperMode: boolean;
+  /** Lets the Exit Profile section (in the confirm modal's footer) also
+   *  switch paper/live, right before submitting, without backing out to the
+   *  ticker picker. Calls back up to whichever parent owns paperMode so both
+   *  toggles and the background tint everywhere stay in sync. */
+  onChangePaperMode: (paper: boolean) => void;
   /** Called after a trade submission resolves (success or failure) — a toast has already been shown. */
   onSubmitted?: () => void;
 }
@@ -131,7 +137,7 @@ const asOpportunity = (c: OptionsContract): OptionsOpportunity => ({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function OptionsChainPicker({ ticker, colors, visible, paperMode, onSubmitted }: Props) {
+export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChangePaperMode, onSubmitted }: Props) {
   const toast = useToast();
   const [side, setSide]                 = useState<OptionSide>('CALL');
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
@@ -400,9 +406,35 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onSubmi
 
   const detailFooter = selected ? (
     <View style={{ gap: 12 }}>
-      {/* Profile dropdown */}
-      <View>
-        <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>EXIT PROFILE</Text>
+      {/* Profile dropdown — also where paper/live can be switched, right
+          before submitting, without backing out to the ticker picker.
+          Background tinted more strongly than the rest of the screen so
+          this card reads as "you're about to trade in X mode" at the exact
+          point the trade is confirmed. */}
+      <View style={[styles.exitProfileCard, { backgroundColor: blendHex(colors.card, modeTint, 0.16), borderColor: modeTint + '40' }]}>
+        <View style={styles.exitAccountRow}>
+          <Text style={[styles.footerLabel, { color: colors.tabBarInactive, marginBottom: 0 }]}>ACCOUNT</Text>
+          <View style={[styles.exitAccountToggle, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            {([['Paper', true], ['Live', false]] as const).map(([label, isPaper]) => {
+              const active = paperMode === isPaper;
+              const tint = isPaper ? '#FF9F0A' : '#30D158';
+              return (
+                <TouchableOpacity
+                  key={label}
+                  onPress={() => onChangePaperMode(isPaper)}
+                  activeOpacity={0.8}
+                  style={[styles.exitAccountBtn, active && { backgroundColor: tint + '22', borderRadius: 7 }]}
+                >
+                  <Text style={[styles.exitAccountText, { color: active ? tint : colors.tabBarInactive, fontWeight: active ? '700' : '500' }]}>
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
+        <Text style={[styles.footerLabel, { color: colors.tabBarInactive, marginTop: 12 }]}>EXIT PROFILE</Text>
         <ProfileDropdown
           selectedIndex={profileIndex}
           onSelect={handleProfileSelect}
@@ -515,7 +547,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onSubmi
   ) : null;
 
   return (
-    <View style={{ flex: 1, backgroundColor: modeTint + '0A' }}>
+    <View style={{ flex: 1, backgroundColor: blendHex(colors.background, modeTint, 0.08) }}>
       {/* Controls */}
       <View style={styles.controls}>
         {/* Calls / Puts + price */}
@@ -714,6 +746,11 @@ const styles = StyleSheet.create({
   autoSelectSub:    { fontSize: 10 },
 
   // ── Footer ──
+  exitProfileCard:  { borderRadius: 12, borderWidth: 1, padding: 12 },
+  exitAccountRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  exitAccountToggle:{ flexDirection: 'row', borderRadius: 9, borderWidth: 1, padding: 2 },
+  exitAccountBtn:   { paddingHorizontal: 14, paddingVertical: 5 },
+  exitAccountText:  { fontSize: 12 },
   footerLabel:    { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 },
   footerQtyRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   qtyHint:        { fontSize: 10 },

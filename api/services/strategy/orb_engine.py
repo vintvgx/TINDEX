@@ -76,6 +76,18 @@ EOD_CLOSE_TIMES = {
 # dropped WebSocket), the flatten may not fire. A scheduled hard-flatten job
 # at 15:58 independent of the tick loop is the correct long-term fix (TODO).
 
+# ── Priced exits (TP1/TP2/manual sell) ──────────────────────────────────────
+# These reasons get a few seconds' patience for a better fill instead of an
+# instant market order — unlike a hard stop or EOD flatten, nothing is racing
+# against an adverse move, so it's worth trying. Options can move $0.05-$0.10
+# in seconds even on a liquid underlying, so a plain market sell on a TP hit
+# or a manual exit can leave real money on the table.
+PRICE_SEEKING_REASONS = frozenset({"TP1", "TP2", "TP2_FULL_CLOSE", "MANUAL_EXIT"})
+PRICE_SEEK_SAMPLE_WINDOW_SEC = 3.0   # total time spent sampling the bid
+PRICE_SEEK_MIN_SAMPLES       = 4     # bid samples taken across that window
+PRICE_SEEK_TOTAL_BUDGET_SEC  = 10.0  # ceiling on how long we'll wait for a fill
+                                      # before cancelling and market-selling the rest
+
 
 class ORBEngine:
     def __init__(self, config: dict = None, stream_manager=None, hub=None):
@@ -1800,7 +1812,13 @@ class ORBEngine:
         current_option_price is used for accurate P&L when available; falls back
         to action["current_premium"] then current_price (underlying) as last resort.
 
-        NOTE: Called by on_price_tick immediately after ExitManager.evaluate().
+        NOTE: Called by on_price_tick immediately after ExitManager.evaluate(),
+        which runs under self._tick_lock — a TP1/TP2 priced exit below spawns
+        a background thread and returns immediately specifically so this call
+        (and the lock its caller holds) doesn't block for the exit's up-to-10s
+        price-seeking window; a hard stop on the remaining position (e.g. the
+        runner after a TP1 partial) must still be able to fire while that's
+        in flight.
         """
         if not action or action["type"] == "HOLD":
             return
@@ -1808,19 +1826,36 @@ class ORBEngine:
         qty_to_close = action.get("qty", self.exit_manager.qty_remaining)
         closing_all  = qty_to_close >= self.exit_manager.qty_remaining
         em       = self.exit_manager
+        reason   = action.get("reason", "")
+        entry_p  = em.entry_premium
         opt_str  = f"${current_option_price:.2f}" if current_option_price is not None else "N/A"
         _tag = f"[{self.strategy_name} | {self.profile_key}]"
         self.debug.emit("INFO",
-            f"{_tag} Exit triggered — {action['type']} reason={action.get('reason','')} "
+            f"{_tag} Exit triggered — {action['type']} reason={reason} "
             f"qty={qty_to_close} option_price={opt_str} "
             f"entry=${em.entry_premium:.2f} hard_stop=${em.hard_stop:.2f} "
             f"tp1=${em.tp1:.2f} tp2=${em.tp2:.2f}",
             {"action": action})
-        # ── Step 1: Submit the Alpaca order ──────────────────────────────────────
-        # Keep separate from logging so a close_position failure (e.g. option
-        # already expired) does NOT suppress the exit record in Supabase.
+
         contract_snapshot  = self.contract_symbol  # capture before any reset
         direction_snapshot = self.position          # capture before closing_all resets it
+
+        if reason in PRICE_SEEKING_REASONS:
+            # Reserve the qty up front (see _reserve_exit_qty) so the engine's
+            # own state already reflects "these contracts are spoken for"
+            # before we spend up to 10s trying for a good fill off-thread.
+            self._reserve_exit_qty(closing_all, contract_snapshot, qty_to_close)
+            threading.Thread(
+                target=self._run_priced_exit_and_finalize,
+                args=(action, contract_snapshot, direction_snapshot,
+                      qty_to_close, closing_all, current_price, entry_p, None),
+                daemon=True, name=f"PricedExit-{contract_snapshot}",
+            ).start()
+            return
+
+        # ── Instant market order (HARD_STOP / BREAKEVEN_STOP / EOD_CLOSE /
+        # RUNNER_TRAIL_STOP / CONSOLIDATION / LOW_VOLUME_EXIT) — speed matters
+        # more than price here, there's no time to sample or wait. ─────────────
         order_ok   = False
         fill_order = None
         try:
@@ -1835,22 +1870,7 @@ class ORBEngine:
                 time_in_force=TimeInForce.DAY,
             )
             fill_order = self.trading_client.submit_order(order)
-            if closing_all:
-                self.exit_manager.update_qty(self.exit_manager.qty_remaining)
-                self.trade_taken = False
-                self.position    = None
-                if self.stream_manager and contract_snapshot:
-                    self.stream_manager.unsubscribe(contract_snapshot, self._on_stream_quote)
-                import json as _json
-                _closed_msg = _json.dumps({"type": "position_closed"})
-                with self._live_clients_lock:
-                    for _q in list(self._live_clients):
-                        try:
-                            _q.put_nowait(_closed_msg)
-                        except Exception:
-                            pass
-            else:
-                self.exit_manager.update_qty(qty_to_close)
+            self._reserve_exit_qty(closing_all, contract_snapshot, qty_to_close)
             order_ok = True
         except Exception as e:
             logger.error("[ORBEngine] Exit order failed: %s", e)
@@ -1859,13 +1879,234 @@ class ORBEngine:
         if not order_ok:
             return
 
-        # ── Step 2: Log and notify — always runs when the order succeeded ────────
         mid_price    = (action.get("current_premium") or current_option_price or current_price)
         exit_premium = self._resolve_exit_premium(fill_order, mid_price) if fill_order else mid_price
-        entry_p = em.entry_premium if em else 0
-        pnl = (exit_premium - entry_p) * qty_to_close * 100
+        self._finalize_exit(action, contract_snapshot, direction_snapshot,
+                             qty_to_close, closing_all, current_price, exit_premium, entry_p)
 
-        # ── Step 3: Update session-level risk tracking ────────────────────────────
+    def _reserve_exit_qty(self, closing_all: bool, contract_symbol: str, qty: int):
+        """
+        Immediately reflects an in-flight exit in the engine's own state —
+        decrementing qty_remaining (or fully closing out) — regardless of
+        whether the actual broker fill has completed yet. For the instant
+        market-order path this happens right after a successful submit; for
+        a priced exit it happens BEFORE the up-to-10s price-seeking window so
+        no other tick can act on the same contracts again meanwhile. See
+        _reconcile_exit_shortfall for what undoes this if the priced exit
+        ultimately sells fewer than `qty`.
+        """
+        if closing_all:
+            self.exit_manager.update_qty(self.exit_manager.qty_remaining)
+            self.trade_taken = False
+            self.position    = None
+            if self.stream_manager and contract_symbol:
+                self.stream_manager.unsubscribe(contract_symbol, self._on_stream_quote)
+            import json as _json
+            _closed_msg = _json.dumps({"type": "position_closed"})
+            with self._live_clients_lock:
+                for _q in list(self._live_clients):
+                    try:
+                        _q.put_nowait(_closed_msg)
+                    except Exception:
+                        pass
+        else:
+            self.exit_manager.update_qty(qty)
+
+    def _reconcile_exit_shortfall(self, shortfall: int, was_closing_all: bool,
+                                   contract_symbol: str, direction_snapshot: str):
+        """
+        Restores `shortfall` contracts to tracking when a priced exit sells
+        fewer than requested — e.g. the market fallback itself errored after
+        the limit order and cancel. Rare, but the app's state must never
+        claim fewer contracts are open than actually are at the broker.
+        """
+        if shortfall <= 0:
+            return
+        if was_closing_all:
+            self.trade_taken = True
+            self.position    = direction_snapshot
+            self.exit_manager.qty_remaining = shortfall
+            if self.stream_manager and contract_symbol:
+                self.stream_manager.subscribe(contract_symbol, self._on_stream_quote)
+        else:
+            self.exit_manager.qty_remaining += shortfall
+        logger.error("[ORBEngine] Priced exit for %s only sold part of the request — "
+                     "%d contract(s) still open, restored to tracking",
+                     contract_symbol, shortfall)
+        self.debug.emit("ERROR", f"Priced exit for {contract_symbol} only partially filled — "
+                                  f"{shortfall} contract(s) still open, restored to tracking")
+
+    def _fetch_option_quote(self, symbol: str) -> tuple[float | None, float | None]:
+        """Best-effort (bid, ask) snapshot for `symbol`. Never raises."""
+        try:
+            from alpaca.data.requests import OptionLatestQuoteRequest
+            quotes = self.option_client.get_option_latest_quote(
+                OptionLatestQuoteRequest(symbol_or_symbols=symbol)
+            )
+            q = quotes.get(symbol)
+            if not q:
+                return None, None
+            bid = float(q.bid_price) if q.bid_price else None
+            ask = float(q.ask_price) if q.ask_price else None
+            return bid, ask
+        except Exception as e:
+            logger.debug("[ORBEngine] _fetch_option_quote failed for %s: %s", symbol, e)
+            return None, None
+
+    def _execute_priced_exit(self, qty_to_close: int, contract_symbol: str,
+                              limit_price_override: float | None = None) -> dict:
+        """
+        Sells `qty_to_close` contracts of `contract_symbol`, seeking a good
+        price instead of firing an instant market order.
+
+        If `limit_price_override` is given (the user typed their own limit
+        price), skips sampling and submits a limit order there directly.
+        Otherwise samples the option's bid PRICE_SEEK_MIN_SAMPLES (4) times
+        across PRICE_SEEK_SAMPLE_WINDOW_SEC (3s), submits a limit SELL at the
+        best (highest) bid observed, and waits up to the remaining
+        PRICE_SEEK_TOTAL_BUDGET_SEC (10s total) for it to fill. Whatever's
+        still unfilled when that budget expires gets cancelled and
+        market-sold immediately — the 10s bounds how long we'll *try* for a
+        better price, never whether the position actually closes.
+
+        Runs with no locking of its own — callers must have already reserved
+        qty_to_close (e.g. via _reserve_exit_qty) before calling this, and
+        must not call it while holding self._tick_lock (it can take up to
+        ~10 real seconds).
+
+        Returns {"filled_qty": int, "avg_fill_price": float | None,
+        "order_ids": [str, ...]}. avg_fill_price is None only if filled_qty
+        is 0 (both the limit attempt and the market fallback failed outright
+        — e.g. broker rejected both, contract already gone).
+        """
+        import time as _time
+        from alpaca.trading.requests import LimitOrderRequest
+
+        t_start = _time.monotonic()
+        order_ids: list[str] = []
+
+        if limit_price_override is not None:
+            target_price = round(float(limit_price_override), 2)
+            self.debug.emit("INFO", f"Priced exit — user limit ${target_price:.2f} "
+                                     f"for {contract_symbol}")
+        else:
+            samples: list[float] = []
+            interval = PRICE_SEEK_SAMPLE_WINDOW_SEC / PRICE_SEEK_MIN_SAMPLES
+            for i in range(PRICE_SEEK_MIN_SAMPLES):
+                bid, _ask = self._fetch_option_quote(contract_symbol)
+                if bid:
+                    samples.append(bid)
+                if i < PRICE_SEEK_MIN_SAMPLES - 1:
+                    _time.sleep(interval)
+            target_price = round(max(samples), 2) if samples else None
+            self.debug.emit("INFO", f"Priced exit — sampled {len(samples)} bid(s) for "
+                                     f"{contract_symbol}, best="
+                                     f"{f'${target_price:.2f}' if target_price else 'none'}")
+
+        filled_qty     = 0
+        fill_notional  = 0.0  # sum(price * qty) across every fill, for a correct blended average
+
+        if target_price is not None:
+            try:
+                limit_order = LimitOrderRequest(
+                    symbol=contract_symbol, qty=qty_to_close, side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY, limit_price=target_price,
+                )
+                submitted = self.trading_client.submit_order(limit_order)
+                order_ids.append(str(submitted.id))
+
+                deadline = t_start + PRICE_SEEK_TOTAL_BUDGET_SEC
+                refreshed = submitted
+                while _time.monotonic() < deadline:
+                    _time.sleep(0.5)
+                    refreshed = self.trading_client.get_order_by_id(str(submitted.id))
+                    status = str(refreshed.status).rsplit(".", 1)[-1].upper()
+                    if status in ("FILLED", "CANCELED", "REJECTED", "EXPIRED"):
+                        break
+
+                filled_qty = int(refreshed.filled_qty or 0)
+                if filled_qty > 0:
+                    fill_notional = filled_qty * float(refreshed.filled_avg_price or target_price)
+
+                if filled_qty < qty_to_close:
+                    try:
+                        self.trading_client.cancel_order_by_id(str(submitted.id))
+                        _time.sleep(0.3)
+                        refreshed = self.trading_client.get_order_by_id(str(submitted.id))
+                        newly_filled = int(refreshed.filled_qty or 0)
+                        if newly_filled > filled_qty:
+                            fill_notional += (newly_filled - filled_qty) * float(
+                                refreshed.filled_avg_price or target_price)
+                            filled_qty = newly_filled
+                    except Exception as e:
+                        logger.warning("[ORBEngine] cancel_order_by_id failed for %s: %s",
+                                       submitted.id, e)
+            except Exception as e:
+                logger.error("[ORBEngine] Priced exit limit order failed for %s: %s",
+                             contract_symbol, e)
+                self.debug.emit("ERROR", f"Priced exit limit order failed: {e}")
+
+        remaining_qty = qty_to_close - filled_qty
+        if remaining_qty > 0:
+            try:
+                market_order = MarketOrderRequest(
+                    symbol=contract_symbol, qty=remaining_qty,
+                    side=OrderSide.SELL, time_in_force=TimeInForce.DAY,
+                )
+                market_fill = self.trading_client.submit_order(market_order)
+                order_ids.append(str(market_fill.id))
+                market_price = self._resolve_exit_premium(
+                    market_fill, target_price or self._get_option_price() or 0.0)
+                fill_notional += remaining_qty * market_price
+                filled_qty    += remaining_qty
+                self.debug.emit("WARN", f"Priced exit — {remaining_qty} unfilled after "
+                                         f"{PRICE_SEEK_TOTAL_BUDGET_SEC:.0f}s, market-sold "
+                                         f"@ ${market_price:.2f}")
+            except Exception as e:
+                logger.error("[ORBEngine] Priced exit fallback market order failed for %s: %s",
+                             contract_symbol, e)
+                self.debug.emit("ERROR", f"Priced exit fallback market order failed: {e}")
+
+        avg_fill_price = (fill_notional / filled_qty) if filled_qty > 0 else None
+        return {"filled_qty": filled_qty, "avg_fill_price": avg_fill_price, "order_ids": order_ids}
+
+    def _run_priced_exit_and_finalize(self, action: dict, contract_snapshot: str,
+                                       direction_snapshot: str, qty_requested: int,
+                                       closing_all: bool, current_price: float,
+                                       entry_premium: float,
+                                       limit_price_override: float | None):
+        """Background-thread entry point for the tick-driven (TP1/TP2) priced
+        exit path — see _handle_exit_action. Not used by submit_manual_exit,
+        which runs _execute_priced_exit synchronously so the HTTP response can
+        report the real fill."""
+        result = self._execute_priced_exit(qty_requested, contract_snapshot, limit_price_override)
+        shortfall = qty_requested - result["filled_qty"]
+        if shortfall > 0:
+            with self._tick_lock:
+                self._reconcile_exit_shortfall(shortfall, closing_all, contract_snapshot,
+                                                direction_snapshot)
+        if result["filled_qty"] <= 0:
+            logger.error("[ORBEngine] Priced exit for %s filled nothing", contract_snapshot)
+            self.debug.emit("ERROR", f"Priced exit for {contract_snapshot} did not fill any "
+                                      f"contracts — check server logs / broker manually")
+            return
+        self._finalize_exit(action, contract_snapshot, direction_snapshot,
+                             result["filled_qty"], closing_all and shortfall == 0,
+                             current_price, result["avg_fill_price"], entry_premium)
+
+    def _finalize_exit(self, action: dict, contract_snapshot: str, direction_snapshot: str,
+                        qty_closed: int, closing_all: bool, current_price: float,
+                        exit_premium: float, entry_premium: float):
+        """
+        Logs the exit, updates session-level risk tracking, and notifies —
+        shared by the instant market-order path and both priced-exit paths
+        (tick-driven and manual), each of which resolves its own exit_premium
+        first (instant fill price, or the priced exit's actual blended fill).
+        """
+        reason = action.get("reason", "")
+        _tag = f"[{self.strategy_name} | {self.profile_key}]"
+        pnl = (exit_premium - entry_premium) * qty_closed * 100
+
         self._active_trade_pnl     += pnl
         self._session_realized_pnl += pnl
 
@@ -1900,9 +2141,9 @@ class ORBEngine:
         try:
             self.logger.log_exit(
                 contract_symbol=contract_snapshot,
-                exit_reason=action["reason"],
+                exit_reason=reason,
                 exit_premium=exit_premium,
-                qty_closed=qty_to_close,
+                qty_closed=qty_closed,
                 profile=self.profile_key,
                 strategy_id=self.strategy_id,
                 underlying_price_exit=current_price,
@@ -1912,29 +2153,40 @@ class ORBEngine:
             self.notifier.notify_exit(
                 ticker=self.ticker,
                 contract_symbol=contract_snapshot,
-                exit_reason=action["reason"],
+                exit_reason=reason,
                 pnl=pnl,
-                qty=qty_to_close,
+                qty=qty_closed,
                 profile_key=self.profile_key,
+                exit_premium=exit_premium,
             )
-            logger.info("[ORBEngine] Exit %s qty=%d reason=%s",
-                        action["type"], qty_to_close, action.get("reason", ""))
-            self.debug.emit("SUCCESS", f"{_tag} Exit {action['type']} qty={qty_to_close} "
-                                       f"reason={action.get('reason', '')} pnl=${pnl:.2f} "
+            logger.info("[ORBEngine] Exit %s qty=%d reason=%s @ $%.2f",
+                        action["type"], qty_closed, reason, exit_premium)
+            self.debug.emit("SUCCESS", f"{_tag} Exit {action['type']} qty={qty_closed} "
+                                       f"reason={reason} @ ${exit_premium:.2f} pnl=${pnl:.2f} "
                                        f"session_pnl=${self._session_realized_pnl:.0f}")
         except Exception as e:
             logger.error("[ORBEngine] Exit log/notify failed: %s", e)
             self.debug.emit("ERROR", f"Exit log/notify failed: {e}")
 
-    def submit_manual_exit(self, qty: int | None = None) -> dict:
+    def submit_manual_exit(self, qty: int | None = None, limit_price: float | None = None) -> dict:
         """
-        Manually sell `qty` contracts of the open position right now (default: all
-        remaining). Reuses the same close path as automated exits — partial sells
-        submit a SELL order and decrement qty_remaining; a full sell closes the
-        position, unsubscribes the option stream, and resets the session.
+        Manually sell `qty` contracts of the open position (default: all
+        remaining). Seeks a good price the same way an automated TP1/TP2 exit
+        does — samples the bid and tries a limit order first, falling back to
+        market for whatever's unfilled after a ~10s budget (see
+        _execute_priced_exit) — unless the caller supplies their own
+        `limit_price`, in which case that's used directly with no sampling.
+
+        The price-seeking/waiting step runs OUTSIDE self._tick_lock — only
+        the qty reservation before it and the state finalization after it are
+        lock-protected — so this call can take its full ~10s without blocking
+        the engine's ability to react to a hard stop on any remaining
+        contracts (e.g. a partial sell here while the runner blows through
+        its stop moments later).
 
         Called by POST /strategy/positions/<id>/sell. Returns
-        {"status": "ok"|"error", "message", "qty_sold"?, "qty_remaining"?}.
+        {"status": "ok"|"error", "message", "qty_sold"?, "qty_remaining"?,
+        "avg_fill_price"?}.
         """
         with self._tick_lock:
             if not self.trade_taken or not self.contract_symbol or not self.exit_manager:
@@ -1946,29 +2198,45 @@ class ORBEngine:
 
             want = remaining_before if qty is None else int(qty)
             want = max(1, min(want, remaining_before))
-            contract = self.contract_symbol
+            contract           = self.contract_symbol
+            direction_snapshot = self.position
+            entry_p            = self.exit_manager.entry_premium
+            closing_all        = want >= remaining_before
 
+            price_note = f" @ limit ${limit_price:.2f}" if limit_price is not None else " (seeking best price)"
             self.debug.emit("INFO", f"Manual exit requested — sell {want}/{remaining_before} "
-                                    f"of {contract}")
-            action = {"type": "MANUAL_SELL", "reason": "MANUAL_EXIT", "qty": want}
-            self._handle_exit_action(action, self._last_underlying_price or 0.0,
-                                     self._get_option_price())
+                                    f"of {contract}{price_note}")
 
-            still_open    = bool(self.trade_taken and self.exit_manager)
-            new_remaining = self.exit_manager.qty_remaining if self.exit_manager else 0
-            # _handle_exit_action swallows order errors; detect a no-op as a failure.
-            if still_open and new_remaining == remaining_before:
-                return {"status": "error", "message": "Sell order failed — check server logs"}
+            self._reserve_exit_qty(closing_all, contract, want)
 
-            closed_all = not still_open
-            if closed_all:
-                self.reset_session()
-            return {
-                "status":        "ok",
-                "message":       f"Sold {want} contract(s) of {contract}",
-                "qty_sold":      want,
-                "qty_remaining": 0 if closed_all else new_remaining,
-            }
+        # Outside the lock — up to ~10s. See docstring.
+        result = self._execute_priced_exit(want, contract, limit_price)
+
+        shortfall = want - result["filled_qty"]
+        if shortfall > 0:
+            with self._tick_lock:
+                self._reconcile_exit_shortfall(shortfall, closing_all, contract, direction_snapshot)
+
+        if result["filled_qty"] <= 0:
+            return {"status": "error", "message": "Sell order failed — check server logs"}
+
+        fully_closed = closing_all and shortfall == 0
+        action = {"type": "MANUAL_SELL", "reason": "MANUAL_EXIT", "qty": result["filled_qty"]}
+        self._finalize_exit(action, contract, direction_snapshot, result["filled_qty"],
+                             fully_closed, self._last_underlying_price or 0.0,
+                             result["avg_fill_price"], entry_p)
+
+        if fully_closed:
+            self.reset_session()
+
+        return {
+            "status":         "ok",
+            "message":        f"Sold {result['filled_qty']} contract(s) of {contract} "
+                              f"@ ${result['avg_fill_price']:.2f}",
+            "qty_sold":       result["filled_qty"],
+            "avg_fill_price": round(result["avg_fill_price"], 4),
+            "qty_remaining":  0 if fully_closed else self.exit_manager.qty_remaining,
+        }
 
     def add_to_position(self, qty: int) -> dict:
         """

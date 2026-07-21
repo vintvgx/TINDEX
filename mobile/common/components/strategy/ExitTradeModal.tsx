@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View, Text, Modal, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Pressable,
+  View, Text, Modal, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Pressable, TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
@@ -30,15 +30,22 @@ export function ExitTradeModal({
   const { mutate: sell, isPending } = useSellPosition();
   const max = Math.max(1, qtyRemaining || 1);
   const [qty, setQty] = useState(max);
+  // Optional — leaving this blank makes the backend seek a good price itself
+  // (sample the bid a few times, try a limit order, fall back to market
+  // after ~10s) instead of firing an instant market order. Typing a price
+  // here skips that and uses this exact limit instead.
+  const [limitPriceInput, setLimitPriceInput] = useState('');
 
-  // Reset the chosen qty whenever the sheet (re)opens or the held qty changes.
-  useEffect(() => { if (visible) setQty(max); }, [visible, max]);
+  // Reset the chosen qty/limit price whenever the sheet (re)opens or the held qty changes.
+  useEffect(() => { if (visible) { setQty(max); setLimitPriceInput(''); } }, [visible, max]);
 
   const sellAll = qty >= max;
+  const limitPrice = limitPriceInput ? parseFloat(limitPriceInput) : undefined;
+  const hasValidLimit = limitPrice != null && !Number.isNaN(limitPrice) && limitPrice > 0;
 
   const doSell = () => {
     sell(
-      { strategyId, qty: sellAll ? undefined : qty },
+      { strategyId, qty: sellAll ? undefined : qty, limitPrice: hasValidLimit ? limitPrice : undefined },
       {
         onSuccess: (r) => { toast.success(r.message || 'Position exited'); onClose(); },
         onError:   (e) => toast.error(e.message || 'Sell failed'),
@@ -47,10 +54,13 @@ export function ExitTradeModal({
   };
 
   const confirm = () => {
+    const priceNote = hasValidLimit
+      ? `\n\nLimit price: $${limitPrice!.toFixed(2)}`
+      : '\n\nSeeking the best price (may take up to ~10s).';
     if (!paperMode) {
       Alert.alert(
         'Sell LIVE Position',
-        `Sell ${sellAll ? 'ALL' : qty} contract(s) of ${contract || ticker} with REAL money now?`,
+        `Sell ${sellAll ? 'ALL' : qty} contract(s) of ${contract || ticker} with REAL money now?${priceNote}`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Sell', style: 'destructive', onPress: doSell },
@@ -116,6 +126,30 @@ export function ExitTradeModal({
             </Text>
           </TouchableOpacity>
 
+          {/* Limit price — optional. Left blank, the backend samples the bid
+              and seeks a good price itself (limit order first, market
+              fallback after ~10s) instead of firing an instant market
+              order. */}
+          <Text style={[styles.label, { color: colors.tabBarInactive, marginTop: 18 }]}>
+            LIMIT PRICE (OPTIONAL)
+          </Text>
+          <View style={[styles.limitRow, { borderColor: colors.border, backgroundColor: colors.background }]}>
+            <Text style={[styles.limitDollar, { color: colors.tabBarInactive }]}>$</Text>
+            <TextInput
+              value={limitPriceInput}
+              onChangeText={t => setLimitPriceInput(t.replace(/[^0-9.]/g, ''))}
+              placeholder="Best price (auto)"
+              placeholderTextColor={colors.tabBarInactive}
+              keyboardType="decimal-pad"
+              style={[styles.limitInput, { color: colors.text }]}
+            />
+          </View>
+          <Text style={[styles.limitHint, { color: colors.tabBarInactive }]}>
+            {hasValidLimit
+              ? `Sells at exactly $${limitPrice!.toFixed(2)} (or better).`
+              : 'Samples the current price a few times and tries for the best fill — may take up to ~10s.'}
+          </Text>
+
           {/* Sell */}
           <TouchableOpacity
             onPress={confirm}
@@ -151,6 +185,10 @@ const styles = StyleSheet.create({
   qtyBtn:   { width: 48, height: 48, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   qtyValue: { fontSize: 30, fontWeight: '800' },
   allTag:   { fontSize: 10, fontWeight: '800', letterSpacing: 1, marginTop: -2 },
+  limitRow:    { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 10, paddingHorizontal: 12 },
+  limitDollar: { fontSize: 15, fontWeight: '600', marginRight: 4 },
+  limitInput:  { flex: 1, fontSize: 15, fontWeight: '600', paddingVertical: 11 },
+  limitHint:   { fontSize: 11, marginTop: 6, lineHeight: 15 },
   maxBtn:   { alignSelf: 'center', marginTop: 14, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 18, borderWidth: 1 },
   maxBtnText: { fontSize: 13, fontWeight: '600' },
   sellBtn:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 15, borderRadius: 12, marginTop: 18 },

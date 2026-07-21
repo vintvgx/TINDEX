@@ -204,8 +204,15 @@ class StrategyNotifier:
         pnl: float,
         qty: int,
         profile_key: str,
+        exit_premium: float | None = None,
     ):
-        """One or more contracts were closed (stop, TP1, TP2, EOD, etc.)."""
+        """One or more contracts were closed (stop, TP1, TP2, EOD, etc.).
+
+        exit_premium — the actual fill price. Added so a priced exit (TP1/TP2/
+        manual sell now sample the bid and/or use a limit order rather than
+        firing an instant market order — see ORBEngine._execute_priced_exit)
+        can show the user what price it actually sold at, not just the P&L.
+        """
         sign  = "+" if pnl >= 0 else ""
         emoji = "✅" if pnl >= 0 else "🛑"
 
@@ -221,14 +228,16 @@ class StrategyNotifier:
             "CONSOLIDATION":      "Consolidation exit",
             "LOW_VOLUME_EXIT":    "Low-volume exit",
             "MANUAL_CLOSE":       "Manually closed",
+            "MANUAL_EXIT":        "Manually sold",
             "FORCE_CLOSE":        "Force-closed",
         }
         label = labels.get(exit_reason, exit_reason)
+        price_str = f" @ ${exit_premium:.2f}" if exit_premium is not None else ""
 
         readable = _fmt_contract(contract_symbol)
         self._dispatch(
             title=f"{emoji} {readable} — {label}  [{profile_key}]",
-            body=f"{qty} contracts  P&L: {sign}${pnl:,.2f}",
+            body=f"{qty} contracts{price_str}  P&L: {sign}${pnl:,.2f}",
             data={
                 "screen":      "tradelog",
                 "symbol":      contract_symbol,

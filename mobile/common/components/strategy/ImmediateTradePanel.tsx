@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import { OptionsChainPicker } from '@/common/components/strategy/OptionsChainPicker';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
+import { blendHex } from '@/lib/colorBlend';
 
 interface Props {
   colors: any;
@@ -36,7 +37,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
   const modeTint = paperMode ? '#FF9F0A' : '#30D158';
 
   return (
-    <View style={{ flex: 1, backgroundColor: modeTint + '0A' }}>
+    <View style={{ flex: 1, backgroundColor: blendHex(colors.background, modeTint, 0.08) }}>
       <View style={styles.controls}>
         {/* Paper / Live — above the ticker picker so it's the first thing
             tapped/seen, not something that can be scrolled past unnoticed. */}
@@ -108,7 +109,7 @@ export function ImmediateTradePanel({ colors, tickerOptions, visible, onClose }:
         onSelectTicker={t => setTicker(t)}
       />
 
-      <OptionsChainPicker ticker={ticker} colors={colors} visible={visible} paperMode={paperMode} onSubmitted={onClose} />
+      <OptionsChainPicker ticker={ticker} colors={colors} visible={visible} paperMode={paperMode} onChangePaperMode={setPaperMode} onSubmitted={onClose} />
     </View>
   );
 }

@@ -599,6 +599,7 @@ def force_close_strategy(strategy_id: str):
             pnl=pnl,
             qty=qty,
             profile_key=engine.profile_key,
+            exit_premium=exit_price,
         )
         engine.debug.emit("SUCCESS",
             f"Force-closed {engine.contract_symbol} qty={qty} "
@@ -613,15 +614,27 @@ def force_close_strategy(strategy_id: str):
 def sell_position(strategy_id: str):
     """
     Manually sell contracts of an open position. Works for both saved strategies
-    and ad-hoc immediate-trade engines (resolved by id). Body: {qty?} — omit qty
-    to sell the entire remaining position.
+    and ad-hoc immediate-trade engines (resolved by id). Body: {qty?, limit_price?}
+    — omit qty to sell the entire remaining position; omit limit_price to let
+    the engine seek a good price itself (sample the bid, try a limit order,
+    fall back to market after ~10s — see ORBEngine._execute_priced_exit), or
+    supply one to use that exact price instead.
+
+    NOTE: this request can legitimately take up to ~10s to return — the
+    gunicorn worker timeout (120s, see Procfile) and the mobile client both
+    need to tolerate that; this isn't a hang.
     """
     engine = _resolve_any_engine(strategy_id)
     if not engine:
         return jsonify({"status": "error", "message": "Position not found"}), 404
     data = request.get_json() or {}
     qty = data.get("qty")
-    result = engine.submit_manual_exit(int(qty) if qty is not None else None)
+    limit_price = data.get("limit_price")
+    try:
+        limit_price = float(limit_price) if limit_price is not None else None
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "limit_price must be a number"}), 400
+    result = engine.submit_manual_exit(int(qty) if qty is not None else None, limit_price)
     code = 200 if result.get("status") == "ok" else 409
     return jsonify(result), code
 
