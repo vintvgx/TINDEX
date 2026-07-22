@@ -1,37 +1,27 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { TickerResponse } from "@/common/types/blogPosts/ticker";
-import { useCallback, useRef } from "react";
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 
 /**
  * Custom hook to fetch detailed ticker information
  *
- * Defaults to the backend's cache (use_cache: true) — the server-side
- * research cache is short-lived (~60s, see perform_yfinance_research), so
- * this mainly saves a full yfinance + options-chain pass on rapid re-opens
- * of the same ticker; a cold/idle ticker will still take the same slow path
- * either way. That slow path is a full uncached yfinance research pass
- * (.info + .history + .news + .recommendations + a 5-expiration options-
- * chain fetch/score), which has no timeout of its own and can run
- * noticeably slower outside market hours — the abort below is what actually
- * bounds the wait, caching just reduces how often that path gets hit.
+ * Always requests fresh data (use_cache: false) and never treats a previous
+ * result as fresh client-side (no staleTime) — a stock's price moves
+ * continuously during market hours, so both the backend's research cache
+ * and React Query's default staleTime were serving visibly outdated prices
+ * on quick re-opens of the same ticker. Every mount/refetch now hits
+ * yfinance directly.
  *
- * `refetchFresh` (returned alongside the normal query fields) is the one
- * escape hatch: it forces the *next* fetch to bypass the cache — wire it
- * to pull-to-refresh so an explicit refresh always gets real fresh data
- * instead of possibly replaying whatever's still in that 60s cache window.
+ * `refetchFresh` (returned alongside the normal query fields) is just
+ * `refetch` under this name — wire it to pull-to-refresh; it always returns
+ * the most current data since there's no cache left to bypass.
  *
  * @param ticker - The stock ticker symbol (e.g., 'AAPL', 'TSLA')
  * @returns React Query result with ticker data, plus refetchFresh()
  */
 export function useTickerQuery(ticker: string) {
   const { authState: { user, isLoading: authLoading } } = useAuth();
-  // A ref, not state: the queryFn below reads this at call time (not at
-  // render/definition time), so setting it and immediately calling
-  // refetch() takes effect on that very next fetch — no waiting on a state
-  // update to flush through a re-render first.
-  const bypassCacheRef = useRef(false);
 
   const query = useQuery({
     queryKey: ['ticker', ticker, user?.id],
@@ -43,15 +33,10 @@ export function useTickerQuery(ticker: string) {
       try {
         const apiUrl = `${RAILWAY_BASE_URL}/ticker/${ticker}`;
 
-        // Consume the one-shot bypass so only the fetch that triggered it
-        // skips the cache — every fetch after goes back to using it.
-        const useCache = !bypassCacheRef.current;
-        bypassCacheRef.current = false;
-
         const requestBody = {
           userId: user.id,
           save_to_db: true,
-          use_cache: useCache,
+          use_cache: false,
         };
 
         // This request can trigger a full, uncached yfinance research pass
@@ -93,19 +78,15 @@ export function useTickerQuery(ticker: string) {
       }
     },
     enabled: !!ticker && !!user?.id && !authLoading,
-    staleTime: 2 * 60 * 1000, // 2 minutes
+    // No staleTime: every mount/refetch is treated as stale, so re-opening
+    // the same ticker always hits the network instead of replaying whatever
+    // price was in memory from the last visit.
+    staleTime: 0,
     retry: 1,
     retryDelay: 1000,
   });
 
-  // Forces the next fetch to skip the backend cache — wire this to
-  // pull-to-refresh instead of the plain `refetch` so an explicit refresh
-  // always gets a genuinely fresh pull, not whatever's still sitting in the
-  // server's ~60s research cache.
-  const refetchFresh = useCallback(() => {
-    bypassCacheRef.current = true;
-    return query.refetch();
-  }, [query.refetch]);
-
-  return { ...query, refetchFresh };
+  // Kept as its own name so pull-to-refresh call sites don't need to change —
+  // it's a plain alias for `refetch` now that there's no cache to bypass.
+  return { ...query, refetchFresh: query.refetch };
 }

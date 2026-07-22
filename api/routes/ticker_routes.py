@@ -16,7 +16,7 @@ from services.supabase.supabase_service import get_supabase_service
 from services.utils.research_service import get_research_service
 from services.utils.blog_generation_service import get_blog_service
 from services.yfinance.yfinance_service import get_historical_prices, PERIOD_MAP
-from utils.cache import TrendingStocksCache, GenericTTLCache
+from utils.cache import TrendingStocksCache
 
 import requests as _requests
 from bs4 import BeautifulSoup
@@ -27,17 +27,6 @@ bp = Blueprint("ticker", __name__)
 
 _trending_cache = TrendingStocksCache()
 _TRENDING_CACHE_TTL = 90
-
-_history_cache = GenericTTLCache()
-_HISTORY_CACHE_TTL = {
-    "1D": 30,
-    "1W": 60,
-    "1M": 300,
-    "3M": 300,
-    "YTD": 300,
-    "1Y": 300,
-    "5Y": 300,
-}
 
 
 # ── Data classes ────────────────────────────────────────────────────────────────
@@ -150,13 +139,7 @@ def get_ticker_history(ticker: str):
         if period not in PERIOD_MAP:
             return jsonify({"success": False, "error": f"Invalid period. Must be one of: {', '.join(PERIOD_MAP.keys())}"}), 400
 
-        cache_key = f"{ticker}_{period}"
-        cached_data = _history_cache.get(cache_key)
-        if cached_data:
-            return jsonify({"success": True, "data": cached_data, "period": period, "timestamp": time.time(), "from_cache": True})
-
         historical_data = get_historical_prices(ticker, period)
-        _history_cache.set(cache_key, historical_data, _HISTORY_CACHE_TTL.get(period, 60))
 
         return jsonify({"success": True, "data": historical_data, "period": period, "timestamp": time.time(), "from_cache": False})
 

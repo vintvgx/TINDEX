@@ -226,9 +226,7 @@ function ImmediatePositionCard({
             hitSlop={6}
             style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}
           >
-            <Text style={[styles.posTicker, { color: colors.text }]}>
-              {PROFILE_EMOJI[pos.profile] ?? '📊'}
-            </Text>
+ 
             <TickerLogo
               uri={`https://financialmodelingprep.com/image-stock/${pos.ticker.toUpperCase()}.png`}
               ticker={pos.ticker}

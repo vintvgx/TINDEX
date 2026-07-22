@@ -48,8 +48,9 @@ export function useTickerHistoryQuery(ticker: string, period: PricePeriod) {
       }
     },
     enabled: !!ticker && !!user?.id && !authLoading,
-    // Intraday timeframes go stale fast; longer ranges barely change minute to minute.
-    staleTime: period === "1D" ? 30 * 1000 : period === "1W" ? 60 * 1000 : 5 * 60 * 1000,
+    // No staleTime — every mount/refetch hits the network so the chart never
+    // silently replays an old in-memory series.
+    staleTime: 0,
     retry: 1,
     retryDelay: 1000,
     // Switching timeframes changes the query key (ticker-history includes
