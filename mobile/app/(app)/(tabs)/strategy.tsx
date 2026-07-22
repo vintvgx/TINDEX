@@ -550,7 +550,7 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
     queryClient.invalidateQueries({ queryKey: ['strategy-trades'] });
   }, [queryClient]);
 
-  const { data: live, connected: streaming } = useStrategyLivePrice(
+  const { data: live, connected: streaming, patchData } = useStrategyLivePrice(
     config.id,
     hasPosition,
     onPositionClosed,
@@ -713,6 +713,7 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
                   entry_premium={live.entry_premium}
                   tp1_hit={live.tp1_hit}
                   tp2_hit={live.tp2_hit}
+                  onUpdated={patchData}
                   style={{ flex: 1 }}
                 />
               )}
@@ -767,7 +768,7 @@ function PositionStopBar({ live, colors }: { live: LiveOptionPrice; colors: any 
 // ── ImmediatePositionCard ──────────────────────────────────────────────────────
 
 function ImmediatePositionCard({ position, colors }: { position: ImmediatePosition; colors: any }) {
-  const { data: live, connected } = useStrategyLivePrice(position.strategy_id, true);
+  const { data: live, connected, patchData } = useStrategyLivePrice(position.strategy_id, true);
   const [exitOpen, setExitOpen]   = useState(false);
   const [expanded, setExpanded]   = useState(false);
 
@@ -872,6 +873,7 @@ function ImmediatePositionCard({ position, colors }: { position: ImmediatePositi
                 entry_premium={live.entry_premium}
                 tp1_hit={live.tp1_hit}
                 tp2_hit={live.tp2_hit}
+                onUpdated={patchData}
                 style={{ flex: 1 }}
               />
             )}

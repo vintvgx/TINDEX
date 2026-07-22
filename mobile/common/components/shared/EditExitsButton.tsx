@@ -16,6 +16,10 @@ interface BaseProps {
   tp2_hit?: boolean;
   label?: string;
   style?: object;
+  /** Called with the submitted fields right after the server confirms the
+   *  update — lets the caller patch its locally-held WS snapshot immediately
+   *  instead of waiting on the next "price_update" tick to reflect the edit. */
+  onUpdated?: (payload: { hard_stop?: number; tp1?: number; tp2?: number }) => void;
 }
 
 interface OrbProps extends BaseProps {
@@ -26,7 +30,7 @@ interface OrbProps extends BaseProps {
 type Props = OrbProps;
 
 export function EditExitsButton(props: Props) {
-  const { ticker, hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit, label, style } = props;
+  const { ticker, hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit, label, style, onUpdated } = props;
   const colors = useThemeColors();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -43,6 +47,7 @@ export function EditExitsButton(props: Props) {
     tp2_pct?: number;
   }) => {
     await orbMutation.mutateAsync({ strategy_id: props.strategy_id, ...payload });
+    onUpdated?.(payload);
     toast.success('Stop & targets updated');
     setOpen(false);
   };

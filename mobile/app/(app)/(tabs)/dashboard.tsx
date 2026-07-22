@@ -13,6 +13,9 @@ import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySes
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useOrbServiceAlert } from '@/hooks/useOrbServiceAlert';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
+import { AddContractModal } from '@/common/components/strategy/AddContractModal';
+import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
+import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import {
   ORBNotificationModal,
   type ORBBreakoutNotificationData,
@@ -81,21 +84,49 @@ interface ExitTarget {
   paperMode: boolean;
 }
 
+interface AddTarget {
+  strategyId: string;
+  ticker: string;
+  contract?: string;
+  qtyHeld: number;
+  entryPremium?: number;
+  midPrice?: number;
+  paperMode: boolean;
+}
+
 function StrategyPositionCard({
-  pos, colors, onExit,
-}: { pos: PositionEntry; colors: any; onExit: (t: ExitTarget) => void }) {
+  pos, colors, onExit, onAdd,
+}: { pos: PositionEntry; colors: any; onExit: (t: ExitTarget) => void; onAdd: (t: AddTarget) => void }) {
   const { toTicker } = useBaseNavigation();
-  const pnl     = pos.unrealized_pnl ?? 0;
-  const pnlPct  = pos.unrealized_pnl_pct ?? 0;
-  const pnlColor = pnl >= 0 ? colors.success : colors.error;
   const dirColor = pos.direction === 'CALL' ? colors.success : colors.error;
   const isLive   = pos.paper_mode === false;
 
+  // Same WS the Live Positions tab uses. REST here (useStrategyPositions)
+  // only polls every 15s, so without this merge every field on this card —
+  // not just stop/TP — would visibly lag behind the Live Positions tab,
+  // which merges this same `live` snapshot into everything it renders. Also
+  // gets the patchData escape hatch so a submitted edit reflects immediately.
+  const { data: live, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
+  const hardStop      = live?.hard_stop     ?? pos.hard_stop;
+  const tp1           = live?.tp1           ?? pos.tp1;
+  const tp2           = live?.tp2           ?? pos.tp2;
+  const entryPremium  = live?.entry_premium ?? pos.entry_premium;
+  const tp1Hit        = live?.tp1_hit       ?? pos.tp1_hit;
+  const tp2Hit        = live?.tp2_hit       ?? pos.tp2_hit;
+  const currentPrice  = live?.mid_price     ?? pos.current_price;
+  const qtyRemaining  = live?.qty_remaining ?? pos.qty_remaining;
+  const marketValue   = live?.market_value
+    ?? (currentPrice != null && qtyRemaining != null ? currentPrice * qtyRemaining * 100 : undefined);
+  const pnl           = live?.pnl     ?? pos.unrealized_pnl     ?? 0;
+  const pnlPct        = live?.pnl_pct ?? pos.unrealized_pnl_pct ?? 0;
+  const pnlColor      = pnl >= 0 ? colors.success : colors.error;
+  const canEditExits  = hardStop != null && tp1 != null && entryPremium != null;
+
   const stages = [
-    { label: 'Stop', value: pos.hard_stop,      active: !pos.tp1_hit && !pos.be_stop_active, color: colors.error },
-    { label: 'BE',   value: pos.entry_premium,   active: !!pos.be_stop_active,                color: '#FF9F0A' },
-    { label: 'TP1',  value: pos.tp1,             active: !!pos.tp1_hit && !pos.tp2_hit,       color: '#4A9EFF' },
-    { label: 'TP2',  value: pos.tp2,             active: !!pos.tp2_hit,                       color: colors.success },
+    { label: 'Stop', value: hardStop,          active: !tp1Hit && !pos.be_stop_active,      color: colors.error },
+    { label: 'BE',   value: entryPremium,       active: !!pos.be_stop_active,                color: '#FF9F0A' },
+    { label: 'TP1',  value: tp1,                active: !!tp1Hit && !tp2Hit,                 color: '#4A9EFF' },
+    { label: 'TP2',  value: tp2,                active: !!tp2Hit,                             color: colors.success },
   ];
 
   return (
@@ -149,9 +180,9 @@ function StrategyPositionCard({
           <Text style={[styles.posPnlPct, { color: pnlColor }]}>
             {pnlPct >= 0 ? '+' : '-'}{Math.abs(pnlPct).toFixed(1)}%
           </Text>
-          {pos.current_price != null && pos.qty_remaining != null && (
+          {marketValue != null && (
             <Text style={[styles.posMktVal, { color: colors.textTertiary }]}>
-              Mkt ${(pos.current_price * pos.qty_remaining * 100).toFixed(2)}
+              Mkt ${marketValue.toFixed(2)}
             </Text>
           )}
         </View>
@@ -160,9 +191,9 @@ function StrategyPositionCard({
       {/* Entry / Current / Qty */}
       <View style={styles.posLevels}>
         {[
-          { label: 'Entry',   value: fmtPrice(pos.entry_premium) },
-          { label: 'Current', value: fmtPrice(pos.current_price), accent: true },
-          { label: 'Qty',     value: `${pos.qty_remaining ?? '?'}/${pos.qty_total ?? '?'}` },
+          { label: 'Entry',   value: fmtPrice(entryPremium) },
+          { label: 'Current', value: fmtPrice(currentPrice), accent: true },
+          { label: 'Qty',     value: `${qtyRemaining ?? '?'}/${pos.qty_total ?? '?'}` },
         ].map(({ label, value, accent }) => (
           <View key={label} style={{ alignItems: 'center', flex: 1 }}>
             <Text style={[styles.levelLabel, { color: colors.textTertiary }]}>{label}</Text>
@@ -188,33 +219,81 @@ function StrategyPositionCard({
         ))}
       </View>
 
-      {/* Exit button */}
-      <TouchableOpacity
-        onPress={() => onExit({
-          strategyId:   pos.strategy_id,
-          ticker:       pos.ticker,
-          contract:     pos.contract,
-          qtyRemaining: pos.qty_remaining ?? 0,
-          paperMode:    pos.paper_mode !== false,
-        })}
-        style={[styles.exitBtn, { borderColor: colors.error + '88' }]}
-      >
-        <Ionicons name="close-circle-outline" size={16} color={colors.error} />
-        <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
-      </TouchableOpacity>
+      {/* Edit exits + add + exit buttons */}
+      <View style={styles.actionsRow}>
+        {canEditExits && (
+          <EditExitsButton
+            mode="orb"
+            strategy_id={pos.strategy_id}
+            ticker={pos.ticker}
+            hard_stop={hardStop!}
+            tp1={tp1!}
+            tp2={tp2}
+            entry_premium={entryPremium!}
+            tp1_hit={tp1Hit}
+            tp2_hit={tp2Hit}
+            onUpdated={patchData}
+            style={{ flex: 1 }}
+          />
+        )}
+        <TouchableOpacity
+          onPress={() => onAdd({
+            strategyId:   pos.strategy_id,
+            ticker:       pos.ticker,
+            contract:     pos.contract,
+            qtyHeld:      qtyRemaining ?? 0,
+            entryPremium: entryPremium,
+            midPrice:     currentPrice,
+            paperMode:    pos.paper_mode !== false,
+          })}
+          style={[styles.addBtn, { flex: 1, borderColor: colors.accent + '88' }]}
+        >
+          <Ionicons name="add-circle-outline" size={16} color={colors.accent} />
+          <Text style={[styles.addBtnText, { color: colors.accent }]}>Add</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => onExit({
+            strategyId:   pos.strategy_id,
+            ticker:       pos.ticker,
+            contract:     pos.contract,
+            qtyRemaining: qtyRemaining ?? 0,
+            paperMode:    pos.paper_mode !== false,
+          })}
+          style={[styles.exitBtn, { flex: 1, borderColor: colors.error + '88' }]}
+        >
+          <Ionicons name="close-circle-outline" size={16} color={colors.error} />
+          <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
 
 function ImmediatePositionCard({
-  pos, colors, onExit,
-}: { pos: ImmediatePosition; colors: any; onExit: (t: ExitTarget) => void }) {
+  pos, colors, onExit, onAdd,
+}: { pos: ImmediatePosition; colors: any; onExit: (t: ExitTarget) => void; onAdd: (t: AddTarget) => void }) {
   const { toTicker } = useBaseNavigation();
-  const pnl     = pos.pnl ?? 0;
-  const pnlPct  = pos.pnl_pct ?? 0;
-  const pnlColor = pnl >= 0 ? colors.success : colors.error;
   const dirColor = pos.direction === 'CALL' ? colors.success : colors.error;
   const isLive   = pos.paper_mode === false;
+
+  // ImmediatePosition carries no hard_stop/tp1/tp2 over REST at all, and its
+  // REST poll (useImmediatePositions) only refreshes every 5s — same WS the
+  // Live Positions tab uses drives every field here too, same as it does there.
+  const { data: live, patchData } = useStrategyLivePrice(pos.strategy_id, true);
+  const hardStop      = live?.hard_stop;
+  const tp1           = live?.tp1;
+  const tp2           = live?.tp2;
+  const entryPremium  = live?.entry_premium ?? pos.entry_premium ?? undefined;
+  const tp1Hit        = live?.tp1_hit ?? pos.tp1_hit;
+  const tp2Hit        = live?.tp2_hit ?? pos.tp2_hit;
+  const midPrice      = live?.mid_price ?? pos.mid_price ?? undefined;
+  const qtyRemaining  = live?.qty_remaining ?? pos.qty_remaining;
+  const marketValue   = live?.market_value
+    ?? (midPrice != null && qtyRemaining != null ? midPrice * qtyRemaining * 100 : undefined);
+  const pnl           = live?.pnl     ?? pos.pnl     ?? 0;
+  const pnlPct        = live?.pnl_pct ?? pos.pnl_pct ?? 0;
+  const pnlColor      = pnl >= 0 ? colors.success : colors.error;
+  const canEditExits  = hardStop != null && tp1 != null && entryPremium != null;
 
   return (
     <View style={[styles.posCard, { backgroundColor: colors.card, borderColor: colors.border,
@@ -264,9 +343,9 @@ function ImmediatePositionCard({
           <Text style={[styles.posPnlPct, { color: pnlColor }]}>
             {pnlPct >= 0 ? '+' : '-'}{Math.abs(pnlPct).toFixed(1)}%
           </Text>
-          {pos.mid_price != null && pos.qty_remaining != null && (
+          {marketValue != null && (
             <Text style={[styles.posMktVal, { color: colors.textTertiary }]}>
-              Mkt ${(pos.mid_price * pos.qty_remaining * 100).toFixed(2)}
+              Mkt ${marketValue.toFixed(2)}
             </Text>
           )}
         </View>
@@ -274,9 +353,9 @@ function ImmediatePositionCard({
 
       <View style={styles.posLevels}>
         {[
-          { label: 'Entry',   value: fmtPrice(pos.entry_premium) },
-          { label: 'Current', value: fmtPrice(pos.mid_price), accent: true },
-          { label: 'Qty',     value: String(pos.qty_remaining ?? '?') },
+          { label: 'Entry',   value: fmtPrice(entryPremium) },
+          { label: 'Current', value: fmtPrice(midPrice), accent: true },
+          { label: 'Qty',     value: String(qtyRemaining ?? '?') },
         ].map(({ label, value, accent }) => (
           <View key={label} style={{ alignItems: 'center', flex: 1 }}>
             <Text style={[styles.levelLabel, { color: colors.textTertiary }]}>{label}</Text>
@@ -288,9 +367,9 @@ function ImmediatePositionCard({
       {/* TP milestone badges */}
       <View style={styles.stageBar}>
         {[
-          { label: 'Stop',  active: !pos.tp1_hit,                      color: colors.error },
-          { label: 'TP1',   active: pos.tp1_hit && !pos.tp2_hit,        color: '#4A9EFF' },
-          { label: 'TP2',   active: pos.tp2_hit,                        color: colors.success },
+          { label: 'Stop',  active: !tp1Hit,                      color: colors.error },
+          { label: 'TP1',   active: tp1Hit && !tp2Hit,             color: '#4A9EFF' },
+          { label: 'TP2',   active: tp2Hit,                        color: colors.success },
         ].map((s, i) => (
           <View key={i} style={{ alignItems: 'center', flex: 1 }}>
             <View style={[styles.stageDot, { backgroundColor: s.active ? s.color : colors.border }]} />
@@ -301,19 +380,51 @@ function ImmediatePositionCard({
         ))}
       </View>
 
-      <TouchableOpacity
-        onPress={() => onExit({
-          strategyId:   pos.strategy_id,
-          ticker:       pos.ticker,
-          contract:     pos.contract,
-          qtyRemaining: pos.qty_remaining ?? 0,
-          paperMode:    pos.paper_mode !== false,
-        })}
-        style={[styles.exitBtn, { borderColor: colors.error + '88' }]}
-      >
-        <Ionicons name="close-circle-outline" size={16} color={colors.error} />
-        <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
-      </TouchableOpacity>
+      <View style={styles.actionsRow}>
+        {canEditExits && (
+          <EditExitsButton
+            mode="orb"
+            strategy_id={pos.strategy_id}
+            ticker={pos.ticker}
+            hard_stop={hardStop!}
+            tp1={tp1!}
+            tp2={tp2}
+            entry_premium={entryPremium!}
+            tp1_hit={tp1Hit}
+            tp2_hit={tp2Hit}
+            onUpdated={patchData}
+            style={{ flex: 1 }}
+          />
+        )}
+        <TouchableOpacity
+          onPress={() => onAdd({
+            strategyId:   pos.strategy_id,
+            ticker:       pos.ticker,
+            contract:     pos.contract,
+            qtyHeld:      qtyRemaining ?? 0,
+            entryPremium: entryPremium,
+            midPrice:     midPrice,
+            paperMode:    pos.paper_mode !== false,
+          })}
+          style={[styles.addBtn, { flex: 1, borderColor: colors.accent + '88' }]}
+        >
+          <Ionicons name="add-circle-outline" size={16} color={colors.accent} />
+          <Text style={[styles.addBtnText, { color: colors.accent }]}>Add</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => onExit({
+            strategyId:   pos.strategy_id,
+            ticker:       pos.ticker,
+            contract:     pos.contract,
+            qtyRemaining: qtyRemaining ?? 0,
+            paperMode:    pos.paper_mode !== false,
+          })}
+          style={[styles.exitBtn, { flex: 1, borderColor: colors.error + '88' }]}
+        >
+          <Ionicons name="close-circle-outline" size={16} color={colors.error} />
+          <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -430,6 +541,7 @@ const DashboardScreen = () => {
 
   // ── Panel / exit state ────────────────────────────────────────────────────
   const [exitTarget, setExitTarget] = useState<ExitTarget | null>(null);
+  const [addTarget, setAddTarget] = useState<AddTarget | null>(null);
 
   // ── ORB notification modal ────────────────────────────────────────────────
   const [orbNotificationModalVisible, setOrbNotificationModalVisible] = useState(false);
@@ -589,9 +701,9 @@ const DashboardScreen = () => {
                   </Text>
                 </View>
                 {liveCombined.map(item => item.kind === 'strat' ? (
-                  <StrategyPositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
+                  <StrategyPositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} onAdd={setAddTarget} />
                 ) : (
-                  <ImmediatePositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
+                  <ImmediatePositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} onAdd={setAddTarget} />
                 ))}
               </>
             )}
@@ -607,9 +719,9 @@ const DashboardScreen = () => {
                   </Text>
                 </View>
                 {paperCombined.map(item => item.kind === 'strat' ? (
-                  <StrategyPositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
+                  <StrategyPositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} onAdd={setAddTarget} />
                 ) : (
-                  <ImmediatePositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
+                  <ImmediatePositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} onAdd={setAddTarget} />
                 ))}
               </>
             )}
@@ -633,6 +745,22 @@ const DashboardScreen = () => {
             setExitTarget(null);
             refresh();
           }}
+        />
+      )}
+
+      {/* ── Add-to-position modal ───────────────────────────────────────── */}
+      {addTarget && (
+        <AddContractModal
+          visible
+          colors={colors}
+          strategyId={addTarget.strategyId}
+          ticker={addTarget.ticker}
+          contract={addTarget.contract}
+          qtyHeld={addTarget.qtyHeld}
+          entryPremium={addTarget.entryPremium}
+          midPrice={addTarget.midPrice}
+          paperMode={addTarget.paperMode}
+          onClose={() => setAddTarget(null)}
         />
       )}
 
@@ -718,9 +846,13 @@ const styles = StyleSheet.create({
   stageLabel:    { fontSize: 10, fontWeight: '600' },
   stageValue:    { fontSize: 9, marginTop: 2 },
 
+  actionsRow:    { flexDirection: 'row', gap: 8, marginTop: 2 },
   exitBtn:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-                   gap: 6, borderWidth: 1, borderRadius: 10, paddingVertical: 10, marginTop: 2 },
+                   gap: 6, borderWidth: 1, borderRadius: 10, paddingVertical: 10 },
   exitBtnText:   { fontSize: 13, fontWeight: '600' },
+  addBtn:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                   gap: 6, borderWidth: 1, borderRadius: 10, paddingVertical: 10 },
+  addBtnText:    { fontSize: 13, fontWeight: '600' },
 
   emptyCard:     { borderRadius: 14, borderWidth: 1, padding: 32,
                    alignItems: 'center', gap: 8 },

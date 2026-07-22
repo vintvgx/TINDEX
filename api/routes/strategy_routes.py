@@ -600,6 +600,7 @@ def force_close_strategy(strategy_id: str):
             qty=qty,
             profile_key=engine.profile_key,
             exit_premium=exit_price,
+            paper_mode=engine.paper,
         )
         engine.debug.emit("SUCCESS",
             f"Force-closed {engine.contract_symbol} qty={qty} "

@@ -70,12 +70,21 @@ export function EditExitsModal({
       Alert.alert('Invalid', 'Stop loss must be a positive price.');
       return;
     }
-    if (tp1 !== undefined && !isNaN(tp1) && tp1 <= (stop ?? current.hard_stop)) {
+    // TP1/TP2 inputs are locked (non-editable) once that target has already
+    // been hit, but they still carry their pre-filled value into this
+    // validation — so without these hit-checks, raising the stop past an
+    // already-filled target (e.g. trailing SL up to lock in TP1 profit)
+    // would be rejected using a TP value the user isn't even editing.
+    if (!current.tp1_hit && tp1 !== undefined && !isNaN(tp1) && tp1 <= (stop ?? current.hard_stop)) {
       Alert.alert('Invalid', 'TP1 must be above the stop loss.');
       return;
     }
     if (tp1 !== undefined && !isNaN(tp1) && entry > 0 && tp1 <= entry) {
       Alert.alert('Invalid', 'TP1 must be above your entry premium.');
+      return;
+    }
+    if (!current.tp2_hit && tp2 !== undefined && !isNaN(tp2) && tp2 <= (stop ?? current.hard_stop)) {
+      Alert.alert('Invalid', 'TP2 must be above the stop loss.');
       return;
     }
     if (tp2 !== undefined && tp1 !== undefined && !isNaN(tp2) && !isNaN(tp1) && tp2 <= tp1) {

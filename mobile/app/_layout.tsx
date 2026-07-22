@@ -44,6 +44,7 @@ applyGlobalFont();
 // import LoadingScreen from "./components/LoadingScreen";
 import { Slot } from "expo-router";
 import { useNotifications } from "@/hooks/notifications/useNotifications";
+import { useAppBootstrap } from "@/hooks/useAppBootstrap";
 import { useRef } from "react";
 import { isValidWatchlistType } from "@/common/types/watchlist";
 import { ORBBreakoutNotificationData } from "@/common/components/FEED/modals/ORBNotificationModal";
@@ -118,6 +119,9 @@ function AppContent() {
   const { authState } = useAuth();
   const { colorScheme } = useAppColorScheme();
   const { expoPushToken, isRegistering } = useNotifications();
+  const { ready: bootstrapReady } = useAppBootstrap(
+    authState.isAuthenticated && !authState.isLoading,
+  );
 
   // Add ref for notification subscription
   const notificationResponseListener = useRef<Notifications.EventSubscription | null>(null);
@@ -213,6 +217,10 @@ function AppContent() {
   }, [expoPushToken, isRegistering]);
 
   if (authState.isLoading) {
+    return <LoadingScreen message="Initializing Alethia..." />;
+  }
+
+  if (authState.isAuthenticated && !bootstrapReady) {
     return <LoadingScreen message="Initializing Alethia..." />;
   }
 

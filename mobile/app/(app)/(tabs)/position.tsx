@@ -266,7 +266,7 @@ function PositionRow({
   onLiveUpdate: (strategyId: string, data: LivePriceData | null) => void;
 }) {
   const { toTicker } = useBaseNavigation();
-  const { data: live, connected } = useStrategyLivePrice(pos.strategy_id, pos.active);
+  const { data: live, connected, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
   const [exitOpen, setExitOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const accentColor = pos.direction === 'CALL' ? colors.success : colors.error;
@@ -330,6 +330,7 @@ function PositionRow({
         onExitPress={() => setExitOpen(true)}
         onAddPress={() => setAddOpen(true)}
         colors={colors}
+        patchData={patchData}
       />
 
       {/* Fib levels */}

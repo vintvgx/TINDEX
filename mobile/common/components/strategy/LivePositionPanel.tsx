@@ -46,6 +46,9 @@ interface LivePositionPanelProps {
    *  entirely — used by surfaces that don't yet support adding to a position. */
   onAddPress?: () => void;
   colors: any;
+  /** Merges a submitted stop/TP edit straight into the WS `live` snapshot so
+   *  it's reflected immediately instead of waiting on the next price tick. */
+  patchData?: (patch: Partial<LivePriceData>) => void;
 }
 
 /**
@@ -59,7 +62,7 @@ interface LivePositionPanelProps {
  */
 export function LivePositionPanel({
   live, staticFallback, streaming, isMock, accentColor,
-  strategyId, ticker, paperMode, onExitPress, onAddPress, colors,
+  strategyId, ticker, paperMode, onExitPress, onAddPress, colors, patchData,
 }: LivePositionPanelProps) {
   const [expanded, setExpanded] = useState(false);
   const toggleExpanded = useCallback(() => {
@@ -198,6 +201,7 @@ export function LivePositionPanel({
             entry_premium={display.entry_premium}
             tp1_hit={display.tp1_hit}
             tp2_hit={display.tp2_hit}
+            onUpdated={patchData}
             style={{ flex: 1 }}
           />
         )}

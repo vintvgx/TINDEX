@@ -471,6 +471,7 @@ class ORBEngine:
                     current_pnl=pnl,
                     entry_premium=entry_p,
                     current_premium=current_option_price,
+                    paper_mode=self.paper,
                 )
                 self.timer_notified = True
             return
@@ -1084,6 +1085,7 @@ class ORBEngine:
                 trade_id=self.active_trade_id,
                 profile_key=logged_profile_key,
                 macro_event=self.macro_today,
+                paper_mode=self.paper,
             )
             # Subscribe to real-time option quotes now that the position is open
             if self.stream_manager:
@@ -1247,6 +1249,7 @@ class ORBEngine:
             direction=row["direction"],
             qty=qty_remaining,
             entry_premium=float(row["entry_premium"]),
+            paper_mode=self.paper,
         )
         return True
 
@@ -1372,6 +1375,7 @@ class ORBEngine:
             contract=contract,
             pending_id=row["id"],
             expires_in_min=PENDING_CONFIRMATION_TTL_MIN,
+            paper_mode=self.paper,
         )
 
     def approve_pending_entry(self, pending_id: str,
@@ -2158,6 +2162,7 @@ class ORBEngine:
                 qty=qty_closed,
                 profile_key=self.profile_key,
                 exit_premium=exit_premium,
+                paper_mode=self.paper,
             )
             logger.info("[ORBEngine] Exit %s qty=%d reason=%s @ $%.2f",
                         action["type"], qty_closed, reason, exit_premium)

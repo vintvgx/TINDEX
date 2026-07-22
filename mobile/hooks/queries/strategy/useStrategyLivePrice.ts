@@ -47,6 +47,11 @@ interface UseStrategyLivePriceResult {
   pendingPriceData:   PendingPriceUpdate | null;
   connected:          boolean;
   disconnect:         () => void;
+  /** Merge fields into the current WS snapshot immediately (e.g. right after
+   *  a stop/TP edit succeeds server-side) instead of waiting for the next
+   *  "price_update" tick to catch up — the server confirms the edit over
+   *  REST well before the next tick would otherwise reflect it. */
+  patchData:          (patch: Partial<LivePriceData>) => void;
 }
 
 /**
@@ -167,5 +172,9 @@ export function useStrategyLivePrice(
     // re-runs exactly when the target socket changes (no reconnect storm).
   }, [connect, disconnect, enabled, wsUrl]);
 
-  return { data, pendingPriceData, connected, disconnect };
+  const patchData = useCallback((patch: Partial<LivePriceData>) => {
+    setData(prev => (prev ? { ...prev, ...patch } : prev));
+  }, []);
+
+  return { data, pendingPriceData, connected, disconnect, patchData };
 }

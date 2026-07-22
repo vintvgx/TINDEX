@@ -67,6 +67,10 @@ def _fmt_contract(symbol: str) -> str:
     return f"{ticker} {strike_str}{opt} {date_str}"
 
 
+def _account_tag(paper_mode: bool) -> str:
+    return "PAPER" if paper_mode else "LIVE"
+
+
 class StrategyNotifier:
     """
     Wraps Expo push delivery for ORB strategy events.
@@ -94,7 +98,7 @@ class StrategyNotifier:
 
     # ── Public event methods ────────────────────────────────────────────────────
     def notify_position_recovered(self, ticker: str, contract_symbol: str, direction: str,
-                                   qty: int, entry_premium: float):
+                                   qty: int, entry_premium: float, paper_mode: bool = True):
         """
         A restart happened while this position was open, and its exit
         management (stop-loss/TP monitoring) has just been reattached —
@@ -105,11 +109,12 @@ class StrategyNotifier:
         confirms the position is visible and protected again, not just that
         something recovered somewhere.
         """
+        tag = _account_tag(paper_mode)
         readable = _fmt_contract(contract_symbol)
         self._dispatch(
-            title=f"🔄 {readable} — position recovered",
+            title=f"🔄 [{tag}] {readable} — position recovered",
             body=f"{direction} qty={qty} @ ${entry_premium:.2f} — stop-loss monitoring resumed after restart.",
-            data={"screen": "position", "symbol": contract_symbol},
+            data={"screen": "position", "symbol": contract_symbol, "paper_mode": paper_mode},
             priority=P_TRADE_ENTRY,
         )
 
@@ -177,21 +182,24 @@ class StrategyNotifier:
         trade_id: str | None,
         profile_key: str,
         macro_event: bool = False,
+        paper_mode: bool = True,
     ):
         """A market order was successfully submitted."""
+        tag        = _account_tag(paper_mode)
         symbol     = contract.get("symbol", "")
         label      = _fmt_contract(symbol) if symbol else f"{ticker} option"
         cost       = entry_premium * qty * 100
         macro_warn = "  ⚠ Macro event today" if macro_event else ""
 
         self._dispatch(
-            title=f"{label} entered  [{profile_key}]",
+            title=f"[{tag}] {label} entered  [{profile_key}]",
             body=f"@ ${entry_premium:.2f} × {qty} contracts  (${cost:,.0f} total){macro_warn}",
             data={
                 "screen":      "position",
                 "trade_id":    trade_id,
                 "symbol":      symbol,
                 "macro_event": macro_event,
+                "paper_mode":  paper_mode,
             },
             priority=P_TRADE_ENTRY,
         )
@@ -205,6 +213,7 @@ class StrategyNotifier:
         qty: int,
         profile_key: str,
         exit_premium: float | None = None,
+        paper_mode: bool = True,
     ):
         """One or more contracts were closed (stop, TP1, TP2, EOD, etc.).
 
@@ -213,6 +222,7 @@ class StrategyNotifier:
         firing an instant market order — see ORBEngine._execute_priced_exit)
         can show the user what price it actually sold at, not just the P&L.
         """
+        tag   = _account_tag(paper_mode)
         sign  = "+" if pnl >= 0 else ""
         emoji = "✅" if pnl >= 0 else "🛑"
 
@@ -236,12 +246,13 @@ class StrategyNotifier:
 
         readable = _fmt_contract(contract_symbol)
         self._dispatch(
-            title=f"{emoji} {readable} — {label}  [{profile_key}]",
+            title=f"{emoji} [{tag}] {readable} — {label}  [{profile_key}]",
             body=f"{qty} contracts{price_str}  P&L: {sign}${pnl:,.2f}",
             data={
                 "screen":      "tradelog",
                 "symbol":      contract_symbol,
                 "exit_reason": exit_reason,
+                "paper_mode":  paper_mode,
             },
             priority=P_TRADE_EXIT,
         )
@@ -253,15 +264,17 @@ class StrategyNotifier:
         current_pnl: float,
         entry_premium: float,
         current_premium: float,
+        paper_mode: bool = True,
     ):
         """30-minute mark: P&L update while trade is live."""
+        tag   = _account_tag(paper_mode)
         sign  = "+" if current_pnl >= 0 else ""
         arrow = "↑" if current_pnl >= 0 else "↓"
         chg   = current_premium - entry_premium
 
         readable = _fmt_contract(contract_symbol)
         self._dispatch(
-            title=f"{readable} update (30 min)",
+            title=f"[{tag}] {readable} update (30 min)",
             body=(
                 f"{arrow} ${current_premium:.2f}  "
                 f"({sign}${chg:.2f}/contract)  "
@@ -270,12 +283,14 @@ class StrategyNotifier:
             data={
                 "screen": "position",
                 "symbol": contract_symbol,
+                "paper_mode": paper_mode,
             },
             priority=P_MARKET,
         )
 
     def notify_expiry_reminder(self, contract_symbol: str, days_to_expiry: int,
-                                milestone: str, qty: int, direction: str):
+                                milestone: str, qty: int, direction: str,
+                                paper_mode: bool = True):
         """
         Heads-up that an open (typically swing/LEAPS) position is approaching
         its own expiration — purely informational, no automatic action taken.
@@ -283,6 +298,7 @@ class StrategyNotifier:
         app no longer force-closes a multi-day hold, so this is the
         replacement safety net — a reminder, not a forced exit.
         """
+        tag = _account_tag(paper_mode)
         milestone_label = {
             "week":     "expires this week",
             "two_day":  "expires in 2 days",
@@ -290,9 +306,10 @@ class StrategyNotifier:
         }.get(milestone, f"expires in {days_to_expiry}d")
         readable = _fmt_contract(contract_symbol)
         self._dispatch(
-            title=f"⏳ {readable} — {milestone_label}",
+            title=f"⏳ [{tag}] {readable} — {milestone_label}",
             body=f"{direction} · {qty} contract(s) · {days_to_expiry} day(s) to expiration.",
-            data={"screen": "position", "symbol": contract_symbol, "type": "expiry_reminder"},
+            data={"screen": "position", "symbol": contract_symbol, "type": "expiry_reminder",
+                  "paper_mode": paper_mode},
             priority=P_MARKET,
         )
 
@@ -313,18 +330,21 @@ class StrategyNotifier:
         qty: int,
         entry_premium: float,
         profile_key: str,
+        paper_mode: bool = True,
     ):
         """A second entry was taken after a partial exit (runner re-entered)."""
+        tag     = _account_tag(paper_mode)
         symbol  = contract.get("symbol", "")
         label   = _fmt_contract(symbol) if symbol else f"{ticker} option"
 
         self._dispatch(
-            title=f"{label} re-entered  [{profile_key}]",
+            title=f"[{tag}] {label} re-entered  [{profile_key}]",
             body=f"@ ${entry_premium:.2f} × {qty} contracts",
             data={
                 "screen": "position",
                 "symbol": contract.get("symbol"),
                 "re_entry": True,
+                "paper_mode": paper_mode,
             },
             priority=P_TRADE_ENTRY,
         )
@@ -338,6 +358,7 @@ class StrategyNotifier:
         contract: dict,
         pending_id: str,
         expires_in_min: int,
+        paper_mode: bool = True,
     ):
         """
         confirm_entry gate: a breakout/reversal was confirmed and a contract was
@@ -346,10 +367,11 @@ class StrategyNotifier:
         Enter/Skip confirmation modal (the modal itself is also shown from
         foregrounding the app while a confirmation is open, not only from the tap).
         """
+        tag    = _account_tag(paper_mode)
         symbol = contract.get("symbol", "")
         label  = _fmt_contract(symbol) if symbol else f"{ticker} option"
         self._dispatch(
-            title=f"Confirm {ticker} Trade",
+            title=f"[{tag}] Confirm {ticker} Trade",
             body=(
                 f"{label}  [{profile_key}]  ·  Confidence {confidence:.0f}/100  ·  "
                 f"expires in {expires_in_min} min"
@@ -359,6 +381,7 @@ class StrategyNotifier:
                 "type":       "confirm_entry",
                 "pending_id": pending_id,
                 "symbol":     symbol,
+                "paper_mode": paper_mode,
             },
             priority=P_TRADE_ENTRY,
         )
