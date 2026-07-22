@@ -1082,6 +1082,10 @@ def get_both_accounts():
             pnl_today   = equity - last_equity
             return {
                 "equity":                equity,
+                # Exposed so the client can recompute today's P&L against a
+                # live-derived equity (cash + streamed position market value)
+                # instead of only this endpoint's own slower equity figure.
+                "last_equity":           last_equity,
                 "cash":                  float(acct.cash),
                 "buying_power":          float(acct.buying_power),
                 # Optional[int] on Alpaca's model — coerced to 0 rather than

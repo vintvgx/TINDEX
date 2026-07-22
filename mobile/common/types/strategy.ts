@@ -330,6 +330,9 @@ export interface LiveOptionPrice {
 
 export interface AlpacaAccount {
   equity: number;
+  /** Start-of-day equity baseline — lets the client recompute today's P&L
+   *  against a live-derived equity instead of only this endpoint's own. */
+  last_equity?: number;
   cash: number;
   buying_power: number;
   day_trade_count: number;

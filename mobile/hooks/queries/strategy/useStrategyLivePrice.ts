@@ -9,6 +9,11 @@ export interface LivePriceData {
   pnl:           number;
   pnl_pct:       number;
   qty_remaining: number;
+  /** mid_price * qty_remaining * 100 — the position's live mark-to-market
+   *  value, already computed server-side on every tick (orb_engine.py's
+   *  broadcast_price_update). Lets the client derive live account equity
+   *  without a separate REST poll. */
+  market_value:  number;
   tp1_hit:       boolean;
   tp2_hit:       boolean;
   hard_stop:     number;

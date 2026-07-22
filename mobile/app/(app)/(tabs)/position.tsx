@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View, Text, ScrollView, SafeAreaView,
   ActivityIndicator, TouchableOpacity, StyleSheet,
@@ -11,6 +11,7 @@ import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { LivePositionPanel } from '@/common/components/strategy/LivePositionPanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { AddContractModal } from '@/common/components/strategy/AddContractModal';
@@ -99,6 +100,49 @@ export default function PositionScreen({ embedded = false }: Props) {
     );
   const activeCount = filteredPositions.length;
 
+  // Each rendered PositionRow already holds its own open WebSocket
+  // (useStrategyLivePrice) streaming that position's live mark-to-market
+  // value for its own P&L display. Rows report their latest tick up here via
+  // onLiveUpdate so the account bar's equity can be derived from the same
+  // already-open sockets instead of a separate slow REST poll.
+  const [liveByStrategy, setLiveByStrategy] = useState<Record<string, LivePriceData>>({});
+  const handleLiveUpdate = useCallback((strategyId: string, data: LivePriceData | null) => {
+    setLiveByStrategy(prev => {
+      if (!data) {
+        if (!(strategyId in prev)) return prev;
+        const next = { ...prev };
+        delete next[strategyId];
+        return next;
+      }
+      return { ...prev, [strategyId]: data };
+    });
+  }, []);
+
+  // Live-derived equity = cash (stable mid-trade, from the slow account poll)
+  // + the sum of every open position's live market value. Falls back to a
+  // position's static cost basis (entry_premium * qty * 100) for the brief
+  // window before its socket delivers a first tick, and to the account's own
+  // (slower) equity field entirely when nothing is open to aggregate.
+  const liveDerivedEquity = useMemo(() => {
+    if (!account?.available || filteredPositions.length === 0) return null;
+    let sumMarketValue = 0;
+    for (const pos of filteredPositions) {
+      const live = liveByStrategy[pos.strategy_id];
+      if (live?.market_value != null) {
+        sumMarketValue += live.market_value;
+      } else if (pos.entry_premium != null && pos.qty_remaining != null) {
+        sumMarketValue += pos.entry_premium * pos.qty_remaining * 100;
+      }
+    }
+    return account.cash + sumMarketValue;
+  }, [account, filteredPositions, liveByStrategy]);
+
+  const displayEquity = liveDerivedEquity ?? account?.equity ?? 0;
+  const displayPnlToday =
+    liveDerivedEquity != null && account?.last_equity != null
+      ? liveDerivedEquity - account.last_equity
+      : account?.pnl_today ?? 0;
+
   const toggleMode = () => setMode(m => (m === 'live' ? 'paper' : 'live'));
 
   return (
@@ -152,15 +196,15 @@ export default function PositionScreen({ embedded = false }: Props) {
         >
           <AccountStat
             label={mode === 'live' ? 'Live Equity' : 'Paper Equity'}
-            value={`$${account.equity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+            value={`$${displayEquity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
             color={mode === 'live' ? '#30D158' : '#FF9F0A'}
             colors={colors}
           />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
           <AccountStat
             label="Today P&L"
-            value={`${account.pnl_today >= 0 ? '+' : ''}$${account.pnl_today.toFixed(2)}`}
-            color={account.pnl_today >= 0 ? colors.success : colors.error}
+            value={`${displayPnlToday >= 0 ? '+' : ''}$${displayPnlToday.toFixed(2)}`}
+            color={displayPnlToday >= 0 ? colors.success : colors.error}
             colors={colors}
           />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
@@ -199,7 +243,7 @@ export default function PositionScreen({ embedded = false }: Props) {
         ) : (
           filteredPositions
             .map(pos => (
-              <PositionRow key={pos.strategy_id} pos={pos} colors={colors} />
+              <PositionRow key={pos.strategy_id} pos={pos} colors={colors} onLiveUpdate={handleLiveUpdate} />
             ))
         )}
         <View style={{ height: 100 }} />
@@ -214,12 +258,27 @@ export default function PositionScreen({ embedded = false }: Props) {
 // row here needs its own component (hooks can't be called per-item inside
 // a parent's .map()).
 
-function PositionRow({ pos, colors }: { pos: PositionEntry; colors: any }) {
+function PositionRow({
+  pos, colors, onLiveUpdate,
+}: {
+  pos: PositionEntry;
+  colors: any;
+  onLiveUpdate: (strategyId: string, data: LivePriceData | null) => void;
+}) {
   const { toTicker } = useBaseNavigation();
   const { data: live, connected } = useStrategyLivePrice(pos.strategy_id, pos.active);
   const [exitOpen, setExitOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const accentColor = pos.direction === 'CALL' ? colors.success : colors.error;
+
+  // Report every tick (and clear on unmount, e.g. mode toggle or exit) so the
+  // parent's account-bar equity always reflects exactly the rows on screen.
+  useEffect(() => {
+    onLiveUpdate(pos.strategy_id, live);
+  }, [pos.strategy_id, live, onLiveUpdate]);
+  useEffect(() => {
+    return () => onLiveUpdate(pos.strategy_id, null);
+  }, [pos.strategy_id, onLiveUpdate]);
 
   return (
     <View style={styles.positionBlock}>
