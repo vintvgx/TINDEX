@@ -26,6 +26,7 @@ import { useMarketStream } from '@/hooks/useMarketStream';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useUpdateProfileMutation } from '@/hooks/mutations/auth/useUpdateProfileMutation';
+import { StatPill } from '@/common/components/ui/StatPill';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -73,42 +74,6 @@ async function loadLocalConfig(): Promise<string[] | null> {
 
 async function cacheLocalConfig(cfg: string[]) {
   try { await SecureStore.setItemAsync(CONFIG_KEY, JSON.stringify(cfg)); } catch {}
-}
-
-// ─── Pill ─────────────────────────────────────────────────────────────────────
-
-function Pill({
-  label, value, sub, accentColor, colors,
-}: {
-  label: string; value: string; sub?: string; accentColor: string; colors: any;
-}) {
-  return (
-    <View style={{
-      backgroundColor: accentColor + '14',
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: accentColor + '30',
-      paddingHorizontal: 14,
-      paddingVertical: 11,
-      minWidth: 96,
-      marginRight: 8,
-    }}>
-      <Text style={{
-        color: colors.textTertiary, fontSize: 10, fontWeight: '700',
-        textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 4,
-      }}>
-        {label}
-      </Text>
-      <Text style={{ color: accentColor, fontSize: 21, fontWeight: '800', letterSpacing: -0.5 }} numberOfLines={1}>
-        {value}
-      </Text>
-      {sub != null && (
-        <Text style={{ color: accentColor + 'CC', fontSize: 11, fontWeight: '600', marginTop: 3 }} numberOfLines={1}>
-          {sub}
-        </Text>
-      )}
-    </View>
-  );
 }
 
 // ─── Config Sheet ─────────────────────────────────────────────────────────────
@@ -394,7 +359,7 @@ export function FeedMarketPulseStrip() {
   function renderPill(key: string) {
     if (key === 'VIX') {
       return (
-        <Pill
+        <StatPill
           key="VIX"
           label="VIX"
           value={vix != null ? vix.toFixed(2) : '—'}
@@ -406,7 +371,7 @@ export function FeedMarketPulseStrip() {
     }
     if (key === 'FLOW') {
       return (
-        <Pill
+        <StatPill
           key="FLOW"
           label="Flow"
           value={flow.label}
@@ -421,7 +386,7 @@ export function FeedMarketPulseStrip() {
     const orbColor = getOrbColor(key, price);
     const orbSub   = getOrbSub(key, price);
     return (
-      <Pill
+      <StatPill
         key={key}
         label={key}
         value={price != null ? `$${price.toFixed(2)}` : '—'}

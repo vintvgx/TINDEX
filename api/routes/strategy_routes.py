@@ -1081,12 +1081,22 @@ def get_both_accounts():
             last_equity = float(acct.last_equity)
             pnl_today   = equity - last_equity
             return {
-                "equity":          equity,
-                "cash":            float(acct.cash),
-                "buying_power":    float(acct.buying_power),
-                "day_trade_count": acct.daytrade_count,
-                "pnl_today":       round(pnl_today, 2),
-                "pnl_today_pct":   round(pnl_today / last_equity * 100, 3) if last_equity > 0 else 0,
+                "equity":                equity,
+                "cash":                  float(acct.cash),
+                "buying_power":          float(acct.buying_power),
+                # Optional[int] on Alpaca's model — coerced to 0 rather than
+                # left None, which the mobile Live Positions screen used to
+                # render as the literal string "null" (position.tsx wasn't
+                # guarding it the way this endpoint's other consumer does).
+                "day_trade_count":       acct.daytrade_count or 0,
+                "pnl_today":             round(pnl_today, 2),
+                "pnl_today_pct":         round(pnl_today / last_equity * 100, 3) if last_equity > 0 else 0,
+                # "Available balance" — the account's actual unlevered spending
+                # power, distinct from buying_power (which reflects margin).
+                "available_balance":     float(acct.non_marginable_buying_power or 0),
+                "options_buying_power":  float(acct.options_buying_power or 0),
+                "long_market_value":     float(acct.long_market_value or 0),
+                "short_market_value":    float(acct.short_market_value or 0),
                 "paper_mode":      paper,
                 "available":       True,
             }
@@ -1101,6 +1111,48 @@ def get_both_accounts():
         "paper":       _fetch(True),
         "live":        _fetch(False),
     })
+
+
+@strategy_bp.route("/accounts/transfers", methods=["GET"])
+def get_account_transfers():
+    """
+    Real ACH transfer history (deposits/withdrawals) for the live account.
+
+    Alpaca paper accounts start with a fixed virtual balance and don't take
+    real ACH transfers, so this is live-only — a "Paper transfers" section
+    would always be empty and just be noise.
+
+    The retail TradingClient has no typed get_account_activities()/
+    get_transfers() method (that only exists on the separate Broker API,
+    alpaca.broker.client, which this app doesn't use) — TradingClient extends
+    RESTClient, which does expose a generic authenticated .get(path, data),
+    so the retail Activities endpoint is reached directly through that.
+    """
+    import os
+    from alpaca.trading.client import TradingClient
+
+    try:
+        key    = os.getenv("ALPACA_LIVE_API_KEY")
+        secret = os.getenv("ALPACA_LIVE_SECRET_KEY")
+        client = TradingClient(key, secret, paper=False)
+
+        raw = client.get("/account/activities", {"activity_types": "CSD,CSW"})
+        transfers = []
+        for item in raw or []:
+            net_amount = float(item.get("net_amount", 0) or 0)
+            transfers.append({
+                "id":          item.get("id"),
+                "date":        item.get("date"),
+                "amount":      net_amount,
+                "direction":   "deposit" if net_amount >= 0 else "withdrawal",
+                "status":      item.get("status"),
+                "description": item.get("description", ""),
+            })
+        transfers.sort(key=lambda t: t["date"] or "", reverse=True)
+        return jsonify({"success": True, "transfers": transfers})
+    except Exception as e:
+        logger.error("[strategy] get_account_transfers failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e), "transfers": []}), 502
 
 
 @strategy_bp.route("/accounts/history", methods=["GET"])

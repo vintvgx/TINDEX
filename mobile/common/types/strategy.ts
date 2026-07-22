@@ -336,6 +336,12 @@ export interface AlpacaAccount {
   pnl_today: number;
   pnl_today_pct: number;
   paper_mode: boolean;
+  /** Non-marginable buying power — the account's actual unlevered spending
+   *  power, distinct from buying_power (which reflects margin). */
+  available_balance?: number;
+  options_buying_power?: number;
+  long_market_value?: number;
+  short_market_value?: number;
 }
 
 export interface ORBSession {

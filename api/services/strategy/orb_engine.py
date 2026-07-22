@@ -2672,7 +2672,7 @@ class ORBEngine:
                 "cash":                 float(acct.cash),
                 "buying_power":         buying_power,
                 "options_buying_power": options_buying_power,
-                "day_trade_count":      acct.daytrade_count,
+                "day_trade_count":      acct.daytrade_count or 0,
                 "pnl_today":            float(acct.equity) - float(acct.last_equity),
                 "pnl_today_pct":        ((float(acct.equity) - float(acct.last_equity))
                                          / float(acct.last_equity) * 100)

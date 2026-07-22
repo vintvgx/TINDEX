@@ -10,6 +10,7 @@ import { useStrategyPositions } from '@/hooks/queries/strategy/useStrategyPositi
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { StatPill } from '@/common/components/ui/StatPill';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { LivePositionPanel } from '@/common/components/strategy/LivePositionPanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
@@ -172,7 +173,11 @@ export default function PositionScreen({ embedded = false }: Props) {
         </TouchableOpacity>
       </View>
 
-      {/* ── Account bar (sticky) — tap to toggle Live/Paper ── */}
+      {/* ── Account bar (sticky) — tap anywhere to flip Live/Paper. This is
+          the only mode control on the screen now — the separate LIVE/PAPER
+          pill row (colored dots, count badges) was redundant with this bar
+          and is gone; mode is conveyed only by the "Live Equity"/"Paper
+          Equity" label and its color, not a dedicated switch widget. ── */}
       {account?.available && (
         <TouchableOpacity
           activeOpacity={0.8}
@@ -194,46 +199,29 @@ export default function PositionScreen({ embedded = false }: Props) {
           />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
           <AccountStat
-            label="Day Trades"
-            value={String(account.day_trade_count)}
+            label="Available Balance"
+            value={`$${(account.available_balance ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`}
             colors={colors}
           />
-          <Ionicons name="swap-horizontal" size={16} color={colors.tabBarInactive} style={{ marginLeft: 4 }} />
         </TouchableOpacity>
       )}
 
-      {/* ── LIVE / PAPER toggle ── */}
-      <View style={[styles.modeToggleRow, { borderBottomColor: colors.border }]}>
-        {(['live', 'paper'] as const).map((m) => {
-          const isActive = mode === m;
-          const accentClr = m === 'live' ? '#30D158' : '#FF9F0A';
-          return (
-            <TouchableOpacity
-              key={m}
-              onPress={() => setMode(m)}
-              style={[
-                styles.modeBtn,
-                isActive && { backgroundColor: accentClr + '22', borderColor: accentClr + '66' },
-                !isActive && { borderColor: colors.border },
-              ]}
-            >
-              {m === 'live' && (
-                <View style={[styles.modeDot, { backgroundColor: isActive ? '#30D158' : colors.textTertiary }]} />
-              )}
-              <Text style={[styles.modeBtnText, { color: isActive ? accentClr : colors.textTertiary }]}>
-                {m === 'live' ? 'LIVE' : 'PAPER'}
-              </Text>
-              {activePositions.filter(p => m === 'live' ? !p.paper_mode : !!p.paper_mode).length > 0 && (
-                <View style={[styles.modeBadge, { backgroundColor: isActive ? accentClr : colors.border }]}>
-                  <Text style={[styles.modeBadgeText, { color: isActive ? '#fff' : colors.textSecondary }]}>
-                    {activePositions.filter(p => m === 'live' ? !p.paper_mode : !!p.paper_mode).length}
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      {/* ── More stats, horizontally scrollable — Day Trades stays last ── */}
+      {account?.available && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={[styles.moreStatsScroll, { borderBottomColor: colors.border }]}
+          contentContainerStyle={styles.moreStatsContent}
+        >
+          <StatPill label="Buying Power" value={`$${account.buying_power.toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
+          <StatPill label="Options BP" value={`$${(account.options_buying_power ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
+          <StatPill label="Long Value" value={`$${(account.long_market_value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
+          <StatPill label="Short Value" value={`$${(account.short_market_value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
+          <StatPill label="Cash" value={`$${account.cash.toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
+          <StatPill label="Day Trades" value={String(account.day_trade_count ?? 0)} accentColor={colors.accent} colors={colors} />
+        </ScrollView>
+      )}
 
       {/* ── Mock banner ── */}
       {showMock && (
@@ -425,20 +413,9 @@ const styles = StyleSheet.create({
   acctValue:   { fontSize: 14, fontWeight: '700' },
   divider:     { width: StyleSheet.hairlineWidth, height: 28 },
 
-  // ── Mode toggle ──
-  modeToggleRow: {
-    flexDirection: 'row', gap: 10, paddingHorizontal: 16,
-    paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  modeBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
-    borderWidth: 1,
-  },
-  modeDot:      { width: 6, height: 6, borderRadius: 3 },
-  modeBtnText:  { fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
-  modeBadge:    { borderRadius: 8, paddingHorizontal: 6, paddingVertical: 1, minWidth: 18, alignItems: 'center' },
-  modeBadgeText:{ fontSize: 11, fontWeight: '700' },
+  // ── More stats (scrollable) ──
+  moreStatsScroll:  { borderBottomWidth: StyleSheet.hairlineWidth },
+  moreStatsContent: { paddingHorizontal: 16, paddingVertical: 10 },
 
   // ── Mock banner ──
   mockBanner:     { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 6, borderBottomWidth: 1 },

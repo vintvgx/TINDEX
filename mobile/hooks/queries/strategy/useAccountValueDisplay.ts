@@ -13,6 +13,11 @@ export interface AccountDisplayValue {
   live_derived: boolean;
   /** Total unrealized P&L across all open positions at this instant */
   total_unrealized_pl: number;
+  /** Non-marginable buying power — actual unlevered spending power. */
+  available_balance: number;
+  options_buying_power: number;
+  long_market_value: number;
+  short_market_value: number;
   available: boolean;
   error?: string;
 }
@@ -84,6 +89,10 @@ export function useAccountValueDisplay(): AccountValueDisplay {
       day_trade_count:     acct.day_trade_count ?? 0,
       live_derived:        hasPositions,
       total_unrealized_pl: pos?.total_unrealized_pl ?? 0,
+      available_balance:    acct.available_balance ?? 0,
+      options_buying_power: acct.options_buying_power ?? 0,
+      long_market_value:    acct.long_market_value ?? 0,
+      short_market_value:   acct.short_market_value ?? 0,
       available:           true,
     };
   }, [accountData, posData]);
@@ -108,6 +117,10 @@ export function useAccountValueDisplay(): AccountValueDisplay {
       day_trade_count:     acct.day_trade_count ?? 0,
       live_derived:        hasPositions,
       total_unrealized_pl: pos?.total_unrealized_pl ?? 0,
+      available_balance:    acct.available_balance ?? 0,
+      options_buying_power: acct.options_buying_power ?? 0,
+      long_market_value:    acct.long_market_value ?? 0,
+      short_market_value:   acct.short_market_value ?? 0,
       available:           true,
     };
   }, [accountData, posData]);
