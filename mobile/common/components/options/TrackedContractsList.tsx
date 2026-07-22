@@ -13,6 +13,8 @@ import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 import type { ContractScore } from '@/common/types/agent';
 import { AddContractSheet } from './AddContractSheet';
 import { useToast } from '@/common/components/ui/Toast';
+import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
+import { TickerLogo } from '@/common/components/ui/TickerLogo';
 
 const toDateStr = (d: Date) => d.toISOString().split('T')[0];
 
@@ -72,6 +74,7 @@ interface ContractCardProps {
 }
 
 const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress, onUntrack, isUntracking, colors }) => {
+  const { toTicker } = useBaseNavigation();
   const today = toDateStr(new Date());
   const farDate = (() => { const d = new Date(); d.setFullYear(d.getFullYear() + 1); return toDateStr(d); })();
 
@@ -139,7 +142,18 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
             <View style={[cc.badge, { backgroundColor: typeColor + '20', borderColor: typeColor + '40' }]}>
               <Text style={[cc.badgeText, { color: typeColor }]}>{contract.option_type}</Text>
             </View>
-            <Text style={[cc.ticker, { color: colors.text }]}>{contract.ticker}</Text>
+            <TouchableOpacity
+              onPress={() => toTicker(contract.ticker)}
+              hitSlop={6}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}
+            >
+              <TickerLogo
+                uri={`https://financialmodelingprep.com/image-stock/${contract.ticker.toUpperCase()}.png`}
+                ticker={contract.ticker}
+                size={16}
+              />
+              <Text style={[cc.ticker, { color: colors.text }]}>{contract.ticker}</Text>
+            </TouchableOpacity>
             <Text style={[cc.strike, { color: colors.textSecondary }]}>{strikeLabel}</Text>
           </View>
           <View style={cc.metaRow}>

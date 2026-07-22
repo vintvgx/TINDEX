@@ -96,13 +96,17 @@ export function LivePositionPanel({
     ? (display.pnl >= 0 ? colors.success : colors.error)
     : colors.tabBarInactive;
 
-  // Outside market hours there's nothing to connect to — a swing/LEAPS
-  // position held overnight or over a weekend would otherwise show
-  // "CONNECTING" indefinitely, which reads as something being wrong rather
-  // than the market simply being closed.
+  // marketOpen must win over `streaming`: the WS is a socket to our own
+  // backend, not to Alpaca's market feed directly, so it can — and does —
+  // stay connected outside market hours with no real ticks flowing through
+  // it. Checking `streaming` first showed "LIVE" the moment that socket
+  // connected regardless of market hours, which is exactly backwards — a
+  // swing/LEAPS position held overnight or over a weekend still needs
+  // "CONNECTING" to resolve to something (hence the marketOpen fallback
+  // below), but never to "LIVE" while the market itself is closed.
   const marketOpen  = isMarketHours();
-  const statusLabel = isMock ? 'PREVIEW' : streaming ? 'LIVE' : marketOpen ? 'CONNECTING' : 'MARKET CLOSED';
-  const statusColor = isMock ? colors.accent : streaming ? colors.success : colors.tabBarInactive;
+  const statusLabel = isMock ? 'PREVIEW' : !marketOpen ? 'MARKET CLOSED' : streaming ? 'LIVE' : 'CONNECTING';
+  const statusColor = isMock ? colors.accent : (marketOpen && streaming) ? colors.success : colors.tabBarInactive;
 
   return (
     <View style={[styles.livePnlCard, { backgroundColor: colors.background, borderColor: accentColor + '44' }]}>

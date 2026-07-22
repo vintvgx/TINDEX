@@ -18,11 +18,18 @@ export function useTickerHistoryQuery(ticker: string, period: PricePeriod) {
     queryKey: ["ticker-history", ticker, period],
     queryFn: async (): Promise<TickerHistoryResponse> => {
       try {
+        // See useTickerQuery.ts for why this needs an explicit abort — same
+        // uncached yfinance call underneath, same risk of hanging instead of
+        // ever reaching the mock-data fallback below.
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20_000);
+
         const response = await fetch(`${RAILWAY_BASE_URL}/ticker/${ticker}/history`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ period }),
-        });
+          signal: controller.signal,
+        }).finally(() => clearTimeout(timeoutId));
 
         if (!response.ok) {
           throw new Error(`Failed to fetch ticker history: ${response.statusText}`);

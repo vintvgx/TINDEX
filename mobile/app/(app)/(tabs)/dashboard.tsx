@@ -20,6 +20,8 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import type { ImmediatePosition } from '@/common/types/strategy';
 import { formatContractSymbolShort, getTradeHorizon, TRADE_HORIZON_RANK } from '@/lib/formatContract';
+import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
+import { TickerLogo } from '@/common/components/ui/TickerLogo';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -82,6 +84,7 @@ interface ExitTarget {
 function StrategyPositionCard({
   pos, colors, onExit,
 }: { pos: PositionEntry; colors: any; onExit: (t: ExitTarget) => void }) {
+  const { toTicker } = useBaseNavigation();
   const pnl     = pos.unrealized_pnl ?? 0;
   const pnlPct  = pos.unrealized_pnl_pct ?? 0;
   const pnlColor = pnl >= 0 ? colors.success : colors.error;
@@ -101,9 +104,21 @@ function StrategyPositionCard({
       {/* Top row */}
       <View style={styles.posHeader}>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.posTicker, { color: colors.text }]}>
-            {PROFILE_EMOJI[pos.profile] ?? '📊'} {pos.ticker}
-          </Text>
+          <TouchableOpacity
+            onPress={() => toTicker(pos.ticker)}
+            hitSlop={6}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}
+          >
+            <Text style={[styles.posTicker, { color: colors.text }]}>
+              {PROFILE_EMOJI[pos.profile] ?? '📊'}
+            </Text>
+            <TickerLogo
+              uri={`https://financialmodelingprep.com/image-stock/${pos.ticker.toUpperCase()}.png`}
+              ticker={pos.ticker}
+              size={16}
+            />
+            <Text style={[styles.posTicker, { color: colors.text }]}>{pos.ticker}</Text>
+          </TouchableOpacity>
           <Text style={[styles.posContract, { color: colors.textSecondary }]} numberOfLines={1}>
             {pos.contract ? formatContractSymbolShort(pos.contract) : '—'}
           </Text>
@@ -197,6 +212,7 @@ function StrategyPositionCard({
 function ImmediatePositionCard({
   pos, colors, onExit,
 }: { pos: ImmediatePosition; colors: any; onExit: (t: ExitTarget) => void }) {
+  const { toTicker } = useBaseNavigation();
   const pnl     = pos.pnl ?? 0;
   const pnlPct  = pos.pnl_pct ?? 0;
   const pnlColor = pnl >= 0 ? colors.success : colors.error;
@@ -208,9 +224,21 @@ function ImmediatePositionCard({
                                     borderLeftColor: pnlColor, borderLeftWidth: 3 }]}>
       <View style={styles.posHeader}>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.posTicker, { color: colors.text }]}>
-            {PROFILE_EMOJI[pos.profile] ?? '📊'} {pos.ticker}
-          </Text>
+          <TouchableOpacity
+            onPress={() => toTicker(pos.ticker)}
+            hitSlop={6}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}
+          >
+            <Text style={[styles.posTicker, { color: colors.text }]}>
+              {PROFILE_EMOJI[pos.profile] ?? '📊'}
+            </Text>
+            <TickerLogo
+              uri={`https://financialmodelingprep.com/image-stock/${pos.ticker.toUpperCase()}.png`}
+              ticker={pos.ticker}
+              size={16}
+            />
+            <Text style={[styles.posTicker, { color: colors.text }]}>{pos.ticker}</Text>
+          </TouchableOpacity>
           <Text style={[styles.posContract, { color: colors.textSecondary }]} numberOfLines={1}>
             {pos.contract ? formatContractSymbolShort(pos.contract) : '—'}
           </Text>

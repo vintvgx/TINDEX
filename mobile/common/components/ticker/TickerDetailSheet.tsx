@@ -40,7 +40,7 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
   // a persistent background tint needs a value from above it to apply to).
   const [paperMode, setPaperMode] = useState(true);
 
-  const { data: tickerResponse, isLoading, isRefetching, refetch } = useTickerQuery(ticker);
+  const { data: tickerResponse, isLoading, isRefetching, refetchFresh } = useTickerQuery(ticker);
   const stockData = tickerResponse?.data;
 
   const { data: historyResponse, isLoading: historyLoading } = useTickerHistoryQuery(ticker, period);
@@ -146,7 +146,7 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
       style={{ flex: 1 }}
       contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 32 }}
       showsVerticalScrollIndicator={false}
-      refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={colors.accent} />}
+      refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetchFresh} tintColor={colors.accent} />}
     >
       {/* Header row */}
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, marginBottom: 8 }}>

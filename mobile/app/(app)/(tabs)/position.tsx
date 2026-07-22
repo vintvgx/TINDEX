@@ -10,13 +10,14 @@ import { useStrategyPositions } from '@/hooks/queries/strategy/useStrategyPositi
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
-import { StatPill } from '@/common/components/ui/StatPill';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { LivePositionPanel } from '@/common/components/strategy/LivePositionPanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { AddContractModal } from '@/common/components/strategy/AddContractModal';
-import type { FibLevels, ImmediatePosition } from '@/common/types/strategy';
+import type { ImmediatePosition } from '@/common/types/strategy';
 import { TRADE_HORIZON_RANK, getTradeHorizon } from '@/lib/formatContract';
+import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
+import { TickerLogo } from '@/common/components/ui/TickerLogo';
 
 /**
  * /strategy/immediate-positions now returns the same shape /strategy/positions
@@ -55,37 +56,6 @@ function toPositionEntry(pos: ImmediatePosition): PositionEntry {
   };
 }
 
-const MOCK_POSITIONS: PositionEntry[] = [
-  {
-    strategy_id:    'mock-1',
-    strategy_name:  'IWM Bull Dog M/W/F',
-    active:         true,
-    paper_mode:     true,
-    ticker:         'IWM',
-    profile:        'BULL_DOG',
-    direction:      'CALL',
-    contract:       'IWM250107C00215000',
-    qty_remaining:  2,
-    qty_total:      3,
-    entry_premium:  1.45,
-    current_price:  2.18,
-    unrealized_pnl: 146.00,
-    unrealized_pnl_pct: 50.3,
-    hard_stop:      0.94,
-    tp1:            2.175,
-    tp2:            2.90,
-    tp1_hit:        true,
-    tp2_hit:        false,
-    be_stop_active: true,
-    runner_trail:   1.90,
-    fib_levels: {
-      'up_1.0': 215.50, 'up_1.618': 216.32, 'up_2.618': 217.80,
-      'dn_1.0': 213.50, 'dn_1.618': 212.68, 'dn_2.618': 211.20,
-      mid: 214.50, orh: 215.00, orl: 214.00,
-    } as FibLevels,
-  },
-];
-
 interface Props {
   /**
    * True when rendered as a SegmentedPager scene (Home/Accounts tabs) instead
@@ -98,7 +68,6 @@ interface Props {
 
 export default function PositionScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
-  const [showMock, setShowMock] = useState(false);
   const [mode, setMode] = useState<'live' | 'paper'>('live');
 
   const { data: stratPositions = [], isLoading: stratLoading } = useStrategyPositions();
@@ -118,8 +87,7 @@ export default function PositionScreen({ embedded = false }: Props) {
   const { data: accounts } = useAlpacaBothAccounts();
   const account = accounts ? (mode === 'live' ? accounts.live : accounts.paper) : undefined;
 
-  const positions         = showMock ? MOCK_POSITIONS : livePositions;
-  const activePositions   = positions.filter(p => p.active);
+  const activePositions   = livePositions.filter(p => p.active);
   // 0DTE/weekly positions need more immediate attention than a swing trade's,
   // so they always list first — sort is stable, so relative order within the
   // same horizon (e.g. saved-strategy vs immediate) is otherwise unchanged.
@@ -159,30 +127,28 @@ export default function PositionScreen({ embedded = false }: Props) {
         </View>
 
         <TouchableOpacity
-          onPress={() => setShowMock(v => !v)}
-          hitSlop={12}
-          style={[styles.headerSide, styles.headerSideRight,
-            showMock && { backgroundColor: colors.accent + '22', borderRadius: 8 },
-          ]}
+          onPress={toggleMode}
+          hitSlop={8}
+          activeOpacity={0.75}
+          style={[styles.activeBadge, { backgroundColor: (mode === 'live' ? '#30D158' : '#FF9F0A') + '22' }]}
         >
-          <Ionicons
-            name={showMock ? 'flask' : 'flask-outline'}
-            size={20}
-            color={showMock ? colors.accent : colors.tabBarInactive}
-          />
+          <View style={[styles.liveDot, { backgroundColor: mode === 'live' ? '#30D158' : '#FF9F0A' }]} />
+          <Text style={[styles.activeBadgeText, { color: mode === 'live' ? '#30D158' : '#FF9F0A' }]}>
+            {mode === 'live' ? 'LIVE' : 'PAPER'}
+          </Text>
         </TouchableOpacity>
       </View>
 
-      {/* ── Account bar (sticky) — tap anywhere to flip Live/Paper. This is
-          the only mode control on the screen now — the separate LIVE/PAPER
-          pill row (colored dots, count badges) was redundant with this bar
-          and is gone; mode is conveyed only by the "Live Equity"/"Paper
-          Equity" label and its color, not a dedicated switch widget. ── */}
+      {/* ── Account bar (sticky), horizontally scrollable — every data point
+          lives in one row now. Not touchable: the header's LIVE/PAPER badge
+          above is the only way to flip mode, so nothing here fights the
+          scroll gesture. Day Trades stays last. ── */}
       {account?.available && (
-        <TouchableOpacity
-          activeOpacity={0.8}
-          onPress={toggleMode}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
           style={[styles.accountBar, { backgroundColor: colors.card, borderBottomColor: colors.border }]}
+          contentContainerStyle={styles.accountBarContent}
         >
           <AccountStat
             label={mode === 'live' ? 'Live Equity' : 'Paper Equity'}
@@ -198,42 +164,25 @@ export default function PositionScreen({ embedded = false }: Props) {
             colors={colors}
           />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
-          <AccountStat
-            label="Available Balance"
-            value={`$${(account.available_balance ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`}
-            colors={colors}
-          />
-        </TouchableOpacity>
-      )}
-
-      {/* ── More stats, horizontally scrollable — Day Trades stays last ── */}
-      {account?.available && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={[styles.moreStatsScroll, { borderBottomColor: colors.border }]}
-          contentContainerStyle={styles.moreStatsContent}
-        >
-          <StatPill label="Buying Power" value={`$${account.buying_power.toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
-          <StatPill label="Options BP" value={`$${(account.options_buying_power ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
-          <StatPill label="Long Value" value={`$${(account.long_market_value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
-          <StatPill label="Short Value" value={`$${(account.short_market_value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
-          <StatPill label="Cash" value={`$${account.cash.toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
-          <StatPill label="Day Trades" value={String(account.day_trade_count ?? 0)} accentColor={colors.accent} colors={colors} />
+          <AccountStat label="Available Balance" value={`$${(account.available_balance ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} colors={colors} />
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <AccountStat label="Buying Power" value={`$${account.buying_power.toLocaleString('en-US', { minimumFractionDigits: 0 })}`} colors={colors} />
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <AccountStat label="Options BP" value={`$${(account.options_buying_power ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} colors={colors} />
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <AccountStat label="Long Value" value={`$${(account.long_market_value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} colors={colors} />
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <AccountStat label="Short Value" value={`$${(account.short_market_value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} colors={colors} />
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <AccountStat label="Cash" value={`$${account.cash.toLocaleString('en-US', { minimumFractionDigits: 0 })}`} colors={colors} />
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <AccountStat label="Day Trades" value={String(account.day_trade_count ?? 0)} colors={colors} />
         </ScrollView>
-      )}
-
-      {/* ── Mock banner ── */}
-      {showMock && (
-        <View style={[styles.mockBanner, { backgroundColor: colors.accent + '15', borderBottomColor: colors.accent + '44' }]}>
-          <Ionicons name="flask" size={12} color={colors.accent} />
-          <Text style={[styles.mockBannerText, { color: colors.accent }]}>Preview mode — mock data</Text>
-        </View>
       )}
 
       {/* ── Scrollable content ── */}
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        {isLoading && !showMock ? (
+        {isLoading ? (
           <ActivityIndicator color={colors.accent} style={{ marginTop: 60 }} />
         ) : activeCount === 0 ? (
           <View style={styles.emptyState}>
@@ -246,21 +195,11 @@ export default function PositionScreen({ embedded = false }: Props) {
                 ? 'Active live positions will appear here in real time'
                 : 'Active paper positions will appear here'}
             </Text>
-            {mode === 'live' && (
-              <TouchableOpacity
-                onPress={() => setShowMock(true)}
-                style={[styles.mockPreviewBtn, { borderColor: colors.accent + 'AA' }]}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="flask-outline" size={14} color={colors.accent} />
-                <Text style={[styles.mockPreviewText, { color: colors.accent }]}>Preview with mock data</Text>
-              </TouchableOpacity>
-            )}
           </View>
         ) : (
           filteredPositions
             .map(pos => (
-              <PositionRow key={pos.strategy_id} pos={pos} showMock={showMock} colors={colors} />
+              <PositionRow key={pos.strategy_id} pos={pos} colors={colors} />
             ))
         )}
         <View style={{ height: 100 }} />
@@ -275,8 +214,9 @@ export default function PositionScreen({ embedded = false }: Props) {
 // row here needs its own component (hooks can't be called per-item inside
 // a parent's .map()).
 
-function PositionRow({ pos, showMock, colors }: { pos: PositionEntry; showMock: boolean; colors: any }) {
-  const { data: live, connected } = useStrategyLivePrice(pos.strategy_id, pos.active && !showMock);
+function PositionRow({ pos, colors }: { pos: PositionEntry; colors: any }) {
+  const { toTicker } = useBaseNavigation();
+  const { data: live, connected } = useStrategyLivePrice(pos.strategy_id, pos.active);
   const [exitOpen, setExitOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const accentColor = pos.direction === 'CALL' ? colors.success : colors.error;
@@ -285,7 +225,18 @@ function PositionRow({ pos, showMock, colors }: { pos: PositionEntry; showMock: 
     <View style={styles.positionBlock}>
       {/* Strategy label row */}
       <View style={styles.stratLabelRow}>
-        <Text style={[styles.stratTicker, { color: colors.text }]}>{pos.ticker}</Text>
+        <TouchableOpacity
+          onPress={() => toTicker(pos.ticker)}
+          hitSlop={6}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}
+        >
+          <TickerLogo
+            uri={`https://financialmodelingprep.com/image-stock/${pos.ticker.toUpperCase()}.png`}
+            ticker={pos.ticker}
+            size={18}
+          />
+          <Text style={[styles.stratTicker, { color: colors.text }]}>{pos.ticker}</Text>
+        </TouchableOpacity>
         {pos.strategy_name ? (
           <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>{pos.strategy_name}</Text>
         ) : null}
@@ -313,13 +264,12 @@ function PositionRow({ pos, showMock, colors }: { pos: PositionEntry; showMock: 
           tp2_hit:       pos.tp2_hit,
         }}
         streaming={connected}
-        isMock={showMock}
         accentColor={accentColor}
         strategyId={pos.strategy_id}
         ticker={pos.ticker}
         paperMode={pos.paper_mode}
         onExitPress={() => setExitOpen(true)}
-        onAddPress={showMock ? undefined : () => setAddOpen(true)}
+        onAddPress={() => setAddOpen(true)}
         colors={colors}
       />
 
@@ -344,40 +294,45 @@ function PositionRow({ pos, showMock, colors }: { pos: PositionEntry; showMock: 
         </View>
       )}
 
-      {!showMock && (
-        <ExitTradeModal
-          visible={exitOpen}
-          colors={colors}
-          strategyId={pos.strategy_id}
-          ticker={pos.ticker}
-          contract={live?.contract ?? pos.contract}
-          qtyRemaining={live?.qty_remaining ?? pos.qty_remaining ?? 1}
-          paperMode={pos.paper_mode}
-          onClose={() => setExitOpen(false)}
-        />
-      )}
-      {!showMock && (
-        <AddContractModal
-          visible={addOpen}
-          colors={colors}
-          strategyId={pos.strategy_id}
-          ticker={pos.ticker}
-          contract={live?.contract ?? pos.contract}
-          qtyHeld={live?.qty_remaining ?? pos.qty_remaining ?? 0}
-          entryPremium={live?.entry_premium ?? pos.entry_premium}
-          midPrice={live?.mid_price ?? pos.current_price}
-          paperMode={pos.paper_mode}
-          onClose={() => setAddOpen(false)}
-        />
-      )}
+      <ExitTradeModal
+        visible={exitOpen}
+        colors={colors}
+        strategyId={pos.strategy_id}
+        ticker={pos.ticker}
+        contract={live?.contract ?? pos.contract}
+        qtyRemaining={live?.qty_remaining ?? pos.qty_remaining ?? 1}
+        paperMode={pos.paper_mode}
+        onClose={() => setExitOpen(false)}
+      />
+      <AddContractModal
+        visible={addOpen}
+        colors={colors}
+        strategyId={pos.strategy_id}
+        ticker={pos.ticker}
+        contract={live?.contract ?? pos.contract}
+        qtyHeld={live?.qty_remaining ?? pos.qty_remaining ?? 0}
+        entryPremium={live?.entry_premium ?? pos.entry_premium}
+        midPrice={live?.mid_price ?? pos.current_price}
+        paperMode={pos.paper_mode}
+        onClose={() => setAddOpen(false)}
+      />
     </View>
   );
 }
 
 const AccountStat = ({ label, value, color, colors }: any) => (
   <View style={styles.accountStat}>
-    <Text style={[styles.acctLabel, { color: colors.tabBarInactive }]}>{label}</Text>
-    <Text style={[styles.acctValue, { color: color ?? colors.text }]}>{value}</Text>
+    <Text style={[styles.acctLabel, { color: colors.tabBarInactive }]} numberOfLines={1}>
+      {label}
+    </Text>
+    <Text
+      style={[styles.acctValue, { color: color ?? colors.text }]}
+      numberOfLines={1}
+      adjustsFontSizeToFit
+      minimumFontScale={0.8}
+    >
+      {value}
+    </Text>
   </View>
 );
 
@@ -393,33 +348,27 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   headerSide:      { width: 36, alignItems: 'flex-start', justifyContent: 'center' },
-  headerSideRight: { alignItems: 'flex-end', padding: 6 },
   headerCenter:    { flex: 1, alignItems: 'center', gap: 4 },
   title:           { fontSize: 18, fontWeight: '700' },
   activeBadge:     { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
   activeBadgeText: { fontSize: 11, fontWeight: '600' },
   liveDot:         { width: 6, height: 6, borderRadius: 3 },
 
-  // ── Account bar ──
+  // ── Account bar (scrollable) ──
   accountBar: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    height: 68,
+  },
+  accountBarContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around',
+    paddingHorizontal: 16,
     paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  accountStat: { alignItems: 'center', flex: 1 },
-  acctLabel:   { fontSize: 10, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
-  acctValue:   { fontSize: 14, fontWeight: '700' },
-  divider:     { width: StyleSheet.hairlineWidth, height: 28 },
-
-  // ── More stats (scrollable) ──
-  moreStatsScroll:  { borderBottomWidth: StyleSheet.hairlineWidth },
-  moreStatsContent: { paddingHorizontal: 16, paddingVertical: 10 },
-
-  // ── Mock banner ──
-  mockBanner:     { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 6, borderBottomWidth: 1 },
-  mockBannerText: { fontSize: 12, fontWeight: '600' },
+  accountStat: { alignItems: 'center', minWidth: 88, paddingHorizontal: 6, flexShrink: 0 },
+  acctLabel:   { fontSize: 9, lineHeight: 12, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 3 },
+  acctValue:   { fontSize: 14, lineHeight: 17, fontWeight: '700' },
+  divider:     { width: StyleSheet.hairlineWidth, height: 28, flexShrink: 0 },
 
   // ── Scroll content ──
   content: { paddingHorizontal: 16, paddingTop: 16 },
@@ -434,17 +383,6 @@ const styles = StyleSheet.create({
   },
   emptyTitle:    { fontSize: 17, fontWeight: '600', marginTop: 8 },
   emptySubtitle: { fontSize: 13, textAlign: 'center', maxWidth: 260, lineHeight: 18 },
-  mockPreviewBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 9,
-    borderRadius: 20,
-    borderWidth: 1,
-  },
-  mockPreviewText: { fontSize: 13, fontWeight: '600' },
 
   // ── Position blocks ──
   positionBlock: { marginBottom: 20 },

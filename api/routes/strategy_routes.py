@@ -1179,7 +1179,6 @@ def get_accounts_history():
     from datetime import date as _date
     from alpaca.trading.client import TradingClient
     from alpaca.trading.requests import GetPortfolioHistoryRequest
-    from alpaca.trading.enums import ActivityType
 
     def _nearest_index_on_or_before(timestamps: list, target_ts: float) -> int:
         """Index of the latest daily bar at/before target_ts, clamped to [0, len-1]."""
@@ -1190,6 +1189,35 @@ def get_accounts_history():
             else:
                 break
         return idx
+
+    def _fetch_deposits_withdrawn(client) -> tuple[float, float]:
+        """
+        Total deposited/withdrawn via the same direct Activities endpoint
+        /accounts/transfers uses (client.get("/account/activities", ...)),
+        rather than get_portfolio_history's `cashflow` sub-object below.
+
+        That sub-object requires cashflow_types to exactly match Alpaca's
+        expected format and only reports cashflow that falls inside the
+        returned daily-bar timestamp range — for at least one real account
+        this came back empty (0 deposited) despite $500+ in confirmed CSD
+        activity, silently breaking both the All-Time P&L % and the app's
+        "Overall P&L vs. net deposits" figure (position.tsx). The Activities
+        endpoint is what actually lists each settled transfer directly, so
+        summing it here can't miss what /accounts/transfers already shows.
+        """
+        try:
+            raw = client.get("/account/activities", {"activity_types": "CSD,CSW"})
+        except Exception as e:
+            logger.warning("[strategy] deposit/withdrawal activities fetch failed: %s", e)
+            return 0.0, 0.0
+        deposited = withdrawn = 0.0
+        for item in raw or []:
+            net_amount = float(item.get("net_amount", 0) or 0)
+            if net_amount >= 0:
+                deposited += net_amount
+            else:
+                withdrawn += abs(net_amount)
+        return deposited, withdrawn
 
     def _fetch_with_history(paper: bool) -> dict:
         try:
@@ -1210,31 +1238,19 @@ def get_accounts_history():
             pnl_month = pnl_month_pct = None
             pnl_ytd = pnl_ytd_pct = None
             pnl_all_time = pnl_all_time_pct = None
-            total_deposited = total_withdrawn = 0.0
+
+            # Deposits/withdrawals via the direct Activities endpoint — see
+            # _fetch_deposits_withdrawn's docstring for why this replaced
+            # get_portfolio_history's cashflow sub-object.
+            total_deposited, total_withdrawn = _fetch_deposits_withdrawn(client)
 
             try:
-                # `cashflow_types` must be requested explicitly — Alpaca omits
-                # the cashflow dict entirely otherwise (confirmed against
-                # alpaca-py 0.43.2's GetPortfolioHistoryRequest, which defaults
-                # cashflow_types to None).
                 hist = client.get_portfolio_history(
-                    GetPortfolioHistoryRequest(
-                        period="all", timeframe="1D",
-                        cashflow_types=f"{ActivityType.CSD.value},{ActivityType.CSW.value}",
-                    )
+                    GetPortfolioHistoryRequest(period="all", timeframe="1D")
                 )
                 timestamps = list(hist.timestamp or [])
                 equities   = [float(e) if e is not None else None for e in (hist.equity or [])]
                 pls        = [float(p) if p is not None else None for p in (hist.profit_loss or [])]
-                cashflow   = hist.cashflow or {}
-
-                for activity, values in cashflow.items():
-                    total = sum(float(v) for v in values if v is not None)
-                    key_name = activity.value if hasattr(activity, "value") else str(activity)
-                    if key_name == "CSD":
-                        total_deposited += total
-                    elif key_name == "CSW":
-                        total_withdrawn += abs(total)
 
                 if timestamps and pls:
                     now_ts = timestamps[-1]

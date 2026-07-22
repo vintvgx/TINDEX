@@ -3,10 +3,15 @@
  */
 
 import type React from "react";
-import { View, Text } from "react-native";
+import { View, Text, Pressable, Linking } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { AppStoreCard } from "@/common/components/ui/AppStoreCard";
 import type { TickerData } from "@/common/types/blogPosts/ticker";
 import { formatMarketCap } from "@/common/utils/format/marketCap";
+
+const openArticle = (url?: string | null) => {
+  if (url) Linking.openURL(url).catch(() => {});
+};
 
 interface FinancialsTabProps {
   stockData: TickerData;
@@ -143,34 +148,44 @@ export const FinancialsTab: React.FC<FinancialsTabProps> = ({ stockData }) => {
           </Text>
           <AppStoreCard variant="featured">
             <View className="p-0">
-              {stockData.news_data.slice(0, 3).map((news, index) => (
-                <View
-                  key={news.id}
-                  className={`p-6 ${index > 0 ? "border-t border-gray-700/50" : ""}`}>
-                  {news.content.title && (
-                    <Text className="text-white font-bold tracking-wide mb-2">
-                      {news.content.title}
-                    </Text>
-                  )}
-                  {news.content.summary && (
-                    <Text className="text-gray-300 text-sm font-medium mb-2">
-                      {news.content.summary}
-                    </Text>
-                  )}
-                  <View className="flex-row justify-between items-center">
-                    {news.content.provider?.displayName && (
-                      <Text className="text-gray-400 text-xs">
-                        {news.content.provider.displayName}
+              {stockData.news_data.slice(0, 3).map((news, index) => {
+                const url = news.content.clickThroughUrl?.url ?? news.content.canonicalUrl?.url;
+                return (
+                  <Pressable
+                    key={news.id}
+                    disabled={!url}
+                    onPress={() => openArticle(url)}
+                    className={`p-6 ${index > 0 ? "border-t border-gray-700/50" : ""} active:opacity-60`}>
+                    {news.content.title && (
+                      <View className="flex-row items-start justify-between mb-2">
+                        <Text className="text-white font-bold tracking-wide flex-1 mr-2">
+                          {news.content.title}
+                        </Text>
+                        {url && (
+                          <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
+                        )}
+                      </View>
+                    )}
+                    {news.content.summary && (
+                      <Text className="text-gray-300 text-sm font-medium mb-2">
+                        {news.content.summary}
                       </Text>
                     )}
-                    {news.content.pubDate && (
-                      <Text className="text-gray-400 text-xs">
-                        {new Date(news.content.pubDate).toLocaleDateString()}
-                      </Text>
-                    )}
-                  </View>
-                </View>
-              ))}
+                    <View className="flex-row justify-between items-center">
+                      {news.content.provider?.displayName && (
+                        <Text className="text-gray-400 text-xs">
+                          {news.content.provider.displayName}
+                        </Text>
+                      )}
+                      {news.content.pubDate && (
+                        <Text className="text-gray-400 text-xs">
+                          {new Date(news.content.pubDate).toLocaleDateString()}
+                        </Text>
+                      )}
+                    </View>
+                  </Pressable>
+                );
+              })}
             </View>
           </AppStoreCard>
         </View>

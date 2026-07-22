@@ -134,6 +134,16 @@ export default function AccountsScreen({ embedded = false }: Props) {
               colors={colors}
             />
 
+            {/* Overall P&L — equity vs. actual money deposited, live account
+                only. Distinct from the period P&L pills above (Alpaca's
+                trade-only figures, cashflow excluded): this answers "is the
+                system making me money" in the plainest sense — what the
+                account is worth vs. what was actually put into it. Sits
+                right above Transfer History since it's derived directly
+                from summing that same list, not a separately-computed
+                backend aggregate that could silently drift from it. */}
+            <OverallPnlCard liveEquity={liveDisplay?.available ? liveDisplay.equity : null} colors={colors} />
+
             {/* Transfer History — live-account only. Paper accounts start
                 with a fixed virtual balance and don't take real ACH
                 transfers, so there's nothing meaningful to show for that
@@ -333,6 +343,41 @@ function formatTransferDate(iso: string): string {
 }
 
 /**
+ * Overall P&L: current live equity vs. the net of every transfer in
+ * Transfer History (sum of each transfer's signed amount — deposits
+ * positive, withdrawals negative). Deliberately summed from the same list
+ * rendered right below, not a separately-computed backend total, so the
+ * number on screen can never silently disagree with the rows the user can
+ * actually see and count themselves.
+ */
+const OverallPnlCard = ({ liveEquity, colors }: { liveEquity: number | null; colors: any }) => {
+  const { data, isLoading } = useAlpacaTransfers();
+  const transfers = data?.transfers ?? [];
+
+  if (isLoading || liveEquity == null || transfers.length === 0) return null;
+
+  const netTransferred = transfers.reduce((sum, t) => sum + t.amount, 0);
+  const overallPnl = liveEquity - netTransferred;
+  const pnlColor = overallPnl >= 0 ? colors.success : colors.error;
+
+  return (
+    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.cardLabel, { color: colors.text, marginBottom: 2 }]}>Overall P&L</Text>
+          <Text style={[styles.cardSubtitle, { color: colors.tabBarInactive }]}>
+            Equity vs. ${netTransferred.toLocaleString('en-US', { minimumFractionDigits: 0 })} net transferred
+          </Text>
+        </View>
+        <Text style={{ color: pnlColor, fontSize: 22, fontWeight: '800', marginLeft: 12 }}>
+          {overallPnl >= 0 ? '+' : ''}${overallPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </Text>
+      </View>
+    </View>
+  );
+};
+
+/**
  * Status wording here reflects Alpaca's Activities endpoint (settled cash
  * movements only — CSD/CSW) via NonTradeActivityStatus ("executed"/
  * "correct"/"canceled"), NOT the richer pending/queued/rejected states
@@ -469,7 +514,7 @@ const styles = StyleSheet.create({
   pnlPct:  { fontSize: 13, fontWeight: '600' },
   noData:  { fontSize: 13, fontStyle: 'italic' },
 
-  statsScroll: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 2 },
+  statsScroll: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 2, height: 84 },
   statsScrollContent: { paddingTop: 12, paddingRight: 4 },
   stat:     { flex: 1, alignItems: 'center' },
   statLabel: { fontSize: 10, marginBottom: 3 },

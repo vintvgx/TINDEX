@@ -24,6 +24,7 @@ import { EMAZoneBadge } from '@/common/components/shared/EMAZoneBadge';
 import { AdvancedPriceChart } from '@/common/components/ticker/AdvancedPriceChart';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
+import { TickerLogo } from '@/common/components/ui/TickerLogo';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -582,7 +583,18 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
         <View style={[styles.header, { borderBottomColor: colors.separator }]}>
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-              <Text style={[styles.ticker, { color: colors.text }]}>{data.ticker}</Text>
+              <TouchableOpacity
+                onPress={() => { onClose(); onNavigateToTicker?.(data.ticker); }}
+                hitSlop={6}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+              >
+                <TickerLogo
+                  uri={`https://financialmodelingprep.com/image-stock/${data.ticker.toUpperCase()}.png`}
+                  ticker={data.ticker}
+                  size={26}
+                />
+                <Text style={[styles.ticker, { color: colors.text }]}>{data.ticker}</Text>
+              </TouchableOpacity>
               {/* Suggestion type pill */}
               <View style={[styles.typeBadge, { backgroundColor: suggestion.color + '25', borderColor: suggestion.color + '60' }]}>
                 <Text style={[styles.typeBadgeText, { color: suggestion.color }]}>{suggestion.type}</Text>
