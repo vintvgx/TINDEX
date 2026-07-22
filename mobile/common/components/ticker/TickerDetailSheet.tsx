@@ -40,10 +40,10 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
   // a persistent background tint needs a value from above it to apply to).
   const [paperMode, setPaperMode] = useState(true);
 
-  const { data: tickerResponse, isLoading, isRefetching, refetchFresh } = useTickerQuery(ticker);
+  const { data: tickerResponse, isLoading, isError, isRefetching, refetchFresh, refetch } = useTickerQuery(ticker);
   const stockData = tickerResponse?.data;
 
-  const { data: historyResponse, isLoading: historyLoading } = useTickerHistoryQuery(ticker, period);
+  const { data: historyResponse, isLoading: historyLoading, isError: historyIsError, refetch: refetchHistory } = useTickerHistoryQuery(ticker, period);
   const historyData = historyResponse?.data;
 
   const { data: isFollowingORB } = useIsFollowingORB(ticker);
@@ -79,6 +79,35 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
     if (!user?.id) return;
     generateTickerUpdate.mutate({ ticker, userId: user.id, targetLength: 500 });
   };
+
+  if (isError && !stockData) {
+    return (
+      <View style={{ flex: 1 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, marginBottom: 8, paddingHorizontal: 20 }}>
+          <Pressable onPress={onClose} hitSlop={10} style={{ padding: 4 }}>
+            <Ionicons name="chevron-down" size={22} color={colors.text} />
+          </Pressable>
+          <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>{ticker}</Text>
+          <View style={{ width: 22 }} />
+        </View>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
+          <Ionicons name="cloud-offline-outline" size={40} color={colors.textTertiary} />
+          <Text style={{ marginTop: 14, fontSize: 15, fontWeight: '600', color: colors.text, textAlign: 'center' }}>
+            Unable to be fetched
+          </Text>
+          <Text style={{ marginTop: 6, fontSize: 13, color: colors.textSecondary, textAlign: 'center', lineHeight: 18 }}>
+            We couldn't load data for {ticker}. Check your connection and try again.
+          </Text>
+          <Pressable
+            onPress={() => refetch()}
+            style={{ marginTop: 20, backgroundColor: colors.accent, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 20 }}
+          >
+            <Text style={{ color: colors.accentForeground, fontWeight: '700', fontSize: 14 }}>Retry</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
 
   if (subScreen && stockData) {
     return (
@@ -218,14 +247,18 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
             <Ionicons name="expand-outline" size={18} color={colors.textTertiary} />
           </Pressable>
         </View>
-        <PriceChart
-          data={historyData}
-          isLoading={historyLoading}
-          period={period}
-          onPeriodChange={setPeriod}
-          positive={periodPositive}
-          onScrub={setScrubPoint}
-        />
+        {historyIsError && !historyData ? (
+          <UnavailableBox message="Chart unable to be fetched" onRetry={() => refetchHistory()} />
+        ) : (
+          <PriceChart
+            data={historyData}
+            isLoading={historyLoading}
+            period={period}
+            onPeriodChange={setPeriod}
+            positive={periodPositive}
+            onScrub={setScrubPoint}
+          />
+        )}
       </View>
 
       <PriceChartFullScreen
@@ -287,44 +320,56 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
       {/* Market Cap */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <Text style={{ color: colors.textSecondary, fontSize: 15, fontWeight: '500' }}>Market Cap</Text>
-        {stockData?.market_cap != null ? (
+        {!stockData ? (
+          <Skeleton width={70} height={16} />
+        ) : stockData.market_cap != null ? (
           <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>{formatMarketCap(stockData.market_cap)}</Text>
         ) : (
-          <Skeleton width={70} height={16} />
+          <UnavailableText />
         )}
       </View>
 
       {/* 52-week range */}
-      {stockData?.year_low != null && stockData?.year_high != null && stockData?.current_price != null ? (
+      {!stockData ? (
+        <Skeleton width="100%" height={56} style={{ marginBottom: 24 }} />
+      ) : stockData.year_low != null && stockData.year_high != null && stockData.current_price != null ? (
         <FiftyTwoWeekRangeBar
           currentPrice={stockData.current_price}
           yearLow={stockData.year_low}
           yearHigh={stockData.year_high}
         />
       ) : (
-        <Skeleton width="100%" height={56} style={{ marginBottom: 24 }} />
+        <View style={{ marginBottom: 24 }}>
+          <UnavailableText />
+        </View>
       )}
 
       {/* Revenue / P/E */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginBottom: 24 }}>
         <View style={{ alignItems: 'center' }}>
           <Text style={{ color: colors.textTertiary, fontSize: 13, marginBottom: 4 }}>Revenue</Text>
-          {stockData?.revenue_growth != null ? (
+          {!stockData ? (
+            <Skeleton width={60} height={18} />
+          ) : stockData.revenue_growth != null ? (
             <Text style={{ color: stockData.revenue_growth >= 0 ? colors.success : colors.error, fontSize: 18, fontWeight: '700' }}>
               {stockData.revenue_growth >= 0 ? '+' : ''}
               {(stockData.revenue_growth * 100).toFixed(1)}%
             </Text>
           ) : (
-            <Skeleton width={60} height={18} />
+            // Genuinely nullable field (e.g. no reported revenue growth) —
+            // not a fetch failure, so this isn't "Unable to be fetched".
+            <Text style={{ color: colors.textTertiary, fontSize: 18, fontWeight: '700' }}>N/A</Text>
           )}
           <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 2 }}>YoY growth</Text>
         </View>
         <View style={{ alignItems: 'center' }}>
           <Text style={{ color: colors.textTertiary, fontSize: 13, marginBottom: 4 }}>P/E Ratio</Text>
-          {stockData?.pe_ratio != null ? (
+          {!stockData ? (
+            <Skeleton width={40} height={18} />
+          ) : stockData.pe_ratio != null ? (
             <Text style={{ color: colors.text, fontSize: 18, fontWeight: '700' }}>{stockData.pe_ratio.toFixed(1)}</Text>
           ) : (
-            <Skeleton width={40} height={18} />
+            <Text style={{ color: colors.textTertiary, fontSize: 18, fontWeight: '700' }}>N/A</Text>
           )}
           <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 2 }}>Valuation</Text>
         </View>
@@ -418,6 +463,36 @@ const SubScreenHost: React.FC<{
         {rightAction}
       </View>
       <View style={{ flex: 1 }}>{children}</View>
+    </View>
+  );
+};
+
+const UnavailableText: React.FC = () => {
+  const colors = useThemeColors();
+  return (
+    <Text style={{ color: colors.textTertiary, fontSize: 13, fontStyle: 'italic' }}>Unable to be fetched</Text>
+  );
+};
+
+const UnavailableBox: React.FC<{ message: string; onRetry: () => void }> = ({ message, onRetry }) => {
+  const colors = useThemeColors();
+  return (
+    <View
+      style={{
+        height: 200,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: colors.border,
+        backgroundColor: colors.surface,
+      }}
+    >
+      <Ionicons name="cloud-offline-outline" size={26} color={colors.textTertiary} />
+      <Text style={{ marginTop: 8, fontSize: 13, color: colors.textSecondary, fontWeight: '600' }}>{message}</Text>
+      <Pressable onPress={onRetry} hitSlop={10} style={{ marginTop: 10 }}>
+        <Text style={{ color: colors.accent, fontSize: 13, fontWeight: '700' }}>Retry</Text>
+      </Pressable>
     </View>
   );
 };
