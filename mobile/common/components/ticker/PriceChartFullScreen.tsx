@@ -103,7 +103,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
       onRequestClose={onClose}
     >
       <StatusBar barStyle={colors.isDark ? 'light-content' : 'dark-content'} />
-      <SafeAreaView  style={{ flex: 1, backgroundColor: colors.background }}>
+      <View  style={{ paddingTop: 70, flex: 1, backgroundColor: colors.background }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 }}>
           <Pressable onPress={onClose} hitSlop={10} style={{ padding: 4 }}>
             <Ionicons name="chevron-back" size={24} color={colors.text} />
@@ -225,7 +225,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             </View>
           )}
         </View>
-      </SafeAreaView>
+      </View>
     </Modal>
   );
 };

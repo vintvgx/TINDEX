@@ -33,6 +33,7 @@ import LoadingScreen from "@/common/components/LoadingScreen";
 import { ToastProvider } from "@/common/components/ui/Toast";
 import { PendingConfirmationProvider } from "@/common/components/strategy/PendingConfirmationProvider";
 import { TickerSheetProvider } from "@/common/utils/context/ticker/TickerSheetProvider";
+import { MarketStreamProvider } from "@/common/utils/context/market/MarketStreamContext";
 import { FONT_ASSETS } from "@/lib/typography";
 
 import { applyGlobalFont } from "@/lib/applyGlobalFont";
@@ -220,16 +221,28 @@ function AppContent() {
     return <LoadingScreen message="Initializing Alethia..." />;
   }
 
-  if (authState.isAuthenticated && !bootstrapReady) {
-    return <LoadingScreen message="Initializing Alethia..." />;
-  }
-
   return (
     <ToastProvider>
       <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
         <PendingConfirmationProvider>
           <TickerSheetProvider>
-            <Slot />
+            <MarketStreamProvider>
+              {/* <Slot/> must always mount as soon as auth resolves — AuthContext's
+                  own navigation effect calls router.replace() the instant
+                  authState.isAuthenticated flips true, independent of
+                  bootstrapReady. Gating this return on bootstrapReady used to
+                  unmount the root Slot right when that replace() call landed,
+                  so the navigation silently failed (nothing mounted to act on)
+                  and the app got stuck showing this screen forever. The
+                  bootstrap loading screen is now an overlay on top of the
+                  already-mounted Slot instead of replacing it. */}
+              <Slot />
+              {authState.isAuthenticated && !bootstrapReady && (
+                <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}>
+                  <LoadingScreen message="Initializing Alethia..." />
+                </View>
+              )}
+            </MarketStreamProvider>
           </TickerSheetProvider>
         </PendingConfirmationProvider>
         <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />

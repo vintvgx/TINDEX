@@ -4,9 +4,12 @@ import {
   ActivityIndicator, RefreshControl, StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMarketStream } from '@/hooks/useMarketStream';
+import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
+import { Skeleton } from '@/common/components/ui/Skeleton';
 import { useStrategyPositions, type PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
@@ -61,14 +64,40 @@ function fmtPrice(n: number | null | undefined): string {
 // ─── Market Tile ─────────────────────────────────────────────────────────────
 
 function MarketTile({
-  label, value, sub, accentColor, colors,
-}: { label: string; value: string; sub?: string; accentColor: string; colors: any }) {
+  label, value, formatValue, sub, accentColor, colors, loading,
+}: {
+  label: string;
+  /** Raw numeric value — null while nothing has arrived yet. */
+  value: number | null;
+  formatValue: (n: number) => string;
+  sub?: string;
+  accentColor: string;
+  colors: any;
+  /** Extra readiness gate beyond `value == null` (e.g. ORB range data). */
+  loading?: boolean;
+}) {
+  // Counts up from 0 on first arrival, then smoothly tracks each later tick —
+  // "stock number" style, not a flat pop-in.
+  const animatedValue = useAnimatedNumber(value);
+  const showSkeleton = loading || value == null;
+
   return (
     <View style={[styles.tile, { backgroundColor: accentColor + '12', borderColor: accentColor + '30' }]}>
       <Text style={[styles.tileLabel, { color: colors.textTertiary }]}>{label}</Text>
-      <Text style={[styles.tileValue, { color: accentColor }]}>{value}</Text>
-      {sub != null && (
-        <Text style={[styles.tileSub, { color: accentColor + 'CC' }]}>{sub}</Text>
+      {showSkeleton ? (
+        <>
+          <Skeleton width={56} height={22} borderRadius={5} style={{ marginTop: 3 }} />
+          <Skeleton width={64} height={11} borderRadius={4} style={{ marginTop: 6 }} />
+        </>
+      ) : (
+        <Animated.View entering={FadeIn.duration(700)}>
+          <Text style={[styles.tileValue, { color: accentColor }]}>
+            {formatValue(animatedValue ?? value)}
+          </Text>
+          {sub != null && (
+            <Text style={[styles.tileSub, { color: accentColor + 'CC' }]}>{sub}</Text>
+          )}
+        </Animated.View>
       )}
     </View>
   );
@@ -439,7 +468,7 @@ const DashboardScreen = () => {
 
   // ── Data ──────────────────────────────────────────────────────────────────
   const { livePrices, vix, spy, sentiment, connected } = useMarketStream(WATCHED_TICKERS);
-  const { data: orbData } = useORBMonitoringState(false, false);
+  const { data: orbData, isLoading: orbLoading } = useORBMonitoringState(false, false);
   const { data: stratPositions, isLoading: stratLoading, refetch: refetchStrat } = useStrategyPositions();
   const { data: immPositions,   isLoading: immLoading,   refetch: refetchImm }   = useImmediatePositions();
   const { data: sessionStates } = useStrategySessionState();
@@ -637,31 +666,38 @@ const DashboardScreen = () => {
                     contentContainerStyle={styles.tilesRow}>
           <MarketTile
             label="VIX"
-            value={vix != null ? vix.toFixed(2) : '—'}
-            sub={sentiment?.label ?? '—'}
+            value={vix}
+            formatValue={(n) => n.toFixed(2)}
+            sub={sentiment?.label}
             accentColor={sentimentHex}
             colors={colors}
           />
           <MarketTile
             label="SPY"
-            value={spyPrice != null ? `$${spyPrice.toFixed(2)}` : '—'}
+            value={spyPrice}
+            formatValue={(n) => `$${n.toFixed(2)}`}
             sub={orbSub('SPY', spyPrice)}
             accentColor={orbColor('SPY', spyPrice)}
             colors={colors}
+            loading={orbLoading}
           />
           <MarketTile
             label="IWM"
-            value={iwmPrice != null ? `$${iwmPrice.toFixed(2)}` : '—'}
+            value={iwmPrice}
+            formatValue={(n) => `$${n.toFixed(2)}`}
             sub={orbSub('IWM', iwmPrice)}
             accentColor={orbColor('IWM', iwmPrice)}
             colors={colors}
+            loading={orbLoading}
           />
           <MarketTile
             label="QQQ"
-            value={qqqPrice != null ? `$${qqqPrice.toFixed(2)}` : '—'}
+            value={qqqPrice}
+            formatValue={(n) => `$${n.toFixed(2)}`}
             sub={orbSub('QQQ', qqqPrice)}
             accentColor={orbColor('QQQ', qqqPrice)}
             colors={colors}
+            loading={orbLoading}
           />
         </ScrollView>
 

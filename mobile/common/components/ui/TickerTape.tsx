@@ -25,6 +25,7 @@ import { useMarketStream } from '@/hooks/useMarketStream';
 import { useWatchlists } from '@/hooks/queries/watchlist/useWatchlist';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useOrbHubHealth } from '@/hooks/queries/orb/useOrbHubHealth';
+import { Skeleton } from '@/common/components/ui/Skeleton';
 import type { WatchlistStock } from '@/common/types/watchlist';
 
 // Live-stream symbols (SPY arrives on its own field; the rest via livePrices).
@@ -147,6 +148,27 @@ export function TickerTape() {
     ? items
     : STREAM_TICKERS.map(s => ({ symbol: s, value: '—' as string }));
 
+  // ── First-load skeleton ─────────────────────────────────────────────────────
+  // Only gates the very first reveal (cold start before any stream tick has
+  // landed) — mode-cycle loading already has its own title-overlay transition
+  // below, so this never re-triggers on a later mode switch. Stays mounted
+  // (with fading opacity) until the crossfade finishes, then unmounts.
+  const everReady = items.length > 0;
+  const [skeletonVisible, setSkeletonVisible] = useState(true);
+  const skeletonOpacity = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (everReady && skeletonVisible) {
+      Animated.timing(skeletonOpacity, {
+        toValue: 0,
+        duration: 700,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }).start(() => setSkeletonVisible(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [everReady]);
+  const marqueeVisibility = skeletonOpacity.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
+
   // ── Marquee scroll ──────────────────────────────────────────────────────────
   const translateX = useRef(new Animated.Value(0)).current;
   const [rowWidth, setRowWidth] = useState(0);
@@ -221,11 +243,23 @@ export function TickerTape() {
       <Pressable style={styles.tape} onPress={cycle} accessibilityRole="button" accessibilityLabel={`Ticker tape: ${mode.label}. Tap to change.`}>
         <View style={[styles.liveDot, { backgroundColor: orbDotColor }]} />
 
-        {/* Marquee */}
-        <Animated.View style={[styles.track, { opacity: contentOpacity, transform: [{ translateX }] }]}>
+        {/* Marquee — hidden (opacity 0) under the skeleton until the first
+            batch of data ever arrives, then crossfades in. */}
+        <Animated.View style={[styles.track, { opacity: Animated.multiply(contentOpacity, marqueeVisibility), transform: [{ translateX }] }]}>
           <TapeRow items={display} onWidth={handleWidth} colors={colors} />
           <TapeRow items={display} colors={colors} />
         </Animated.View>
+
+        {/* First-load skeleton — crossfades out once real data lands */}
+        {skeletonVisible && (
+          <Animated.View style={[styles.skeletonRow, { opacity: skeletonOpacity }]} pointerEvents="none">
+            {[42, 34, 46, 38, 50, 36].map((w, i) => (
+              <View key={i} style={styles.skeletonItem}>
+                <Skeleton width={w} height={10} borderRadius={4} />
+              </View>
+            ))}
+          </Animated.View>
+        )}
 
         {/* Centered mode title (during a transition) */}
         <Animated.View style={[styles.titleOverlay, { opacity: titleOpacity }]} pointerEvents="none">
@@ -255,6 +289,15 @@ const styles = StyleSheet.create({
     marginLeft: 12,
     marginRight: 4,
     zIndex: 2,
+  },
+  skeletonRow: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: 24,
+  },
+  skeletonItem: {
+    marginRight: 18,
   },
   track: {
     flexDirection: 'row',
