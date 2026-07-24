@@ -93,6 +93,35 @@ class ExitManager:
         self._cascade_close_pct    = profile.get("cascade_close_pct", 0.50)
         self._cascade_last_price   = None
 
+        # SL confirmation: require N consecutive ticks at/below hard_stop before
+        # firing — same idea as TP1's confirm-ticks, applied symmetrically so a
+        # single noisy quote (wide bid/ask on a cheap OTM contract) can't force
+        # an exit on its own. Applies to both the pre-TP1 hard stop and the
+        # post-TP1 breakeven stop (same check, same variable — see evaluate()).
+        self._sl_ticks        = 0
+        self._sl_ticks_needed = profile.get("sl_confirm_ticks", 1)
+
+        # Pre-TP1 SL grace window (REVERSAL only, via profile flags — see
+        # profiles.py for the full rationale). Once SL is confirmed hit and
+        # grace is enabled, the exit doesn't fire immediately: it waits for
+        # either sl_grace_bars consecutive adverse 1-min bars (real move) or
+        # sl_grace_seconds of no recovery (stuck at the stop), whichever comes
+        # first. sl_outer_floor_pct is an absolute worst-case stop that bypasses
+        # grace (and confirm-ticks) entirely, so this can never turn into an
+        # unbounded hold. Never applies once be_stop_active — that's protecting
+        # already-banked TP1 profit, not giving a fresh entry room to develop.
+        self._sl_grace_enabled     = profile.get("sl_grace_enabled", False)
+        self._sl_grace_bars_needed = profile.get("sl_grace_bars", 0)
+        self._sl_grace_seconds     = profile.get("sl_grace_seconds", 0)
+        self._sl_grace_active      = False
+        self._sl_grace_start       = None
+        self._sl_grace_down_bars   = 0
+        self._sl_grace_last_price  = None
+        outer_floor_pct = profile.get("sl_outer_floor_pct")
+        self._sl_outer_floor = (
+            entry_premium * (1 - outer_floor_pct) if outer_floor_pct is not None else None
+        )
+
         # NO_STOP_LOSS: fully manual, hold until sold — even past EOD. The
         # separate scheduler._eod_reset() cron backstop also checks this flag
         # (see scheduler.py); both must agree or "hold until I sell" would
@@ -117,13 +146,51 @@ class ExitManager:
         if self._is_zero_dte and not self._disable_eod_close and now_et >= self.eod_close_time:
             return self._action("CLOSE_ALL", self.qty_remaining, "EOD_CLOSE")
 
+        # Absolute worst-case floor — bypasses SL confirm-ticks and the grace
+        # window entirely. A breach this deep is a real breakdown, not noise;
+        # this exists so the grace window below can never turn into an
+        # unbounded hold while "waiting for the move."
+        if self._sl_outer_floor is not None and current_option_price <= self._sl_outer_floor:
+            return self._action("CLOSE_ALL", self.qty_remaining, "HARD_STOP_FLOOR",
+                                current_option_price)
+
         # Premium-based stop. Before TP1: hard stop at entry × (1 - max_loss_pct).
         # After TP1: hard_stop is moved to entry_premium (breakeven), so the same
         # check doubles as the BE stop — labeled correctly for analytics.
         if current_option_price <= self.hard_stop:
+            self._sl_ticks += 1
+            if self._sl_ticks < self._sl_ticks_needed:
+                return self._action("HOLD", 0, "SL_CONFIRMING")
+
             reason = "BREAKEVEN_STOP" if self.be_stop_active else "HARD_STOP"
+
+            # Grace window only applies to the pre-TP1 hard stop — post-TP1 this
+            # is protecting already-banked TP1 profit (breakeven), not giving a
+            # fresh entry room to develop, so it exits on confirmation like normal.
+            if self._sl_grace_enabled and not self.be_stop_active:
+                if not self._sl_grace_active:
+                    self._sl_grace_active    = True
+                    self._sl_grace_start     = datetime.now(ET)
+                    self._sl_grace_down_bars = 0
+                elapsed = (datetime.now(ET) - self._sl_grace_start).total_seconds()
+                if (self._sl_grace_bars_needed > 0
+                        and self._sl_grace_down_bars >= self._sl_grace_bars_needed):
+                    return self._action("CLOSE_ALL", self.qty_remaining, reason,
+                                        current_option_price)
+                if self._sl_grace_seconds > 0 and elapsed >= self._sl_grace_seconds:
+                    return self._action("CLOSE_ALL", self.qty_remaining, reason,
+                                        current_option_price)
+                return self._action("HOLD", 0, "SL_GRACE")
+
             return self._action("CLOSE_ALL", self.qty_remaining, reason,
                                 current_option_price)
+        else:
+            self._sl_ticks = 0
+            if self._sl_grace_active:
+                # Recovered back above SL before grace expired — cancel the
+                # pending stop-out and resume holding normally.
+                self._sl_grace_active    = False
+                self._sl_grace_down_bars = 0
 
         # Only track actual underlying price — option price is not a valid proxy
         # (same option premium on consecutive ticks would instantly fake consolidation)
@@ -224,10 +291,11 @@ class ExitManager:
 
     def on_underlying_bar(self, close: float) -> None:
         """
-        Feed one 1-minute bar close into the cascade tracker.
-        Must be called from on_bar (bar cadence), NOT from quote-tick handlers —
-        inter-bar quotes repeat the same underlying price and would reset the counter.
-        Equal prices (flat bar) are treated as no information.
+        Feed one 1-minute bar close into the cascade tracker (post-TP1) or the
+        SL grace-window tracker (pre-TP1). Must be called from on_bar (bar
+        cadence), NOT from quote-tick handlers — inter-bar quotes repeat the
+        same underlying price and would reset the counter. Equal prices (flat
+        bar) are treated as no information.
 
         "Against-the-trade" direction is: lower closes for a CALL (underlying
         moving against us), higher closes for a PUT (underlying moving against us).
@@ -235,6 +303,24 @@ class ExitManager:
         would incorrectly force-sell contracts while they are gaining value.
         """
         if not self.tp1_hit:
+            # Pre-TP1: feed the SL grace window's consecutive-adverse-bar
+            # counter (only meaningful while sl_grace_active — see evaluate()
+            # — but tracked unconditionally so the count is already warm the
+            # moment grace kicks in, not starting from zero on that first bar).
+            if self._sl_grace_last_price is not None:
+                against = (
+                    close < self._sl_grace_last_price if self.direction == "CALL"
+                    else close > self._sl_grace_last_price
+                )
+                recovering = (
+                    close > self._sl_grace_last_price if self.direction == "CALL"
+                    else close < self._sl_grace_last_price
+                )
+                if against:
+                    self._sl_grace_down_bars += 1
+                elif recovering:
+                    self._sl_grace_down_bars = 0
+            self._sl_grace_last_price = close
             return  # cascade is only relevant after TP1
         if self._cascade_last_price is None:
             self._cascade_last_price = close
@@ -296,4 +382,7 @@ class ExitManager:
             "qty_remaining":       self.qty_remaining,
             "cascade_down_ticks":  self._cascade_down_ticks,
             "tp1_confirm_ticks":   self._tp1_ticks,
+            "sl_confirm_ticks":    self._sl_ticks,
+            "sl_grace_active":     self._sl_grace_active,
+            "sl_grace_down_bars":  self._sl_grace_down_bars,
         }

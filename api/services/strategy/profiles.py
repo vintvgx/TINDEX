@@ -29,6 +29,7 @@ PROFILES = {
         "tp2_close_pct": 0.30,
         "runner_trail_pct": 0.15,
         "runner_mode": "be_hold",   # high-qty aggressive — ride the full move, B/E protects runner
+        "sl_confirm_ticks": 2,      # require 2 consecutive ticks at/below SL before firing — filters one bad quote
         "consol_exit": False,
         "volume_exit": False,
         "consol_range_pct": 0.0005,
@@ -59,6 +60,7 @@ PROFILES = {
         "tp2_close_pct": 0.50,
         "runner_trail_pct": 0.22,   # loosened from 0.20 — less noise sensitivity
         "runner_mode": "trail",
+        "sl_confirm_ticks": 2,
         "consol_exit": False,
         "volume_exit": False,
         "consol_range_pct": 0.0008,
@@ -89,6 +91,7 @@ PROFILES = {
         "tp2_close_pct": 1.00,
         "runner_trail_pct": 0.20,   # loosened from 0.10 — 10% was firing on bid/ask spread alone
         "runner_mode": "trail",
+        "sl_confirm_ticks": 3,      # low qty/conservative — a bit more noise tolerance before cutting
         "consol_exit": False,
         "volume_exit": False,
         "consol_range_pct": 0.0012,
@@ -119,6 +122,7 @@ PROFILES = {
         "tp2_close_pct": 0.35,
         "runner_trail_pct": 0.18,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode": "be_hold",   # designed for this — lock TP1, ride runner to TP2/EOD risk-free
+        "sl_confirm_ticks": 2,
         "consol_exit": False,
         "volume_exit": False,
         "consol_range_pct": 0.0010,
@@ -155,6 +159,28 @@ PROFILES = {
         "tp2_close_pct":          0.50,   # close 1 of 2 remaining at TP2, leave 1 runner
         "runner_trail_pct":       0.18,   # kept for reference; ignored in be_hold mode
         "runner_mode":            "be_hold", # trail exited within seconds on fast moves; cascade (now direction-aware) handles runner reduction
+        "sl_confirm_ticks":       3,    # cheap OTM prints are noisy — require 3 consecutive ticks at/below SL, not 1
+        # ── Pre-TP1 SL grace window (2026-07-24) ──────────────────────────────
+        # A single quote piercing SL on a cheap ($0.10-0.30) OTM reversal contract
+        # is often bid/ask noise, not a real breakdown — the 2026-07-23 SPY trade
+        # was stopped out in 2m39s on exactly this. Once SL is first touched
+        # (and sl_confirm_ticks above has confirmed it's not a 1-tick flicker),
+        # this holds the position open a bit longer instead of closing instantly:
+        #   - sl_grace_bars consecutive adverse 1-min underlying closes → exit
+        #     immediately (real, sustained move against us — don't wait out
+        #     the rest of the window).
+        #   - otherwise, exit once sl_grace_seconds has elapsed without the
+        #     price recovering back above SL (consolidating at the stop is
+        #     still eventually a loser).
+        #   - if price recovers above SL at any point before either fires,
+        #     the grace state clears and the trade holds normally.
+        # sl_outer_floor_pct is the escape hatch: an absolute worst-case stop
+        # that bypasses grace (and tick-confirm) entirely, so "give it time"
+        # can never turn into "ride it to zero" while waiting out the window.
+        "sl_grace_enabled":       True,
+        "sl_grace_bars":          3,     # ~3 consecutive 1-min bars against = genuine move, don't wait
+        "sl_grace_seconds":       300,   # 5 minutes max before forcing the exit regardless
+        "sl_outer_floor_pct":     0.40,  # hard floor at -40% (vs. -25% normal SL) — bypasses grace/confirm
         "consol_exit":            False,
         "volume_exit":            False,
         "consol_range_pct":       0.0008,
@@ -192,6 +218,7 @@ PROFILES = {
         "tp2_close_pct":           0.00,
         "runner_trail_pct":        0.00,
         "runner_mode":             "trail",
+        "sl_confirm_ticks":        2,   # irrelevant in practice — max_loss_pct=1.0 means hard_stop=0, never reached
         "disable_eod_close":       True,
         "consol_exit":             False,
         "volume_exit":             False,
@@ -216,6 +243,7 @@ PROFILES = {
         "tp2_close_pct":           1.00,
         "runner_trail_pct":        0.25,   # intentionally tight — scalper exits fast
         "runner_mode":             "trail",
+        "sl_confirm_ticks":        1,   # scalper is designed to cut fast — no added delay on the SL either
         "consol_exit":             False,
         "volume_exit":             False,
         "consol_range_pct":        0.0006,
@@ -239,6 +267,7 @@ PROFILES = {
         "tp2_close_pct":           1.00,
         "runner_trail_pct":        0.22,   # loosened from 0.20
         "runner_mode":             "trail",
+        "sl_confirm_ticks":        2,   # disciplined/tight by design — light noise filter only
         "consol_exit":             False,
         "volume_exit":             False,
         "consol_range_pct":        0.0008,
@@ -262,6 +291,7 @@ PROFILES = {
         "tp2_close_pct":           0.50,
         "runner_trail_pct":        0.18,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode":             "be_hold", # small TP1 close → runner rides to TP2 then EOD
+        "sl_confirm_ticks":        3,
         "consol_exit":             False,
         "volume_exit":             False,
         "consol_range_pct":        0.0010,
@@ -285,6 +315,7 @@ PROFILES = {
         "tp2_close_pct":           0.35,
         "runner_trail_pct":        0.15,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode":             "be_hold", # tiny TP1 close — almost all rides to TP2/EOD
+        "sl_confirm_ticks":        3,
         "consol_exit":             False,
         "volume_exit":             False,
         "consol_range_pct":        0.0012,
@@ -309,6 +340,7 @@ PROFILES = {
         "tp2_close_pct":           0.00,
         "runner_trail_pct":        0.12,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode":             "be_hold", # close half at TP1, ride the rest to EOD or B/E
+        "sl_confirm_ticks":        2,
         "consol_exit":             False,
         "volume_exit":             False,
         "consol_range_pct":        0.0015,
@@ -334,6 +366,7 @@ PROFILES = {
         "tp2_close_pct":           0.33,   # close 33% of remainder at TP2
         "runner_trail_pct":        0.20,
         "runner_mode":             "trail",
+        "sl_confirm_ticks":        4,   # sub-$0.25 contracts — noisiest quotes in the book, needs the most confirmation
         "consol_exit":             False,  # OTM contracts don't consolidate cleanly
         "volume_exit":             False,
         "consol_range_pct":        0.0015,
@@ -358,6 +391,7 @@ PROFILES = {
         "tp2_close_pct":           0.50,   # close 50% of remainder at TP2
         "runner_trail_pct":        0.20,
         "runner_mode":             "be_hold",
+        "sl_confirm_ticks":        3,   # $0.25-0.40 contracts — noisier than a normal ATM/OTM breakout play
         "consol_exit":             False,
         "volume_exit":             False,
         "consol_range_pct":        0.0012,
@@ -382,6 +416,7 @@ PROFILES = {
         "tp2_close_pct":          0.00,
         "runner_trail_pct":       0.00,
         "runner_mode":            "trail",
+        "sl_confirm_ticks":       2,
         "consol_exit":            False,
         "volume_exit":            False,
         "consol_range_pct":       0.0008,
@@ -410,6 +445,7 @@ PROFILES = {
         "tp2_close_pct": 0.35,
         "runner_trail_pct": 0.22,   # loosened from 0.15 — entered at confirmed level, give room
         "runner_mode": "trail",     # retest entry = confirmed level; protect gains dynamically
+        "sl_confirm_ticks": 2,
         "consol_exit": False,
         "volume_exit": False,
         "consol_range_pct": 0.0008,
@@ -457,6 +493,7 @@ CUSTOM_DEFAULTS = {
     "tp2_close_pct":          0.50,
     "runner_trail_pct":       0.20,
     "runner_mode":            "trail",
+    "sl_confirm_ticks":       2,
     "consol_exit":            False,
     "volume_exit":            False,
     "consol_range_pct":       0.0008,
