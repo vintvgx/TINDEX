@@ -32,6 +32,21 @@ from services.utils.orb_data_hub import get_orb_data_hub, OrbBar
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
+# Every constructed ORBEngine self-registers here (see _apply_config), keyed
+# by strategy_id — lets any engine cheaply check what every OTHER engine
+# (any profile, saved or ad-hoc "immediate" trade, paper or live) currently
+# holds open, without a DB round trip or importing the routes-side registries
+# (which would create a circular import). Used by _find_ticker_conflict.
+#
+# _live_engines_lock guards mutation vs. the snapshot in _find_ticker_conflict:
+# list(dict.items()) is NOT safe against a concurrent same-size-changing
+# mutation from another thread (can raise "dictionary changed size during
+# iteration") — a new engine registering (config created/reloaded) while
+# another engine's tick thread is mid-conflict-check is a real scenario here,
+# not a hypothetical one.
+_live_engines: dict[str, "ORBEngine"] = {}
+_live_engines_lock = threading.Lock()
+
 # Opening-range window is fixed at 09:30–09:45 ET to stay consistent with
 # OrbService, which computes the ORB over the same 15-minute window.
 ORB_WINDOW_MINUTES = 15
@@ -189,6 +204,16 @@ class ORBEngine:
                     self.profile_key, self.ticker, self.paper, self.trade_days)
         self.debug.emit("INFO", f"Config applied — {self.ticker} {self.profile_key} "
                                 f"paper={self.paper} days={sorted(self.trade_days)}")
+
+        # Self-register (or re-register, on a hot config reload) in the
+        # cross-engine lookup used by _find_ticker_conflict. Keyed by
+        # strategy_id — saved strategies get a real Supabase uuid;
+        # "immediate"/ad-hoc engines (_get_or_create_immediate_engine) get a
+        # synthetic f"immediate-{ticker}-{paper|live}" id, so both register
+        # here and both count as possible conflict sources/targets.
+        if self.strategy_id:
+            with _live_engines_lock:
+                _live_engines[self.strategy_id] = self
 
     def reload_config(self, new_config: dict):
         self.config.update(new_config)
@@ -755,6 +780,16 @@ class ORBEngine:
                                     "already awaiting your response")
             return
 
+        # Cross-engine guard: does another engine (any profile, or a manual/
+        # immediate position) already hold this exact ticker+direction open?
+        # Computed here (cheap — in-memory registry lookup, no API calls) but
+        # only acted on further down, once a contract is actually selected —
+        # forces a confirmation pause instead of auto-entering, regardless of
+        # this engine's own confirm_entry setting (2026-07-24: IWM REVERSAL
+        # held an open CALL while a separate TREND_RIDER engine auto-entered
+        # its own IWM CALL 14 minutes later, no coordination between them).
+        ticker_conflict = self._find_ticker_conflict(direction)
+
         # ── Risk guards — checked before any API / broker call ───────────────────
         if self._check_daily_loss_limit():
             self.debug.emit(
@@ -957,11 +992,64 @@ class ORBEngine:
                 self.notifier.notify_stream_failed(self.ticker, symbol_to_verify)
                 return
 
+        if ticker_conflict is not None:
+            conflict_context = {
+                "ticker":       ticker_conflict.ticker,
+                "direction":    ticker_conflict.position,
+                "profile":      ticker_conflict.profile_key,
+                "strategy_id":  ticker_conflict.strategy_id,
+                "strategy_name": ticker_conflict.strategy_name,
+                "paper_mode":   ticker_conflict.paper,
+                "entry_premium": (
+                    ticker_conflict.exit_manager.entry_premium
+                    if ticker_conflict.exit_manager else None
+                ),
+                "entry_time": (
+                    ticker_conflict.exit_manager.entry_time.isoformat()
+                    if ticker_conflict.exit_manager else None
+                ),
+            }
+            self.debug.emit("WARN",
+                f"Entry paused — {ticker_conflict.strategy_name or ticker_conflict.profile_key} "
+                f"already has an open {direction} on {self.ticker} "
+                f"({'paper' if ticker_conflict.paper else 'live'})")
+            self._pause_for_confirmation(direction, trigger_price, contract, qty, effective_profile,
+                                         conflict_context=conflict_context)
+            return
+
         if self.confirm_entry:
             self._pause_for_confirmation(direction, trigger_price, contract, qty, effective_profile)
             return
 
         self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
+
+    def _find_ticker_conflict(self, direction: str) -> "ORBEngine | None":
+        """
+        Returns another live engine that already holds an open position on
+        this same ticker + direction (any profile, saved or immediate,
+        paper or live) — used to force a confirmation pause instead of
+        silently stacking duplicate directional exposure. Same-ticker only;
+        an open SPY CALL does not gate an unrelated TSLA CALL signal.
+
+        Uses getattr defensively: a sibling engine self-registers into
+        _live_engines partway through its own __init__ (_apply_config, before
+        _reset_session_state runs), so another thread could in principle
+        observe it here before trade_taken/position/ticker exist yet. A plain
+        attribute access would raise AttributeError and abort this engine's
+        entire entry attempt over a construction-ordering race on a totally
+        unrelated engine — getattr with a safe default just treats a
+        not-yet-initialized sibling as "not a conflict" instead.
+        """
+        with _live_engines_lock:
+            engines_snapshot = list(_live_engines.items())
+        for sid, eng in engines_snapshot:
+            if eng is self:
+                continue
+            if getattr(eng, "ticker", None) != self.ticker:
+                continue
+            if getattr(eng, "trade_taken", False) and getattr(eng, "position", None) == direction:
+                return eng
+        return None
 
     def _execute_entry(self, direction: str, contract: dict, qty: int,
                        effective_profile: dict, fib_levels: dict, manual: bool = False,
@@ -1316,19 +1404,22 @@ class ORBEngine:
         return confidence, breakdown
 
     def _pause_for_confirmation(self, direction: str, trigger_price: float,
-                                 contract: dict, qty: int, effective_profile: dict):
+                                 contract: dict, qty: int, effective_profile: dict,
+                                 conflict_context: dict | None = None):
         """
-        confirm_entry gate: instead of submitting the order, persist the
-        candidate trade, push a notification, and stream the live premium so
-        the user can Enter or Skip from the app. Called from _enter_trade in
-        place of _execute_entry when self.confirm_entry is True.
+        Instead of submitting the order, persist the candidate trade, push a
+        notification, and stream the live premium so the user can Enter or
+        Skip from the app. Called from _enter_trade in place of _execute_entry
+        when either self.confirm_entry is True, or conflict_context is set
+        (another engine already holds this ticker+direction open — see
+        _find_ticker_conflict).
         """
         confidence, breakdown = self._compute_confidence(direction, trigger_price)
         entry_estimate = contract["ask"]
         hard_stop, tp1, tp2 = compute_exit_levels(entry_estimate, effective_profile)
         expires_at = datetime.now(ET) + timedelta(minutes=PENDING_CONFIRMATION_TTL_MIN)
 
-        row = self.logger.create_pending_confirmation({
+        payload = {
             "strategy_id":          self.strategy_id,
             "ticker":               self.ticker,
             "profile":              self.profile_key,
@@ -1345,11 +1436,30 @@ class ORBEngine:
             "tp1":                  tp1,
             "tp2":                  tp2,
             "expires_at":           expires_at.isoformat(),
-        })
+        }
+        # Only included when set — added as a nullable column via the
+        # 2026-07-24 migration. Omitting the key entirely (rather than
+        # sending it as None) means an ordinary confirm_entry pause (which
+        # never sets this) keeps working unchanged even before that
+        # migration has been applied to a given environment; only a
+        # ticker-conflict pause needs the column to actually exist.
+        if conflict_context is not None:
+            payload["conflict_context"] = conflict_context
+        row = self.logger.create_pending_confirmation(payload)
         if row is None:
-            # Persistence failed — don't strand the signal where the user can
-            # never approve it. Fall back to entering directly, same as if
-            # confirm_entry were off.
+            if conflict_context is not None:
+                # Fail CLOSED here, unlike the opt-in confirm_entry case below —
+                # this pause exists specifically to prevent stacking duplicate
+                # directional exposure; falling back to entering anyway would
+                # defeat the entire point in exactly the failure case where it
+                # matters most. Skip the signal instead and let the next one
+                # (or the user, manually) decide.
+                self.debug.emit("ERROR",
+                    "Confirmation persist failed — skipping entry (ticker conflict, fail-closed)")
+                return
+            # Ordinary confirm_entry opt-in: don't strand the signal where the
+            # user can never approve it. Fall back to entering directly, same
+            # as if confirm_entry were off.
             self.debug.emit("ERROR", "Confirmation persist failed — entering without confirmation")
             self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
             return
@@ -1366,7 +1476,8 @@ class ORBEngine:
 
         self.debug.emit("INFO",
             f"Entry paused for confirmation — {direction} {contract['symbol']} "
-            f"confidence={confidence:.0f} expires in {PENDING_CONFIRMATION_TTL_MIN}m")
+            f"confidence={confidence:.0f} expires in {PENDING_CONFIRMATION_TTL_MIN}m"
+            + (" (ticker conflict)" if conflict_context else ""))
         self.notifier.notify_confirm_entry(
             ticker=self.ticker,
             direction=direction,
@@ -1376,6 +1487,7 @@ class ORBEngine:
             pending_id=row["id"],
             expires_in_min=PENDING_CONFIRMATION_TTL_MIN,
             paper_mode=self.paper,
+            conflict_context=conflict_context,
         )
 
     def approve_pending_entry(self, pending_id: str,

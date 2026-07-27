@@ -28,6 +28,8 @@ import type { ImmediatePosition } from '@/common/types/strategy';
 import { formatContractSymbolShort, getTradeHorizon, TRADE_HORIZON_RANK } from '@/lib/formatContract';
 import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
+import { useHiddenPositions } from '@/hooks/useHiddenPositions';
+import { positionHideKey } from '@/lib/positionHideKey';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -261,6 +263,7 @@ function StrategyPositionCard({
             entry_premium={entryPremium!}
             tp1_hit={tp1Hit}
             tp2_hit={tp2Hit}
+            hideKey={positionHideKey(pos)}
             onUpdated={patchData}
             style={{ flex: 1 }}
           />
@@ -421,6 +424,7 @@ function ImmediatePositionCard({
             entry_premium={entryPremium!}
             tp1_hit={tp1Hit}
             tp2_hit={tp2Hit}
+            hideKey={positionHideKey(pos)}
             onUpdated={patchData}
             style={{ flex: 1 }}
           />
@@ -524,15 +528,27 @@ const DashboardScreen = () => {
   const liveImm    = useMemo(() => activeImm.filter(p => p.paper_mode === false),    [activeImm]);
   const paperImm   = useMemo(() => activeImm.filter(p => p.paper_mode !== false),    [activeImm]);
 
+  // Hidden trades (e.g. a contract that expired worthless) stay out of the
+  // default card list but still count toward the ACTIVE badges above — hiding
+  // is purely a client-side display filter (never touches the backend), the
+  // position is still real and still open.
+  const { isHidden } = useHiddenPositions();
+  const [showHidden, setShowHidden] = useState(false);
+  const hiddenCount =
+    activeStrat.filter(p => isHidden(positionHideKey(p))).length
+    + activeImm.filter(p => isHidden(positionHideKey(p))).length;
+
   // Combined + sorted so a swing trade never ranks above a 0DTE/weekly one —
   // sort is stable, so saved-strategy vs immediate order is otherwise
   // unchanged within the same horizon tier.
   type CombinedPos = { kind: 'strat'; pos: PositionEntry } | { kind: 'imm'; pos: ImmediatePosition };
   const byHorizon = (items: CombinedPos[]) =>
-    [...items].sort((a, b) =>
-      TRADE_HORIZON_RANK[getTradeHorizon(a.pos.contract ?? '')] -
-      TRADE_HORIZON_RANK[getTradeHorizon(b.pos.contract ?? '')],
-    );
+    [...items]
+      .filter(({ pos }) => (showHidden ? isHidden(positionHideKey(pos)) : !isHidden(positionHideKey(pos))))
+      .sort((a, b) =>
+        TRADE_HORIZON_RANK[getTradeHorizon(a.pos.contract ?? '')] -
+        TRADE_HORIZON_RANK[getTradeHorizon(b.pos.contract ?? '')],
+      );
   const liveCombined = useMemo(
     () => byHorizon([
       ...liveStrat.map(pos => ({ kind: 'strat' as const, pos })),
@@ -704,19 +720,36 @@ const DashboardScreen = () => {
         {/* ── Positions ───────────────────────────────────────────────────── */}
         <View style={styles.sectionHeader}>
           <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>POSITIONS</Text>
-          {totalActive > 0 && (
-            <View style={[styles.activeBadge, { backgroundColor: colors.success + '22' }]}>
-              <View style={[styles.activeDot, { backgroundColor: colors.success }]} />
-              <Text style={[styles.activeBadgeText, { color: colors.success }]}>
-                {totalActive} ACTIVE
-              </Text>
-            </View>
-          )}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {/* Hidden trades (e.g. a contract that expired worthless) stay out
+                of the list below by default — tap to reveal them; they only
+                un-hide again via the Edit menu on the card itself. */}
+            {hiddenCount > 0 && (
+              <TouchableOpacity
+                onPress={() => setShowHidden(v => !v)}
+                activeOpacity={0.75}
+                style={[styles.activeBadge, { backgroundColor: '#4A9EFF22' }]}
+              >
+                <Ionicons name="eye-off-outline" size={11} color="#4A9EFF" />
+                <Text style={[styles.activeBadgeText, { color: '#4A9EFF' }]}>
+                  {showHidden ? 'SHOWING HIDDEN' : `${hiddenCount} HIDDEN`}
+                </Text>
+              </TouchableOpacity>
+            )}
+            {totalActive > 0 && (
+              <View style={[styles.activeBadge, { backgroundColor: colors.success + '22' }]}>
+                <View style={[styles.activeDot, { backgroundColor: colors.success }]} />
+                <Text style={[styles.activeBadgeText, { color: colors.success }]}>
+                  {totalActive} ACTIVE
+                </Text>
+              </View>
+            )}
+          </View>
         </View>
 
         {isLoading && totalActive === 0 ? (
           <ActivityIndicator color={colors.accent} style={{ marginTop: 20 }} />
-        ) : totalActive === 0 ? (
+        ) : liveCombined.length === 0 && paperCombined.length === 0 ? (
           <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Ionicons name="moon-outline" size={32} color={colors.textTertiary} />
             <Text style={[styles.emptyTitle, { color: colors.text }]}>No Active Positions</Text>
@@ -727,13 +760,13 @@ const DashboardScreen = () => {
         ) : (
           <>
             {/* ── LIVE positions ────────────────────────────── */}
-            {totalLive > 0 && (
+            {liveCombined.length > 0 && (
               <>
                 <View style={styles.modeSubHeader}>
                   <View style={[styles.modeSubDot, { backgroundColor: '#30D158' }]} />
                   <Text style={[styles.modeSubLabel, { color: '#30D158' }]}>LIVE</Text>
                   <Text style={[styles.modeSubCount, { color: colors.textTertiary }]}>
-                    {totalLive} active
+                    {liveCombined.length} {showHidden ? 'hidden' : 'active'}
                   </Text>
                 </View>
                 {liveCombined.map(item => item.kind === 'strat' ? (
@@ -745,13 +778,13 @@ const DashboardScreen = () => {
             )}
 
             {/* ── PAPER positions ───────────────────────────── */}
-            {totalPaper > 0 && (
+            {paperCombined.length > 0 && (
               <>
-                <View style={[styles.modeSubHeader, totalLive > 0 && { marginTop: 8 }]}>
+                <View style={[styles.modeSubHeader, liveCombined.length > 0 && { marginTop: 8 }]}>
                   <View style={[styles.modeSubDot, { backgroundColor: '#FF9F0A' }]} />
                   <Text style={[styles.modeSubLabel, { color: '#FF9F0A' }]}>PAPER</Text>
                   <Text style={[styles.modeSubCount, { color: colors.textTertiary }]}>
-                    {totalPaper} active
+                    {paperCombined.length} {showHidden ? 'hidden' : 'active'}
                   </Text>
                 </View>
                 {paperCombined.map(item => item.kind === 'strat' ? (

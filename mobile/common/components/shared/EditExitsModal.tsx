@@ -32,12 +32,20 @@ interface Props {
     tp2?: number;
   }) => Promise<void>;
   isLoading?: boolean;
+  /** Whether this position is currently hidden from the Dashboard/Live
+   *  Positions default view — flips the Hide button to "Unhide". */
+  hidden?: boolean;
+  /** Toggles the hidden state (e.g. a contract that expired worthless).
+   *  Omit to hide the Hide/Unhide action entirely. */
+  onToggleHidden?: () => Promise<void>;
+  isTogglingHidden?: boolean;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function EditExitsModal({
   visible, onClose, mode, ticker, current, onSubmit, isLoading,
+  hidden, onToggleHidden, isTogglingHidden,
 }: Props) {
   const colors = useThemeColors();
 
@@ -103,6 +111,22 @@ export function EditExitsModal({
     }
 
     await onSubmit(payload);
+  };
+
+  const handleToggleHidden = () => {
+    if (!onToggleHidden) return;
+    if (hidden) {
+      onToggleHidden();
+      return;
+    }
+    Alert.alert(
+      'Hide This Trade?',
+      `${ticker} will no longer show on the Dashboard or Live Positions until you unhide it from this same Edit menu.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Hide', onPress: () => onToggleHidden() },
+      ],
+    );
   };
 
   const pctLabel = (abs: number | undefined) => {
@@ -274,6 +298,28 @@ export function EditExitsModal({
               {isLoading ? 'Updating…' : 'Update Stop & Targets'}
             </Text>
           </TouchableOpacity>
+
+          {onToggleHidden && (
+            <TouchableOpacity
+              onPress={handleToggleHidden}
+              disabled={isTogglingHidden}
+              style={{
+                marginTop: 12,
+                borderRadius: 12,
+                padding: 14,
+                alignItems: 'center',
+                borderWidth: 1,
+                borderColor: colors.border,
+                backgroundColor: isTogglingHidden ? colors.border : 'transparent',
+              }}
+            >
+              <Text style={{ color: colors.textSecondary, fontSize: 14, fontWeight: '600' }}>
+                {isTogglingHidden
+                  ? (hidden ? 'Unhiding…' : 'Hiding…')
+                  : (hidden ? 'Unhide This Trade' : 'Hide This Trade')}
+              </Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
       </SafeAreaView>
     </Modal>

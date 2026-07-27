@@ -359,23 +359,38 @@ class StrategyNotifier:
         pending_id: str,
         expires_in_min: int,
         paper_mode: bool = True,
+        conflict_context: dict | None = None,
     ):
         """
-        confirm_entry gate: a breakout/reversal was confirmed and a contract was
-        selected, but the strategy is configured to wait for user approval before
-        the order is actually submitted. Tapping this opens the in-app
-        Enter/Skip confirmation modal (the modal itself is also shown from
-        foregrounding the app while a confirmation is open, not only from the tap).
+        A breakout/reversal was confirmed and a contract was selected, but
+        entry is paused for user approval instead of being submitted —
+        either because the strategy has confirm_entry enabled, or because
+        conflict_context is set (another engine already holds this same
+        ticker+direction open — see ORBEngine._find_ticker_conflict).
+        Tapping this opens the in-app Enter/Skip confirmation modal (the
+        modal itself is also shown from foregrounding the app while a
+        confirmation is open, not only from the tap).
         """
         tag    = _account_tag(paper_mode)
         symbol = contract.get("symbol", "")
         label  = _fmt_contract(symbol) if symbol else f"{ticker} option"
-        self._dispatch(
-            title=f"[{tag}] Confirm {ticker} Trade",
-            body=(
+        if conflict_context:
+            conflict_tag = _account_tag(conflict_context.get("paper_mode", True))
+            title = f"[{tag}] {ticker} Already Open — Confirm?"
+            body = (
+                f"{label}  [{profile_key}]  ·  You already have an open "
+                f"{conflict_context.get('profile', 'position')} {direction} on "
+                f"{ticker} ({conflict_tag})  ·  expires in {expires_in_min} min"
+            )
+        else:
+            title = f"[{tag}] Confirm {ticker} Trade"
+            body = (
                 f"{label}  [{profile_key}]  ·  Confidence {confidence:.0f}/100  ·  "
                 f"expires in {expires_in_min} min"
-            ),
+            )
+        self._dispatch(
+            title=title,
+            body=body,
             data={
                 "screen":     "strategy",
                 "type":       "confirm_entry",

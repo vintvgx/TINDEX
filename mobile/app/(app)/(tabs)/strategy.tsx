@@ -27,6 +27,7 @@ import { OrbHubHealthBanner } from '@/common/components/strategy/OrbHubHealthBan
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
+import { positionHideKey } from '@/lib/positionHideKey';
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
 import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, ImmediatePosition, LiveOptionPrice, ExitOverrides, ORBTrade } from '@/common/types/strategy';
@@ -713,6 +714,7 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
                   entry_premium={live.entry_premium}
                   tp1_hit={live.tp1_hit}
                   tp2_hit={live.tp2_hit}
+                  hideKey={positionHideKey({ strategy_id: config.id, contract: live.contract, entry_premium: live.entry_premium })}
                   onUpdated={patchData}
                   style={{ flex: 1 }}
                 />
@@ -873,6 +875,7 @@ function ImmediatePositionCard({ position, colors }: { position: ImmediatePositi
                 entry_premium={live.entry_premium}
                 tp1_hit={live.tp1_hit}
                 tp2_hit={live.tp2_hit}
+                hideKey={positionHideKey({ strategy_id: position.strategy_id, contract: live.contract, entry_premium: live.entry_premium })}
                 onUpdated={patchData}
                 style={{ flex: 1 }}
               />

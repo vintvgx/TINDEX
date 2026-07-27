@@ -49,6 +49,9 @@ interface LivePositionPanelProps {
   /** Merges a submitted stop/TP edit straight into the WS `live` snapshot so
    *  it's reflected immediately instead of waiting on the next price tick. */
   patchData?: (patch: Partial<LivePriceData>) => void;
+  /** Stable per-trade key for the client-only hide feature — see
+   *  lib/positionHideKey.ts. Passed straight through to EditExitsButton. */
+  hideKey: string;
 }
 
 /**
@@ -62,7 +65,7 @@ interface LivePositionPanelProps {
  */
 export function LivePositionPanel({
   live, staticFallback, streaming, isMock, accentColor,
-  strategyId, ticker, paperMode, onExitPress, onAddPress, colors, patchData,
+  strategyId, ticker, paperMode, onExitPress, onAddPress, colors, patchData, hideKey,
 }: LivePositionPanelProps) {
   const [expanded, setExpanded] = useState(false);
   const toggleExpanded = useCallback(() => {
@@ -201,6 +204,7 @@ export function LivePositionPanel({
             entry_premium={display.entry_premium}
             tp1_hit={display.tp1_hit}
             tp2_hit={display.tp2_hit}
+            hideKey={hideKey}
             onUpdated={patchData}
             style={{ flex: 1 }}
           />

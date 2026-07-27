@@ -19,6 +19,8 @@ import type { ImmediatePosition } from '@/common/types/strategy';
 import { TRADE_HORIZON_RANK, getTradeHorizon } from '@/lib/formatContract';
 import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
+import { useHiddenPositions } from '@/hooks/useHiddenPositions';
+import { positionHideKey } from '@/lib/positionHideKey';
 
 /**
  * /strategy/immediate-positions now returns the same shape /strategy/positions
@@ -99,6 +101,17 @@ export default function PositionScreen({ embedded = false }: Props) {
       TRADE_HORIZON_RANK[getTradeHorizon(b.contract ?? '')],
     );
   const activeCount = filteredPositions.length;
+
+  // Hidden trades (e.g. a contract that expired worthless) stay out of the
+  // default list but are never excluded from the equity math above — hiding
+  // is purely a client-side display filter (never touches the backend), the
+  // position is still real and still open.
+  const { isHidden } = useHiddenPositions();
+  const [showHidden, setShowHidden] = useState(false);
+  const hiddenPositions = filteredPositions.filter(p => isHidden(positionHideKey(p)));
+  const visiblePositions = filteredPositions.filter(p => !isHidden(positionHideKey(p)));
+  const hiddenCount = hiddenPositions.length;
+  const displayedPositions = showHidden ? hiddenPositions : visiblePositions;
 
   // Each rendered PositionRow already holds its own open WebSocket
   // (useStrategyLivePrice) streaming that position's live mark-to-market
@@ -224,11 +237,27 @@ export default function PositionScreen({ embedded = false }: Props) {
         </ScrollView>
       )}
 
+      {/* ── Hidden-trades banner — only shown when at least one trade is
+          hidden; tap to reveal them (they only un-hide via the Edit menu). ── */}
+      {hiddenCount > 0 && (
+        <TouchableOpacity
+          onPress={() => setShowHidden(v => !v)}
+          activeOpacity={0.75}
+          style={[styles.hiddenBanner, { backgroundColor: '#4A9EFF1A', borderBottomColor: colors.border }]}
+        >
+          <Ionicons name="eye-off-outline" size={14} color="#4A9EFF" />
+          <Text style={[styles.hiddenBannerText, { color: '#4A9EFF' }]}>
+            {showHidden ? 'Showing Hidden — Tap to Return' : `${hiddenCount} Hidden`}
+          </Text>
+          <Ionicons name={showHidden ? 'chevron-up' : 'chevron-forward'} size={14} color="#4A9EFF" />
+        </TouchableOpacity>
+      )}
+
       {/* ── Scrollable content ── */}
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+      <ScrollView style={styles.contentScroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         {isLoading ? (
           <ActivityIndicator color={colors.accent} style={{ marginTop: 60 }} />
-        ) : activeCount === 0 ? (
+        ) : displayedPositions.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="pulse-outline" size={52} color={colors.tabBarInactive} style={{ opacity: 0.4 }} />
             <Text style={[styles.emptyTitle, { color: colors.tabBarInactive }]}>
@@ -241,7 +270,7 @@ export default function PositionScreen({ embedded = false }: Props) {
             </Text>
           </View>
         ) : (
-          filteredPositions
+          displayedPositions
             .map(pos => (
               <PositionRow key={pos.strategy_id} pos={pos} colors={colors} onLiveUpdate={handleLiveUpdate} />
             ))
@@ -331,6 +360,7 @@ function PositionRow({
         onAddPress={() => setAddOpen(true)}
         colors={colors}
         patchData={patchData}
+        hideKey={positionHideKey(pos)}
       />
 
       {/* Fib levels */}
@@ -406,6 +436,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
+    flexGrow: 0,
+    flexShrink: 0,
   },
   headerSide:      { width: 36, alignItems: 'flex-start', justifyContent: 'center' },
   headerCenter:    { flex: 1, alignItems: 'center', gap: 4 },
@@ -414,10 +446,27 @@ const styles = StyleSheet.create({
   activeBadgeText: { fontSize: 11, fontWeight: '600' },
   liveDot:         { width: 6, height: 6, borderRadius: 3 },
 
+  // ── Hidden-trades banner ──
+  hiddenBanner: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  hiddenBannerText: { fontSize: 12, fontWeight: '700' },
+
   // ── Account bar (scrollable) ──
   accountBar: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     height: 68,
+    maxHeight: 68,
+    minHeight: 68,
+    // Pinned to exactly 68 regardless of sibling content — this bar was
+    // stretching to fill leftover screen space (visibly centered inside a
+    // much taller box) whenever the position list below it was short (0 or
+    // 1 rows), since neither it nor the content ScrollView below had an
+    // explicit flexGrow/flexShrink telling Yoga who actually owns the
+    // remaining space.
+    flexGrow: 0,
+    flexShrink: 0,
   },
   accountBarContent: {
     flexDirection: 'row',
@@ -431,7 +480,13 @@ const styles = StyleSheet.create({
   divider:     { width: StyleSheet.hairlineWidth, height: 28, flexShrink: 0 },
 
   // ── Scroll content ──
-  content: { paddingHorizontal: 16, paddingTop: 16 },
+  // Explicit flex:1 so this ScrollView — not the fixed-height header/account
+  // bar above it — is the thing that actually owns all leftover screen
+  // space; flexGrow:1 on its contentContainerStyle is what lets the empty
+  // state below correctly center within that space instead of collapsing
+  // to its own intrinsic (tiny) size.
+  contentScroll: { flex: 1 },
+  content: { paddingHorizontal: 16, paddingTop: 16, flexGrow: 1 },
 
   // ── Empty state ──
   emptyState: {

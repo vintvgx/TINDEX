@@ -130,7 +130,7 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
         <View style={{ padding: 16, borderBottomWidth: 1, borderColor: colors.border }}>
           <Text style={{ color: colors.text, fontSize: 19, fontWeight: '700' }}>
-            Confirm {pending.ticker} Trade
+            {pending.conflict_context ? `${pending.ticker} Already Open` : `Confirm ${pending.ticker} Trade`}
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
             <Badge label={pending.direction} color={pending.direction === 'CALL' ? '#10B981' : '#FF453A'} colors={colors} />
@@ -140,6 +140,30 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
         </View>
 
         <ScrollView contentContainerStyle={{ padding: 16 }}>
+          {/* Ticker conflict — another engine already holds this exact
+              ticker+direction open (see ORBEngine._find_ticker_conflict) */}
+          {pending.conflict_context && (
+            <View style={{
+              backgroundColor: '#F59E0B18', borderRadius: 14, padding: 14, marginBottom: 20,
+              borderWidth: 1, borderColor: '#F59E0B55',
+            }}>
+              <Text style={{ color: '#F59E0B', fontSize: 13, fontWeight: '700', marginBottom: 4 }}>
+                ⚠️ Already have a matching open position
+              </Text>
+              <Text style={{ color: colors.text, fontSize: 13, lineHeight: 18 }}>
+                {(pending.conflict_context.strategy_name || pending.conflict_context.profile.replace('_', ' '))}
+                {' '}already has an open {pending.conflict_context.direction} on{' '}
+                {pending.conflict_context.ticker}
+                {' '}({pending.conflict_context.paper_mode ? 'Paper' : 'Live'}
+                {pending.conflict_context.entry_premium != null
+                  ? `, entered at $${pending.conflict_context.entry_premium.toFixed(2)}`
+                  : ''}
+                ). Entering this {pending.profile.replace('_', ' ')} {pending.direction} would stack a
+                second position in the same direction on the same ticker.
+              </Text>
+            </View>
+          )}
+
           {/* Live premium */}
           <View style={{
             backgroundColor: colors.surface, borderRadius: 14, padding: 16, marginBottom: 20,

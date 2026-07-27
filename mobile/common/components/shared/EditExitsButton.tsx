@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useToast } from '@/common/components/ui/Toast';
 import { useUpdateStrategyExits } from '@/hooks/mutations/strategy/useUpdateStrategyExits';
+import { useHiddenPositions } from '@/hooks/useHiddenPositions';
 import { EditExitsModal, type ExitEditMode } from '@/common/components/shared/EditExitsModal';
 
 interface BaseProps {
@@ -14,6 +15,9 @@ interface BaseProps {
   entry_premium: number;
   tp1_hit?: boolean;
   tp2_hit?: boolean;
+  /** Stable per-trade key for the client-only hide feature — see
+   *  lib/positionHideKey.ts. Never sent to the backend. */
+  hideKey: string;
   label?: string;
   style?: object;
   /** Called with the submitted fields right after the server confirms the
@@ -30,12 +34,14 @@ interface OrbProps extends BaseProps {
 type Props = OrbProps;
 
 export function EditExitsButton(props: Props) {
-  const { ticker, hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit, label, style, onUpdated } = props;
+  const { ticker, hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit, hideKey, label, style, onUpdated } = props;
   const colors = useThemeColors();
   const toast = useToast();
   const [open, setOpen] = useState(false);
 
   const orbMutation = useUpdateStrategyExits();
+  const { isHidden, setHidden } = useHiddenPositions();
+  const hidden = isHidden(hideKey);
 
   const isPending = orbMutation.isPending;
 
@@ -52,6 +58,13 @@ export function EditExitsButton(props: Props) {
     setOpen(false);
   };
 
+  const handleToggleHidden = async () => {
+    const next = !hidden;
+    await setHidden(hideKey, next);
+    toast.success(next ? `${ticker} hidden` : `${ticker} unhidden`);
+    setOpen(false);
+  };
+
   return (
     <>
       <TouchableOpacity
@@ -60,7 +73,7 @@ export function EditExitsButton(props: Props) {
         activeOpacity={0.7}
       >
         <Ionicons name="pencil-outline" size={13} color={colors.accent} />
-        <Text style={[styles.btnText, { color: colors.accent }]}>{label ?? 'Edit SL/TP'}</Text>
+        <Text style={[styles.btnText, { color: colors.accent }]}>{label ?? 'Edit'}</Text>
       </TouchableOpacity>
 
       <EditExitsModal
@@ -72,6 +85,8 @@ export function EditExitsButton(props: Props) {
         current={{ hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit }}
         onSubmit={handleSubmit}
         isLoading={isPending}
+        hidden={hidden}
+        onToggleHidden={handleToggleHidden}
       />
     </>
   );

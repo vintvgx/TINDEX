@@ -127,6 +127,19 @@ export interface PendingConfirmation {
   expires_at: string;
   created_at: string;
   resolved_at: string | null;
+  /** Set only when this pause was triggered by another engine already
+   *  holding the same ticker+direction open (not the opt-in confirm_entry
+   *  toggle) — describes that other position so the modal can explain why. */
+  conflict_context: {
+    ticker: string;
+    direction: 'CALL' | 'PUT';
+    profile: ProfileKey;
+    strategy_id: string | null;
+    strategy_name: string | null;
+    paper_mode: boolean;
+    entry_premium: number | null;
+    entry_time: string | null;
+  } | null;
 }
 
 /** Live price message shape pushed over /ws/strategy/<id>/live while a
