@@ -20,6 +20,9 @@ const PROFILE_EMOJI: Record<ProfileKey, string> = {
   OTM_RUNNER:    '🎯',
   OTM_CONVICTION:'💡',
   MANUAL:        '🛠️',
+  NO_STOP_LOSS:  '🧗',
+  SL_5:          '⏱️',
+  SL_10:         '⏳',
 };
 
 interface Props {

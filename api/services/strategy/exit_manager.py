@@ -22,7 +22,7 @@ REVERSAL    — 3 contracts,  TP1 +15% / $0.18 floor, cascade(5 ticks, 50%), be_
 
 import math
 import pytz
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from collections import deque
 
 ET = pytz.timezone("America/New_York")
@@ -117,6 +117,18 @@ class ExitManager:
         self._sl_grace_start       = None
         self._sl_grace_down_bars   = 0
         self._sl_grace_last_price  = None
+
+        # Recovery-confirmation window (SL_5/SL_10 — see profiles.py): once
+        # price ticks back above the hard stop mid-grace, the grace clock
+        # does NOT cancel immediately — it only cancels once price has held
+        # continuously above the stop for sl_grace_recovery_seconds. A single
+        # tick back above the line no longer resets a 5/10-minute wait; the
+        # overall grace deadline (_sl_grace_start-based) keeps counting the
+        # whole time this recovery is "pending", so a bounce that never holds
+        # still gets force-closed on schedule. Defaults to 0 (instant cancel
+        # on any recovery tick) so REVERSAL's existing behavior is unchanged.
+        self._sl_grace_recovery_seconds = profile.get("sl_grace_recovery_seconds", 0)
+        self._sl_recovery_start          = None
         outer_floor_pct = profile.get("sl_outer_floor_pct")
         self._sl_outer_floor = (
             entry_premium * (1 - outer_floor_pct) if outer_floor_pct is not None else None
@@ -172,6 +184,9 @@ class ExitManager:
                     self._sl_grace_active    = True
                     self._sl_grace_start     = datetime.now(ET)
                     self._sl_grace_down_bars = 0
+                # Back below the stop — any pending recovery confirmation is
+                # moot, since the price didn't actually hold above the line.
+                self._sl_recovery_start = None
                 elapsed = (datetime.now(ET) - self._sl_grace_start).total_seconds()
                 if (self._sl_grace_bars_needed > 0
                         and self._sl_grace_down_bars >= self._sl_grace_bars_needed):
@@ -187,10 +202,27 @@ class ExitManager:
         else:
             self._sl_ticks = 0
             if self._sl_grace_active:
-                # Recovered back above SL before grace expired — cancel the
-                # pending stop-out and resume holding normally.
-                self._sl_grace_active    = False
-                self._sl_grace_down_bars = 0
+                if self._sl_grace_recovery_seconds <= 0:
+                    # No recovery-confirmation window configured (e.g.
+                    # REVERSAL) — a single recovery tick cancels immediately,
+                    # same as always.
+                    self._sl_grace_active    = False
+                    self._sl_grace_down_bars = 0
+                    self._sl_recovery_start  = None
+                else:
+                    if self._sl_recovery_start is None:
+                        self._sl_recovery_start = datetime.now(ET)
+                    recovery_elapsed = (datetime.now(ET) - self._sl_recovery_start).total_seconds()
+                    if recovery_elapsed >= self._sl_grace_recovery_seconds:
+                        # Held above the stop continuously for the full
+                        # recovery window — the bounce is real, cancel the
+                        # pending stop-out and resume holding normally.
+                        self._sl_grace_active    = False
+                        self._sl_grace_down_bars = 0
+                        self._sl_recovery_start  = None
+                    # else: recovery still pending — grace stays active and
+                    # its own deadline (checked above, on the next tick that's
+                    # back at/below the stop) keeps counting uninterrupted.
 
         # Only track actual underlying price — option price is not a valid proxy
         # (same option premium on consecutive ticks would instantly fake consolidation)
@@ -368,6 +400,18 @@ class ExitManager:
         return changed
 
     def to_dict(self) -> dict:
+        # Absolute timestamps (not durations) so a client never has to run its
+        # own independent countdown clock — it just computes
+        # deadline - now() every render, anchored to the same instant the
+        # backend is anchored to. See the 2026-07-27 SL_5/SL_10 discussion.
+        sl_grace_deadline = (
+            (self._sl_grace_start + timedelta(seconds=self._sl_grace_seconds)).isoformat()
+            if self._sl_grace_active and self._sl_grace_start else None
+        )
+        sl_recovery_deadline = (
+            (self._sl_recovery_start + timedelta(seconds=self._sl_grace_recovery_seconds)).isoformat()
+            if self._sl_grace_active and self._sl_recovery_start else None
+        )
         return {
             "entry_premium":       self.entry_premium,
             "hard_stop":           self.hard_stop,
@@ -383,6 +427,8 @@ class ExitManager:
             "cascade_down_ticks":  self._cascade_down_ticks,
             "tp1_confirm_ticks":   self._tp1_ticks,
             "sl_confirm_ticks":    self._sl_ticks,
-            "sl_grace_active":     self._sl_grace_active,
-            "sl_grace_down_bars":  self._sl_grace_down_bars,
+            "sl_grace_active":       self._sl_grace_active,
+            "sl_grace_down_bars":    self._sl_grace_down_bars,
+            "sl_grace_deadline":     sl_grace_deadline,
+            "sl_recovery_deadline":  sl_recovery_deadline,
         }

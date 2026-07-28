@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
@@ -168,6 +168,9 @@ export function LivePositionPanel({
           {/* Stop/TP progression bar */}
           <PositionStopBar live={display} colors={colors} />
 
+          {/* SL grace-timer countdown (SL_5/SL_10 — see exit_manager.py) */}
+          <SlGraceBadge live={display} colors={colors} />
+
           {/* TP hit badges */}
           {(display.tp1_hit || display.tp2_hit) && (
             <View style={styles.tpRow}>
@@ -253,6 +256,51 @@ function PositionStopBar({ live, colors }: { live: DisplayData; colors: any }) {
   );
 }
 
+/**
+ * Countdown for an active SL_5/SL_10 grace window. Never runs its own
+ * independent clock — every render recomputes `deadline - Date.now()` off
+ * the backend's absolute timestamp (sl_grace_deadline), so this can't drift
+ * from the engine actually deciding when to force-sell. The setInterval here
+ * only forces a re-render each second; it holds no state of its own.
+ */
+function SlGraceBadge({ live, colors }: { live: DisplayData; colors: any }) {
+  const [, forceTick] = useState(0);
+  const active = !!live.sl_grace_active && !!live.sl_grace_deadline;
+
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => forceTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+
+  if (!active) return null;
+
+  const remainingSec = Math.max(0, Math.round((new Date(live.sl_grace_deadline!).getTime() - Date.now()) / 1000));
+  const mm = Math.floor(remainingSec / 60);
+  const ss = remainingSec % 60;
+  const urgent = remainingSec <= 60;
+  const color  = urgent ? colors.error : '#FF9F0A';
+
+  const recovering  = !!live.sl_recovery_deadline;
+  const recoverSec  = recovering
+    ? Math.max(0, Math.round((new Date(live.sl_recovery_deadline!).getTime() - Date.now()) / 1000))
+    : 0;
+
+  return (
+    <View style={[styles.slGraceBadge, { backgroundColor: color + '1A', borderColor: color + '55' }]}>
+      <Ionicons name="timer-outline" size={13} color={color} />
+      <Text style={[styles.slGraceText, { color }]}>
+        SL breach — selling in {mm}:{String(ss).padStart(2, '0')}
+      </Text>
+      {recovering && (
+        <Text style={[styles.slGraceSubText, { color: colors.tabBarInactive }]}>
+          recovering, {recoverSec}s to cancel
+        </Text>
+      )}
+    </View>
+  );
+}
+
 function LivePositionDetail({ live, colors }: { live: DisplayData; colors: any }) {
   return (
     <View style={[styles.liveDetail, { borderTopColor: colors.border }]}>
@@ -316,6 +364,13 @@ const styles = StyleSheet.create({
   stopDot:   { width: 6, height: 6, borderRadius: 3 },
   stopLabel: { fontSize: 9, fontWeight: '700' },
   stopValue: { fontSize: 10 },
+
+  slGraceBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+    borderWidth: 1, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, marginTop: 8,
+  },
+  slGraceText:    { fontSize: 11, fontWeight: '700' },
+  slGraceSubText: { fontSize: 10 },
 
   tpRow:       { flexDirection: 'row', gap: 6, marginTop: 8 },
   tpBadge:     { borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },

@@ -233,6 +233,76 @@ PROFILES = {
         "breakout_time_limit_min": 240,
         "vix_max_override":        50,
     },
+    # ─── SL_5 — Sub-$0.50 contracts, 5-min stop-loss grace timer ────────────────
+    # For cheap/leveraged contracts where a normal instant stop whipsaws on
+    # noise: once the premium confirms at/below the hard stop, this DOESN'T
+    # sell immediately — it starts a 5-minute clock (sl_grace_seconds). Only
+    # force-closes at "best price" if the premium is STILL at/below the stop
+    # when the clock runs out. A recovery above the stop only cancels the
+    # clock once it holds for sl_grace_recovery_seconds (60s) continuously —
+    # a single tick back above the line doesn't reset anything (see
+    # ExitManager.evaluate()/2026-07-27 discussion). sl_outer_floor_pct is an
+    # absolute worst-case bypass so a real breakdown can't hide behind the grace
+    # window. TP/sizing otherwise mirrors OTM_CONVICTION ($0.25–$0.50 band).
+    "SL_5": {
+        "qty_contracts":            6,
+        "use_tp2":                  True,
+        "max_loss_pct":             0.55,
+        "tp1_mult":                 1.75,
+        "tp2_mult":                 3.00,
+        "tp1_close_pct":            0.33,
+        "tp2_close_pct":            0.50,
+        "runner_trail_pct":         0.20,
+        "runner_mode":              "be_hold",
+        "sl_confirm_ticks":         3,
+        "sl_grace_enabled":         True,
+        "sl_grace_seconds":         300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct":       0.80,
+        "consol_exit":              False,
+        "volume_exit":              False,
+        "consol_range_pct":         0.0012,
+        "consol_bars":              6,
+        "volume_exit_threshold":    0.12,
+        "strike_offset_min":        1.00,
+        "strike_offset_max":        4.00,
+        "target_delta_min":         0.10,
+        "target_delta_max":         0.35,
+        "eod_buffer_minutes":       15,
+        "breakout_time_limit_min":  240,
+        "vix_max_override":         55,
+    },
+    # ─── SL_10 — Sub-$0.25 contracts, 10-min stop-loss grace timer ──────────────
+    # Same mechanism as SL_5, doubled to 10 minutes — for the noisiest, most
+    # leveraged tier (sub-$0.25). TP/sizing mirrors OTM_RUNNER.
+    "SL_10": {
+        "qty_contracts":            10,
+        "use_tp2":                  True,
+        "max_loss_pct":             0.60,
+        "tp1_mult":                 2.00,
+        "tp2_mult":                 3.50,
+        "tp1_close_pct":            0.25,
+        "tp2_close_pct":            0.33,
+        "runner_trail_pct":         0.20,
+        "runner_mode":              "trail",
+        "sl_confirm_ticks":         4,
+        "sl_grace_enabled":         True,
+        "sl_grace_seconds":         600,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct":       0.85,
+        "consol_exit":              False,
+        "volume_exit":              False,
+        "consol_range_pct":         0.0015,
+        "consol_bars":              8,
+        "volume_exit_threshold":    0.10,
+        "strike_offset_min":        1.00,
+        "strike_offset_max":        5.00,
+        "target_delta_min":         0.08,
+        "target_delta_max":         0.28,
+        "eod_buffer_minutes":       15,
+        "breakout_time_limit_min":  240,
+        "vix_max_override":         60,
+    },
     # ─── SCALPER — Quick locks, tight trail ──────────────────────────────────────
     "SCALPER": {
         "qty_contracts":           3,
@@ -525,6 +595,8 @@ _DISPLAY_NAMES = {
     "OTM_CONVICTION": "OTM Conviction",
     "MANUAL":         "Manual",
     "NO_STOP_LOSS":   "No Stop Loss",
+    "SL_5":           "SL-5",
+    "SL_10":          "SL-10",
 }
 
 _EMOJIS = {
@@ -544,6 +616,8 @@ _EMOJIS = {
     "OTM_CONVICTION": "🎯",
     "MANUAL":         "✋",
     "NO_STOP_LOSS":   "🧗",
+    "SL_5":           "⏱️",
+    "SL_10":          "⏳",
 }
 
 
@@ -584,6 +658,8 @@ def describe_profile(key: str, custom_thresholds: dict | None = None) -> dict:
         "OTM_RUNNER":      "High",
         "OTM_CONVICTION":  "Med-High",
         "NO_STOP_LOSS":    "Unbounded",
+        "SL_5":            "High (5-min grace stop)",
+        "SL_10":           "High (10-min grace stop)",
     }.get(k, "Custom")
     has_runner = (not p.get("use_tp2", True)) or p["tp2_close_pct"] < 1.0
     return {

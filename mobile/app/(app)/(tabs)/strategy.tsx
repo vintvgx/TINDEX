@@ -72,6 +72,9 @@ const PROFILE_COLORS: Record<ProfileKey, string> = {
   OTM_RUNNER:    '#8B5CF6',
   OTM_CONVICTION:'#EC4899',
   MANUAL:        '#94A3B8',
+  NO_STOP_LOSS:  '#64748B',
+  SL_5:          '#FF9F0A',
+  SL_10:         '#FF7A00',
 };
 
 const DAY_LABELS = ['M', 'T', 'W', 'T', 'F'];

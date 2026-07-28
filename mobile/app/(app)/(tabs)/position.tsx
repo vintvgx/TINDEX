@@ -4,7 +4,8 @@ import {
   ActivityIndicator, TouchableOpacity, StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useStrategyPositions } from '@/hooks/queries/strategy/useStrategyPosition';
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
@@ -72,6 +73,19 @@ interface Props {
 export default function PositionScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
   const [mode, setMode] = useState<'live' | 'paper'>('live');
+
+  // Deep-link from a notification tap (see NotificationNavigationService) —
+  // consume `paper_mode` exactly once, same pattern as orb.tsx's `section`
+  // param, so it doesn't keep re-applying on every later refocus.
+  const { paper_mode: paperModeParam } = useLocalSearchParams<{ paper_mode?: string }>();
+  useFocusEffect(
+    useCallback(() => {
+      if (paperModeParam != null) {
+        setMode(paperModeParam === 'true' ? 'paper' : 'live');
+        router.setParams({ paper_mode: undefined });
+      }
+    }, [paperModeParam]),
+  );
 
   const { data: stratPositions = [], isLoading: stratLoading } = useStrategyPositions();
   // Ad-hoc immediate trades (not tied to a saved strategy) — merged in so Live

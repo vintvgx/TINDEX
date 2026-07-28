@@ -8,7 +8,7 @@ import { useToast } from '@/common/components/ui/Toast';
 import { useImmediateTradeByTicker } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
 import {
   IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
-  getOtmAutoProfileIndex, ProfileDropdown, ManualSLPicker,
+  getCheapContractAutoProfileIndex, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 
@@ -18,7 +18,8 @@ interface Props {
   colors: any;
   ticker: string;
   contract: OptionsContract | null;
-  /** Underlying price at the time the contract was looked up — drives OTM auto-profile selection. */
+  /** Underlying price at the time the contract was looked up (unused by the
+   *  cheap-contract auto-profile check itself, kept for signature stability). */
   currentPrice: number;
 }
 
@@ -43,11 +44,11 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
-  // Reset to defaults + auto-pick an OTM profile for a cheap OTM contract
+  // Reset to defaults + auto-pick SL_5/SL_10 for any sub-$0.50 contract
   // every time a new contract is opened, mirroring ImmediateTradePanel.
   useEffect(() => {
     if (!visible || !contract) return;
-    const otmIdx = getOtmAutoProfileIndex(contract, currentPrice);
+    const otmIdx = getCheapContractAutoProfileIndex(contract, currentPrice);
     const idx = otmIdx ?? DEFAULT_PROFILE_INDEX;
     setProfileIndex(idx);
     setQty(IMMEDIATE_PROFILES[idx].qty);

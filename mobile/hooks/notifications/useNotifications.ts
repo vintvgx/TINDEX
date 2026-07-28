@@ -21,6 +21,7 @@ import Constants from "expo-constants";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { SecureStorageService } from "@/common/services/SecureStorageService";
 import { NotificationService } from "@/common/services/NotificationService";
+import { navigateFromNotification } from "@/common/services/NotificationNavigationService";
 import { SchedulableTriggerInputTypes } from "expo-notifications";
 
 /**
@@ -133,10 +134,24 @@ export function useNotifications() {
         });
 
       // Set up response listener for handling user interaction with notifications
+      // (the app was already running, foreground or background — this fires
+      // on the tap itself). Navigates to whatever screen the notification is
+      // actually about instead of just leaving the user on the home screen.
       responseListener.current =
         Notifications.addNotificationResponseReceivedListener((response) => {
           console.log("Notification response:", response);
+          navigateFromNotification(response.notification.request.content.data);
         });
+
+      // Cold-start case: the app was killed and the tap is what's launching
+      // it right now — addNotificationResponseReceivedListener above can miss
+      // this one since it wasn't listening yet when the tap happened. Expo's
+      // own recommended pattern is checking this once at startup as well.
+      Notifications.getLastNotificationResponseAsync().then((response) => {
+        if (response) {
+          navigateFromNotification(response.notification.request.content.data);
+        }
+      });
     } catch (error) {
       console.error("Error initializing notifications:", error);
     } finally {

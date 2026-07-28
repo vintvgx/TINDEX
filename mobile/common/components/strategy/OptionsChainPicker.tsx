@@ -12,7 +12,7 @@ import { blendHex } from '@/lib/colorBlend';
 import type { OptionsContract, OptionsOpportunity } from '@/common/types/blogPosts/ticker';
 import {
   IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
-  getOtmAutoProfileIndex, ProfileDropdown, ManualSLPicker,
+  getCheapContractAutoProfileIndex, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
 
 /**
@@ -158,10 +158,12 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
     setAutoSelected(false); // user explicitly chose — clear the auto flag
   };
 
-  // Auto-select OTM profile when a cheap OTM contract is tapped.
+  // Auto-select the SL_5/SL_10 grace-timer profile when a cheap contract is
+  // tapped — mirrors the server-side unconditional price rule (see
+  // getCheapContractAutoProfileIndex), not gated on OTM-ness.
   useEffect(() => {
-    if (!selected || !currentPrice) { setAutoSelected(false); return; }
-    const idx = getOtmAutoProfileIndex(selected, currentPrice);
+    if (!selected) { setAutoSelected(false); return; }
+    const idx = getCheapContractAutoProfileIndex(selected, currentPrice);
     if (idx !== null && idx >= 0) {
       setProfileIndex(idx);
       setQty(IMMEDIATE_PROFILES[idx].qty);
@@ -444,7 +446,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
           <View style={[styles.autoSelectBanner, { backgroundColor: colors.accent + '15', borderColor: colors.accent + '35' }]}>
             <Ionicons name="flash-outline" size={12} color={colors.accent} />
             <Text style={[styles.autoSelectText, { color: colors.accent }]}>
-              Auto-selected · OTM contract · ask ${selected!.ask.toFixed(2)}
+              Auto-selected · cheap contract · ask ${selected!.ask.toFixed(2)}
             </Text>
             <Text style={[styles.autoSelectSub, { color: colors.tabBarInactive }]}>
               Tap above to override
@@ -702,6 +704,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
           currentPrice={currentPrice}
           footer={detailFooter}
           tintColor={modeTint}
+          qty={qty}
         />
       )}
     </View>

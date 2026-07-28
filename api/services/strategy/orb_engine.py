@@ -289,6 +289,11 @@ class ORBEngine:
         # REVERSAL-profile: timestamp when the trade first dropped below the -15%
         # bleed threshold. Cleared when price recovers above -15%.
         self._reversal_down_since:    Optional[datetime] = None
+        # Tracks whether an "SL grace" push has already gone out for the
+        # currently-active grace window, so the notification fires once per
+        # breach (not once per tick) — reset at each new entry in
+        # _execute_entry. See _process_tick's grace-transition check.
+        self._sl_grace_notified:      bool = False
 
     def reset_session(self):
         if self.stream_manager and self.contract_symbol:
@@ -484,6 +489,23 @@ class ORBEngine:
                     self._reversal_down_since = None
 
             self._handle_exit_action(action, current_price, current_option_price)
+
+            # SL grace-timer notification — fires once the instant the grace
+            # window opens (this is the user's window to intervene manually
+            # if they disagree with the pending auto-exit), not on every tick
+            # while it's active. self.exit_manager may be None here if the
+            # action above just fully closed the position (e.g. HARD_STOP_FLOOR
+            # bypassing grace) — nothing to notify about in that case.
+            if self.exit_manager and action.get("reason") == "SL_GRACE" and not self._sl_grace_notified:
+                self._sl_grace_notified = True
+                self.notifier.notify_sl_grace_started(
+                    ticker=self.ticker,
+                    contract_symbol=self.contract_symbol,
+                    current_premium=current_option_price,
+                    hard_stop=self.exit_manager.hard_stop,
+                    grace_seconds=self.profile.get("sl_grace_seconds", 0),
+                    paper_mode=self.paper,
+                )
 
             # 30-minute P&L notification (fires once per trade)
             if (
@@ -1089,12 +1111,29 @@ class ORBEngine:
             # TP/SL levels are anchored to what was actually paid.
             entry_premium = self._resolve_entry_premium(submitted, contract["ask"])
 
+            # Cheap-contract stop-loss safety rail: sub-$0.50 fills are the
+            # ones that get whipsawed out by an instant stop (2026-07-27
+            # discussion) — force these onto the SL_5/SL_10 grace-timer
+            # profiles regardless of what was configured/selected, so a
+            # NO_STOP_LOSS (or any other) pick on a cheap fill never silently
+            # loses stop-loss protection. Contracts $0.50+ are untouched —
+            # whatever profile was already chosen applies as-is.
+            if entry_premium < 0.25:
+                effective_profile, logged_profile_key_override = get_profile("SL_10"), "SL_10"
+            elif entry_premium < 0.50:
+                effective_profile, logged_profile_key_override = get_profile("SL_5"), "SL_5"
+            else:
+                logged_profile_key_override = None
+            if logged_profile_key_override:
+                profile_key_override = logged_profile_key_override
+
             self.position               = direction
             self.contract_symbol        = contract["symbol"]
             self.trade_taken            = True
             self._trade_was_taken_today = True  # survives the position close
             self.trade_entry_time = datetime.now(ET)
             self.timer_notified   = False
+            self._sl_grace_notified = False  # reset for this trade's own grace window
             self._active_trade_pnl = 0.0  # reset accumulator for this trade
             # `or` alone isn't enough here: immediate-trade engines are created
             # with active=False/trade_days=[] specifically so they're NEVER put
@@ -2505,6 +2544,7 @@ class ORBEngine:
         pnl          = (mid - entry_p) * em.qty_remaining * 100
         pnl_pct      = ((mid - entry_p) / entry_p * 100) if entry_p > 0 else 0
         market_value = mid * em.qty_remaining * 100
+        em_state     = em.to_dict()
         payload = _json.dumps({
             "type":          "price_update",
             "contract":      self.contract_symbol,
@@ -2519,6 +2559,9 @@ class ORBEngine:
             "hard_stop":     round(em.hard_stop, 4),
             "tp1":           round(em.tp1, 4),
             "tp2":           round(em.tp2, 4),
+            "sl_grace_active":      em_state.get("sl_grace_active", False),
+            "sl_grace_deadline":    em_state.get("sl_grace_deadline"),
+            "sl_recovery_deadline": em_state.get("sl_recovery_deadline"),
         })
         with self._live_clients_lock:
             for q in list(self._live_clients):

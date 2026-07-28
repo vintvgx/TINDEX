@@ -19,6 +19,19 @@ export interface LivePriceData {
   hard_stop:     number;
   tp1:           number;
   tp2:           number;
+  /** True while a SL_5/SL_10 (or REVERSAL) grace window is open — the
+   *  premium is at/below hard_stop but hasn't been force-sold yet. See
+   *  exit_manager.py's sl_grace_enabled. */
+  sl_grace_active?:      boolean;
+  /** Absolute ISO timestamp the grace window force-sells at, if still below
+   *  the stop then. Always compute a countdown as `deadline - Date.now()`
+   *  every render — never run an independent local timer — so the displayed
+   *  countdown can't drift from the backend's own clock. */
+  sl_grace_deadline?:    string | null;
+  /** Absolute ISO timestamp: if the premium is currently recovered above the
+   *  stop, this is when that recovery will have held long enough (60s) to
+   *  cancel the grace window. Null while price is still at/below the stop. */
+  sl_recovery_deadline?: string | null;
   // ── Simulation-only fields (all optional — absent on a real live position) ──
   sim?:               boolean;
   sim_tick?:          number;

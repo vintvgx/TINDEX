@@ -146,7 +146,7 @@ class StrategyNotifier:
             title=f"{dir_emoji} {ticker} Retest Watch Armed",
             body=(f"Breakout @ ${breakout_price:.2f} — waiting for {level_label} "
                   f"retest at ${level:.2f}"),
-            data={"type": "retest_watching", "ticker": ticker,
+            data={"screen": "strategy", "type": "retest_watching", "ticker": ticker,
                   "profile": profile_key, "level": level},
             priority=P_MARKET,
         )
@@ -252,6 +252,38 @@ class StrategyNotifier:
                 "screen":      "tradelog",
                 "symbol":      contract_symbol,
                 "exit_reason": exit_reason,
+                "paper_mode":  paper_mode,
+            },
+            priority=P_TRADE_EXIT,
+        )
+
+    def notify_sl_grace_started(
+        self,
+        ticker: str,
+        contract_symbol: str,
+        current_premium: float,
+        hard_stop: float,
+        grace_seconds: int,
+        paper_mode: bool = True,
+    ):
+        """
+        The premium just confirmed at/below the hard stop, but this profile
+        (SL_5/SL_10 — or REVERSAL's bars-based grace) doesn't exit instantly:
+        it's now waiting out a grace window before force-closing. This is the
+        user's window to intervene manually (close it themselves, or just
+        let it ride) if they disagree with the pending auto-exit — fires
+        once per breach, not on every tick. See ORBEngine._process_tick.
+        """
+        tag = _account_tag(paper_mode)
+        readable = _fmt_contract(contract_symbol)
+        mins = grace_seconds // 60
+        self._dispatch(
+            title=f"⏱️ [{tag}] {readable} — SL breach, {mins}-min grace started",
+            body=f"@ ${current_premium:.2f} (stop ${hard_stop:.2f}) — will sell at best price if still below in {mins} min.",
+            data={
+                "screen":      "position",
+                "symbol":      contract_symbol,
+                "type":        "sl_grace_started",
                 "paper_mode":  paper_mode,
             },
             priority=P_TRADE_EXIT,

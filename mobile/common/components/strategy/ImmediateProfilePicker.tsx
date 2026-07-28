@@ -28,6 +28,13 @@ export interface ImmediateProfile {
    *  hides every auto-exit control (SL picker, consol/volume toggles) since
    *  none of them apply. See profiles.py's NO_STOP_LOSS for the backend side. */
   isNoStopLoss?: boolean;
+  /** SL still fires, but not instantly — once the premium confirms at/below
+   *  the stop, a grace timer starts (5 or 10 min) and only force-sells if it's
+   *  still below the stop when the timer runs out. Any fill under $0.50 is
+   *  force-routed onto SL_5/SL_10 server-side regardless of picker choice
+   *  (see orb_engine.py's _execute_entry) — picking one explicitly here just
+   *  makes that behavior available for $0.50+ contracts too. */
+  isGraceStop?: boolean;
 }
 
 export const IMMEDIATE_PROFILES: ImmediateProfile[] = [
@@ -111,6 +118,30 @@ export const IMMEDIATE_PROFILES: ImmediateProfile[] = [
     isOtmProfile: true,
   },
   {
+    key: 'SL_5',
+    emoji: '⏱️',
+    name: 'SL-5',
+    qty: 6,
+    maxLoss: 55,
+    tp1: 75,
+    tp2: 200,
+    risk: 'High (5-min grace stop)',
+    description: 'For contracts $0.25–$0.50. Stop-loss still fires, but waits 5 minutes to see if it recovers before force-selling.',
+    isGraceStop: true,
+  },
+  {
+    key: 'SL_10',
+    emoji: '⏳',
+    name: 'SL-10',
+    qty: 10,
+    maxLoss: 60,
+    tp1: 100,
+    tp2: 250,
+    risk: 'High (10-min grace stop)',
+    description: 'For contracts under $0.25. Stop-loss still fires, but waits 10 minutes to see if it recovers before force-selling.',
+    isGraceStop: true,
+  },
+  {
     key: 'MANUAL',
     emoji: '✋',
     name: 'Manual',
@@ -139,25 +170,27 @@ export const IMMEDIATE_PROFILES: ImmediateProfile[] = [
 export const DEFAULT_PROFILE_INDEX = 2; // MOMENTUM
 export const SL_PRESETS = [20, 30, 40, 50];
 
-// ── OTM auto-selection ────────────────────────────────────────────────────────
-// Above this ask price, OTM contracts are priced well enough for normal profiles.
-const OTM_PRICE_CEILING = 0.50;
-// Below this ask price, use OTM_RUNNER (cheaper lottery-ticket contracts).
-// Between OTM_RUNNER_CEILING and OTM_PRICE_CEILING, use OTM_CONVICTION.
-const OTM_RUNNER_CEILING = 0.25;
+// ── Cheap-contract auto-selection ─────────────────────────────────────────────
+// Above this ask price, a contract is priced well enough for normal profiles —
+// this mirrors the server-side rule in orb_engine.py's _execute_entry, which
+// force-routes any fill under $0.50 onto SL_5/SL_10 REGARDLESS of what profile
+// was selected (see the 2026-07-27 SL_5/SL_10 discussion). This picker needs
+// to preview that same outcome, or a user could pick a profile here that the
+// backend silently overrides the instant the order fills — exactly the
+// "OTM Runner was selected but it should have been an SL one" mismatch this
+// was fixing. Deliberately NOT gated on OTM-ness (the backend rule isn't
+// either — a cheap ITM/ATM contract gets the same treatment).
+const AUTO_PRICE_CEILING = 0.50;
+// Below this ask price, use SL_10 (longer grace — the noisiest tier).
+// Between SL_10_CEILING and AUTO_PRICE_CEILING, use SL_5.
+const SL_10_CEILING = 0.25;
 
-export function getOtmAutoProfileIndex(
+export function getCheapContractAutoProfileIndex(
   contract: OptionsContract,
-  underlyingPrice: number,
+  _underlyingPrice: number,
 ): number | null {
-  if (!underlyingPrice || underlyingPrice <= 0) return null;
-  const isOTM =
-    contract.option_type === 'CALL'
-      ? contract.strike > underlyingPrice
-      : contract.strike < underlyingPrice;
-  if (!isOTM || contract.ask <= 0 || contract.ask >= OTM_PRICE_CEILING) return null;
-  const targetKey: ProfileKey =
-    contract.ask < OTM_RUNNER_CEILING ? 'OTM_RUNNER' : 'OTM_CONVICTION';
+  if (contract.ask <= 0 || contract.ask >= AUTO_PRICE_CEILING) return null;
+  const targetKey: ProfileKey = contract.ask < SL_10_CEILING ? 'SL_10' : 'SL_5';
   return IMMEDIATE_PROFILES.findIndex(p => p.key === targetKey);
 }
 

@@ -46,6 +46,15 @@ interface Props {
    * domain; callers that don't trade just never pass this.
    */
   tintColor?: string;
+  /**
+   * Contract quantity currently selected in the caller's own qty stepper
+   * (OptionsChainPicker / TradeContractSheet). When provided, the hero card
+   * shows the live premium and the resulting Market Value (premium × qty ×
+   * 100) right alongside Strike — the pre-submit summary the user actually
+   * needs to see before confirming a trade. Omitted entirely by read-only
+   * callers (watchlist tracking) that have no qty concept.
+   */
+  qty?: number;
 }
 
 const fc = (v: number) =>
@@ -79,6 +88,7 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
   footer,
   onTrade,
   tintColor,
+  qty,
 }) => {
   const colors = useThemeColors();
   const [greeksInfoOpen, setGreeksInfoOpen] = useState(false);
@@ -97,6 +107,12 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
   const trackedChange = liveContractPrice != null && trackedPrice != null
     ? liveContractPrice - trackedPrice
     : null;
+
+  // Prefer the live price a trading caller is already streaming (matches the
+  // card exactly) — falls back to the static ask snapshot for callers that
+  // don't pass one (or haven't gotten a live tick yet).
+  const contractPrice = liveContractPrice ?? contract.ask;
+  const marketValue   = qty != null ? contractPrice * qty * 100 : null;
   const trackedChangePct = trackedChange != null && trackedPrice != null && trackedPrice > 0
     ? (trackedChange / trackedPrice) * 100
     : null;
@@ -157,8 +173,13 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
                 </View>
                 <Text style={[s.heroTicker, { color: colors.text }]}>{ticker}</Text>
                 <Text style={[s.heroStrike, { color: colors.textSecondary }]}>
-                  Strike {fc(contract.strike)}
+                  Strike {fc(contract.strike)} · Price {fc(contractPrice)}
                 </Text>
+                {marketValue != null && (
+                  <Text style={[s.heroMarketValue, { color: colors.text }]}>
+                    Market Value {fc(marketValue)} <Text style={{ color: colors.textSecondary, fontWeight: '400' }}>({qty} × 100)</Text>
+                  </Text>
+                )}
               </View>
 
               <View style={{ alignItems: 'flex-end', gap: 4 }}>
@@ -418,6 +439,7 @@ const s = StyleSheet.create({
   typePillText: { fontSize: 12, fontWeight: '700' },
   heroTicker: { fontSize: 22, fontWeight: '800' },
   heroStrike: { fontSize: 14 },
+  heroMarketValue: { fontSize: 14, fontWeight: '700', marginTop: 2 },
   trackedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
   trackedText: { fontSize: 11, fontWeight: '700' },
   signalBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },

@@ -1,9 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
   ActivityIndicator, SafeAreaView, Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   format, addMonths, subMonths, startOfMonth, endOfMonth,
   eachDayOfInterval, getISODay, isSameDay, isAfter, startOfDay, parseISO,
@@ -68,6 +70,23 @@ export default function DailyReviewScreen() {
   // strategies" is the primary thing being tracked; paper is for testing.
   const [mode, setMode] = useState<AccountMode>('live');
   const paperMode = mode === 'paper';
+
+  // Deep-link from a notification tap (see NotificationNavigationService) —
+  // consume `review_date`/`paper_mode` exactly once, same pattern as
+  // orb.tsx's `section`. Opens the detail modal directly since a
+  // notify_review_ready* tap only ever fires once that review already exists.
+  const { review_date: reviewDateParam, paper_mode: paperModeParam } =
+    useLocalSearchParams<{ review_date?: string; paper_mode?: string }>();
+  useFocusEffect(
+    useCallback(() => {
+      if (reviewDateParam != null) {
+        if (paperModeParam != null) setMode(paperModeParam === 'true' ? 'paper' : 'live');
+        setCurrentMonth(parseISO(reviewDateParam));
+        setModalDate(reviewDateParam);
+        router.setParams({ review_date: undefined, paper_mode: undefined });
+      }
+    }, [reviewDateParam, paperModeParam]),
+  );
 
   const { data, isLoading, isFetching, refetch } = usePerformanceReviews(180, paperMode);
   const generateReview = useGenerateReview();

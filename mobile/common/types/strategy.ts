@@ -4,7 +4,12 @@ export type ProfileKey =
   | 'SCALPER' | 'PRECISION' | 'MOMENTUM' | 'CONVICTION' | 'ALL_IN'
   // OTM-specific profiles (auto-selected for cheap out-of-money contracts)
   | 'OTM_RUNNER' | 'OTM_CONVICTION'
-  | 'MANUAL';
+  // Sub-$0.50 stop-loss grace-timer profiles — auto-selected server-side at
+  // entry for any fill under $0.50 (see orb_engine.py's _execute_entry),
+  // also directly selectable. SL_5 = $0.25-$0.50 band (5-min grace), SL_10 =
+  // sub-$0.25 band (10-min grace). See exit_manager.py's sl_grace_* fields.
+  | 'SL_5' | 'SL_10'
+  | 'MANUAL' | 'NO_STOP_LOSS';
 
 export type TradeType = 'STRATEGY' | 'IMMEDIATE';
 

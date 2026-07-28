@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
@@ -109,6 +110,18 @@ export default function TradeLogScreen({ embedded = false }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [mode, setMode]             = useState<AccountMode>('live');
   const [refreshing, setRefreshing] = useState(false);
+
+  // Deep-link from a notification tap (see NotificationNavigationService) —
+  // consume `paper_mode` exactly once, same pattern as orb.tsx's `section`.
+  const { paper_mode: paperModeParam } = useLocalSearchParams<{ paper_mode?: string }>();
+  useFocusEffect(
+    useCallback(() => {
+      if (paperModeParam != null) {
+        setMode(paperModeParam === 'true' ? 'paper' : 'live');
+        router.setParams({ paper_mode: undefined });
+      }
+    }, [paperModeParam]),
+  );
 
   const tradeDate = dateFilter === 'TODAY' ? TODAY : null;
   const wantPaper = mode === 'paper';
