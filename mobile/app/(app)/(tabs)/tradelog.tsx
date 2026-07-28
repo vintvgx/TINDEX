@@ -409,9 +409,15 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
   // per trade, but we can show a note if the exit was HARD_STOP.
   const stopHit = trade.exit_reason === 'HARD_STOP';
 
-  const pnlColor = trade.pnl == null
+  const isOpen = trade.exit_time == null;
+  // Realized pnl/pnl_pct stay null for the whole life of an open trade —
+  // fall back to the live, unrealized estimate so this section isn't just
+  // dashes until the position actually closes.
+  const displayPnl    = isOpen ? trade.live_pnl ?? null : trade.pnl;
+  const displayPnlPct = isOpen ? trade.live_pnl_pct ?? null : trade.pnl_pct;
+  const pnlColor = displayPnl == null
     ? undefined
-    : trade.pnl >= 0 ? colors.success : colors.error;
+    : displayPnl >= 0 ? colors.success : colors.error;
 
   return (
     <View style={[styles.detailSection, { borderTopColor: colors.border }]}>
@@ -449,11 +455,16 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
       <DetailRow label="Duration"          value={duration}                                                  colors={colors} />
       <DetailRow label="Entry Premium"     value={`$${trade.entry_premium?.toFixed(2) ?? '—'}`}             colors={colors} />
       <DetailRow
-        label="Exit Premium"
-        value={trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—'}
+        label={isOpen ? 'Current Price (live)' : 'Exit Premium'}
+        value={
+          isOpen
+            ? (trade.live_price != null ? `$${trade.live_price.toFixed(2)}` : '—')
+            : (trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—')
+        }
         valueColor={
-          trade.exit_premium == null ? undefined
-          : trade.exit_premium >= trade.entry_premium ? colors.success : colors.error
+          isOpen
+            ? (trade.live_price == null ? undefined : trade.live_price >= trade.entry_premium ? colors.success : colors.error)
+            : (trade.exit_premium == null ? undefined : trade.exit_premium >= trade.entry_premium ? colors.success : colors.error)
         }
         colors={colors}
       />
@@ -463,14 +474,14 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
         colors={colors}
       />
       <DetailRow
-        label="P&L"
-        value={trade.pnl != null ? `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)}` : '—'}
+        label={isOpen ? 'P&L (live, unrealized)' : 'P&L'}
+        value={displayPnl != null ? `${displayPnl >= 0 ? '+' : ''}$${displayPnl.toFixed(2)}` : '—'}
         valueColor={pnlColor}
         colors={colors}
       />
       <DetailRow
-        label="P&L %"
-        value={trade.pnl_pct != null ? `${trade.pnl_pct >= 0 ? '+' : ''}${trade.pnl_pct.toFixed(1)}%` : '—'}
+        label={isOpen ? 'P&L % (live)' : 'P&L %'}
+        value={displayPnlPct != null ? `${displayPnlPct >= 0 ? '+' : ''}${displayPnlPct.toFixed(1)}%` : '—'}
         valueColor={pnlColor}
         colors={colors}
       />
@@ -566,9 +577,14 @@ const TradeRow = ({
 }) => {
   const pnl          = trade.pnl ?? 0;
   const isOpen       = trade.exit_time == null;
-  const pnlColor     = isOpen ? colors.accent
-                     : pnl > 0 ? colors.success
-                     : pnl < 0 ? colors.error : colors.tabBarInactive;
+  // Open trades have no realized pnl yet (only ever written at exit) — show
+  // the live, unrealized estimate instead so a still-open swing/weekly hold
+  // isn't just a bare "OPEN" with no number at all.
+  const displayPnl    = isOpen ? trade.live_pnl ?? null : pnl;
+  const displayPnlPct = isOpen ? trade.live_pnl_pct ?? null : trade.pnl_pct;
+  const pnlColor     = displayPnl == null ? colors.accent
+                     : displayPnl > 0 ? colors.success
+                     : displayPnl < 0 ? colors.error : colors.tabBarInactive;
   const accentColor  = isOpen ? colors.accent
                      : pnl > 0 ? colors.success
                      : pnl < 0 ? colors.error : colors.border;
@@ -661,12 +677,19 @@ const TradeRow = ({
         {/* P&L */}
         <View style={styles.tradeRight}>
           <Text style={[styles.tradePnl, { color: pnlColor }]}>
-            {isOpen ? 'OPEN' : `${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}`}
+            {displayPnl == null
+              ? (isOpen ? 'OPEN' : `${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}`)
+              : `${displayPnl > 0 ? '+' : ''}$${displayPnl.toFixed(2)}`}
           </Text>
-          {trade.pnl_pct != null && !isOpen && (
+          {isOpen && displayPnl != null && (
+            <Text style={{ fontSize: 9, fontWeight: '700', letterSpacing: 0.4, color: colors.accent, marginTop: 1 }}>
+              OPEN · LIVE
+            </Text>
+          )}
+          {displayPnlPct != null && (
             <View style={[styles.pnlPctPill, { backgroundColor: pnlColor + '1A' }]}>
               <Text style={[styles.tradePnlPct, { color: pnlColor }]}>
-                {trade.pnl_pct > 0 ? '+' : ''}{trade.pnl_pct.toFixed(1)}%
+                {displayPnlPct > 0 ? '+' : ''}{displayPnlPct.toFixed(1)}%
               </Text>
             </View>
           )}

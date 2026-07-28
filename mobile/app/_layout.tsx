@@ -225,8 +225,18 @@ function AppContent() {
     <ToastProvider>
       <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
         <PendingConfirmationProvider>
-          <TickerSheetProvider>
-            <MarketStreamProvider>
+          <MarketStreamProvider>
+            {/* TickerSheetProvider must be INSIDE MarketStreamProvider, not
+                the other way around: it renders its ticker-detail <Modal>
+                as a sibling of {children}, not nested inside it — so
+                anything in that modal (PriceChartFullScreen calls
+                useMarketStream unconditionally on every mount, regardless of
+                its own `visible` prop) needs MarketStreamProvider to be an
+                ancestor of TickerSheetProvider itself, not just of <Slot/>.
+                Previously reversed, so opening the ticker sheet crashed the
+                app immediately with "useMarketStream must be used within a
+                MarketStreamProvider". */}
+            <TickerSheetProvider>
               {/* <Slot/> must always mount as soon as auth resolves — AuthContext's
                   own navigation effect calls router.replace() the instant
                   authState.isAuthenticated flips true, independent of
@@ -242,8 +252,8 @@ function AppContent() {
                   <LoadingScreen message="Initializing Alethia..." />
                 </View>
               )}
-            </MarketStreamProvider>
-          </TickerSheetProvider>
+            </TickerSheetProvider>
+          </MarketStreamProvider>
         </PendingConfirmationProvider>
         <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
       </ThemeProvider>

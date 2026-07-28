@@ -28,9 +28,8 @@ import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTrade
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
 import { positionHideKey } from '@/lib/positionHideKey';
-import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
-import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, ImmediatePosition, LiveOptionPrice, ExitOverrides, ORBTrade } from '@/common/types/strategy';
+import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, LiveOptionPrice, ExitOverrides, ORBTrade } from '@/common/types/strategy';
 import { formatContractSymbolShort } from '@/lib/formatContract';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -164,7 +163,6 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
   const { data: profiles, isLoading: profilesLoading } = useStrategyProfiles();
   const { data: accounts } = useAlpacaBothAccounts(!!(configs && configs.length > 0));
   const { data: monitoringState } = useORBMonitoringState();
-  const { data: immediatePositions } = useImmediatePositions();
   const { data: recentTrades } = useStrategyTrades({ limit: 50 });
 
   // Decoupled LIVE/PAPER view — everything below (positions, strategies,
@@ -196,10 +194,6 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
     () => (configs ?? []).filter(c => c.paper_mode === wantPaper),
     [configs, wantPaper],
   );
-  const modeImmediatePositions = useMemo(
-    () => (immediatePositions ?? []).filter(p => p.paper_mode === wantPaper),
-    [immediatePositions, wantPaper],
-  );
   const modeTodayCompletedTrades = useMemo(
     () => todayCompletedTrades.filter(t => (t.paper_mode ?? false) === wantPaper),
     [todayCompletedTrades, wantPaper],
@@ -226,17 +220,8 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
     );
   }, [modeTodayCompletedTrades, liveStrategyConfigs]);
 
-  const completedImmediateTrades = useMemo<ORBTrade[]>(() => {
-    const activeContracts = new Set(modeImmediatePositions.map(p => p.contract));
-    return modeTodayCompletedTrades.filter(
-      t => t.trade_type === 'IMMEDIATE' && !activeContracts.has(t.contract_symbol)
-    );
-  }, [modeTodayCompletedTrades, modeImmediatePositions]);
-
-  const hasLiveActivity =
-    liveStrategyConfigs.length > 0 || modeImmediatePositions.length > 0;
-  const hasCompletedToday =
-    completedStrategyTrades.length > 0 || completedImmediateTrades.length > 0;
+  const hasLiveActivity = liveStrategyConfigs.length > 0;
+  const hasCompletedToday = completedStrategyTrades.length > 0;
 
   const { mutate: createConfig } = useCreateStrategyConfig();
   const { mutate: updateConfig } = useUpdateStrategyConfig();
@@ -395,15 +380,16 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
         )}
 
         {/* ── LIVE POSITIONS ─────────────────────────────────────────────────── */}
+        {/* Strategy view shows only saved-strategy positions — immediate
+            (manual/ad-hoc) trades belong on Dashboard/Live Positions, not here. */}
         {hasLiveActivity && (
           <>
             <SectionHeader
-              title={`Open Positions (${liveStrategyConfigs.length + modeImmediatePositions.length})`}
+              title={`Open Positions (${liveStrategyConfigs.length})`}
               accent
               colors={colors}
             />
 
-            {/* Strategy live positions */}
             {liveStrategyConfigs.map(cfg => (
               <StrategyCard
                 key={cfg.id}
@@ -413,11 +399,6 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
                 onPress={() => openDetail(cfg)}
               />
             ))}
-
-            {/* Immediate positions */}
-            {modeImmediatePositions.map(pos => (
-              <ImmediatePositionCard key={pos.strategy_id} position={pos} colors={colors} />
-            ))}
           </>
         )}
 
@@ -426,9 +407,6 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
           <>
             <SectionHeader title="Today's Results" colors={colors} />
             {completedStrategyTrades.map(trade => (
-              <CompletedTradeCard key={trade.id} trade={trade} colors={colors} />
-            ))}
-            {completedImmediateTrades.map(trade => (
               <CompletedTradeCard key={trade.id} trade={trade} colors={colors} />
             ))}
           </>
@@ -763,145 +741,6 @@ function PositionStopBar({ live, colors }: { live: LiveOptionPrice; colors: any 
           <Text style={[styles.stopValue, { color: colors.tabBarInactive }]}>${s.value.toFixed(2)}</Text>
         </View>
       ))}
-    </View>
-  );
-}
-
-// ── ImmediatePositionCard ──────────────────────────────────────────────────────
-
-function ImmediatePositionCard({ position, colors }: { position: ImmediatePosition; colors: any }) {
-  const { data: live, connected, patchData } = useStrategyLivePrice(position.strategy_id, true);
-  const [exitOpen, setExitOpen]   = useState(false);
-  const [expanded, setExpanded]   = useState(false);
-
-  const toggleExpanded = useCallback(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpanded(v => !v);
-  }, []);
-
-  const pnl    = live?.pnl     ?? position.pnl     ?? 0;
-  const pnlPct = live?.pnl_pct ?? position.pnl_pct ?? 0;
-  const mid    = live?.mid_price ?? position.mid_price;
-  const qty    = live?.qty_remaining ?? position.qty_remaining;
-  const tp1    = live?.tp1_hit ?? position.tp1_hit;
-  const tp2    = live?.tp2_hit ?? position.tp2_hit;
-
-  const dirColor  = position.direction === 'CALL' ? colors.success : colors.error;
-  const pnlColor  = pnl >= 0 ? colors.success : colors.error;
-  const modeColor = position.paper_mode ? '#FF9F0A' : colors.success;
-
-  return (
-    <View style={[styles.stratCard, { backgroundColor: colors.card, borderColor: dirColor + '44' }]}>
-      <View style={[styles.stratAccent, { backgroundColor: dirColor }]} />
-      <View style={styles.stratBody}>
-        <View style={styles.stratRow}>
-          <View style={styles.stratTitleGroup}>
-            <Text style={[styles.stratTicker, { color: colors.text }]}>
-              {position.ticker}{' '}
-              <Text style={{ color: dirColor, fontSize: 14 }}>{position.direction}</Text>
-            </Text>
-            <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>
-              {formatContractSymbolShort(position.contract)}
-            </Text>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <MetaChip label="IMMED" color="#F59E0B" />
-            <View style={[styles.modeBadge, { backgroundColor: modeColor + '22' }]}>
-              <View style={[styles.modeDot, { backgroundColor: modeColor }]} />
-              <Text style={[styles.modeBadgeText, { color: modeColor }]}>
-                {position.paper_mode ? 'Paper' : 'Live'}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={[styles.livePnlCard, { backgroundColor: colors.background, borderColor: dirColor + '33' }]}>
-          {/* Header row */}
-          <TouchableOpacity onPress={toggleExpanded} activeOpacity={0.7} style={styles.liveHeaderRow}>
-            <View style={styles.liveHeaderLeft}>
-              <View style={[styles.modeDot, { backgroundColor: connected ? colors.success : colors.tabBarInactive }]} />
-              <Text style={[styles.liveLabel, { color: connected ? colors.success : colors.tabBarInactive }]}>
-                {connected ? 'LIVE' : 'CONNECTING'}
-              </Text>
-              <MetaChip label={position.profile.replace('_', ' ')} color={PROFILE_COLORS[position.profile] ?? colors.accent} />
-            </View>
-            <View style={styles.liveHeaderRight}>
-              <Text style={[styles.livePnlValue, { color: pnlColor }]}>
-                {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
-              </Text>
-              <View style={[styles.pnlPctPill, { backgroundColor: pnlColor + '1A' }]}>
-                <Text style={[styles.pnlPctText, { color: pnlColor }]}>
-                  {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
-                </Text>
-              </View>
-              {mid != null && qty != null && (
-                <Text style={[styles.mktValText, { color: colors.tabBarInactive }]}>
-                  Mkt ${(mid * qty * 100).toFixed(2)}
-                </Text>
-              )}
-            </View>
-            <Ionicons
-              name={expanded ? 'chevron-up' : 'chevron-down'}
-              size={14}
-              color={colors.tabBarInactive}
-              style={{ marginLeft: 8 }}
-            />
-          </TouchableOpacity>
-
-          <View style={styles.liveStats}>
-            <LiveStat label="Entry" value={position.entry_premium != null ? `$${position.entry_premium.toFixed(2)}` : '—'} colors={colors} />
-            <LiveStat label="Price" value={mid != null ? `$${mid.toFixed(2)}` : '—'} colors={colors} highlight />
-            <LiveStat label="Qty"   value={String(qty)}  colors={colors} />
-          </View>
-
-          {(tp1 || tp2) && (
-            <View style={styles.tpRow}>
-              {tp1 && <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}><Text style={[styles.tpBadgeText, { color: colors.success }]}>TP1 ✓</Text></View>}
-              {tp2 && <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}><Text style={[styles.tpBadgeText, { color: colors.success }]}>TP2 ✓</Text></View>}
-            </View>
-          )}
-
-          {expanded && live && <LivePositionDetail live={live} colors={colors} />}
-
-          <View style={styles.liveActionsRow}>
-            {live && (
-              <EditExitsButton
-                mode="orb"
-                strategy_id={position.strategy_id}
-                ticker={position.ticker}
-                hard_stop={live.hard_stop}
-                tp1={live.tp1}
-                tp2={live.tp2}
-                entry_premium={live.entry_premium}
-                tp1_hit={live.tp1_hit}
-                tp2_hit={live.tp2_hit}
-                hideKey={positionHideKey({ strategy_id: position.strategy_id, contract: live.contract, entry_premium: live.entry_premium })}
-                onUpdated={patchData}
-                style={{ flex: 1 }}
-              />
-            )}
-            <TouchableOpacity
-              onPress={() => setExitOpen(true)}
-              activeOpacity={0.8}
-              style={[styles.exitBtn, { flex: 1, marginTop: 0, borderColor: colors.error + '55', backgroundColor: colors.error + '14' }]}
-            >
-              <Ionicons name="exit-outline" size={16} color={colors.error} />
-              <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-
-      <ExitTradeModal
-        visible={exitOpen}
-        colors={colors}
-        strategyId={position.strategy_id}
-        ticker={position.ticker}
-        contract={position.contract}
-        qtyRemaining={qty}
-        paperMode={position.paper_mode}
-        onClose={() => setExitOpen(false)}
-      />
     </View>
   );
 }

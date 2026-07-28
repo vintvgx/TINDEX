@@ -285,6 +285,14 @@ export interface ORBTrade {
   account_balance_before?: number | null;
   account_balance_after?: number | null;
   account_balance_change?: number | null;
+  // ── Live unrealized P&L — only present while the row is still open
+  //    (exit_time is null). Computed at response time from a live quote,
+  //    never written to the DB, and distinct from pnl/pnl_pct above (which
+  //    stay null until a real exit/partial-close event). See
+  //    api/routes/strategy_routes.py's _enrich_open_trades_with_live_pnl.
+  live_price?: number;
+  live_pnl?: number;
+  live_pnl_pct?: number;
 }
 
 export interface StrategyStats {

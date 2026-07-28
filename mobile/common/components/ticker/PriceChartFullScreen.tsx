@@ -1,7 +1,7 @@
 import type React from 'react';
 import { useEffect, useState } from 'react';
-import { View, Text, Pressable, Modal, StatusBar, useWindowDimensions } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, Pressable, Modal, StatusBar, ScrollView, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketStream } from '@/hooks/useMarketStream';
@@ -60,6 +60,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   periodPositive,
 }) => {
   const colors = useThemeColors();
+  const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const [scrubPoint, setScrubPoint] = useState<AdvancedScrubPoint | null>(null);
   // ORB is on by default — the band only draws on 1D, and only when today's
@@ -103,10 +104,11 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
       onRequestClose={onClose}
     >
       <StatusBar barStyle={colors.isDark ? 'light-content' : 'dark-content'} />
-      <View  style={{ paddingTop: 70, flex: 1, backgroundColor: colors.background }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 }}>
-          <Pressable onPress={onClose} hitSlop={10} style={{ padding: 4 }}>
+      <View style={{ paddingTop: insets.top, flex: 1, backgroundColor: colors.background }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: colors.separator }}>
+          <Pressable onPress={onClose} hitSlop={12} style={{ padding: 8, flexDirection: 'row', alignItems: 'center', gap: 2 }}>
             <Ionicons name="chevron-back" size={24} color={colors.text} />
+            <Text style={{ color: colors.text, fontSize: 16 }}>Back</Text>
           </Pressable>
           <View style={{ alignItems: 'center' }}>
             <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>{ticker}</Text>
@@ -114,10 +116,14 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
               <Text style={{ color: colors.textTertiary, fontSize: 12 }} numberOfLines={1}>{companyName}</Text>
             )}
           </View>
-          <View style={{ width: 32 }} />
+          <View style={{ width: 70 }} />
         </View>
 
-        <View style={{ alignItems: 'center', marginTop: 6, marginBottom: 8 }}>
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) }}
+        >
+        <View style={{ alignItems: 'center', marginTop: 10, marginBottom: 8 }}>
           {displayPrice != null && (
             <Text style={{ color: colors.text, fontSize: 32, fontWeight: '800', letterSpacing: -1 }}>
               ${displayPrice.toFixed(2)}
@@ -164,7 +170,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
           </View>
         </View>
 
-        <View style={{ paddingHorizontal: 16, flex: 1 }}>
+        <View style={{ paddingHorizontal: 16 }}>
           <AdvancedPriceChart
             data={historyData}
             isLoading={historyLoading}
@@ -172,7 +178,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             onPeriodChange={onPeriodChange}
             positive={periodPositive}
             onScrub={setScrubPoint}
-            height={Math.max(300, windowHeight * 0.5)}
+            height={Math.min(340, Math.max(260, windowHeight * 0.38))}
             orbRange={hasOrbData ? { high: orbData!.orb_high, low: orbData!.orb_low } : null}
             showOrbRange={showOrbRange}
             livePrice={visible ? livePrices[ticker] ?? null : null}
@@ -225,6 +231,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             </View>
           )}
         </View>
+        </ScrollView>
       </View>
     </Modal>
   );
