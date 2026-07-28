@@ -6,17 +6,15 @@ Legacy single-engine endpoints (/strategy/config, /strategy/position, etc.)
 operate on the first engine for backwards compatibility with old clients.
 """
 
-import asyncio
 import logging
 import concurrent.futures
 from datetime import date, datetime
 
 from flask import Blueprint, jsonify, request
-from services.strategy.trade_logger import TradeLogger
+from services.strategy.trade_logger import TradeLogger, enrich_open_trades_with_live_pnl
 from services.strategy.profiles import PROFILES, describe_profile
 from services.strategy.scheduler import reschedule_jobs, schedule_eod_close
 from services.strategy.orb_engine import ORBEngine, STRATEGY_DEFAULTS
-from services.alpaca.alpaca_option_service import get_alpaca_option_service
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +102,52 @@ def get_immediate_engine(strategy_id: str) -> ORBEngine | None:
 def _resolve_any_engine(strategy_id: str) -> ORBEngine | None:
     """Find an engine by id across saved strategies AND immediate-trade engines."""
     return _engines.get(strategy_id) or get_immediate_engine(strategy_id)
+
+
+def _sync_paired_strategy(sid: str, new_pair_id, old_pair_id) -> None:
+    """
+    Keep paired_strategy_id symmetric: if A.paired_strategy_id == B.id then
+    B.paired_strategy_id must equal A.id (or both are None). Call this
+    whenever sid's own pairing changes (create/update/delete) — it only
+    touches the OTHER side(s) of the link, since sid's own row is saved by
+    the caller. A stale partner pointer would make ORBEngine._find_ticker_conflict
+    silently stop excluding a pair that still thinks it's linked.
+    """
+    new_pair_id = new_pair_id or None
+    old_pair_id = old_pair_id or None
+    if new_pair_id == old_pair_id:
+        return
+
+    def _set_pair(target_id: str, value):
+        eng = _engines.get(target_id)
+        if eng:
+            eng.config["paired_strategy_id"] = value
+            eng.reload_config(eng.config)
+            logger_svc.save_strategy_config(eng.config)
+        else:
+            configs = logger_svc.load_configs()
+            base = next((c for c in configs if c.get("id") == target_id), None)
+            if base:
+                base["paired_strategy_id"] = value
+                logger_svc.save_strategy_config(base)
+
+    # Unlink the old partner — it no longer points back to sid.
+    if old_pair_id and old_pair_id != new_pair_id:
+        _set_pair(old_pair_id, None)
+
+    if new_pair_id:
+        # Steal the new partner away from whatever it previously pointed at,
+        # so the relationship stays strictly one-to-one.
+        eng = _engines.get(new_pair_id)
+        if eng:
+            prev = eng.config.get("paired_strategy_id")
+        else:
+            configs = logger_svc.load_configs()
+            base = next((c for c in configs if c.get("id") == new_pair_id), None)
+            prev = base.get("paired_strategy_id") if base else None
+        if prev and prev != sid:
+            _set_pair(prev, None)
+        _set_pair(new_pair_id, sid)
 
 
 def _get_or_create_immediate_engine(ticker: str, paper_mode: bool) -> ORBEngine:
@@ -454,7 +498,7 @@ def create_config():
             "profile", "trade_days", "strategy_name", "capital_limit",
             "bypass_breakout_window", "custom_thresholds", "exit_overrides",
             "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
-            "confirm_entry",
+            "confirm_entry", "paired_strategy_id",
         ) if k in data
     }}
     config.pop("id", None)   # force new UUID
@@ -468,6 +512,7 @@ def create_config():
     engine = ORBEngine(saved_config, stream_manager=_stream_manager)
     _engines[sid] = engine
     reschedule_jobs(engine, strategy_id=sid)
+    _sync_paired_strategy(sid, saved_config.get("paired_strategy_id"), None)
 
     return jsonify(saved), 201
 
@@ -490,11 +535,12 @@ def update_config(strategy_id: str):
         logger.info("[strategy] Rebuilt missing engine for %s during PATCH", strategy_id)
 
     engine = _engines[strategy_id]
+    old_pair_id = engine.config.get("paired_strategy_id")
     allowed = {"ticker", "paper_mode", "active",
                "profile", "trade_days", "strategy_name", "capital_limit",
                "bypass_breakout_window", "custom_thresholds", "exit_overrides",
                "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
-               "confirm_entry"}
+               "confirm_entry", "paired_strategy_id"}
     for key in allowed:
         if key in data:
             engine.config[key] = data[key]
@@ -506,6 +552,9 @@ def update_config(strategy_id: str):
     saved = logger_svc.save_strategy_config(engine.config)
     if not saved:
         return jsonify({"error": "Config updated in memory but failed to persist to database"}), 500
+
+    if "paired_strategy_id" in data:
+        _sync_paired_strategy(strategy_id, engine.config.get("paired_strategy_id"), old_pair_id)
 
     return jsonify({"status": "ok", "config": engine.config})
 
@@ -552,6 +601,13 @@ def delete_config(strategy_id: str):
                     sched.remove_job(f"job_{strategy_id}_{suffix}")
                 except Exception:
                     pass
+
+    old_pair_id = engine.config.get("paired_strategy_id") if engine else None
+    if old_pair_id is None and engine is None:
+        configs = logger_svc.load_configs()
+        base = next((c for c in configs if c.get("id") == strategy_id), None)
+        old_pair_id = base.get("paired_strategy_id") if base else None
+    _sync_paired_strategy(strategy_id, None, old_pair_id)
 
     logger_svc.delete_strategy_config(strategy_id)
     return jsonify({"status": "ok"})
@@ -1414,57 +1470,6 @@ def reset_strategy_data():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-def _run_async(coro):
-    loop = asyncio.new_event_loop()
-    try:
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-
-def _enrich_open_trades_with_live_pnl(trades: list) -> list:
-    """
-    orb_trades.pnl/pnl_pct are only ever written by TradeLogger.log_exit() —
-    they stay NULL for the entire life of an open position, so the Trade Log
-    (and everything derived from it: stats, Daily Review) showed a bare
-    "OPEN" with no P&L number at all, even for a swing/weekly hold sitting
-    open for days. Attaches a live, unrealized live_price/live_pnl/live_pnl_pct
-    to each still-open row — a separate field from the real (realized)
-    pnl/pnl_pct, never written to the DB, so a partially-closed (TP1-hit) row's
-    real partial-realized pnl is never confused with this estimate.
-
-    Always goes straight to a REST quote (AlpacaOptionService.
-    get_contract_prices_batch) rather than trying to reuse a resident
-    ORBEngine's in-memory price — a multi-day swing/weekly hold has no
-    guarantee its option-stream subscription is still alive or its cached
-    price is fresh, whereas a REST snapshot is correct regardless of how
-    long the position has been open or whether the process restarted since.
-    """
-    open_rows = [t for t in trades if t.get("exit_time") is None and t.get("contract_symbol")]
-    if not open_rows:
-        return trades
-
-    symbols = list({t["contract_symbol"] for t in open_rows})
-    try:
-        prices = _run_async(get_alpaca_option_service().get_contract_prices_batch(symbols))
-    except Exception as e:
-        logger.warning("[trades] live price fetch failed for %d open row(s): %s", len(open_rows), e)
-        return trades
-
-    for row in open_rows:
-        price = prices.get(row["contract_symbol"])
-        entry = row.get("entry_premium")
-        qty   = (row.get("qty_entered") or 0) - (row.get("qty_exited") or 0)
-        if price is None or not entry or qty <= 0:
-            continue
-        row["live_price"]   = round(price, 4)
-        row["live_pnl"]     = round((price - entry) * qty * 100, 2)
-        row["live_pnl_pct"] = round((price - entry) / entry * 100, 2)
-
-    return trades
-
-
 @strategy_bp.route("/trades", methods=["GET"])
 def get_trade_history():
     limit   = request.args.get("limit", 20, type=int)
@@ -1473,7 +1478,7 @@ def get_trade_history():
     trade_date = request.args.get("trade_date", None)
     trades = logger_svc.get_trades(limit=limit, ticker=ticker, profile=profile,
                                     trade_date=trade_date)
-    trades = _enrich_open_trades_with_live_pnl(trades)
+    trades = enrich_open_trades_with_live_pnl(trades)
     return jsonify(trades)
 
 

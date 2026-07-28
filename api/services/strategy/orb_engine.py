@@ -129,6 +129,9 @@ class ORBEngine:
         self.trade_days     = set(self.config.get("trade_days", [0, 2, 4]))
         self.strategy_id             = self.config.get("id")
         self.strategy_name           = self.config.get("strategy_name", "")
+        # Explicit paper/live pairing — see _find_ticker_conflict and the
+        # 2026-07-28 strategy_configs migration.
+        self.paired_strategy_id      = self.config.get("paired_strategy_id")
         self.capital_limit           = self.config.get("capital_limit")
         self.bypass_breakout_window  = self.config.get("bypass_breakout_window", False)
         self.budget_otm_mode         = self.config.get("budget_otm_mode", False)
@@ -1039,6 +1042,13 @@ class ORBEngine:
         entire entry attempt over a construction-ordering race on a totally
         unrelated engine — getattr with a safe default just treats a
         not-yet-initialized sibling as "not a conflict" instead.
+
+        Skips an engine explicitly paired with this one (paired_strategy_id,
+        checked both directions) — a paper config and its live counterpart
+        both taking "the same" signal is intentional mirroring, not
+        accidental duplicate exposure, and pausing one of them for
+        confirmation only introduces price drift between the two fills for
+        no risk-management benefit (2026-07-27 IWM TREND_RIDER incident).
         """
         with _live_engines_lock:
             engines_snapshot = list(_live_engines.items())
@@ -1046,6 +1056,9 @@ class ORBEngine:
             if eng is self:
                 continue
             if getattr(eng, "ticker", None) != self.ticker:
+                continue
+            if (sid == self.paired_strategy_id
+                    or getattr(eng, "paired_strategy_id", None) == self.strategy_id):
                 continue
             if getattr(eng, "trade_taken", False) and getattr(eng, "position", None) == direction:
                 return eng

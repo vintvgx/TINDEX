@@ -107,6 +107,7 @@ type FormState = {
   confirm_entry:          boolean;
   consol_exit:            boolean;
   volume_exit:            boolean;
+  paired_strategy_id:     string | null;
 };
 
 const DEFAULT_FORM: FormState = {
@@ -125,6 +126,7 @@ const DEFAULT_FORM: FormState = {
   confirm_entry:          false,
   consol_exit:            false,
   volume_exit:            false,
+  paired_strategy_id:     null,
 };
 
 function configToForm(cfg: StrategyConfig): FormState {
@@ -144,6 +146,7 @@ function configToForm(cfg: StrategyConfig): FormState {
     confirm_entry:          cfg.confirm_entry ?? false,
     consol_exit:            cfg.exit_overrides?.consol_exit ?? false,
     volume_exit:            cfg.exit_overrides?.volume_exit ?? false,
+    paired_strategy_id:     cfg.paired_strategy_id ?? null,
   };
 }
 
@@ -240,6 +243,18 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
   const openEdit   = (cfg: StrategyConfig) => { setEditingConfig(cfg); setForm(configToForm(cfg)); setModalVisible(true); };
   const openDetail = (cfg: StrategyConfig) => { setDetailConfig(cfg); setDetailVisible(true); };
 
+  // Candidates for "Paired Strategy": same ticker, the opposite paper/live
+  // mode, excluding the config being edited — this is what
+  // ORBEngine._find_ticker_conflict treats as an intentional mirrored pair.
+  const pairOptions = useMemo(() => {
+    const formPaperMode = form.mode === 'paper';
+    return (configs ?? []).filter(c =>
+      c.id !== editingConfig?.id &&
+      c.ticker === form.ticker &&
+      c.paper_mode !== formPaperMode
+    );
+  }, [configs, editingConfig, form.mode, form.ticker]);
+
   const handleDelete = (cfg: StrategyConfig) => {
     const label = cfg.strategy_name || `${cfg.ticker} ${cfg.profile.replace('_', ' ')}`;
     Alert.alert(
@@ -302,6 +317,7 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
       otm_fib_level:          form.otm_fib_level,
       smart_contracts:        form.smart_contracts,
       confirm_entry:          form.confirm_entry,
+      paired_strategy_id:     form.paired_strategy_id,
       ...modeToConfig(form.mode),
     };
     setSaving(true);
@@ -472,6 +488,7 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
         form={form}
         profiles={profiles ?? []}
         tickerOptions={tickerOptions}
+        pairOptions={pairOptions}
         saving={saving}
         colors={colors}
         onClose={() => setModalVisible(false)}
@@ -929,6 +946,7 @@ interface FormModalProps {
   form: FormState;
   profiles: StrategyProfile[];
   tickerOptions: string[];
+  pairOptions: StrategyConfig[];
   saving: boolean;
   colors: any;
   onClose: () => void;
@@ -941,10 +959,11 @@ const PRIMARY_PROFILES: ProfileKey[] = ['TREND_RIDER', 'RETESTER', 'REVERSAL'];
 const SECONDARY_PROFILES: ProfileKey[] = ['BULL_DOG', 'THUNDER_CAT', 'WOLF'];
 
 function StrategyFormModal({
-  visible, isEditing, form, profiles, tickerOptions, saving, colors,
+  visible, isEditing, form, profiles, tickerOptions, pairOptions, saving, colors,
   onClose, onPatch, onModeSelect, onSave,
 }: FormModalProps) {
   const [tickerOpen, setTickerOpen]       = useState(false);
+  const [pairOpen, setPairOpen]           = useState(false);
   const [scrollEnabled, setScrollEnabled] = useState(true);
   const [tab, setTab]                     = useState<'strategy' | 'immediate'>('strategy');
   const isSecondaryActive = SECONDARY_PROFILES.includes(form.profile) || form.profile === 'CUSTOM';
@@ -1063,6 +1082,63 @@ function StrategyFormModal({
                 );
               })}
             </View>
+
+            <SectionHeader title="Paired Strategy" colors={colors} />
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <ConfigRow label="Linked Config" colors={colors} last={!pairOpen}>
+                <TouchableOpacity
+                  onPress={() => pairOptions.length > 0 && setPairOpen(o => !o)}
+                  activeOpacity={0.7}
+                  disabled={pairOptions.length === 0}
+                  style={[styles.tickerSelect, { backgroundColor: colors.border, borderColor: colors.border }]}
+                >
+                  <Text style={[styles.tickerSelectText, { color: colors.text }]} numberOfLines={1}>
+                    {form.paired_strategy_id
+                      ? (pairOptions.find(o => o.id === form.paired_strategy_id)?.strategy_name || 'Linked')
+                      : (pairOptions.length > 0 ? 'None' : 'No match')}
+                  </Text>
+                  {pairOptions.length > 0 && (
+                    <Ionicons name={pairOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.tabBarInactive} />
+                  )}
+                </TouchableOpacity>
+              </ConfigRow>
+
+              {pairOpen && (
+                <View style={[styles.tickerMenu, { borderTopColor: colors.border }]}>
+                  <TouchableOpacity
+                    onPress={() => { onPatch('paired_strategy_id', null); setPairOpen(false); }}
+                    activeOpacity={0.7}
+                    style={[styles.tickerMenuItem, form.paired_strategy_id === null && { backgroundColor: colors.accent + '1A' }]}
+                  >
+                    <Text style={[styles.tickerMenuItemText, { color: form.paired_strategy_id === null ? colors.accent : colors.text, fontWeight: form.paired_strategy_id === null ? '700' : '500' }]}>
+                      None
+                    </Text>
+                    {form.paired_strategy_id === null && <Ionicons name="checkmark" size={16} color={colors.accent} />}
+                  </TouchableOpacity>
+                  {pairOptions.map(opt => {
+                    const selected = form.paired_strategy_id === opt.id;
+                    return (
+                      <TouchableOpacity
+                        key={opt.id}
+                        onPress={() => { onPatch('paired_strategy_id', opt.id); setPairOpen(false); }}
+                        activeOpacity={0.7}
+                        style={[styles.tickerMenuItem, selected && { backgroundColor: colors.accent + '1A' }]}
+                      >
+                        <Text style={[styles.tickerMenuItemText, { color: selected ? colors.accent : colors.text, fontWeight: selected ? '700' : '500' }]}>
+                          {opt.strategy_name || `${opt.ticker} ${opt.profile}`} ({opt.paper_mode ? 'Paper' : 'Live'})
+                        </Text>
+                        {selected && <Ionicons name="checkmark" size={16} color={colors.accent} />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+            <Text style={[styles.hint, { color: colors.tabBarInactive }]}>
+              {pairOptions.length > 0
+                ? 'Linking a paper and live config for the same signal means neither one pauses for confirmation when the other takes the same trade — they mirror each other intentionally instead of being treated as a conflict.'
+                : `No opposite-mode ${form.ticker} strategy exists yet to pair with.`}
+            </Text>
 
             <SectionHeader title="Configuration" colors={colors} />
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>

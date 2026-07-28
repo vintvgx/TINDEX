@@ -75,7 +75,9 @@ interface AdvancedPriceChartProps {
 
 // ── Layout constants ─────────────────────────────────────────────────────
 const Y_AXIS_W = 54; // right gutter for price labels
-const X_AXIS_H = 20; // bottom row for time labels
+// Bottom row for time labels — tall enough for the scrub tooltip's two lines
+// (time on top, volume below) rather than just the plain axis label.
+const X_AXIS_H = 34;
 const VOL_H = 44; // volume pane height
 const PANE_GAP = 6; // gap between price pane and volume pane
 
@@ -91,6 +93,13 @@ const niceStep = (range: number, targetTicks: number) => {
 };
 
 const formatAxisPrice = (p: number) => (p >= 1000 ? p.toFixed(0) : p.toFixed(2));
+
+const formatVolume = (v: number) => {
+  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`;
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
+  return `${v}`;
+};
 
 /** Time label under the x-axis, granularity matched to the timeframe. */
 const formatXLabel = (dateStr: string, period: PricePeriod) => {
@@ -654,18 +663,28 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                   >
                     {formatAxisPrice(ePrices[scrubIndex])}
                   </SvgText>
-                  {/* Time pill on the x-axis */}
+                  {/* Time + volume pill on the x-axis */}
                   <Rect
                     x={Math.min(Math.max(scale.xForIndex(scrubIndex) - 34, 0), plotW - 68)}
-                    y={height - X_AXIS_H} width={68} height={16} rx={4} fill={colors.text}
+                    y={height - X_AXIS_H + 2} width={68} height={30} rx={4} fill={colors.text}
                   />
                   <SvgText
                     x={Math.min(Math.max(scale.xForIndex(scrubIndex), 34), plotW - 34)}
-                    y={height - X_AXIS_H + 11.5}
+                    y={height - X_AXIS_H + 13}
                     fill={colors.background} fontSize={9.5} fontWeight="600" textAnchor="middle"
                   >
                     {formatXLabel(dates[scrubIndex], period)}
                   </SvgText>
+                  {volumes[scrubIndex] != null && (
+                    <SvgText
+                      x={Math.min(Math.max(scale.xForIndex(scrubIndex), 34), plotW - 34)}
+                      y={height - X_AXIS_H + 25}
+                      fill={colors.background} fontSize={8.5} fontWeight="500"
+                      textAnchor="middle" opacity={0.8}
+                    >
+                      Vol {formatVolume(volumes[scrubIndex])}
+                    </SvgText>
+                  )}
                 </>
               )}
             </Svg>

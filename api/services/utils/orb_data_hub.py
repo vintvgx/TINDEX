@@ -148,6 +148,28 @@ class OrbDataHub:
 
     # ── Publishing (called by OrbService) ────────────────────────────────────
 
+    @staticmethod
+    def _live_first(listeners: list) -> list:
+        """
+        Sort a ticker's subscriber callbacks so live-mode (paper=False)
+        engines are notified before paper ones sharing the same signal.
+
+        Dispatch here is sequential and synchronous — each engine's callback
+        (contract selection, capital checks, order submission) runs to
+        completion before the next one is even called — so whichever engine
+        happens to be registered first gets first crack at the current price,
+        and the other is delayed behind that engine's *entire* processing
+        time, not just a few milliseconds. For an explicitly-paired
+        paper/live strategy (see ORBEngine.paired_strategy_id), that ordering
+        was previously arbitrary (whatever order configs loaded in); this
+        guarantees live is never the one waiting.
+
+        Callbacks are always bound ORBEngine methods (e.g.
+        self.on_breakout_confirmed), so cb.__self__ is the owning engine —
+        confirmed at every subscribe_* call site in ORBEngine._apply_config.
+        """
+        return sorted(listeners, key=lambda cb: getattr(getattr(cb, "__self__", None), "paper", True))
+
     def publish_bar(self, bar: OrbBar) -> None:
         with self._lock:
             buf = self._recent_bars.get(bar.ticker)
@@ -159,7 +181,7 @@ class OrbDataHub:
             # time) — this is a "how long since we last heard anything" check,
             # so it must reflect when we actually got it.
             self._last_bar_at = datetime.utcnow()
-            listeners = list(self._bar_subs.get(bar.ticker, ()))
+            listeners = self._live_first(list(self._bar_subs.get(bar.ticker, ())))
         for cb in listeners:
             try:
                 cb(bar)
@@ -184,7 +206,7 @@ class OrbDataHub:
         this ticker. direction is "CALL" | "PUT"; price is the confirming tick.
         """
         with self._lock:
-            listeners = list(self._breakout_subs.get(ticker, ()))
+            listeners = self._live_first(list(self._breakout_subs.get(ticker, ())))
         logger.info("[OrbDataHub] breakout confirmed %s %s @ %.2f → %d listener(s)",
                     ticker, direction, price, len(listeners))
         for cb in listeners:
@@ -203,7 +225,7 @@ class OrbDataHub:
         (out of 5) for logging / debug visibility.
         """
         with self._lock:
-            listeners = list(self._reversal_subs.get(ticker, ()))
+            listeners = self._live_first(list(self._reversal_subs.get(ticker, ())))
         logger.info(
             "[OrbDataHub] reversal confirmed %s %s @ %.2f score=%d/5 → %d listener(s)",
             ticker, direction, price, score, len(listeners),

@@ -96,6 +96,11 @@ export interface StrategyConfig {
   smart_contracts: boolean;
   debug_mode: boolean;
   confirm_entry: boolean;
+  // Explicit link to this strategy's paper/live counterpart (symmetric —
+  // kept in sync both ways by the backend). When set, a signal for this
+  // ticker/direction won't pause-for-confirmation against the paired
+  // sibling; see ORBEngine._find_ticker_conflict.
+  paired_strategy_id?: string | null;
   has_position?: boolean;
   qty_remaining?: number | null;
 }

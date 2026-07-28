@@ -5,6 +5,7 @@ Reads config back from strategy_config table.
 
 import os
 import uuid
+import asyncio
 import logging
 from datetime import datetime, date
 from typing import Optional
@@ -12,6 +13,65 @@ from typing import Optional
 from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
+
+
+def _run_async(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def enrich_open_trades_with_live_pnl(trades: list) -> list:
+    """
+    orb_trades.pnl/pnl_pct are only ever written by TradeLogger.log_exit() —
+    they stay NULL for the entire life of an open position, so a bare trade
+    list showed "no P&L" at all for a still-open row, even a swing/weekly
+    hold sitting open for days. Attaches a live, unrealized
+    live_price/live_pnl/live_pnl_pct to each still-open row — a separate
+    field from the real (realized) pnl/pnl_pct, never written to the DB, so
+    a partially-closed (TP1-hit) row's real partial-realized pnl is never
+    confused with this estimate.
+
+    Shared by strategy_routes.py's /strategy/trades (Trade Log) and
+    ReviewGenerator's open-positions section (Daily Review) — module-level,
+    not a TradeLogger method, so ReviewGenerator (which only holds a raw
+    Supabase client, not a TradeLogger instance) can import it directly
+    without a circular import back through strategy_routes.py.
+
+    Always goes straight to a REST quote (AlpacaOptionService.
+    get_contract_prices_batch) rather than trying to reuse a resident
+    ORBEngine's in-memory price — a multi-day swing/weekly hold has no
+    guarantee its option-stream subscription is still alive or its cached
+    price is fresh, whereas a REST snapshot is correct regardless of how
+    long the position has been open or whether the process restarted since.
+    """
+    open_rows = [t for t in trades if t.get("exit_time") is None and t.get("contract_symbol")]
+    if not open_rows:
+        return trades
+
+    from services.alpaca.alpaca_option_service import get_alpaca_option_service
+
+    symbols = list({t["contract_symbol"] for t in open_rows})
+    try:
+        prices = _run_async(get_alpaca_option_service().get_contract_prices_batch(symbols))
+    except Exception as e:
+        logger.warning("[trades] live price fetch failed for %d open row(s): %s", len(open_rows), e)
+        return trades
+
+    for row in open_rows:
+        price = prices.get(row["contract_symbol"])
+        entry = row.get("entry_premium")
+        qty   = (row.get("qty_entered") or 0) - (row.get("qty_exited") or 0)
+        if price is None or not entry or qty <= 0:
+            continue
+        row["live_price"]   = round(price, 4)
+        row["live_pnl"]     = round((price - entry) * qty * 100, 2)
+        row["live_pnl_pct"] = round((price - entry) / entry * 100, 2)
+
+    return trades
 
 
 class TradeLogger:
@@ -56,6 +116,7 @@ class TradeLogger:
                 "debug_mode":             config.get("debug_mode", False),
                 "smart_contracts":        config.get("smart_contracts", False),
                 "confirm_entry":          config.get("confirm_entry", False),
+                "paired_strategy_id":     config.get("paired_strategy_id"),
                 "updated_at":             datetime.utcnow().isoformat(),
             }
             if "id" in config and config["id"]:
@@ -77,6 +138,16 @@ class TradeLogger:
                     self.client.table(table).update({"strategy_id": None}).eq("strategy_id", strategy_id).execute()
                 except Exception:
                     pass  # table may not have strategy_id column — safe to ignore
+            # Belt-and-suspenders: unlink any config still pointing at this one as
+            # its paired sibling. The route layer (_sync_paired_strategy) already
+            # does this for normal delete requests, but this covers any other
+            # caller of delete_strategy_config directly.
+            try:
+                self.client.table("strategy_configs").update(
+                    {"paired_strategy_id": None}
+                ).eq("paired_strategy_id", strategy_id).execute()
+            except Exception:
+                pass
             self.client.table("strategy_configs").delete().eq("id", strategy_id).execute()
         except Exception as e:
             logger.error("[TradeLogger] delete_strategy_config failed: %s", e)
