@@ -349,9 +349,14 @@ export const ORBAdminModal: React.FC<ORBAdminModalProps> = ({
 
               <Text className="text-red-600 text-sm mb-4">
                 Permanently deletes all rows from{' '}
-                <Text className="font-mono font-semibold">orb_trades</Text> and{' '}
-                <Text className="font-mono font-semibold">orb_session</Text>. Use this to clear
-                paper-trading debug data and start fresh.
+                <Text className="font-mono font-semibold">orb_trades</Text>,{' '}
+                <Text className="font-mono font-semibold">orb_session</Text>,{' '}
+                <Text className="font-mono font-semibold">performance_reviews</Text>, and{' '}
+                <Text className="font-mono font-semibold">orb_pending_confirmations</Text> — every
+                Trade Log, Stats, and Daily Review entry goes with it. Also resets every running
+                strategy's session state (halts, cooldowns, today's P&L) so it takes effect
+                immediately, not just after a restart. An engine with an open position right now
+                is left running as-is, but its trade history won't be there to log its exit into.
               </Text>
 
               {/* Clear debug logs toggle */}

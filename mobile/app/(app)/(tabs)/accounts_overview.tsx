@@ -479,6 +479,7 @@ const styles = StyleSheet.create({
   title:     { fontSize: 20, fontWeight: '700' },
 
   periodBar: {
+    paddingTop: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   periodBarContent: {

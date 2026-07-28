@@ -60,6 +60,69 @@ def get_historical_prices(ticker: str, period_key: str) -> dict:
     }
 
 
+def get_intraday_chart_for_date(ticker: str, date_str: str, interval: str = "5m") -> dict:
+    """
+    Intraday OHLCV + VWAP + RSI(14) for ONE specific past calendar day —
+    used by the Daily Review's per-trade chart (see routes/ticker_routes.py's
+    /ticker/<ticker>/history-date) so a trade card can show what actually
+    happened around its entry/exit, not just the numbers.
+
+    yfinance only serves intraday intervals for a limited lookback window
+    (roughly 60 days for 5m/15m bars, far less for 1m) — a request for an
+    older session_date simply comes back empty. That's expected, not an
+    error: callers must check "available" and show a graceful fallback
+    rather than treating an empty result as a fetch failure.
+
+    RSI-14 uses the same simple-rolling-mean convention as
+    technical_service.get_technicals (not true Wilder smoothing) — kept
+    consistent with the rest of this codebase rather than mixing conventions.
+    VWAP resets each session (cumulative from the first bar of THIS date only),
+    matching how VWAP is meant to be read on an intraday chart.
+    """
+    import pandas as pd
+
+    try:
+        start = datetime.strptime(date_str, "%Y-%m-%d")
+        end = start + timedelta(days=1)
+        hist = yf.Ticker(ticker).history(start=start, end=end, interval=interval)
+        if not hist.empty and "Close" in hist.columns:
+            hist = hist.dropna(subset=["Close"])
+    except Exception as e:
+        logger.warning(f"Failed to get intraday chart for {ticker} on {date_str}: {str(e)}")
+        hist = pd.DataFrame()
+
+    if hist.empty:
+        return {"available": False, "dates": [], "opens": [], "highs": [], "lows": [],
+                "closes": [], "volumes": [], "vwap": [], "rsi": []}
+
+    typical = (hist["High"] + hist["Low"] + hist["Close"]) / 3
+    cum_pv  = (typical * hist["Volume"]).cumsum()
+    cum_vol = hist["Volume"].cumsum().replace(0, float("nan"))
+    vwap    = (cum_pv / cum_vol).bfill().fillna(hist["Close"]).tolist()
+
+    close = hist["Close"]
+    delta = close.diff()
+    gain  = delta.clip(lower=0).rolling(14).mean()
+    loss  = (-delta.clip(upper=0)).rolling(14).mean()
+    rs    = gain / loss.replace(0, float("nan"))
+    rsi_series = (100 - 100 / (1 + rs))
+    # First 14 bars have no RSI yet (insufficient window) — null, not 0/NaN,
+    # so the frontend can skip plotting them instead of drawing a false floor.
+    rsi = [None if pd.isna(v) else float(v) for v in rsi_series.tolist()]
+
+    return {
+        "available": True,
+        "dates":   hist.index.strftime("%Y-%m-%dT%H:%M:%S%z").tolist(),
+        "opens":   hist["Open"].tolist(),
+        "highs":   hist["High"].tolist(),
+        "lows":    hist["Low"].tolist(),
+        "closes":  hist["Close"].tolist(),
+        "volumes": hist["Volume"].tolist(),
+        "vwap":    [round(float(v), 4) for v in vwap],
+        "rsi":     rsi,
+    }
+
+
 def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_options_analysis: bool | None = True) -> dict:
     """
     Perform comprehensive research using yFinance including options analysis.

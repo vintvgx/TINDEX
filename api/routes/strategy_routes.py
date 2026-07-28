@@ -1440,9 +1440,24 @@ def get_alpaca_positions():
 @strategy_bp.route("/data/reset", methods=["POST"])
 def reset_strategy_data():
     """
-    Danger-zone: delete all rows from orb_trades and orb_session so the user
-    can start fresh.  Optionally also wipes orb_debug_logs when
-    clear_debug_logs=true is passed in the JSON body.
+    Danger-zone: delete all rows from orb_trades, orb_session,
+    performance_reviews, and orb_pending_confirmations so the user can start
+    fresh and re-rate the system from a clean slate. Optionally also wipes
+    orb_debug_logs when clear_debug_logs=true is passed in the JSON body.
+
+    performance_reviews and orb_pending_confirmations are cleared
+    unconditionally (not gated behind a flag) — both are entirely derived
+    from trades that no longer exist after this call, so leaving them behind
+    would show stale AI reviews / confirmation prompts referencing deleted
+    history, which defeats the point of a "clean slate."
+
+    Also resets every currently-loaded engine's in-memory session state
+    (_session_halted, _session_realized_pnl, re-entry cooldowns, etc. — see
+    ORBEngine.reset_session). Without this, an engine that halted on
+    daily_loss_limit or is sitting in a post-loss cooldown earlier today would
+    keep enforcing that against trades that no longer exist in the DB until
+    the next 9:35 ET calculate_orb or a server restart — the DB would say
+    "clean slate" while the live engine still didn't believe it.
 
     Intended for development / paper-trading only.  The route does not require
     a confirmation token beyond the explicit POST — the frontend handles the
@@ -1456,14 +1471,58 @@ def reset_strategy_data():
         # UUID or integer — avoids the cast error from a hardcoded UUID sentinel.
         client.table("orb_trades").delete().not_.is_("id", "null").execute()
         client.table("orb_session").delete().not_.is_("id", "null").execute()
+        # performance_reviews has no guaranteed "id" column usage elsewhere in
+        # this codebase (upserts key on review_date+paper_mode) — filter on
+        # review_date instead, which is always populated and part of that
+        # composite key, so this can't silently no-op on a schema mismatch.
+        client.table("performance_reviews").delete().not_.is_("review_date", "null").execute()
+        client.table("orb_pending_confirmations").delete().not_.is_("id", "null").execute()
+        cleared = ["orb_trades", "orb_session", "performance_reviews", "orb_pending_confirmations"]
         if clear_debug:
             client.table("orb_debug_logs").delete().not_.is_("id", "null").execute()
-        logger.warning("[strategy] Trade data reset performed — orb_trades and orb_session cleared")
+            cleared.append("orb_debug_logs")
+
+        # Reset every live engine's session state so halts/cooldowns/realized
+        # P&L don't keep enforcing against trades that no longer exist.
+        # Skip any engine that currently holds an OPEN position — resetting
+        # it would wipe its self.exit_manager/self.trade_taken and silently
+        # orphan a real broker position with no more SL/TP monitoring. That
+        # position's own orb_trades row was just deleted above too, so its
+        # eventual exit won't have a row left to log against; this is
+        # surfaced to the caller via open_position_engines rather than
+        # silently swallowed, since it's the one real risk of resetting
+        # while something is still open.
+        reset_count = 0
+        open_position_skips = []
+        for eng in list(_engines.values()) + list(_immediate_engines.values()):
+            if getattr(eng, "trade_taken", False):
+                open_position_skips.append(f"{eng.ticker} {getattr(eng, 'contract_symbol', '?')}")
+                continue
+            try:
+                eng.reset_session()
+                reset_count += 1
+            except Exception as e:
+                logger.warning("[strategy] reset_session failed for %s during data/reset: %s",
+                               getattr(eng, "strategy_id", "?"), e)
+
+        logger.warning(
+            "[strategy] Trade data reset performed — %s cleared, %d live engine(s) session-reset, "
+            "%d skipped (open position)",
+            ", ".join(cleared), reset_count, len(open_position_skips),
+        )
+        warning = (
+            f" WARNING: {len(open_position_skips)} engine(s) have an open position "
+            f"({', '.join(open_position_skips)}) — left running as-is, but its trade "
+            f"history was just deleted, so its eventual exit won't be logged."
+            if open_position_skips else ""
+        )
         return jsonify({
             "status":  "ok",
-            "message": "Trade data cleared. orb_trades and orb_session wiped."
-                       + (" orb_debug_logs also cleared." if clear_debug else ""),
-            "cleared": ["orb_trades", "orb_session"] + (["orb_debug_logs"] if clear_debug else []),
+            "message": f"Trade data cleared ({', '.join(cleared)}). "
+                       f"{reset_count} live engine(s) session-reset.{warning}",
+            "cleared": cleared,
+            "engines_reset": reset_count,
+            "open_position_skips": open_position_skips,
         })
     except Exception as e:
         logger.error("[strategy] data/reset failed: %s", e)
