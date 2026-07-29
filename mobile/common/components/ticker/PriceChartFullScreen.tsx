@@ -9,6 +9,8 @@ import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { getOrbStatus } from '@/common/utils/orb/getOrbStatus';
 import { AdvancedPriceChart, AdvancedScrubPoint } from '@/common/components/ticker/AdvancedPriceChart';
 import type { PricePeriod, TickerHistoryData } from '@/common/types/blogPosts/ticker';
+import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
+import { LiveModeToggle } from '@/common/components/strategy/LiveModeToggle';
 
 interface PriceChartFullScreenProps {
   visible: boolean;
@@ -69,6 +71,14 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
 
   const { data: orbData } = useTickerORBRange(visible ? ticker : '');
   const hasOrbData = orbData != null;
+
+  // Open contracts for this ticker, below the chart — see LivePositionsSection.
+  const [contractsMode, setContractsMode] = useState<'live' | 'paper'>('live');
+  const positionsData = useLivePositionsData(contractsMode, ticker);
+  const contractsCounts = {
+    live:  useLivePositionsData('live', ticker).filteredPositions.length,
+    paper: useLivePositionsData('paper', ticker).filteredPositions.length,
+  };
 
   // Reset when the sheet closes so reopening starts fresh, and so the
   // WebSocket below disconnects rather than idling in the background.
@@ -230,6 +240,25 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
               </Pressable>
             </View>
           )}
+
+          {/* Open contracts for this ticker — full data + editable SL/TP via
+              the same LivePositionPanel used everywhere else (Edit/Add/Exit,
+              live WS pricing). See LivePositionsSection.tsx. */}
+          <View style={{ marginTop: 18, borderTopWidth: 1, borderTopColor: colors.separator, paddingTop: 14 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>
+                Open Contracts — {ticker}
+              </Text>
+              <LiveModeToggle mode={contractsMode} onChange={setContractsMode} counts={contractsCounts} colors={colors} />
+            </View>
+            <LivePositionsBody
+              data={positionsData}
+              mode={contractsMode}
+              colors={colors}
+              emptyTitle={`No Open ${contractsMode === 'live' ? 'Live' : 'Paper'} Contracts`}
+              emptySubtitle={`Open ${ticker} positions will appear here.`}
+            />
+          </View>
         </View>
         </ScrollView>
       </View>

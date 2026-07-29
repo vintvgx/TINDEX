@@ -32,6 +32,9 @@ export interface LivePriceData {
    *  stop, this is when that recovery will have held long enough (60s) to
    *  cancel the grace window. Null while price is still at/below the stop. */
   sl_recovery_deadline?: string | null;
+  /** False for a 1-contract entry regardless of profile — TP2 is never
+   *  reachable. See common/types/strategy.ts's StrategyPosition.use_tp2. */
+  use_tp2?: boolean;
   // ── Simulation-only fields (all optional — absent on a real live position) ──
   sim?:               boolean;
   sim_tick?:          number;

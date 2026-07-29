@@ -19,14 +19,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, Animated, Easing, StyleSheet, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { useWatchlists } from '@/hooks/queries/watchlist/useWatchlist';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useOrbHubHealth } from '@/hooks/queries/orb/useOrbHubHealth';
+import { usePendingConfirmations } from '@/hooks/queries/strategy/usePendingConfirmations';
 import { Skeleton } from '@/common/components/ui/Skeleton';
 import type { WatchlistStock } from '@/common/types/watchlist';
+
+const CONFIRM_ORANGE = '#F59E0B';
 
 // Live-stream symbols (SPY arrives on its own field; the rest via livePrices).
 const STREAM_TICKERS = ['SPY', 'QQQ', 'IWM', 'AAPL', 'TSLA', 'NVDA', 'MSFT', 'AMZN'];
@@ -85,6 +89,13 @@ export function TickerTape() {
 
   const [modeIndex, setModeIndex] = useState(0);
   const mode = MODES[modeIndex];
+
+  // ── Trade confirmations pending — takes over the whole tape (see the early
+  // return below) until every one is resolved. Polls independently of
+  // PendingConfirmationProvider/Dashboard so this stays accurate even when
+  // neither of those is mounted/focused. ────────────────────────────────────
+  const { data: pendingList } = usePendingConfirmations();
+  const pendingCount = pendingList?.length ?? 0;
 
   // ── Data sources ──────────────────────────────────────────────────────────
   const { livePrices, spy, vix, sentiment } = useMarketStream(STREAM_TICKERS);
@@ -238,6 +249,29 @@ export function TickerTape() {
 
   useEffect(() => () => { if (maxWaitRef.current) clearTimeout(maxWaitRef.current); }, []);
 
+  // ── Awaiting confirmation — replaces ticker prices entirely, not just an
+  // overlay, so it can't be mistaken for a passing banner among the market
+  // data. Stays up (and blocks the normal mode-cycle tap) until every pending
+  // confirmation is resolved (entered or skipped) — see the Dashboard's
+  // pending-confirmation cards, which is where tapping this sends you.
+  if (pendingCount > 0) {
+    return (
+      <View style={{ backgroundColor: colors.tape, paddingTop: insets.top }}>
+        <Pressable
+          style={[styles.tape, styles.confirmTape, { backgroundColor: CONFIRM_ORANGE + '1F' }]}
+          onPress={() => router.push('/(app)/(tabs)/dashboard')}
+          accessibilityRole="button"
+          accessibilityLabel={`${pendingCount} trade confirmation(s) awaiting review. Tap to open Dashboard.`}
+        >
+          <Ionicons name="warning" size={13} color={CONFIRM_ORANGE} style={{ marginLeft: 12, marginRight: 6 }} />
+          <Text style={[styles.confirmText, { color: CONFIRM_ORANGE }]} numberOfLines={1}>
+            Awaiting Trade Confirmation{pendingCount > 1 ? ` · ${pendingCount}` : ''} — Tap to Review
+          </Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
     <View style={{ backgroundColor: colors.tape, paddingTop: insets.top }}>
       <Pressable style={styles.tape} onPress={cycle} accessibilityRole="button" accessibilityLabel={`Ticker tape: ${mode.label}. Tap to change.`}>
@@ -281,6 +315,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     overflow: 'hidden',
+  },
+  confirmTape: {
+    justifyContent: 'flex-start',
+  },
+  confirmText: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
   liveDot: {
     width: 6,

@@ -3,6 +3,7 @@ import {
   Modal, View, Text, TextInput, TouchableOpacity, ScrollView,
   SafeAreaView, ActivityIndicator, Alert,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useToast } from '@/common/components/ui/Toast';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
@@ -120,23 +121,29 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
     <Modal
       visible={visible}
       animationType="slide"
-      // fullScreen (not pageSheet) — pageSheet allows an iOS swipe-down-to-dismiss
-      // gesture that RN's Modal exposes no prop to disable. fullScreen has no such
-      // gesture, so Enter/Skip really are the only way out. onRequestClose is a
-      // no-op for the same reason on Android (hardware/gesture back button).
-      presentationStyle="fullScreen"
-      onRequestClose={() => {}}
+      // pageSheet — this is now opened via "Edit" from a Dashboard card that
+      // already offers Skip/Enter directly (see PendingConfirmationCard), so
+      // it no longer needs to be the only way out. Swipe-down-to-dismiss and
+      // the header close button both just cancel back to the card, which
+      // still shows Skip/Enter for whenever the user does want to act.
+      presentationStyle="pageSheet"
+      onRequestClose={onResolved}
     >
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-        <View style={{ padding: 16, borderBottomWidth: 1, borderColor: colors.border }}>
-          <Text style={{ color: colors.text, fontSize: 19, fontWeight: '700' }}>
-            {pending.conflict_context ? `${pending.ticker} Already Open` : `Confirm ${pending.ticker} Trade`}
-          </Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
-            <Badge label={pending.direction} color={pending.direction === 'CALL' ? '#10B981' : '#FF453A'} colors={colors} />
-            <Badge label={pending.profile.replace('_', ' ')} color={colors.accent} colors={colors} />
-            <Badge label={`Confidence ${pending.confidence.toFixed(0)}/100`} color={confColor} colors={colors} />
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderColor: colors.border }}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.text, fontSize: 19, fontWeight: '700' }}>
+              {pending.conflict_context ? `${pending.ticker} Already Open` : `Confirm ${pending.ticker} Trade`}
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+              <Badge label={pending.direction} color={pending.direction === 'CALL' ? '#10B981' : '#FF453A'} colors={colors} />
+              <Badge label={pending.profile.replace('_', ' ')} color={colors.accent} colors={colors} />
+              <Badge label={`Confidence ${pending.confidence.toFixed(0)}/100`} color={confColor} colors={colors} />
+            </View>
           </View>
+          <TouchableOpacity onPress={onResolved} hitSlop={10} style={{ padding: 4 }}>
+            <Ionicons name="close" size={22} color={colors.textSecondary} />
+          </TouchableOpacity>
         </View>
 
         <ScrollView contentContainerStyle={{ padding: 16 }}>

@@ -38,14 +38,14 @@ class NavigationService {
    * rather than pushing a route, so the ticker view can appear instantly
    * as a sheet over whatever screen is currently active.
    */
-  toTicker(ticker: string): void {
+  toTicker(ticker: string, options?: { fullScreenChart?: boolean }): void {
     if (!ticker || typeof ticker !== 'string') {
       console.warn('NavigationService.toTicker: Invalid ticker provided');
       return;
     }
 
     try {
-      TickerSheetService.getInstance().open(ticker.toUpperCase());
+      TickerSheetService.getInstance().open(ticker.toUpperCase(), options);
     } catch (error) {
       console.error('NavigationService.toTicker: Navigation failed', error);
     }

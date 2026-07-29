@@ -399,9 +399,12 @@ class StrategyNotifier:
         either because the strategy has confirm_entry enabled, or because
         conflict_context is set (another engine already holds this same
         ticker+direction open — see ORBEngine._find_ticker_conflict).
-        Tapping this opens the in-app Enter/Skip confirmation modal (the
-        modal itself is also shown from foregrounding the app while a
-        confirmation is open, not only from the tap).
+        Tapping this opens the Dashboard, where every pending confirmation
+        shows as its own card (Edit/Skip/Enter) — see dashboard.tsx and
+        TickerTape's "Awaiting Trade Confirmation" banner, both of which
+        already surface this independent of the tap (2026-07-29 redesign:
+        this used to be a blocking full-screen modal that could stack two
+        deep and lock up the UI).
         """
         tag    = _account_tag(paper_mode)
         symbol = contract.get("symbol", "")
@@ -424,7 +427,7 @@ class StrategyNotifier:
             title=title,
             body=body,
             data={
-                "screen":     "strategy",
+                "screen":     "dashboard",
                 "type":       "confirm_entry",
                 "pending_id": pending_id,
                 "symbol":     symbol,

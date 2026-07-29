@@ -15,6 +15,12 @@ interface BaseProps {
   entry_premium: number;
   tp1_hit?: boolean;
   tp2_hit?: boolean;
+  /** Contracts still open — drives the "Advanced" per-level qty section
+   *  (only shown when there's more than 1 to split). */
+  qty_remaining?: number;
+  /** False for a 1-contract entry regardless of profile — hides TP2 (and
+   *  its Advanced qty field) entirely since it can never fire. */
+  use_tp2?: boolean;
   /** Stable per-trade key for the client-only hide feature — see
    *  lib/positionHideKey.ts. Never sent to the backend. */
   hideKey: string;
@@ -34,7 +40,10 @@ interface OrbProps extends BaseProps {
 type Props = OrbProps;
 
 export function EditExitsButton(props: Props) {
-  const { ticker, hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit, hideKey, label, style, onUpdated } = props;
+  const {
+    ticker, hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit,
+    qty_remaining, use_tp2, hideKey, label, style, onUpdated,
+  } = props;
   const colors = useThemeColors();
   const toast = useToast();
   const [open, setOpen] = useState(false);
@@ -49,8 +58,9 @@ export function EditExitsButton(props: Props) {
     hard_stop?: number;
     tp1?: number;
     tp2?: number;
-    tp1_pct?: number;
-    tp2_pct?: number;
+    sl_qty?: number;
+    tp1_qty?: number;
+    tp2_qty?: number;
   }) => {
     await orbMutation.mutateAsync({ strategy_id: props.strategy_id, ...payload });
     onUpdated?.(payload);
@@ -82,7 +92,7 @@ export function EditExitsButton(props: Props) {
         mode={props.mode as ExitEditMode}
         positionId={props.strategy_id}
         ticker={ticker}
-        current={{ hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit }}
+        current={{ hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit, qty_remaining, use_tp2 }}
         onSubmit={handleSubmit}
         isLoading={isPending}
         hidden={hidden}

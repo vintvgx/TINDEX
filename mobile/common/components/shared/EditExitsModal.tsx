@@ -17,6 +17,12 @@ export interface CurrentExits {
   entry_premium: number;   // for display/validation
   tp1_hit?: boolean;
   tp2_hit?: boolean;
+  /** Contracts still open — drives the "Advanced" per-level qty section
+   *  below (only shown when there's more than 1 to split). */
+  qty_remaining?: number;
+  /** False for a 1-contract entry regardless of profile — hides the TP2
+   *  qty field entirely since it can never fire. */
+  use_tp2?: boolean;
 }
 
 interface Props {
@@ -30,6 +36,9 @@ interface Props {
     hard_stop?: number;
     tp1?: number;
     tp2?: number;
+    sl_qty?: number;
+    tp1_qty?: number;
+    tp2_qty?: number;
   }) => Promise<void>;
   isLoading?: boolean;
   /** Whether this position is currently hidden from the Dashboard/Live
@@ -53,6 +62,15 @@ export function EditExitsModal({
   const [tp1Val, setTp1Val] = useState('');
   const [tp2Val, setTp2Val] = useState('');
 
+  // "Advanced" per-level qty overrides — how many of qty_remaining to sell
+  // at each level, instead of the profile's fixed close percentage. Only
+  // meaningful (and only shown) when there's more than 1 contract to split.
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [slQtyVal, setSlQtyVal]   = useState('');
+  const [tp1QtyVal, setTp1QtyVal] = useState('');
+  const [tp2QtyVal, setTp2QtyVal] = useState('');
+  const canSplit = (current.qty_remaining ?? 0) > 1;
+
   // Reset fields to current values only on the closed→open transition — `current`
   // comes from a polling query and gets a new object reference on every refetch,
   // so keying this effect on `current` too would wipe out in-progress edits every
@@ -63,6 +81,10 @@ export function EditExitsModal({
       setStopVal(current.hard_stop > 0 ? current.hard_stop.toFixed(2) : '');
       setTp1Val(current.tp1 > 0 ? current.tp1.toFixed(2) : '');
       setTp2Val(current.tp2 && current.tp2 > 0 ? current.tp2.toFixed(2) : '');
+      setShowAdvanced(false);
+      setSlQtyVal('');
+      setTp1QtyVal('');
+      setTp2QtyVal('');
     }
     wasVisibleRef.current = visible;
   }, [visible, current]);
@@ -100,10 +122,25 @@ export function EditExitsModal({
       return;
     }
 
+    const qtyRemaining = current.qty_remaining ?? 0;
+    const parseQty = (raw: string): number | undefined => raw ? parseInt(raw, 10) : undefined;
+    const slQty  = parseQty(slQtyVal);
+    const tp1Qty = parseQty(tp1QtyVal);
+    const tp2Qty = parseQty(tp2QtyVal);
+    for (const [label, qty] of [['Stop-loss', slQty], ['TP1', tp1Qty], ['TP2', tp2Qty]] as const) {
+      if (qty !== undefined && (isNaN(qty) || qty < 1 || qty > qtyRemaining)) {
+        Alert.alert('Invalid', `${label} quantity must be between 1 and ${qtyRemaining}.`);
+        return;
+      }
+    }
+
     const payload: Parameters<typeof onSubmit>[0] = {};
     if (stop !== undefined && !isNaN(stop)) payload.hard_stop = stop;
     if (tp1 !== undefined && !isNaN(tp1)) payload.tp1 = tp1;
     if (tp2 !== undefined && !isNaN(tp2)) payload.tp2 = tp2;
+    if (slQty !== undefined) payload.sl_qty = slQty;
+    if (tp1Qty !== undefined) payload.tp1_qty = tp1Qty;
+    if (tp2Qty !== undefined) payload.tp2_qty = tp2Qty;
 
     if (!Object.keys(payload).length) {
       Alert.alert('No changes', 'Enter at least one value to update.');
@@ -283,6 +320,64 @@ export function EditExitsModal({
             </View>
           </View>
 
+          {/* Advanced — per-level contract counts, only when there's more
+              than 1 to split. Collapsed by default so the common case
+              (just move a price) stays a 3-field form. */}
+          {canSplit && (
+            <>
+              <TouchableOpacity
+                onPress={() => setShowAdvanced(v => !v)}
+                activeOpacity={0.7}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: showAdvanced ? 14 : 20 }}
+              >
+                <Ionicons name={showAdvanced ? 'chevron-up' : 'chevron-forward'} size={14} color={colors.textSecondary} />
+                <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
+                  Advanced — how many contracts to sell at each level
+                </Text>
+              </TouchableOpacity>
+
+              {showAdvanced && (
+                <View style={{ backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: colors.border, gap: 14 }}>
+                  <Text style={{ color: colors.textSecondary, fontSize: 12, lineHeight: 17 }}>
+                    Replaces the profile's default split. A partial stop-loss sells only what
+                    you set here, then leaves the rest running with{' '}
+                    <Text style={{ fontWeight: '700', color: colors.warning }}>no further automatic stop</Text> —
+                    you manage the remainder from here on.
+                  </Text>
+
+                  <AdvancedQtyRow
+                    label="Sell at Stop Loss"
+                    value={slQtyVal}
+                    onChangeText={setSlQtyVal}
+                    max={current.qty_remaining ?? 0}
+                    color="#FF453A"
+                    colors={colors}
+                  />
+                  <AdvancedQtyRow
+                    label="Sell at TP1"
+                    value={tp1QtyVal}
+                    onChangeText={setTp1QtyVal}
+                    max={current.qty_remaining ?? 0}
+                    color="#10B981"
+                    colors={colors}
+                    disabled={current.tp1_hit}
+                  />
+                  {current.use_tp2 !== false && (
+                    <AdvancedQtyRow
+                      label="Sell at TP2"
+                      value={tp2QtyVal}
+                      onChangeText={setTp2QtyVal}
+                      max={current.qty_remaining ?? 0}
+                      color="#F59E0B"
+                      colors={colors}
+                      disabled={current.tp2_hit}
+                    />
+                  )}
+                </View>
+              )}
+            </>
+          )}
+
           {/* Submit */}
           <TouchableOpacity
             onPress={validateAndSubmit}
@@ -323,5 +418,41 @@ export function EditExitsModal({
         </ScrollView>
       </SafeAreaView>
     </Modal>
+  );
+}
+
+function AdvancedQtyRow({ label, value, onChangeText, max, color, colors, disabled }: {
+  label: string;
+  value: string;
+  onChangeText: (v: string) => void;
+  max: number;
+  color: string;
+  colors: any;
+  disabled?: boolean;
+}) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, opacity: disabled ? 0.5 : 1 }}>
+      <Text style={{ color: colors.text, fontSize: 13, flex: 1 }}>{label}</Text>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        keyboardType="number-pad"
+        editable={!disabled}
+        placeholder={`of ${max}`}
+        placeholderTextColor={colors.textTertiary}
+        style={{
+          width: 70,
+          textAlign: 'center',
+          backgroundColor: colors.background,
+          borderRadius: 8,
+          paddingVertical: 8,
+          color,
+          fontSize: 15,
+          fontWeight: '700',
+          borderWidth: 1,
+          borderColor: value ? color + '55' : colors.border,
+        }}
+      />
+    </View>
   );
 }

@@ -10,6 +10,8 @@ import { useAlpacaAccountsHistory, useAlpacaTransfers } from '@/hooks/queries/st
 import type { AccountHistoryEntry, AccountTransfer } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useAccountValueDisplay } from '@/hooks/queries/strategy/useAccountValueDisplay';
 import { StatPill } from '@/common/components/ui/StatPill';
+import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
+import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 
 type Period = 'today' | 'week' | 'month' | 'ytd' | 'all';
 
@@ -41,6 +43,14 @@ export default function AccountsScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
   const [period, setPeriod] = useState<Period>('today');
   const [manualRefreshing, setManualRefreshing] = useState(false);
+  // Live Positions section (bottom of this screen) — decoupled from `period`
+  // above, same as position.tsx/strategy.tsx's own account-mode toggle.
+  const [positionsMode, setPositionsMode] = useState<AccountMode>('live');
+  const positionsData = useLivePositionsData(positionsMode);
+  const positionsCounts = {
+    live:  useLivePositionsData('live').filteredPositions.length,
+    paper: useLivePositionsData('paper').filteredPositions.length,
+  };
 
   const { paper: paperDisplay, live: liveDisplay, has_open_positions } = useAccountValueDisplay();
   const { data: history, isLoading: histLoading, refetch: refetchHistory } = useAlpacaAccountsHistory();
@@ -179,6 +189,24 @@ export default function AccountsScreen({ embedded = false }: Props) {
               Paper and Live account data shown above. Trading mode (paper vs live) is
               configured per-strategy in the ORB Strategy screen.
             </Text>
+
+            {/* Live Positions — its own section at the bottom of this screen
+                (previously a separate sub-page under Alpaca; see
+                alpaca_overview.tsx, which now just renders this screen). */}
+            <View style={{ marginTop: 24, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 16 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <Text style={[styles.sectionTitle, { color: colors.text }]}>Live Positions</Text>
+                <LiveModeToggle mode={positionsMode} onChange={setPositionsMode} counts={positionsCounts} colors={colors} />
+              </View>
+              <LivePositionsBody
+                data={positionsData}
+                mode={positionsMode}
+                colors={colors}
+                emptySubtitle={positionsMode === 'live'
+                  ? 'Active live positions will appear here in real time'
+                  : 'Active paper positions will appear here'}
+              />
+            </View>
           </>
         )}
 
@@ -532,6 +560,7 @@ const styles = StyleSheet.create({
   compValue: { fontSize: 16, fontWeight: '700' },
 
   disclaimer: { fontSize: 11, lineHeight: 17, marginTop: 4 },
+  sectionTitle: { fontSize: 17, fontWeight: '700' },
 
   transferRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10 },
   transferDate: { fontSize: 13, fontWeight: '600', marginBottom: 2 },

@@ -8,12 +8,19 @@
  * the ticker changes.
  */
 
-type Listener = (ticker: string | null) => void;
+export interface TickerSheetOpenOptions {
+  /** Opens straight into the full-screen chart view (e.g. the "Open Chart"
+   *  button on a live position card) instead of the default sheet overview. */
+  fullScreenChart?: boolean;
+}
+
+type Listener = (ticker: string | null, options: TickerSheetOpenOptions) => void;
 
 class TickerSheetService {
   private static instance: TickerSheetService;
   private listeners: Set<Listener> = new Set();
   private activeTicker: string | null = null;
+  private activeOptions: TickerSheetOpenOptions = {};
 
   static getInstance(): TickerSheetService {
     if (!TickerSheetService.instance) {
@@ -22,17 +29,19 @@ class TickerSheetService {
     return TickerSheetService.instance;
   }
 
-  open(ticker: string): void {
+  open(ticker: string, options: TickerSheetOpenOptions = {}): void {
     if (!ticker || typeof ticker !== 'string') {
       console.warn('TickerSheetService.open: Invalid ticker provided');
       return;
     }
     this.activeTicker = ticker.toUpperCase();
+    this.activeOptions = options;
     this.notify();
   }
 
   close(): void {
     this.activeTicker = null;
+    this.activeOptions = {};
     this.notify();
   }
 
@@ -46,7 +55,7 @@ class TickerSheetService {
   }
 
   private notify(): void {
-    this.listeners.forEach((listener) => listener(this.activeTicker));
+    this.listeners.forEach((listener) => listener(this.activeTicker, this.activeOptions));
   }
 }
 

@@ -2562,6 +2562,10 @@ class ORBEngine:
             "sl_grace_active":      em_state.get("sl_grace_active", False),
             "sl_grace_deadline":    em_state.get("sl_grace_deadline"),
             "sl_recovery_deadline": em_state.get("sl_recovery_deadline"),
+            # Whether TP2 is even reachable for this trade — see
+            # routes/strategy_routes.py's _engine_position_response for the
+            # same field on the REST side.
+            "use_tp2":              em_state.get("use_tp2", False),
         })
         with self._live_clients_lock:
             for q in list(self._live_clients):
@@ -2620,8 +2624,13 @@ class ORBEngine:
 
         # Feed the cascade tracker at bar cadence (not quote cadence — inter-bar
         # quotes repeat the same underlying price and would reset the counter).
+        # Cascade now judges candle color (open vs. close) rather than a
+        # cross-bar close comparison — see ExitManager.on_underlying_bar. If a
+        # provider ever omits open on a bar, fall back to close (a "doji" with
+        # no information) rather than crashing or guessing a direction.
         if self.trade_taken and self.exit_manager:
-            self.exit_manager.on_underlying_bar(bar.close)
+            bar_open = bar.open if bar.open is not None else bar.close
+            self.exit_manager.on_underlying_bar(bar_open, bar.close)
 
         # Only act once the ORB is established and the session isn't skipped.
         # getattr guards the brief __init__ window before _reset_session_state runs.

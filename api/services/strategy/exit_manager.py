@@ -70,7 +70,15 @@ class ExitManager:
 
         # Disable TP2 when the profile explicitly opts out OR when starting with
         # ≤ 2 contracts (TP1 closes one, the other becomes a runner — no TP2 needed).
-        self._use_tp2 = profile.get("use_tp2", qty > 2)
+        # A 1-contract entry is a hard override, not just a default: TP1 hitting
+        # always closes the entire position (see qty_tp1's max(1, ...) floor
+        # below — floor(1 * any_pct) rounds to 0, then max(1, 0) closes the
+        # sole contract), so there is never a runner left for TP2 or cascade to
+        # apply to, regardless of what the profile says (SL_5/SL_10/OTM_RUNNER/
+        # OTM_CONVICTION all explicitly set use_tp2=True, which would otherwise
+        # win over the qty-based default below). 2026-07-29: manage your own
+        # runner, or let the stop handle it, for a single-contract trade.
+        self._use_tp2 = False if qty <= 1 else profile.get("use_tp2", qty > 2)
 
         self.orh = fib_levels["orh"]
         self.orl = fib_levels["orl"]
@@ -85,13 +93,19 @@ class ExitManager:
         self._tp1_ticks        = 0
         self._tp1_ticks_needed = profile.get("tp1_confirm_ticks", 2)
 
-        # Cascade exit: after TP1, track consecutive underlying down-ticks.
-        # On N consecutive downs, sell cascade_close_pct of non-runner contracts.
-        # Always preserves 1 runner contract regardless of cascade count.
+        # Cascade exit: after TP1, track consecutive underlying candles that
+        # close AGAINST the trade (red for a CALL, green for a PUT) — judged
+        # by each bar's own open vs. close, not against the previous bar's
+        # close (see on_underlying_bar; 2026-07-29 fix — the old cross-bar
+        # comparison could count a bearish-looking bar as "recovering" just
+        # because it gapped up, or a bullish-looking bar as "against" just
+        # because it closed a cent under the prior bar).
+        # On N consecutive against-candles, sell cascade_close_pct of
+        # non-runner contracts. Always preserves 1 runner contract regardless
+        # of cascade count.
         self._cascade_down_ticks   = 0
         self._cascade_ticks_needed = profile.get("cascade_ticks", 3)
         self._cascade_close_pct    = profile.get("cascade_close_pct", 0.50)
-        self._cascade_last_price   = None
 
         # SL confirmation: require N consecutive ticks at/below hard_stop before
         # firing — same idea as TP1's confirm-ticks, applied symmetrically so a
@@ -100,6 +114,23 @@ class ExitManager:
         # post-TP1 breakeven stop (same check, same variable — see evaluate()).
         self._sl_ticks        = 0
         self._sl_ticks_needed = profile.get("sl_confirm_ticks", 1)
+
+        # Advanced per-trade qty overrides (set via PATCH .../exits — see
+        # apply_overrides) — user-chosen contract counts to sell at the
+        # PRE-TP1 hard stop / TP1 / TP2, replacing the profile's fixed
+        # percentages. None means "use the profile default" for that level.
+        # sl_qty is deliberately partial-only: firing it once sells exactly
+        # that many contracts and then _sl_override_consumed permanently
+        # disables the pre-TP1 hard stop for whatever's left — the user chose
+        # to let the remainder run unprotected (manage it manually, or via
+        # TP1/TP2) rather than get a stop that silently keeps re-firing on
+        # the same breach every subsequent tick. Never applies to the
+        # post-TP1 breakeven stop, which always protects the full remaining
+        # runner — see evaluate().
+        self._sl_qty_override    = None
+        self._tp1_qty_override   = None
+        self._tp2_qty_override   = None
+        self._sl_override_consumed = False
 
         # Pre-TP1 SL grace window (REVERSAL only, via profile flags — see
         # profiles.py for the full rationale). Once SL is confirmed hit and
@@ -169,7 +200,17 @@ class ExitManager:
         # Premium-based stop. Before TP1: hard stop at entry × (1 - max_loss_pct).
         # After TP1: hard_stop is moved to entry_premium (breakeven), so the same
         # check doubles as the BE stop — labeled correctly for analytics.
-        if current_option_price <= self.hard_stop:
+        #
+        # `and not (self._sl_override_consumed and not self.be_stop_active)`:
+        # once a partial sl_qty override has fired pre-TP1, this whole branch
+        # goes inert for whatever's left of the ORIGINAL stop — the trader
+        # explicitly chose to let that remainder run unprotected (manage it
+        # manually, or via TP1/TP2) rather than get stopped out again on the
+        # very next tick at the same breach. Falls through to the `else`
+        # below exactly as if price were back above the stop. This never
+        # applies to the post-TP1 breakeven stop, which always protects the
+        # full remaining runner regardless of any earlier SL-override history.
+        if current_option_price <= self.hard_stop and not (self._sl_override_consumed and not self.be_stop_active):
             self._sl_ticks += 1
             if self._sl_ticks < self._sl_ticks_needed:
                 return self._action("HOLD", 0, "SL_CONFIRMING")
@@ -190,15 +231,15 @@ class ExitManager:
                 elapsed = (datetime.now(ET) - self._sl_grace_start).total_seconds()
                 if (self._sl_grace_bars_needed > 0
                         and self._sl_grace_down_bars >= self._sl_grace_bars_needed):
-                    return self._action("CLOSE_ALL", self.qty_remaining, reason,
-                                        current_option_price)
+                    action_type, qty = self._resolve_sl_close(reason)
+                    return self._action(action_type, qty, reason, current_option_price)
                 if self._sl_grace_seconds > 0 and elapsed >= self._sl_grace_seconds:
-                    return self._action("CLOSE_ALL", self.qty_remaining, reason,
-                                        current_option_price)
+                    action_type, qty = self._resolve_sl_close(reason)
+                    return self._action(action_type, qty, reason, current_option_price)
                 return self._action("HOLD", 0, "SL_GRACE")
 
-            return self._action("CLOSE_ALL", self.qty_remaining, reason,
-                                current_option_price)
+            action_type, qty = self._resolve_sl_close(reason)
+            return self._action(action_type, qty, reason, current_option_price)
         else:
             self._sl_ticks = 0
             if self._sl_grace_active:
@@ -261,7 +302,15 @@ class ExitManager:
                 self.hard_stop      = self.entry_premium  # SL moves to breakeven
                 if self._runner_mode == "trail":
                     self.runner_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
-                qty_tp1 = max(1, math.floor(self.qty_remaining * self.profile["tp1_close_pct"]))
+                # tp1_qty override (see apply_overrides) replaces the
+                # profile's fixed tp1_close_pct when set — clamped to what's
+                # actually remaining as a defensive floor, though TP1 is
+                # always the first exit event so qty_remaining is still the
+                # full entry qty in practice.
+                if self._tp1_qty_override is not None:
+                    qty_tp1 = min(self._tp1_qty_override, self.qty_remaining)
+                else:
+                    qty_tp1 = max(1, math.floor(self.qty_remaining * self.profile["tp1_close_pct"]))
                 return self._action("CLOSE_PARTIAL", qty_tp1, "TP1", current_option_price)
             else:
                 self._tp1_ticks = 0
@@ -269,6 +318,14 @@ class ExitManager:
         # TP2 — runner bonus target; only fires if the full move materialises.
         if self._use_tp2 and self.tp1_hit and not self.tp2_hit and current_option_price >= self.tp2:
             self.tp2_hit = True
+            # tp2_qty override replaces BOTH the profile's tp2_close_pct AND
+            # its tp2_close_pct >= 1.0 full-close behavior when set.
+            if self._tp2_qty_override is not None:
+                qty_tp2 = min(self._tp2_qty_override, self.qty_remaining)
+                if qty_tp2 >= self.qty_remaining:
+                    return self._action("CLOSE_ALL", self.qty_remaining, "TP2_FULL_CLOSE",
+                                        current_option_price)
+                return self._action("CLOSE_PARTIAL", qty_tp2, "TP2", current_option_price)
             if self.profile["tp2_close_pct"] >= 1.0:
                 return self._action("CLOSE_ALL", self.qty_remaining, "TP2_FULL_CLOSE",
                                     current_option_price)
@@ -285,8 +342,14 @@ class ExitManager:
                                     current_option_price)
 
         # Cascade exit — fires when on_underlying_bar() has accumulated enough
-        # consecutive lower closes (bar cadence, not quote cadence).
-        # Always preserves 1 runner contract; that runner exits only via TP2/BE/EOD/manual.
+        # consecutive against-the-trade candles (bar cadence, not quote cadence).
+        # Always preserves 1 runner contract; that runner exits only via TP2/BE/EOD/manual —
+        # never cascade. This qty_remaining > 1 gate is also what makes a
+        # 1-contract entry cascade-exempt entirely: it never has more than 1 to
+        # begin with (in practice it never even reaches here, since TP1 already
+        # closes it in full — see _use_tp2 above), so "manage your own runner,
+        # or let the stop handle it" already holds for both the single-contract
+        # case and the runner of any multi-contract trade.
         if self.tp1_hit and self.qty_remaining > 1:
             if self._cascade_down_ticks >= self._cascade_ticks_needed:
                 self._cascade_down_ticks = 0
@@ -297,6 +360,23 @@ class ExitManager:
                                     current_option_price)
 
         return self._action("HOLD", 0, "")
+
+    def _resolve_sl_close(self, reason: str) -> tuple[str, int]:
+        """
+        Qty to actually close when the pre-TP1 hard stop fires, honoring an
+        sl_qty override (see apply_overrides). Only ever partial for
+        reason=="HARD_STOP" — BREAKEVEN_STOP always closes in full, since
+        that's protecting the whole remaining runner's already-banked TP1
+        profit, not a fresh entry the trader chose to partially self-insure.
+        Marks the override consumed the moment it fires a genuine partial —
+        see the guard in evaluate() that goes inert afterward.
+        """
+        if reason == "HARD_STOP" and self._sl_qty_override is not None:
+            qty = min(self._sl_qty_override, self.qty_remaining)
+            if qty < self.qty_remaining:
+                self._sl_override_consumed = True
+                return "CLOSE_PARTIAL", qty
+        return "CLOSE_ALL", self.qty_remaining
 
     def _is_consolidating(self) -> bool:
         if len(self.price_buffer) < self.profile["consol_bars"]:
@@ -321,18 +401,28 @@ class ExitManager:
         return {"type": action_type, "qty": qty, "reason": reason,
                 "current_premium": current_premium}
 
-    def on_underlying_bar(self, close: float) -> None:
+    def on_underlying_bar(self, open_: float, close: float) -> None:
         """
-        Feed one 1-minute bar close into the cascade tracker (post-TP1) or the
-        SL grace-window tracker (pre-TP1). Must be called from on_bar (bar
+        Feed one 1-minute bar into the cascade tracker (post-TP1) or the SL
+        grace-window tracker (pre-TP1). Must be called from on_bar (bar
         cadence), NOT from quote-tick handlers — inter-bar quotes repeat the
-        same underlying price and would reset the counter. Equal prices (flat
-        bar) are treated as no information.
+        same underlying price and would reset the counter.
 
-        "Against-the-trade" direction is: lower closes for a CALL (underlying
-        moving against us), higher closes for a PUT (underlying moving against us).
-        Firing the cascade during a winning PUT move (consecutive lower closes)
-        would incorrectly force-sell contracts while they are gaining value.
+        Pre-TP1 (SL grace) still compares this bar's close to the PREVIOUS
+        bar's close — that tracker cares about a sustained adverse drift
+        while sitting at the stop, not candle shape.
+
+        Post-TP1 (cascade) instead judges each bar by its OWN open vs. close
+        — a genuinely red (bearish) candle for a CALL, green (bullish) for a
+        PUT — not by comparing to the previous bar's close. The two diverge
+        exactly in the noisy post-TP1 window: a bar can gap up and still
+        close red while remaining above the prior bar's close (old logic
+        called that "recovering"), or be green yet close a cent under the
+        prior bar's close (old logic called that "against"). Neither matches
+        "3 red candles in a row," which is what cascade is meant to detect
+        (2026-07-29 fix — see the cascade-exit-too-eager incident). A doji
+        (close == open) is no information either way, same as an equal close
+        was under the old comparison — counter unchanged.
         """
         if not self.tp1_hit:
             # Pre-TP1: feed the SL grace window's consecutive-adverse-bar
@@ -354,28 +444,38 @@ class ExitManager:
                     self._sl_grace_down_bars = 0
             self._sl_grace_last_price = close
             return  # cascade is only relevant after TP1
-        if self._cascade_last_price is None:
-            self._cascade_last_price = close
-            return
-        against = close < self._cascade_last_price if self.direction == "CALL" else close > self._cascade_last_price
-        recovering = close > self._cascade_last_price if self.direction == "CALL" else close < self._cascade_last_price
+
+        is_red   = close < open_
+        is_green = close > open_
+        against    = is_red   if self.direction == "CALL" else is_green
+        recovering = is_green if self.direction == "CALL" else is_red
         if against:
             self._cascade_down_ticks += 1
         elif recovering:
             self._cascade_down_ticks = 0
-        # equal close → leave counter unchanged
-        self._cascade_last_price = close
+        # doji (close == open) → leave counter unchanged
 
     def update_qty(self, qty_closed: int) -> None:
         """Call after executing a partial close so remaining contract count stays accurate."""
         self.qty_remaining = max(0, self.qty_remaining - qty_closed)
 
     def apply_overrides(self, hard_stop: float | None = None, tp1: float | None = None,
-                        tp2: float | None = None) -> dict:
+                        tp2: float | None = None, sl_qty: int | None = None,
+                        tp1_qty: int | None = None, tp2_qty: int | None = None) -> dict:
         """
-        Validate and apply user-supplied SL/TP1/TP2 overrides to this (already
-        open) position. Raises ValueError with a user-facing message on invalid
-        input — never partially applies a rejected field.
+        Validate and apply user-supplied SL/TP1/TP2 price and/or qty overrides
+        to this (already open) position. Raises ValueError with a user-facing
+        message on invalid input — never partially applies a rejected field.
+
+        sl_qty/tp1_qty/tp2_qty are the "Advanced" per-level contract counts
+        (see EditExitsModal) — how many of qty_remaining to sell at that
+        level, replacing the profile's fixed close percentage. Only available
+        when use_tp2 (qty > 1 at entry — see __init__); a 1-contract trade has
+        no runner to split, so there is nothing for these to override. sl_qty
+        is a genuine partial: firing it once sells exactly that many and
+        leaves the rest running unprotected (see _resolve_sl_close) — the
+        trader is explicitly choosing that trade-off, not asking for a lower
+        stop.
 
         Shared by the mid-trade PATCH /configs/<id>/exits route and the
         confirm-entry approve path (edited fields from the confirmation modal,
@@ -386,6 +486,11 @@ class ExitManager:
             raise ValueError("hard_stop must be > 0")
         if tp1 is not None and tp1 <= self.entry_premium:
             raise ValueError("tp1 must be above entry premium")
+        for label, qty in (("Stop-loss", sl_qty), ("TP1", tp1_qty), ("TP2", tp2_qty)):
+            if qty is not None and (qty < 1 or qty > self.qty_remaining):
+                raise ValueError(f"{label} quantity must be between 1 and {self.qty_remaining}")
+        if tp2_qty is not None and not self._use_tp2:
+            raise ValueError("TP2 is not available for this position (single contract)")
 
         changed = {}
         if hard_stop is not None:
@@ -397,6 +502,15 @@ class ExitManager:
         if tp2 is not None:
             self.tp2 = tp2
             changed["tp2"] = round(tp2, 4)
+        if sl_qty is not None:
+            self._sl_qty_override = sl_qty
+            changed["sl_qty"] = sl_qty
+        if tp1_qty is not None:
+            self._tp1_qty_override = tp1_qty
+            changed["tp1_qty"] = tp1_qty
+        if tp2_qty is not None:
+            self._tp2_qty_override = tp2_qty
+            changed["tp2_qty"] = tp2_qty
         return changed
 
     def to_dict(self) -> dict:
@@ -431,4 +545,9 @@ class ExitManager:
             "sl_grace_down_bars":    self._sl_grace_down_bars,
             "sl_grace_deadline":     sl_grace_deadline,
             "sl_recovery_deadline":  sl_recovery_deadline,
+            # "Advanced" per-level qty overrides — null means "profile default".
+            "sl_qty":                self._sl_qty_override,
+            "tp1_qty":               self._tp1_qty_override,
+            "tp2_qty":               self._tp2_qty_override,
+            "sl_override_consumed":  self._sl_override_consumed,
         }

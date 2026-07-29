@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
 import { formatContractSymbolShort, getTradeHorizon } from '@/lib/formatContract';
 import { isMarketHours } from '@/lib/marketHours';
+import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 
 /** LivePriceData plus the market_value the header displays — computed via
@@ -28,6 +29,7 @@ export interface LivePositionStaticFallback {
   tp2?: number;
   tp1_hit?: boolean;
   tp2_hit?: boolean;
+  use_tp2?: boolean;
 }
 
 interface LivePositionPanelProps {
@@ -45,6 +47,11 @@ interface LivePositionPanelProps {
   /** Opens the add-to-position (average down/up) modal. Omit to hide the button
    *  entirely — used by surfaces that don't yet support adding to a position. */
   onAddPress?: () => void;
+  /** Drives the "No Stop Loss" display treatment (hides numeric Stop/TP1/TP2
+   *  — none of them can ever fire for that profile — in favor of a plain
+   *  "hold until you manually sell" badge) and, together with `use_tp2`,
+   *  whether TP2 is shown at all. */
+  profile?: string;
   colors: any;
   /** Merges a submitted stop/TP edit straight into the WS `live` snapshot so
    *  it's reflected immediately instead of waiting on the next price tick. */
@@ -65,8 +72,10 @@ interface LivePositionPanelProps {
  */
 export function LivePositionPanel({
   live, staticFallback, streaming, isMock, accentColor,
-  strategyId, ticker, paperMode, onExitPress, onAddPress, colors, patchData, hideKey,
+  strategyId, ticker, paperMode, onExitPress, onAddPress, profile, colors, patchData, hideKey,
 }: LivePositionPanelProps) {
+  const isNoStopLoss = profile === 'NO_STOP_LOSS';
+  const { toTicker } = useBaseNavigation();
   const [expanded, setExpanded] = useState(false);
   const toggleExpanded = useCallback(() => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -94,9 +103,14 @@ export function LivePositionPanel({
         hard_stop:     staticFallback!.hard_stop!,
         tp1:           staticFallback!.tp1!,
         tp2:           staticFallback!.tp2 ?? staticFallback!.tp1!,
+        use_tp2:       staticFallback!.use_tp2,
         market_value:  (staticFallback!.mid_price ?? staticFallback!.entry_premium!) * (staticFallback!.qty_remaining ?? 0) * 100,
       }
     : undefined);
+
+  // Absent on older cached data → default to showing TP2 (matches the
+  // pre-use_tp2 behavior) rather than hiding a value that might be real.
+  const showTp2 = !isNoStopLoss && display?.use_tp2 !== false;
 
   const pnlColor = display
     ? (display.pnl >= 0 ? colors.success : colors.error)
@@ -162,33 +176,51 @@ export function LivePositionPanel({
             <LiveStat label="Entry" value={`$${display.entry_premium.toFixed(2)}`} colors={colors} />
             <LiveStat label="Price" value={`$${display.mid_price.toFixed(2)}`} colors={colors} highlight />
             <LiveStat label="Qty"   value={String(display.qty_remaining)} colors={colors} />
-            <LiveStat label="Stop"  value={`$${display.hard_stop.toFixed(2)}`} colors={colors} valueColor={colors.error} />
+            {!isNoStopLoss && (
+              <LiveStat label="Stop" value={`$${display.hard_stop.toFixed(2)}`} colors={colors} valueColor={colors.error} />
+            )}
           </View>
 
-          {/* Stop/TP progression bar */}
-          <PositionStopBar live={display} colors={colors} />
-
-          {/* SL grace-timer countdown (SL_5/SL_10 — see exit_manager.py) */}
-          <SlGraceBadge live={display} colors={colors} />
-
-          {/* TP hit badges */}
-          {(display.tp1_hit || display.tp2_hit) && (
-            <View style={styles.tpRow}>
-              {display.tp1_hit && (
-                <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}>
-                  <Text style={[styles.tpBadgeText, { color: colors.success }]}>TP1 ✓</Text>
-                </View>
-              )}
-              {display.tp2_hit && (
-                <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}>
-                  <Text style={[styles.tpBadgeText, { color: colors.success }]}>TP2 ✓</Text>
-                </View>
-              )}
+          {isNoStopLoss ? (
+            /* No automatic exit of any kind for this profile — the real
+               hard_stop/tp1/tp2 are unreachable placeholder values (see
+               profiles.py's NO_STOP_LOSS), so showing them as dollar figures
+               just reads as a confusing/outlandish number. Say what's
+               actually true instead. */
+            <View style={[styles.noStopBadge, { backgroundColor: colors.tabBarInactive + '1A', borderColor: colors.border }]}>
+              <Ionicons name="hand-left-outline" size={13} color={colors.tabBarInactive} />
+              <Text style={[styles.noStopText, { color: colors.tabBarInactive }]}>
+                No Stop Loss — hold until you manually sell
+              </Text>
             </View>
+          ) : (
+            <>
+              {/* Stop/TP progression bar */}
+              <PositionStopBar live={display} colors={colors} showTp2={showTp2} />
+
+              {/* SL grace-timer countdown (SL_5/SL_10 — see exit_manager.py) */}
+              <SlGraceBadge live={display} colors={colors} />
+
+              {/* TP hit badges */}
+              {(display.tp1_hit || (showTp2 && display.tp2_hit)) && (
+                <View style={styles.tpRow}>
+                  {display.tp1_hit && (
+                    <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}>
+                      <Text style={[styles.tpBadgeText, { color: colors.success }]}>TP1 ✓</Text>
+                    </View>
+                  )}
+                  {showTp2 && display.tp2_hit && (
+                    <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}>
+                      <Text style={[styles.tpBadgeText, { color: colors.success }]}>TP2 ✓</Text>
+                    </View>
+                  )}
+                </View>
+              )}
+            </>
           )}
 
           {/* Expanded detail */}
-          {expanded && <LivePositionDetail live={display} colors={colors} />}
+          {expanded && !isNoStopLoss && <LivePositionDetail live={display} colors={colors} showTp2={showTp2} />}
         </>
       ) : (
         <ActivityIndicator size="small" color={colors.accent} style={{ marginTop: 8 }} />
@@ -196,6 +228,15 @@ export function LivePositionPanel({
 
       {/* Edit exits + manual exit */}
       <View style={styles.liveActionsRow}>
+        {!isMock && (
+          <TouchableOpacity
+            onPress={() => toTicker(ticker, { fullScreenChart: true })}
+            activeOpacity={0.8}
+            style={[styles.chartBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+          >
+            <Ionicons name="bar-chart-outline" size={16} color={colors.text} />
+          </TouchableOpacity>
+        )}
         {display && !isMock && (
           <EditExitsButton
             mode="orb"
@@ -207,6 +248,8 @@ export function LivePositionPanel({
             entry_premium={display.entry_premium}
             tp1_hit={display.tp1_hit}
             tp2_hit={display.tp2_hit}
+            qty_remaining={display.qty_remaining}
+            use_tp2={showTp2}
             hideKey={hideKey}
             onUpdated={patchData}
             style={{ flex: 1 }}
@@ -237,11 +280,11 @@ export function LivePositionPanel({
   );
 }
 
-function PositionStopBar({ live, colors }: { live: DisplayData; colors: any }) {
+function PositionStopBar({ live, colors, showTp2 }: { live: DisplayData; colors: any; showTp2: boolean }) {
   const stages = [
     { label: 'Stop', value: live.hard_stop, active: !live.tp1_hit, color: colors.error },
     { label: 'TP1',  value: live.tp1,       active: live.tp1_hit && !live.tp2_hit, color: '#4A9EFF' },
-    { label: 'TP2',  value: live.tp2,       active: live.tp2_hit, color: colors.success },
+    ...(showTp2 ? [{ label: 'TP2', value: live.tp2, active: live.tp2_hit, color: colors.success }] : []),
   ];
   return (
     <View style={styles.stopBar}>
@@ -301,13 +344,15 @@ function SlGraceBadge({ live, colors }: { live: DisplayData; colors: any }) {
   );
 }
 
-function LivePositionDetail({ live, colors }: { live: DisplayData; colors: any }) {
+function LivePositionDetail({ live, colors, showTp2 }: { live: DisplayData; colors: any; showTp2: boolean }) {
   return (
     <View style={[styles.liveDetail, { borderTopColor: colors.border }]}>
       <LiveDetailRow label="Entry"     value={`$${live.entry_premium.toFixed(2)}`} colors={colors} />
       <LiveDetailRow label="Hard Stop" value={`$${live.hard_stop.toFixed(2)}`} valueColor={colors.error} colors={colors} />
       <LiveDetailRow label="TP1" value={`$${live.tp1.toFixed(2)}`} badge={live.tp1_hit ? 'Hit' : undefined} badgeColor={colors.success} colors={colors} />
-      <LiveDetailRow label="TP2" value={`$${live.tp2.toFixed(2)}`} badge={live.tp2_hit ? 'Hit' : undefined} badgeColor={colors.success} colors={colors} />
+      {showTp2 && (
+        <LiveDetailRow label="TP2" value={`$${live.tp2.toFixed(2)}`} badge={live.tp2_hit ? 'Hit' : undefined} badgeColor={colors.success} colors={colors} />
+      )}
     </View>
   );
 }
@@ -365,6 +410,12 @@ const styles = StyleSheet.create({
   stopLabel: { fontSize: 9, fontWeight: '700' },
   stopValue: { fontSize: 10 },
 
+  noStopBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    borderWidth: 1, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 8, marginTop: 10,
+  },
+  noStopText: { fontSize: 11, fontWeight: '600', flex: 1 },
+
   slGraceBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap',
     borderWidth: 1, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, marginTop: 8,
@@ -390,4 +441,8 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderRadius: 8, paddingVertical: 9,
   },
   exitBtnText: { fontSize: 13, fontWeight: '700' },
+  chartBtn: {
+    width: 38, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderRadius: 8, paddingVertical: 9,
+  },
 });

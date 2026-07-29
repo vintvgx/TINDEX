@@ -13,6 +13,8 @@ import { Skeleton } from '@/common/components/ui/Skeleton';
 import { useStrategyPositions, type PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
+import { usePendingConfirmations } from '@/hooks/queries/strategy/usePendingConfirmations';
+import { PendingConfirmationCard } from '@/common/components/strategy/PendingConfirmationCard';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useOrbServiceAlert } from '@/hooks/useOrbServiceAlert';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
@@ -571,6 +573,11 @@ const DashboardScreen = () => {
   // ── ORB service-down alert (toast every hour + persistent banner) ─────────
   const { serviceDown } = useOrbServiceAlert();
 
+  // ── Trades awaiting confirm_entry approval — non-blocking cards (see
+  // PendingConfirmationCard); TickerTape shows an "Awaiting Trade
+  // Confirmation" banner from anywhere in the app while any of these exist.
+  const { data: pendingConfirmations } = usePendingConfirmations();
+
   // ── Session risk state ────────────────────────────────────────────────────
   const haltedEngines = useMemo(() => {
     if (!sessionStates) return [];
@@ -673,6 +680,18 @@ const DashboardScreen = () => {
               Daily loss limit hit — {haltedEngines.map(e => e.ticker).join(', ')} halted
             </Text>
           </View>
+        )}
+
+        {/* ── Awaiting trade confirmation — non-blocking cards ─────────────── */}
+        {pendingConfirmations != null && pendingConfirmations.length > 0 && (
+          <>
+            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
+              AWAITING CONFIRMATION ({pendingConfirmations.length})
+            </Text>
+            {pendingConfirmations.map(p => (
+              <PendingConfirmationCard key={p.id} pending={p} colors={colors} />
+            ))}
+          </>
         )}
 
         {/* ── Market ──────────────────────────────────────────────────────── */}

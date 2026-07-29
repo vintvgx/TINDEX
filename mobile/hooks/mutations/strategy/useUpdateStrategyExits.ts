@@ -7,6 +7,13 @@ interface UpdateStrategyExitsPayload {
   hard_stop?: number;
   tp1?: number;
   tp2?: number;
+  /** "Advanced" per-level contract counts — how many of the remaining
+   *  position to sell at that level, replacing the profile's fixed close
+   *  percentage. sl_qty is a one-time partial: it leaves whatever's left
+   *  running unprotected rather than re-firing on the same breach. */
+  sl_qty?: number;
+  tp1_qty?: number;
+  tp2_qty?: number;
 }
 
 export function useUpdateStrategyExits() {

@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { View, Modal, Animated, Dimensions, Pressable, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useThemeColors } from '@/lib/useColorScheme';
-import TickerSheetService from '@/common/services/TickerSheetService';
+import TickerSheetService, { type TickerSheetOpenOptions } from '@/common/services/TickerSheetService';
 import { TickerDetailSheet } from '@/common/components/ticker/TickerDetailSheet';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -23,13 +23,15 @@ const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 export const TickerSheetProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const colors = useThemeColors();
   const [ticker, setTicker] = useState<string | null>(null);
+  const [openOptions, setOpenOptions] = useState<TickerSheetOpenOptions>({});
   const [visible, setVisible] = useState(false);
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
 
   useEffect(() => {
-    return TickerSheetService.getInstance().subscribe((activeTicker) => {
+    return TickerSheetService.getInstance().subscribe((activeTicker, options) => {
       if (activeTicker) {
         setTicker(activeTicker);
+        setOpenOptions(options);
         setVisible(true);
       } else {
         handleClose();
@@ -73,7 +75,13 @@ export const TickerSheetProvider: React.FC<{ children: React.ReactNode }> = ({ c
         >
           <SafeAreaView style={{ flex: 1 }} edges={['left', 'right', 'bottom']}>
             <View style={[styles.handle, { backgroundColor: colors.textTertiary }]} />
-            {ticker && <TickerDetailSheet ticker={ticker} onClose={handleClose} />}
+            {ticker && (
+              <TickerDetailSheet
+                ticker={ticker}
+                onClose={handleClose}
+                initialFullScreenChart={openOptions.fullScreenChart}
+              />
+            )}
           </SafeAreaView>
         </Animated.View>
       </Modal>

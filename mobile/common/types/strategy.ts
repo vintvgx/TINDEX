@@ -245,6 +245,10 @@ export interface StrategyPosition {
   be_stop_active?: boolean;
   runner_trail?: number;
   fib_levels?: FibLevels;
+  /** False for a 1-contract entry regardless of profile — TP2 is never
+   *  reachable (TP1 always closes the sole contract in full). See
+   *  ExitManager.__init__ / _engine_position_response. */
+  use_tp2?: boolean;
 }
 
 export interface ExitStage {

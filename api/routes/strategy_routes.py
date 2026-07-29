@@ -725,7 +725,9 @@ def add_to_position(strategy_id: str):
 def update_strategy_exits(strategy_id: str):
     """
     Update the live ExitManager's stop-loss and/or TP levels mid-trade.
-    Body: { hard_stop?, tp1?, tp2? }  — all optional, only provided fields are changed.
+    Body: { hard_stop?, tp1?, tp2?, sl_qty?, tp1_qty?, tp2_qty? } — all
+    optional, only provided fields are changed. sl_qty/tp1_qty/tp2_qty are
+    the "Advanced" per-level contract counts (see ExitManager.apply_overrides).
     Returns the updated exit state so the client can confirm the new levels.
     """
     engine = _resolve_any_engine(strategy_id)
@@ -741,6 +743,9 @@ def update_strategy_exits(strategy_id: str):
             hard_stop=float(data["hard_stop"]) if "hard_stop" in data else None,
             tp1=float(data["tp1"]) if "tp1" in data else None,
             tp2=float(data["tp2"]) if "tp2" in data else None,
+            sl_qty=int(data["sl_qty"]) if "sl_qty" in data else None,
+            tp1_qty=int(data["tp1_qty"]) if "tp1_qty" in data else None,
+            tp2_qty=int(data["tp2_qty"]) if "tp2_qty" in data else None,
         )
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
@@ -1864,6 +1869,11 @@ def _engine_position_response(engine: ORBEngine):
             "be_stop_active":      em.be_stop_active if em else False,
             "runner_trail":        em.runner_trail if em else None,
             "fib_levels":          engine.fib_levels,
+            # Whether TP2 is even reachable for this trade — false for a
+            # 1-contract entry regardless of profile (see ExitManager.__init__).
+            # Lets the client hide TP2 entirely instead of showing a number
+            # that can never fire.
+            "use_tp2":             em._use_tp2 if em else False,
         })
     except Exception:
         return jsonify({"active": False, "position": None, "paper_mode": engine.paper})

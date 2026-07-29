@@ -181,14 +181,13 @@ function AppContent() {
           return;
         }
 
-        // confirm_entry gate: the modal itself is driven by polling
-        // (PendingConfirmationProvider) so it appears regardless of which
-        // screen is active — this tap handler is just a convenience deep
-        // link to the ORB tab's Strategy page where that modal naturally surfaces.
-        if (data.type === 'confirm_entry') {
-          router.push({ pathname: '/(app)/(tabs)/orb', params: { section: 'strategy' } });
-          return;
-        }
+        // confirm_entry is NOT handled here (removed 2026-07-29) — it now
+        // carries data.screen="dashboard" and falls through to
+        // useNotifications.ts's own listener (NotificationNavigationService),
+        // which routes generically off data.screen. Handling it here too used
+        // to double-fire two independent router.push calls to two different
+        // destinations (this one to the old ORB/Strategy page, the other to
+        // Dashboard) racing on every tap.
 
         // Handle different screen types
         if (data.screen === 'watchlists' && isValidWatchlistType(data.watchlistType)) {

@@ -15,6 +15,7 @@ const ROUTE_BY_SCREEN: Record<string, string> = {
   strategy:     '/(app)/(tabs)/strategy',
   daily_review: '/(app)/(tabs)/daily_review',
   options:      '/(app)/(tabs)/options',
+  dashboard:    '/(app)/(tabs)/dashboard',
 };
 
 /**
@@ -24,11 +25,11 @@ const ROUTE_BY_SCREEN: Record<string, string> = {
  * api/services/strategy/notifier.py already attaches — `data.screen` is the
  * one required field; everything else below is screen-specific and optional.
  *
- * `confirm_entry` notifications intentionally still land on `strategy` even
- * though tapping isn't what actually surfaces that modal — PendingConfirmationProvider
- * (mounted at the app root) already polls and shows it globally, over
- * whatever screen is active, the moment the app foregrounds. Navigating
- * there anyway just puts the user somewhere sensible once they dismiss it.
+ * `confirm_entry` notifications land on `dashboard` — that's where every
+ * pending confirmation now shows as its own non-blocking card (Edit/Skip/
+ * Enter), replacing the old blocking full-screen modal that could stack two
+ * deep. TickerTape also surfaces an "Awaiting Trade Confirmation" banner
+ * from anywhere in the app independent of this tap.
  */
 export function navigateFromNotification(data: NotificationData | undefined | null): void {
   if (!data || typeof data !== 'object') return;

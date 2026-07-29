@@ -23,18 +23,21 @@ import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 interface TickerDetailSheetProps {
   ticker: string;
   onClose: () => void;
+  /** Opens straight into the full-screen chart (e.g. the "Open Chart" button
+   *  on a live position card) instead of the default sheet overview. */
+  initialFullScreenChart?: boolean;
 }
 
 type SubScreen = 'contracts' | 'insights' | 'financials' | 'updates' | null;
 
-export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, onClose }) => {
+export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, onClose, initialFullScreenChart = false }) => {
   const colors = useThemeColors();
   const { authState: { user } } = useAuth();
 
   const [period, setPeriod] = useState<PricePeriod>('1D');
   const [subScreen, setSubScreen] = useState<SubScreen>(null);
   const [scrubPoint, setScrubPoint] = useState<ScrubPoint | null>(null);
-  const [fullScreenChart, setFullScreenChart] = useState(false);
+  const [fullScreenChart, setFullScreenChart] = useState(initialFullScreenChart);
   // Own paper/live toggle for the Contracts tab — OptionsChainPicker no
   // longer owns this itself (see ImmediateTradePanel for why it moved up:
   // a persistent background tint needs a value from above it to apply to).
