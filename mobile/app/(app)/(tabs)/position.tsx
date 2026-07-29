@@ -9,6 +9,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
+import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 
 interface Props {
   /**
@@ -23,6 +24,7 @@ interface Props {
 export default function PositionScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
   const [mode, setMode] = useState<'live' | 'paper'>('live');
+  const tabBarHeight = useFloatingTabBarHeight();
 
   // Deep-link from a notification tap (see NotificationNavigationService) —
   // consume `paper_mode` exactly once, same pattern as orb.tsx's `section`
@@ -167,7 +169,7 @@ export default function PositionScreen({ embedded = false }: Props) {
             ? 'Active live positions will appear here in real time'
             : 'Active paper positions will appear here'}
         />
-        <View style={{ height: 100 }} />
+        <View style={{ height: tabBarHeight }} />
       </ScrollView>
     </SafeAreaView>
   );

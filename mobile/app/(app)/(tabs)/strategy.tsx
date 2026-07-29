@@ -22,6 +22,7 @@ import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/comp
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
 import { StrategyDetailModal } from '@/common/components/strategy/StrategyDetailModal';
+import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { OrbHubHealthBanner } from '@/common/components/strategy/OrbHubHealthBanner';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
@@ -164,6 +165,7 @@ interface StrategyScreenProps {
 export default function StrategyScreen({ embedded = false }: StrategyScreenProps) {
   const colors  = useThemeColors();
   const toast   = useToast();
+  const tabBarHeight = useFloatingTabBarHeight();
 
   const { data: configs,  isLoading: configsLoading  } = useStrategyConfigs();
   const { data: profiles, isLoading: profilesLoading } = useStrategyProfiles();
@@ -371,7 +373,7 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
         </TouchableOpacity>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight }]}>
 
         <OrbHubHealthBanner colors={colors} />
 

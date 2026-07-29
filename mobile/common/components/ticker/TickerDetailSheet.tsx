@@ -266,7 +266,17 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
 
       <PriceChartFullScreen
         visible={fullScreenChart}
-        onClose={() => setFullScreenChart(false)}
+        onClose={() => {
+          // Opened directly from a position card's "View Chart" button
+          // (initialFullScreenChart) — there's no ticker overview underneath
+          // the user actually asked to see, so back should dismiss the whole
+          // sheet rather than reveal it.
+          if (initialFullScreenChart) {
+            onClose();
+          } else {
+            setFullScreenChart(false);
+          }
+        }}
         ticker={ticker}
         companyName={stockData?.company_name}
         currentPrice={stockData?.current_price}

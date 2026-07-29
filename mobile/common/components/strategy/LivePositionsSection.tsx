@@ -128,11 +128,14 @@ export function useLivePositionsData(mode: 'live' | 'paper', tickerFilter?: stri
 // a parent's .map()).
 
 export function PositionRow({
-  pos, colors, onLiveUpdate,
+  pos, colors, onLiveUpdate, hideChartButton,
 }: {
   pos: PositionEntry;
   colors: any;
   onLiveUpdate: (strategyId: string, data: LivePriceData | null) => void;
+  /** True when rendered inside PriceChartFullScreen's own open-contracts
+   *  section — a button that reopens the chart you're on is noise there. */
+  hideChartButton?: boolean;
 }) {
   const { toTicker } = useBaseNavigation();
   const { data: live, connected, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
@@ -167,11 +170,19 @@ export function PositionRow({
         </TouchableOpacity>
         {pos.strategy_name ? (
           <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>{pos.strategy_name}</Text>
-        ) : null}
-        {pos.paper_mode && (
-          <View style={[styles.paperBadge, { backgroundColor: '#FF9F0A22' }]}>
-            <Text style={[styles.paperBadgeText, { color: '#FF9F0A' }]}>PAPER</Text>
-          </View>
+        ) : (
+          <View style={{ flex: 1 }} />
+        )}
+        {!hideChartButton && (
+          <TouchableOpacity
+            onPress={() => toTicker(pos.ticker, { fullScreenChart: true })}
+            hitSlop={6}
+            activeOpacity={0.75}
+            style={[styles.viewChartBtn, { backgroundColor: colors.text + '1F' }]}
+          >
+            <Ionicons name="bar-chart-outline" size={11} color={colors.text} />
+            <Text style={[styles.viewChartText, { color: colors.text }]}>View Chart</Text>
+          </TouchableOpacity>
         )}
       </View>
 
@@ -243,12 +254,16 @@ interface LivePositionsBodyProps {
   colors: any;
   emptyTitle?: string;
   emptySubtitle?: string;
+  /** True when embedded inside PriceChartFullScreen's own open-contracts
+   *  section — hides each row's "open chart" icon (it would just reopen the
+   *  chart you're already looking at). */
+  hideChartButton?: boolean;
 }
 
 /** Hidden banner + list/empty-state — no header, no account bar, no own
  *  ScrollView, so it can be embedded inside any parent scroll container. */
 export function LivePositionsBody({
-  data, mode, colors, emptyTitle, emptySubtitle,
+  data, mode, colors, emptyTitle, emptySubtitle, hideChartButton,
 }: LivePositionsBodyProps) {
   const {
     isLoading, displayedPositions, hiddenCount, showHidden, setShowHidden, handleLiveUpdate,
@@ -284,7 +299,13 @@ export function LivePositionsBody({
         </View>
       ) : (
         displayedPositions.map(pos => (
-          <PositionRow key={pos.strategy_id} pos={pos} colors={colors} onLiveUpdate={handleLiveUpdate} />
+          <PositionRow
+            key={pos.strategy_id}
+            pos={pos}
+            colors={colors}
+            onLiveUpdate={handleLiveUpdate}
+            hideChartButton={hideChartButton}
+          />
         ))
       )}
     </>
@@ -306,6 +327,9 @@ const styles = StyleSheet.create({
   stratLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   stratTicker:   { fontSize: 18, fontWeight: '700' },
   stratName:     { fontSize: 13, flex: 1 },
-  paperBadge:    { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
-  paperBadgeText:{ fontSize: 10, fontWeight: '700' },
+  viewChartBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2,
+  },
+  viewChartText: { fontSize: 10, fontWeight: '700' },
 });

@@ -257,6 +257,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
               colors={colors}
               emptyTitle={`No Open ${contractsMode === 'live' ? 'Live' : 'Paper'} Contracts`}
               emptySubtitle={`Open ${ticker} positions will appear here.`}
+              hideChartButton
             />
           </View>
         </View>

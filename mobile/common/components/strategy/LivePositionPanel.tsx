@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
 import { formatContractSymbolShort, getTradeHorizon } from '@/lib/formatContract';
 import { isMarketHours } from '@/lib/marketHours';
-import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
+import { useCardTintDarkMode } from '@/hooks/useCardTintDarkMode';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 
 /** LivePriceData plus the market_value the header displays — computed via
@@ -72,10 +72,11 @@ interface LivePositionPanelProps {
  */
 export function LivePositionPanel({
   live, staticFallback, streaming, isMock, accentColor,
-  strategyId, ticker, paperMode, onExitPress, onAddPress, profile, colors, patchData, hideKey,
+  strategyId, ticker, paperMode, onExitPress, onAddPress, profile,
+  colors, patchData, hideKey,
 }: LivePositionPanelProps) {
   const isNoStopLoss = profile === 'NO_STOP_LOSS';
-  const { toTicker } = useBaseNavigation();
+  const { enabled: darkTintEnabled } = useCardTintDarkMode();
   const [expanded, setExpanded] = useState(false);
   const toggleExpanded = useCallback(() => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -110,7 +111,12 @@ export function LivePositionPanel({
 
   // Absent on older cached data → default to showing TP2 (matches the
   // pre-use_tp2 behavior) rather than hiding a value that might be real.
-  const showTp2 = !isNoStopLoss && display?.use_tp2 !== false;
+  // NOT gated on isNoStopLoss — a NO_STOP_LOSS position's SL/TP1/TP2 are
+  // real, editable numbers the moment the user sets them via Edit (see
+  // EditExitsModal), so they're always shown like any other position;
+  // use_tp2 alone (profile flag or the qty<=1 hard override) still governs
+  // whether TP2 specifically is reachable for this trade.
+  const showTp2 = display?.use_tp2 !== false;
 
   const pnlColor = display
     ? (display.pnl >= 0 ? colors.success : colors.error)
@@ -129,14 +135,27 @@ export function LivePositionPanel({
   const statusColor = isMock ? colors.accent : (marketOpen && streaming) ? colors.success : colors.tabBarInactive;
 
   return (
-    <View style={[styles.livePnlCard, { backgroundColor: colors.background, borderColor: accentColor + '44' }]}>
-      {/* Header row: streaming dot + label + contract + P&L */}
+    <View
+      style={[
+        styles.livePnlCard,
+        {
+          // Light mode's card background matched the screen background
+          // exactly, so the card visually disappeared — wash it with the
+          // same green/red as the border instead. Dark mode defaults to
+          // plain colors.background (it already read fine there); the same
+          // tint is opt-in via the Profile "Tint Cards in Dark Mode" setting.
+          backgroundColor: !colors.isDark || darkTintEnabled ? accentColor + '0F' : colors.background,
+          borderColor: accentColor + '99',
+        },
+      ]}
+    >
+      {/* ── Header (tap anywhere to expand): status + contract | P&L | chart · chevron ── */}
       <TouchableOpacity onPress={toggleExpanded} activeOpacity={0.7} style={styles.liveHeaderRow}>
         <View style={styles.liveHeaderLeft}>
           <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
           <Text style={[styles.liveLabel, { color: statusColor }]}>{statusLabel}</Text>
           {display && (
-            <Text style={[styles.liveContract, { color: colors.tabBarInactive }]}>
+            <Text style={[styles.liveContract, { color: colors.text }]} numberOfLines={1}>
               {formatContractSymbolShort(display.contract)}
             </Text>
           )}
@@ -156,126 +175,94 @@ export function LivePositionPanel({
                 {display.pnl_pct >= 0 ? '+' : ''}{display.pnl_pct.toFixed(1)}%
               </Text>
             </View>
-            <Text style={[styles.mktValText, { color: colors.tabBarInactive }]}>
-              Mkt ${(display.market_value ?? display.mid_price * display.qty_remaining * 100).toFixed(2)}
-            </Text>
           </View>
         )}
         <Ionicons
           name={expanded ? 'chevron-up' : 'chevron-down'}
           size={14}
           color={colors.tabBarInactive}
-          style={{ marginLeft: 8 }}
+          style={{ marginLeft: 10 }}
         />
       </TouchableOpacity>
 
-      {/* Stats row: Price | Qty | Stop */}
       {display ? (
         <>
-          <View style={styles.liveStats}>
-            <LiveStat label="Entry" value={`$${display.entry_premium.toFixed(2)}`} colors={colors} />
-            <LiveStat label="Price" value={`$${display.mid_price.toFixed(2)}`} colors={colors} highlight />
-            <LiveStat label="Qty"   value={String(display.qty_remaining)} colors={colors} />
-            {!isNoStopLoss && (
-              <LiveStat label="Stop" value={`$${display.hard_stop.toFixed(2)}`} colors={colors} valueColor={colors.error} />
-            )}
+          {/* ── Compact summary — the one always-visible line, so a screen of
+              several open trades stays scannable. Everything else (stop bar,
+              detail rows, action buttons) lives behind the expand. ── */}
+          <View style={styles.summaryRow}>
+            <Text style={[styles.summaryText, { color: colors.textSecondary }]} numberOfLines={1}>
+              ${display.entry_premium.toFixed(2)} → <Text style={{ color: colors.text, fontWeight: '700' }}>${display.mid_price.toFixed(2)}</Text>
+              {'  ·  Qty '}{display.qty_remaining}
+              {`  ·  Stop $${display.hard_stop.toFixed(2)}`}
+              {display.tp1_hit ? '  ·  ' : ''}
+              {display.tp1_hit && <Text style={{ color: colors.success, fontWeight: '700' }}>TP1 ✓</Text>}
+              {showTp2 && display.tp2_hit ? '  ' : ''}
+              {showTp2 && display.tp2_hit && <Text style={{ color: colors.success, fontWeight: '700' }}>TP2 ✓</Text>}
+            </Text>
+            <Text style={[styles.mktValText, { color: colors.textSecondary }]}>
+              Mkt ${(display.market_value ?? display.mid_price * display.qty_remaining * 100).toFixed(0)}
+            </Text>
           </View>
 
-          {isNoStopLoss ? (
-            /* No automatic exit of any kind for this profile — the real
-               hard_stop/tp1/tp2 are unreachable placeholder values (see
-               profiles.py's NO_STOP_LOSS), so showing them as dollar figures
-               just reads as a confusing/outlandish number. Say what's
-               actually true instead. */
-            <View style={[styles.noStopBadge, { backgroundColor: colors.tabBarInactive + '1A', borderColor: colors.border }]}>
-              <Ionicons name="hand-left-outline" size={13} color={colors.tabBarInactive} />
-              <Text style={[styles.noStopText, { color: colors.tabBarInactive }]}>
-                No Stop Loss — hold until you manually sell
-              </Text>
-            </View>
-          ) : (
+          {/* SL grace-timer countdown — urgent, so never hidden behind the
+              expand (SL_5/SL_10 — see exit_manager.py) */}
+          {!isNoStopLoss && <SlGraceBadge live={display} colors={colors} />}
+
+          {expanded && (
             <>
-              {/* Stop/TP progression bar */}
+              {/* SL/TP1/TP2 are always shown — even for NO_STOP_LOSS, whose
+                  defaults are unreachable placeholders (see profiles.py)
+                  until the user sets real ones via Edit, at which point
+                  they're genuine, live levels like any other position. */}
               <PositionStopBar live={display} colors={colors} showTp2={showTp2} />
+              <LivePositionDetail live={display} colors={colors} showTp2={showTp2} />
 
-              {/* SL grace-timer countdown (SL_5/SL_10 — see exit_manager.py) */}
-              <SlGraceBadge live={display} colors={colors} />
-
-              {/* TP hit badges */}
-              {(display.tp1_hit || (showTp2 && display.tp2_hit)) && (
-                <View style={styles.tpRow}>
-                  {display.tp1_hit && (
-                    <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}>
-                      <Text style={[styles.tpBadgeText, { color: colors.success }]}>TP1 ✓</Text>
-                    </View>
+              {/* ── Actions: Edit | Add | Exit (chart lives in the header) ── */}
+              {!isMock && (
+                <View style={styles.liveActionsRow}>
+                  <EditExitsButton
+                    mode="orb"
+                    strategy_id={strategyId}
+                    ticker={ticker}
+                    hard_stop={display.hard_stop}
+                    tp1={display.tp1}
+                    tp2={display.tp2}
+                    entry_premium={display.entry_premium}
+                    tp1_hit={display.tp1_hit}
+                    tp2_hit={display.tp2_hit}
+                    qty_remaining={display.qty_remaining}
+                    use_tp2={showTp2}
+                    hideKey={hideKey}
+                    onUpdated={patchData}
+                    style={{ flex: 1 }}
+                  />
+                  {onAddPress && (
+                    <TouchableOpacity
+                      onPress={onAddPress}
+                      activeOpacity={0.8}
+                      style={[styles.exitBtn, { flex: 1, marginTop: 0, borderColor: accentColor + '55', backgroundColor: accentColor + '14' }]}
+                    >
+                      <Ionicons name="add-circle-outline" size={16} color={accentColor} />
+                      <Text style={[styles.exitBtnText, { color: accentColor }]}>Add</Text>
+                    </TouchableOpacity>
                   )}
-                  {showTp2 && display.tp2_hit && (
-                    <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}>
-                      <Text style={[styles.tpBadgeText, { color: colors.success }]}>TP2 ✓</Text>
-                    </View>
-                  )}
+                  <TouchableOpacity
+                    onPress={onExitPress}
+                    activeOpacity={0.8}
+                    style={[styles.exitBtn, { flex: 1, marginTop: 0, borderColor: colors.error + '55', backgroundColor: colors.error + '14' }]}
+                  >
+                    <Ionicons name="exit-outline" size={16} color={colors.error} />
+                    <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit</Text>
+                  </TouchableOpacity>
                 </View>
               )}
             </>
           )}
-
-          {/* Expanded detail */}
-          {expanded && !isNoStopLoss && <LivePositionDetail live={display} colors={colors} showTp2={showTp2} />}
         </>
       ) : (
         <ActivityIndicator size="small" color={colors.accent} style={{ marginTop: 8 }} />
       )}
-
-      {/* Edit exits + manual exit */}
-      <View style={styles.liveActionsRow}>
-        {!isMock && (
-          <TouchableOpacity
-            onPress={() => toTicker(ticker, { fullScreenChart: true })}
-            activeOpacity={0.8}
-            style={[styles.chartBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-          >
-            <Ionicons name="bar-chart-outline" size={16} color={colors.text} />
-          </TouchableOpacity>
-        )}
-        {display && !isMock && (
-          <EditExitsButton
-            mode="orb"
-            strategy_id={strategyId}
-            ticker={ticker}
-            hard_stop={display.hard_stop}
-            tp1={display.tp1}
-            tp2={display.tp2}
-            entry_premium={display.entry_premium}
-            tp1_hit={display.tp1_hit}
-            tp2_hit={display.tp2_hit}
-            qty_remaining={display.qty_remaining}
-            use_tp2={showTp2}
-            hideKey={hideKey}
-            onUpdated={patchData}
-            style={{ flex: 1 }}
-          />
-        )}
-        {!isMock && onAddPress && (
-          <TouchableOpacity
-            onPress={onAddPress}
-            activeOpacity={0.8}
-            style={[styles.exitBtn, { flex: 1, marginTop: 0, borderColor: accentColor + '55', backgroundColor: accentColor + '14' }]}
-          >
-            <Ionicons name="add-circle-outline" size={16} color={accentColor} />
-            <Text style={[styles.exitBtnText, { color: accentColor }]}>Add</Text>
-          </TouchableOpacity>
-        )}
-        {!isMock && (
-          <TouchableOpacity
-            onPress={onExitPress}
-            activeOpacity={0.8}
-            style={[styles.exitBtn, { flex: 1, marginTop: 0, borderColor: colors.error + '55', backgroundColor: colors.error + '14' }]}
-          >
-            <Ionicons name="exit-outline" size={16} color={colors.error} />
-            <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
-          </TouchableOpacity>
-        )}
-      </View>
     </View>
   );
 }
@@ -291,8 +278,8 @@ function PositionStopBar({ live, colors, showTp2 }: { live: DisplayData; colors:
       {stages.map((s, i) => (
         <View key={i} style={styles.stopStage}>
           <View style={[styles.stopDot, { backgroundColor: s.active ? s.color : colors.border }]} />
-          <Text style={[styles.stopLabel, { color: s.active ? s.color : colors.tabBarInactive }]}>{s.label}</Text>
-          <Text style={[styles.stopValue, { color: colors.tabBarInactive }]}>${s.value.toFixed(2)}</Text>
+          <Text style={[styles.stopLabel, { color: s.active ? s.color : colors.textSecondary }]}>{s.label}</Text>
+          <Text style={[styles.stopValue, { color: colors.textSecondary }]}>${s.value.toFixed(2)}</Text>
         </View>
       ))}
     </View>
@@ -336,7 +323,7 @@ function SlGraceBadge({ live, colors }: { live: DisplayData; colors: any }) {
         SL breach — selling in {mm}:{String(ss).padStart(2, '0')}
       </Text>
       {recovering && (
-        <Text style={[styles.slGraceSubText, { color: colors.tabBarInactive }]}>
+        <Text style={[styles.slGraceSubText, { color: colors.textSecondary }]}>
           recovering, {recoverSec}s to cancel
         </Text>
       )}
@@ -348,6 +335,8 @@ function LivePositionDetail({ live, colors, showTp2 }: { live: DisplayData; colo
   return (
     <View style={[styles.liveDetail, { borderTopColor: colors.border }]}>
       <LiveDetailRow label="Entry"     value={`$${live.entry_premium.toFixed(2)}`} colors={colors} />
+      <LiveDetailRow label="Current"   value={`$${live.mid_price.toFixed(2)}`} valueColor={colors.text} colors={colors} />
+      <LiveDetailRow label="Qty Remaining" value={String(live.qty_remaining)} colors={colors} />
       <LiveDetailRow label="Hard Stop" value={`$${live.hard_stop.toFixed(2)}`} valueColor={colors.error} colors={colors} />
       <LiveDetailRow label="TP1" value={`$${live.tp1.toFixed(2)}`} badge={live.tp1_hit ? 'Hit' : undefined} badgeColor={colors.success} colors={colors} />
       {showTp2 && (
@@ -362,7 +351,7 @@ function LiveDetailRow({ label, value, valueColor, badge, badgeColor, colors }: 
 }) {
   return (
     <View style={styles.liveDetailRow}>
-      <Text style={[styles.liveDetailLabel, { color: colors.tabBarInactive }]}>{label}</Text>
+      <Text style={[styles.liveDetailLabel, { color: colors.textSecondary }]}>{label}</Text>
       <View style={styles.liveDetailRight}>
         <Text style={[styles.liveDetailValue, { color: valueColor ?? colors.text }]}>{value}</Text>
         {badge && (
@@ -375,34 +364,26 @@ function LiveDetailRow({ label, value, valueColor, badge, badgeColor, colors }: 
   );
 }
 
-const LiveStat = ({ label, value, colors, highlight, valueColor }: {
-  label: string; value: string; colors: any; highlight?: boolean; valueColor?: string;
-}) => (
-  <View style={styles.liveStat}>
-    <Text style={[styles.liveStatLabel, { color: colors.tabBarInactive }]}>{label}</Text>
-    <Text style={[styles.liveStatValue, { color: valueColor ?? (highlight ? colors.accent : colors.text) }]}>{value}</Text>
-  </View>
-);
-
 const styles = StyleSheet.create({
-  livePnlCard:     { borderRadius: 12, borderWidth: 1, padding: 12, marginTop: 10 },
+  livePnlCard:     { borderRadius: 12, borderWidth: 1.5, padding: 12, marginTop: 10 },
   liveHeaderRow:   { flexDirection: 'row', alignItems: 'center' },
   liveHeaderLeft:  { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
-  liveHeaderRight: { alignItems: 'flex-end', gap: 2 },
+  liveHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   statusDot:       { width: 6, height: 6, borderRadius: 3 },
   liveLabel:       { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
-  liveContract:    { fontSize: 11, fontFamily: 'monospace' },
+  liveContract:    { fontSize: 12, fontWeight: '700', flexShrink: 1 },
   swingBadge:      { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 },
   swingBadgeText:  { fontSize: 9, fontWeight: '700', letterSpacing: 0.4 },
   livePnlValue:    { fontSize: 15, fontWeight: '700' },
   pnlPctPill:      { borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 },
   pnlPctText:      { fontSize: 10, fontWeight: '700' },
-  mktValText:      { fontSize: 10, marginTop: 1 },
+  mktValText:      { fontSize: 10 },
 
-  liveStats:      { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
-  liveStat:       { alignItems: 'center', flex: 1 },
-  liveStatLabel:  { fontSize: 10, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
-  liveStatValue:  { fontSize: 13, fontWeight: '700' },
+  summaryRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    gap: 8, marginTop: 8,
+  },
+  summaryText: { fontSize: 11, flexShrink: 1 },
 
   stopBar:   { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10, gap: 6 },
   stopStage: { flex: 1, alignItems: 'center', gap: 2 },
@@ -410,22 +391,12 @@ const styles = StyleSheet.create({
   stopLabel: { fontSize: 9, fontWeight: '700' },
   stopValue: { fontSize: 10 },
 
-  noStopBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    borderWidth: 1, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 8, marginTop: 10,
-  },
-  noStopText: { fontSize: 11, fontWeight: '600', flex: 1 },
-
   slGraceBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap',
     borderWidth: 1, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, marginTop: 8,
   },
   slGraceText:    { fontSize: 11, fontWeight: '700' },
   slGraceSubText: { fontSize: 10 },
-
-  tpRow:       { flexDirection: 'row', gap: 6, marginTop: 8 },
-  tpBadge:     { borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
-  tpBadgeText: { fontSize: 10, fontWeight: '700' },
 
   liveDetail:      { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 10, paddingTop: 10, gap: 6 },
   liveDetailRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -441,8 +412,4 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderRadius: 8, paddingVertical: 9,
   },
   exitBtnText: { fontSize: 13, fontWeight: '700' },
-  chartBtn: {
-    width: 38, alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderRadius: 8, paddingVertical: 9,
-  },
 });

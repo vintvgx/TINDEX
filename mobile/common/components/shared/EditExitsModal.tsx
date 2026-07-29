@@ -71,6 +71,15 @@ export function EditExitsModal({
   const [tp2QtyVal, setTp2QtyVal] = useState('');
   const canSplit = (current.qty_remaining ?? 0) > 1;
 
+  // TP2 is unreachable for this trade (1-contract entry, or a profile that
+  // opts out, e.g. NO_STOP_LOSS's sentinel 999x-entry tp1/tp2) — its section
+  // is never rendered (see below), so it must never be pre-filled or
+  // validated either. Without this gate, a NO_STOP_LOSS position's hidden
+  // tp2Val still got pre-filled from its real (but meaningless) sentinel
+  // tp2, which then equalled tp1 and tripped "TP2 must be above TP1" on
+  // every submit — including a plain stop-loss-only edit.
+  const tp2Editable = current.use_tp2 !== false;
+
   // Reset fields to current values only on the closed→open transition — `current`
   // comes from a polling query and gets a new object reference on every refetch,
   // so keying this effect on `current` too would wipe out in-progress edits every
@@ -80,7 +89,7 @@ export function EditExitsModal({
     if (visible && !wasVisibleRef.current) {
       setStopVal(current.hard_stop > 0 ? current.hard_stop.toFixed(2) : '');
       setTp1Val(current.tp1 > 0 ? current.tp1.toFixed(2) : '');
-      setTp2Val(current.tp2 && current.tp2 > 0 ? current.tp2.toFixed(2) : '');
+      setTp2Val(tp2Editable && current.tp2 && current.tp2 > 0 ? current.tp2.toFixed(2) : '');
       setShowAdvanced(false);
       setSlQtyVal('');
       setTp1QtyVal('');
@@ -113,11 +122,11 @@ export function EditExitsModal({
       Alert.alert('Invalid', 'TP1 must be above your entry premium.');
       return;
     }
-    if (!current.tp2_hit && tp2 !== undefined && !isNaN(tp2) && tp2 <= (stop ?? current.hard_stop)) {
+    if (tp2Editable && !current.tp2_hit && tp2 !== undefined && !isNaN(tp2) && tp2 <= (stop ?? current.hard_stop)) {
       Alert.alert('Invalid', 'TP2 must be above the stop loss.');
       return;
     }
-    if (tp2 !== undefined && tp1 !== undefined && !isNaN(tp2) && !isNaN(tp1) && tp2 <= tp1) {
+    if (tp2Editable && tp2 !== undefined && tp1 !== undefined && !isNaN(tp2) && !isNaN(tp1) && tp2 <= tp1) {
       Alert.alert('Invalid', 'TP2 must be above TP1.');
       return;
     }
@@ -137,10 +146,10 @@ export function EditExitsModal({
     const payload: Parameters<typeof onSubmit>[0] = {};
     if (stop !== undefined && !isNaN(stop)) payload.hard_stop = stop;
     if (tp1 !== undefined && !isNaN(tp1)) payload.tp1 = tp1;
-    if (tp2 !== undefined && !isNaN(tp2)) payload.tp2 = tp2;
+    if (tp2Editable && tp2 !== undefined && !isNaN(tp2)) payload.tp2 = tp2;
     if (slQty !== undefined) payload.sl_qty = slQty;
     if (tp1Qty !== undefined) payload.tp1_qty = tp1Qty;
-    if (tp2Qty !== undefined) payload.tp2_qty = tp2Qty;
+    if (tp2Editable && tp2Qty !== undefined) payload.tp2_qty = tp2Qty;
 
     if (!Object.keys(payload).length) {
       Alert.alert('No changes', 'Enter at least one value to update.');
@@ -183,7 +192,8 @@ export function EditExitsModal({
           <View style={{ flex: 1 }}>
             <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700' }}>Edit Stop / Target</Text>
             <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 1 }}>
-              {ticker} · entry ${entry.toFixed(2)} · 0DTE
+              {ticker} · entry ${entry.toFixed(2)}
+              {current.qty_remaining != null ? ` · ${current.qty_remaining} contract${current.qty_remaining !== 1 ? 's' : ''}` : ''}
             </Text>
           </View>
         </View>
@@ -275,50 +285,55 @@ export function EditExitsModal({
             </View>
           </View>
 
-          {/* TP2 */}
-          <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 10 }}>
-            TAKE PROFIT 2 (OPTIONAL){current.tp2_hit ? '  ✓ HIT' : ''}
-          </Text>
-          <View style={{
-            backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 28,
-            borderWidth: 1, borderColor: current.tp2_hit ? '#10B98133' : colors.border,
-            opacity: current.tp2_hit ? 0.6 : 1,
-          }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-              <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
-                Current: {current.tp2 ? `$${current.tp2.toFixed(2)}` : 'Not set'}
+          {/* TP2 — hidden entirely when unreachable (1-contract entry, or a
+              profile that opts out), same gate the position card itself uses. */}
+          {current.use_tp2 !== false && (
+            <>
+              <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 10 }}>
+                TAKE PROFIT 2 (OPTIONAL){current.tp2_hit ? '  ✓ HIT' : ''}
               </Text>
-              {current.tp2 && (
-                <Text style={{ color: '#F59E0B', fontSize: 12 }}>{pctLabel(current.tp2)}</Text>
-              )}
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <TextInput
-                value={tp2Val}
-                onChangeText={setTp2Val}
-                keyboardType="decimal-pad"
-                placeholder={current.tp2 ? current.tp2.toFixed(2) : 'e.g. 0.65'}
-                placeholderTextColor={colors.textTertiary}
-                editable={!current.tp2_hit}
-                style={{
-                  flex: 1,
-                  backgroundColor: colors.background,
-                  borderRadius: 10,
-                  padding: 12,
-                  color: '#F59E0B',
-                  fontSize: 18,
-                  fontWeight: '700',
-                  borderWidth: 1,
-                  borderColor: tp2Val ? '#F59E0B44' : colors.border,
-                }}
-              />
-              {tp2Val && entry > 0 && (
-                <Text style={{ color: '#F59E0B', fontSize: 13, fontWeight: '600', minWidth: 52, textAlign: 'right' }}>
-                  {pctLabel(parseFloat(tp2Val))}
-                </Text>
-              )}
-            </View>
-          </View>
+              <View style={{
+                backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 28,
+                borderWidth: 1, borderColor: current.tp2_hit ? '#10B98133' : colors.border,
+                opacity: current.tp2_hit ? 0.6 : 1,
+              }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
+                    Current: {current.tp2 ? `$${current.tp2.toFixed(2)}` : 'Not set'}
+                  </Text>
+                  {current.tp2 && (
+                    <Text style={{ color: '#F59E0B', fontSize: 12 }}>{pctLabel(current.tp2)}</Text>
+                  )}
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <TextInput
+                    value={tp2Val}
+                    onChangeText={setTp2Val}
+                    keyboardType="decimal-pad"
+                    placeholder={current.tp2 ? current.tp2.toFixed(2) : 'e.g. 0.65'}
+                    placeholderTextColor={colors.textTertiary}
+                    editable={!current.tp2_hit}
+                    style={{
+                      flex: 1,
+                      backgroundColor: colors.background,
+                      borderRadius: 10,
+                      padding: 12,
+                      color: '#F59E0B',
+                      fontSize: 18,
+                      fontWeight: '700',
+                      borderWidth: 1,
+                      borderColor: tp2Val ? '#F59E0B44' : colors.border,
+                    }}
+                  />
+                  {tp2Val && entry > 0 && (
+                    <Text style={{ color: '#F59E0B', fontSize: 13, fontWeight: '600', minWidth: 52, textAlign: 'right' }}>
+                      {pctLabel(parseFloat(tp2Val))}
+                    </Text>
+                  )}
+                </View>
+              </View>
+            </>
+          )}
 
           {/* Advanced — per-level contract counts, only when there's more
               than 1 to split. Collapsed by default so the common case

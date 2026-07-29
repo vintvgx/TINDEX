@@ -171,6 +171,13 @@ class ExitManager:
         # still get silently force-closed at 15:30 ET.
         self._disable_eod_close = profile.get("disable_eod_close", False)
 
+        # NO_STOP_LOSS: skip the TP1 auto-close branch entirely (see evaluate()),
+        # rather than relying on tp1 being numerically unreachable. Decouples
+        # "this profile has zero automatic exits" from "the TP1 number happens
+        # to be huge" — tp1/tp2 can now be a normal, sane-looking display value
+        # without ever risking an unwanted auto-sell.
+        self._disable_tp1_exit = profile.get("disable_tp1_exit", False)
+
         # EOD_CLOSE below only makes sense for a 0DTE contract — flattening a
         # swing/LEAPS hold every single day at eod_close_time just because the
         # clock crossed that time-of-day would silently sell a multi-week
@@ -292,7 +299,9 @@ class ExitManager:
 
         # TP1 — requires tp1_confirm_ticks consecutive ticks at/above the level.
         # Price falling back below TP1 mid-count resets the counter.
-        if not self.tp1_hit:
+        # disable_tp1_exit (NO_STOP_LOSS) skips this branch entirely — tp1 is
+        # a display-only relative number for that profile, not a real target.
+        if not self._disable_tp1_exit and not self.tp1_hit:
             if current_option_price >= self.tp1:
                 self._tp1_ticks += 1
                 if self._tp1_ticks < self._tp1_ticks_needed:

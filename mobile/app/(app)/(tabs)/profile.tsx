@@ -1,15 +1,18 @@
 import { useState } from 'react';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
-import { SafeAreaView, Text, View, Pressable, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { SafeAreaView, Text, View, Pressable, TouchableOpacity, ScrollView, Alert, Switch } from 'react-native';
 import { router } from 'expo-router';
 import { ORBAdminModal } from '@/common/components/admin/ORBAdminModal';
 import { ServiceStatusModal } from '@/common/components/admin/ServiceStatusModal';
 import { LogViewerModal } from '@/common/components/orb/LogViewerModal';
+import { AgentModal } from '@/common/components/agent/AgentModal';
 import { ThemeToggle } from '@/common/components/ThemeToggle';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
 import { useNotificationHistory } from '@/hooks/queries/notifications/useNotificationHistory';
+import { useSearchBarVisibility } from '@/hooks/useSearchBarVisibility';
+import { useCardTintDarkMode } from '@/hooks/useCardTintDarkMode';
 import { signOut } from '@/common/utils/auth/function';
 
 const ProfileScreen = () => {
@@ -18,8 +21,11 @@ const ProfileScreen = () => {
   const [adminModalVisible, setAdminModalVisible] = useState(false);
   const [logViewerVisible, setLogViewerVisible] = useState(false);
   const [serviceStatusVisible, setServiceStatusVisible] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
   const toast = useToast();
   const { unreadCount } = useNotificationHistory();
+  const { hidden: searchBarHidden, setHidden: setSearchBarHidden } = useSearchBarVisibility();
+  const { enabled: cardTintDarkMode, setEnabled: setCardTintDarkMode } = useCardTintDarkMode();
 
   const email = user?.email || 'User';
   const initials = email.substring(0, 2).toUpperCase();
@@ -47,6 +53,11 @@ const ProfileScreen = () => {
     { icon: 'briefcase-outline' as const, label: 'Track Portfolio', onPress: () => go('/(app)/(tabs)/track') },
     { icon: 'notifications-outline' as const, label: 'Notifications', onPress: () => go('/(app)/(tabs)/notifications'), badge: unreadCount },
     { icon: 'flask-outline' as const, label: 'Run Simulation', onPress: () => go('/(app)/(tabs)/simulation') },
+    // Fallback entry point for the AI assistant — the floating sparkle
+    // button above the tab bar hides along with the search bar when the
+    // "Hide Search Bar" setting is on (see CustomTabBar), so it needs
+    // another way in.
+    { icon: 'sparkles-outline' as const, label: 'Open AI Assistant', onPress: () => setAgentOpen(true) },
   ];
 
   const menuItems = [
@@ -216,6 +227,105 @@ const ProfileScreen = () => {
           </View>
         </View>
 
+        {/* Display section */}
+        <View style={{ paddingHorizontal: 20, marginBottom: 24 }}>
+          <Text
+            style={{
+              color: colors.textTertiary,
+              fontSize: 12,
+              fontWeight: '600',
+              textTransform: 'uppercase',
+              letterSpacing: 0.8,
+              marginBottom: 8,
+              paddingHorizontal: 4,
+            }}
+          >
+            Display
+          </Text>
+          <View
+            style={{
+              backgroundColor: colors.surface,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: colors.border,
+              overflow: 'hidden',
+            }}
+          >
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                paddingHorizontal: 16,
+                paddingVertical: 14,
+              }}
+            >
+              <View
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 10,
+                  backgroundColor: colors.iconButton,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginRight: 12,
+                }}
+              >
+                <Ionicons name="search-outline" size={17} color={colors.textSecondary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.text, fontSize: 15, fontWeight: '500' }}>
+                  Hide Search Bar
+                </Text>
+                <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 1 }}>
+                  Hides the floating search bar above the tab bar
+                </Text>
+              </View>
+              <Switch
+                value={searchBarHidden}
+                onValueChange={setSearchBarHidden}
+                trackColor={{ false: colors.border, true: colors.accent }}
+              />
+            </View>
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                paddingHorizontal: 16,
+                paddingVertical: 14,
+                borderTopWidth: 1,
+                borderTopColor: colors.separator,
+              }}
+            >
+              <View
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 10,
+                  backgroundColor: colors.iconButton,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginRight: 12,
+                }}
+              >
+                <Ionicons name="color-palette-outline" size={17} color={colors.textSecondary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.text, fontSize: 15, fontWeight: '500' }}>
+                  Tint Cards in Dark Mode
+                </Text>
+                <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 1 }}>
+                  Applies the green/red position card tint in dark mode too (on by default in light mode)
+                </Text>
+              </View>
+              <Switch
+                value={cardTintDarkMode}
+                onValueChange={setCardTintDarkMode}
+                trackColor={{ false: colors.border, true: colors.accent }}
+              />
+            </View>
+          </View>
+        </View>
+
         {/* Menu section */}
         <View style={{ paddingHorizontal: 20, marginBottom: 24 }}>
           <Text
@@ -371,6 +481,11 @@ const ProfileScreen = () => {
       <ServiceStatusModal
         visible={serviceStatusVisible}
         onClose={() => setServiceStatusVisible(false)}
+      />
+      <AgentModal
+        visible={agentOpen}
+        onClose={() => setAgentOpen(false)}
+        onError={(msg) => toast.error(msg)}
       />
     </SafeAreaView>
   );

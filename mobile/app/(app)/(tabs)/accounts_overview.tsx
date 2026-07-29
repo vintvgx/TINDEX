@@ -12,6 +12,7 @@ import { useAccountValueDisplay } from '@/hooks/queries/strategy/useAccountValue
 import { StatPill } from '@/common/components/ui/StatPill';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
+import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 
 type Period = 'today' | 'week' | 'month' | 'ytd' | 'all';
 
@@ -54,6 +55,7 @@ export default function AccountsScreen({ embedded = false }: Props) {
 
   const { paper: paperDisplay, live: liveDisplay, has_open_positions } = useAccountValueDisplay();
   const { data: history, isLoading: histLoading, refetch: refetchHistory } = useAlpacaAccountsHistory();
+  const tabBarHeight = useFloatingTabBarHeight();
 
   const isLoading = histLoading && !paperDisplay && !liveDisplay;
 
@@ -109,7 +111,7 @@ export default function AccountsScreen({ embedded = false }: Props) {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight }]}
         refreshControl={
           <RefreshControl
             refreshing={manualRefreshing}

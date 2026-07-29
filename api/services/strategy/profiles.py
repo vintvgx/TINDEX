@@ -200,20 +200,28 @@ PROFILES = {
     # ── IMMEDIATE TRADE PROFILES ──────────────────────────────────────────────────
 
     # ─── NO_STOP_LOSS — Fully manual, hold until sold ────────────────────────────
-    # No automatic exit of any kind: max_loss_pct=1.0 means hard_stop computes to
-    # entry*0=0 (never triggers on a real quote), tp1/tp2 multiples are unreachable,
+    # No automatic exit of any kind: hard_stop=0 never triggers on a real quote,
+    # disable_tp1_exit=True makes ExitManager.evaluate() skip the TP1 branch
+    # entirely (see exit_manager.py) rather than relying on an unreachable price,
     # and disable_eod_close=True skips BOTH the ExitManager.evaluate() EOD_CLOSE
     # branch AND the separate scheduler._eod_reset() 15:30 ET hard-close cron (see
     # scheduler.py) — the two are independent mechanisms and both must respect this
     # flag for "hold until I sell" to actually mean never, not just "not before 3:30".
+    # tp1_mult/tp2_mult are now a normal, relative-looking target (not the old
+    # 999x-entry sentinel) purely for display — disable_tp1_exit (and use_tp2
+    # =False for TP2) guarantees neither can ever actually fire regardless of
+    # what these numbers are, so there's no tension between "looks like a sane
+    # price" and "still 100% manual" (2026-07-29: the old 999x number read as
+    # an outlandish, confusing price on the position card).
     # qty_contracts=1 by design — no-stop-loss risk should default to the smallest
     # possible size; submit_manual_trade only overrides qty if the caller passes one.
     "NO_STOP_LOSS": {
         "qty_contracts":           1,
         "use_tp2":                 False,
+        "disable_tp1_exit":        True,
         "max_loss_pct":            1.0,
-        "tp1_mult":                999.0,
-        "tp2_mult":                999.0,
+        "tp1_mult":                1.20,
+        "tp2_mult":                1.35,
         "tp1_close_pct":           0.00,
         "tp2_close_pct":           0.00,
         "runner_trail_pct":        0.00,
@@ -476,12 +484,17 @@ PROFILES = {
         "vix_max_override":        55,
     },
     # ─── MANUAL — User-controlled exit, only a hard stop fires automatically ─────
+    # Same "unreachable TP1" pattern as NO_STOP_LOSS above (and the same fix,
+    # 2026-07-29): disable_tp1_exit guarantees TP1 never auto-fires regardless
+    # of the number, so tp1_mult/tp2_mult can be a normal, sane-looking target
+    # instead of a 999x-entry sentinel.
     "MANUAL": {
         "qty_contracts":          2,
         "use_tp2":                False,
+        "disable_tp1_exit":       True,
         "max_loss_pct":           0.30,   # default SL — overridden by user's picker selection
-        "tp1_mult":               999.0,  # unreachable — TP1 never auto-fires
-        "tp2_mult":               999.0,
+        "tp1_mult":               1.20,
+        "tp2_mult":               1.35,
         "tp1_close_pct":          0.00,
         "tp2_close_pct":          0.00,
         "runner_trail_pct":       0.00,
