@@ -12,8 +12,9 @@ import { blendHex } from '@/lib/colorBlend';
 import type { OptionsContract, OptionsOpportunity } from '@/common/types/blogPosts/ticker';
 import {
   IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
-  getCheapContractAutoProfileIndex, ProfileDropdown, ManualSLPicker,
+  getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
+import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
 
 /**
  * Chain browser + order-entry UI: expiration-range/date chips, a calls/puts
@@ -143,9 +144,10 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [selected, setSelected]         = useState<OptionsContract | null>(null);
   const [qty, setQty]                   = useState(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
+  const [stopType, setStopType]         = useState<StopType>('HARD');
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
-  const [autoSelected, setAutoSelected] = useState(false);
+  const [autoGraceMinutes, setAutoGraceMinutes] = useState<5 | 10 | null>(null);
 
   const profile      = IMMEDIATE_PROFILES[profileIndex];
   const isManual     = profile.isManual === true;
@@ -154,22 +156,16 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   const handleProfileSelect = (idx: number) => {
     setProfileIndex(idx);
     setQty(IMMEDIATE_PROFILES[idx].qty);
-    setAutoSelected(false); // user explicitly chose — clear the auto flag
   };
 
-  // Auto-select the SL_5/SL_10 grace-timer profile when a cheap contract is
-  // tapped — mirrors the server-side unconditional price rule (see
-  // getCheapContractAutoProfileIndex), not gated on OTM-ness.
+  // Auto-suggest the grace stop-type when a cheap contract is tapped — mirrors
+  // the server-side unconditional price rule (see getCheapContractAutoGraceMinutes),
+  // not gated on OTM-ness. Sizing/profile is untouched; only stop type follows.
   useEffect(() => {
-    if (!selected) { setAutoSelected(false); return; }
-    const idx = getCheapContractAutoProfileIndex(selected, currentPrice);
-    if (idx !== null && idx >= 0) {
-      setProfileIndex(idx);
-      setQty(IMMEDIATE_PROFILES[idx].qty);
-      setAutoSelected(true);
-    } else {
-      setAutoSelected(false);
-    }
+    if (!selected) { setAutoGraceMinutes(null); return; }
+    const minutes = getCheapContractAutoGraceMinutes(selected.ask);
+    setAutoGraceMinutes(minutes);
+    setStopType(minutes ?? 'HARD');
   // Only re-run when the selected contract changes, not on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.symbol]);
@@ -302,6 +298,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         profile:         profile.key,
         paper_mode:      paperMode,
         volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
+        sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
         ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
       },
       {
@@ -440,17 +437,6 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
           onSelect={handleProfileSelect}
           colors={colors}
         />
-        {autoSelected && (
-          <View style={[styles.autoSelectBanner, { backgroundColor: colors.accent + '15', borderColor: colors.accent + '35' }]}>
-            <Ionicons name="flash-outline" size={12} color={colors.accent} />
-            <Text style={[styles.autoSelectText, { color: colors.accent }]}>
-              Auto-selected · cheap contract · ask ${selected!.ask.toFixed(2)}
-            </Text>
-            <Text style={[styles.autoSelectSub, { color: colors.tabBarInactive }]}>
-              Tap above to override
-            </Text>
-          </View>
-        )}
       </View>
 
       {/* Manual SL picker — only when MANUAL selected */}
@@ -488,24 +474,27 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         </View>
       </View>
 
-      {/* Auto exit toggles — hidden for MANUAL/NO_STOP_LOSS (no automatic exit to configure) */}
-      {!isManual && !isNoStopLoss && (
+      {/* Exit Controls — hidden for NO_STOP_LOSS (no automatic exit to configure) */}
+      {!isNoStopLoss && (
         <View>
           <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>EXIT CONTROLS</Text>
-          <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.exitToggleRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Volume Exit</Text>
-                <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Close half on low volume</Text>
+          <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
+          {!isManual && (
+            <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border, marginTop: 10 }]}>
+              <View style={styles.exitToggleRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Volume Exit</Text>
+                  <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Close half on low volume</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setVolumeExit(v => !v)}
+                  style={[styles.togglePill, { backgroundColor: volumeExit ? colors.accent + '33' : colors.border + '55', borderColor: volumeExit ? colors.accent : colors.border }]}
+                >
+                  <View style={[styles.toggleThumb, { backgroundColor: volumeExit ? colors.accent : colors.tabBarInactive, transform: [{ translateX: volumeExit ? 14 : 0 }] }]} />
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                onPress={() => setVolumeExit(v => !v)}
-                style={[styles.togglePill, { backgroundColor: volumeExit ? colors.accent + '33' : colors.border + '55', borderColor: volumeExit ? colors.accent : colors.border }]}
-              >
-                <View style={[styles.toggleThumb, { backgroundColor: volumeExit ? colors.accent : colors.tabBarInactive, transform: [{ translateX: volumeExit ? 14 : 0 }] }]} />
-              </TouchableOpacity>
             </View>
-          </View>
+          )}
         </View>
       )}
 
@@ -728,11 +717,6 @@ const styles = StyleSheet.create({
   centered:   { alignItems: 'center', justifyContent: 'center', paddingTop: 60, paddingHorizontal: 32, gap: 6 },
   emptyText:  { fontSize: 15, fontWeight: '600', marginTop: 6 },
   emptySub:   { fontSize: 13, textAlign: 'center' },
-
-  // ── Auto-select banner ──
-  autoSelectBanner: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, borderWidth: 1 },
-  autoSelectText:   { fontSize: 11, fontWeight: '600', flex: 1 },
-  autoSelectSub:    { fontSize: 10 },
 
   // ── Footer ──
   exitProfileCard:  { borderRadius: 12, borderWidth: 1, padding: 12 },

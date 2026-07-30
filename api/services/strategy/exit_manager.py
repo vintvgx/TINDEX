@@ -25,7 +25,15 @@ import pytz
 from datetime import datetime, time, timedelta
 from collections import deque
 
+from services.strategy.profiles import grace_fields_for_minutes
+
 ET = pytz.timezone("America/New_York")
+
+# Sentinel distinguishing "sl_grace_minutes not provided" (leave the current
+# stop-type alone) from "sl_grace_minutes explicitly set to None" (switch to
+# Hard Stop) in ExitManager.apply_overrides — None itself is a meaningful
+# value here, so it can't double as the "not provided" default.
+_UNSET = object()
 
 
 def compute_exit_levels(entry_premium: float, profile: dict) -> tuple[float, float, float]:
@@ -452,7 +460,8 @@ class ExitManager:
 
     def apply_overrides(self, hard_stop: float | None = None, tp1: float | None = None,
                         tp2: float | None = None, sl_qty: int | None = None,
-                        tp1_qty: int | None = None, tp2_qty: int | None = None) -> dict:
+                        tp1_qty: int | None = None, tp2_qty: int | None = None,
+                        sl_grace_minutes=_UNSET) -> dict:
         """
         Validate and apply user-supplied SL/TP1/TP2 price and/or qty overrides
         to this (already open) position. Raises ValueError with a user-facing
@@ -468,6 +477,15 @@ class ExitManager:
         trader is explicitly choosing that trade-off, not asking for a lower
         stop.
 
+        sl_grace_minutes is the independent per-trade "stop type" choice —
+        None (or omitted) means Hard Stop, 5/10/15 arms the matching grace
+        window (see profiles.py's grace_fields_for_minutes) on top of
+        whatever sizing profile this trade already uses, decoupled from the
+        SL_5/SL_10 profile identities. Omit the kwarg entirely to leave the
+        current stop type untouched — it uses a sentinel default (not None)
+        specifically so "not provided" and "explicitly switch to Hard Stop"
+        are distinguishable.
+
         Shared by the mid-trade PATCH /configs/<id>/exits route and the
         confirm-entry approve path (edited fields from the confirmation modal,
         applied right after the real fill so levels are relative to the actual
@@ -482,6 +500,9 @@ class ExitManager:
                 raise ValueError(f"{label} quantity must be between 1 and {self.qty_remaining}")
         if tp2_qty is not None and not self._use_tp2:
             raise ValueError("TP2 is not available for this position (single contract)")
+        grace_fields = None
+        if sl_grace_minutes is not _UNSET:
+            grace_fields = grace_fields_for_minutes(sl_grace_minutes)  # raises ValueError on bad input
 
         changed = {}
         if hard_stop is not None:
@@ -502,6 +523,23 @@ class ExitManager:
         if tp2_qty is not None:
             self._tp2_qty_override = tp2_qty
             changed["tp2_qty"] = tp2_qty
+        if grace_fields is not None:
+            self._sl_grace_enabled = grace_fields["sl_grace_enabled"]
+            self._sl_grace_seconds = grace_fields.get("sl_grace_seconds", 0)
+            self._sl_grace_recovery_seconds = grace_fields.get("sl_grace_recovery_seconds", 0)
+            outer_floor_pct = grace_fields.get("sl_outer_floor_pct")
+            self._sl_outer_floor = (
+                self.entry_premium * (1 - outer_floor_pct) if outer_floor_pct is not None else None
+            )
+            if not self._sl_grace_enabled:
+                # Switching to Hard Stop cancels any grace window already in
+                # progress — a pending countdown shouldn't linger after the
+                # user deliberately turns the timer off.
+                self._sl_grace_active    = False
+                self._sl_grace_down_bars = 0
+                self._sl_grace_start     = None
+                self._sl_recovery_start  = None
+            changed["sl_grace_minutes"] = sl_grace_minutes
         return changed
 
     def to_dict(self) -> dict:
@@ -536,6 +574,10 @@ class ExitManager:
             "sl_grace_down_bars":    self._sl_grace_down_bars,
             "sl_grace_deadline":     sl_grace_deadline,
             "sl_recovery_deadline":  sl_recovery_deadline,
+            # Stop-type CONFIGURATION (not just runtime grace state) — lets a
+            # client (e.g. EditExitsModal) know which tab to pre-select.
+            "sl_grace_enabled":      self._sl_grace_enabled,
+            "sl_grace_minutes":      (self._sl_grace_seconds // 60) if self._sl_grace_enabled else None,
             # "Advanced" per-level qty overrides — null means "profile default".
             "sl_qty":                self._sl_qty_override,
             "tp1_qty":               self._tp1_qty_override,

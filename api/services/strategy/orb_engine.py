@@ -20,7 +20,7 @@ from alpaca.data.historical import OptionHistoricalDataClient, StockHistoricalDa
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
-from services.strategy.profiles import get_profile
+from services.strategy.profiles import get_profile, grace_fields_for_minutes
 from services.strategy.contract_selector import select_contract
 from services.strategy.exit_manager import ExitManager, compute_exit_levels
 from services.strategy.sentiment import SentimentFilter
@@ -1113,19 +1113,27 @@ class ORBEngine:
 
             # Cheap-contract stop-loss safety rail: sub-$0.50 fills are the
             # ones that get whipsawed out by an instant stop (2026-07-27
-            # discussion) — force these onto the SL_5/SL_10 grace-timer
-            # profiles regardless of what was configured/selected, so a
-            # NO_STOP_LOSS (or any other) pick on a cheap fill never silently
-            # loses stop-loss protection. Contracts $0.50+ are untouched —
-            # whatever profile was already chosen applies as-is.
+            # discussion) — force a grace-timer stop onto them regardless of
+            # what was configured/selected, so a cheap fill never silently
+            # loses stop-loss protection. Contracts $0.50+ are untouched.
+            #
+            # 2026-07-30: this used to REPLACE the entire profile with SL_5/
+            # SL_10 (get_profile("SL_5")/("SL_10")) — losing the trader's own
+            # sizing/targets, and (for NO_STOP_LOSS specifically) silently
+            # re-enabling automatic TP1 exits, since SL_5/SL_10 don't set
+            # disable_tp1_exit. Stop-type is now independent of sizing (see
+            # profiles.py's grace_fields_for_minutes) — this just layers the
+            # grace fields onto whatever effective_profile was already
+            # resolved, leaving its sizing/other flags (including
+            # disable_tp1_exit) untouched. profile_key_override is
+            # deliberately NOT renamed to SL_5/SL_10 anymore — the trade log
+            # should show the real sizing profile that was actually used;
+            # the grace timer is now its own separate, visible field
+            # (ExitManager.to_dict()'s sl_grace_minutes).
             if entry_premium < 0.25:
-                effective_profile, logged_profile_key_override = get_profile("SL_10"), "SL_10"
+                effective_profile = {**effective_profile, **grace_fields_for_minutes(10)}
             elif entry_premium < 0.50:
-                effective_profile, logged_profile_key_override = get_profile("SL_5"), "SL_5"
-            else:
-                logged_profile_key_override = None
-            if logged_profile_key_override:
-                profile_key_override = logged_profile_key_override
+                effective_profile = {**effective_profile, **grace_fields_for_minutes(5)}
 
             self.position               = direction
             self.contract_symbol        = contract["symbol"]
@@ -2275,6 +2283,20 @@ class ORBEngine:
         _tag = f"[{self.strategy_name} | {self.profile_key}]"
         pnl = (exit_premium - entry_premium) * qty_closed * 100
 
+        # Breakeven guarantee: ANY exit that locks in a profit (TP hit, manual
+        # profit-take, cascade, ...) — not just the automatic TP1 path in
+        # ExitManager.evaluate() — raises the stop to entry for whatever's
+        # left, so a partial profit-take can never be given all the way back
+        # down to the original stop. Only ever moves the stop UP (never
+        # overrides a tighter manual stop already above breakeven), and
+        # no-ops on a full close (nothing left to protect). 2026-07-30: a
+        # manual sell bypasses evaluate() entirely, so this was the one path
+        # that never armed breakeven at all.
+        if not closing_all and exit_premium > entry_premium and self.exit_manager:
+            if self.exit_manager.hard_stop < entry_premium:
+                self.exit_manager.hard_stop = entry_premium
+                self.exit_manager.be_stop_active = True
+
         self._active_trade_pnl     += pnl
         self._session_realized_pnl += pnl
 
@@ -2566,6 +2588,12 @@ class ORBEngine:
             # routes/strategy_routes.py's _engine_position_response for the
             # same field on the REST side.
             "use_tp2":              em_state.get("use_tp2", False),
+            # Current stop-type CONFIGURATION (Hard Stop vs SL timer, and
+            # which duration) — distinct from sl_grace_active above, which is
+            # only true while a grace window is actively counting down. Lets
+            # EditExitsModal know which tab to pre-select.
+            "sl_grace_enabled":     em_state.get("sl_grace_enabled", False),
+            "sl_grace_minutes":     em_state.get("sl_grace_minutes"),
         })
         with self._live_clients_lock:
             for q in list(self._live_clients):

@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, SafeAreaView, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
 import { useImmediateTradeByTicker } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
 import {
   IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
-  ProfileDropdown, ManualSLPicker,
+  getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
+import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
 import { formatContractSymbol } from '@/lib/formatContract';
 import type { SocialSignalContract } from '@/common/types/social';
 
@@ -30,16 +31,30 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
   const [paperMode, setPaperMode] = useState(true);
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [qty, setQty] = useState(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
+  const [stopType, setStopType] = useState<StopType>('HARD');
   const [volumeExit, setVolumeExit] = useState(false);
   const [manualSlPct, setManualSlPct] = useState(30);
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
+  const askPrice = livePrice ?? contract?.current_price ?? contract?.tracked_entry_price ?? 0;
+  const autoGraceMinutes = contract ? getCheapContractAutoGraceMinutes(askPrice) : null;
+
+  // Auto-suggest the grace stop-type for a cheap signal contract, mirroring
+  // the other two entry sheets — this one previously had no auto-detect at
+  // all, since SocialSignalContract has no `.ask` field to key off directly.
+  useEffect(() => {
+    if (!contract) return;
+    setStopType(getCheapContractAutoGraceMinutes(askPrice) ?? 'HARD');
+  // Only re-run when a different contract is opened, not on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contract?.contract_symbol]);
+
   if (!contract) return null;
 
   const profile = IMMEDIATE_PROFILES[profileIndex];
   const isManual = profile.isManual === true;
-  const askPrice = livePrice ?? contract.current_price ?? contract.tracked_entry_price ?? 0;
+  const isNoStopLoss = profile.isNoStopLoss === true;
 
   const handleProfileSelect = (idx: number) => {
     setProfileIndex(idx);
@@ -55,7 +70,8 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
         qty,
         profile: profile.key,
         paper_mode: paperMode,
-        volume_exit: isManual ? false : volumeExit,
+        volume_exit: (isManual || isNoStopLoss) ? false : volumeExit,
+        sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
         ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
       },
       {
@@ -150,11 +166,13 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
             </View>
           </View>
 
-          {/* Exit controls */}
-          {!isManual && (
+          {/* Exit controls — hidden for NO_STOP_LOSS (no automatic exit to configure) */}
+          {!isNoStopLoss && (
             <View style={{ marginTop: 16 }}>
               <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>EXIT CONTROLS</Text>
-              <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
+              {!isManual && (
+              <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border, marginTop: 10 }]}>
                 <View style={styles.exitToggleRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Volume Exit</Text>
@@ -168,6 +186,7 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
                   </TouchableOpacity>
                 </View>
               </View>
+              )}
             </View>
           )}
 

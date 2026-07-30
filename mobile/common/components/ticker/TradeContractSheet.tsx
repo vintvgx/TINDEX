@@ -8,8 +8,9 @@ import { useToast } from '@/common/components/ui/Toast';
 import { useImmediateTradeByTicker } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
 import {
   IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
-  getCheapContractAutoProfileIndex, ProfileDropdown, ManualSLPicker,
+  getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
+import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 
 interface Props {
@@ -34,6 +35,7 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
   const [paperMode, setPaperMode]       = useState(true);
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [qty, setQty]                   = useState(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
+  const [stopType, setStopType]         = useState<StopType>('HARD');
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
 
@@ -43,14 +45,14 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
-  // Reset to defaults + auto-pick SL_5/SL_10 for any sub-$0.50 contract
-  // every time a new contract is opened, mirroring ImmediateTradePanel.
+  // Reset to defaults + auto-suggest a grace stop-type for any sub-$0.50
+  // contract every time a new contract is opened, mirroring ImmediateTradePanel.
+  const autoGraceMinutes = contract ? getCheapContractAutoGraceMinutes(contract.ask) : null;
   useEffect(() => {
     if (!visible || !contract) return;
-    const otmIdx = getCheapContractAutoProfileIndex(contract, currentPrice);
-    const idx = otmIdx ?? DEFAULT_PROFILE_INDEX;
-    setProfileIndex(idx);
-    setQty(IMMEDIATE_PROFILES[idx].qty);
+    setProfileIndex(DEFAULT_PROFILE_INDEX);
+    setQty(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
+    setStopType(getCheapContractAutoGraceMinutes(contract.ask) ?? 'HARD');
     setVolumeExit(false);
     setManualSlPct(30);
     setPaperMode(true);
@@ -74,6 +76,7 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
         profile:         profile.key,
         paper_mode:      paperMode,
         volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
+        sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
         ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
       },
       {
@@ -183,22 +186,25 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
             </Text>
           </View>
 
-          {/* Exit toggles — hidden for MANUAL/NO_STOP_LOSS (no automatic exit to configure) */}
-          {!isManual && !isNoStopLoss && (
+          {/* Exit Controls — hidden for NO_STOP_LOSS (no automatic exit to configure) */}
+          {!isNoStopLoss && (
             <>
-              <Text style={[s.label, { color: colors.tabBarInactive, marginTop: 18 }]}>EXTRA EXITS</Text>
-              <View style={[s.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <View style={s.exitRow}>
-                  <Text style={[s.exitLabel, { color: colors.text }]}>Volume Exit</Text>
-                  <TouchableOpacity onPress={() => setVolumeExit(v => !v)} hitSlop={8}>
-                    <Ionicons
-                      name={volumeExit ? 'checkbox' : 'square-outline'}
-                      size={22}
-                      color={volumeExit ? colors.accent : colors.tabBarInactive}
-                    />
-                  </TouchableOpacity>
+              <Text style={[s.label, { color: colors.tabBarInactive, marginTop: 18 }]}>EXIT CONTROLS</Text>
+              <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
+              {!isManual && (
+                <View style={[s.exitToggles, { backgroundColor: colors.card, borderColor: colors.border, marginTop: 10 }]}>
+                  <View style={s.exitRow}>
+                    <Text style={[s.exitLabel, { color: colors.text }]}>Volume Exit</Text>
+                    <TouchableOpacity onPress={() => setVolumeExit(v => !v)} hitSlop={8}>
+                      <Ionicons
+                        name={volumeExit ? 'checkbox' : 'square-outline'}
+                        size={22}
+                        color={volumeExit ? colors.accent : colors.tabBarInactive}
+                      />
+                    </TouchableOpacity>
+                  </View>
                 </View>
-              </View>
+              )}
             </>
           )}
 

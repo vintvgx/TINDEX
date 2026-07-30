@@ -14,6 +14,9 @@ interface UpdateStrategyExitsPayload {
   sl_qty?: number;
   tp1_qty?: number;
   tp2_qty?: number;
+  /** Stop type — null switches to Hard Stop, 5/10/15 arms the matching
+   *  grace-timer window (see exit_manager.py's sl_grace_* fields). */
+  sl_grace_minutes?: number | null;
 }
 
 export function useUpdateStrategyExits() {

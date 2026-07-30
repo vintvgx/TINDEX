@@ -35,6 +35,12 @@ export interface LivePriceData {
   /** False for a 1-contract entry regardless of profile — TP2 is never
    *  reachable. See common/types/strategy.ts's StrategyPosition.use_tp2. */
   use_tp2?: boolean;
+  /** Current stop-type CONFIGURATION (Hard Stop vs SL timer, and which
+   *  duration) — distinct from sl_grace_active above, which is only true
+   *  while a grace window is actively counting down. See
+   *  ExitManager.to_dict(). */
+  sl_grace_enabled?: boolean;
+  sl_grace_minutes?: number | null;
   // ── Simulation-only fields (all optional — absent on a real live position) ──
   sim?:               boolean;
   sim_tick?:          number;

@@ -1,10 +1,13 @@
 import type React from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View, Text, Pressable, Modal, StatusBar, ScrollView, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketStream } from '@/hooks/useMarketStream';
+import { useChartLiveStream } from '@/hooks/queries/ticker/useChartLiveStream';
+import { useChartPriceSource } from '@/hooks/useChartPriceSource';
+import { useToast } from '@/common/components/ui/Toast';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { getOrbStatus } from '@/common/utils/orb/getOrbStatus';
 import { AdvancedPriceChart, AdvancedScrubPoint } from '@/common/components/ticker/AdvancedPriceChart';
@@ -81,16 +84,41 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   };
 
   // Reset when the sheet closes so reopening starts fresh, and so the
-  // WebSocket below disconnects rather than idling in the background.
+  // WebSockets below disconnect rather than idling in the background.
   useEffect(() => {
     if (!visible) { setShowOrbRange(true); setScrubPoint(null); }
   }, [visible]);
 
-  // Live stream drives both the chart's last-price line and the ORB badge.
+  const toast = useToast();
+  const { source: chartPriceSource } = useChartPriceSource();
+  const useAlpacaStream = chartPriceSource === 'alpaca';
+
+  // Real-time paper-key Alpaca trade stream (default) — see
+  // useChartLiveStream/stock_chart_stream.py. Kept separate from the
+  // yfinance-backed useMarketStream below (which stays subscribed
+  // regardless of the chosen source) so a bad Alpaca connection can fall
+  // back instantly instead of needing a fresh subscribe.
+  const chartStream = useChartLiveStream(ticker, visible && useAlpacaStream);
   const { livePrices } = useMarketStream([ticker], { enabled: visible });
-  const livePrice = livePrices[ticker] ?? currentPrice ?? 0;
+
+  const alpacaUsable = useAlpacaStream && !chartStream.error && chartStream.price != null;
+  const resolvedLivePrice = alpacaUsable ? chartStream.price! : livePrices[ticker] ?? currentPrice;
+
+  // Notify once per failure streak (not on every reconnect tick) so a flaky
+  // stream during the trading day doesn't get missed, but also doesn't spam.
+  const notifiedErrorRef = useRef(false);
+  useEffect(() => {
+    if (!visible || !useAlpacaStream) return;
+    if (chartStream.error && !notifiedErrorRef.current) {
+      notifiedErrorRef.current = true;
+      toast.warning(`Live chart stream for ${ticker} is down — showing delayed (Yahoo) price instead.`);
+    } else if (!chartStream.error) {
+      notifiedErrorRef.current = false;
+    }
+  }, [visible, useAlpacaStream, chartStream.error, ticker, toast]);
+
   const orbActive = showOrbRange && hasOrbData && period === '1D';
-  const orbStatus = hasOrbData ? getOrbStatus(livePrice, orbData!.orb_high, orbData!.orb_low) : null;
+  const orbStatus = hasOrbData ? getOrbStatus(resolvedLivePrice ?? 0, orbData!.orb_high, orbData!.orb_low) : null;
   const orbStatusColor = orbStatus === 'above' ? colors.success : orbStatus === 'below' ? colors.error : colors.textSecondary;
 
   const periodStartPrice = historyData?.prices?.[0];
@@ -103,7 +131,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   // opened) and never moved again. priceChange/priceChangePercent are
   // recomputed against the same day-open reference so they stay consistent
   // with the live price instead of freezing at their initial values.
-  const headerLivePrice = livePrices[ticker] ?? currentPrice;
+  const headerLivePrice = resolvedLivePrice;
   const dayRefPrice = (currentPrice != null && priceChange != null) ? currentPrice - priceChange : undefined;
   const liveChange = (headerLivePrice != null && dayRefPrice != null) ? headerLivePrice - dayRefPrice : priceChange;
   const liveChangePercent = (dayRefPrice) ? ((liveChange ?? 0) / dayRefPrice) * 100 : priceChangePercent;
@@ -202,7 +230,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             height={Math.min(340, Math.max(260, windowHeight * 0.38))}
             orbRange={hasOrbData ? { high: orbData!.orb_high, low: orbData!.orb_low } : null}
             showOrbRange={showOrbRange}
-            livePrice={visible ? livePrices[ticker] ?? null : null}
+            livePrice={visible ? resolvedLivePrice ?? null : null}
           />
 
           {hasOrbData && (

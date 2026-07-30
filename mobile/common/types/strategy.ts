@@ -185,6 +185,9 @@ export interface ImmediateTradeByTickerRequest {
   paper_mode: boolean;
   volume_exit?: boolean;
   max_loss_pct?: number; // MANUAL profile: decimal (e.g. 0.30 = 30% SL)
+  /** Stop type — null/omitted means Hard Stop, 5|10 arms the matching
+   *  grace-timer window (see exit_manager.py's sl_grace_* fields). */
+  sl_grace_minutes?: 5 | 10 | null;
 }
 
 /** An open position from a ticker-based immediate trade engine. */
@@ -241,6 +244,9 @@ export interface StrategyPosition {
    *  reachable (TP1 always closes the sole contract in full). See
    *  ExitManager.__init__ / _engine_position_response. */
   use_tp2?: boolean;
+  /** Current stop-type configuration — see ExitManager.to_dict(). */
+  sl_grace_enabled?: boolean;
+  sl_grace_minutes?: number | null;
 }
 
 export interface ExitStage {

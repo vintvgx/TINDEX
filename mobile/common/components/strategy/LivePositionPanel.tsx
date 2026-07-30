@@ -30,6 +30,8 @@ export interface LivePositionStaticFallback {
   tp1_hit?: boolean;
   tp2_hit?: boolean;
   use_tp2?: boolean;
+  sl_grace_enabled?: boolean;
+  sl_grace_minutes?: number | null;
 }
 
 interface LivePositionPanelProps {
@@ -105,6 +107,8 @@ export function LivePositionPanel({
         tp1:           staticFallback!.tp1!,
         tp2:           staticFallback!.tp2 ?? staticFallback!.tp1!,
         use_tp2:       staticFallback!.use_tp2,
+        sl_grace_enabled: staticFallback!.sl_grace_enabled,
+        sl_grace_minutes: staticFallback!.sl_grace_minutes,
         market_value:  (staticFallback!.mid_price ?? staticFallback!.entry_premium!) * (staticFallback!.qty_remaining ?? 0) * 100,
       }
     : undefined);
@@ -233,6 +237,8 @@ export function LivePositionPanel({
                     tp2_hit={display.tp2_hit}
                     qty_remaining={display.qty_remaining}
                     use_tp2={showTp2}
+                    sl_grace_enabled={display.sl_grace_enabled}
+                    sl_grace_minutes={display.sl_grace_minutes}
                     hideKey={hideKey}
                     onUpdated={patchData}
                     style={{ flex: 1 }}

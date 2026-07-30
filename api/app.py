@@ -30,6 +30,11 @@ def log_response_info(response):
 from services.websocket.price_stream_service import price_stream
 price_stream.start()
 
+# Per-chart real-time equity stream — see stock_chart_stream.py's docstring
+# for why this uses the PAPER Alpaca key pair specifically (a fully separate
+# connection from the ORB engines' own live-account stock stream below).
+from services.websocket.stock_chart_stream import chart_stream
+
 # Single shared Alpaca option-data-stream connection for the whole process.
 # Constructed here (module scope, before the ORB engine's try/except below)
 # so a failure initialising ORB engines can never take this down — but its
@@ -147,6 +152,41 @@ def ws_prices(ws):
         with tickers_lock:
             for ticker in client_tickers:
                 price_stream.unsubscribe(ticker)
+
+
+# ── WebSocket: per-chart real-time equity stream (paper-key Alpaca) ────────────
+
+@sock.route("/ws/chart/<ticker>/live")
+def ws_chart_live(ws, ticker: str):
+    """
+    Real-time last-trade price for exactly one ticker, for whichever chart is
+    currently open — see stock_chart_stream.py. Independent of /ws/prices
+    (that stays on its existing yfinance poll for TickerTape/watchlists/etc.)
+    and independent of the ORB engines' own live-account stock stream.
+    """
+    import queue as _queue
+
+    symbol = ticker.upper()
+    client_q: _queue.Queue = _queue.Queue(maxsize=20)
+
+    def _on_price(price: float):
+        try:
+            client_q.put_nowait(json.dumps({"type": "price_update", "price": price}))
+        except _queue.Full:
+            pass
+
+    chart_stream.subscribe(symbol, _on_price)
+    try:
+        while True:
+            try:
+                payload = client_q.get(timeout=30)
+                ws.send(payload)
+            except _queue.Empty:
+                ws.send(json.dumps({"type": "ping"}))
+    except Exception as exc:
+        logger.debug("[WS/chart] client disconnected: %s", exc)
+    finally:
+        chart_stream.unsubscribe(symbol, _on_price)
         logger.info("[WS] client cleanup done")
 
 

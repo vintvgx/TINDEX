@@ -1,0 +1,49 @@
+import { useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+export type ChartPriceSource = 'alpaca' | 'yfinance';
+
+const STORAGE_KEY = 'chart_price_source_v1';
+const QUERY_KEY = ['chart-price-source'];
+const DEFAULT_SOURCE: ChartPriceSource = 'alpaca';
+
+async function loadSource(): Promise<ChartPriceSource> {
+  try {
+    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    return raw === 'yfinance' ? 'yfinance' : DEFAULT_SOURCE;
+  } catch {
+    return DEFAULT_SOURCE;
+  }
+}
+
+/**
+ * Which live-price source PriceChartFullScreen uses — the real-time
+ * paper-key Alpaca trade stream (useChartLiveStream, default) or the
+ * existing ~5s yfinance poll (useMarketStream) — a Profile setting so the
+ * user can drop back to the old poll mid-trading-day if the Alpaca stream
+ * is acting up, without needing a redeploy. Persisted to AsyncStorage and
+ * mirrored into the React Query cache (same pattern as
+ * useSearchBarVisibility) so PriceChartFullScreen re-renders the instant
+ * the Profile toggle flips it.
+ */
+export function useChartPriceSource() {
+  const qc = useQueryClient();
+  const { data: source = DEFAULT_SOURCE } = useQuery<ChartPriceSource>({
+    queryKey: QUERY_KEY,
+    queryFn: loadSource,
+    staleTime: Infinity,
+  });
+
+  const setSource = useCallback(async (next: ChartPriceSource) => {
+    qc.setQueryData(QUERY_KEY, next);
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY, next);
+    } catch {
+      // Best-effort persistence — the query cache above already reflects
+      // the toggle for the rest of this session even if the write fails.
+    }
+  }, [qc]);
+
+  return { source, setSource };
+}

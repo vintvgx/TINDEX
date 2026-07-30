@@ -580,6 +580,51 @@ _EMOJIS = {
 }
 
 
+# Grace-timer fields are always overridable regardless of whether the base
+# profile already declares them — the stop-timer (Hard Stop / SL-5 / SL-10)
+# is now an independent per-trade choice (see grace_fields_for_minutes)
+# layered on top of ANY sizing profile, not just SL_5/SL_10 themselves.
+# Without this allow-list, get_profile()'s "only override existing keys"
+# rule below would silently drop a grace override on any profile that
+# doesn't itself define sl_grace_* (i.e. everything except SL_5/SL_10/
+# REVERSAL) — logged as an "ignoring unknown key" warning instead of doing
+# what was asked. 2026-07-30.
+GRACE_OVERRIDE_KEYS = {
+    "sl_grace_enabled", "sl_grace_seconds",
+    "sl_grace_recovery_seconds", "sl_outer_floor_pct",
+}
+
+
+def grace_fields_for_minutes(minutes: int | None) -> dict:
+    """
+    Translate a user-facing stop-timer choice into ExitManager's grace
+    fields. `None` means Hard Stop (grace off). Shared by the entry route
+    and the mid-trade PATCH /configs/<id>/exits route so the two surfaces
+    can never drift apart. sl_outer_floor_pct rises with the timer length —
+    a longer grace window needs a deeper absolute worst-case floor so it can
+    never turn into an unbounded hold (see ExitManager.evaluate()'s outer-
+    floor check).
+    """
+    if minutes is None:
+        return {"sl_grace_enabled": False}
+    if minutes == 5:
+        return {
+            "sl_grace_enabled": True, "sl_grace_seconds": 300,
+            "sl_grace_recovery_seconds": 60, "sl_outer_floor_pct": 0.80,
+        }
+    if minutes == 10:
+        return {
+            "sl_grace_enabled": True, "sl_grace_seconds": 600,
+            "sl_grace_recovery_seconds": 60, "sl_outer_floor_pct": 0.85,
+        }
+    if minutes == 15:
+        return {
+            "sl_grace_enabled": True, "sl_grace_seconds": 900,
+            "sl_grace_recovery_seconds": 60, "sl_outer_floor_pct": 0.90,
+        }
+    raise ValueError(f"sl_grace_minutes must be 5, 10, 15, or null (Hard Stop) — got {minutes!r}")
+
+
 def get_profile(name: str, custom_thresholds: dict | None = None) -> dict:
     key = name.upper().replace(" ", "_")
     if key == "CUSTOM":
@@ -589,7 +634,7 @@ def get_profile(name: str, custom_thresholds: dict | None = None) -> dict:
     base = dict(PROFILES[key])
     if custom_thresholds:
         for k, v in custom_thresholds.items():
-            if k in base:
+            if k in base or k in GRACE_OVERRIDE_KEYS:
                 base[k] = v
             else:
                 logger.warning(

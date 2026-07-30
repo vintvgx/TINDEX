@@ -10,6 +10,12 @@ import { useThemeColors } from '@/lib/useColorScheme';
 
 export type ExitEditMode = 'orb';
 
+/** 5/10/15-minute grace timer, or Hard Stop (immediate). Mirrors StopTypeSelector's
+ *  StopType but with 15 added — see EditExitsModal's own header comment for why
+ *  entry only offers 5/10 while Edit additionally offers 15. */
+type EditStopMode = 'HARD' | 'TIMER';
+type GraceMinutes = 5 | 10 | 15;
+
 export interface CurrentExits {
   hard_stop: number;       // absolute premium price
   tp1: number;             // absolute premium price
@@ -17,12 +23,15 @@ export interface CurrentExits {
   entry_premium: number;   // for display/validation
   tp1_hit?: boolean;
   tp2_hit?: boolean;
-  /** Contracts still open — drives the "Advanced" per-level qty section
-   *  below (only shown when there's more than 1 to split). */
+  /** Contracts still open — drives the inline per-level qty stepper below
+   *  (only shown when there's more than 1 to split). */
   qty_remaining?: number;
   /** False for a 1-contract entry regardless of profile — hides the TP2
-   *  qty field entirely since it can never fire. */
+   *  section entirely since it can never fire. */
   use_tp2?: boolean;
+  /** Current stop-type configuration — see ExitManager.to_dict(). */
+  sl_grace_enabled?: boolean;
+  sl_grace_minutes?: number | null;
 }
 
 interface Props {
@@ -39,6 +48,7 @@ interface Props {
     sl_qty?: number;
     tp1_qty?: number;
     tp2_qty?: number;
+    sl_grace_minutes?: number | null;
   }) => Promise<void>;
   isLoading?: boolean;
   /** Whether this position is currently hidden from the Dashboard/Live
@@ -49,6 +59,8 @@ interface Props {
   onToggleHidden?: () => Promise<void>;
   isTogglingHidden?: boolean;
 }
+
+const GRACE_OPTIONS: GraceMinutes[] = [5, 10, 15];
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -62,10 +74,19 @@ export function EditExitsModal({
   const [tp1Val, setTp1Val] = useState('');
   const [tp2Val, setTp2Val] = useState('');
 
-  // "Advanced" per-level qty overrides — how many of qty_remaining to sell
-  // at each level, instead of the profile's fixed close percentage. Only
-  // meaningful (and only shown) when there's more than 1 contract to split.
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  // Stop type — an independent choice from the price itself (see
+  // StopTypeSelector for the entry-time equivalent; Edit additionally offers
+  // a 15-min tier since there's no need to keep the post-entry picker as
+  // minimal as the entry flow).
+  const [stopMode, setStopMode] = useState<EditStopMode>('HARD');
+  const [graceMinutes, setGraceMinutes] = useState<GraceMinutes>(5);
+  const initialStopRef = useRef<{ mode: EditStopMode; minutes: GraceMinutes }>({ mode: 'HARD', minutes: 5 });
+
+  // Per-level qty overrides — how many of qty_remaining to sell at that
+  // level, instead of the profile's fixed close percentage. Only meaningful
+  // (and only shown) when there's more than 1 contract to split. Lives
+  // inline in each level's own card now, not a separate collapsed section —
+  // everything about one exit level lives in one place.
   const [slQtyVal, setSlQtyVal]   = useState('');
   const [tp1QtyVal, setTp1QtyVal] = useState('');
   const [tp2QtyVal, setTp2QtyVal] = useState('');
@@ -90,7 +111,12 @@ export function EditExitsModal({
       setStopVal(current.hard_stop > 0 ? current.hard_stop.toFixed(2) : '');
       setTp1Val(current.tp1 > 0 ? current.tp1.toFixed(2) : '');
       setTp2Val(tp2Editable && current.tp2 && current.tp2 > 0 ? current.tp2.toFixed(2) : '');
-      setShowAdvanced(false);
+      const startMode: EditStopMode = current.sl_grace_enabled ? 'TIMER' : 'HARD';
+      const startMinutes = (current.sl_grace_minutes === 5 || current.sl_grace_minutes === 10 || current.sl_grace_minutes === 15)
+        ? current.sl_grace_minutes : 5;
+      setStopMode(startMode);
+      setGraceMinutes(startMinutes);
+      initialStopRef.current = { mode: startMode, minutes: startMinutes };
       setSlQtyVal('');
       setTp1QtyVal('');
       setTp2QtyVal('');
@@ -151,6 +177,15 @@ export function EditExitsModal({
     if (tp1Qty !== undefined) payload.tp1_qty = tp1Qty;
     if (tp2Editable && tp2Qty !== undefined) payload.tp2_qty = tp2Qty;
 
+    // Only send sl_grace_minutes if the stop type actually changed from what
+    // it was when the sheet opened — same "sparse payload" convention as
+    // every other field here.
+    const initial = initialStopRef.current;
+    const stopTypeChanged = initial.mode !== stopMode || (stopMode === 'TIMER' && initial.minutes !== graceMinutes);
+    if (stopTypeChanged) {
+      payload.sl_grace_minutes = stopMode === 'TIMER' ? graceMinutes : null;
+    }
+
     if (!Object.keys(payload).length) {
       Alert.alert('No changes', 'Enter at least one value to update.');
       return;
@@ -184,7 +219,9 @@ export function EditExitsModal({
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-        {/* Header */}
+        {/* Header — Update button lives here too so a change can be
+            submitted without scrolling all the way down past every
+            section. Bottom button stays for the natural end-of-form flow. */}
         <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderColor: colors.border }}>
           <TouchableOpacity onPress={onClose} style={{ marginRight: 12 }}>
             <Ionicons name="close" size={24} color={colors.text} />
@@ -196,52 +233,126 @@ export function EditExitsModal({
               {current.qty_remaining != null ? ` · ${current.qty_remaining} contract${current.qty_remaining !== 1 ? 's' : ''}` : ''}
             </Text>
           </View>
+          <TouchableOpacity
+            onPress={validateAndSubmit}
+            disabled={isLoading}
+            style={{
+              backgroundColor: isLoading ? colors.border : colors.accent,
+              borderRadius: 10,
+              paddingHorizontal: 14,
+              paddingVertical: 9,
+              marginLeft: 10,
+            }}
+          >
+            <Text style={{ color: colors.accentForeground ?? '#fff', fontSize: 14, fontWeight: '700' }}>
+              {isLoading ? 'Updating…' : 'Update'}
+            </Text>
+          </TouchableOpacity>
         </View>
 
         <ScrollView contentContainerStyle={{ padding: 16 }}>
-          {/* Info banner */}
-          <View style={{ backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: colors.border, flexDirection: 'row', gap: 10 }}>
-            <Ionicons name="information-circle-outline" size={18} color={colors.textSecondary} style={{ marginTop: 1 }} />
-            <Text style={{ color: colors.textSecondary, fontSize: 12, flex: 1, lineHeight: 18 }}>
-              Changes take effect immediately on submit. For live trades, the engine evaluates the new levels on the next price tick — not via a bracket order update.{'\n\n'}
-              <Text style={{ color: colors.warning, fontWeight: '600' }}>Tip: use limit orders at the mid-price for best fills, not market orders.</Text>
-            </Text>
+
+          {/* Stop Type — Hard Stop fires the instant price touches the stop;
+              SL Timer waits 5/10/15 min to see if it recovers first. Lives
+              above the Stop Loss price section since it governs how that
+              price actually behaves. */}
+          <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 10 }}>
+            STOP TYPE
+          </Text>
+          <View style={{ backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: colors.border, gap: 12 }}>
+            <View style={{ flexDirection: 'row', borderRadius: 10, borderWidth: 1, borderColor: colors.border, padding: 3, gap: 3 }}>
+              {([['HARD', 'Hard Stop'], ['TIMER', 'SL Timer']] as const).map(([m, label]) => {
+                const active = stopMode === m;
+                return (
+                  <TouchableOpacity
+                    key={m}
+                    onPress={() => setStopMode(m)}
+                    activeOpacity={0.75}
+                    style={{ flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 8, backgroundColor: active ? colors.accent + '22' : 'transparent' }}
+                  >
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: active ? colors.accent : colors.textSecondary }}>
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {stopMode === 'TIMER' && (
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {GRACE_OPTIONS.map(m => {
+                  const active = graceMinutes === m;
+                  return (
+                    <TouchableOpacity
+                      key={m}
+                      onPress={() => setGraceMinutes(m)}
+                      activeOpacity={0.75}
+                      style={{
+                        flex: 1, alignItems: 'center', paddingVertical: 8, borderRadius: 8,
+                        borderWidth: 1, borderColor: active ? colors.accent : colors.border,
+                        backgroundColor: active ? colors.accent + '14' : colors.background,
+                      }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: active ? colors.accent : colors.text }}>
+                        {m} min
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+            {stopMode === 'TIMER' && (
+              <Text style={{ color: colors.textSecondary, fontSize: 11, lineHeight: 15 }}>
+                Stop still fires at the price below, but waits {graceMinutes} min to see if it recovers before force-selling.
+              </Text>
+            )}
           </View>
 
           {/* Stop Loss */}
           <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 10 }}>
             STOP LOSS
           </Text>
-          <View style={{ backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: colors.border }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-              <Text style={{ color: colors.textSecondary, fontSize: 12 }}>Current: ${current.hard_stop.toFixed(2)}</Text>
-              <Text style={{ color: '#FF453A', fontSize: 12 }}>{pctLabel(current.hard_stop)}</Text>
+          <View style={{ backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: colors.border, gap: 12 }}>
+            <View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                <Text style={{ color: colors.textSecondary, fontSize: 12 }}>Current: ${current.hard_stop.toFixed(2)}</Text>
+                <Text style={{ color: '#FF453A', fontSize: 12 }}>{pctLabel(current.hard_stop)}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <TextInput
+                  value={stopVal}
+                  onChangeText={setStopVal}
+                  keyboardType="decimal-pad"
+                  placeholder={current.hard_stop.toFixed(2)}
+                  placeholderTextColor={colors.textTertiary}
+                  style={{
+                    flex: 1,
+                    backgroundColor: colors.background,
+                    borderRadius: 10,
+                    padding: 12,
+                    color: '#FF453A',
+                    fontSize: 18,
+                    fontWeight: '700',
+                    borderWidth: 1,
+                    borderColor: stopVal ? '#FF453A44' : colors.border,
+                  }}
+                />
+                {stopVal && entry > 0 && (
+                  <Text style={{ color: '#FF453A', fontSize: 13, fontWeight: '600', minWidth: 52, textAlign: 'right' }}>
+                    {pctLabel(parseFloat(stopVal))}
+                  </Text>
+                )}
+              </View>
             </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <TextInput
-                value={stopVal}
-                onChangeText={setStopVal}
-                keyboardType="decimal-pad"
-                placeholder={current.hard_stop.toFixed(2)}
-                placeholderTextColor={colors.textTertiary}
-                style={{
-                  flex: 1,
-                  backgroundColor: colors.background,
-                  borderRadius: 10,
-                  padding: 12,
-                  color: '#FF453A',
-                  fontSize: 18,
-                  fontWeight: '700',
-                  borderWidth: 1,
-                  borderColor: stopVal ? '#FF453A44' : colors.border,
-                }}
+            {canSplit && (
+              <AdvancedQtyRow
+                label="Qty to sell"
+                value={slQtyVal}
+                onChangeText={setSlQtyVal}
+                max={current.qty_remaining ?? 0}
+                color="#FF453A"
+                colors={colors}
               />
-              {stopVal && entry > 0 && (
-                <Text style={{ color: '#FF453A', fontSize: 13, fontWeight: '600', minWidth: 52, textAlign: 'right' }}>
-                  {pctLabel(parseFloat(stopVal))}
-                </Text>
-              )}
-            </View>
+            )}
           </View>
 
           {/* TP1 */}
@@ -249,172 +360,124 @@ export function EditExitsModal({
             TAKE PROFIT 1{current.tp1_hit ? '  ✓ HIT' : ''}
           </Text>
           <View style={{
-            backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20,
+            backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20, gap: 12,
             borderWidth: 1, borderColor: current.tp1_hit ? '#10B98133' : colors.border,
             opacity: current.tp1_hit ? 0.6 : 1,
           }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-              <Text style={{ color: colors.textSecondary, fontSize: 12 }}>Current: ${current.tp1.toFixed(2)}</Text>
-              <Text style={{ color: '#10B981', fontSize: 12 }}>{pctLabel(current.tp1)}</Text>
+            <View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                <Text style={{ color: colors.textSecondary, fontSize: 12 }}>Current: ${current.tp1.toFixed(2)}</Text>
+                <Text style={{ color: '#10B981', fontSize: 12 }}>{pctLabel(current.tp1)}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <TextInput
+                  value={tp1Val}
+                  onChangeText={setTp1Val}
+                  keyboardType="decimal-pad"
+                  placeholder={current.tp1.toFixed(2)}
+                  placeholderTextColor={colors.textTertiary}
+                  editable={!current.tp1_hit}
+                  style={{
+                    flex: 1,
+                    backgroundColor: colors.background,
+                    borderRadius: 10,
+                    padding: 12,
+                    color: '#10B981',
+                    fontSize: 18,
+                    fontWeight: '700',
+                    borderWidth: 1,
+                    borderColor: tp1Val ? '#10B98144' : colors.border,
+                  }}
+                />
+                {tp1Val && entry > 0 && (
+                  <Text style={{ color: '#10B981', fontSize: 13, fontWeight: '600', minWidth: 52, textAlign: 'right' }}>
+                    {pctLabel(parseFloat(tp1Val))}
+                  </Text>
+                )}
+              </View>
             </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <TextInput
-                value={tp1Val}
-                onChangeText={setTp1Val}
-                keyboardType="decimal-pad"
-                placeholder={current.tp1.toFixed(2)}
-                placeholderTextColor={colors.textTertiary}
-                editable={!current.tp1_hit}
-                style={{
-                  flex: 1,
-                  backgroundColor: colors.background,
-                  borderRadius: 10,
-                  padding: 12,
-                  color: '#10B981',
-                  fontSize: 18,
-                  fontWeight: '700',
-                  borderWidth: 1,
-                  borderColor: tp1Val ? '#10B98144' : colors.border,
-                }}
+            {canSplit && (
+              <AdvancedQtyRow
+                label="Qty to sell"
+                value={tp1QtyVal}
+                onChangeText={setTp1QtyVal}
+                max={current.qty_remaining ?? 0}
+                color="#10B981"
+                colors={colors}
+                disabled={current.tp1_hit}
               />
-              {tp1Val && entry > 0 && (
-                <Text style={{ color: '#10B981', fontSize: 13, fontWeight: '600', minWidth: 52, textAlign: 'right' }}>
-                  {pctLabel(parseFloat(tp1Val))}
-                </Text>
-              )}
-            </View>
+            )}
           </View>
 
           {/* TP2 — hidden entirely when unreachable (1-contract entry, or a
               profile that opts out), same gate the position card itself uses. */}
-          {current.use_tp2 !== false && (
+          {tp2Editable && (
             <>
               <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 10 }}>
                 TAKE PROFIT 2 (OPTIONAL){current.tp2_hit ? '  ✓ HIT' : ''}
               </Text>
               <View style={{
-                backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 28,
+                backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 28, gap: 12,
                 borderWidth: 1, borderColor: current.tp2_hit ? '#10B98133' : colors.border,
                 opacity: current.tp2_hit ? 0.6 : 1,
               }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
-                    Current: {current.tp2 ? `$${current.tp2.toFixed(2)}` : 'Not set'}
-                  </Text>
-                  {current.tp2 && (
-                    <Text style={{ color: '#F59E0B', fontSize: 12 }}>{pctLabel(current.tp2)}</Text>
-                  )}
-                </View>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  <TextInput
-                    value={tp2Val}
-                    onChangeText={setTp2Val}
-                    keyboardType="decimal-pad"
-                    placeholder={current.tp2 ? current.tp2.toFixed(2) : 'e.g. 0.65'}
-                    placeholderTextColor={colors.textTertiary}
-                    editable={!current.tp2_hit}
-                    style={{
-                      flex: 1,
-                      backgroundColor: colors.background,
-                      borderRadius: 10,
-                      padding: 12,
-                      color: '#F59E0B',
-                      fontSize: 18,
-                      fontWeight: '700',
-                      borderWidth: 1,
-                      borderColor: tp2Val ? '#F59E0B44' : colors.border,
-                    }}
-                  />
-                  {tp2Val && entry > 0 && (
-                    <Text style={{ color: '#F59E0B', fontSize: 13, fontWeight: '600', minWidth: 52, textAlign: 'right' }}>
-                      {pctLabel(parseFloat(tp2Val))}
+                <View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
+                      Current: {current.tp2 ? `$${current.tp2.toFixed(2)}` : 'Not set'}
                     </Text>
-                  )}
+                    {current.tp2 && (
+                      <Text style={{ color: '#F59E0B', fontSize: 12 }}>{pctLabel(current.tp2)}</Text>
+                    )}
+                  </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <TextInput
+                      value={tp2Val}
+                      onChangeText={setTp2Val}
+                      keyboardType="decimal-pad"
+                      placeholder={current.tp2 ? current.tp2.toFixed(2) : 'e.g. 0.65'}
+                      placeholderTextColor={colors.textTertiary}
+                      editable={!current.tp2_hit}
+                      style={{
+                        flex: 1,
+                        backgroundColor: colors.background,
+                        borderRadius: 10,
+                        padding: 12,
+                        color: '#F59E0B',
+                        fontSize: 18,
+                        fontWeight: '700',
+                        borderWidth: 1,
+                        borderColor: tp2Val ? '#F59E0B44' : colors.border,
+                      }}
+                    />
+                    {tp2Val && entry > 0 && (
+                      <Text style={{ color: '#F59E0B', fontSize: 13, fontWeight: '600', minWidth: 52, textAlign: 'right' }}>
+                        {pctLabel(parseFloat(tp2Val))}
+                      </Text>
+                    )}
+                  </View>
                 </View>
+                {canSplit && (
+                  <AdvancedQtyRow
+                    label="Qty to sell"
+                    value={tp2QtyVal}
+                    onChangeText={setTp2QtyVal}
+                    max={current.qty_remaining ?? 0}
+                    color="#F59E0B"
+                    colors={colors}
+                    disabled={current.tp2_hit}
+                  />
+                )}
               </View>
             </>
           )}
-
-          {/* Advanced — per-level contract counts, only when there's more
-              than 1 to split. Collapsed by default so the common case
-              (just move a price) stays a 3-field form. */}
-          {canSplit && (
-            <>
-              <TouchableOpacity
-                onPress={() => setShowAdvanced(v => !v)}
-                activeOpacity={0.7}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: showAdvanced ? 14 : 20 }}
-              >
-                <Ionicons name={showAdvanced ? 'chevron-up' : 'chevron-forward'} size={14} color={colors.textSecondary} />
-                <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
-                  Advanced — how many contracts to sell at each level
-                </Text>
-              </TouchableOpacity>
-
-              {showAdvanced && (
-                <View style={{ backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: colors.border, gap: 14 }}>
-                  <Text style={{ color: colors.textSecondary, fontSize: 12, lineHeight: 17 }}>
-                    Replaces the profile's default split. A partial stop-loss sells only what
-                    you set here, then leaves the rest running with{' '}
-                    <Text style={{ fontWeight: '700', color: colors.warning }}>no further automatic stop</Text> —
-                    you manage the remainder from here on.
-                  </Text>
-
-                  <AdvancedQtyRow
-                    label="Sell at Stop Loss"
-                    value={slQtyVal}
-                    onChangeText={setSlQtyVal}
-                    max={current.qty_remaining ?? 0}
-                    color="#FF453A"
-                    colors={colors}
-                  />
-                  <AdvancedQtyRow
-                    label="Sell at TP1"
-                    value={tp1QtyVal}
-                    onChangeText={setTp1QtyVal}
-                    max={current.qty_remaining ?? 0}
-                    color="#10B981"
-                    colors={colors}
-                    disabled={current.tp1_hit}
-                  />
-                  {current.use_tp2 !== false && (
-                    <AdvancedQtyRow
-                      label="Sell at TP2"
-                      value={tp2QtyVal}
-                      onChangeText={setTp2QtyVal}
-                      max={current.qty_remaining ?? 0}
-                      color="#F59E0B"
-                      colors={colors}
-                      disabled={current.tp2_hit}
-                    />
-                  )}
-                </View>
-              )}
-            </>
-          )}
-
-          {/* Submit */}
-          <TouchableOpacity
-            onPress={validateAndSubmit}
-            disabled={isLoading}
-            style={{
-              backgroundColor: isLoading ? colors.border : colors.text,
-              borderRadius: 12,
-              padding: 16,
-              alignItems: 'center',
-            }}
-          >
-            <Text style={{ color: colors.background, fontSize: 16, fontWeight: '700' }}>
-              {isLoading ? 'Updating…' : 'Update Stop & Targets'}
-            </Text>
-          </TouchableOpacity>
 
           {onToggleHidden && (
             <TouchableOpacity
               onPress={handleToggleHidden}
               disabled={isTogglingHidden}
               style={{
-                marginTop: 12,
+                marginTop: 4,
                 borderRadius: 12,
                 padding: 14,
                 alignItems: 'center',
@@ -446,8 +509,8 @@ function AdvancedQtyRow({ label, value, onChangeText, max, color, colors, disabl
   disabled?: boolean;
 }) {
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, opacity: disabled ? 0.5 : 1 }}>
-      <Text style={{ color: colors.text, fontSize: 13, flex: 1 }}>{label}</Text>
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12, opacity: disabled ? 0.5 : 1 }}>
+      <Text style={{ color: colors.textSecondary, fontSize: 12, flex: 1 }}>{label}</Text>
       <TextInput
         value={value}
         onChangeText={onChangeText}

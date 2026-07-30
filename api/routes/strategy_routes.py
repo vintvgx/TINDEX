@@ -12,7 +12,7 @@ from datetime import date, datetime
 
 from flask import Blueprint, jsonify, request
 from services.strategy.trade_logger import TradeLogger, enrich_open_trades_with_live_pnl
-from services.strategy.profiles import PROFILES, describe_profile
+from services.strategy.profiles import PROFILES, describe_profile, grace_fields_for_minutes
 from services.strategy.scheduler import reschedule_jobs, schedule_eod_close
 from services.strategy.orb_engine import ORBEngine, STRATEGY_DEFAULTS
 
@@ -746,9 +746,10 @@ def add_to_position(strategy_id: str):
 def update_strategy_exits(strategy_id: str):
     """
     Update the live ExitManager's stop-loss and/or TP levels mid-trade.
-    Body: { hard_stop?, tp1?, tp2?, sl_qty?, tp1_qty?, tp2_qty? } — all
-    optional, only provided fields are changed. sl_qty/tp1_qty/tp2_qty are
-    the "Advanced" per-level contract counts (see ExitManager.apply_overrides).
+    Body: { hard_stop?, tp1?, tp2?, sl_qty?, tp1_qty?, tp2_qty?, sl_grace_minutes? }
+    — all optional, only provided fields are changed. sl_qty/tp1_qty/tp2_qty
+    are per-level contract counts; sl_grace_minutes is the stop-type choice
+    (null = Hard Stop, 5/10/15 = SL timer — see ExitManager.apply_overrides).
     Returns the updated exit state so the client can confirm the new levels.
     """
     engine = _resolve_any_engine(strategy_id)
@@ -759,15 +760,19 @@ def update_strategy_exits(strategy_id: str):
         return jsonify({"status": "error", "message": "No active position — nothing to update"}), 409
 
     data = request.get_json() or {}
+    kwargs = {
+        "hard_stop": float(data["hard_stop"]) if "hard_stop" in data else None,
+        "tp1":       float(data["tp1"]) if "tp1" in data else None,
+        "tp2":       float(data["tp2"]) if "tp2" in data else None,
+        "sl_qty":    int(data["sl_qty"]) if "sl_qty" in data else None,
+        "tp1_qty":   int(data["tp1_qty"]) if "tp1_qty" in data else None,
+        "tp2_qty":   int(data["tp2_qty"]) if "tp2_qty" in data else None,
+    }
+    if "sl_grace_minutes" in data:
+        raw = data["sl_grace_minutes"]
+        kwargs["sl_grace_minutes"] = int(raw) if raw is not None else None
     try:
-        changed = em.apply_overrides(
-            hard_stop=float(data["hard_stop"]) if "hard_stop" in data else None,
-            tp1=float(data["tp1"]) if "tp1" in data else None,
-            tp2=float(data["tp2"]) if "tp2" in data else None,
-            sl_qty=int(data["sl_qty"]) if "sl_qty" in data else None,
-            tp1_qty=int(data["tp1_qty"]) if "tp1_qty" in data else None,
-            tp2_qty=int(data["tp2_qty"]) if "tp2_qty" in data else None,
-        )
+        changed = em.apply_overrides(**kwargs)
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
@@ -983,11 +988,22 @@ def immediate_trade(strategy_id: str):
         return jsonify({"status": "error",
                         "message": "direction and contract_symbol are required"}), 400
 
+    is_no_stop_loss = (data.get("profile") or "").upper() == "NO_STOP_LOSS"
+
     exit_overrides_cfg = {}
     if "max_loss_pct" in data:
         val = float(data["max_loss_pct"])
         if 0.05 <= val <= 0.95:
             exit_overrides_cfg["max_loss_pct"] = val
+    # Stop type (Hard Stop / SL-5 / SL-10) — an independent per-trade choice
+    # layered onto whatever profile was selected (see grace_fields_for_minutes).
+    # Skipped for NO_STOP_LOSS, same as every other exit-override field here.
+    if "sl_grace_minutes" in data and not is_no_stop_loss:
+        raw = data["sl_grace_minutes"]
+        try:
+            exit_overrides_cfg.update(grace_fields_for_minutes(int(raw) if raw is not None else None))
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
 
     result = _submit_manual_trade_bounded(
         engine,
@@ -1034,6 +1050,15 @@ def immediate_trade_by_ticker():
             val = float(data["max_loss_pct"])
             if 0.05 <= val <= 0.95:   # sanity clamp: 5%–95%
                 exit_overrides["max_loss_pct"] = val
+        # Stop type (Hard Stop / SL-5 / SL-10) — independent per-trade choice
+        # layered onto whatever profile was selected (see
+        # grace_fields_for_minutes); null/omitted means Hard Stop.
+        if "sl_grace_minutes" in data:
+            raw = data["sl_grace_minutes"]
+            try:
+                exit_overrides.update(grace_fields_for_minutes(int(raw) if raw is not None else None))
+            except ValueError as e:
+                return jsonify({"status": "error", "message": str(e)}), 400
 
     engine = _get_or_create_immediate_engine(ticker, paper_mode)
     result = _submit_manual_trade_bounded(
@@ -1867,6 +1892,7 @@ def _engine_position_response(engine: ORBEngine):
         qty_rem         = em.qty_remaining if em else 0
         unrealized_pnl  = (current_price - entry_p) * qty_rem * 100
         unrealized_pct  = ((current_price - entry_p) / entry_p * 100) if entry_p > 0 else 0
+        em_state = em.to_dict() if em else {}
         return jsonify({
             "active":              True,
             "ticker":              engine.config["ticker"],
@@ -1893,6 +1919,10 @@ def _engine_position_response(engine: ORBEngine):
             # Lets the client hide TP2 entirely instead of showing a number
             # that can never fire.
             "use_tp2":             em._use_tp2 if em else False,
+            # Current stop-type configuration (Hard Stop vs SL timer) — lets
+            # the card/Edit modal know which to show as active.
+            "sl_grace_enabled":    em_state.get("sl_grace_enabled", False),
+            "sl_grace_minutes":    em_state.get("sl_grace_minutes"),
         })
     except Exception:
         return jsonify({"active": False, "position": None, "paper_mode": engine.paper})

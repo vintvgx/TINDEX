@@ -61,6 +61,8 @@ function toPositionEntry(pos: ImmediatePosition): PositionEntry {
     runner_trail:        full.runner_trail,
     fib_levels:          full.fib_levels,
     use_tp2:             full.use_tp2,
+    sl_grace_enabled:    full.sl_grace_enabled,
+    sl_grace_minutes:    full.sl_grace_minutes,
   };
 }
 
@@ -203,6 +205,8 @@ export function PositionRow({
           tp1_hit:       pos.tp1_hit,
           tp2_hit:       pos.tp2_hit,
           use_tp2:       pos.use_tp2,
+          sl_grace_enabled: pos.sl_grace_enabled,
+          sl_grace_minutes: pos.sl_grace_minutes,
         }}
         streaming={connected}
         accentColor={accentColor}
