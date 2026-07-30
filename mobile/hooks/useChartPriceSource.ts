@@ -6,7 +6,7 @@ export type ChartPriceSource = 'alpaca' | 'yfinance';
 
 const STORAGE_KEY = 'chart_price_source_v1';
 const QUERY_KEY = ['chart-price-source'];
-const DEFAULT_SOURCE: ChartPriceSource = 'alpaca';
+const DEFAULT_SOURCE: ChartPriceSource = 'yfinance';
 
 async function loadSource(): Promise<ChartPriceSource> {
   try {
@@ -19,13 +19,14 @@ async function loadSource(): Promise<ChartPriceSource> {
 
 /**
  * Which live-price source PriceChartFullScreen uses — the real-time
- * paper-key Alpaca trade stream (useChartLiveStream, default) or the
- * existing ~5s yfinance poll (useMarketStream) — a Profile setting so the
- * user can drop back to the old poll mid-trading-day if the Alpaca stream
- * is acting up, without needing a redeploy. Persisted to AsyncStorage and
- * mirrored into the React Query cache (same pattern as
- * useSearchBarVisibility) so PriceChartFullScreen re-renders the instant
- * the Profile toggle flips it.
+ * paper-key Alpaca trade stream (useChartLiveStream) or the existing ~5s
+ * yfinance poll (useMarketStream). The Alpaca stream is force-disabled
+ * (Railway errors from the paper-key connection) — 'alpaca' is never
+ * returned even if a device has it persisted from before, and the Profile
+ * toggle's Alpaca option is disabled so it can't be re-selected. Persisted
+ * to AsyncStorage and mirrored into the React Query cache (same pattern as
+ * useSearchBarVisibility) so PriceChartFullScreen re-renders if this is
+ * ever re-enabled.
  */
 export function useChartPriceSource() {
   const qc = useQueryClient();

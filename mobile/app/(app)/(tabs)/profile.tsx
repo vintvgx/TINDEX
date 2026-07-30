@@ -359,10 +359,13 @@ const ProfileScreen = () => {
               <View style={{ flexDirection: 'row', borderRadius: 10, borderWidth: 1, borderColor: colors.border, padding: 3, backgroundColor: colors.background }}>
                 {([['alpaca', 'Alpaca Stream'], ['yfinance', 'Yahoo Polling']] as const).map(([key, label]) => {
                   const active = chartPriceSource === key;
+                  // Alpaca stream is force-disabled — see useChartPriceSource.
+                  const disabled = key === 'alpaca';
                   return (
                     <TouchableOpacity
                       key={key}
-                      onPress={() => setChartPriceSource(key)}
+                      onPress={() => !disabled && setChartPriceSource(key)}
+                      disabled={disabled}
                       activeOpacity={0.75}
                       style={{
                         flex: 1,
@@ -370,6 +373,7 @@ const ProfileScreen = () => {
                         paddingVertical: 8,
                         borderRadius: 8,
                         backgroundColor: active ? colors.accent : 'transparent',
+                        opacity: disabled ? 0.4 : 1,
                       }}
                     >
                       <Text style={{ fontSize: 13, fontWeight: '600', color: active ? colors.accentForeground : colors.textSecondary }}>

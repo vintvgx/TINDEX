@@ -6,7 +6,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { useChartLiveStream } from '@/hooks/queries/ticker/useChartLiveStream';
-import { useChartPriceSource } from '@/hooks/useChartPriceSource';
 import { useToast } from '@/common/components/ui/Toast';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { getOrbStatus } from '@/common/utils/orb/getOrbStatus';
@@ -90,15 +89,15 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   }, [visible]);
 
   const toast = useToast();
-  const { source: chartPriceSource } = useChartPriceSource();
-  const useAlpacaStream = chartPriceSource === 'alpaca';
+  // Alpaca paper-key stream is force-disabled — see useChartPriceSource.
+  const useAlpacaStream = false;
 
-  // Real-time paper-key Alpaca trade stream (default) — see
+  // Real-time paper-key Alpaca trade stream — see
   // useChartLiveStream/stock_chart_stream.py. Kept separate from the
   // yfinance-backed useMarketStream below (which stays subscribed
   // regardless of the chosen source) so a bad Alpaca connection can fall
   // back instantly instead of needing a fresh subscribe.
-  const chartStream = useChartLiveStream(ticker, visible && useAlpacaStream);
+  const chartStream = useChartLiveStream(ticker, false);
   const { livePrices } = useMarketStream([ticker], { enabled: visible });
 
   const alpacaUsable = useAlpacaStream && !chartStream.error && chartStream.price != null;
