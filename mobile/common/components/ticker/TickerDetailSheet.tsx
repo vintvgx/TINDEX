@@ -46,7 +46,12 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
   const { data: tickerResponse, isLoading, isError, isRefetching, refetchFresh, refetch } = useTickerQuery(ticker);
   const stockData = tickerResponse?.data;
 
-  const { data: historyResponse, isLoading: historyLoading, isError: historyIsError, refetch: refetchHistory } = useTickerHistoryQuery(ticker, period);
+  // Poll on 1D so the chart's 5-min candles pick up the newest bar on their
+  // own — see AdvancedPriceChart's countdown + PriceChartFullScreen's
+  // header price, which previously only refreshed if you closed and
+  // reopened the sheet. 30s matches this app's usual live-data poll cadence.
+  const { data: historyResponse, isLoading: historyLoading, isError: historyIsError, refetch: refetchHistory } =
+    useTickerHistoryQuery(ticker, period, period === '1D' ? 30_000 : undefined);
   const historyData = historyResponse?.data;
 
   const { data: isFollowingORB } = useIsFollowingORB(ticker);

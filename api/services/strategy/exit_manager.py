@@ -85,8 +85,11 @@ class ExitManager:
 
         self._runner_mode  = profile.get("runner_mode", "trail")
 
-        self.price_buffer  = deque(maxlen=profile["consol_bars"])
-        self.volume_buffer = deque(maxlen=profile["consol_bars"])
+        # Consolidation-exit was removed entirely (2026-07-29 — closed winning
+        # positions too early on a normal post-TP1 pause; SL/TP1/TP2/cascade
+        # now govern exits exclusively). volume_buffer remains for the
+        # separate (also currently disabled) low-volume exit.
+        self.volume_buffer = deque(maxlen=6)
 
         # TP1 confirmation: require N consecutive ticks at/above TP1 before firing.
         # Prevents a single ask-side spike from triggering a premature partial close.
@@ -272,24 +275,10 @@ class ExitManager:
                     # its own deadline (checked above, on the next tick that's
                     # back at/below the stop) keeps counting uninterrupted.
 
-        # Only track actual underlying price — option price is not a valid proxy
-        # (same option premium on consecutive ticks would instantly fake consolidation)
-        if current_underlying_price is not None:
-            self.price_buffer.append(current_underlying_price)
         if current_volume is not None:
             self.volume_buffer.append(current_volume)
 
         secs_held = (datetime.now(ET) - self.entry_time).total_seconds()
-
-        # Minimum 5-minute hold before consolidation exit: price consolidates naturally
-        # right at the breakout level for the first few minutes — don't exit yet.
-        # Also suppressed until TP1 hits — a real breakout can stall right after
-        # entry while still being a winner; closing it here mistakes a pause for
-        # a failed trade. Once TP1 is hit, the runner trail/BE-stop take over.
-        if (secs_held >= 300 and self.profile["consol_exit"]
-                and self.tp1_hit and self._is_consolidating()):
-            return self._action("CLOSE_ALL", self.qty_remaining, "CONSOLIDATION",
-                                current_option_price)
 
         # Minimum 3-minute hold before volume exit
         if secs_held >= 180 and self.profile.get("volume_exit", False) and self._is_low_volume() and not self.tp1_hit:
@@ -386,13 +375,6 @@ class ExitManager:
                 self._sl_override_consumed = True
                 return "CLOSE_PARTIAL", qty
         return "CLOSE_ALL", self.qty_remaining
-
-    def _is_consolidating(self) -> bool:
-        if len(self.price_buffer) < self.profile["consol_bars"]:
-            return False
-        hi, lo = max(self.price_buffer), min(self.price_buffer)
-        mid = (hi + lo) / 2
-        return mid > 0 and (hi - lo) / mid < self.profile["consol_range_pct"]
 
     def _is_low_volume(self) -> bool:
         if len(self.volume_buffer) < 3:

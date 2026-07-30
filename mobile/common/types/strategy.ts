@@ -21,10 +21,7 @@ export interface CustomThresholds {
   tp1_close_pct:           number;
   tp2_close_pct:           number;
   runner_trail_pct:        number;
-  consol_exit:             boolean;
   volume_exit:             boolean;
-  consol_range_pct:        number;
-  consol_bars:             number;
   volume_exit_threshold:   number;
   strike_offset_min:       number;
   strike_offset_max:       number;
@@ -43,10 +40,7 @@ export interface ProfileThresholds {
   tp1_close_pct: number;
   tp2_close_pct: number;
   runner_trail_pct: number;
-  consol_exit: boolean;
   volume_exit: boolean;
-  consol_range_pct: number;
-  consol_bars: number;
   volume_exit_threshold: number;
   strike_offset_min: number;
   strike_offset_max: number;
@@ -80,7 +74,6 @@ export interface StrategyProfile {
 export type OtmFibLevel = '1.0' | '1.618' | '2.618';
 
 export interface ExitOverrides {
-  consol_exit: boolean;
   volume_exit: boolean;
 }
 
@@ -190,7 +183,6 @@ export interface ImmediateTradeByTickerRequest {
   qty?: number;
   profile?: ProfileKey;
   paper_mode: boolean;
-  consol_exit?: boolean;
   volume_exit?: boolean;
   max_loss_pct?: number; // MANUAL profile: decimal (e.g. 0.30 = 30% SL)
 }

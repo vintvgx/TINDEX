@@ -30,8 +30,6 @@ import { usePendingConfirmations } from '@/hooks/queries/strategy/usePendingConf
 import { Skeleton } from '@/common/components/ui/Skeleton';
 import type { WatchlistStock } from '@/common/types/watchlist';
 
-const CONFIRM_ORANGE = '#F59E0B';
-
 // Live-stream symbols (SPY arrives on its own field; the rest via livePrices).
 const STREAM_TICKERS = ['SPY', 'QQQ', 'IWM', 'AAPL', 'TSLA', 'NVDA', 'MSFT', 'AMZN'];
 const SCROLL_SPEED_PX_PER_SEC = 45;
@@ -258,14 +256,14 @@ export function TickerTape() {
     return (
       <View style={{ backgroundColor: colors.tape, paddingTop: insets.top }}>
         <Pressable
-          style={[styles.tape, styles.confirmTape, { backgroundColor: CONFIRM_ORANGE + '1F' }]}
+          style={[styles.tape, styles.confirmTape, { backgroundColor: colors.warningBg }]}
           onPress={() => router.push('/(app)/(tabs)/dashboard')}
           accessibilityRole="button"
           accessibilityLabel={`${pendingCount} trade confirmation(s) awaiting review. Tap to open Dashboard.`}
         >
-          <Ionicons name="warning" size={13} color={CONFIRM_ORANGE} style={{ marginLeft: 12, marginRight: 6 }} />
-          <Text style={[styles.confirmText, { color: CONFIRM_ORANGE }]} numberOfLines={1}>
-            Awaiting Trade Confirmation{pendingCount > 1 ? ` · ${pendingCount}` : ''} — Tap to Review
+          <Ionicons name="warning" size={13} color={colors.warning} style={{ marginLeft: 12, marginRight: 6 }} />
+          <Text style={[styles.confirmText, { color: colors.warning }]} numberOfLines={1}>
+            Awaiting Confirmation
           </Text>
         </Pressable>
       </View>

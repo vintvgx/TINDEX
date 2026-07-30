@@ -109,7 +109,6 @@ type FormState = {
   otm_fib_level:          OtmFibLevel;
   smart_contracts:        boolean;
   confirm_entry:          boolean;
-  consol_exit:            boolean;
   volume_exit:            boolean;
   paired_strategy_id:     string | null;
 };
@@ -128,7 +127,6 @@ const DEFAULT_FORM: FormState = {
   otm_fib_level:          '1.0',
   smart_contracts:        false,
   confirm_entry:          false,
-  consol_exit:            false,
   volume_exit:            false,
   paired_strategy_id:     null,
 };
@@ -148,7 +146,6 @@ function configToForm(cfg: StrategyConfig): FormState {
     otm_fib_level:          cfg.otm_fib_level ?? '1.0',
     smart_contracts:        cfg.smart_contracts ?? false,
     confirm_entry:          cfg.confirm_entry ?? false,
-    consol_exit:            cfg.exit_overrides?.consol_exit ?? false,
     volume_exit:            cfg.exit_overrides?.volume_exit ?? false,
     paired_strategy_id:     cfg.paired_strategy_id ?? null,
   };
@@ -308,7 +305,7 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
       toast.error('Select at least one trade day');
       return;
     }
-    const exitOverrides: ExitOverrides = { consol_exit: form.consol_exit, volume_exit: form.volume_exit };
+    const exitOverrides: ExitOverrides = { volume_exit: form.volume_exit };
     const payload = {
       strategy_name:          form.strategy_name.trim(),
       ticker:                 form.ticker,
@@ -1396,13 +1393,6 @@ function StrategyFormModal({
               <>
                 <SectionHeader title="Exit Controls" colors={colors} />
                 <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <View style={[styles.configRow, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.configLabel, { color: colors.text }]}>Consolidation Exit</Text>
-                      <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>Close when price stops moving after 5 min</Text>
-                    </View>
-                    <Switch value={form.consol_exit} onValueChange={v => onPatch('consol_exit', v)} thumbColor={form.consol_exit ? '#4A9EFF' : '#ccc'} trackColor={{ true: '#4A9EFF55', false: colors.border }} />
-                  </View>
                   <View style={[styles.configRow, { borderBottomWidth: 0 }]}>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.configLabel, { color: colors.text }]}>Volume Exit</Text>
@@ -1411,7 +1401,7 @@ function StrategyFormModal({
                     <Switch value={form.volume_exit} onValueChange={v => onPatch('volume_exit', v)} thumbColor={form.volume_exit ? '#4A9EFF' : '#ccc'} trackColor={{ true: '#4A9EFF55', false: colors.border }} />
                   </View>
                 </View>
-                <Text style={[styles.hint, { color: colors.tabBarInactive }]}>Both are off by default.</Text>
+                <Text style={[styles.hint, { color: colors.tabBarInactive }]}>Off by default.</Text>
               </>
             )}
 

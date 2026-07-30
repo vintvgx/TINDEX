@@ -97,10 +97,21 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   const scrubChange = scrubPoint && periodStartPrice != null ? scrubPoint.price - periodStartPrice : null;
   const scrubChangePercent = scrubChange != null && periodStartPrice ? (scrubChange / periodStartPrice) * 100 : null;
 
-  const displayPrice = scrubPoint ? scrubPoint.price : currentPrice;
-  const displayChange = scrubPoint ? scrubChange ?? 0 : priceChange;
-  const displayChangePercent = scrubPoint ? scrubChangePercent ?? 0 : priceChangePercent;
-  const displayPositive = scrubPoint ? (scrubChange ?? 0) >= 0 : (priceChange ?? 0) >= 0;
+  // Header price must track the live tick (same source AdvancedPriceChart's
+  // own last-price line uses below) — it previously showed the static
+  // `currentPrice` prop (a one-time REST snapshot from when the sheet
+  // opened) and never moved again. priceChange/priceChangePercent are
+  // recomputed against the same day-open reference so they stay consistent
+  // with the live price instead of freezing at their initial values.
+  const headerLivePrice = livePrices[ticker] ?? currentPrice;
+  const dayRefPrice = (currentPrice != null && priceChange != null) ? currentPrice - priceChange : undefined;
+  const liveChange = (headerLivePrice != null && dayRefPrice != null) ? headerLivePrice - dayRefPrice : priceChange;
+  const liveChangePercent = (dayRefPrice) ? ((liveChange ?? 0) / dayRefPrice) * 100 : priceChangePercent;
+
+  const displayPrice = scrubPoint ? scrubPoint.price : headerLivePrice;
+  const displayChange = scrubPoint ? scrubChange ?? 0 : liveChange;
+  const displayChangePercent = scrubPoint ? scrubChangePercent ?? 0 : liveChangePercent;
+  const displayPositive = scrubPoint ? (scrubChange ?? 0) >= 0 : (liveChange ?? 0) >= 0;
   const priceColor = displayPositive ? colors.success : colors.error;
 
   const scrubHasOhlc = scrubPoint?.open != null && scrubPoint.high != null && scrubPoint.low != null;

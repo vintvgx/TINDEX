@@ -13,10 +13,7 @@ export const DEFAULT_CUSTOM_THRESHOLDS: CustomThresholds = {
   tp1_close_pct:           0.50,
   tp2_close_pct:           0.50,
   runner_trail_pct:        0.20,
-  consol_exit:             false,
   volume_exit:             false,
-  consol_range_pct:        0.0008,
-  consol_bars:             4,
   volume_exit_threshold:   0.20,
   strike_offset_min:       0.50,
   strike_offset_max:       2.00,
@@ -298,18 +295,6 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragSta
         />
         <View style={[s.toggleRow, { borderBottomColor: borderColor }]}>
           <View>
-            <Text style={[s.sliderLabel, { color: labelColor }]}>Consolidation Exit</Text>
-            <Text style={[s.toggleSub, { color: labelColor }]}>Exit when price stalls in range</Text>
-          </View>
-          <Switch
-            value={t.consol_exit}
-            onValueChange={v => patch('consol_exit', v)}
-            thumbColor={t.consol_exit ? accent : '#ccc'}
-            trackColor={{ true: accent + '55', false: borderColor }}
-          />
-        </View>
-        <View style={[s.toggleRow, { borderBottomColor: borderColor }]}>
-          <View>
             <Text style={[s.sliderLabel, { color: labelColor }]}>Volume Exit</Text>
             <Text style={[s.toggleSub, { color: labelColor }]}>Exit half on low volume after 3 min</Text>
           </View>
@@ -357,12 +342,6 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragSta
             label="Delta Max" value={t.target_delta_max} min={0.30} max={0.70} step={0.02}
             format={v => v.toFixed(2)}
             onChange={v => patch('target_delta_max', v)}
-            accent={accent} labelColor={labelColor} textColor={textColor} borderColor={borderColor}
-          />
-          <StepperRow
-            label="Consol. Bars" value={t.consol_bars} min={2} max={10} step={1}
-            format={v => `${Math.round(v)} bars`}
-            onChange={v => patch('consol_bars', Math.round(v))}
             accent={accent} labelColor={labelColor} textColor={textColor} borderColor={borderColor}
           />
         </View>

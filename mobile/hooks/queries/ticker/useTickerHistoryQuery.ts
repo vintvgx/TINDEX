@@ -10,8 +10,11 @@ import { RAILWAY_BASE_URL } from "@/lib/railway.config";
  *
  * @param ticker - Stock ticker symbol
  * @param period - Selected chart timeframe (1D/1W/1M/3M/YTD/1Y/5Y)
+ * @param refetchIntervalMs - Optional background poll interval (e.g. so a 1D
+ *   chart's 5-min candles pick up the newest bar on their own instead of
+ *   requiring the screen to be closed and reopened). Omit for a one-shot fetch.
  */
-export function useTickerHistoryQuery(ticker: string, period: PricePeriod) {
+export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refetchIntervalMs?: number) {
   const { authState: { user, isLoading: authLoading } } = useAuth();
 
   return useQuery({
@@ -53,6 +56,7 @@ export function useTickerHistoryQuery(ticker: string, period: PricePeriod) {
     staleTime: 0,
     retry: 1,
     retryDelay: 1000,
+    refetchInterval: refetchIntervalMs ?? false,
     // Switching timeframes changes the query key (ticker-history includes
     // period) — without this, the chart would drop back to a loading state
     // on every tab tap. Keeping the previous period's data displayed while

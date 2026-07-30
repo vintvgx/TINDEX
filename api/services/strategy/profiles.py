@@ -30,10 +30,7 @@ PROFILES = {
         "runner_trail_pct": 0.15,
         "runner_mode": "be_hold",   # high-qty aggressive — ride the full move, B/E protects runner
         "sl_confirm_ticks": 2,      # require 2 consecutive ticks at/below SL before firing — filters one bad quote
-        "consol_exit": False,
         "volume_exit": False,
-        "consol_range_pct": 0.0005,
-        "consol_bars": 6,
         "volume_exit_threshold": 0.10,
         "strike_offset_min": 1.00,
         "strike_offset_max": 3.00,
@@ -61,10 +58,7 @@ PROFILES = {
         "runner_trail_pct": 0.22,   # loosened from 0.20 — less noise sensitivity
         "runner_mode": "trail",
         "sl_confirm_ticks": 2,
-        "consol_exit": False,
         "volume_exit": False,
-        "consol_range_pct": 0.0008,
-        "consol_bars": 4,
         "volume_exit_threshold": 0.20,
         "strike_offset_min": 1.00,  # raised from 0.50 — confirmation entry is already past the ORH; 0.50 selects strikes that are ITM at fill
         "strike_offset_max": 2.00,
@@ -92,10 +86,7 @@ PROFILES = {
         "runner_trail_pct": 0.20,   # loosened from 0.10 — 10% was firing on bid/ask spread alone
         "runner_mode": "trail",
         "sl_confirm_ticks": 3,      # low qty/conservative — a bit more noise tolerance before cutting
-        "consol_exit": False,
         "volume_exit": False,
-        "consol_range_pct": 0.0012,
-        "consol_bars": 3,
         "volume_exit_threshold": 0.30,
         "strike_offset_min": 0.50,
         "strike_offset_max": 1.25,
@@ -123,10 +114,7 @@ PROFILES = {
         "runner_trail_pct": 0.18,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode": "be_hold",   # designed for this — lock TP1, ride runner to TP2/EOD risk-free
         "sl_confirm_ticks": 2,
-        "consol_exit": False,
         "volume_exit": False,
-        "consol_range_pct": 0.0010,
-        "consol_bars": 8,
         "volume_exit_threshold": 0.10,
         "strike_offset_min": 1.25,  # raised from 0.50 — BREAK entry fires after confirmation, underlying is already past ORH; force at least 1.25 OTM so we're not buying ITM at fill
         "strike_offset_max": 2.50,  # widened from 2.00 — give scorer room to find a cleaner OTM strike
@@ -181,10 +169,7 @@ PROFILES = {
         "sl_grace_bars":          3,     # ~3 consecutive 1-min bars against = genuine move, don't wait
         "sl_grace_seconds":       300,   # 5 minutes max before forcing the exit regardless
         "sl_outer_floor_pct":     0.40,  # hard floor at -40% (vs. -25% normal SL) — bypasses grace/confirm
-        "consol_exit":            False,
         "volume_exit":            False,
-        "consol_range_pct":       0.0008,
-        "consol_bars":            4,
         "volume_exit_threshold":  0.20,
         "strike_offset_min":      0.50,
         "strike_offset_max":      2.00,
@@ -228,10 +213,7 @@ PROFILES = {
         "runner_mode":             "trail",
         "sl_confirm_ticks":        2,   # irrelevant in practice — max_loss_pct=1.0 means hard_stop=0, never reached
         "disable_eod_close":       True,
-        "consol_exit":             False,
         "volume_exit":             False,
-        "consol_range_pct":        0.0008,
-        "consol_bars":             4,
         "volume_exit_threshold":   0.20,
         "strike_offset_min":       0.50,
         "strike_offset_max":       2.00,
@@ -267,10 +249,7 @@ PROFILES = {
         "sl_grace_seconds":         300,
         "sl_grace_recovery_seconds": 60,
         "sl_outer_floor_pct":       0.80,
-        "consol_exit":              False,
         "volume_exit":              False,
-        "consol_range_pct":         0.0012,
-        "consol_bars":              6,
         "volume_exit_threshold":    0.12,
         "strike_offset_min":        1.00,
         "strike_offset_max":        4.00,
@@ -298,10 +277,7 @@ PROFILES = {
         "sl_grace_seconds":         600,
         "sl_grace_recovery_seconds": 60,
         "sl_outer_floor_pct":       0.85,
-        "consol_exit":              False,
         "volume_exit":              False,
-        "consol_range_pct":         0.0015,
-        "consol_bars":              8,
         "volume_exit_threshold":    0.10,
         "strike_offset_min":        1.00,
         "strike_offset_max":        5.00,
@@ -322,10 +298,7 @@ PROFILES = {
         "runner_trail_pct":        0.25,   # intentionally tight — scalper exits fast
         "runner_mode":             "trail",
         "sl_confirm_ticks":        1,   # scalper is designed to cut fast — no added delay on the SL either
-        "consol_exit":             False,
         "volume_exit":             False,
-        "consol_range_pct":        0.0006,
-        "consol_bars":             4,
         "volume_exit_threshold":   0.25,
         "strike_offset_min":       0.50,
         "strike_offset_max":       1.50,
@@ -346,10 +319,7 @@ PROFILES = {
         "runner_trail_pct":        0.22,   # loosened from 0.20
         "runner_mode":             "trail",
         "sl_confirm_ticks":        2,   # disciplined/tight by design — light noise filter only
-        "consol_exit":             False,
         "volume_exit":             False,
-        "consol_range_pct":        0.0008,
-        "consol_bars":             4,
         "volume_exit_threshold":   0.20,
         "strike_offset_min":       0.50,
         "strike_offset_max":       1.50,
@@ -370,10 +340,7 @@ PROFILES = {
         "runner_trail_pct":        0.18,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode":             "be_hold", # small TP1 close → runner rides to TP2 then EOD
         "sl_confirm_ticks":        3,
-        "consol_exit":             False,
         "volume_exit":             False,
-        "consol_range_pct":        0.0010,
-        "consol_bars":             6,
         "volume_exit_threshold":   0.15,
         "strike_offset_min":       0.50,
         "strike_offset_max":       2.00,
@@ -394,10 +361,7 @@ PROFILES = {
         "runner_trail_pct":        0.15,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode":             "be_hold", # tiny TP1 close — almost all rides to TP2/EOD
         "sl_confirm_ticks":        3,
-        "consol_exit":             False,
         "volume_exit":             False,
-        "consol_range_pct":        0.0012,
-        "consol_bars":             8,
         "volume_exit_threshold":   0.10,
         "strike_offset_min":       0.50,
         "strike_offset_max":       2.00,
@@ -419,10 +383,7 @@ PROFILES = {
         "runner_trail_pct":        0.12,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode":             "be_hold", # close half at TP1, ride the rest to EOD or B/E
         "sl_confirm_ticks":        2,
-        "consol_exit":             False,
         "volume_exit":             False,
-        "consol_range_pct":        0.0015,
-        "consol_bars":             10,
         "volume_exit_threshold":   0.08,
         "strike_offset_min":       0.50,
         "strike_offset_max":       2.50,
@@ -445,10 +406,7 @@ PROFILES = {
         "runner_trail_pct":        0.20,
         "runner_mode":             "trail",
         "sl_confirm_ticks":        4,   # sub-$0.25 contracts — noisiest quotes in the book, needs the most confirmation
-        "consol_exit":             False,  # OTM contracts don't consolidate cleanly
         "volume_exit":             False,
-        "consol_range_pct":        0.0015,
-        "consol_bars":             8,
         "volume_exit_threshold":   0.10,
         "strike_offset_min":       1.00,
         "strike_offset_max":       5.00,
@@ -470,10 +428,7 @@ PROFILES = {
         "runner_trail_pct":        0.20,
         "runner_mode":             "be_hold",
         "sl_confirm_ticks":        3,   # $0.25-0.40 contracts — noisier than a normal ATM/OTM breakout play
-        "consol_exit":             False,
         "volume_exit":             False,
-        "consol_range_pct":        0.0012,
-        "consol_bars":             6,
         "volume_exit_threshold":   0.12,
         "strike_offset_min":       1.00,
         "strike_offset_max":       4.00,
@@ -500,10 +455,7 @@ PROFILES = {
         "runner_trail_pct":       0.00,
         "runner_mode":            "trail",
         "sl_confirm_ticks":       2,
-        "consol_exit":            False,
         "volume_exit":            False,
-        "consol_range_pct":       0.0008,
-        "consol_bars":            4,
         "volume_exit_threshold":  0.20,
         "strike_offset_min":      0.50,
         "strike_offset_max":      2.00,
@@ -529,10 +481,7 @@ PROFILES = {
         "runner_trail_pct": 0.22,   # loosened from 0.15 — entered at confirmed level, give room
         "runner_mode": "trail",     # retest entry = confirmed level; protect gains dynamically
         "sl_confirm_ticks": 2,
-        "consol_exit": False,
         "volume_exit": False,
-        "consol_range_pct": 0.0008,
-        "consol_bars": 4,
         "volume_exit_threshold": 0.20,
         "strike_offset_min": 1.00,  # raised from 0.50 — RETEST entry fires after underlying retests ORH; 0.50 selects near-ATM at fill
         "strike_offset_max": 2.00,
@@ -577,10 +526,7 @@ CUSTOM_DEFAULTS = {
     "runner_trail_pct":       0.20,
     "runner_mode":            "trail",
     "sl_confirm_ticks":       2,
-    "consol_exit":            False,
     "volume_exit":            False,
-    "consol_range_pct":       0.0008,
-    "consol_bars":            4,
     "volume_exit_threshold":  0.20,
     "strike_offset_min":      0.50,
     "strike_offset_max":      2.00,

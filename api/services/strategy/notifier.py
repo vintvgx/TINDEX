@@ -235,7 +235,6 @@ class StrategyNotifier:
             "EOD_CLOSE":          "EOD close",
             "EOD_HARD_CLOSE":     "EOD hard close",
             "BREAKEVEN_STOP":     "Breakeven stop hit",
-            "CONSOLIDATION":      "Consolidation exit",
             "LOW_VOLUME_EXIT":    "Low-volume exit",
             "MANUAL_CLOSE":       "Manually closed",
             "MANUAL_EXIT":        "Manually sold",

@@ -1,5 +1,5 @@
 import type React from 'react';
-import { Fragment, useMemo, useState, useCallback } from 'react';
+import { Fragment, useMemo, useState, useCallback, useEffect } from 'react';
 import { View, Text, Pressable, LayoutChangeEvent, SafeAreaView } from 'react-native';
 import Svg, { Path, Rect, Line, Circle, Defs, LinearGradient, Stop, Text as SvgText } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -366,6 +366,35 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const lastUp = count > 1 ? lastPrice >= prices[count - 2] : true;
   const lastPriceColor = lastUp ? colors.success : colors.error;
 
+  // ── Next-candle countdown (1D only — 5-min bars) ───────────────────────
+  // Ticks once a second purely to re-render this label; the actual new bar
+  // arrives via the history query's own background refetch (see
+  // TickerDetailSheet's refetchIntervalMs) — this is display-only.
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (period !== '1D') return;
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [period]);
+
+  const nextCandleSecs = useMemo(() => {
+    if (period !== '1D' || dates.length === 0) return null;
+    // Derive the bar interval from the data itself (rather than assuming
+    // 5 minutes) so this stays correct if the backend's bar size ever
+    // changes; falls back to 5 min when there's only one bar to go on.
+    const lastMs = new Date(dates[dates.length - 1]).getTime();
+    const barMs = dates.length >= 2
+      ? lastMs - new Date(dates[dates.length - 2]).getTime()
+      : 5 * 60 * 1000;
+    if (!(barMs > 0)) return null;
+    const nextBarMs = lastMs + barMs;
+    return Math.max(0, Math.round((nextBarMs - nowTick) / 1000));
+  }, [period, dates, nowTick]);
+
+  const candleCountdownLabel = nextCandleSecs != null
+    ? `${Math.floor(nextCandleSecs / 60)}:${String(nextCandleSecs % 60).padStart(2, '0')}`
+    : null;
+
   const candleW = scale ? Math.max(1, Math.min(scale.step * 0.65, 12)) : 0;
 
   return (
@@ -630,6 +659,18 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                   >
                     {formatAxisPrice(lastPrice)}
                   </SvgText>
+                  {/* Countdown to the next 5-min candle, just below the
+                      last-price tag — clamped so it can't overflow past the
+                      bottom of the chart when price sits near the low. */}
+                  {candleCountdownLabel && (
+                    <SvgText
+                      x={plotW + Y_AXIS_W / 2}
+                      y={Math.min(scale.yForPrice(lastPrice) + 20, volTop + VOL_H - 2)}
+                      fill={colors.textTertiary} fontSize={9} fontWeight="600" textAnchor="middle"
+                    >
+                      {candleCountdownLabel}
+                    </SvgText>
+                  )}
                 </>
               )}
 

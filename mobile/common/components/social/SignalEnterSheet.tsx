@@ -30,7 +30,6 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
   const [paperMode, setPaperMode] = useState(true);
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [qty, setQty] = useState(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
-  const [consolExit, setConsolExit] = useState(false);
   const [volumeExit, setVolumeExit] = useState(false);
   const [manualSlPct, setManualSlPct] = useState(30);
 
@@ -56,7 +55,6 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
         qty,
         profile: profile.key,
         paper_mode: paperMode,
-        consol_exit: isManual ? false : consolExit,
         volume_exit: isManual ? false : volumeExit,
         ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
       },
@@ -158,18 +156,6 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
               <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>EXIT CONTROLS</Text>
               <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <View style={styles.exitToggleRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Consolidation Exit</Text>
-                    <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Close when price stops moving</Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => setConsolExit(v => !v)}
-                    style={[styles.togglePill, { backgroundColor: consolExit ? colors.accent + '33' : colors.border + '55', borderColor: consolExit ? colors.accent : colors.border }]}
-                  >
-                    <View style={[styles.toggleThumb, { backgroundColor: consolExit ? colors.accent : colors.tabBarInactive, transform: [{ translateX: consolExit ? 14 : 0 }] }]} />
-                  </TouchableOpacity>
-                </View>
-                <View style={[styles.exitToggleRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Volume Exit</Text>
                     <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Close half on low volume</Text>

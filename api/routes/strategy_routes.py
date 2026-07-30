@@ -151,9 +151,30 @@ def _sync_paired_strategy(sid: str, new_pair_id, old_pair_id) -> None:
 
 
 def _get_or_create_immediate_engine(ticker: str, paper_mode: bool) -> ORBEngine:
-    """Return the immediate engine for (ticker, paper/live), creating it on first use."""
-    key = _immediate_key(ticker, paper_mode)
-    eng = _immediate_engines.get(key)
+    """
+    Return a free immediate engine for (ticker, paper/live) — reusing the base
+    slot if it exists and its prior position has closed (trade_taken=False),
+    otherwise spinning up an additional slot (base key + "-2", "-3", ...).
+
+    Immediate trades must NEVER be blocked just because another one is
+    already open on the same ticker+mode (2026-07-29 — a user hedging a live
+    IWM call with a put got refused entirely, which defeats the entire point
+    of an ad-hoc/manual trade: the user is deliberately overriding the
+    system's usual same-ticket caution). One ORBEngine can only track a
+    single open position at a time, so a genuinely concurrent second
+    position (a hedge, or scaling into a second contract) needs its own
+    engine instance rather than reusing a busy one.
+    """
+    base_key = _immediate_key(ticker, paper_mode)
+    key = base_key
+    suffix = 1
+    while True:
+        eng = _immediate_engines.get(key)
+        if eng is None or not eng.trade_taken:
+            break
+        suffix += 1
+        key = f"{base_key}-{suffix}"
+
     if eng is None:
         cfg = {
             **STRATEGY_DEFAULTS.copy(),
@@ -1001,14 +1022,12 @@ def immediate_trade_by_ticker():
     is_no_stop_loss = (profile_key or "").upper() == "NO_STOP_LOSS"
 
     exit_overrides = {}
-    # NO_STOP_LOSS means NO automatic exit of any kind — consol/volume exit
-    # and max_loss_pct overrides are intentionally ignored for it rather than
+    # NO_STOP_LOSS means NO automatic exit of any kind — volume exit and
+    # max_loss_pct overrides are intentionally ignored for it rather than
     # merged in, so a client can't accidentally (or a stale UI can't) partially
     # re-enable an automatic close on a position the user explicitly chose to
     # hold with zero automatic exits.
     if not is_no_stop_loss:
-        if "consol_exit" in data:
-            exit_overrides["consol_exit"] = bool(data["consol_exit"])
         if "volume_exit" in data:
             exit_overrides["volume_exit"] = bool(data["volume_exit"])
         if "max_loss_pct" in data:

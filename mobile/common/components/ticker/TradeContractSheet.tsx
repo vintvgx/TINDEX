@@ -34,7 +34,6 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
   const [paperMode, setPaperMode]       = useState(true);
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [qty, setQty]                   = useState(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
-  const [consolExit, setConsolExit]     = useState(false);
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
 
@@ -52,7 +51,6 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
     const idx = otmIdx ?? DEFAULT_PROFILE_INDEX;
     setProfileIndex(idx);
     setQty(IMMEDIATE_PROFILES[idx].qty);
-    setConsolExit(false);
     setVolumeExit(false);
     setManualSlPct(30);
     setPaperMode(true);
@@ -75,7 +73,6 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
         qty,
         profile:         profile.key,
         paper_mode:      paperMode,
-        consol_exit:     (isManual || isNoStopLoss) ? false : consolExit,
         volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
         ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
       },
@@ -191,16 +188,6 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
             <>
               <Text style={[s.label, { color: colors.tabBarInactive, marginTop: 18 }]}>EXTRA EXITS</Text>
               <View style={[s.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <View style={[s.exitRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
-                  <Text style={[s.exitLabel, { color: colors.text }]}>Consolidation Exit</Text>
-                  <TouchableOpacity onPress={() => setConsolExit(v => !v)} hitSlop={8}>
-                    <Ionicons
-                      name={consolExit ? 'checkbox' : 'square-outline'}
-                      size={22}
-                      color={consolExit ? colors.accent : colors.tabBarInactive}
-                    />
-                  </TouchableOpacity>
-                </View>
                 <View style={s.exitRow}>
                   <Text style={[s.exitLabel, { color: colors.text }]}>Volume Exit</Text>
                   <TouchableOpacity onPress={() => setVolumeExit(v => !v)} hitSlop={8}>
