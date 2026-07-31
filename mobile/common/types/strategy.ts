@@ -21,6 +21,11 @@ export interface CustomThresholds {
   tp1_close_pct:           number;
   tp2_close_pct:           number;
   runner_trail_pct:        number;
+  /** "trail" (high-water-mark trailing stop), "be_hold" (breakeven floor,
+   *  rides to TP2/EOD, no trail), or "none" (original pre-TP1 hard stop —
+   *  no BE floor, no trail; exits only via TP2/cascade/EOD/manual). See
+   *  exit_manager.py's runner_mode handling. */
+  runner_mode:              'trail' | 'be_hold' | 'none';
   volume_exit:             boolean;
   volume_exit_threshold:   number;
   strike_offset_min:       number;
@@ -40,6 +45,7 @@ export interface ProfileThresholds {
   tp1_close_pct: number;
   tp2_close_pct: number;
   runner_trail_pct: number;
+  runner_mode?: 'trail' | 'be_hold' | 'none';
   volume_exit: boolean;
   volume_exit_threshold: number;
   strike_offset_min: number;
@@ -61,9 +67,10 @@ export interface StrategyProfile {
   tp2_pct: number;        // integer percent, e.g. 100
   runner: boolean;
   use_tp2: boolean;
-  /** "trail" (high-water-mark trailing stop) or "be_hold" (rides to TP2/
-   *  breakeven-stop/EOD, no trail) — see profiles.py's describe_profile(). */
-  runner_mode?: 'trail' | 'be_hold';
+  /** "trail" (high-water-mark trailing stop), "be_hold" (rides to TP2/
+   *  breakeven-stop/EOD, no trail), or "none" (original pre-TP1 hard stop,
+   *  no BE floor) — see profiles.py's describe_profile(). */
+  runner_mode?: 'trail' | 'be_hold' | 'none';
   risk_level: 'Low' | 'Medium' | 'High' | 'Medium-High' | 'Custom';
   vix_max: number;
   breakout_limit_min: number;

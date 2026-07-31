@@ -304,8 +304,11 @@ class ExitManager:
                 if self._tp1_ticks < self._tp1_ticks_needed:
                     return self._action("HOLD", 0, "TP1_CONFIRMING")
                 self.tp1_hit        = True
-                self.be_stop_active = True
-                self.hard_stop      = self.entry_premium  # SL moves to breakeven
+                # "none" leaves the runner on its original pre-TP1 hard stop —
+                # no BE floor, no trail. It only exits via TP2/cascade/EOD/manual.
+                if self._runner_mode != "none":
+                    self.be_stop_active = True
+                    self.hard_stop      = self.entry_premium  # SL moves to breakeven
                 if self._runner_mode == "trail":
                     self.runner_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
                 # tp1_qty override (see apply_overrides) replaces the

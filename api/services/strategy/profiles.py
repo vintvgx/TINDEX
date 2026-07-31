@@ -7,6 +7,8 @@ All profile-dependent logic in other modules reads from here — nothing hardcod
 runner_mode controls what happens to remaining contracts after TP1 is hit:
   "be_hold" — runner sits at breakeven stop, rides to TP2 target then EOD. No trail noise.
   "trail"   — traditional high-water-mark trailing stop (runner_trail_pct from peak).
+  "none"    — runner keeps its original pre-TP1 hard stop (max_loss_pct). No BE floor,
+              no trail — exits only via TP2, cascade, EOD, or manual close.
 """
 
 import logging
