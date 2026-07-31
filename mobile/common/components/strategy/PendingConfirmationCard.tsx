@@ -66,6 +66,11 @@ export function PendingConfirmationCard({ pending, colors }: { pending: PendingC
             <Text style={[styles.ticker, { color: colors.text }]}>{pending.ticker}</Text>
             <Badge label={pending.direction} color={dirColor} />
             <Badge label={pending.profile.replace(/_/g, ' ')} color={colors.accent} />
+            {/* This strategy's OWN account mode — the conflict box below (if
+                shown) describes a DIFFERENT position's mode, not this one;
+                without this badge that was the only Paper/Live text on the
+                card at all, easy to misread as describing this strategy. */}
+            <Badge label={pending.paper_mode ? 'PAPER' : 'LIVE'} color={pending.paper_mode ? '#FF9F0A' : colors.error} />
           </View>
           <Text style={[styles.meta, { color: colors.textSecondary }]} numberOfLines={1}>
             {pending.contract_symbol} · ${pending.strike} strike · {pending.qty} qty

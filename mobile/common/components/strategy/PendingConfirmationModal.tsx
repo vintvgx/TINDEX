@@ -138,6 +138,7 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
               <Badge label={pending.direction} color={pending.direction === 'CALL' ? '#10B981' : '#FF453A'} colors={colors} />
               <Badge label={pending.profile.replace('_', ' ')} color={colors.accent} colors={colors} />
+              <Badge label={pending.paper_mode ? 'PAPER' : 'LIVE'} color={pending.paper_mode ? '#FF9F0A' : '#FF453A'} colors={colors} />
               <Badge label={`Confidence ${pending.confidence.toFixed(0)}/100`} color={confColor} colors={colors} />
             </View>
           </View>

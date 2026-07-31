@@ -114,6 +114,10 @@ export interface PendingConfirmation {
   contract_symbol: string;
   strike: number;
   qty: number;
+  /** This strategy's OWN account mode — distinct from
+   *  conflict_context.paper_mode below, which describes a DIFFERENT
+   *  (conflicting) position's mode. */
+  paper_mode: boolean;
   trigger_price: number;
   entry_estimate: number;
   confidence: number;   // 0-100

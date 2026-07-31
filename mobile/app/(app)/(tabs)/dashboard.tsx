@@ -103,10 +103,6 @@ const DashboardScreen = () => {
   const queryClient = useQueryClient();
 
   // ── Data ──────────────────────────────────────────────────────────────────
-  const { livePrices, vix, spy, sentiment, connected } = useMarketStream(WATCHED_TICKERS);
-  const { data: orbData, isLoading: orbLoading } = useORBMonitoringState(false, false);
-  const { data: sessionStates } = useStrategySessionState();
-
   // Live/Paper positions — same shared fetch+filter+hidden-trades logic as
   // position.tsx/accounts_overview.tsx/PriceChartFullScreen (see
   // LivePositionsSection.tsx), so this screen can never drift out of sync
@@ -115,6 +111,29 @@ const DashboardScreen = () => {
   const paperPositions = useLivePositionsData('paper');
   const totalActive = livePositions.filteredPositions.length + paperPositions.filteredPositions.length;
   const isLoading = livePositions.isLoading || paperPositions.isLoading;
+
+  // Tickers with an active LIVE option position — shown as their own Market
+  // tiles ahead of the default watchlist (VIX always stays first). Only
+  // live (not paper) per the request. Deduped, and the market stream needs
+  // to actually subscribe to these too (it only knew about WATCHED_TICKERS
+  // otherwise) so a ticker like TSLA that isn't already on the default
+  // watchlist still gets a live price.
+  const activeLiveTickers = useMemo(() => {
+    const set = new Set(livePositions.filteredPositions.map(p => p.ticker.toUpperCase()));
+    return Array.from(set);
+  }, [livePositions.filteredPositions]);
+  const extraActiveTickers = useMemo(
+    () => activeLiveTickers.filter(t => !WATCHED_TICKERS.includes(t)),
+    [activeLiveTickers],
+  );
+  const marketStreamTickers = useMemo(
+    () => Array.from(new Set([...WATCHED_TICKERS, ...activeLiveTickers])),
+    [activeLiveTickers],
+  );
+
+  const { livePrices, vix, spy, sentiment, connected } = useMarketStream(marketStreamTickers);
+  const { data: orbData, isLoading: orbLoading } = useORBMonitoringState(false, false);
+  const { data: sessionStates } = useStrategySessionState();
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['strategy-positions'] });
@@ -284,6 +303,17 @@ const DashboardScreen = () => {
             accentColor={sentimentHex}
             colors={colors}
           />
+          {extraActiveTickers.map(ticker => (
+            <MarketTile
+              key={ticker}
+              label={ticker}
+              value={livePrices[ticker] ?? null}
+              formatValue={(n) => `$${n.toFixed(2)}`}
+              sub={orbSub(ticker, livePrices[ticker] ?? null)}
+              accentColor={orbColor(ticker, livePrices[ticker] ?? null)}
+              colors={colors}
+            />
+          ))}
           <MarketTile
             label="SPY"
             value={spyPrice}

@@ -8,11 +8,12 @@ import { useMarketStream } from '@/hooks/useMarketStream';
 import { useChartLiveStream } from '@/hooks/queries/ticker/useChartLiveStream';
 import { useToast } from '@/common/components/ui/Toast';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
-import { getOrbStatus } from '@/common/utils/orb/getOrbStatus';
+import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
 import { AdvancedPriceChart, AdvancedScrubPoint } from '@/common/components/ticker/AdvancedPriceChart';
 import type { PricePeriod, TickerHistoryData } from '@/common/types/blogPosts/ticker';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
 import { LiveModeToggle } from '@/common/components/strategy/LiveModeToggle';
+import { LiveTradesTickerTape } from '@/common/components/ticker/LiveTradesTickerTape';
 
 interface PriceChartFullScreenProps {
   visible: boolean;
@@ -28,12 +29,6 @@ interface PriceChartFullScreenProps {
   onPeriodChange: (period: PricePeriod) => void;
   periodPositive: boolean;
 }
-
-const ORB_STATUS_LABEL: Record<ReturnType<typeof getOrbStatus>, string> = {
-  above: 'Above Range',
-  below: 'Below Range',
-  'in-range': 'In Range',
-};
 
 const formatVolume = (v: number) => {
   if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`;
@@ -67,12 +62,22 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const [scrubPoint, setScrubPoint] = useState<AdvancedScrubPoint | null>(null);
-  // ORB is on by default — the band only draws on 1D, and only when today's
-  // range exists, so the default is harmless on other timeframes.
-  const [showOrbRange, setShowOrbRange] = useState(true);
 
+  // Feeds the shaded ORB band drawn directly on the chart (see
+  // AdvancedPriceChart) — the separate "ORB Range" status card that used to
+  // sit below the chart was removed (2026-07-31): redundant now that the
+  // above/below/in-range status shows in the tickertape header instead.
+  // Falls back to a client-computed range (from this chart's own 1D bars)
+  // whenever there's no orb_ranges row for the ticker — e.g. one not
+  // followed by an active strategy — so the band shows for ANY ticker
+  // opened here, not just ORB-tracked ones.
   const { data: orbData } = useTickerORBRange(visible ? ticker : '');
-  const hasOrbData = orbData != null;
+  const fallbackOrb = !orbData ? computeOrbRangeFromHistory(historyData) : null;
+  const effectiveOrb = orbData
+    ? { high: orbData.orb_high, low: orbData.orb_low }
+    : fallbackOrb
+      ? { high: fallbackOrb.orb_high, low: fallbackOrb.orb_low }
+      : null;
 
   // Open contracts for this ticker, below the chart — see LivePositionsSection.
   const [contractsMode, setContractsMode] = useState<'live' | 'paper'>('live');
@@ -85,7 +90,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   // Reset when the sheet closes so reopening starts fresh, and so the
   // WebSockets below disconnect rather than idling in the background.
   useEffect(() => {
-    if (!visible) { setShowOrbRange(true); setScrubPoint(null); }
+    if (!visible) { setScrubPoint(null); }
   }, [visible]);
 
   const toast = useToast();
@@ -115,10 +120,6 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
       notifiedErrorRef.current = false;
     }
   }, [visible, useAlpacaStream, chartStream.error, ticker, toast]);
-
-  const orbActive = showOrbRange && hasOrbData && period === '1D';
-  const orbStatus = hasOrbData ? getOrbStatus(resolvedLivePrice ?? 0, orbData!.orb_high, orbData!.orb_low) : null;
-  const orbStatusColor = orbStatus === 'above' ? colors.success : orbStatus === 'below' ? colors.error : colors.textSecondary;
 
   const periodStartPrice = historyData?.prices?.[0];
   const scrubChange = scrubPoint && periodStartPrice != null ? scrubPoint.price - periodStartPrice : null;
@@ -153,6 +154,10 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
     >
       <StatusBar barStyle={colors.isDark ? 'light-content' : 'dark-content'} />
       <View style={{ paddingTop: insets.top, flex: 1, backgroundColor: colors.background }}>
+        {/* Positioned above the header/back button, same as the global
+            TickerTape sits above AppHeader elsewhere in the app. */}
+        <LiveTradesTickerTape colors={colors} />
+
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingTop: 8, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: colors.separator }}>
           <Pressable onPress={onClose} hitSlop={12} style={{ padding: 8, flexDirection: 'row', alignItems: 'center', gap: 2 }}>
             <Ionicons name="chevron-back" size={24} color={colors.text} />
@@ -227,57 +232,10 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             positive={periodPositive}
             onScrub={setScrubPoint}
             height={Math.min(340, Math.max(260, windowHeight * 0.38))}
-            orbRange={hasOrbData ? { high: orbData!.orb_high, low: orbData!.orb_low } : null}
-            showOrbRange={showOrbRange}
+            orbRange={effectiveOrb}
+            showOrbRange
             livePrice={visible ? resolvedLivePrice ?? null : null}
           />
-
-          {hasOrbData && (
-            <View style={{ marginTop: 14, borderTopWidth: 1, borderTopColor: colors.separator, paddingTop: 12 }}>
-              <Pressable
-                onPress={() => {
-                  if (orbActive) {
-                    setShowOrbRange(false);
-                    return;
-                  }
-                  // Activating from a non-intraday timeframe jumps to 1D —
-                  // the band only exists for today's session.
-                  setShowOrbRange(true);
-                  if (period !== '1D') onPeriodChange('1D');
-                }}
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  paddingVertical: 12,
-                  paddingHorizontal: 16,
-                  borderRadius: 14,
-                  borderWidth: 1,
-                  borderColor: orbActive ? colors.accent : colors.border,
-                  backgroundColor: orbActive ? colors.accent + '15' : 'transparent',
-                }}
-              >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  <Ionicons name="git-compare-outline" size={18} color={orbActive ? colors.accent : colors.text} />
-                  <View>
-                    <Text style={{ color: orbActive ? colors.accent : colors.text, fontSize: 15, fontWeight: '700' }}>
-                      ORB Range
-                    </Text>
-                    <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 1 }}>
-                      {orbActive
-                        ? `${orbData!.orb_low.toFixed(2)} – ${orbData!.orb_high.toFixed(2)}`
-                        : period === '1D' ? 'Hidden' : 'Tap to view on 1D'}
-                    </Text>
-                  </View>
-                </View>
-                {orbActive && orbStatus && (
-                  <View style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 100, backgroundColor: orbStatusColor + '18', borderWidth: 1, borderColor: orbStatusColor + '40' }}>
-                    <Text style={{ color: orbStatusColor, fontSize: 12, fontWeight: '700' }}>{ORB_STATUS_LABEL[orbStatus]}</Text>
-                  </View>
-                )}
-              </Pressable>
-            </View>
-          )}
 
           {/* Open contracts for this ticker — full data + editable SL/TP via
               the same LivePositionPanel used everywhere else (Edit/Add/Exit,

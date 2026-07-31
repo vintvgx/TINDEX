@@ -6,6 +6,7 @@ POSTs to /strategy/config. Paper vs live trading is set by paper_mode in config.
 """
 
 import os
+import time
 import uuid as _uuid
 import logging
 import threading
@@ -1050,19 +1051,32 @@ class ORBEngine:
 
     def _find_ticker_conflict(self, direction: str) -> "ORBEngine | None":
         """
-        Returns another live engine that already holds an open position on
-        this same ticker + direction (any profile, saved or immediate,
-        paper or live) — used to force a confirmation pause instead of
-        silently stacking duplicate directional exposure. Same-ticker only;
-        an open SPY CALL does not gate an unrelated TSLA CALL signal.
+        Returns another live engine in the SAME paper/live account that
+        already holds an open position on this same ticker + direction (any
+        profile, saved or immediate) — used to force a confirmation pause
+        instead of silently stacking duplicate directional exposure.
+        Same-ticker only; an open SPY CALL does not gate an unrelated TSLA
+        CALL signal.
+
+        Paper and live are separate books with zero real overlap — a paper
+        strategy's automatic entry must never be paused just because the
+        LIVE account happens to hold a same-direction position (or vice
+        versa). 2026-07-30 incident: SPY RIDER and IWM RIDER (both paper)
+        each had an automatic entry wrongly routed to confirmation because
+        an unrelated LIVE immediate trade already held the same ticker+
+        direction — the user then skipped both, so two fully-automatic
+        paper trades that should have entered on their own never did. This
+        check used to be paper/live-agnostic on purpose (see the removed
+        docstring note); that turned out to be the actual bug, not a
+        deliberate feature — paper vs. live isolation should always win.
 
         Uses getattr defensively: a sibling engine self-registers into
         _live_engines partway through its own __init__ (_apply_config, before
         _reset_session_state runs), so another thread could in principle
-        observe it here before trade_taken/position/ticker exist yet. A plain
-        attribute access would raise AttributeError and abort this engine's
-        entire entry attempt over a construction-ordering race on a totally
-        unrelated engine — getattr with a safe default just treats a
+        observe it here before trade_taken/position/ticker/paper exist yet. A
+        plain attribute access would raise AttributeError and abort this
+        engine's entire entry attempt over a construction-ordering race on a
+        totally unrelated engine — getattr with a safe default just treats a
         not-yet-initialized sibling as "not a conflict" instead.
 
         Skips an engine explicitly paired with this one (paired_strategy_id,
@@ -1078,6 +1092,8 @@ class ORBEngine:
             if eng is self:
                 continue
             if getattr(eng, "ticker", None) != self.ticker:
+                continue
+            if getattr(eng, "paper", None) != self.paper:
                 continue
             if (sid == self.paired_strategy_id
                     or getattr(eng, "paired_strategy_id", None) == self.strategy_id):
@@ -1483,6 +1499,15 @@ class ORBEngine:
             "strategy_id":          self.strategy_id,
             "ticker":               self.ticker,
             "profile":              self.profile_key,
+            # This strategy's OWN account mode — distinct from
+            # conflict_context.paper_mode below, which describes the OTHER
+            # (conflicting) position's mode. Previously omitted entirely, so
+            # the only Paper/Live tag ever visible on the confirmation card
+            # was the conflicting position's — easy to misread as describing
+            # this strategy itself (2026-07-30: a PAPER strategy's card only
+            # showed "(Live)" from a conflicting LIVE position, with nothing
+            # indicating the strategy asking for confirmation was Paper).
+            "paper_mode":           self.paper,
             "direction":            direction,
             "contract_symbol":      contract["symbol"],
             "strike":               contract["strike"],
@@ -2766,35 +2791,52 @@ class ORBEngine:
 
         logger.info("[ORBEngine] Hub buffer empty for %s — fetching ORB bars from Alpaca REST",
                     self.ticker)
-        try:
-            req = StockBarsRequest(
-                symbol_or_symbols=self.ticker,
-                timeframe=TimeFrame.Minute,
-                start=start,
-                end=end,
-                feed="iex",
-            )
-            resp = self.stock_client.get_stock_bars(req)
-            raw_bars = resp.get(self.ticker, [])
-            for rb in raw_bars:
-                ts = rb.timestamp
-                if ts.tzinfo is None:
-                    ts = ET.localize(ts)
-                else:
-                    ts = ts.astimezone(ET)
-                if start <= ts < end and rb.high is not None and rb.low is not None:
-                    bars.append(OrbBar(ticker=self.ticker, ts=ts,
-                                       open=rb.open, high=rb.high,
-                                       low=rb.low, close=rb.close,
-                                       volume=rb.volume or 0))
-            if bars:
-                logger.info("[ORBEngine] Alpaca REST returned %d bars for %s ORB window",
-                            len(bars), self.ticker)
-            else:
-                logger.warning("[ORBEngine] No bars in ORB window for %s (%s–%s) from Alpaca REST",
-                               self.ticker, start.time(), end.time())
-        except Exception as e:
-            logger.error("[ORBEngine] Alpaca REST bar fallback failed for %s: %s", self.ticker, e)
+        # Retry a transient REST failure a couple of times before giving up.
+        # 2026-07-30 incident: right after a process restart mid-session (the
+        # "late start" catch-up in scheduler.py — hub buffer is always empty
+        # on a fresh process, so every late-start run lands here), a single
+        # failed REST call used to fall straight through to _skip("NO_DATA"),
+        # which is STICKY for the rest of the day — one transient blip right
+        # after a cold restart permanently killed every strategy's trading
+        # for the remaining session. A restart is exactly when this call is
+        # most likely to hit a brief hiccup (client/connection just spun up),
+        # so it's exactly when a retry matters most.
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                req = StockBarsRequest(
+                    symbol_or_symbols=self.ticker,
+                    timeframe=TimeFrame.Minute,
+                    start=start,
+                    end=end,
+                    feed="iex",
+                )
+                resp = self.stock_client.get_stock_bars(req)
+                raw_bars = resp.get(self.ticker, [])
+                for rb in raw_bars:
+                    ts = rb.timestamp
+                    if ts.tzinfo is None:
+                        ts = ET.localize(ts)
+                    else:
+                        ts = ts.astimezone(ET)
+                    if start <= ts < end and rb.high is not None and rb.low is not None:
+                        bars.append(OrbBar(ticker=self.ticker, ts=ts,
+                                           open=rb.open, high=rb.high,
+                                           low=rb.low, close=rb.close,
+                                           volume=rb.volume or 0))
+                if bars:
+                    logger.info("[ORBEngine] Alpaca REST returned %d bars for %s ORB window "
+                                "(attempt %d/%d)", len(bars), self.ticker, attempt, max_attempts)
+                    break
+                logger.warning("[ORBEngine] No bars in ORB window for %s (%s–%s) from Alpaca REST "
+                               "(attempt %d/%d)", self.ticker, start.time(), end.time(),
+                               attempt, max_attempts)
+            except Exception as e:
+                logger.error("[ORBEngine] Alpaca REST bar fallback failed for %s (attempt %d/%d): %s",
+                             self.ticker, attempt, max_attempts, e)
+
+            if attempt < max_attempts:
+                time.sleep(2)
 
         return bars
 
