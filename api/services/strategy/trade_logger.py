@@ -604,15 +604,22 @@ class TradeLogger:
     def reconcile_orphaned_trades(self):
         """
         Close any orb_trades rows that are still open (exit_time IS NULL) but
-        whose expiry date is today or earlier. This catches trades that were
+        whose expiry date is strictly before today. This catches trades that were
         never properly closed due to a crash/redeploy, or an option that just
         ran out the clock (no tick-driven exit ever fires for an untraded
         0DTE contract — expiration isn't a fill event, so nothing else in the
         app notices).
 
-        Uses .lte (not .lt) so a contract expiring TODAY is caught the same
-        day, not the day after — the previous off-by-one meant an option that
-        expired this afternoon would still show "open" until tomorrow's run.
+        Uses .lt (not .lte) so a contract expiring TODAY is never blind-closed
+        here — it's still live and tradeable all day today, with no broker
+        check in this function at all. 2026-07-31: .lte was closing today-
+        expiring 0DTE contracts as EXPIRED_WORTHLESS mid-session on every
+        boot/restart and every 09:35 ET calculate_orb() run, even though they
+        were still genuinely open at the broker (this fires purely off
+        expiry <= today, with no position lookup). Same-day rows now fall
+        through to get_open_trades() -> _reconcile_trade_with_broker() in
+        recover_open_positions(), which actually checks Alpaca before ever
+        closing anything.
 
         Recorded as a full loss of the premium paid (exit_premium=0,
         qty_exited=full remaining qty), since an expired contract with no
@@ -631,7 +638,7 @@ class TradeLogger:
                 self.client.table("orb_trades")
                 .select("id, contract_symbol, entry_premium, qty_entered, qty_exited, expiry")
                 .is_("exit_time", "null")
-                .lte("expiry", today)
+                .lt("expiry", today)
                 .execute()
             )
             rows = res.data or []
