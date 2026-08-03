@@ -18,6 +18,14 @@ import { BenchmarkCard } from '@/common/components/robinhood/BenchmarkCard';
 
 const ROBINHOOD_GREEN = '#00C805';
 
+// Module-level, not AsyncStorage — deliberately resets on cold start (a
+// fresh JS bundle) but stays true across tab navigation within the same app
+// launch, so the user is prompted once per launch rather than on every
+// single visit to this tab. See useRobinhoodAccount()'s docstring: the
+// first fetch after this flips true can trigger a real Robinhood login
+// (and possibly a live SMS), so it must never happen before an explicit tap.
+let robinhoodConnectedThisLaunch = false;
+
 interface Props {
   /** True when rendered as a SegmentedPager scene (Accounts tab). */
   embedded?: boolean;
@@ -46,9 +54,10 @@ export default function RobinhoodScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const [code, setCode] = useState('');
+  const [connectRequested, setConnectRequested] = useState(robinhoodConnectedThisLaunch);
 
-  const { data: account, isLoading: acctLoading, refetch: refetchAccount } = useRobinhoodAccount();
-  const { data: holdingsData, isLoading: holdingsLoading, refetch: refetchHoldings } = useRobinhoodHoldings();
+  const { data: account, isLoading: acctLoading, refetch: refetchAccount } = useRobinhoodAccount(connectRequested);
+  const { data: holdingsData, isLoading: holdingsLoading, refetch: refetchHoldings } = useRobinhoodHoldings(connectRequested);
   const connected = !!account?.available;
   const { data: equityHistory } = useRobinhoodEquityHistory('day', connected);
   const { data: optionPositionsData } = useRobinhoodOptionPositions(connected);
@@ -56,13 +65,22 @@ export default function RobinhoodScreen({ embedded = false }: Props) {
   const loginMutation = useRobinhoodLogin();
   const verifyMutation = useRobinhoodVerify();
 
-  const isLoading = (acctLoading || holdingsLoading) && !account;
+  const handleConnect = useCallback(() => {
+    robinhoodConnectedThisLaunch = true;
+    setConnectRequested(true);
+  }, []);
+
+  const isLoading = connectRequested && (acctLoading || holdingsLoading) && !account;
 
   const handlePullRefresh = useCallback(async () => {
+    // refetch() ignores a query's `enabled: false` and fires regardless —
+    // guard explicitly so pulling to refresh before tapping "Connect" can't
+    // sneak past the gate above and trigger a real Robinhood login.
+    if (!connectRequested) return;
     setManualRefreshing(true);
     await Promise.all([refetchAccount(), refetchHoldings()]);
     setManualRefreshing(false);
-  }, [refetchAccount, refetchHoldings]);
+  }, [connectRequested, refetchAccount, refetchHoldings]);
 
   const handleVerify = useCallback(async () => {
     if (!code.trim()) return;
@@ -94,7 +112,9 @@ export default function RobinhoodScreen({ embedded = false }: Props) {
           <RefreshControl refreshing={manualRefreshing} onRefresh={handlePullRefresh} tintColor={ROBINHOOD_GREEN} />
         }
       >
-        {isLoading ? (
+        {!connectRequested ? (
+          <ConnectPromptCard onConnect={handleConnect} colors={colors} />
+        ) : isLoading ? (
           <ActivityIndicator color={ROBINHOOD_GREEN} style={{ marginTop: 60 }} />
         ) : authIssue ? (
           <AuthStatusCard
@@ -139,6 +159,30 @@ export default function RobinhoodScreen({ embedded = false }: Props) {
     </SafeAreaView>
   );
 }
+
+/**
+ * Shown before the account/holdings queries are allowed to fire at all —
+ * see robinhoodConnectedThisLaunch above. Fetching this data is what makes
+ * the backend attempt a real Robinhood login the first time there's no
+ * active session, so this tap is the actual gate, not just a loading state.
+ */
+const ConnectPromptCard = ({ onConnect, colors }: { onConnect: () => void; colors: any }) => (
+  <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border, alignItems: 'center', paddingVertical: 28, gap: 10 }]}>
+    <Ionicons name="log-in-outline" size={32} color={colors.tabBarInactive} />
+    <Text style={[styles.cardLabel, { color: colors.text }]}>Connect to Robinhood</Text>
+    <Text style={[styles.cardSubtitle, { color: colors.tabBarInactive, textAlign: 'center' }]}>
+      Tap below to check your account status and load your portfolio.
+    </Text>
+    <TouchableOpacity
+      onPress={onConnect}
+      activeOpacity={0.8}
+      style={[styles.accessButton, { backgroundColor: ROBINHOOD_GREEN }]}
+    >
+      <Ionicons name="log-in-outline" size={18} color="#fff" />
+      <Text style={styles.accessButtonText}>Connect</Text>
+    </TouchableOpacity>
+  </View>
+);
 
 /**
  * Distinct copy per backend auth status (see robinhood_service.py's

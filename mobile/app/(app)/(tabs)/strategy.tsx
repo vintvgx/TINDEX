@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   View, Text, ScrollView, SafeAreaView, TouchableOpacity,
   StyleSheet, ActivityIndicator, Alert, Modal, TextInput,
@@ -244,6 +244,17 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
   const openCreate = () => { setEditingConfig(null); setForm(DEFAULT_FORM); setModalVisible(true); };
   const openEdit   = (cfg: StrategyConfig) => { setEditingConfig(cfg); setForm(configToForm(cfg)); setModalVisible(true); };
   const openDetail = (cfg: StrategyConfig) => { setDetailConfig(cfg); setDetailVisible(true); };
+
+  // detailConfig is a snapshot taken when the modal opened — re-point it at
+  // the latest matching row whenever `configs` refetches (e.g. right after
+  // the Active toggle inside the modal itself PATCHes and invalidates the
+  // query), so the modal — and the card behind it once closed — shows the
+  // update immediately instead of the stale value until reopened.
+  useEffect(() => {
+    if (!detailConfig || !configs) return;
+    const fresh = configs.find(c => c.id === detailConfig.id);
+    if (fresh && fresh !== detailConfig) setDetailConfig(fresh);
+  }, [configs, detailConfig]);
 
   // Candidates for "Paired Strategy": same ticker, the opposite paper/live
   // mode, excluding the config being edited — this is what
@@ -534,13 +545,16 @@ interface StrategyCardProps {
 }
 
 function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) {
-  const mode         = getMode(config);
-  const modeMeta     = MODE_META[mode];
   const profileColor = PROFILE_COLORS[config.profile] ?? colors.accent;
   const activeDays   = config.trade_days ?? [];
   const hasPosition  = config.has_position === true;
   const qtyContracts = config.custom_thresholds?.qty_contracts
     ?? profiles.find(p => p.key === config.profile)?.thresholds.qty_contracts;
+
+  // Display only — too easy to fat-finger a real trading toggle sitting in
+  // the corner of a scrolling list. The actual switch lives in
+  // StrategyDetailModal, reached by tapping into the card.
+  const activeColor = config.active ? '#30D158' : '#8E8E93';
 
   const queryClient = useQueryClient();
   const onPositionClosed = useCallback(() => {
@@ -585,9 +599,15 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
               </Text>
             ) : null}
           </View>
-          <View style={[styles.modeBadge, { backgroundColor: modeMeta.color + '22' }]}>
-            <View style={[styles.modeDot, { backgroundColor: modeMeta.color }]} />
-            <Text style={[styles.modeBadgeText, { color: modeMeta.color }]}>{modeMeta.label}</Text>
+          {/* Active/Not Active — read-only here; toggle it from the detail
+              modal (tap the card) instead of a one-tap badge in a scrolling
+              list. Paper/Live is already conveyed by which account-mode tab
+              is selected above, so this spot no longer repeats it. */}
+          <View style={[styles.modeBadge, { backgroundColor: activeColor + '22' }]}>
+            <View style={[styles.modeDot, { backgroundColor: activeColor }]} />
+            <Text style={[styles.modeBadgeText, { color: activeColor }]}>
+              {config.active ? 'Active' : 'Not Active'}
+            </Text>
           </View>
         </View>
 

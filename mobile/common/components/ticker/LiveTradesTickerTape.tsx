@@ -5,10 +5,15 @@ import { useLivePositionsData } from '@/common/components/strategy/LivePositions
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
 import { useStrategyLivePrice, type LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import type { AlpacaAccount } from '@/common/types/strategy';
 import { useOrbRangesForTickers } from '@/hooks/queries/orb/useOrbRangesForTickers';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
 import { getOrbStatus } from '@/common/utils/orb/getOrbStatus';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
+
+// Same PAPER tint used everywhere else a live/paper trade needs to be told
+// apart at a glance (PositionCard, PendingConfirmationCard/Modal).
+const PAPER_COLOR = '#FF9F0A';
 
 /**
  * Headless per-position live-tick subscriber — reports every mark-to-market
@@ -54,40 +59,24 @@ function rangeLabel(price: number, orbHigh: number, orbLow: number, colors: any)
 }
 
 /**
- * The ticker-tape-styled strip for PriceChartFullScreen — same dark
- * colors.tape/tapeText/tapeUp/tapeDown palette and top-of-screen position as
- * the global TickerTape (see ui/TickerTape.tsx), positioned above the
- * header/back button the same way TickerTape sits above AppHeader elsewhere
- * in the app. Taller than the compact global tape (two lines instead of
- * one) since it's showing more per trade — ticker, live price,
- * above/below/in-range vs. today's ORB, total Live Equity (same
- * useAlpacaBothAccounts() state Live Positions reads), and today's live P&L.
- * Cycles vertically through every LIVE open trade every 8s — paper trades
- * are excluded, and there's no animation at all with 0 or 1 trade.
+ * Same calc as position.tsx's account bar: cash (from the slow account
+ * poll, stable mid-trade) + the sum of every open position's mark-to-market
+ * value (falling back to static cost basis before a position's first tick
+ * arrives). Today P&L is then this derived equity minus yesterday's close —
+ * NOT the raw account.pnl_today field, which only refreshes every ~60s and
+ * is what caused this tape's number to drift from what Live/Paper Positions
+ * shows. Used once for the live account and once for paper — same math,
+ * different account + position set.
  */
-export function LiveTradesTickerTape({ colors }: { colors: any }) {
-  const { filteredPositions, liveByStrategy, handleLiveUpdate } = useLivePositionsData('live');
-  const tickers = useMemo(
-    () => Array.from(new Set(filteredPositions.map(p => p.ticker.toUpperCase()))),
-    [filteredPositions],
-  );
-
-  const { livePrices } = useMarketStream(tickers, { enabled: tickers.length > 0 });
-  const { data: orbRanges } = useOrbRangesForTickers(tickers);
-  const { data: accounts } = useAlpacaBothAccounts();
-  const account = accounts?.live;
-
-  // Same calc as position.tsx's account bar: cash (from the slow account
-  // poll, stable mid-trade) + the sum of every open live position's
-  // mark-to-market value (falling back to static cost basis before a
-  // position's first tick arrives). Today P&L is then this live equity
-  // minus yesterday's close — NOT the raw account.pnl_today field, which
-  // only refreshes every ~60s and is what caused this tape's number to
-  // drift from what Live Positions shows.
-  const liveDerivedEquity = useMemo(() => {
-    if (!account?.available || filteredPositions.length === 0) return null;
+function useDerivedEquity(
+  account: (AlpacaAccount & { available: boolean }) | undefined,
+  positions: PositionEntry[],
+  liveByStrategy: Record<string, LivePriceData | null>,
+) {
+  const derivedEquity = useMemo(() => {
+    if (!account?.available || positions.length === 0) return null;
     let sumMarketValue = 0;
-    for (const pos of filteredPositions) {
+    for (const pos of positions) {
       const live = liveByStrategy[pos.strategy_id];
       if (live?.market_value != null) {
         sumMarketValue += live.market_value;
@@ -96,35 +85,80 @@ export function LiveTradesTickerTape({ colors }: { colors: any }) {
       }
     }
     return account.cash + sumMarketValue;
-  }, [account, filteredPositions, liveByStrategy]);
+  }, [account, positions, liveByStrategy]);
 
-  const displayEquity = liveDerivedEquity ?? account?.equity ?? null;
-  const displayPnlToday =
-    liveDerivedEquity != null && account?.last_equity != null
-      ? liveDerivedEquity - account.last_equity
+  const equity = derivedEquity ?? account?.equity ?? null;
+  const pnlToday =
+    derivedEquity != null && account?.last_equity != null
+      ? derivedEquity - account.last_equity
       : account?.pnl_today ?? null;
-  const displayPnlTodayPct =
-    liveDerivedEquity != null && account?.last_equity
-      ? (displayPnlToday! / account.last_equity) * 100
+  const pnlTodayPct =
+    derivedEquity != null && account?.last_equity
+      ? (pnlToday! / account.last_equity) * 100
       : account?.pnl_today_pct ?? null;
+
+  return { equity, pnlToday, pnlTodayPct };
+}
+
+type ModeEntry = { ticker: string; mode: 'live' | 'paper' };
+
+/**
+ * The ticker-tape-styled strip for PriceChartFullScreen — same dark
+ * colors.tape/tapeText/tapeUp/tapeDown palette and top-of-screen position as
+ * the global TickerTape (see ui/TickerTape.tsx), positioned above the
+ * header/back button the same way TickerTape sits above AppHeader elsewhere
+ * in the app. Taller than the compact global tape (two lines instead of
+ * one) since it's showing more per trade — mode (live/paper), ticker, live
+ * price, above/below/in-range vs. today's ORB, that account's total equity
+ * (same useAlpacaBothAccounts() state Live/Paper Positions reads), and
+ * today's live P&L for whichever account the currently-shown trade belongs
+ * to. Cycles vertically through every open trade — live AND paper — every
+ * 8s, with no animation at all with 0 or 1 trade total.
+ */
+export function LiveTradesTickerTape({ colors }: { colors: any }) {
+  const live = useLivePositionsData('live');
+  const paper = useLivePositionsData('paper');
+
+  const entries = useMemo<ModeEntry[]>(() => {
+    const liveTickers = Array.from(new Set(live.filteredPositions.map(p => p.ticker.toUpperCase())));
+    const paperTickers = Array.from(new Set(paper.filteredPositions.map(p => p.ticker.toUpperCase())));
+    return [
+      ...liveTickers.map(ticker => ({ ticker, mode: 'live' as const })),
+      ...paperTickers.map(ticker => ({ ticker, mode: 'paper' as const })),
+    ];
+  }, [live.filteredPositions, paper.filteredPositions]);
+
+  const allTickers = useMemo(
+    () => Array.from(new Set(entries.map(e => e.ticker))),
+    [entries],
+  );
+
+  const { livePrices } = useMarketStream(allTickers, { enabled: allTickers.length > 0 });
+  const { data: orbRanges } = useOrbRangesForTickers(allTickers);
+  const { data: accounts } = useAlpacaBothAccounts();
+
+  const liveEquity = useDerivedEquity(accounts?.live, live.filteredPositions, live.liveByStrategy);
+  const paperEquity = useDerivedEquity(accounts?.paper, paper.filteredPositions, paper.liveByStrategy);
 
   const [index, setIndex] = useState(0);
   // The open-trade list itself can shrink/grow (a position closes, a new one
   // opens) — clamp instead of resetting to 0 so an in-progress cycle doesn't
   // visually jump back to the first trade every time.
   useEffect(() => {
-    setIndex(i => (tickers.length ? i % tickers.length : 0));
-  }, [tickers.length]);
+    setIndex(i => (entries.length ? i % entries.length : 0));
+  }, [entries.length]);
 
   useEffect(() => {
-    if (tickers.length <= 1) return;
+    if (entries.length <= 1) return;
     const id = setInterval(() => {
-      setIndex(i => (i + 1) % tickers.length);
+      setIndex(i => (i + 1) % entries.length);
     }, CYCLE_MS);
     return () => clearInterval(id);
-  }, [tickers.length]);
+  }, [entries.length]);
 
-  const ticker = tickers[index % tickers.length] ?? '';
+  const current = entries[index % entries.length];
+  const ticker = current?.ticker ?? '';
+  const mode = current?.mode ?? 'live';
 
   // 1D history for whichever ticker is currently showing — only actually
   // used when useOrbRangesForTickers has no row for it (see
@@ -146,25 +180,31 @@ export function LiveTradesTickerTape({ colors }: { colors: any }) {
     ]).start();
   }, [index, opacity, translateY]);
 
-  if (tickers.length === 0) return null;
+  if (entries.length === 0) return null;
 
   const price = livePrices[ticker] ?? null;
   const orb = orbRanges?.[ticker] ?? computeOrbRangeFromHistory(historyResponse?.data);
   const range = price != null && orb ? rangeLabel(price, orb.orb_high, orb.orb_low, colors) : null;
 
-  const equity = displayEquity;
-  const pnlToday = displayPnlToday;
-  const pnlTodayPct = displayPnlTodayPct;
+  const { equity, pnlToday, pnlTodayPct } = mode === 'live' ? liveEquity : paperEquity;
+  const modeColor = mode === 'live' ? colors.tapeUp : PAPER_COLOR;
+  const equityLabel = mode === 'live' ? 'Live Equity' : 'Paper Equity';
 
   return (
     <View style={[styles.wrap, { backgroundColor: colors.tape }]}>
       {/* Headless — feeds liveByStrategy above, nothing rendered. */}
-      {filteredPositions.map(pos => (
-        <LivePositionPnlSub key={pos.strategy_id} pos={pos} onUpdate={handleLiveUpdate} />
+      {live.filteredPositions.map(pos => (
+        <LivePositionPnlSub key={`live-${pos.strategy_id}`} pos={pos} onUpdate={live.handleLiveUpdate} />
       ))}
-      <View style={[styles.liveDot, { backgroundColor: colors.tapeUp }]} />
-      <Animated.View style={[styles.content, { opacity, transform: [{ translateY }] }]}>
-        <View style={styles.row}>
+      {paper.filteredPositions.map(pos => (
+        <LivePositionPnlSub key={`paper-${pos.strategy_id}`} pos={pos} onUpdate={paper.handleLiveUpdate} />
+      ))}
+      <View style={[styles.liveDot, { backgroundColor: modeColor }]} />
+      <View style={styles.content}>
+        {/* Only this row animates on cycle — ticker/price/range are what
+            actually changes between trades. Account info below stays put. */}
+        <Animated.View style={[styles.row, { opacity, transform: [{ translateY }] }]}>
+          <Text style={[styles.modeLabel, { color: modeColor }]}>{mode === 'live' ? 'LIVE' : 'PAPER'}</Text>
           <Text style={[styles.ticker, { color: colors.tapeText }]} numberOfLines={1}>${ticker}</Text>
           {price != null && (
             <Text style={[styles.price, { color: colors.tapeText }]}>${price.toFixed(2)}</Text>
@@ -172,11 +212,13 @@ export function LiveTradesTickerTape({ colors }: { colors: any }) {
           {range && (
             <Text style={[styles.range, { color: range.color }]}>{range.text}</Text>
           )}
-        </View>
+        </Animated.View>
+        {/* Sticky — the account this trade belongs to still changes when
+            cycling live→paper, but the value swaps in place, no slide/fade. */}
         <View style={styles.row}>
           {equity != null && (
             <Text style={[styles.sub, { color: colors.tapeMuted }]}>
-              Live Equity ${equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {equityLabel} ${equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </Text>
           )}
           {pnlToday != null && (
@@ -189,7 +231,7 @@ export function LiveTradesTickerTape({ colors }: { colors: any }) {
             </>
           )}
         </View>
-      </Animated.View>
+      </View>
     </View>
   );
 }
@@ -199,6 +241,7 @@ const styles = StyleSheet.create({
   liveDot: { width: 6, height: 6, borderRadius: 3 },
   content: { flex: 1, gap: 3 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 16 },
+  modeLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
   ticker: { fontSize: 13, fontWeight: '700', letterSpacing: 0.2 },
   price: { fontSize: 13, fontWeight: '600' },
   range: { fontSize: 12, fontWeight: '700' },

@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
+import { loggedFetch } from '@/lib/loggedFetch';
 import type { RobinhoodAuthStatus } from '@/common/types/robinhood';
 
 export interface RobinhoodAuthResponse {
@@ -7,6 +8,11 @@ export interface RobinhoodAuthResponse {
   status: RobinhoodAuthStatus;
   message?: string;
 }
+
+// Robinhood's unofficial API can just never respond — without this, a
+// hung request leaves the "Connecting…" button spinning forever instead of
+// surfacing as a failed connection attempt (see useRobinhoodAccount.ts).
+const ROBINHOOD_TIMEOUT_MS = 60_000;
 
 /**
  * "Sign In" / "Resend Code" — always a deliberate tap, since it can trigger
@@ -17,7 +23,7 @@ export function useRobinhoodLogin() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (): Promise<RobinhoodAuthResponse> => {
-      const res = await fetch(`${RAILWAY_BASE_URL}/robinhood/login`, { method: 'POST' });
+      const res = await loggedFetch(`${RAILWAY_BASE_URL}/robinhood/login`, { method: 'POST' }, ROBINHOOD_TIMEOUT_MS);
       return res.json();
     },
     onSettled: () => {
@@ -31,11 +37,11 @@ export function useRobinhoodVerify() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (code: string): Promise<RobinhoodAuthResponse> => {
-      const res = await fetch(`${RAILWAY_BASE_URL}/robinhood/verify`, {
+      const res = await loggedFetch(`${RAILWAY_BASE_URL}/robinhood/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code }),
-      });
+      }, ROBINHOOD_TIMEOUT_MS);
       return res.json();
     },
     onSettled: () => {

@@ -1,11 +1,13 @@
 import React from 'react';
 import {
   View, Text, Modal, TouchableOpacity, ScrollView,
-  StyleSheet, SafeAreaView, Alert,
+  StyleSheet, SafeAreaView, Alert, Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { StrategyConfig, StrategyProfile } from '@/common/types/strategy';
 import { PROFILES as PROFILE_GUIDES } from '@/common/components/strategy/ProfileGuideModal';
+import { useUpdateStrategyConfig } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
+import { useToast } from '@/common/components/ui/Toast';
 
 interface Props {
   visible: boolean;
@@ -36,6 +38,14 @@ export function StrategyDetailModal({ visible, config, profiles, colors, onClose
   const modeLabel = mode === 'off' ? 'Off' : mode === 'paper' ? 'Paper' : 'Live';
 
   const hasPosition = config.has_position === true;
+
+  const toast = useToast();
+  const updateConfig = useUpdateStrategyConfig();
+  const handleToggleActive = (next: boolean) => {
+    updateConfig.mutate({ id: config.id, active: next }, {
+      onError: () => toast.error('Failed to update strategy'),
+    });
+  };
 
   const handleEditPress = () => { onClose(); onEdit(); };
 
@@ -90,6 +100,30 @@ export function StrategyDetailModal({ visible, config, profiles, colors, onClose
                 color={config.confirm_entry ? '#30D158' : colors.tabBarInactive}
                 colors={colors}
                 dim={!config.confirm_entry}
+              />
+            </View>
+          </View>
+
+          {/* Active/Not Active — the one control that lives here rather than
+              on the card itself: flipping it PATCHes config.active straight
+              away, which already stops the engine from entering new trades
+              for this strategy (see orb_engine.py's session_skipped gate) —
+              this switch doesn't need to do anything more than that PATCH. */}
+          <SectionHeader title="Status" colors={colors} />
+          <View style={[s.settingsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={[s.settingRow, { borderBottomWidth: 0 }]}>
+              <View>
+                <Text style={[s.settingLabel, { color: colors.text, fontWeight: '700' }]}>Active</Text>
+                <Text style={[s.statusHint, { color: colors.tabBarInactive }]}>
+                  {config.active ? 'Trading normally' : 'Paused — no new trades will be entered'}
+                </Text>
+              </View>
+              <Switch
+                value={config.active}
+                onValueChange={handleToggleActive}
+                disabled={updateConfig.isPending}
+                trackColor={{ false: colors.border, true: '#30D15855' }}
+                thumbColor={config.active ? '#30D158' : undefined}
               />
             </View>
           </View>
@@ -222,6 +256,7 @@ const s = StyleSheet.create({
   settingRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 11 },
   settingLabel:   { fontSize: 13, fontWeight: '500' },
   settingValue:   { fontSize: 13, fontWeight: '700' },
+  statusHint:     { fontSize: 11, marginTop: 2, maxWidth: 220 },
 
   metricsGrid:    { flexDirection: 'row', flexWrap: 'wrap', borderRadius: 12, borderWidth: 1, padding: 8 },
   metricCell:     { width: '33.3%', alignItems: 'center', paddingVertical: 10 },
