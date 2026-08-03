@@ -45,6 +45,7 @@ would need rethinking under multiple worker processes.
 
 from __future__ import annotations
 
+import base64
 import builtins
 import os
 import threading
@@ -61,6 +62,7 @@ _logged_in = False
 _mfa_pending = False
 _attempted = False
 _last_error: str | None = None
+_session_restore_attempted = False
 
 _cache = GenericTTLCache()
 # Unofficial API — deliberately polled less aggressively than Alpaca to avoid
@@ -93,9 +95,87 @@ def _credentials() -> tuple[str, str]:
     return username, password
 
 
+def _pickle_path() -> str:
+    """
+    Same default path robin_stocks's own login() writes to (see the installed
+    robin_stocks/robinhood/authentication.py: pickle_path="" -> ~/.tokens/
+    robinhood.pickle) — kept in sync here rather than passing an explicit
+    pickle_path into rh.login() so robin_stocks's own cached-session reuse
+    logic (loading it, validating the access token, falling back to a normal
+    login while keeping the same device_token) works completely unmodified.
+    """
+    return os.path.join(os.path.expanduser("~"), ".tokens", "robinhood.pickle")
+
+
+def _restore_session_from_supabase() -> None:
+    """
+    Runs once per process, before the very first login attempt.
+
+    Root cause of "signed in every time": robin_stocks pickles its session
+    (access/refresh token + a device_token Robinhood's server recognizes) to
+    the container's local disk. Railway's filesystem is wiped on every
+    restart (redeploy, platform restart, crash — see
+    monitoring_routes.py's start_contracts_monitor_core docstring for the
+    same documented pattern), so a fresh device_token gets generated on the
+    next login attempt and Robinhood re-triggers the SMS challenge every
+    time, not just once.
+
+    This writes back whatever pickle bytes were last saved to Supabase (see
+    _persist_session_to_supabase) to the same path robin_stocks reads from,
+    *before* rh.login() runs — so robin_stocks's own existing cached-session
+    branch picks it up transparently, same device_token as before the
+    restart, no robin_stocks changes needed.
+    """
+    global _session_restore_attempted
+    if _session_restore_attempted:
+        return
+    _session_restore_attempted = True
+
+    try:
+        pickle_path = _pickle_path()
+        if os.path.exists(pickle_path):
+            # Already have a pickle on disk this process lifetime (e.g. a
+            # login already happened) — never clobber it with a possibly
+            # stale Supabase copy.
+            return
+
+        from services.supabase.supabase_service import get_supabase_service
+        pickle_b64 = get_supabase_service().get_robinhood_session()
+        if not pickle_b64:
+            return
+
+        os.makedirs(os.path.dirname(pickle_path), exist_ok=True)
+        with open(pickle_path, "wb") as f:
+            f.write(base64.b64decode(pickle_b64))
+        logger.info("[robinhood] restored session pickle from Supabase")
+    except Exception as e:
+        # Non-fatal — worst case we just fall back to a fresh login/MFA
+        # flow, same behavior as before this persistence existed.
+        logger.warning("[robinhood] failed to restore session from Supabase: %s", e)
+
+
+def _persist_session_to_supabase() -> None:
+    """Called right after a successful login — mirrors the fresh on-disk
+    pickle into Supabase so the next process restart can restore it."""
+    try:
+        pickle_path = _pickle_path()
+        if not os.path.exists(pickle_path):
+            return
+        with open(pickle_path, "rb") as f:
+            raw = f.read()
+
+        from services.supabase.supabase_service import get_supabase_service
+        get_supabase_service().save_robinhood_session(base64.b64encode(raw).decode("ascii"))
+        logger.info("[robinhood] persisted session pickle to Supabase")
+    except Exception as e:
+        logger.warning("[robinhood] failed to persist session to Supabase: %s", e)
+
+
 def _attempt_login(username: str, password: str, mfa_code: str | None) -> None:
     """Must be called with _state_lock held."""
     global _logged_in, _mfa_pending, _last_error, _attempted
+
+    _restore_session_from_supabase()
 
     original_input = builtins.input
     builtins.input = _no_interactive_input
@@ -104,6 +184,7 @@ def _attempt_login(username: str, password: str, mfa_code: str | None) -> None:
         _logged_in = True
         _mfa_pending = False
         _last_error = None
+        _persist_session_to_supabase()
         logger.info("[robinhood] logged in")
     except _MFAPromptNeeded:
         # Robinhood has already sent the SMS by this point — that happens on
@@ -170,8 +251,37 @@ def _safe_float(val, default: float = 0.0) -> float:
         return default
 
 
+def _extract_margin_summary(account: dict) -> dict | None:
+    """
+    Robinhood's load_account_profile() response includes a margin_balances
+    sub-dict for every account, margin-enabled or not — for a plain cash
+    account it comes back either None or populated with zeroed/null figures
+    (Robinhood just doesn't extend margin to it). Returns None in that case
+    rather than a fabricated "$0 margin" figure, so the UI can honestly say
+    "cash account — no margin" instead of implying a real, checked balance.
+    """
+    raw = account.get("margin_balances")
+    if not isinstance(raw, dict) or not raw:
+        return None
+
+    day_trade_bp = _safe_float(raw.get("day_trade_buying_power"))
+    overnight_bp = _safe_float(raw.get("overnight_buying_power"))
+    margin_limit = _safe_float(raw.get("margin_limit"))
+    unallocated_margin_cash = _safe_float(raw.get("unallocated_margin_cash"))
+
+    if not any([day_trade_bp, overnight_bp, margin_limit, unallocated_margin_cash]):
+        return None
+
+    return {
+        "day_trade_buying_power": round(day_trade_bp, 2),
+        "overnight_buying_power": round(overnight_bp, 2),
+        "margin_limit": round(margin_limit, 2),
+        "unallocated_margin_cash": round(unallocated_margin_cash, 2),
+    }
+
+
 def get_account_summary() -> dict:
-    """Equity, cash, buying power, and today's $/% change."""
+    """Equity, cash, buying power, margin (if any), and today's $/% change."""
     cached = _cache.get("account")
     if cached is not None:
         return cached
@@ -191,27 +301,56 @@ def get_account_summary() -> dict:
     pnl_today = equity - prev_close_equity if prev_close_equity else 0.0
     pnl_today_pct = (pnl_today / prev_close_equity * 100) if prev_close_equity else 0.0
 
+    cash = _safe_float(account.get("cash"))
+    uncleared_deposits = _safe_float(account.get("uncleared_deposits"))
+    unsettled_funds = _safe_float(account.get("unsettled_funds"))
+    margin = _extract_margin_summary(account)
+
     result = {
         "available": True,
         "equity": round(equity, 2),
-        "cash": round(_safe_float(account.get("cash")), 2),
+        "cash": round(cash, 2),
         "buying_power": round(_safe_float(account.get("buying_power")), 2),
         "market_value": round(_safe_float(portfolio.get("market_value")), 2),
         "pnl_today": round(pnl_today, 2),
         "pnl_today_pct": round(pnl_today_pct, 3),
+        # Cash-vs-margin breakdown. is_margin_account is honest about
+        # whether Robinhood actually returned usable margin figures for
+        # this account — a cash account will have margin: null and
+        # is_margin_account: false rather than a fake $0 margin block.
+        "is_margin_account": margin is not None,
+        "margin": margin,
+        "uncleared_deposits": round(uncleared_deposits, 2),
+        "unsettled_funds": round(unsettled_funds, 2),
     }
     _cache.set("account", result, _CACHE_TTL_SECONDS)
     return result
 
 
 def get_holdings() -> list:
-    """Per-symbol stock holdings — ticker, qty, cost basis, live price, P&L."""
+    """Per-symbol stock holdings — ticker, qty, cost basis, live price, P&L, sector."""
     cached = _cache.get("holdings")
     if cached is not None:
         return cached
 
     _ensure_login()
     raw = rh.build_holdings() or {}
+
+    # Sector, for the allocation pie chart — build_holdings() already calls
+    # get_fundamentals() per-ticker internally (for pe_ratio) but doesn't
+    # surface 'sector' in its own return dict, so it's fetched here as one
+    # extra batched call. Real data from Robinhood's fundamentals endpoint,
+    # not inferred/fabricated — a ticker with no sector data back from
+    # Robinhood just gets sector: None, surfaced honestly to the UI.
+    tickers = list(raw.keys())
+    sectors: dict[str, str | None] = {}
+    if tickers:
+        try:
+            fundamentals = rh.get_fundamentals(tickers) or []
+            for ticker, fdata in zip(tickers, fundamentals):
+                sectors[ticker] = (fdata or {}).get("sector") or None
+        except Exception as e:
+            logger.warning("[robinhood] sector fetch failed: %s", e)
 
     holdings = []
     for ticker, data in raw.items():
@@ -232,8 +371,105 @@ def get_holdings() -> list:
             "market_value": round(equity, 2),
             "unrealized_pl": round(unrealized_pl, 2),
             "unrealized_pl_pct": round(unrealized_pl_pct, 3),
+            "sector": sectors.get(ticker),
         })
 
     holdings.sort(key=lambda h: h["market_value"], reverse=True)
     _cache.set("holdings", holdings, _CACHE_TTL_SECONDS)
     return holdings
+
+
+# Robinhood's historicals span/interval combos it actually accepts together
+# (see the installed robin_stocks/robinhood/account.py's get_historical_portfolio
+# validation) — 'day' uses extended trading-hours bounds so the sparkline
+# reflects the same session the pnl_today figure above is computed over.
+_EQUITY_HISTORY_SPANS = {
+    "day":   {"interval": "5minute", "span": "day",   "bounds": "trading"},
+    "week":  {"interval": "hour",    "span": "week",  "bounds": "regular"},
+    "month": {"interval": "day",     "span": "month",  "bounds": "regular"},
+}
+
+
+def get_equity_history(span: str = "day") -> dict:
+    """
+    Real equity marks over time straight from Robinhood's own portfolio-
+    historicals endpoint (rh.get_historical_portfolio) — not reconstructed
+    from holdings, since Robinhood's series already accounts for cash and
+    intraday fills the way the account summary's pnl_today figure does.
+    Backs the Day P/L sparkline.
+    """
+    span = span if span in _EQUITY_HISTORY_SPANS else "day"
+    cache_key = f"equity_history_{span}"
+    cached = _cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    _ensure_login()
+    cfg = _EQUITY_HISTORY_SPANS[span]
+    raw = rh.get_historical_portfolio(**cfg) or {}
+    raw_points = raw.get("equity_historicals") or []
+
+    points = []
+    for p in raw_points:
+        if not p:
+            continue
+        equity = _safe_float(p.get("close_equity") or p.get("adjusted_close_equity"))
+        points.append({"timestamp": p.get("begins_at"), "equity": round(equity, 2)})
+
+    result = {"available": bool(points), "span": span, "points": points}
+    _cache.set(cache_key, result, _CACHE_TTL_SECONDS)
+    return result
+
+
+def get_option_positions() -> list:
+    """
+    Open Robinhood option positions — kept separate from get_holdings()
+    (stock only). rh.get_open_option_positions() returns each position's
+    quantity/cost fields but not the contract's own strike/expiration/type,
+    so each is resolved individually via get_option_instrument_data_by_id.
+    A resolution failure on one position (e.g. a transient Robinhood 5xx)
+    is swallowed and that position skipped rather than failing the whole
+    list — same defensive posture as get_holdings() around a single bad row.
+    """
+    cached = _cache.get("option_positions")
+    if cached is not None:
+        return cached
+
+    _ensure_login()
+    raw = rh.get_open_option_positions() or []
+
+    positions = []
+    for p in raw:
+        if not p:
+            continue
+        try:
+            quantity = _safe_float(p.get("quantity"))
+            if quantity == 0:
+                continue  # closed position still listed with zero quantity
+
+            option_id = p.get("option_id")
+            if not option_id:
+                option_url = p.get("option") or ""
+                option_id = option_url.rstrip("/").split("/")[-1] or None
+
+            instrument = rh.get_option_instrument_data_by_id(option_id) if option_id else None
+            avg_price = _safe_float(p.get("average_price"))
+            # Robinhood quotes average_price per-share; standard equity
+            # option contracts represent 100 shares each.
+            cost_basis = quantity * avg_price * 100
+
+            positions.append({
+                "ticker": p.get("chain_symbol"),
+                "option_type": (instrument or {}).get("type"),
+                "strike": _safe_float((instrument or {}).get("strike_price")) or None,
+                "expiration_date": (instrument or {}).get("expiration_date"),
+                "quantity": quantity,
+                "position_type": p.get("type"),  # 'long' or 'short'
+                "average_price": round(avg_price, 2),
+                "cost_basis": round(cost_basis, 2),
+            })
+        except Exception as e:
+            logger.warning("[robinhood] failed to resolve option position: %s", e)
+
+    _cache.set("option_positions", positions, _CACHE_TTL_SECONDS)
+    return positions

@@ -1225,6 +1225,47 @@ class SupabaseService:
             logger.error("save_contract_score failed: %s", str(e), exc_info=True)
             return None
 
+    # ── Robinhood session persistence ────────────────────────────────────────
+    #
+    # See supabase/migrations/20260802_robinhood_session.sql for why this
+    # exists: robin_stocks pickles its session (access/refresh/device token)
+    # to the container's local disk, which Railway wipes on every restart,
+    # forcing a fresh SMS challenge each time. robinhood_service.py round-trips
+    # that same pickle's bytes through this singleton row so the device_token
+    # survives restarts.
+
+    def save_robinhood_session(self, pickle_b64: str) -> bool:
+        """Upsert the single robinhood_sessions row with fresh pickle bytes."""
+        try:
+            self.client.table("robinhood_sessions").upsert({
+                "id": 1,
+                "pickle_b64": pickle_b64,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+            return True
+        except Exception as e:
+            # Non-fatal: the process falls back to a fresh login/MFA flow,
+            # same as before this persistence existed.
+            logger.warning("save_robinhood_session failed: %s", str(e))
+            return False
+
+    def get_robinhood_session(self) -> Optional[str]:
+        """Return the persisted pickle's base64 bytes, or None if never saved."""
+        try:
+            result = (
+                self.client.table("robinhood_sessions")
+                .select("pickle_b64")
+                .eq("id", 1)
+                .limit(1)
+                .execute()
+            )
+            if result.data:
+                return result.data[0].get("pickle_b64")
+            return None
+        except Exception as e:
+            logger.warning("get_robinhood_session failed: %s", str(e))
+            return None
+
 
 _supabase_service = None
 

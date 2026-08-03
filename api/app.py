@@ -91,6 +91,7 @@ from routes.agent_routes import bp as agent_bp
 from routes.swing_routes import bp as swing_bp
 from routes.social_routes import bp as social_bp
 from routes.robinhood_routes import bp as robinhood_bp
+from routes.review_notes_routes import bp as review_notes_bp
 
 app.register_blueprint(ticker_bp)
 app.register_blueprint(yahoo_bp)
@@ -101,6 +102,7 @@ app.register_blueprint(agent_bp)
 app.register_blueprint(swing_bp)
 app.register_blueprint(social_bp)
 app.register_blueprint(robinhood_bp)
+app.register_blueprint(review_notes_bp)
 
 
 # ── WebSocket: live price stream ───────────────────────────────────────────────

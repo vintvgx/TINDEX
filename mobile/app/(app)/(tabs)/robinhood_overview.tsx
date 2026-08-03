@@ -6,9 +6,15 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useRobinhoodAccount, useRobinhoodHoldings } from '@/hooks/queries/robinhood/useRobinhoodAccount';
+import {
+  useRobinhoodAccount, useRobinhoodHoldings, useRobinhoodEquityHistory, useRobinhoodOptionPositions,
+} from '@/hooks/queries/robinhood/useRobinhoodAccount';
 import { useRobinhoodLogin, useRobinhoodVerify } from '@/hooks/mutations/robinhood/useRobinhoodAuth';
-import { StatPill } from '@/common/components/ui/StatPill';
+import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { BrokerBalanceCard } from '@/common/components/robinhood/BrokerBalanceCard';
+import { HoldingsSection } from '@/common/components/robinhood/HoldingsSection';
+import { OptionPositionsSection } from '@/common/components/robinhood/OptionPositionsSection';
+import { BenchmarkCard } from '@/common/components/robinhood/BenchmarkCard';
 
 const ROBINHOOD_GREEN = '#00C805';
 
@@ -24,6 +30,17 @@ interface Props {
  * Robinhood-texted SMS code (passkeys replaced TOTP enrollment for this kind
  * of login, so there's no authenticator-app path anymore) — the code has to
  * be typed in by hand here when Robinhood asks for one.
+ *
+ * The backend now persists robin_stocks's session (device token + access/
+ * refresh token) to Supabase across process restarts (see
+ * robinhood_service.py's _restore_session_from_supabase /
+ * _persist_session_to_supabase and supabase/migrations/
+ * 20260802_robinhood_session.sql) — that's the actual fix for "signed out
+ * every time": Railway wipes the container's local disk on every restart,
+ * which used to force a brand new, Robinhood-unrecognized device token (and
+ * therefore a fresh SMS challenge) on every single restart. The explicit
+ * "Access Account" flow below still exists for whenever a real re-auth is
+ * genuinely needed (expired refresh token, revoked device, etc).
  */
 export default function RobinhoodScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
@@ -32,6 +49,10 @@ export default function RobinhoodScreen({ embedded = false }: Props) {
 
   const { data: account, isLoading: acctLoading, refetch: refetchAccount } = useRobinhoodAccount();
   const { data: holdingsData, isLoading: holdingsLoading, refetch: refetchHoldings } = useRobinhoodHoldings();
+  const connected = !!account?.available;
+  const { data: equityHistory } = useRobinhoodEquityHistory('day', connected);
+  const { data: optionPositionsData } = useRobinhoodOptionPositions(connected);
+  const { data: alpaca } = useAlpacaBothAccounts();
   const loginMutation = useRobinhoodLogin();
   const verifyMutation = useRobinhoodVerify();
 
@@ -50,6 +71,7 @@ export default function RobinhoodScreen({ embedded = false }: Props) {
   }, [code, verifyMutation]);
 
   const holdings = holdingsData?.holdings ?? [];
+  const optionPositions = optionPositionsData?.positions ?? [];
   const authIssue = !account?.available && account?.status && account.status !== 'ok';
 
   return (
@@ -84,52 +106,27 @@ export default function RobinhoodScreen({ embedded = false }: Props) {
             onVerify={handleVerify}
             verifying={verifyMutation.isPending}
             verifyError={verifyMutation.data?.status === 'error' ? verifyMutation.data.message : undefined}
-            onRetry={() => loginMutation.mutate()}
-            retrying={loginMutation.isPending}
+            onAccessAccount={() => loginMutation.mutate()}
+            accessing={loginMutation.isPending}
           />
         ) : (
           <>
-            <AccountCard account={account} colors={colors} />
+            <BrokerBalanceCard
+              robinhood={account}
+              robinhoodEquityHistory={equityHistory}
+              alpaca={alpaca}
+              colors={colors}
+            />
 
-            {holdings.length > 0 && (
-              <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Text style={[styles.cardLabel, { color: colors.text, marginBottom: 2 }]}>Holdings</Text>
-                <Text style={[styles.cardSubtitle, { color: colors.tabBarInactive, marginBottom: 10 }]}>
-                  {holdings.length} position{holdings.length === 1 ? '' : 's'}
-                </Text>
-                {holdings.map((h, i) => {
-                  const plColor = h.unrealized_pl >= 0 ? colors.success : colors.error;
-                  return (
-                    <View
-                      key={h.ticker}
-                      style={[
-                        styles.holdingRow,
-                        i < holdings.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.separator },
-                      ]}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.holdingTicker, { color: colors.text }]}>{h.ticker}</Text>
-                        <Text style={[styles.holdingDesc, { color: colors.tabBarInactive }]} numberOfLines={1}>
-                          {h.quantity} sh @ ${h.average_cost.toFixed(2)} avg · ${h.price.toFixed(2)}
-                        </Text>
-                      </View>
-                      <View style={{ alignItems: 'flex-end' }}>
-                        <Text style={[styles.holdingValue, { color: colors.text }]}>
-                          ${h.market_value.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                        </Text>
-                        <Text style={[styles.holdingPnl, { color: plColor }]}>
-                          {h.unrealized_pl >= 0 ? '+' : ''}${h.unrealized_pl.toFixed(2)} ({h.unrealized_pl_pct >= 0 ? '+' : ''}{h.unrealized_pl_pct.toFixed(2)}%)
-                        </Text>
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
-            )}
+            <BenchmarkCard colors={colors} />
+
+            <HoldingsSection holdings={holdings} colors={colors} />
 
             {holdings.length === 0 && account?.available && (
               <Text style={[styles.disclaimer, { color: colors.tabBarInactive }]}>No open holdings.</Text>
             )}
+
+            <OptionPositionsSection positions={optionPositions} colors={colors} />
 
             <Text style={[styles.disclaimer, { color: colors.tabBarInactive }]}>
               View only — this account is never traded through the app.
@@ -143,53 +140,6 @@ export default function RobinhoodScreen({ embedded = false }: Props) {
   );
 }
 
-const AccountCard = ({ account, colors }: { account?: { equity?: number; cash?: number; buying_power?: number; market_value?: number; pnl_today?: number; pnl_today_pct?: number } | null; colors: any }) => {
-  const pnl = account?.pnl_today ?? 0;
-  const pnlPct = account?.pnl_today_pct ?? 0;
-  const pnlColor = pnl >= 0 ? colors.success : colors.error;
-
-  return (
-    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={styles.cardHeader}>
-        <View>
-          <View style={styles.labelRow}>
-            <View style={[styles.dot, { backgroundColor: ROBINHOOD_GREEN }]} />
-            <Text style={[styles.cardLabel, { color: colors.text }]}>Robinhood</Text>
-          </View>
-          <Text style={[styles.cardSubtitle, { color: colors.tabBarInactive }]}>Individual brokerage — view only</Text>
-        </View>
-      </View>
-
-      <Text style={[styles.equity, { color: colors.text }]}>
-        ${(account?.equity ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-      </Text>
-
-      <View style={styles.pnlRow}>
-        <View style={[styles.pnlPill, { backgroundColor: pnlColor + '18' }]}>
-          <Ionicons name={pnl >= 0 ? 'trending-up' : 'trending-down'} size={14} color={pnlColor} />
-          <Text style={[styles.pnlValue, { color: pnlColor }]}>
-            {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(2)}
-          </Text>
-          <Text style={[styles.pnlPct, { color: pnlColor }]}>
-            ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
-          </Text>
-        </View>
-      </View>
-
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={[styles.statsScroll, { borderTopColor: colors.border }]}
-        contentContainerStyle={styles.statsScrollContent}
-      >
-        <StatPill label="Cash" value={`$${(account?.cash ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={ROBINHOOD_GREEN} colors={colors} />
-        <StatPill label="Buying Power" value={`$${(account?.buying_power ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={ROBINHOOD_GREEN} colors={colors} />
-        <StatPill label="Market Value" value={`$${(account?.market_value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={ROBINHOOD_GREEN} colors={colors} />
-      </ScrollView>
-    </View>
-  );
-};
-
 /**
  * Distinct copy per backend auth status (see robinhood_service.py's
  * RobinhoodAuthError) — "not connected" (no creds set) reads very
@@ -200,7 +150,7 @@ const AUTH_STATUS_COPY: Record<string, { icon: keyof typeof Ionicons.glyphMap; t
   unauthenticated: {
     icon: 'key-outline',
     title: 'Robinhood not connected',
-    fallback: 'Add ROBINHOOD_USERNAME / ROBINHOOD_PASSWORD to the backend config.',
+    fallback: 'Tap below to sign in to your Robinhood account.',
   },
   mfa_required: {
     icon: 'chatbox-ellipses-outline',
@@ -215,11 +165,11 @@ const AUTH_STATUS_COPY: Record<string, { icon: keyof typeof Ionicons.glyphMap; t
 };
 
 const AuthStatusCard = ({
-  status, message, colors, code, onChangeCode, onVerify, verifying, verifyError, onRetry, retrying,
+  status, message, colors, code, onChangeCode, onVerify, verifying, verifyError, onAccessAccount, accessing,
 }: {
   status: string; message?: string; colors: any;
   code: string; onChangeCode: (v: string) => void; onVerify: () => void; verifying: boolean; verifyError?: string;
-  onRetry: () => void; retrying: boolean;
+  onAccessAccount: () => void; accessing: boolean;
 }) => {
   const copy = AUTH_STATUS_COPY[status] ?? AUTH_STATUS_COPY.error;
   const isMfa = status === 'mfa_required';
@@ -256,21 +206,34 @@ const AuthStatusCard = ({
               ? <ActivityIndicator color="#fff" size="small" />
               : <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Verify</Text>}
           </TouchableOpacity>
-          <TouchableOpacity onPress={onRetry} disabled={retrying} activeOpacity={0.7} style={{ marginTop: 2 }}>
+          <TouchableOpacity onPress={onAccessAccount} disabled={accessing} activeOpacity={0.7} style={{ marginTop: 2 }}>
             <Text style={{ color: colors.tabBarInactive, fontSize: 12, fontWeight: '600' }}>
-              {retrying ? 'Resending…' : "Didn't get a code? Resend"}
+              {accessing ? 'Resending…' : "Didn't get a code? Resend"}
             </Text>
           </TouchableOpacity>
         </>
       ) : (
+        // The "Access Account" CTA the app shows any time the account isn't
+        // signed in (no active session, or a previous attempt errored) — a
+        // deliberate, explicit tap rather than the screen silently retrying
+        // on its own, since a tap can trigger a real Robinhood SMS send.
         <TouchableOpacity
-          onPress={onRetry}
-          disabled={retrying}
-          activeOpacity={0.75}
-          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, backgroundColor: ROBINHOOD_GREEN + '18' }}
+          onPress={onAccessAccount}
+          disabled={accessing}
+          activeOpacity={0.8}
+          style={[styles.accessButton, { backgroundColor: ROBINHOOD_GREEN, opacity: accessing ? 0.75 : 1 }]}
         >
-          <Ionicons name="refresh" size={14} color={ROBINHOOD_GREEN} />
-          <Text style={{ color: ROBINHOOD_GREEN, fontSize: 13, fontWeight: '700' }}>{retrying ? 'Retrying…' : 'Retry'}</Text>
+          {accessing ? (
+            <>
+              <ActivityIndicator color="#fff" size="small" />
+              <Text style={styles.accessButtonText}>Connecting…</Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="log-in-outline" size={18} color="#fff" />
+              <Text style={styles.accessButtonText}>Access Account</Text>
+            </>
+          )}
         </TouchableOpacity>
       )}
     </View>
@@ -284,26 +247,14 @@ const styles = StyleSheet.create({
   title:     { fontSize: 20, fontWeight: '700' },
 
   card:         { borderRadius: 16, padding: 16, gap: 10, borderWidth: 1 },
-  cardHeader:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  labelRow:     { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3 },
-  dot:          { width: 9, height: 9, borderRadius: 5 },
   cardLabel:    { fontSize: 17, fontWeight: '700' },
   cardSubtitle: { fontSize: 12 },
 
-  equity:  { fontSize: 30, fontWeight: '700' },
-  pnlRow:  { flexDirection: 'row' },
-  pnlPill: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
-  pnlValue:{ fontSize: 15, fontWeight: '700' },
-  pnlPct:  { fontSize: 13, fontWeight: '600' },
-
-  statsScroll: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 2, height: 84 },
-  statsScrollContent: { paddingTop: 12, paddingRight: 4 },
-
-  holdingRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10 },
-  holdingTicker: { fontSize: 13, fontWeight: '600', marginBottom: 2 },
-  holdingDesc:   { fontSize: 11 },
-  holdingValue:  { fontSize: 14, fontWeight: '700', marginBottom: 2 },
-  holdingPnl:    { fontSize: 10, fontWeight: '600' },
+  accessButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8,
+    paddingHorizontal: 24, paddingVertical: 13, borderRadius: 12, minWidth: 200, justifyContent: 'center',
+  },
+  accessButtonText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 
   codeInput: {
     borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10,

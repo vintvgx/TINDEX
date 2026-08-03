@@ -12,7 +12,9 @@ from log.logging_config import get_logger
 from services.robinhood.robinhood_service import (
     RobinhoodAuthError,
     get_account_summary,
+    get_equity_history,
     get_holdings,
+    get_option_positions,
     start_login,
     verify_code,
 )
@@ -51,6 +53,41 @@ def get_positions():
         logger.warning("[robinhood] holdings fetch failed: %s", e)
         return jsonify({
             "success": False, "holdings": [], "status": "error", "message": str(e),
+        })
+
+
+@bp.route("/equity-history", methods=["GET"])
+def get_equity_history_route():
+    """Backs the Day P/L sparkline. ?span=day|week|month (default day)."""
+    span = (request.args.get("span") or "day").strip().lower()
+    try:
+        return jsonify({"success": True, "data": get_equity_history(span)})
+    except RobinhoodAuthError as e:
+        return jsonify({
+            "success": True,
+            "data": {"available": False, "points": [], "status": e.status, "message": e.message},
+        })
+    except Exception as e:
+        logger.warning("[robinhood] equity history fetch failed: %s", e)
+        return jsonify({
+            "success": False,
+            "data": {"available": False, "points": [], "status": "error", "message": str(e)},
+        })
+
+
+@bp.route("/options", methods=["GET"])
+def get_options_route():
+    """Open Robinhood option positions — separate from /positions (stock only)."""
+    try:
+        return jsonify({"success": True, "positions": get_option_positions()})
+    except RobinhoodAuthError as e:
+        return jsonify({
+            "success": True, "positions": [], "status": e.status, "message": e.message,
+        })
+    except Exception as e:
+        logger.warning("[robinhood] option positions fetch failed: %s", e)
+        return jsonify({
+            "success": False, "positions": [], "status": "error", "message": str(e),
         })
 
 

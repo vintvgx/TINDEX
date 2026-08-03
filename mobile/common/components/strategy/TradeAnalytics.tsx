@@ -30,11 +30,17 @@ export const TIME_RANGES: { label: string; value: TimeRange }[] = [
 /** Filters by trade_date (entry date, ET calendar) — TODAY is an exact match,
  *  1W/1M are rolling lookback windows, ALL is a no-op. Applied uniformly to
  *  both the day-grouped log and every Stats figure so the period selector
- *  actually changes what's being measured, not just which rows render. */
+ *  actually changes what's being measured, not just which rows render.
+ *
+ *  Still-open trades (exit_time == null) always pass regardless of range —
+ *  a swing/LEAPS entered outside the window shouldn't vanish from the log
+ *  just because its entry date scrolled out of view. It keeps showing under
+ *  its real entry-date group (see groupTradesByDay) with live overall P&L
+ *  until it actually closes, so it can be evaluated start to finish. */
 export function filterTradesByRange(trades: ORBTrade[], range: TimeRange): ORBTrade[] {
   if (range === 'ALL') return trades;
   const cutoff = range === 'TODAY' ? todayEt() : range === '1W' ? daysAgoEt(7) : daysAgoEt(30);
-  return trades.filter(t => (t.trade_date?.slice(0, 10) ?? '') >= cutoff);
+  return trades.filter(t => t.exit_time == null || (t.trade_date?.slice(0, 10) ?? '') >= cutoff);
 }
 
 const fmtMoney = (v: number, decimals = 0) =>
