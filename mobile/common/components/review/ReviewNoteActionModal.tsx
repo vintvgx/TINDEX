@@ -81,6 +81,20 @@ export function ReviewNoteActionModal({ note, onClose }: Props) {
 
             <Text style={{ color: colors.text, fontSize: 15, lineHeight: 21 }}>{note.content}</Text>
 
+            {note.kind === 'todo' && note.is_done && note.completion_note && (
+              <View style={{
+                borderRadius: 10, padding: 12, gap: 4,
+                backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border,
+              }}>
+                <Text style={{ color: colors.success, fontSize: 11, fontWeight: '700' }}>
+                  COMPLETED{note.completed_at ? ` · ${format(parseISO(note.completed_at), 'MMM d, h:mm a')}` : ''}
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, lineHeight: 18 }}>
+                  {note.completion_note}
+                </Text>
+              </View>
+            )}
+
             {reassignDate ? (
               <View style={{ gap: 12 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>

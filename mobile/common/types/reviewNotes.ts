@@ -6,6 +6,8 @@ export interface ReviewNote {
   kind: ReviewNoteKind;
   content: string;
   is_done: boolean;
+  completion_note: string | null;
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -14,6 +14,7 @@ interface UpdateNoteArgs {
   kind?: ReviewNoteKind;
   content?: string;
   is_done?: boolean;
+  completion_note?: string;
 }
 
 async function parseOrThrow(resp: Response): Promise<{ success: boolean; data?: ReviewNote; error?: string }> {

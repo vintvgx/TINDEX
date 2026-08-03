@@ -88,8 +88,12 @@ def create_note():
 @bp.route("/review/notes/<note_id>", methods=["PATCH"])
 def update_note(note_id: str):
     """
-    Body (all optional): { note_date?, kind?, content?, is_done? }
-    Covers the "reassign to a different date" / "mark finished" toggle.
+    Body (all optional): { note_date?, kind?, content?, is_done?, completion_note? }
+    Covers the "reassign to a different date" / "mark finished" toggle, plus
+    recording what was actually done to resolve a TODO (e.g. from Claude Code).
+
+    completed_at is derived, not settable directly: it's stamped when is_done
+    flips to true and cleared when a TODO is reopened.
     """
     body = request.get_json(silent=True) or {}
     patch = {}
@@ -104,8 +108,12 @@ def update_note(note_id: str):
         if not content:
             return jsonify({"success": False, "error": "content cannot be empty"}), 400
         patch["content"] = content
+    if "completion_note" in body:
+        patch["completion_note"] = (body["completion_note"] or "").strip() or None
     if "is_done" in body:
-        patch["is_done"] = bool(body["is_done"])
+        is_done = bool(body["is_done"])
+        patch["is_done"] = is_done
+        patch["completed_at"] = datetime.now(timezone.utc).isoformat() if is_done else None
     if not patch:
         return jsonify({"success": False, "error": "nothing to update"}), 400
     patch["updated_at"] = datetime.now(timezone.utc).isoformat()
