@@ -41,6 +41,11 @@ export interface LivePriceData {
    *  ExitManager.to_dict(). */
   sl_grace_enabled?: boolean;
   sl_grace_minutes?: number | null;
+  /** Current runner/cascade CONFIGURATION for this open trade (not just the
+   *  profile default) — see exit_manager.py's to_dict(). Lets EditExitsModal
+   *  pre-select the toggle to what's actually in effect right now. */
+  runner_mode?: 'trail' | 'be_hold' | 'none';
+  cascade_enabled?: boolean;
   // ── Simulation-only fields (all optional — absent on a real live position) ──
   sim?:               boolean;
   sim_tick?:          number;

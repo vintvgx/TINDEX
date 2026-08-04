@@ -14,6 +14,8 @@ export const DEFAULT_CUSTOM_THRESHOLDS: CustomThresholds = {
   tp2_close_pct:           0.50,
   runner_trail_pct:        0.20,
   runner_mode:             'trail',
+  cascade_ticks:           3,
+  cascade_close_pct:       0.50,
   volume_exit:             false,
   volume_exit_threshold:   0.20,
   strike_offset_min:       0.50,

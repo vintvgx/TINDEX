@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import type { StrategyPosition, ProfileKey } from '@/common/types/strategy';
 
-const PROFILE_EMOJI: Record<ProfileKey, string> = {
+export const PROFILE_EMOJI: Record<ProfileKey, string> = {
   BULL_DOG:    '🐂',
   THUNDER_CAT: '🐱',
   WOLF:        '🐺',

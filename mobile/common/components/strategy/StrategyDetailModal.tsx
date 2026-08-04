@@ -20,6 +20,9 @@ interface Props {
 }
 
 const MODE_COLORS = { paper: '#FF9F0A', live: '#30D158', off: '#FF453A' } as const;
+const RUNNER_MODE_LABEL: Record<'trail' | 'be_hold' | 'none', string> = {
+  trail: 'Trail', be_hold: 'BE Hold', none: 'No Trail',
+};
 const DAY_LABELS = ['M', 'T', 'W', 'T', 'F'];
 
 export function StrategyDetailModal({ visible, config, profiles, colors, onClose, onEdit, onDelete }: Props) {
@@ -149,7 +152,20 @@ export function StrategyDetailModal({ visible, config, profiles, colors, onClose
                 <MetricCell label="TP2" value={`+${Math.round((thresholds.tp2_mult - 1) * 100)}%`} color="#22C55E" />
                 <MetricCell label="Close@TP1" value={`${Math.round(thresholds.tp1_close_pct * 100)}%`} color={colors.tabBarInactive} />
                 <MetricCell label="Close@TP2" value={`${Math.round(thresholds.tp2_close_pct * 100)}%`} color={colors.tabBarInactive} />
-                <MetricCell label="Runner Trail" value={`${Math.round(thresholds.runner_trail_pct * 100)}%`} color="#A855F7" />
+                <MetricCell label="Exit Style" value={RUNNER_MODE_LABEL[thresholds.runner_mode ?? 'trail']} color="#A855F7" />
+                {/* Only meaningful in trail mode — be_hold/none never move this
+                    floor, so showing a trail % for them would be misleading. */}
+                {(thresholds.runner_mode ?? 'trail') === 'trail' && (
+                  <MetricCell label="Runner Trail" value={`${Math.round(thresholds.runner_trail_pct * 100)}%`} color="#A855F7" />
+                )}
+                {/* Cascade never applies to a 1-contract entry (see
+                    exit_manager.py's qty_remaining > 1 gate) regardless of
+                    what cascade_close_pct is configured to. */}
+                <MetricCell
+                  label="Cascade"
+                  value={thresholds.qty_contracts > 1 && (thresholds.cascade_close_pct ?? 0) > 0 ? 'Yes' : 'No'}
+                  color={colors.tabBarInactive}
+                />
                 <MetricCell label="VIX Max" value={String(thresholds.vix_max_override)} color={colors.tabBarInactive} />
                 <MetricCell label="Window" value={`${thresholds.breakout_time_limit_min}m`} color={colors.tabBarInactive} />
               </View>

@@ -10,6 +10,7 @@ import { useOrbRangesForTickers } from '@/hooks/queries/orb/useOrbRangesForTicke
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
 import { getOrbStatus } from '@/common/utils/orb/getOrbStatus';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
+import { Skeleton } from '@/common/components/ui/Skeleton';
 
 // Same PAPER tint used everywhere else a live/paper trade needs to be told
 // apart at a glance (PositionCard, PendingConfirmationCard/Modal).
@@ -180,7 +181,14 @@ export function LiveTradesTickerTape({ colors }: { colors: any }) {
     ]).start();
   }, [index, opacity, translateY]);
 
-  if (entries.length === 0) return null;
+  // No positions in yet (either account) — nothing to show, ever. But while
+  // the positions queries are still on their first fetch, we don't know
+  // that yet, so show a placeholder instead of popping in abruptly (or
+  // flashing blank-then-content) once data arrives.
+  if (entries.length === 0) {
+    if (live.isLoading || paper.isLoading) return <TapeSkeleton colors={colors} />;
+    return null;
+  }
 
   const price = livePrices[ticker] ?? null;
   const orb = orbRanges?.[ticker] ?? computeOrbRangeFromHistory(historyResponse?.data);
@@ -230,6 +238,28 @@ export function LiveTradesTickerTape({ colors }: { colors: any }) {
               </Text>
             </>
           )}
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * Same wrap/dot/row shape as the real tape so swapping to real content
+ * doesn't reflow the header — just a dimmer dot and two rows of pulsing
+ * bars standing in for ticker/price and equity/P&L.
+ */
+function TapeSkeleton({ colors }: { colors: any }) {
+  return (
+    <View style={[styles.wrap, { backgroundColor: colors.tape }]}>
+      <View style={[styles.liveDot, { backgroundColor: colors.tapeMuted }]} />
+      <View style={styles.content}>
+        <View style={styles.row}>
+          <Skeleton width={40} height={12} borderRadius={4} style={{ backgroundColor: colors.tapeMuted }} />
+          <Skeleton width={56} height={12} borderRadius={4} style={{ backgroundColor: colors.tapeMuted }} />
+        </View>
+        <View style={styles.row}>
+          <Skeleton width={100} height={10} borderRadius={4} style={{ backgroundColor: colors.tapeMuted }} />
         </View>
       </View>
     </View>

@@ -26,6 +26,12 @@ export interface CustomThresholds {
    *  no BE floor, no trail; exits only via TP2/cascade/EOD/manual). See
    *  exit_manager.py's runner_mode handling. */
   runner_mode:              'trail' | 'be_hold' | 'none';
+  /** Consecutive against-the-trade underlying ticks that trigger a cascade
+   *  partial-sell (of non-runner contracts only — see exit_manager.py's
+   *  qty_remaining > 1 gate, which makes a 1-contract entry cascade-exempt). */
+  cascade_ticks:           number;
+  /** Fraction of sellable (non-runner) contracts a cascade event closes. */
+  cascade_close_pct:       number;
   volume_exit:             boolean;
   volume_exit_threshold:   number;
   strike_offset_min:       number;
@@ -46,6 +52,8 @@ export interface ProfileThresholds {
   tp2_close_pct: number;
   runner_trail_pct: number;
   runner_mode?: 'trail' | 'be_hold' | 'none';
+  cascade_ticks?: number;
+  cascade_close_pct?: number;
   volume_exit: boolean;
   volume_exit_threshold: number;
   strike_offset_min: number;

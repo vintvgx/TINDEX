@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, SafeAreaView,
   ActivityIndicator, RefreshControl, StyleSheet,
+  LayoutAnimation, Platform, UIManager,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn } from 'react-native-reanimated';
@@ -13,6 +14,8 @@ import { Skeleton } from '@/common/components/ui/Skeleton';
 import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
 import { usePendingConfirmations } from '@/hooks/queries/strategy/usePendingConfirmations';
 import { PendingConfirmationCard } from '@/common/components/strategy/PendingConfirmationCard';
+import { useCandidateBreakouts } from '@/hooks/queries/strategy/useCandidateBreakouts';
+import { CandidateBreakoutCard } from '@/common/components/strategy/CandidateBreakoutCard';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
 import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
@@ -22,6 +25,10 @@ import {
   type ORBBreakoutNotificationData,
 } from '@/common/components/FEED/modals/ORBNotificationModal';
 import { useQueryClient } from '@tanstack/react-query';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -177,6 +184,29 @@ const DashboardScreen = () => {
   // Confirmation" banner from anywhere in the app while any of these exist.
   const { data: pendingConfirmations } = usePendingConfirmations();
 
+  // ── Candidate breakouts — live-only, pre-confirmation preview cards. See
+  // useCandidateBreakouts's own docstring for the full state machine; a
+  // candidate here and a real pendingConfirmations row above are mutually
+  // exclusive for the same strategy (the hook excludes anything that's
+  // already graduated to a real pending row).
+  const { candidates: candidateBreakouts, handleSkip: handleSkipCandidate } = useCandidateBreakouts();
+  const pendingSectionCount = (pendingConfirmations?.length ?? 0) + candidateBreakouts.length;
+
+  // ── Collapse toggles — Positions/Pending share the same chevron +
+  // LayoutAnimation pattern LivePositionPanel already uses elsewhere in the
+  // app; both default open since these are the time-sensitive items on this
+  // screen, not something to hide by default.
+  const [positionsExpanded, setPositionsExpanded] = useState(true);
+  const [pendingExpanded, setPendingExpanded] = useState(true);
+  const togglePositions = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setPositionsExpanded(v => !v);
+  };
+  const togglePending = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setPendingExpanded(v => !v);
+  };
+
   // ── Session risk state ────────────────────────────────────────────────────
   const haltedEngines = useMemo(() => {
     if (!sessionStates) return [];
@@ -278,18 +308,6 @@ const DashboardScreen = () => {
           </View>
         )}
 
-        {/* ── Awaiting trade confirmation — non-blocking cards ─────────────── */}
-        {pendingConfirmations != null && pendingConfirmations.length > 0 && (
-          <>
-            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
-              AWAITING CONFIRMATION ({pendingConfirmations.length})
-            </Text>
-            {pendingConfirmations.map(p => (
-              <PendingConfirmationCard key={p.id} pending={p} colors={colors} />
-            ))}
-          </>
-        )}
-
         {/* ── Market ──────────────────────────────────────────────────────── */}
         <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>MARKET</Text>
 
@@ -343,12 +361,63 @@ const DashboardScreen = () => {
           />
         </ScrollView>
 
+        {/* ── Pending & Awaiting Confirmation — candidate breakouts (live-only,
+            pre-confirmation preview) above real pending-confirmation cards.
+            Renders nothing at all, not even a header, when both are empty —
+            this section only exists while something is actually being
+            tracked, never as a permanent empty-state fixture. ── */}
+        {pendingSectionCount > 0 && (
+          <>
+            <TouchableOpacity onPress={togglePending} activeOpacity={0.7} style={styles.sectionHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
+                  PENDING &amp; AWAITING CONFIRMATION
+                </Text>
+                <Ionicons
+                  name={pendingExpanded ? 'chevron-up' : 'chevron-down'}
+                  size={14}
+                  color={colors.textTertiary}
+                />
+              </View>
+              <View style={[styles.activeBadge, { backgroundColor: '#F59E0B22' }]}>
+                <View style={[styles.activeDot, { backgroundColor: '#F59E0B' }]} />
+                <Text style={[styles.activeBadgeText, { color: '#F59E0B' }]}>
+                  {pendingSectionCount}
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {pendingExpanded && (
+              <>
+                {candidateBreakouts.map(c => (
+                  <CandidateBreakoutCard
+                    key={c.key}
+                    candidate={c}
+                    colors={colors}
+                    onSkip={() => handleSkipCandidate(c)}
+                  />
+                ))}
+                {(pendingConfirmations ?? []).map(p => (
+                  <PendingConfirmationCard key={p.id} pending={p} colors={colors} />
+                ))}
+              </>
+            )}
+          </>
+        )}
+
         {/* ── Positions — same shared cards as Live Positions/Accounts/
             PriceChartFullScreen (see LivePositionsSection.tsx): Edit/Add/Exit
             + the SL/TP dropdown, identical everywhere, always in sync. Each
             mode section renders its own hidden-trades banner internally. ── */}
-        <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>POSITIONS</Text>
+        <TouchableOpacity onPress={togglePositions} activeOpacity={0.7} style={styles.sectionHeader}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>POSITIONS</Text>
+            <Ionicons
+              name={positionsExpanded ? 'chevron-up' : 'chevron-down'}
+              size={14}
+              color={colors.textTertiary}
+            />
+          </View>
           {totalActive > 0 && (
             <View style={[styles.activeBadge, { backgroundColor: colors.success + '22' }]}>
               <View style={[styles.activeDot, { backgroundColor: colors.success }]} />
@@ -357,48 +426,50 @@ const DashboardScreen = () => {
               </Text>
             </View>
           )}
-        </View>
+        </TouchableOpacity>
 
-        {isLoading && totalActive === 0 ? (
-          <ActivityIndicator color={colors.accent} style={{ marginTop: 20 }} />
-        ) : totalActive === 0 ? (
-          <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Ionicons name="moon-outline" size={32} color={colors.textTertiary} />
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>No Active Positions</Text>
-            <Text style={[styles.emptySub, { color: colors.textTertiary }]}>
-              Watching for the next ORB breakout
-            </Text>
-          </View>
-        ) : (
-          <>
-            {/* ── LIVE positions ────────────────────────────── */}
-            {livePositions.filteredPositions.length > 0 && (
-              <>
-                <View style={styles.modeSubHeader}>
-                  <View style={[styles.modeSubDot, { backgroundColor: '#30D158' }]} />
-                  <Text style={[styles.modeSubLabel, { color: '#30D158' }]}>LIVE</Text>
-                  <Text style={[styles.modeSubCount, { color: colors.textTertiary }]}>
-                    {livePositions.filteredPositions.length} active
-                  </Text>
-                </View>
-                <LivePositionsBody data={livePositions} mode="live" colors={colors} />
-              </>
-            )}
+        {positionsExpanded && (
+          isLoading && totalActive === 0 ? (
+            <ActivityIndicator color={colors.accent} style={{ marginTop: 20 }} />
+          ) : totalActive === 0 ? (
+            <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Ionicons name="moon-outline" size={32} color={colors.textTertiary} />
+              <Text style={[styles.emptyTitle, { color: colors.text }]}>No Active Positions</Text>
+              <Text style={[styles.emptySub, { color: colors.textTertiary }]}>
+                Watching for the next ORB breakout
+              </Text>
+            </View>
+          ) : (
+            <>
+              {/* ── LIVE positions ────────────────────────────── */}
+              {livePositions.filteredPositions.length > 0 && (
+                <>
+                  <View style={styles.modeSubHeader}>
+                    <View style={[styles.modeSubDot, { backgroundColor: '#30D158' }]} />
+                    <Text style={[styles.modeSubLabel, { color: '#30D158' }]}>LIVE</Text>
+                    <Text style={[styles.modeSubCount, { color: colors.textTertiary }]}>
+                      {livePositions.filteredPositions.length} active
+                    </Text>
+                  </View>
+                  <LivePositionsBody data={livePositions} mode="live" colors={colors} />
+                </>
+              )}
 
-            {/* ── PAPER positions ───────────────────────────── */}
-            {paperPositions.filteredPositions.length > 0 && (
-              <>
-                <View style={[styles.modeSubHeader, livePositions.filteredPositions.length > 0 && { marginTop: 8 }]}>
-                  <View style={[styles.modeSubDot, { backgroundColor: '#FF9F0A' }]} />
-                  <Text style={[styles.modeSubLabel, { color: '#FF9F0A' }]}>PAPER</Text>
-                  <Text style={[styles.modeSubCount, { color: colors.textTertiary }]}>
-                    {paperPositions.filteredPositions.length} active
-                  </Text>
-                </View>
-                <LivePositionsBody data={paperPositions} mode="paper" colors={colors} />
-              </>
-            )}
-          </>
+              {/* ── PAPER positions ───────────────────────────── */}
+              {paperPositions.filteredPositions.length > 0 && (
+                <>
+                  <View style={[styles.modeSubHeader, livePositions.filteredPositions.length > 0 && { marginTop: 8 }]}>
+                    <View style={[styles.modeSubDot, { backgroundColor: '#FF9F0A' }]} />
+                    <Text style={[styles.modeSubLabel, { color: '#FF9F0A' }]}>PAPER</Text>
+                    <Text style={[styles.modeSubCount, { color: colors.textTertiary }]}>
+                      {paperPositions.filteredPositions.length} active
+                    </Text>
+                  </View>
+                  <LivePositionsBody data={paperPositions} mode="paper" colors={colors} />
+                </>
+              )}
+            </>
+          )
         )}
 
         <View style={{ height: 32 }} />

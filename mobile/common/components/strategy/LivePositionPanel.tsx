@@ -6,6 +6,9 @@ import { formatContractSymbolShort, getTradeHorizon } from '@/lib/formatContract
 import { isMarketHours } from '@/lib/marketHours';
 import { useCardTintDarkMode } from '@/hooks/useCardTintDarkMode';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import { PROFILE_EMOJI } from '@/common/components/strategy/PositionCard';
+import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
+import type { ProfileKey } from '@/common/types/strategy';
 
 /** LivePriceData plus the market_value the header displays — computed via
  *  fallback (mid_price * qty_remaining * 100) since the live WS payload
@@ -80,6 +83,7 @@ export function LivePositionPanel({
   const isNoStopLoss = profile === 'NO_STOP_LOSS';
   const { enabled: darkTintEnabled } = useCardTintDarkMode();
   const [expanded, setExpanded] = useState(false);
+  const [infoVisible, setInfoVisible] = useState(false);
   const toggleExpanded = useCallback(() => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setExpanded(v => !v);
@@ -158,6 +162,19 @@ export function LivePositionPanel({
         <View style={styles.liveHeaderLeft}>
           <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
           <Text style={[styles.liveLabel, { color: statusColor }]}>{statusLabel}</Text>
+          {/* Profile badge — tap opens the same Profile Guide used elsewhere,
+              pre-jumped to this trade's profile via initialKey. */}
+          {!!profile && (
+            <TouchableOpacity
+              onPress={() => setInfoVisible(true)}
+              hitSlop={6}
+              activeOpacity={0.7}
+              style={styles.profileBadge}
+            >
+              <Text style={styles.profileEmoji}>{PROFILE_EMOJI[profile as ProfileKey] ?? '⚙️'}</Text>
+              <Ionicons name="information-circle-outline" size={13} color={colors.tabBarInactive} />
+            </TouchableOpacity>
+          )}
           {display && (
             <Text style={[styles.liveContract, { color: colors.text }]} numberOfLines={1}>
               {formatContractSymbolShort(display.contract)}
@@ -239,6 +256,8 @@ export function LivePositionPanel({
                     use_tp2={showTp2}
                     sl_grace_enabled={display.sl_grace_enabled}
                     sl_grace_minutes={display.sl_grace_minutes}
+                    runner_mode={display.runner_mode}
+                    cascade_enabled={display.cascade_enabled}
                     hideKey={hideKey}
                     onUpdated={patchData}
                     style={{ flex: 1 }}
@@ -268,6 +287,15 @@ export function LivePositionPanel({
         </>
       ) : (
         <ActivityIndicator size="small" color={colors.accent} style={{ marginTop: 8 }} />
+      )}
+
+      {!!profile && (
+        <ProfileGuideModal
+          visible={infoVisible}
+          onClose={() => setInfoVisible(false)}
+          colors={colors}
+          initialKey={profile as ProfileKey}
+        />
       )}
     </View>
   );
@@ -377,6 +405,8 @@ const styles = StyleSheet.create({
   liveHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   statusDot:       { width: 6, height: 6, borderRadius: 3 },
   liveLabel:       { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
+  profileBadge:    { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  profileEmoji:    { fontSize: 12 },
   liveContract:    { fontSize: 12, fontWeight: '700', flexShrink: 1 },
   swingBadge:      { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 },
   swingBadgeText:  { fontSize: 9, fontWeight: '700', letterSpacing: 0.4 },

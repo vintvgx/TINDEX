@@ -1252,6 +1252,18 @@ class OrbService:
             
             # Update cache state (NO DATABASE CALL)
             if breakout_type_to_set is not None:
+                # Only the original, not-yet-confirmed break carries a live
+                # countdown — everything else (confirmed, invalidated,
+                # retesting, in-range, reversal) clears it. Read straight
+                # from the retest state machine rather than re-deriving the
+                # deadline here, so this can never drift from the value
+                # _process_breakout_side actually holds.
+                if breakout_type_to_set == "Bullish":
+                    confirm_deadline_dt = self._get_side_state(ticker, "high").get("confirm_deadline")
+                elif breakout_type_to_set == "Bearish":
+                    confirm_deadline_dt = self._get_side_state(ticker, "low").get("confirm_deadline")
+                else:
+                    confirm_deadline_dt = None
                 self._state_cache.update_state(
                     ticker=ticker,
                     trade_date=trade_date,
@@ -1259,6 +1271,7 @@ class OrbService:
                     orb_high=float(orb_high),
                     orb_low=float(orb_low),
                     breakout_type=breakout_type_to_set,
+                    confirm_deadline=confirm_deadline_dt.isoformat() if confirm_deadline_dt else None,
                     percentage_change=round(percentage_change, 2) if percentage_change is not None else None,
                     timestamp=self.get_current_et_time().isoformat(),
                 )

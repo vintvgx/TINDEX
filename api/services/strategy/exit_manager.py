@@ -117,6 +117,11 @@ class ExitManager:
         self._cascade_down_ticks   = 0
         self._cascade_ticks_needed = profile.get("cascade_ticks", 3)
         self._cascade_close_pct    = profile.get("cascade_close_pct", 0.50)
+        # Mid-trade on/off switch for cascade (see apply_overrides) — separate
+        # from the qty_remaining > 1 exemption in evaluate(), which is always
+        # in force regardless of this flag. Defaults on for any profile that
+        # actually configures cascade.
+        self._cascade_enabled      = True
 
         # SL confirmation: require N consecutive ticks at/below hard_stop before
         # firing — same idea as TP1's confirm-ticks, applied symmetrically so a
@@ -342,7 +347,11 @@ class ExitManager:
             return self._action("CLOSE_PARTIAL", qty_tp2, "TP2", current_option_price)
 
         # Trail stop (trail mode only) — be_hold skips this; BE stop is the floor.
-        if self._runner_mode == "trail" and self.tp1_hit and self.qty_remaining > 0:
+        # qty_remaining > 1 (not > 0): once only the runner contract is left,
+        # it exits via TP2/BE/EOD/manual only — same "preserve 1 runner"
+        # exemption cascade already gets below, so a single-contract runner
+        # never gets force-sold by RUNNER_TRAIL_STOP either.
+        if self._runner_mode == "trail" and self.tp1_hit and self.qty_remaining > 1:
             new_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
             if new_trail > self.runner_trail:
                 self.runner_trail = new_trail
@@ -359,7 +368,7 @@ class ExitManager:
         # closes it in full — see _use_tp2 above), so "manage your own runner,
         # or let the stop handle it" already holds for both the single-contract
         # case and the runner of any multi-contract trade.
-        if self.tp1_hit and self.qty_remaining > 1:
+        if self._cascade_enabled and self.tp1_hit and self.qty_remaining > 1:
             if self._cascade_down_ticks >= self._cascade_ticks_needed:
                 self._cascade_down_ticks = 0
                 sellable    = self.qty_remaining - 1
@@ -464,7 +473,9 @@ class ExitManager:
     def apply_overrides(self, hard_stop: float | None = None, tp1: float | None = None,
                         tp2: float | None = None, sl_qty: int | None = None,
                         tp1_qty: int | None = None, tp2_qty: int | None = None,
-                        sl_grace_minutes=_UNSET) -> dict:
+                        sl_grace_minutes=_UNSET,
+                        runner_mode: str | None = None,
+                        cascade_enabled: bool | None = None) -> dict:
         """
         Validate and apply user-supplied SL/TP1/TP2 price and/or qty overrides
         to this (already open) position. Raises ValueError with a user-facing
@@ -489,6 +500,12 @@ class ExitManager:
         specifically so "not provided" and "explicitly switch to Hard Stop"
         are distinguishable.
 
+        runner_mode ("trail"/"be_hold"/"none") and cascade_enabled let the
+        user change how the runner is managed on an OPEN position — e.g. flip
+        off cascade mid-trade if they've decided to just let the runner ride.
+        Neither touches qty_remaining > 1 in evaluate(), which always exempts
+        a single-contract runner from both regardless of these flags.
+
         Shared by the mid-trade PATCH /configs/<id>/exits route and the
         confirm-entry approve path (edited fields from the confirmation modal,
         applied right after the real fill so levels are relative to the actual
@@ -496,6 +513,8 @@ class ExitManager:
         """
         if hard_stop is not None and hard_stop <= 0:
             raise ValueError("hard_stop must be > 0")
+        if runner_mode is not None and runner_mode not in ("trail", "be_hold", "none"):
+            raise ValueError("runner_mode must be 'trail', 'be_hold', or 'none'")
         if tp1 is not None and tp1 <= self.entry_premium:
             raise ValueError("tp1 must be above entry premium")
         for label, qty in (("Stop-loss", sl_qty), ("TP1", tp1_qty), ("TP2", tp2_qty)):
@@ -543,6 +562,12 @@ class ExitManager:
                 self._sl_grace_start     = None
                 self._sl_recovery_start  = None
             changed["sl_grace_minutes"] = sl_grace_minutes
+        if runner_mode is not None:
+            self._runner_mode = runner_mode
+            changed["runner_mode"] = runner_mode
+        if cascade_enabled is not None:
+            self._cascade_enabled = cascade_enabled
+            changed["cascade_enabled"] = cascade_enabled
         return changed
 
     def to_dict(self) -> dict:
@@ -570,6 +595,11 @@ class ExitManager:
             "use_tp2":             self._use_tp2,
             "qty":                 self.qty,
             "qty_remaining":       self.qty_remaining,
+            # Current runner/cascade CONFIGURATION for this open trade — lets
+            # a client (EditExitsModal) pre-select the toggle to what's
+            # actually in effect right now, not just the profile default.
+            "runner_mode":         self._runner_mode,
+            "cascade_enabled":     self._cascade_enabled,
             "cascade_down_ticks":  self._cascade_down_ticks,
             "tp1_confirm_ticks":   self._tp1_ticks,
             "sl_confirm_ticks":    self._sl_ticks,

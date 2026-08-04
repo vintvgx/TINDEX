@@ -4,6 +4,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import type { StrategyProfile, ProfileKey } from '@/common/types/strategy';
 
+const RUNNER_MODE_LABEL: Record<'trail' | 'be_hold' | 'none', string> = {
+  trail: 'Trail', be_hold: 'BE Hold', none: 'No Trail',
+};
+
 interface Props {
   profile: StrategyProfile;
   selected: boolean;
@@ -66,6 +70,12 @@ export const ProfileCard: React.FC<Props> = ({ profile, selected, onSelect }) =>
         />
         <Stat label="VIX Max" value={String(profile.vix_max)} colors={colors} />
         <Stat label="Runner" value={profile.runner ? 'Yes' : 'No'} colors={colors} />
+        <Stat label="Exit Style" value={RUNNER_MODE_LABEL[profile.runner_mode ?? 'trail']} colors={colors} />
+        <Stat
+          label="Cascade"
+          value={profile.contracts > 1 && (profile.thresholds.cascade_close_pct ?? 0) > 0 ? 'Yes' : 'No'}
+          colors={colors}
+        />
       </View>
     </TouchableOpacity>
   );

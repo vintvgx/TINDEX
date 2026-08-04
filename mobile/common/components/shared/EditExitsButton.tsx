@@ -24,6 +24,10 @@ interface BaseProps {
   /** Current stop-type configuration — see ExitManager.to_dict(). */
   sl_grace_enabled?: boolean;
   sl_grace_minutes?: number | null;
+  /** Current runner/cascade configuration for THIS open trade (not just the
+   *  profile default) — see ExitManager.to_dict(). */
+  runner_mode?: 'trail' | 'be_hold' | 'none';
+  cascade_enabled?: boolean;
   /** Stable per-trade key for the client-only hide feature — see
    *  lib/positionHideKey.ts. Never sent to the backend. */
   hideKey: string;
@@ -35,6 +39,7 @@ interface BaseProps {
   onUpdated?: (payload: {
     hard_stop?: number; tp1?: number; tp2?: number;
     sl_grace_enabled?: boolean; sl_grace_minutes?: number | null;
+    runner_mode?: 'trail' | 'be_hold' | 'none'; cascade_enabled?: boolean;
   }) => void;
 }
 
@@ -49,6 +54,7 @@ export function EditExitsButton(props: Props) {
   const {
     ticker, hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit,
     qty_remaining, use_tp2, sl_grace_enabled, sl_grace_minutes,
+    runner_mode, cascade_enabled,
     hideKey, label, style, onUpdated,
   } = props;
   const colors = useThemeColors();
@@ -69,6 +75,8 @@ export function EditExitsButton(props: Props) {
     tp1_qty?: number;
     tp2_qty?: number;
     sl_grace_minutes?: number | null;
+    runner_mode?: 'trail' | 'be_hold' | 'none';
+    cascade_enabled?: boolean;
   }) => {
     await orbMutation.mutateAsync({ strategy_id: props.strategy_id, ...payload });
     // Derive sl_grace_enabled alongside sl_grace_minutes so a locally-patched
@@ -106,7 +114,7 @@ export function EditExitsButton(props: Props) {
         mode={props.mode as ExitEditMode}
         positionId={props.strategy_id}
         ticker={ticker}
-        current={{ hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit, qty_remaining, use_tp2, sl_grace_enabled, sl_grace_minutes }}
+        current={{ hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit, qty_remaining, use_tp2, sl_grace_enabled, sl_grace_minutes, runner_mode, cascade_enabled }}
         onSubmit={handleSubmit}
         isLoading={isPending}
         hidden={hidden}

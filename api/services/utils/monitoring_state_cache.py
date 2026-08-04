@@ -57,6 +57,12 @@ class MonitoringState:
     volume: int = 0
     breakout_type: str = "none"
     breakout_price: Optional[float] = None
+    # ISO timestamp of the 3-minute confirmation hold's deadline — non-null
+    # only while breakout_type is exactly "Bullish"/"Bearish" (the original,
+    # not-yet-confirmed break). Lets a client render a countdown instead of
+    # an indeterminate "still watching" state. See orb_service.py's
+    # _process_breakout_side/st["confirm_deadline"], which this mirrors.
+    confirm_deadline: Optional[str] = None
     high_broken: bool = False
     low_broken: bool = False
     monitoring_active: bool = True
@@ -108,6 +114,10 @@ class MonitoringState:
             record["breakout_type"] = self.breakout_type
         if self.breakout_price is not None:
             record["breakout_price"] = self.breakout_price
+        # Unlike the fields above, None is a meaningful, intentional value
+        # here (hold cleared/never started) — always write it, including
+        # null, rather than skipping and leaving a stale deadline in the DB.
+        record["confirm_deadline"] = self.confirm_deadline
         if self.timestamp:
             record["timestamp"] = self.timestamp
         if self.previous_close is not None:
@@ -150,6 +160,7 @@ class MonitoringState:
             volume=record.get("volume", 0),
             breakout_type=record.get("breakout_type", "none"),
             breakout_price=record.get("breakout_price"),
+            confirm_deadline=record.get("confirm_deadline"),
             high_broken=record.get("high_broken", False),
             low_broken=record.get("low_broken", False),
             monitoring_active=record.get("monitoring_active", True),

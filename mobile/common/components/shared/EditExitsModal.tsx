@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Modal, View, Text, TextInput, TouchableOpacity,
-  SafeAreaView, ScrollView, Alert,
+  SafeAreaView, ScrollView, Alert, Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -32,6 +32,10 @@ export interface CurrentExits {
   /** Current stop-type configuration — see ExitManager.to_dict(). */
   sl_grace_enabled?: boolean;
   sl_grace_minutes?: number | null;
+  /** Current runner/cascade configuration for THIS open trade — see
+   *  ExitManager.to_dict(). */
+  runner_mode?: 'trail' | 'be_hold' | 'none';
+  cascade_enabled?: boolean;
 }
 
 interface Props {
@@ -49,6 +53,8 @@ interface Props {
     tp1_qty?: number;
     tp2_qty?: number;
     sl_grace_minutes?: number | null;
+    runner_mode?: 'trail' | 'be_hold' | 'none';
+    cascade_enabled?: boolean;
   }) => Promise<void>;
   isLoading?: boolean;
   /** Whether this position is currently hidden from the Dashboard/Live
@@ -61,6 +67,11 @@ interface Props {
 }
 
 const GRACE_OPTIONS: GraceMinutes[] = [5, 10, 15];
+const RUNNER_MODE_OPTIONS: { key: 'trail' | 'be_hold' | 'none'; label: string }[] = [
+  { key: 'trail', label: 'Trail' },
+  { key: 'be_hold', label: 'BE Hold' },
+  { key: 'none', label: 'No Trail' },
+];
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -92,6 +103,14 @@ export function EditExitsModal({
   const [tp2QtyVal, setTp2QtyVal] = useState('');
   const canSplit = (current.qty_remaining ?? 0) > 1;
 
+  // Runner management — only meaningful once there's an actual runner to
+  // manage (qty_remaining > 1); a 1-contract entry closes in full at TP1
+  // regardless (see exit_manager.py), so this section is hidden entirely
+  // below when !canSplit rather than offering a toggle that does nothing.
+  const [runnerModeVal, setRunnerModeVal] = useState<'trail' | 'be_hold' | 'none'>('trail');
+  const [cascadeEnabledVal, setCascadeEnabledVal] = useState(true);
+  const initialRunnerRef = useRef<{ mode: 'trail' | 'be_hold' | 'none'; cascade: boolean }>({ mode: 'trail', cascade: true });
+
   // TP2 is unreachable for this trade (1-contract entry, or a profile that
   // opts out, e.g. NO_STOP_LOSS's sentinel 999x-entry tp1/tp2) — its section
   // is never rendered (see below), so it must never be pre-filled or
@@ -120,6 +139,11 @@ export function EditExitsModal({
       setSlQtyVal('');
       setTp1QtyVal('');
       setTp2QtyVal('');
+      const startRunnerMode = current.runner_mode ?? 'trail';
+      const startCascade = current.cascade_enabled ?? true;
+      setRunnerModeVal(startRunnerMode);
+      setCascadeEnabledVal(startCascade);
+      initialRunnerRef.current = { mode: startRunnerMode, cascade: startCascade };
     }
     wasVisibleRef.current = visible;
   }, [visible, current]);
@@ -186,8 +210,29 @@ export function EditExitsModal({
       payload.sl_grace_minutes = stopMode === 'TIMER' ? graceMinutes : null;
     }
 
+    const initialRunner = initialRunnerRef.current;
+    const runnerModeChanged = canSplit && runnerModeVal !== initialRunner.mode;
+    const cascadeChanged = canSplit && cascadeEnabledVal !== initialRunner.cascade;
+    if (runnerModeChanged) payload.runner_mode = runnerModeVal;
+    if (cascadeChanged) payload.cascade_enabled = cascadeEnabledVal;
+
     if (!Object.keys(payload).length) {
       Alert.alert('No changes', 'Enter at least one value to update.');
+      return;
+    }
+
+    // Runner/cascade changes affect how this live position exits from here
+    // on — confirm explicitly rather than letting it slip through alongside
+    // an otherwise-routine stop/TP price edit.
+    if (runnerModeChanged || cascadeChanged) {
+      Alert.alert(
+        'Change Exit Behavior?',
+        `This changes how ${ticker}'s remaining runner is managed for the rest of this trade.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Confirm', onPress: () => onSubmit(payload) },
+        ],
+      );
       return;
     }
 
@@ -468,6 +513,55 @@ export function EditExitsModal({
                     disabled={current.tp2_hit}
                   />
                 )}
+              </View>
+            </>
+          )}
+
+          {/* Runner / Cascade — only shown once there's an actual runner to
+              manage (qty_remaining > 1); see canSplit above. Placed above
+              Hide This Trade, same spot the request asked for. */}
+          {canSplit && (
+            <>
+              <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 10 }}>
+                RUNNER MANAGEMENT
+              </Text>
+              <View style={{ backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: colors.border, gap: 14 }}>
+                <View>
+                  <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 8 }}>
+                    Runner exit style — how the last contract is protected once TP1 hits.
+                  </Text>
+                  <View style={{ flexDirection: 'row', borderRadius: 10, borderWidth: 1, borderColor: colors.border, padding: 3, gap: 3 }}>
+                    {RUNNER_MODE_OPTIONS.map(({ key, label }) => {
+                      const active = runnerModeVal === key;
+                      return (
+                        <TouchableOpacity
+                          key={key}
+                          onPress={() => setRunnerModeVal(key)}
+                          activeOpacity={0.75}
+                          style={{ flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 8, backgroundColor: active ? '#A855F722' : 'transparent' }}
+                        >
+                          <Text style={{ fontSize: 13, fontWeight: '700', color: active ? '#A855F7' : colors.textSecondary }}>
+                            {label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12 }}>
+                  <View style={{ flex: 1, marginRight: 10 }}>
+                    <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>Cascade Exit</Text>
+                    <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 1 }}>
+                      Partial-sell on consecutive against-the-trade candles. Never sells the last runner contract.
+                    </Text>
+                  </View>
+                  <Switch
+                    value={cascadeEnabledVal}
+                    onValueChange={setCascadeEnabledVal}
+                    trackColor={{ false: colors.border, true: '#A855F755' }}
+                    thumbColor={cascadeEnabledVal ? '#A855F7' : undefined}
+                  />
+                </View>
               </View>
             </>
           )}

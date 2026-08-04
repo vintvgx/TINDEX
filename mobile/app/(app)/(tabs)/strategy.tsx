@@ -22,6 +22,7 @@ import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/comp
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
 import { StrategyDetailModal } from '@/common/components/strategy/StrategyDetailModal';
+import { PROFILE_EMOJI } from '@/common/components/strategy/PositionCard';
 import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { OrbHubHealthBanner } from '@/common/components/strategy/OrbHubHealthBanner';
@@ -79,6 +80,10 @@ const PROFILE_COLORS: Record<ProfileKey, string> = {
 };
 
 const DAY_LABELS = ['M', 'T', 'W', 'T', 'F'];
+
+const RUNNER_MODE_LABEL: Record<'trail' | 'be_hold' | 'none', string> = {
+  trail: 'Trail', be_hold: 'BE Hold', none: 'No Trail',
+};
 
 function getMode(config: Pick<StrategyConfig, 'active' | 'paper_mode'>): TradingMode {
   if (!config.active) return 'off';
@@ -550,6 +555,10 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
   const hasPosition  = config.has_position === true;
   const qtyContracts = config.custom_thresholds?.qty_contracts
     ?? profiles.find(p => p.key === config.profile)?.thresholds.qty_contracts;
+  const effectiveThresholds = config.custom_thresholds
+    ?? profiles.find(p => p.key === config.profile)?.thresholds;
+  const runnerMode = effectiveThresholds?.runner_mode ?? 'trail';
+  const hasCascade = (qtyContracts ?? 0) > 1 && (effectiveThresholds?.cascade_close_pct ?? 0) > 0;
 
   // Display only — too easy to fat-finger a real trading toggle sitting in
   // the corner of a scrolling list. The actual switch lives in
@@ -569,6 +578,7 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
   );
   const [exitOpen, setExitOpen]   = useState(false);
   const [expanded, setExpanded]   = useState(false);
+  const [infoVisible, setInfoVisible] = useState(false);
 
   const toggleExpanded = useCallback(() => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -618,11 +628,13 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
           {config.bypass_breakout_window && <MetaChip label="No Window" color="#FF9F0A" />}
         </View>
 
-        {/* Row 3: contracts + confirm-entry flags */}
+        {/* Row 3: contracts + exit style + confirm-entry flags */}
         <View style={styles.stratMeta}>
           {qtyContracts != null && (
             <MetaChip label={`${qtyContracts} contract${qtyContracts === 1 ? '' : 's'}`} color={colors.tabBarInactive} />
           )}
+          <MetaChip label={RUNNER_MODE_LABEL[runnerMode]} color="#A855F7" />
+          {hasCascade && <MetaChip label="Cascade" color="#A855F7" />}
           <MetaChip
             label={config.confirm_entry ? 'Confirm Entry' : 'Auto Entry'}
             color={config.confirm_entry ? '#30D158' : colors.tabBarInactive}
@@ -645,6 +657,18 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
                 <View style={[styles.modeDot, {
                   backgroundColor: streaming ? colors.success : colors.tabBarInactive,
                 }]} />
+                {/* Profile badge — tap opens the Profile Guide pre-jumped to
+                    this trade's profile (initialKey), same pattern as the
+                    shared LivePositionPanel used on Live Positions/Dashboard. */}
+                <TouchableOpacity
+                  onPress={(e) => { e.stopPropagation(); setInfoVisible(true); }}
+                  hitSlop={6}
+                  activeOpacity={0.7}
+                  style={styles.profileBadge}
+                >
+                  <Text style={styles.profileEmoji}>{PROFILE_EMOJI[config.profile] ?? '⚙️'}</Text>
+                  <Ionicons name="information-circle-outline" size={13} color={colors.tabBarInactive} />
+                </TouchableOpacity>
                 <Text style={[styles.liveLabel, { color: streaming ? colors.success : colors.tabBarInactive }]}>
                   {streaming ? 'LIVE' : 'CONNECTING'}
                 </Text>
@@ -731,6 +755,9 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
                   entry_premium={live.entry_premium}
                   tp1_hit={live.tp1_hit}
                   tp2_hit={live.tp2_hit}
+                  qty_remaining={live.qty_remaining}
+                  runner_mode={live.runner_mode}
+                  cascade_enabled={live.cascade_enabled}
                   hideKey={positionHideKey({ strategy_id: config.id, contract: live.contract, entry_premium: live.entry_premium })}
                   onUpdated={patchData}
                   style={{ flex: 1 }}
@@ -758,6 +785,13 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
         qtyRemaining={live?.qty_remaining ?? config.qty_remaining ?? 1}
         paperMode={config.paper_mode}
         onClose={() => setExitOpen(false)}
+      />
+
+      <ProfileGuideModal
+        visible={infoVisible}
+        onClose={() => setInfoVisible(false)}
+        colors={colors}
+        initialKey={config.profile}
       />
     </TouchableOpacity>
   );
@@ -1530,6 +1564,8 @@ const styles = StyleSheet.create({
   liveHeaderLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
   liveHeaderRight:{ alignItems: 'flex-end', gap: 3 },
   liveLabel:      { fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
+  profileBadge:   { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  profileEmoji:   { fontSize: 12 },
   liveContract:   { fontSize: 10, color: '#888' },
 
   livePnlValue:   { fontSize: 18, fontWeight: '700' },

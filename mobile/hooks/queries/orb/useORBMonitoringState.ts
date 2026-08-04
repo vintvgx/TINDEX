@@ -38,6 +38,11 @@ export interface ORBMonitoringState {
   current_price: number | null;
   breakout_type: 'none' | 'invalidated' | 'Bullish' | 'Bearish' | 'Retesting Bullish' | 'Retesting Bearish' | 'Confirmed Bullish' | 'Confirmed Bearish' | 'reversal' | 'Offline';
   breakout_price: number | null;
+  /** ISO deadline for the 3-minute confirmation hold — non-null only while
+   *  breakout_type is exactly 'Bullish'/'Bearish' (see monitoring_state_cache.py).
+   *  Optional: rows written before the confirm_deadline migration/backend
+   *  deploy, or offline mock data, simply won't have it. */
+  confirm_deadline?: string | null;
   volume: number | null;
   tracking: string | null;
   high_broken: boolean;

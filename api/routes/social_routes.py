@@ -5,9 +5,13 @@ self-tracked X API spend estimate (§ "X balance display" in
 docs/features/social-signal-contracts.md — X has no public endpoint for the
 actual $ credit balance, only the Developer Console shows that).
 
-Deliberately NOT wired into monitoring_routes.py's SERVICE_REGISTRY or app.py's
-boot sequence — start explicitly, not swept in by a generic "start everything"
-call, until this has a track record (same reasoning as the removed v1 scraper).
+Not wired into monitoring_routes.py's SERVICE_REGISTRY, but IS wired into
+app.py's boot sequence as of 2026-07-17 — same market-hours-gated self-heal
+backstop as the ORB hub and options contract monitor (see app.py and
+start_signal_ingest_core's own docstring below). This comment previously said
+the opposite (deliberately excluded from boot); that stopped being true once
+the 2026-07-17 incident (~15 same-day deploys leaving ingest dead for hours)
+made the same self-heal case for it as for the other two services.
 """
 
 import asyncio

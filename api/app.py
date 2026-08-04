@@ -4,6 +4,7 @@ from flask import Flask, request
 from flask_sock import Sock  # pylint: disable=import-error
 
 from log.logging_config import get_logger
+from services.utils.market_hours import is_market_hours
 
 logger = get_logger(__name__)
 
@@ -260,45 +261,49 @@ try:
     # other Unusual Whales integration, following cancellation of the
     # Unusual Whales subscription.
 
-    # Auto-start the ORB data hub on every process boot — not a replacement for
-    # the 9:20 AM daily cron that hits /tindex/orb/start, but a self-healing
-    # backstop for it. ORB_SERVICE is a plain in-process global (monitoring_routes.py);
-    # any mid-session Railway restart (redeploy, platform restart, crash) wipes it
-    # to None with nothing to bring it back until the NEXT day's cron fires — the
-    # strategy engines above rebuild themselves automatically on every boot and look
-    # "armed" in the UI regardless, so a restart like this silently blinded every
-    # strategy for the rest of the session with no visible symptom (2026-07-09 incident).
-    # Calling this unconditionally is safe outside market hours too — OrbService.start()
-    # already just enters a lightweight 60s-poll wait loop until the market opens.
-    try:
-        from routes.monitoring_routes import start_orb_service as _start_orb
-        _start_orb_result = _start_orb(notify=False)
-        logger.info("[App] ORB hub auto-start at boot: %s", _start_orb_result.get("message"))
-    except Exception as _orb_boot_err:
-        logger.warning("[App] ORB hub auto-start at boot failed: %s", _orb_boot_err)
+    # Auto-start the ORB data hub, social-signal ingest, and options contract
+    # monitor on process boot — a self-healing backstop for a MID-SESSION
+    # Railway restart (redeploy, platform restart, crash) that would otherwise
+    # wipe these plain in-process globals to None with nothing to bring them
+    # back (2026-07-09 / 2026-07-17 incidents — see each start function's own
+    # docstring in monitoring_routes.py / social_routes.py).
+    #
+    # Gated on is_market_hours() (2026-08-04): this used to fire unconditionally
+    # on every boot, including deploys pushed well outside trading hours — e.g.
+    # a routine evening/pre-market push would still arm live monitoring, which
+    # then ran for the ENTIRE next session until OrbService's own market_close
+    # check stopped it around 4 PM, regardless of whether that was ever
+    # intended. A boot outside market hours now skips the self-heal entirely
+    # and leaves these off until the normal 9:20 AM cron (or a manual Admin
+    # start) — a boot DURING market hours still self-heals exactly as before,
+    # since recovering a live session mid-day is the actual point of this.
+    if is_market_hours():
+        try:
+            from routes.monitoring_routes import start_orb_service as _start_orb
+            _start_orb_result = _start_orb(notify=False)
+            logger.info("[App] ORB hub auto-start at boot: %s", _start_orb_result.get("message"))
+        except Exception as _orb_boot_err:
+            logger.warning("[App] ORB hub auto-start at boot failed: %s", _orb_boot_err)
 
-    # Same self-heal, same reason, for the social-signal ingest loop — it had
-    # no boot-time backstop at all until now, so it silently stopped polling
-    # on every redeploy and stayed off until someone noticed and manually hit
-    # /social-signals/start (2026-07-17 incident: ~15 same-day deploys left
-    # it dead for hours with zero visible symptom in the app).
-    try:
-        from routes.social_routes import start_signal_ingest_core as _start_social_ingest
-        _start_social_result, _ = _start_social_ingest()
-        logger.info("[App] Social signal ingest auto-start at boot: %s", _start_social_result.get("message"))
-    except Exception as _social_boot_err:
-        logger.warning("[App] Social signal ingest auto-start at boot failed: %s", _social_boot_err)
+        try:
+            from routes.social_routes import start_signal_ingest_core as _start_social_ingest
+            _start_social_result, _ = _start_social_ingest()
+            logger.info("[App] Social signal ingest auto-start at boot: %s", _start_social_result.get("message"))
+        except Exception as _social_boot_err:
+            logger.warning("[App] Social signal ingest auto-start at boot failed: %s", _social_boot_err)
 
-    # Same self-heal, same reason, for the options contract monitor — it also
-    # had no boot-time backstop, so a mid-session redeploy silently stopped
-    # monitoring every tracked contract until someone noticed and manually hit
-    # /contracts/monitor/start.
-    try:
-        from routes.monitoring_routes import start_contracts_monitor_core as _start_contracts_monitor
-        _start_contracts_result = _start_contracts_monitor()
-        logger.info("[App] Options contract monitor auto-start at boot: %s", _start_contracts_result.get("message"))
-    except Exception as _contracts_boot_err:
-        logger.warning("[App] Options contract monitor auto-start at boot failed: %s", _contracts_boot_err)
+        try:
+            from routes.monitoring_routes import start_contracts_monitor_core as _start_contracts_monitor
+            _start_contracts_result = _start_contracts_monitor()
+            logger.info("[App] Options contract monitor auto-start at boot: %s", _start_contracts_result.get("message"))
+        except Exception as _contracts_boot_err:
+            logger.warning("[App] Options contract monitor auto-start at boot failed: %s", _contracts_boot_err)
+    else:
+        logger.info(
+            "[App] Boot auto-start skipped for ORB hub / social ingest / options "
+            "monitor — outside market hours (9:30 AM-4 PM ET, Mon-Fri). The 9:20 "
+            "AM cron (or a manual Admin start) will bring them up normally."
+        )
 
     # Daily 9 AM ET heads-up (1 day / 2 days / this week) for any open position
     # approaching its own expiration — the replacement for the blanket EOD

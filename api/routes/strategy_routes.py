@@ -15,6 +15,7 @@ from services.strategy.trade_logger import TradeLogger, enrich_open_trades_with_
 from services.strategy.profiles import PROFILES, describe_profile, grace_fields_for_minutes
 from services.strategy.scheduler import reschedule_jobs, schedule_eod_close
 from services.strategy.orb_engine import ORBEngine, STRATEGY_DEFAULTS
+from services.strategy.contract_selector import select_contract, _parse_occ_strike
 
 logger = logging.getLogger(__name__)
 
@@ -746,10 +747,13 @@ def add_to_position(strategy_id: str):
 def update_strategy_exits(strategy_id: str):
     """
     Update the live ExitManager's stop-loss and/or TP levels mid-trade.
-    Body: { hard_stop?, tp1?, tp2?, sl_qty?, tp1_qty?, tp2_qty?, sl_grace_minutes? }
+    Body: { hard_stop?, tp1?, tp2?, sl_qty?, tp1_qty?, tp2_qty?, sl_grace_minutes?,
+            runner_mode?, cascade_enabled? }
     — all optional, only provided fields are changed. sl_qty/tp1_qty/tp2_qty
     are per-level contract counts; sl_grace_minutes is the stop-type choice
-    (null = Hard Stop, 5/10/15 = SL timer — see ExitManager.apply_overrides).
+    (null = Hard Stop, 5/10/15 = SL timer); runner_mode is "trail"/"be_hold"/
+    "none"; cascade_enabled toggles cascade on/off for the rest of this trade
+    (see ExitManager.apply_overrides).
     Returns the updated exit state so the client can confirm the new levels.
     """
     engine = _resolve_any_engine(strategy_id)
@@ -767,6 +771,8 @@ def update_strategy_exits(strategy_id: str):
         "sl_qty":    int(data["sl_qty"]) if "sl_qty" in data else None,
         "tp1_qty":   int(data["tp1_qty"]) if "tp1_qty" in data else None,
         "tp2_qty":   int(data["tp2_qty"]) if "tp2_qty" in data else None,
+        "runner_mode":     data.get("runner_mode"),
+        "cascade_enabled": data["cascade_enabled"] if "cascade_enabled" in data else None,
     }
     if "sl_grace_minutes" in data:
         raw = data["sl_grace_minutes"]
@@ -785,6 +791,118 @@ def update_strategy_exits(strategy_id: str):
         "updated": changed,
         "exit_state": em.to_dict(),
     })
+
+
+def _find_adjacent_strike(engine: ORBEngine, direction: str, default: dict) -> dict | None:
+    """
+    One strike further OTM than `default` in the breakout's own direction —
+    a cheaper, more leveraged "alt" contract for the Dashboard's candidate
+    breakout card. Re-fetches the same chain select_contract() just used
+    rather than threading a second return value through that function, so
+    select_contract's signature (and its live-trading callers) stays
+    untouched. Read-only — no capital checks, no engine/position state.
+    """
+    from datetime import date as _date
+    from alpaca.data.requests import OptionChainRequest
+    from alpaca.data.enums import OptionsFeed
+
+    option_type = "call" if direction == "CALL" else "put"
+    try:
+        chain = engine.option_client.get_option_chain(OptionChainRequest(
+            underlying_symbol=engine.ticker,
+            expiration_date=_date.today(),
+            type=option_type,
+            feed=OptionsFeed.INDICATIVE,
+        ))
+    except Exception as exc:
+        logger.warning("[candidate-contract] alt-strike chain fetch failed: %s", exc)
+        return None
+
+    default_strike = default["strike"]
+    candidates = []
+    for symbol, contract in chain.items():
+        strike = _parse_occ_strike(symbol)
+        if strike is None:
+            continue
+        q = getattr(contract, "latest_quote", None)
+        ask = getattr(q, "ask_price", None) if q else None
+        if not ask or float(ask) <= 0:
+            continue
+        # "Further OTM" = a higher strike for a CALL, a lower strike for a PUT.
+        if direction == "CALL" and strike <= default_strike:
+            continue
+        if direction == "PUT" and strike >= default_strike:
+            continue
+        raw_delta = contract.greeks.delta if getattr(contract, "greeks", None) else None
+        candidates.append({
+            "symbol": symbol, "strike": strike,
+            "delta": abs(raw_delta) if raw_delta is not None else 0.0,
+            "ask": float(ask), "bid": float(getattr(q, "bid_price", 0) or 0),
+        })
+
+    if not candidates:
+        return None
+    # Nearest strike beyond default, on the correct side — the real
+    # next-strike-out, not just whatever the chain happens to sort first.
+    return min(candidates, key=lambda c: abs(c["strike"] - default_strike))
+
+
+@strategy_bp.route("/configs/<strategy_id>/candidate-contract", methods=["GET"])
+def candidate_contract(strategy_id: str):
+    """
+    Preview of what select_contract() would pick for this strategy RIGHT NOW,
+    plus one strike further OTM in the same direction — backs the Dashboard's
+    candidate breakout card, shown BEFORE the 3-minute confirmation hold
+    clears. Purely read-only: no capital/risk checks, no engine or position
+    state touched, safe to poll.
+
+    Query params: direction ("CALL" | "PUT", required).
+    """
+    direction = (request.args.get("direction") or "").upper()
+    if direction not in ("CALL", "PUT"):
+        return jsonify({"success": False, "error": "direction must be CALL or PUT"}), 400
+
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        return jsonify({"success": False, "error": "Engine not found"}), 404
+    if engine.orh is None or engine.orl is None:
+        return jsonify({"success": False, "error": "ORB range not established yet"}), 409
+
+    trigger_price = engine.orh if direction == "CALL" else engine.orl
+    try:
+        default = select_contract(
+            ticker=engine.ticker,
+            direction=direction,
+            trigger_price=trigger_price,
+            orh=engine.orh,
+            orl=engine.orl,
+            fib_levels=engine.fib_levels,
+            data_client=engine.option_client,
+            profile=engine.profile,
+            vwap=engine.session_vwap,
+        )
+    except Exception as e:
+        logger.error("[candidate-contract] %s select_contract failed: %s", strategy_id, e, exc_info=True)
+        return jsonify({"success": False, "error": "Contract lookup failed"}), 500
+
+    if not default:
+        return jsonify({"success": False, "error": "No suitable contract found"}), 404
+
+    alt = _find_adjacent_strike(engine, direction, default)
+
+    def _fmt(row: dict | None) -> dict | None:
+        if not row:
+            return None
+        return {
+            "symbol": row["symbol"],
+            "strike": row["strike"],
+            "delta":  row["delta"],
+            "bid":    row["bid"],
+            "ask":    row["ask"],
+            "mid":    round((row["bid"] + row["ask"]) / 2, 4),
+        }
+
+    return jsonify({"success": True, "default": _fmt(default), "alt": _fmt(alt)})
 
 
 @strategy_bp.route("/pending-confirmations", methods=["GET"])
