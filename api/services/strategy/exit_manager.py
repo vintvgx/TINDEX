@@ -29,6 +29,18 @@ from services.strategy.profiles import grace_fields_for_minutes
 
 ET = pytz.timezone("America/New_York")
 
+# ─── TEMPORARY KILL-SWITCH (2026-08-04) ────────────────────────────────────
+# runner_mode overrides aren't reliably persisting/taking effect (see
+# docs/TODO.md — user reported "None" reverting to "trail" even after the
+# runner_cascade migration). Until that's actually root-caused and fixed,
+# both RUNNER_TRAIL_STOP and CASCADE_EXIT are hard-disabled here regardless
+# of profile/override config, so a stale/reverted setting can never
+# force-sell a contract out from under the user. Only TP1/TP2/HARD_STOP/
+# BREAKEVEN_STOP/EOD_CLOSE/manual close can sell anything while this is on.
+# Flip back to False once docs/TODO.md's item is fixed and verified.
+_RUNNER_TRAIL_HARD_DISABLED = True
+_CASCADE_EXIT_HARD_DISABLED = True
+
 # Sentinel distinguishing "sl_grace_minutes not provided" (leave the current
 # stop-type alone) from "sl_grace_minutes explicitly set to None" (switch to
 # Hard Stop) in ExitManager.apply_overrides — None itself is a meaningful
@@ -351,7 +363,8 @@ class ExitManager:
         # it exits via TP2/BE/EOD/manual only — same "preserve 1 runner"
         # exemption cascade already gets below, so a single-contract runner
         # never gets force-sold by RUNNER_TRAIL_STOP either.
-        if self._runner_mode == "trail" and self.tp1_hit and self.qty_remaining > 1:
+        if (not _RUNNER_TRAIL_HARD_DISABLED and self._runner_mode == "trail"
+                and self.tp1_hit and self.qty_remaining > 1):
             new_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
             if new_trail > self.runner_trail:
                 self.runner_trail = new_trail
@@ -368,7 +381,8 @@ class ExitManager:
         # closes it in full — see _use_tp2 above), so "manage your own runner,
         # or let the stop handle it" already holds for both the single-contract
         # case and the runner of any multi-contract trade.
-        if self._cascade_enabled and self.tp1_hit and self.qty_remaining > 1:
+        if (not _CASCADE_EXIT_HARD_DISABLED and self._cascade_enabled
+                and self.tp1_hit and self.qty_remaining > 1):
             if self._cascade_down_ticks >= self._cascade_ticks_needed:
                 self._cascade_down_ticks = 0
                 sellable    = self.qty_remaining - 1
