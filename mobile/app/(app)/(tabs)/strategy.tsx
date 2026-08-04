@@ -23,6 +23,7 @@ import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
 import { StrategyDetailModal } from '@/common/components/strategy/StrategyDetailModal';
 import { PROFILE_EMOJI } from '@/common/components/strategy/PositionCard';
+import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { OrbHubHealthBanner } from '@/common/components/strategy/OrbHubHealthBanner';
@@ -80,10 +81,6 @@ const PROFILE_COLORS: Record<ProfileKey, string> = {
 };
 
 const DAY_LABELS = ['M', 'T', 'W', 'T', 'F'];
-
-const RUNNER_MODE_LABEL: Record<'trail' | 'be_hold' | 'none', string> = {
-  trail: 'Trail', be_hold: 'BE Hold', none: 'No Trail',
-};
 
 function getMode(config: Pick<StrategyConfig, 'active' | 'paper_mode'>): TradingMode {
   if (!config.active) return 'off';

@@ -3,10 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import type { StrategyProfile, ProfileKey } from '@/common/types/strategy';
-
-const RUNNER_MODE_LABEL: Record<'trail' | 'be_hold' | 'none', string> = {
-  trail: 'Trail', be_hold: 'BE Hold', none: 'No Trail',
-};
+import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 
 interface Props {
   profile: StrategyProfile;

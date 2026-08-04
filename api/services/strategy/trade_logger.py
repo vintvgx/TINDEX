@@ -418,6 +418,79 @@ class TradeLogger:
                 logger.error("[TradeLogger] log_add_to_position failed: %s", e)
                 return False
 
+    def update_exit_levels(self, trade_id: str,
+                            hard_stop_price: Optional[float] = None,
+                            tp1_price: Optional[float] = None,
+                            tp2_price: Optional[float] = None,
+                            runner_mode: Optional[str] = None,
+                            cascade_enabled: Optional[bool] = None) -> bool:
+        """
+        Persist a mid-trade exit-level edit (PATCH /configs/<id>/exits →
+        ExitManager.apply_overrides()) to the open orb_trades row, so
+        recover_position() can restore the EDITED level after a restart
+        instead of silently reverting to whatever was set at entry.
+
+        Root cause this closes (2026-08-04): apply_overrides() only ever
+        mutated the in-memory ExitManager — a user raising TP1 from 1.21 to
+        5, or switching runner_mode to "none", had that change vanish on the
+        next Railway redeploy because recover_position() rebuilds hard_stop/
+        tp1/tp2/runner_mode from this row, which was last written at entry
+        and never touched again. See docs/incidents/
+        2026-07-14-position-lost-on-restart.md for the original version of
+        this same class of bug (that one was about state disappearing
+        entirely; this is state silently reverting to a stale value).
+
+        Sparse by design — only the fields actually passed get written, same
+        convention as apply_overrides()'s own kwargs. Best-effort: a failed
+        write here does not undo the in-memory edit, which stays in effect
+        for the rest of this process's life either way; only a subsequent
+        restart would be affected, so this logs rather than raises.
+        """
+        update: dict = {}
+        if hard_stop_price is not None:
+            update["hard_stop_price"] = hard_stop_price
+        if tp1_price is not None:
+            update["tp1_price"] = tp1_price
+        if tp2_price is not None:
+            update["tp2_price"] = tp2_price
+        if runner_mode is not None:
+            update["runner_mode"] = runner_mode
+        if cascade_enabled is not None:
+            update["cascade_enabled"] = cascade_enabled
+        if not update:
+            return True  # nothing to persist — not an error
+
+        try:
+            res = self.client.table("orb_trades").update(update).eq("id", trade_id).execute()
+            return bool(res.data)
+        except Exception as e:
+            err_str = str(e)
+            # runner_mode/cascade_enabled require the 2026-08-04 migration,
+            # which may not have run yet — retry with just the older,
+            # already-existing hard_stop/tp1/tp2 columns so at least those
+            # keep persisting instead of the whole update failing outright.
+            if "runner_mode" in err_str or "cascade_enabled" in err_str:
+                fallback = {k: v for k, v in update.items() if k in ("hard_stop_price", "tp1_price", "tp2_price")}
+                if not fallback:
+                    logger.warning(
+                        "[TradeLogger] update_exit_levels: runner_mode/cascade_enabled "
+                        "column(s) missing and nothing else to persist — run the Supabase "
+                        "migration (skipping, in-memory edit still in effect this session)"
+                    )
+                    return False
+                logger.warning(
+                    "[TradeLogger] update_exit_levels: runner_mode/cascade_enabled column(s) "
+                    "missing — retrying with hard_stop/tp1/tp2 only (run Supabase migration to fix)"
+                )
+                try:
+                    res2 = self.client.table("orb_trades").update(fallback).eq("id", trade_id).execute()
+                    return bool(res2.data)
+                except Exception as e2:
+                    logger.error("[TradeLogger] update_exit_levels fallback failed: %s", e2)
+                    return False
+            logger.error("[TradeLogger] update_exit_levels failed: %s", e)
+            return False
+
     def log_exit(self, contract_symbol: str, exit_reason: str,
                  exit_premium: Optional[float], qty_closed: int, profile: str,
                  strategy_id: str = None,

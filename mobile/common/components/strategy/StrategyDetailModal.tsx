@@ -8,6 +8,7 @@ import type { StrategyConfig, StrategyProfile } from '@/common/types/strategy';
 import { PROFILES as PROFILE_GUIDES } from '@/common/components/strategy/ProfileGuideModal';
 import { useUpdateStrategyConfig } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
 import { useToast } from '@/common/components/ui/Toast';
+import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 
 interface Props {
   visible: boolean;
@@ -20,9 +21,6 @@ interface Props {
 }
 
 const MODE_COLORS = { paper: '#FF9F0A', live: '#30D158', off: '#FF453A' } as const;
-const RUNNER_MODE_LABEL: Record<'trail' | 'be_hold' | 'none', string> = {
-  trail: 'Trail', be_hold: 'BE Hold', none: 'No Trail',
-};
 const DAY_LABELS = ['M', 'T', 'W', 'T', 'F'];
 
 export function StrategyDetailModal({ visible, config, profiles, colors, onClose, onEdit, onDelete }: Props) {

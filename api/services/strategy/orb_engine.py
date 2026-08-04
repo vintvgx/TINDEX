@@ -1391,6 +1391,15 @@ class ORBEngine:
             self.exit_manager.tp1 = float(row["tp1_price"])
         if row.get("tp2_price") is not None:
             self.exit_manager.tp2 = float(row["tp2_price"])
+        # Same reasoning, for a mid-trade runner_mode/cascade_enabled edit
+        # (see update_strategy_exits/apply_overrides) — without this a
+        # restart silently re-armed cascade or reset to the profile's
+        # default runner mode even though the user had explicitly turned
+        # them off for this trade (2026-08-04).
+        if row.get("runner_mode") is not None:
+            self.exit_manager._runner_mode = row["runner_mode"]
+        if row.get("cascade_enabled") is not None:
+            self.exit_manager._cascade_enabled = bool(row["cascade_enabled"])
 
         if self.stream_manager:
             self.stream_manager.subscribe(self.contract_symbol, self._on_stream_quote)
@@ -2619,6 +2628,16 @@ class ORBEngine:
             # EditExitsModal know which tab to pre-select.
             "sl_grace_enabled":     em_state.get("sl_grace_enabled", False),
             "sl_grace_minutes":     em_state.get("sl_grace_minutes"),
+            # Current runner/cascade CONFIGURATION for this trade (see
+            # ExitManager.to_dict()) — 2026-08-04 fix: this payload used to
+            # omit these entirely even though to_dict() included them, so
+            # the very next tick after a runner_mode edit silently reverted
+            # the mobile client's optimistic patch (setData() on the client
+            # is a full replace, not a merge) back to undefined, making an
+            # edit look like it never took effect the moment you reopened
+            # the Edit sheet.
+            "runner_mode":          em_state.get("runner_mode", "trail"),
+            "cascade_enabled":      em_state.get("cascade_enabled", True),
         })
         with self._live_clients_lock:
             for q in list(self._live_clients):

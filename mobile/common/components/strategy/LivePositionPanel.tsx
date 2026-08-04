@@ -9,6 +9,7 @@ import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePric
 import { PROFILE_EMOJI } from '@/common/components/strategy/PositionCard';
 import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
 import type { ProfileKey } from '@/common/types/strategy';
+import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 
 /** LivePriceData plus the market_value the header displays — computed via
  *  fallback (mid_price * qty_remaining * 100) since the live WS payload
@@ -302,18 +303,33 @@ export function LivePositionPanel({
 }
 
 function PositionStopBar({ live, colors, showTp2 }: { live: DisplayData; colors: any; showTp2: boolean }) {
-  const stages = [
-    { label: 'Stop', value: live.hard_stop, active: !live.tp1_hit, color: colors.error },
-    { label: 'TP1',  value: live.tp1,       active: live.tp1_hit && !live.tp2_hit, color: '#4A9EFF' },
-    ...(showTp2 ? [{ label: 'TP2', value: live.tp2, active: live.tp2_hit, color: colors.success }] : []),
-  ];
+  // Once TP1 has fired and there's no live numeric target left to hit
+  // (no TP2 at all, or TP2 already hit too), the sole remaining contract is
+  // a genuine runner — governed by runner_mode (trail/be_hold/none), not a
+  // fixed price. Showing a stale "TP1" readout there is misleading (that
+  // job is done); relabel the slot to what's actually happening instead.
+  // A fresh 1-contract ENTRY (tp1_hit still false) is NOT a runner — TP1
+  // still fully closes it the moment it hits, so it keeps showing real
+  // Stop/TP1 numbers exactly like any other position.
+  const isRunnerPhase = live.qty_remaining === 1 && live.tp1_hit && (!showTp2 || live.tp2_hit);
+
+  const stages = isRunnerPhase
+    ? [
+        { label: 'Stop',   value: `$${live.hard_stop.toFixed(2)}`, active: true, color: colors.error },
+        { label: 'Runner', value: RUNNER_MODE_LABEL[live.runner_mode ?? 'trail'], active: true, color: '#A855F7' },
+      ]
+    : [
+        { label: 'Stop', value: `$${live.hard_stop.toFixed(2)}`, active: !live.tp1_hit, color: colors.error },
+        { label: 'TP1',  value: `$${live.tp1.toFixed(2)}`,       active: live.tp1_hit && !live.tp2_hit, color: '#4A9EFF' },
+        ...(showTp2 ? [{ label: 'TP2', value: `$${live.tp2.toFixed(2)}`, active: live.tp2_hit, color: colors.success }] : []),
+      ];
   return (
     <View style={styles.stopBar}>
       {stages.map((s, i) => (
         <View key={i} style={styles.stopStage}>
           <View style={[styles.stopDot, { backgroundColor: s.active ? s.color : colors.border }]} />
           <Text style={[styles.stopLabel, { color: s.active ? s.color : colors.textSecondary }]}>{s.label}</Text>
-          <Text style={[styles.stopValue, { color: colors.textSecondary }]}>${s.value.toFixed(2)}</Text>
+          <Text style={[styles.stopValue, { color: colors.textSecondary }]}>{s.value}</Text>
         </View>
       ))}
     </View>

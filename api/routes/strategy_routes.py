@@ -785,6 +785,36 @@ def update_strategy_exits(strategy_id: str):
     if not changed:
         return jsonify({"status": "noop", "message": "No fields provided"}), 400
 
+    # Persist to the open orb_trades row too — apply_overrides() above only
+    # mutated the in-memory ExitManager, which a Railway restart wipes.
+    # Without this, recover_position() rebuilds hard_stop/tp1/tp2/runner_mode
+    # from whatever this row was last written with AT ENTRY, silently
+    # reverting any edit made after entry (2026-08-04 incident: a TP raised
+    # to 5 reverted to 1.21 after a routine redeploy). Best-effort — a failed
+    # persist here doesn't undo the in-memory edit, only a later restart
+    # would be affected, so this logs rather than fails the request.
+    if engine.active_trade_id:
+        try:
+            persisted = logger_svc.update_exit_levels(
+                trade_id=engine.active_trade_id,
+                hard_stop_price=changed.get("hard_stop"),
+                tp1_price=changed.get("tp1"),
+                tp2_price=changed.get("tp2"),
+                runner_mode=changed.get("runner_mode"),
+                cascade_enabled=changed.get("cascade_enabled"),
+            )
+            if not persisted:
+                logger.error(
+                    "[strategy] Exit-level edit for %s applied in-memory but FAILED to persist "
+                    "(trade_id=%s) — will revert to entry-time levels on the next restart",
+                    strategy_id, engine.active_trade_id,
+                )
+        except Exception as e:
+            logger.error(
+                "[strategy] Failed to persist exit-level edit for trade %s: %s",
+                engine.active_trade_id, e, exc_info=True,
+            )
+
     logger.info("[strategy] Updated exits for %s: %s", strategy_id, changed)
     return jsonify({
         "status": "ok",
@@ -2041,6 +2071,8 @@ def _engine_position_response(engine: ORBEngine):
             # the card/Edit modal know which to show as active.
             "sl_grace_enabled":    em_state.get("sl_grace_enabled", False),
             "sl_grace_minutes":    em_state.get("sl_grace_minutes"),
+            "runner_mode":         em_state.get("runner_mode", "trail"),
+            "cascade_enabled":     em_state.get("cascade_enabled", True),
         })
     except Exception:
         return jsonify({"active": False, "position": None, "paper_mode": engine.paper})
