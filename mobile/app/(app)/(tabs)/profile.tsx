@@ -66,6 +66,11 @@ const ProfileScreen = () => {
     { icon: 'pulse-outline' as const, label: 'Service Status', onPress: () => setServiceStatusVisible(true) },
     { icon: 'shield-outline' as const, label: 'Admin Panel', onPress: () => setAdminModalVisible(true) },
     { icon: 'document-text-outline' as const, label: 'View Logs', onPress: () => setLogViewerVisible(true) },
+    // Moved from the "..." button in monitor.tsx's own header (2026-08-04) —
+    // deep-links there and opens the same ORBMenu modal in place, rather than
+    // duplicating its state (grid layout, mock-data toggles, service status)
+    // here as a second copy.
+    { icon: 'ellipsis-horizontal-outline' as const, label: 'ORB Menu', onPress: () => go('/(app)/(tabs)/orb?section=monitor&openMenu=true') },
   ];
 
   const toastItems: Array<{

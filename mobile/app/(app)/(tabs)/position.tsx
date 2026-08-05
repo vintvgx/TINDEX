@@ -77,6 +77,17 @@ export default function PositionScreen({ embedded = false }: Props) {
       ? liveDerivedEquity - account.last_equity
       : account?.pnl_today ?? 0;
 
+  // Cost basis only (entry_premium, never a live price) — deliberately
+  // static, so it only moves when a position actually opens/closes/partial-
+  // closes (i.e. when filteredPositions itself changes), not on every price
+  // tick like the equity/PnL figures above it.
+  const capitalUsed = useMemo(
+    () => filteredPositions.reduce(
+      (sum, p) => sum + (p.entry_premium ?? 0) * (p.qty_remaining ?? 0) * 100, 0,
+    ),
+    [filteredPositions],
+  );
+
   const toggleMode = () => setMode(m => (m === 'live' ? 'paper' : 'live'));
 
   return (
@@ -141,6 +152,8 @@ export default function PositionScreen({ embedded = false }: Props) {
             color={displayPnlToday >= 0 ? colors.success : colors.error}
             colors={colors}
           />
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <AccountStat label="Capital Used" value={`$${capitalUsed.toLocaleString('en-US', { minimumFractionDigits: 0 })}`} color="#CC5500" colors={colors} />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
           <AccountStat label="Available Balance" value={`$${(account.available_balance ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} colors={colors} />
           <View style={[styles.divider, { backgroundColor: colors.border }]} />

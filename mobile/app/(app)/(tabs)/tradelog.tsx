@@ -361,14 +361,21 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
   const stopHit = trade.exit_reason === 'HARD_STOP';
 
   const isOpen = trade.exit_time == null;
-  // Realized pnl/pnl_pct stay null for the whole life of an open trade —
-  // fall back to the live, unrealized estimate so this section isn't just
-  // dashes until the position actually closes.
-  const displayPnl    = isOpen ? trade.live_pnl ?? null : trade.pnl;
-  const displayPnlPct = isOpen ? trade.live_pnl_pct ?? null : trade.pnl_pct;
+  // A partial exit (TP1/cascade) already locked in a real, non-null pnl
+  // even though the row stays open — see trade_logger.py's log_exit. Show
+  // that realized figure plus the still-open remainder's live estimate
+  // separately, rather than one number standing in for both. A fully-open
+  // trade (zero exits yet) has nothing realized — falls back to the live
+  // estimate alone, same as before.
+  const isPartial = isOpen && (trade.qty_exited ?? 0) > 0;
+  const displayPnl    = isPartial ? trade.pnl : isOpen ? trade.live_pnl ?? null : trade.pnl;
+  const displayPnlPct = isPartial ? trade.pnl_pct : isOpen ? trade.live_pnl_pct ?? null : trade.pnl_pct;
   const pnlColor = displayPnl == null
     ? undefined
     : displayPnl >= 0 ? colors.success : colors.error;
+  const unrealizedColor = trade.live_pnl == null
+    ? undefined
+    : trade.live_pnl >= 0 ? colors.success : colors.error;
 
   return (
     <View style={[styles.detailSection, { borderTopColor: colors.border }]}>
@@ -425,17 +432,33 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
         colors={colors}
       />
       <DetailRow
-        label={isOpen ? 'P&L (live, unrealized)' : 'P&L'}
+        label={isPartial ? 'Realized (so far)' : isOpen ? 'P&L (live, unrealized)' : 'P&L'}
         value={displayPnl != null ? `${displayPnl >= 0 ? '+' : ''}$${displayPnl.toFixed(2)}` : '—'}
         valueColor={pnlColor}
         colors={colors}
       />
       <DetailRow
-        label={isOpen ? 'P&L % (live)' : 'P&L %'}
+        label={isPartial ? 'Realized %' : isOpen ? 'P&L % (live)' : 'P&L %'}
         value={displayPnlPct != null ? `${displayPnlPct >= 0 ? '+' : ''}${displayPnlPct.toFixed(1)}%` : '—'}
         valueColor={pnlColor}
         colors={colors}
       />
+      {isPartial && (
+        <>
+          <DetailRow
+            label="Unrealized (remaining)"
+            value={trade.live_pnl != null ? `${trade.live_pnl >= 0 ? '+' : ''}$${trade.live_pnl.toFixed(2)}` : '—'}
+            valueColor={unrealizedColor}
+            colors={colors}
+          />
+          <DetailRow
+            label="Unrealized %"
+            value={trade.live_pnl_pct != null ? `${trade.live_pnl_pct >= 0 ? '+' : ''}${trade.live_pnl_pct.toFixed(1)}%` : '—'}
+            valueColor={unrealizedColor}
+            colors={colors}
+          />
+        </>
+      )}
       <DetailRow
         label="Exit Reason"
         value={exitLabel}
@@ -528,11 +551,16 @@ const TradeRow = ({
 }) => {
   const pnl          = trade.pnl ?? 0;
   const isOpen       = trade.exit_time == null;
-  // Open trades have no realized pnl yet (only ever written at exit) — show
-  // the live, unrealized estimate instead so a still-open swing/weekly hold
-  // isn't just a bare "OPEN" with no number at all.
-  const displayPnl    = isOpen ? trade.live_pnl ?? null : pnl;
-  const displayPnlPct = isOpen ? trade.live_pnl_pct ?? null : trade.pnl_pct;
+  // A partial exit (TP1/cascade) already wrote a real, non-null, running
+  // REALIZED total into pnl/pnl_pct even though the row stays open — see
+  // trade_logger.py's log_exit. So an open trade with qty_exited > 0 has
+  // two genuinely different numbers: pnl (locked in) and live_pnl (still
+  // moving on whatever's left). Show both instead of one replacing the
+  // other. A fully-open trade (zero exits yet) has nothing realized —
+  // falls back to live_pnl alone, same as before.
+  const isPartial     = isOpen && (trade.qty_exited ?? 0) > 0;
+  const displayPnl    = isPartial ? pnl : isOpen ? trade.live_pnl ?? null : pnl;
+  const displayPnlPct = isPartial ? trade.pnl_pct : isOpen ? trade.live_pnl_pct ?? null : trade.pnl_pct;
   const pnlColor     = displayPnl == null ? colors.accent
                      : displayPnl > 0 ? colors.success
                      : displayPnl < 0 ? colors.error : colors.tabBarInactive;
@@ -632,7 +660,14 @@ const TradeRow = ({
               ? (isOpen ? 'OPEN' : `${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}`)
               : `${displayPnl > 0 ? '+' : ''}$${displayPnl.toFixed(2)}`}
           </Text>
-          {isOpen && displayPnl != null && (
+          {isPartial ? (
+            trade.live_pnl != null && (
+              <Text style={{ fontSize: 10, fontWeight: '600', marginTop: 1, color: trade.live_pnl >= 0 ? colors.success : colors.error }}>
+                Unrealized {trade.live_pnl >= 0 ? '+' : ''}${trade.live_pnl.toFixed(2)}
+                {trade.live_pnl_pct != null ? ` (${trade.live_pnl_pct >= 0 ? '+' : ''}${trade.live_pnl_pct.toFixed(1)}%)` : ''}
+              </Text>
+            )
+          ) : isOpen && displayPnl != null && (
             <Text style={{ fontSize: 9, fontWeight: '700', letterSpacing: 0.4, color: colors.accent, marginTop: 1 }}>
               OPEN · LIVE
             </Text>

@@ -1,9 +1,10 @@
 import React, { Component, useState, useMemo, useEffect, useCallback } from 'react';
-import { View, Text, SafeAreaView, TouchableOpacity, ScrollView } from 'react-native';
+import { View, Text, SafeAreaView, ScrollView } from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { MarketPulseStrip } from '@/common/components/orb/MarketPulseStrip';
 import * as SecureStore from 'expo-secure-store';
-import { Ionicons } from '@expo/vector-icons';
 import { useORBMonitoringState, ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useORBRanges } from '@/hooks/queries/orb/useORBRanges';
 import { ORBCardGrid } from '@/common/components/orb/ORBCardGrid';
@@ -64,6 +65,23 @@ const ORBScreen = () => {
   console.log('[ORB] calling useToast');
   const toast = useToast();
   console.log('[ORB] useToast OK');
+
+  // The "..." menu button used to live in this screen's own header; it now
+  // lives as a Profile menu item instead (Profile → ORB Menu), which
+  // deep-links here with ?openMenu=true rather than duplicating this
+  // screen's local state (gridLayout, mock-data toggles, service status)
+  // in a second place. Same one-shot consume-then-strip pattern orb.tsx
+  // already uses for its own `section` param, so a later refocus doesn't
+  // re-open the menu every time you swipe back to this tab.
+  const { openMenu } = useLocalSearchParams<{ openMenu?: string }>();
+  useFocusEffect(
+    useCallback(() => {
+      if (openMenu === 'true') {
+        setMenuVisible(true);
+        router.setParams({ openMenu: undefined });
+      }
+    }, [openMenu]),
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -172,37 +190,11 @@ const ORBScreen = () => {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-      {/* ── Header ── */}
       {/* No page title here — the "Monitor" segment pill above already names
-          this page (see orb.tsx's SegmentedPager). Keep the overflow menu. */}
-      <View
-        style={{
-          paddingHorizontal: 24,
-          paddingVertical: 16,
-          borderBottomWidth: 1,
-          borderBottomColor: colors.separator,
-          flexDirection: 'row',
-          alignItems: 'flex-end',
-          justifyContent: 'flex-end',
-        }}
-      >
-        <TouchableOpacity
-          onPress={() => setMenuVisible(true)}
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 18,
-            backgroundColor: colors.iconButton,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderWidth: 1,
-            borderColor: colors.iconButtonBorder,
-            marginBottom: 2,
-          }}
-        >
-          <Ionicons name="ellipsis-horizontal" size={18} color={colors.text} />
-        </TouchableOpacity>
-      </View>
+          this page (see orb.tsx's SegmentedPager). The overflow menu that
+          used to live in a header here moved to Profile → ORB Menu (see
+          the openMenu deep-link handling above) — nothing else lived in
+          this header row, so it's gone entirely rather than left empty. */}
 
       {/* ── Market Pulse: VIX · Sentiment · Flow ── */}
       <MarketPulseStrip
