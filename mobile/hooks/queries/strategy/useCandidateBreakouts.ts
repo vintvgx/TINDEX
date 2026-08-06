@@ -51,7 +51,10 @@ function todayISODate(): string {
  *    orb_pending_confirmations row — at that point the existing Awaiting
  *    Confirmation card takes over, and this hook excludes it to avoid
  *    showing the same signal twice
- *  - the user taps Skip (useSkippedCandidates, client-only, no backend call)
+ *  - the user taps Skip, or successfully taps Enter Now (both dismiss via
+ *    useSkippedCandidates, client-only, no backend call — Enter Now's own
+ *    query invalidation can lag a beat behind this hook's monitoring-state
+ *    poll, so the card dismisses itself immediately instead of waiting)
  */
 export function useCandidateBreakouts() {
   const { data: configs, isLoading: configsLoading } = useStrategyConfigs();

@@ -5,6 +5,7 @@ interface EnterCandidateTradeRequest {
   strategy_id: string;
   direction: 'CALL' | 'PUT';
   contract_symbol: string;
+  qty?: number;
 }
 
 interface EnterCandidateTradeResult {

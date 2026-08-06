@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
 import { useCandidateContract, type CandidateContract } from '@/hooks/queries/strategy/useCandidateContract';
 import { useEnterCandidateTrade } from '@/hooks/mutations/strategy/useEnterCandidateTrade';
+import { useSkippedCandidates } from '@/hooks/useSkippedCandidates';
 import { getOrbStatus } from '@/common/utils/orb/getOrbStatus';
 import { PROFILE_EMOJI } from '@/common/components/strategy/PositionCard';
 import type { CandidateBreakout } from '@/hooks/queries/strategy/useCandidateBreakouts';
@@ -30,7 +31,10 @@ export function CandidateBreakoutCard({
     candidate.strategyId, candidate.direction,
   );
   const enterTrade = useEnterCandidateTrade();
+  const { skip: dismiss } = useSkippedCandidates();
   const [, forceTick] = useState(0);
+  const [selected, setSelected] = useState<'default' | 'alt'>('default');
+  const [qty, setQty] = useState(1);
 
   useEffect(() => {
     if (!candidate.confirmDeadline) return;
@@ -58,20 +62,24 @@ export function CandidateBreakoutCard({
   const isBusy = enterTrade.isPending;
 
   const handleEnter = () => {
-    const contract = contractData?.default;
+    const contract = contractData?.[selected];
     if (!contract) return;
     Alert.alert(
       'Enter Now?',
-      `Buy ${candidate.ticker} $${contract.strike} ${candidate.direction === 'CALL' ? 'Call' : 'Put'} now, ` +
-        `without waiting for the 3-minute confirmation hold to clear.`,
+      `Buy ${qty} ${candidate.ticker} $${contract.strike} ${candidate.direction === 'CALL' ? 'Call' : 'Put'} ` +
+        `now, without waiting for the 3-minute confirmation hold to clear.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Enter Now',
           onPress: () => enterTrade.mutate(
-            { strategy_id: candidate.strategyId, direction: candidate.direction, contract_symbol: contract.symbol },
+            { strategy_id: candidate.strategyId, direction: candidate.direction, contract_symbol: contract.symbol, qty },
             {
-              onSuccess: () => toast.success(`${candidate.ticker} entered`),
+              // Query invalidation alone can lag a beat behind the monitoring-
+              // state poll this card is derived from (see useCandidateBreakouts)
+              // — dismiss it immediately, same mechanism as Skip, so it never
+              // lingers on screen after a trade the user just placed.
+              onSuccess: () => { toast.success(`${candidate.ticker} entered`); dismiss(candidate.key); },
               onError: (e) => toast.error(e.message || 'Entry failed'),
             },
           ),
@@ -99,8 +107,33 @@ export function CandidateBreakoutCard({
       </View>
 
       <View style={styles.strikesRow}>
-        <StrikeBox label="DEFAULT" contract={contractData?.default} loading={contractLoading} highlighted colors={colors} />
-        <StrikeBox label="ALT" contract={contractData?.alt} loading={contractLoading} colors={colors} />
+        <StrikeBox
+          label="DEFAULT" contract={contractData?.default} loading={contractLoading}
+          selected={selected === 'default'} onPress={() => setSelected('default')} colors={colors}
+        />
+        <StrikeBox
+          label="ALT" contract={contractData?.alt} loading={contractLoading}
+          selected={selected === 'alt'} onPress={() => setSelected('alt')} colors={colors}
+        />
+      </View>
+
+      <View style={styles.qtyRow}>
+        <Text style={[styles.qtyLabel, { color: colors.textTertiary }]}>CONTRACTS</Text>
+        <View style={styles.qtyStepper}>
+          <TouchableOpacity
+            onPress={() => setQty(q => Math.max(1, q - 1))}
+            style={[styles.qtyBtn, { borderColor: colors.border }]}
+          >
+            <Text style={[styles.qtyBtnText, { color: colors.text }]}>−</Text>
+          </TouchableOpacity>
+          <Text style={[styles.qtyValue, { color: colors.text }]}>{qty}</Text>
+          <TouchableOpacity
+            onPress={() => setQty(q => q + 1)}
+            style={[styles.qtyBtn, { borderColor: colors.border }]}
+          >
+            <Text style={[styles.qtyBtnText, { color: colors.text }]}>+</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View style={styles.actionsRow}>
@@ -115,9 +148,9 @@ export function CandidateBreakoutCard({
         </TouchableOpacity>
         <TouchableOpacity
           onPress={handleEnter}
-          disabled={isBusy || !contractData?.default}
+          disabled={isBusy || !contractData?.[selected]}
           activeOpacity={0.8}
-          style={[styles.btn, { flex: 1, borderColor: colors.success + '55', backgroundColor: colors.success + '14', opacity: contractData?.default ? 1 : 0.5 }]}
+          style={[styles.btn, { flex: 1, borderColor: colors.success + '55', backgroundColor: colors.success + '14', opacity: contractData?.[selected] ? 1 : 0.5 }]}
         >
           {isBusy ? <ActivityIndicator size="small" color={colors.success} /> : (
             <>
@@ -132,20 +165,26 @@ export function CandidateBreakoutCard({
 }
 
 function StrikeBox({
-  label, contract, loading, highlighted, colors,
+  label, contract, loading, selected, onPress, colors,
 }: {
   label: string;
   contract: CandidateContract | null | undefined;
   loading: boolean;
-  highlighted?: boolean;
+  selected: boolean;
+  onPress: () => void;
   colors: any;
 }) {
   return (
-    <View style={[
-      styles.strikeBox,
-      { backgroundColor: colors.background, borderColor: highlighted ? WATCHING_COLOR : colors.border },
-    ]}>
-      <Text style={[styles.strikeLabel, { color: highlighted ? WATCHING_COLOR : colors.textTertiary }]}>
+    <TouchableOpacity
+      onPress={onPress}
+      disabled={!contract}
+      activeOpacity={0.7}
+      style={[
+        styles.strikeBox,
+        { backgroundColor: colors.background, borderColor: selected ? WATCHING_COLOR : colors.border },
+      ]}
+    >
+      <Text style={[styles.strikeLabel, { color: selected ? WATCHING_COLOR : colors.textTertiary }]}>
         {contract ? `${contract.strike} · ${label}` : label}
       </Text>
       {loading && !contract ? (
@@ -158,7 +197,7 @@ function StrikeBox({
       ) : (
         <Text style={[styles.strikePrice, { color: colors.textTertiary, fontSize: 12 }]}>unavailable</Text>
       )}
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -185,6 +224,12 @@ const styles = StyleSheet.create({
   strikeLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.3 },
   strikePrice: { fontSize: 16, fontWeight: '800', marginTop: 3 },
   strikeDelta: { fontSize: 10, marginTop: 1 },
+  qtyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
+  qtyLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.3 },
+  qtyStepper: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  qtyBtn: { width: 28, height: 28, borderRadius: 7, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  qtyBtnText: { fontSize: 15, fontWeight: '700' },
+  qtyValue: { fontSize: 14, fontWeight: '700', minWidth: 18, textAlign: 'center' },
   actionsRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
   btn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
