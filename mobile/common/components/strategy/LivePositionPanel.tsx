@@ -36,6 +36,8 @@ export interface LivePositionStaticFallback {
   use_tp2?: boolean;
   sl_grace_enabled?: boolean;
   sl_grace_minutes?: number | null;
+  runner_mode?: 'trail' | 'be_hold' | 'none';
+  runner_trail?: number;
 }
 
 interface LivePositionPanelProps {
@@ -114,6 +116,8 @@ export function LivePositionPanel({
         use_tp2:       staticFallback!.use_tp2,
         sl_grace_enabled: staticFallback!.sl_grace_enabled,
         sl_grace_minutes: staticFallback!.sl_grace_minutes,
+        runner_mode:   staticFallback!.runner_mode,
+        runner_trail:  staticFallback!.runner_trail,
         market_value:  (staticFallback!.mid_price ?? staticFallback!.entry_premium!) * (staticFallback!.qty_remaining ?? 0) * 100,
       }
     : undefined);
@@ -304,19 +308,30 @@ export function LivePositionPanel({
 
 function PositionStopBar({ live, colors, showTp2 }: { live: DisplayData; colors: any; showTp2: boolean }) {
   // Once TP1 has fired and there's no live numeric target left to hit
-  // (no TP2 at all, or TP2 already hit too), the sole remaining contract is
-  // a genuine runner — governed by runner_mode (trail/be_hold/none), not a
-  // fixed price. Showing a stale "TP1" readout there is misleading (that
-  // job is done); relabel the slot to what's actually happening instead.
-  // A fresh 1-contract ENTRY (tp1_hit still false) is NOT a runner — TP1
-  // still fully closes it the moment it hits, so it keeps showing real
-  // Stop/TP1 numbers exactly like any other position.
-  const isRunnerPhase = live.qty_remaining === 1 && live.tp1_hit && (!showTp2 || live.tp2_hit);
+  // (no TP2 at all, or TP2 already hit too), whatever's left is a genuine
+  // runner — governed by runner_mode (trail/be_hold/none), not a fixed
+  // price. Showing a stale "TP1" readout there is misleading (that job is
+  // done); relabel the slot to what's actually happening instead. No longer
+  // gated on qty_remaining === 1 (2026-08-07): trail now sells one contract
+  // at a time on each confirmed dip (see ExitManager.evaluate()) rather than
+  // closing the whole runner at once, so 2+ contracts can be "the runner"
+  // simultaneously, not just the literal last one. A fresh 1-contract ENTRY
+  // (tp1_hit still false) is NOT a runner — TP1 still fully closes it the
+  // moment it hits, so it keeps showing real Stop/TP1 numbers exactly like
+  // any other position.
+  const isRunnerPhase = live.tp1_hit && (!showTp2 || live.tp2_hit);
+
+  // Trail mode shows its live ratcheting floor price (same "$X.XX" shape as
+  // Stop/TP1/TP2) instead of just the mode label — otherwise the only way to
+  // see where the trail actually sits was watching the position get sold.
+  const runnerValue = live.runner_mode === 'trail' && live.runner_trail != null
+    ? `Trail $${live.runner_trail.toFixed(2)}`
+    : RUNNER_MODE_LABEL[live.runner_mode ?? 'trail'];
 
   const stages = isRunnerPhase
     ? [
         { label: 'Stop',   value: `$${live.hard_stop.toFixed(2)}`, active: true, color: colors.error },
-        { label: 'Runner', value: RUNNER_MODE_LABEL[live.runner_mode ?? 'trail'], active: true, color: '#A855F7' },
+        { label: 'Runner', value: runnerValue, active: true, color: '#A855F7' },
       ]
     : [
         { label: 'Stop', value: `$${live.hard_stop.toFixed(2)}`, active: !live.tp1_hit, color: colors.error },
@@ -337,11 +352,22 @@ function PositionStopBar({ live, colors, showTp2 }: { live: DisplayData; colors:
 }
 
 /**
- * Countdown for an active SL_5/SL_10 grace window. Never runs its own
- * independent clock — every render recomputes `deadline - Date.now()` off
- * the backend's absolute timestamp (sl_grace_deadline), so this can't drift
- * from the engine actually deciding when to force-sell. The setInterval here
- * only forces a re-render each second; it holds no state of its own.
+ * SL grace indicator — two states:
+ *  - Idle: a persistent, low-key badge showing this position's PRE-TP1 stop
+ *    has a confirmation window at all (e.g. REVERSAL's default 5-min/3-bar
+ *    grace — see profiles.py). Without this there was no way to know a
+ *    position had grace protection until it was already actively breaching
+ *    (the countdown below), or by opening Edit Exits — easy to mistake for
+ *    "no grace configured" (2026-08-07). Hidden once tp1_hit: grace only
+ *    ever applies to the pre-TP1 hard stop (see ExitManager.evaluate() —
+ *    "not self.be_stop_active"), so showing this after TP1 would claim
+ *    protection the post-TP1 breakeven stop doesn't actually have.
+ *  - Active: countdown for an in-progress grace window. Never runs its own
+ *    independent clock — every render recomputes `deadline - Date.now()` off
+ *    the backend's absolute timestamp (sl_grace_deadline), so this can't
+ *    drift from the engine actually deciding when to force-sell. The
+ *    setInterval here only forces a re-render each second; it holds no
+ *    state of its own.
  */
 function SlGraceBadge({ live, colors }: { live: DisplayData; colors: any }) {
   const [, forceTick] = useState(0);
@@ -353,7 +379,17 @@ function SlGraceBadge({ live, colors }: { live: DisplayData; colors: any }) {
     return () => clearInterval(id);
   }, [active]);
 
-  if (!active) return null;
+  if (!active) {
+    if (!live.sl_grace_enabled || live.sl_grace_minutes == null || live.tp1_hit) return null;
+    return (
+      <View style={[styles.slGraceBadge, { backgroundColor: colors.textTertiary + '14', borderColor: colors.textTertiary + '40' }]}>
+        <Ionicons name="shield-checkmark-outline" size={12} color={colors.textSecondary} />
+        <Text style={[styles.slGraceText, { color: colors.textSecondary }]}>
+          Stop has {live.sl_grace_minutes}m grace
+        </Text>
+      </View>
+    );
+  }
 
   const remainingSec = Math.max(0, Math.round((new Date(live.sl_grace_deadline!).getTime() - Date.now()) / 1000));
   const mm = Math.floor(remainingSec / 60);

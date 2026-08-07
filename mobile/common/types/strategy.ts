@@ -258,6 +258,7 @@ export interface StrategyPosition {
   tp2_hit?: boolean;
   be_stop_active?: boolean;
   runner_trail?: number;
+  runner_mode?: 'trail' | 'be_hold' | 'none';
   fib_levels?: FibLevels;
   /** False for a 1-contract entry regardless of profile — TP2 is never
    *  reachable (TP1 always closes the sole contract in full). See

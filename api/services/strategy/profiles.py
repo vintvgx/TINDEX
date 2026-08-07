@@ -582,18 +582,25 @@ _EMOJIS = {
 }
 
 
-# Grace-timer fields are always overridable regardless of whether the base
-# profile already declares them — the stop-timer (Hard Stop / SL-5 / SL-10)
-# is now an independent per-trade choice (see grace_fields_for_minutes)
-# layered on top of ANY sizing profile, not just SL_5/SL_10 themselves.
-# Without this allow-list, get_profile()'s "only override existing keys"
-# rule below would silently drop a grace override on any profile that
-# doesn't itself define sl_grace_* (i.e. everything except SL_5/SL_10/
-# REVERSAL) — logged as an "ignoring unknown key" warning instead of doing
-# what was asked. 2026-07-30.
+# Fields that are always overridable via custom_thresholds regardless of
+# whether the base profile already declares them. Originally just the
+# grace-timer fields — the stop-timer (Hard Stop / SL-5 / SL-10) is an
+# independent per-trade choice (see grace_fields_for_minutes) layered on top
+# of ANY sizing profile, not just SL_5/SL_10 themselves — without this
+# allow-list, get_profile()'s "only override existing keys" rule below would
+# silently drop a grace override on any profile that doesn't itself define
+# sl_grace_* (i.e. everything except SL_5/SL_10/REVERSAL), logged as an
+# "ignoring unknown key" warning instead of doing what was asked (2026-07-30).
+#
+# runner_trail_confirm_seconds joined this set 2026-08-07 for the same
+# reason: a per-strategy tuning knob (see ExitManager's trail-confirm logic —
+# elapsed wall-clock time at/below the ratcheted trail floor, not a tick
+# count) that should be settable from any strategy's own config without
+# requiring a profiles.py edit first.
 GRACE_OVERRIDE_KEYS = {
     "sl_grace_enabled", "sl_grace_seconds",
     "sl_grace_recovery_seconds", "sl_outer_floor_pct",
+    "runner_trail_confirm_seconds",
 }
 
 

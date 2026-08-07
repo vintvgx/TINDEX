@@ -5,6 +5,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
 import { useSellPosition } from '@/hooks/mutations/strategy/useSellPosition';
+import { useSellStatus } from '@/hooks/useSellStatus';
+import { parseContractSymbol } from '@/lib/formatContract';
 
 interface Props {
   visible: boolean;
@@ -22,12 +24,19 @@ interface Props {
 /**
  * Manually exit an open position: choose how many contracts to sell (or Sell All)
  * and submit a market SELL. LIVE positions confirm first.
+ *
+ * Closes itself the instant the sell is submitted rather than waiting for the
+ * mutation to resolve — a fill can take up to ~10s, and blocking here means
+ * the user can't move on to their next position while it's in flight. See
+ * useSellStatus/TickerTape for the "Selling… → Sold…" confirmation that
+ * replaces the old in-modal spinner.
  */
 export function ExitTradeModal({
   visible, colors, strategyId, ticker, contract, qtyRemaining, paperMode, onClose,
 }: Props) {
   const toast = useToast();
   const { mutate: sell, isPending } = useSellPosition();
+  const { startSelling, markSold, clearSelling } = useSellStatus();
   const max = Math.max(1, qtyRemaining || 1);
   const [qty, setQty] = useState(max);
   // Optional — leaving this blank makes the backend seek a good price itself
@@ -44,11 +53,34 @@ export function ExitTradeModal({
   const hasValidLimit = limitPrice != null && !Number.isNaN(limitPrice) && limitPrice > 0;
 
   const doSell = () => {
+    const qtyToSell = sellAll ? max : qty;
+    const parsed = contract ? parseContractSymbol(contract) : null;
+    const contractLabel = parsed
+      ? `${parsed.ticker} ${parsed.strike % 1 === 0 ? parsed.strike : parsed.strike.toFixed(1)}${parsed.type}`
+      : (contract || ticker);
+    const id = `${strategyId}-${Date.now()}`;
+
+    // Fire-and-close: a sell can take up to ~10s (the backend samples the
+    // bid / tries a limit order before falling back to market — see
+    // useSellPosition's docstring), and blocking the modal on that means the
+    // user can't move on to their next position while it resolves. The
+    // ticker tape (see TickerTape's useSellStatus branch) picks up "Selling…"
+    // → "Sold…" instead, so there's still visible confirmation either way —
+    // it's just not gating this sheet anymore.
+    startSelling({ id, strategyId, ticker, contractLabel, qty: qtyToSell });
+    onClose();
+
     sell(
       { strategyId, qty: sellAll ? undefined : qty, limitPrice: hasValidLimit ? limitPrice : undefined },
       {
-        onSuccess: (r) => { toast.success(r.message || 'Position exited'); onClose(); },
-        onError:   (e) => toast.error(e.message || 'Sell failed'),
+        onSuccess: (r) => {
+          toast.success(r.message || 'Position exited');
+          markSold(id, r.avg_fill_price ?? 0, r.qty_sold ?? qtyToSell);
+        },
+        onError: (e) => {
+          toast.error(e.message || 'Sell failed');
+          clearSelling(id);
+        },
       },
     );
   };
@@ -73,7 +105,7 @@ export function ExitTradeModal({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={isPending ? undefined : onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose}>
         <Pressable style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
           {/* Header */}
           <View style={styles.header}>

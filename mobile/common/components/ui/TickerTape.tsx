@@ -27,6 +27,8 @@ import { useWatchlists } from '@/hooks/queries/watchlist/useWatchlist';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useOrbHubHealth } from '@/hooks/queries/orb/useOrbHubHealth';
 import { usePendingConfirmations } from '@/hooks/queries/strategy/usePendingConfirmations';
+import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import { useSellStatus, type SellStatus } from '@/hooks/useSellStatus';
 import { Skeleton } from '@/common/components/ui/Skeleton';
 import type { WatchlistStock } from '@/common/types/watchlist';
 
@@ -81,6 +83,29 @@ function TapeRow({
   );
 }
 
+/**
+ * One "Selling…" / "Sold…" line in the sell-status takeover (see the
+ * `sellStatuses.length > 0` branch below). Split out from TickerTape itself
+ * because it needs its own useStrategyLivePrice subscription while selling —
+ * a hook can't be called conditionally per array item inline in the parent.
+ */
+function SellStatusLine({ status, colors }: { status: SellStatus; colors: ReturnType<typeof useThemeColors> }) {
+  const { data } = useStrategyLivePrice(status.strategyId, status.phase === 'selling');
+  const livePrice = data?.mid_price ?? null;
+
+  const label = status.phase === 'selling'
+    ? `Selling ${status.qty} ${status.contractLabel}${livePrice != null ? ` ($${livePrice.toFixed(2)})` : ''}`
+    : `Sold ${status.qty} ${status.contractLabel} at $${(status.price ?? 0).toFixed(2)}`;
+  const color = status.phase === 'selling' ? colors.warning : colors.success;
+
+  return (
+    <View style={styles.item}>
+      <Text style={[styles.confirmText, { color }]} numberOfLines={1}>{label}</Text>
+      <Text style={[styles.dot, { color: colors.tapeMuted }]}>•</Text>
+    </View>
+  );
+}
+
 export function TickerTape() {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
@@ -94,6 +119,13 @@ export function TickerTape() {
   // neither of those is mounted/focused. ────────────────────────────────────
   const { data: pendingList } = usePendingConfirmations();
   const pendingCount = pendingList?.length ?? 0;
+
+  // ── Manual sell in flight / just filled — see ExitTradeModal, which closes
+  // itself immediately on submit instead of blocking on the sell, and
+  // useSellStatus for the "Selling…" → "Sold…" (20s) lifecycle. Checked below
+  // pendingCount so an awaiting-confirmation takeover (action-required) is
+  // never hidden behind a transient sell status.
+  const { statuses: sellStatuses } = useSellStatus();
 
   // ── Data sources ──────────────────────────────────────────────────────────
   const { livePrices, spy, vix, sentiment } = useMarketStream(STREAM_TICKERS);
@@ -266,6 +298,18 @@ export function TickerTape() {
             Awaiting Confirmation
           </Text>
         </Pressable>
+      </View>
+    );
+  }
+
+  if (sellStatuses.length > 0) {
+    return (
+      <View style={{ backgroundColor: colors.tape, paddingTop: insets.top }}>
+        <View style={[styles.tape, styles.confirmTape]}>
+          <View style={[styles.row, { paddingLeft: 12 }]}>
+            {sellStatuses.map(s => <SellStatusLine key={s.id} status={s} colors={colors} />)}
+          </View>
+        </View>
       </View>
     );
   }

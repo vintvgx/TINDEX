@@ -2615,6 +2615,13 @@ class ORBEngine:
             "hard_stop":     round(em.hard_stop, 4),
             "tp1":           round(em.tp1, 4),
             "tp2":           round(em.tp2, 4),
+            # Live ratcheting trail floor (runner_mode="trail" only — see
+            # ExitManager.evaluate()). to_dict() already computed this; this
+            # payload just never picked it up (same class of gap as the
+            # 2026-08-04 runner_mode/cascade_enabled fix above) — the mobile
+            # card had no live number to show for the "Runner: Trailing"
+            # stage, only the mode label (2026-08-07).
+            "runner_trail":  round(em_state.get("runner_trail", em.runner_trail) or 0, 4),
             "sl_grace_active":      em_state.get("sl_grace_active", False),
             "sl_grace_deadline":    em_state.get("sl_grace_deadline"),
             "sl_recovery_deadline": em_state.get("sl_recovery_deadline"),

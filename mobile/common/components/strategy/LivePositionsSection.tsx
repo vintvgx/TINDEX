@@ -207,6 +207,8 @@ export function PositionRow({
           use_tp2:       pos.use_tp2,
           sl_grace_enabled: pos.sl_grace_enabled,
           sl_grace_minutes: pos.sl_grace_minutes,
+          runner_mode:   pos.runner_mode,
+          runner_trail:  pos.runner_trail,
         }}
         streaming={connected}
         accentColor={accentColor}

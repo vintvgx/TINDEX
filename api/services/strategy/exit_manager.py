@@ -29,17 +29,24 @@ from services.strategy.profiles import grace_fields_for_minutes
 
 ET = pytz.timezone("America/New_York")
 
-# ─── TEMPORARY KILL-SWITCH (2026-08-04) ────────────────────────────────────
-# runner_mode overrides aren't reliably persisting/taking effect (see
+# ─── KILL-SWITCH (added 2026-08-04, re-enabled 2026-08-07) ─────────────────
+# Originally hard-disabled both RUNNER_TRAIL_STOP and CASCADE_EXIT after
+# runner_mode overrides weren't reliably persisting/taking effect (see
 # docs/TODO.md — user reported "None" reverting to "trail" even after the
-# runner_cascade migration). Until that's actually root-caused and fixed,
-# both RUNNER_TRAIL_STOP and CASCADE_EXIT are hard-disabled here regardless
-# of profile/override config, so a stale/reverted setting can never
-# force-sell a contract out from under the user. Only TP1/TP2/HARD_STOP/
-# BREAKEVEN_STOP/EOD_CLOSE/manual close can sell anything while this is on.
-# Flip back to False once docs/TODO.md's item is fixed and verified.
-_RUNNER_TRAIL_HARD_DISABLED = True
-_CASCADE_EXIT_HARD_DISABLED = True
+# runner_cascade migration) — a stale/reverted setting was force-selling
+# contracts out from under the user. That persistence bug was NEVER
+# root-caused; re-enabling this does not by itself fix it.
+#
+# Re-enabled 2026-08-07 as a deliberate choice, after a separate problem —
+# trail closing the whole runner on a single unconfirmed tick, and cascade/
+# trail firing too eagerly to let a real trend develop — was fixed
+# independently (see the trail-confirm/incremental-sell/TP2-midpoint-gate
+# logic below). That fix addresses "fires too fast," not "runner_mode
+# silently reverts" — if the 08-04 persistence bug resurfaces, this is the
+# switch to flip back to True, and the underlying override-persistence path
+# (ORBEngine / TradeLogger.update_exit_levels) still needs its own look.
+_RUNNER_TRAIL_HARD_DISABLED = False
+_CASCADE_EXIT_HARD_DISABLED = False
 
 # Sentinel distinguishing "sl_grace_minutes not provided" (leave the current
 # stop-type alone) from "sl_grace_minutes explicitly set to None" (switch to
@@ -142,6 +149,26 @@ class ExitManager:
         # post-TP1 breakeven stop (same check, same variable — see evaluate()).
         self._sl_ticks        = 0
         self._sl_ticks_needed = profile.get("sl_confirm_ticks", 1)
+
+        # Runner trail confirmation (2026-08-07, revised same day): the trail
+        # stop originally had NO confirmation at all — one quote touching the
+        # ratcheted floor closed the whole runner instantly. A first pass
+        # used a raw tick counter (mirroring sl_confirm_ticks), but "ticks"
+        # here means option bid/ask updates — those can arrive several times
+        # a SECOND on a liquid 0DTE contract, so a small tick count gives
+        # almost no real confirmation window, not meaningfully different from
+        # the original bug. Bar-based (mirroring cascade's on_underlying_bar,
+        # 1-min candles) would be the other conventional option, but that
+        # would need new engine wiring to track option-premium OHLC per bar —
+        # nothing in this system aggregates option price into bars today,
+        # only the underlying. Elapsed-time is the smallest correct fix:
+        # reuses the same "give it real wall-clock time, not N quotes"
+        # pattern this codebase already trusts for sl_grace_seconds. Price
+        # must sit at/below the ratcheted floor for runner_trail_confirm_
+        # seconds of continuous wall-clock time before it fires; any tick
+        # back above the floor cancels the timer immediately (see evaluate()).
+        self._trail_breach_start    = None
+        self._trail_confirm_seconds = profile.get("runner_trail_confirm_seconds", 60)
 
         # Advanced per-trade qty overrides (set via PATCH .../exits — see
         # apply_overrides) — user-chosen contract counts to sell at the
@@ -359,18 +386,47 @@ class ExitManager:
             return self._action("CLOSE_PARTIAL", qty_tp2, "TP2", current_option_price)
 
         # Trail stop (trail mode only) — be_hold skips this; BE stop is the floor.
-        # qty_remaining > 1 (not > 0): once only the runner contract is left,
-        # it exits via TP2/BE/EOD/manual only — same "preserve 1 runner"
-        # exemption cascade already gets below, so a single-contract runner
-        # never gets force-sold by RUNNER_TRAIL_STOP either.
+        # Sells exactly ONE contract per confirmed dip, then resets its own
+        # confirm timer and keeps trailing whatever's left, same cascade-like
+        # shape as the block below — it never dumps the whole runner at once
+        # (2026-08-07: the old CLOSE_ALL-on-first-touch behavior cut real
+        # continuations short as hard as an unconfirmed single tick did).
+        # qty_remaining > 1 (not > 0) is the same "always preserve 1" floor
+        # cascade uses: once only the last contract is left, trail stops
+        # firing entirely and that contract exits only via TP2/BE stop/EOD/
+        # manual — trail alone can never fully close a position, only the
+        # (breakeven-moved) hard stop can.
         if (not _RUNNER_TRAIL_HARD_DISABLED and self._runner_mode == "trail"
                 and self.tp1_hit and self.qty_remaining > 1):
             new_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
             if new_trail > self.runner_trail:
                 self.runner_trail = new_trail
-            if current_option_price <= self.runner_trail:
-                return self._action("CLOSE_ALL", self.qty_remaining, "RUNNER_TRAIL_STOP",
+
+            # TP2 hitting is real conviction the move is working — don't let
+            # trail nip at the very next tick down off that high. Stay fully
+            # inactive (still ratcheting the floor above, just not acting on
+            # it) until price gives back enough to reach the TP1/TP2
+            # midpoint — a genuine pullback signal, not the first breath —
+            # then resume normal trail behavior against the floor already
+            # built up. AND'd with the ratchet check below, not instead of
+            # it: the midpoint is an extra floor layered under a tight
+            # runner_trail_pct, not a replacement for it.
+            trail_armed = True
+            if self.tp2_hit:
+                midpoint = (self.tp1 + self.tp2) / 2
+                trail_armed = current_option_price <= midpoint
+
+            if trail_armed and current_option_price <= self.runner_trail:
+                if self._trail_breach_start is None:
+                    self._trail_breach_start = datetime.now(ET)
+                elapsed = (datetime.now(ET) - self._trail_breach_start).total_seconds()
+                if elapsed < self._trail_confirm_seconds:
+                    return self._action("HOLD", 0, "RUNNER_TRAIL_CONFIRMING")
+                self._trail_breach_start = None
+                return self._action("CLOSE_PARTIAL", 1, "RUNNER_TRAIL_STOP",
                                     current_option_price)
+            else:
+                self._trail_breach_start = None
 
         # Cascade exit — fires when on_underlying_bar() has accumulated enough
         # consecutive against-the-trade candles (bar cadence, not quote cadence).

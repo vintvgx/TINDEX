@@ -19,6 +19,11 @@ export interface LivePriceData {
   hard_stop:     number;
   tp1:           number;
   tp2:           number;
+  /** Live ratcheting trail floor — only meaningful once `runner_mode ===
+   *  "trail"` and tp1_hit; the runner force-sells if mid_price dips to/below
+   *  this. Recomputed every tick server-side (ExitManager.evaluate()), only
+   *  ever moves up. */
+  runner_trail?: number;
   /** True while a SL_5/SL_10 (or REVERSAL) grace window is open — the
    *  premium is at/below hard_stop but hasn't been force-sold yet. See
    *  exit_manager.py's sl_grace_enabled. */
