@@ -19,6 +19,7 @@ export interface SellStatus {
   /** Engine id — used to open a live-price WS while `phase === 'selling'`. */
   strategyId: string;
   ticker: string;
+  paperMode: boolean;
   /** e.g. "IWM 300C" — no expiry, matches how the ticker tape names things. */
   contractLabel: string;
   qty: number;

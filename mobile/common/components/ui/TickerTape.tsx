@@ -108,9 +108,17 @@ function SellStatusLine({ status, colors }: { status: SellStatus; colors: Return
       ? colors.error
       : colors.success;
 
+  // Same PAPER/LIVE color convention as PendingConfirmationCard's account
+  // badge — real money selling reads as more urgent than paper.
+  const modeTag = status.paperMode ? 'PAPER' : 'LIVE';
+  const modeColor = status.paperMode ? '#FF9F0A' : colors.error;
+
   return (
     <View style={styles.item}>
-      <Text style={[styles.confirmText, { color }]} numberOfLines={1}>{label}</Text>
+      <Text style={[styles.confirmText, { color }]} numberOfLines={1}>
+        <Text style={{ color: modeColor, fontWeight: '800' }}>[{modeTag}] </Text>
+        {label}
+      </Text>
       <Text style={[styles.dot, { color: colors.tapeMuted }]}>•</Text>
     </View>
   );
@@ -136,6 +144,36 @@ export function TickerTape() {
   // pendingCount so an awaiting-confirmation takeover (action-required) is
   // never hidden behind a transient sell status.
   const { statuses: sellStatuses } = useSellStatus();
+  const hasSellStatus = pendingCount === 0 && sellStatuses.length > 0;
+
+  // Crossfades the sell-status overlay in/out over the (never-unmounted,
+  // see the 2026-08-10 fix above) marquee, instead of it just popping in
+  // and snapping back to the tracked tickers. sellOverlayMounted stays true
+  // slightly longer than hasSellStatus — long enough for the fade-out to
+  // finish — so the overlay isn't yanked off-screen mid-animation; nothing
+  // else needs to change since the marquee underneath was already scrolling
+  // the whole time and just becomes visible again as this fades to 0.
+  const [sellOverlayMounted, setSellOverlayMounted] = useState(false);
+  const sellOverlayOpacity = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (hasSellStatus) {
+      setSellOverlayMounted(true);
+      Animated.timing(sellOverlayOpacity, {
+        toValue: 1, duration: 500, easing: Easing.out(Easing.quad), useNativeDriver: true,
+      }).start();
+    } else if (sellOverlayMounted) {
+      Animated.timing(sellOverlayOpacity, {
+        toValue: 0, duration: 500, easing: Easing.in(Easing.quad), useNativeDriver: true,
+      }).start(() => setSellOverlayMounted(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSellStatus]);
+  // sellStatuses itself is already empty by the time hasSellStatus flips
+  // false and the fade-out starts — hold on to the last non-empty list so
+  // the overlay keeps showing real content while it fades away instead of
+  // flashing blank first.
+  const lastSellStatusesRef = useRef(sellStatuses);
+  if (hasSellStatus) lastSellStatusesRef.current = sellStatuses;
 
   // ── Data sources ──────────────────────────────────────────────────────────
   const { livePrices, spy, vix, sentiment } = useMarketStream(STREAM_TICKERS);
@@ -358,12 +396,14 @@ export function TickerTape() {
         </Pressable>
       )}
 
-      {pendingCount === 0 && sellStatuses.length > 0 && (
-        <View style={[styles.tape, styles.confirmTape, styles.overlay, { top: insets.top, backgroundColor: colors.tape }]}>
+      {pendingCount === 0 && sellOverlayMounted && (
+        <Animated.View
+          style={[styles.tape, styles.confirmTape, styles.overlay, { top: insets.top, backgroundColor: colors.tape, opacity: sellOverlayOpacity }]}
+        >
           <View style={[styles.row, { paddingLeft: 12 }]}>
-            {sellStatuses.map(s => <SellStatusLine key={s.id} status={s} colors={colors} />)}
+            {lastSellStatusesRef.current.map(s => <SellStatusLine key={s.id} status={s} colors={colors} />)}
           </View>
-        </View>
+        </Animated.View>
       )}
     </View>
   );

@@ -67,7 +67,7 @@ export function ExitTradeModal({
     // ticker tape (see TickerTape's useSellStatus branch) picks up "Selling…"
     // → "Sold…" instead, so there's still visible confirmation either way —
     // it's just not gating this sheet anymore.
-    startSelling({ id, strategyId, ticker, contractLabel, qty: qtyToSell });
+    startSelling({ id, strategyId, ticker, contractLabel, qty: qtyToSell, paperMode });
     onClose();
 
     sell(

@@ -37,7 +37,7 @@ export function SimulatorScreen({ onClose }: { onClose: () => void }) {
   // same as it would for any stream hiccup on a real sell.
   const simulateSell = () => {
     const id = `sim-sell-${Date.now()}`;
-    startSelling({ id, strategyId: 'sim-fake-strategy', ticker: 'IWM', contractLabel: 'IWM 300C', qty: 2 });
+    startSelling({ id, strategyId: 'sim-fake-strategy', ticker: 'IWM', contractLabel: 'IWM 300C', qty: 2, paperMode: true });
     toast.info('Simulated sell started — watch the ticker tape');
     setTimeout(() => markSold(id, 1.42, 2, 44), 3000);
   };
