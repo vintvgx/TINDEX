@@ -93,10 +93,20 @@ function SellStatusLine({ status, colors }: { status: SellStatus; colors: Return
   const { data } = useStrategyLivePrice(status.strategyId, status.phase === 'selling');
   const livePrice = data?.mid_price ?? null;
 
+  const pnlSuffix = status.pnl != null
+    ? ` (${status.pnl >= 0 ? '+' : '-'}$${Math.abs(status.pnl).toFixed(2)})`
+    : '';
   const label = status.phase === 'selling'
     ? `Selling ${status.qty} ${status.contractLabel}${livePrice != null ? ` ($${livePrice.toFixed(2)})` : ''}`
-    : `Sold ${status.qty} ${status.contractLabel} at $${(status.price ?? 0).toFixed(2)}`;
-  const color = status.phase === 'selling' ? colors.warning : colors.success;
+    : `Sold ${status.qty} ${status.contractLabel} at $${(status.price ?? 0).toFixed(2)}${pnlSuffix}`;
+  // Reflect win/loss once it's known, same green/red convention as PnL
+  // everywhere else in the app — not just a flat "sold" green regardless of
+  // whether this particular sell actually made money.
+  const color = status.phase === 'selling'
+    ? colors.warning
+    : status.pnl != null && status.pnl < 0
+      ? colors.error
+      : colors.success;
 
   return (
     <View style={styles.item}>
@@ -122,7 +132,7 @@ export function TickerTape() {
 
   // ── Manual sell in flight / just filled — see ExitTradeModal, which closes
   // itself immediately on submit instead of blocking on the sell, and
-  // useSellStatus for the "Selling…" → "Sold…" (20s) lifecycle. Checked below
+  // useSellStatus for the "Selling…" → "Sold…" (15s) lifecycle. Checked below
   // pendingCount so an awaiting-confirmation takeover (action-required) is
   // never hidden behind a transient sell status.
   const { statuses: sellStatuses } = useSellStatus();
@@ -284,36 +294,17 @@ export function TickerTape() {
   // data. Stays up (and blocks the normal mode-cycle tap) until every pending
   // confirmation is resolved (entered or skipped) — see the Dashboard's
   // pending-confirmation cards, which is where tapping this sends you.
-  if (pendingCount > 0) {
-    return (
-      <View style={{ backgroundColor: colors.tape, paddingTop: insets.top }}>
-        <Pressable
-          style={[styles.tape, styles.confirmTape, { backgroundColor: colors.warningBg }]}
-          onPress={() => router.push('/(app)/(tabs)/dashboard')}
-          accessibilityRole="button"
-          accessibilityLabel={`${pendingCount} trade confirmation(s) awaiting review. Tap to open Dashboard.`}
-        >
-          <Ionicons name="warning" size={13} color={colors.warning} style={{ marginLeft: 12, marginRight: 6 }} />
-          <Text style={[styles.confirmText, { color: colors.warning }]} numberOfLines={1}>
-            Awaiting Confirmation
-          </Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  if (sellStatuses.length > 0) {
-    return (
-      <View style={{ backgroundColor: colors.tape, paddingTop: insets.top }}>
-        <View style={[styles.tape, styles.confirmTape]}>
-          <View style={[styles.row, { paddingLeft: 12 }]}>
-            {sellStatuses.map(s => <SellStatusLine key={s.id} status={s} colors={colors} />)}
-          </View>
-        </View>
-      </View>
-    );
-  }
-
+  //
+  // 2026-08-10: this (and the sell-status takeover below it) used to be a
+  // full early `return` swapping in a completely different tree — which
+  // meant the marquee's Animated.View got unmounted every time a takeover
+  // started and freshly remounted when it cleared. A native-driven
+  // (useNativeDriver: true) Animated.Value's connection to a specific host
+  // view doesn't reliably reattach to a brand-new view just because a later
+  // effect calls .start() again on the same JS-side value — the scroll loop
+  // came back "started" but never visibly moved. Fixed by never unmounting
+  // the marquee at all: both takeovers now render as an opaque overlay
+  // ON TOP of it instead of replacing it, so there's nothing to reconnect.
   return (
     <View style={{ backgroundColor: colors.tape, paddingTop: insets.top }}>
       <Pressable style={styles.tape} onPress={cycle} accessibilityRole="button" accessibilityLabel={`Ticker tape: ${mode.label}. Tap to change.`}>
@@ -347,6 +338,33 @@ export function TickerTape() {
           <Ionicons name="swap-horizontal" size={13} color={colors.tapeMuted} />
         </View>
       </Pressable>
+
+      {/* Opaque overlay, positioned to exactly cover the Pressable above
+          (not StyleSheet.absoluteFillObject — that would also cover the
+          paddingTop safe-area inset). Fully covers + is rendered after the
+          marquee, so it naturally swallows taps meant for the cycle
+          Pressable underneath — no pointerEvents juggling needed. */}
+      {pendingCount > 0 && (
+        <Pressable
+          style={[styles.tape, styles.confirmTape, styles.overlay, { top: insets.top, backgroundColor: colors.warningBg }]}
+          onPress={() => router.push('/(app)/(tabs)/dashboard')}
+          accessibilityRole="button"
+          accessibilityLabel={`${pendingCount} trade confirmation(s) awaiting review. Tap to open Dashboard.`}
+        >
+          <Ionicons name="warning" size={13} color={colors.warning} style={{ marginLeft: 12, marginRight: 6 }} />
+          <Text style={[styles.confirmText, { color: colors.warning }]} numberOfLines={1}>
+            Awaiting Confirmation
+          </Text>
+        </Pressable>
+      )}
+
+      {pendingCount === 0 && sellStatuses.length > 0 && (
+        <View style={[styles.tape, styles.confirmTape, styles.overlay, { top: insets.top, backgroundColor: colors.tape }]}>
+          <View style={[styles.row, { paddingLeft: 12 }]}>
+            {sellStatuses.map(s => <SellStatusLine key={s.id} status={s} colors={colors} />)}
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -360,6 +378,16 @@ const styles = StyleSheet.create({
   },
   confirmTape: {
     justifyContent: 'flex-start',
+  },
+  // `top` is set inline (to insets.top) rather than baked in here, since it
+  // depends on the device's safe-area inset. Deliberately not
+  // StyleSheet.absoluteFillObject — that anchors to the OUTER container
+  // (which already has paddingTop: insets.top applied), so it would also
+  // cover the safe-area padding above the tape row, not just the row itself.
+  overlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
   },
   confirmText: {
     fontSize: 12,

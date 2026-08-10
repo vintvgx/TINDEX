@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 const QUERY_KEY = ['sell-status'];
-const SOLD_DISPLAY_MS = 20_000;
+const SOLD_DISPLAY_MS = 15_000;
 // Safety net, independent of whether the sell mutation ever settles — see
 // useSellPosition's 2026-08-09 fix for the specific bug this backstops (a
 // hung fetch with no timeout left a "Selling…" status, and the ticker tape
@@ -24,6 +24,8 @@ export interface SellStatus {
   qty: number;
   /** Fill price once sold; unset while selling (tape shows the live streamed price instead). */
   price?: number;
+  /** Dollar P&L for this sell; unset while selling. See useSellPosition's SellResult.pnl. */
+  pnl?: number;
 }
 
 type SellStatusMap = Record<string, SellStatus>;
@@ -66,10 +68,10 @@ export function useSellStatus() {
 
   // Sold status sticks around for SOLD_DISPLAY_MS then removes itself — the
   // tape reverts to its normal content with no further action needed.
-  const markSold = useCallback((id: string, price: number, qty: number) => {
+  const markSold = useCallback((id: string, price: number, qty: number, pnl?: number) => {
     const current = qc.getQueryData<SellStatusMap>(QUERY_KEY) ?? {};
     if (!current[id]) return;
-    qc.setQueryData(QUERY_KEY, { ...current, [id]: { ...current[id], phase: 'sold' as const, price, qty } });
+    qc.setQueryData(QUERY_KEY, { ...current, [id]: { ...current[id], phase: 'sold' as const, price, qty, pnl } });
     setTimeout(() => {
       const latest = qc.getQueryData<SellStatusMap>(QUERY_KEY) ?? {};
       if (!latest[id]) return;

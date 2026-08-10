@@ -2411,7 +2411,7 @@ class ORBEngine:
 
         Called by POST /strategy/positions/<id>/sell. Returns
         {"status": "ok"|"error", "message", "qty_sold"?, "qty_remaining"?,
-        "avg_fill_price"?}.
+        "avg_fill_price"?, "pnl"?}.
         """
         with self._tick_lock:
             if not self.trade_taken or not self.contract_symbol or not self.exit_manager:
@@ -2454,6 +2454,13 @@ class ORBEngine:
         if fully_closed:
             self.reset_session()
 
+        # Same (exit - entry) * qty * 100 convention as TradeLogger.log_exit's
+        # stage_pnl — options premium is quoted per-share, contracts are
+        # 100 shares each. entry_p was captured before _finalize_exit above,
+        # so this reflects this trade's actual cost basis regardless of any
+        # add_to_position blending that happened earlier in its life.
+        pnl = (result["avg_fill_price"] - entry_p) * result["filled_qty"] * 100
+
         return {
             "status":         "ok",
             "message":        f"Sold {result['filled_qty']} contract(s) of {contract} "
@@ -2461,6 +2468,7 @@ class ORBEngine:
             "qty_sold":       result["filled_qty"],
             "avg_fill_price": round(result["avg_fill_price"], 4),
             "qty_remaining":  0 if fully_closed else self.exit_manager.qty_remaining,
+            "pnl":            round(pnl, 2),
         }
 
     def add_to_position(self, qty: int) -> dict:

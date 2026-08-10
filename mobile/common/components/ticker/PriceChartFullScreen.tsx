@@ -88,14 +88,31 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   // and from any position SL/TP lines this chart might show elsewhere.
   const [showSR, setShowSR] = useState(false);
   const { data: srData } = useTickerSupportResistance(visible && showSR ? ticker : null);
+  // AdvancedPriceChart folds EVERY referenceLine price into the y-axis
+  // min/max unconditionally (it has to — that's exactly right for an entry/
+  // TP/stop line, always close to its own trade's range). S/R levels don't
+  // share that property: the swing-detection lookback is 2 years, so a
+  // strongly-touched level can legitimately sit 20-40%+ away from spot.
+  // Folding ALL of them in stretches the domain so far that the actual
+  // candles get crushed into a sliver in the middle — unreadable on any
+  // period, not just an edge case (2026-08-10 fix). Bounding to levels
+  // within 20% of current price keeps the chart legible on every period
+  // while still surfacing anything close enough to matter for a near-term
+  // decision — which is the only kind of S/R level worth seeing on a price
+  // chart anyway.
+  const SR_MAX_DISTANCE_PCT = 0.20;
   const srReferenceLines: ChartReferenceLine[] | null = srData
     ? [
-        ...srData.support.map((lv): ChartReferenceLine => ({
-          label: `S $${lv.price.toFixed(2)}`, price: lv.price, color: colors.success, dash: '4,3',
-        })),
-        ...srData.resistance.map((lv): ChartReferenceLine => ({
-          label: `R $${lv.price.toFixed(2)}`, price: lv.price, color: colors.error, dash: '4,3',
-        })),
+        ...srData.support
+          .filter(lv => (srData.current_price - lv.price) / srData.current_price <= SR_MAX_DISTANCE_PCT)
+          .map((lv): ChartReferenceLine => ({
+            label: `S $${lv.price.toFixed(2)}`, price: lv.price, color: colors.success, dash: '4,3',
+          })),
+        ...srData.resistance
+          .filter(lv => (lv.price - srData.current_price) / srData.current_price <= SR_MAX_DISTANCE_PCT)
+          .map((lv): ChartReferenceLine => ({
+            label: `R $${lv.price.toFixed(2)}`, price: lv.price, color: colors.error, dash: '4,3',
+          })),
       ]
     : null;
 

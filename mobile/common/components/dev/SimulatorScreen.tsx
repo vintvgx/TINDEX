@@ -39,7 +39,7 @@ export function SimulatorScreen({ onClose }: { onClose: () => void }) {
     const id = `sim-sell-${Date.now()}`;
     startSelling({ id, strategyId: 'sim-fake-strategy', ticker: 'IWM', contractLabel: 'IWM 300C', qty: 2 });
     toast.info('Simulated sell started — watch the ticker tape');
-    setTimeout(() => markSold(id, 1.42, 2), 3000);
+    setTimeout(() => markSold(id, 1.42, 2, 44), 3000);
   };
 
   const rows: SimRow[] = [

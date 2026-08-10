@@ -10,6 +10,10 @@ interface SellResult {
    *  sample the bid and seek a good price itself (up to ~10s) rather than
    *  firing an instant market order — this is what it actually sold at. */
   avg_fill_price?: number;
+  /** Dollar P&L for just this sell — (avg_fill_price - entry_premium) * qty_sold
+   *  * 100. Reflects this trade's actual cost basis (post any add_to_position
+   *  blending), not just this partial fill's own premium delta. */
+  pnl?: number;
 }
 
 /**

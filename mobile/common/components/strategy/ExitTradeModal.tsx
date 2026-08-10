@@ -75,7 +75,7 @@ export function ExitTradeModal({
       {
         onSuccess: (r) => {
           toast.success(r.message || 'Position exited');
-          markSold(id, r.avg_fill_price ?? 0, r.qty_sold ?? qtyToSell);
+          markSold(id, r.avg_fill_price ?? 0, r.qty_sold ?? qtyToSell, r.pnl);
         },
         onError: (e) => {
           toast.error(e.message || 'Sell failed');
