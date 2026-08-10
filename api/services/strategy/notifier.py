@@ -487,6 +487,15 @@ class StrategyNotifier:
             priority=P_INFO,
         )
 
+    def notify_test(self, title: str, body: str):
+        """
+        Free-form push with no domain fields — used only by the Profile >
+        Simulator screen's "Send Test Push" action (see
+        POST /strategy/debug/test-push) to verify a device actually receives
+        pushes without needing a real or simulated trade first.
+        """
+        self._dispatch(title=title, body=body, priority=P_INFO)
+
     # ── Internal helpers ────────────────────────────────────────────────────────
 
     def _dispatch(self, title: str, body: str, data: dict | None = None,

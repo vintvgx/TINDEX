@@ -9,7 +9,8 @@ import { useChartLiveStream } from '@/hooks/queries/ticker/useChartLiveStream';
 import { useToast } from '@/common/components/ui/Toast';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
-import { AdvancedPriceChart, AdvancedScrubPoint } from '@/common/components/ticker/AdvancedPriceChart';
+import { useTickerSupportResistance } from '@/hooks/queries/technicals/useTickerSupportResistance';
+import { AdvancedPriceChart, AdvancedScrubPoint, ChartReferenceLine } from '@/common/components/ticker/AdvancedPriceChart';
 import type { PricePeriod, TickerHistoryData } from '@/common/types/blogPosts/ticker';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
 import { LiveModeToggle } from '@/common/components/strategy/LiveModeToggle';
@@ -78,6 +79,25 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
     : fallbackOrb
       ? { high: fallbackOrb.orb_high, low: fallbackOrb.orb_low }
       : null;
+
+  // Historical (multi-day) support/resistance — opt-in, off by default, so
+  // it never clutters the chart unasked. A fundamentally different concept
+  // from the ORB band above (same-session only, always shown) — see
+  // useTickerSupportResistance's docstring. Support = green, resistance =
+  // red, dashed to stay visually distinct from the ORB band's solid lines
+  // and from any position SL/TP lines this chart might show elsewhere.
+  const [showSR, setShowSR] = useState(false);
+  const { data: srData } = useTickerSupportResistance(visible && showSR ? ticker : null);
+  const srReferenceLines: ChartReferenceLine[] | null = srData
+    ? [
+        ...srData.support.map((lv): ChartReferenceLine => ({
+          label: `S $${lv.price.toFixed(2)}`, price: lv.price, color: colors.success, dash: '4,3',
+        })),
+        ...srData.resistance.map((lv): ChartReferenceLine => ({
+          label: `R $${lv.price.toFixed(2)}`, price: lv.price, color: colors.error, dash: '4,3',
+        })),
+      ]
+    : null;
 
   // Open contracts for this ticker, below the chart — see LivePositionsSection.
   const [contractsMode, setContractsMode] = useState<'live' | 'paper'>('live');
@@ -224,6 +244,23 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
         </View>
 
         <View style={{ paddingHorizontal: 16 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 6 }}>
+            <Pressable
+              onPress={() => setShowSR(v => !v)}
+              hitSlop={8}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 4,
+                paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14,
+                borderWidth: 1, borderColor: showSR ? colors.accent : colors.separator,
+                backgroundColor: showSR ? colors.accent + '18' : 'transparent',
+              }}
+            >
+              <Ionicons name="analytics-outline" size={12} color={showSR ? colors.accent : colors.textTertiary} />
+              <Text style={{ fontSize: 11, fontWeight: '700', color: showSR ? colors.accent : colors.textTertiary }}>
+                S/R
+              </Text>
+            </Pressable>
+          </View>
           <AdvancedPriceChart
             data={historyData}
             isLoading={historyLoading}
@@ -235,6 +272,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             orbRange={effectiveOrb}
             showOrbRange
             livePrice={visible ? resolvedLivePrice ?? null : null}
+            referenceLines={showSR ? srReferenceLines : null}
           />
 
           {/* Open contracts for this ticker — full data + editable SL/TP via

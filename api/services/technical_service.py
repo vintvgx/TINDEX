@@ -9,6 +9,12 @@ _cache: dict = {}
 _cache_lock = threading.Lock()
 _CACHE_TTL_SECONDS = 8 * 3600
 
+# Separate cache/dict from get_technicals()'s _cache — independent lifetime,
+# so a failure or force-refresh of one never affects the other. Shares
+# _cache_lock purely as a dict guard (no meaningful contention at this
+# request volume) rather than adding a second global lock for no reason.
+_sr_cache: dict = {}
+
 
 def _compute_zone(
     current: float, ema20: float, ema50, ema200,
@@ -130,3 +136,161 @@ def get_technicals(ticker: str, force_refresh: bool = False) -> dict:
     except Exception as e:
         logger.warning("[technical_service] Failed for %s: %s", ticker, e)
         return {"error": str(e), "ticker": ticker, "trend": "unknown"}
+
+
+# ── Historical support/resistance ───────────────────────────────────────────
+# Classic fractal swing-point detection over multi-day bars — a fundamentally
+# different concept from ORB's orh/orl (same-session, recomputed and
+# discarded daily). This aggregates across up to 2 years of daily closes to
+# find levels price has repeatedly reacted to, the way a trader manually
+# marking up a chart would.
+
+def _find_swing_points(highs: list, lows: list, window: int = 3) -> tuple:
+    """
+    A bar at index i is a swing high if its high is the max within
+    [i-window, i+window] (a local peak with `window` bars of confirmation on
+    both sides), swing low if its low is the local min over the same range.
+    Returns (swing_high_indices, swing_low_indices).
+    """
+    n = len(highs)
+    swing_high_idx, swing_low_idx = [], []
+    for i in range(window, n - window):
+        seg_high = highs[i - window: i + window + 1]
+        seg_low = lows[i - window: i + window + 1]
+        if highs[i] == max(seg_high):
+            swing_high_idx.append(i)
+        if lows[i] == min(seg_low):
+            swing_low_idx.append(i)
+    return swing_high_idx, swing_low_idx
+
+
+def _cluster_levels(points: list, current_price: float, tolerance_pct: float = 0.01) -> list:
+    """
+    points: (price, bar_index, total_bars) per swing point. Groups points
+    within tolerance_pct of each other into one level — a "level" is really
+    a zone, not one exact tick. Each point is compared against its cluster's
+    running mean (not just the last point added) so a slow drift across many
+    close points can't chain into one cluster spanning far more than
+    tolerance_pct end-to-end.
+
+    Scored by touch count + recency: a touch in the most recent third of the
+    lookback window counts double — a level tested last month matters more
+    than one that hasn't been touched in two years.
+    """
+    if not points:
+        return []
+    points = sorted(points, key=lambda p: p[0])
+    clusters: list = []
+    current_cluster = [points[0]]
+    for p in points[1:]:
+        cluster_mean = sum(c[0] for c in current_cluster) / len(current_cluster)
+        if abs(p[0] - cluster_mean) / cluster_mean <= tolerance_pct:
+            current_cluster.append(p)
+        else:
+            clusters.append(current_cluster)
+            current_cluster = [p]
+    clusters.append(current_cluster)
+
+    levels = []
+    for cluster in clusters:
+        price = sum(c[0] for c in cluster) / len(cluster)
+        total_bars = cluster[0][2]
+        recency_weight = sum(
+            2.0 if bar_idx >= total_bars * 0.67 else 1.0
+            for _, bar_idx, _ in cluster
+        )
+        levels.append({
+            "price":    round(price, 4),
+            "touches":  len(cluster),
+            "strength": round(recency_weight, 2),
+            "type":     "resistance" if price > current_price else "support",
+        })
+    return levels
+
+
+def _classic_pivots(prev_high: float, prev_low: float, prev_close: float) -> dict:
+    """Standard daily pivot points off the most recent complete session."""
+    pivot = (prev_high + prev_low + prev_close) / 3
+    return {
+        "pivot": pivot,
+        "r1": 2 * pivot - prev_low,
+        "s1": 2 * pivot - prev_high,
+        "r2": pivot + (prev_high - prev_low),
+        "s2": pivot - (prev_high - prev_low),
+    }
+
+
+def get_support_resistance(ticker: str, force_refresh: bool = False) -> dict:
+    """
+    Historical multi-day support/resistance for `ticker` — swing-point
+    clustering over 2 years of daily bars, plus standard daily pivot points
+    (pivot/R1/R2/S1/S2 off the prior session) as a cheap, always-available
+    complement for tickers too new/thin to have clean swing structure yet.
+
+    Returns the 4 strongest levels above and below the current price,
+    nearest-to-price first.
+    """
+    ticker = ticker.upper().strip()
+    if ticker.startswith("$"):
+        return {"error": "index_ticker_unsupported", "ticker": ticker}
+    now = time.time()
+
+    if not force_refresh:
+        with _cache_lock:
+            entry = _sr_cache.get(ticker)
+        if entry and now - entry["fetched_at"] < _CACHE_TTL_SECONDS:
+            return entry["data"]
+
+    try:
+        import yfinance as yf
+
+        hist = yf.Ticker(ticker).history(period="2y", interval="1d")
+        if hist.empty or len(hist) < 30:
+            return {"error": "insufficient_history", "ticker": ticker}
+
+        highs = hist["High"].tolist()
+        lows = hist["Low"].tolist()
+        current_price = float(hist["Close"].iloc[-1])
+        n = len(highs)
+
+        swing_high_idx, swing_low_idx = _find_swing_points(highs, lows, window=3)
+        points = (
+            [(highs[i], i, n) for i in swing_high_idx]
+            + [(lows[i], i, n) for i in swing_low_idx]
+        )
+        levels = _cluster_levels(points, current_price, tolerance_pct=0.01)
+
+        prev = hist.iloc[-2] if len(hist) >= 2 else hist.iloc[-1]
+        pivots = _classic_pivots(float(prev["High"]), float(prev["Low"]), float(prev["Close"]))
+
+        resistance = sorted(
+            [lv for lv in levels if lv["type"] == "resistance"],
+            key=lambda lv: (-lv["strength"], lv["price"]),
+        )[:4]
+        support = sorted(
+            [lv for lv in levels if lv["type"] == "support"],
+            key=lambda lv: (-lv["strength"], -lv["price"]),
+        )[:4]
+        # Trimmed to the top N by strength above — re-sort by price (nearest
+        # to current price first) since that's the more useful reading order
+        # once the list is already short.
+        resistance.sort(key=lambda lv: lv["price"])
+        support.sort(key=lambda lv: -lv["price"])
+
+        result = {
+            "ticker": ticker,
+            "current_price": round(current_price, 4),
+            "support": support,
+            "resistance": resistance,
+            "pivots": {k: round(v, 4) for k, v in pivots.items()},
+            "last_fetched_utc": datetime.now(timezone.utc).isoformat(),
+        }
+
+        with _cache_lock:
+            _sr_cache[ticker] = {"data": result, "fetched_at": now}
+
+        return result
+
+    except Exception as e:
+        logger.warning("[technical_service] S/R failed for %s: %s", ticker, e)
+        return {"error": str(e), "ticker": ticker}

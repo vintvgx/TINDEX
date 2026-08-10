@@ -76,6 +76,7 @@ function Shell() {
             <Tabs.Screen name="watchlists" options={{ href: null }} />
             <Tabs.Screen name="signals" options={{ href: null }} />
             <Tabs.Screen name="simulation" options={{ href: null }} />
+            <Tabs.Screen name="simulator" options={{ href: null }} />
           </Tabs>
         </SafeAreaInsetsContext.Provider>
       </View>

@@ -1843,6 +1843,32 @@ def run_simulation():
     }), 202
 
 
+@strategy_bp.route("/debug/test-push", methods=["POST"])
+def send_test_push():
+    """
+    POST { "title"?: str, "body"?: str }
+
+    Fires one real Expo push through the exact same StrategyNotifier queue
+    every other notification in the app goes through — no engine, no
+    strategy_id, no synthetic trade required. Added for the Profile >
+    Simulator screen so "does my device actually receive pushes" can be
+    checked in isolation from a whole trade simulation. Delivery is
+    fire-and-forget (same as every other _dispatch call in this codebase) —
+    a 200 here means "queued," not "delivered."
+    """
+    from services.supabase.supabase_service import get_supabase_service
+    from services.strategy.notifier import StrategyNotifier
+
+    data  = request.get_json(silent=True) or {}
+    title = (data.get("title") or "Test Notification").strip()
+    body  = (data.get("body") or "This is a test push from the Simulator screen.").strip()
+
+    try:
+        StrategyNotifier(get_supabase_service().client).notify_test(title, body)
+        return jsonify({"status": "ok", "message": "Test push queued"})
+    except Exception as e:
+        logger.error("[debug/test-push] %s", e, exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # ── Performance reviews ───────────────────────────────────────────────────────
@@ -2012,6 +2038,16 @@ def get_batch_technicals():
         return jsonify({"success": False, "error": "tickers required"}), 400
     results = {t: get_technicals(t) for t in tickers}
     return jsonify({"success": True, "data": results})
+
+
+@strategy_bp.route("/support-resistance/<ticker>", methods=["GET"])
+def get_ticker_support_resistance(ticker: str):
+    from services.technical_service import get_support_resistance
+    force = request.args.get("force", "false").lower() == "true"
+    data = get_support_resistance(ticker.upper(), force_refresh=force)
+    if data.get("error"):
+        return jsonify({"success": False, "error": data["error"]}), 422
+    return jsonify({"success": True, "data": data})
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

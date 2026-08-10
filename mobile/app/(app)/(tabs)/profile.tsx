@@ -55,6 +55,7 @@ const ProfileScreen = () => {
     { icon: 'briefcase-outline' as const, label: 'Track Portfolio', onPress: () => go('/(app)/(tabs)/track') },
     { icon: 'notifications-outline' as const, label: 'Notifications', onPress: () => go('/(app)/(tabs)/notifications'), badge: unreadCount },
     { icon: 'flask-outline' as const, label: 'Run Simulation', onPress: () => go('/(app)/(tabs)/simulation') },
+    { icon: 'game-controller-outline' as const, label: 'Simulator', onPress: () => go('/(app)/(tabs)/simulator') },
     // Fallback entry point for the AI assistant — the floating sparkle
     // button above the tab bar hides along with the search bar when the
     // "Hide Search Bar" setting is on (see CustomTabBar), so it needs

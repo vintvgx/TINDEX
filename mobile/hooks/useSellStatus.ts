@@ -3,6 +3,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 const QUERY_KEY = ['sell-status'];
 const SOLD_DISPLAY_MS = 20_000;
+// Safety net, independent of whether the sell mutation ever settles — see
+// useSellPosition's 2026-08-09 fix for the specific bug this backstops (a
+// hung fetch with no timeout left a "Selling…" status, and the ticker tape
+// it hijacks, stuck forever). This is deliberately generous — the backend's
+// own worst case is ~10s and the mutation now times out at 30s — so this
+// should only ever fire if something clears the mutation's own timeout too
+// (e.g. a backgrounded app pausing JS timers). Belt-and-suspenders: the tape
+// must always be able to recover on its own, no matter what fails upstream.
+const SELLING_SAFETY_NET_MS = 45_000;
 
 export interface SellStatus {
   id: string;
@@ -42,6 +51,17 @@ export function useSellStatus() {
   const startSelling = useCallback((s: Omit<SellStatus, 'phase' | 'price'>) => {
     const current = qc.getQueryData<SellStatusMap>(QUERY_KEY) ?? {};
     qc.setQueryData(QUERY_KEY, { ...current, [s.id]: { ...s, phase: 'selling' as const } });
+
+    // Only clears if STILL 'selling' when this fires — a normal, timely
+    // success/failure already transitioned or removed this entry long
+    // before 45s, so this is a no-op on the happy path. It only acts when
+    // neither markSold nor clearSelling ever got called at all.
+    setTimeout(() => {
+      const latest = qc.getQueryData<SellStatusMap>(QUERY_KEY) ?? {};
+      if (latest[s.id]?.phase !== 'selling') return;
+      const { [s.id]: _drop, ...rest } = latest;
+      qc.setQueryData(QUERY_KEY, rest);
+    }, SELLING_SAFETY_NET_MS);
   }, [qc]);
 
   // Sold status sticks around for SOLD_DISPLAY_MS then removes itself — the
