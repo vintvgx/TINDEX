@@ -6,8 +6,10 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
-import { useImmediateTradeByTicker } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
+import { useImmediateTradeByTicker, StreamUnavailableError } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
 import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsContractDetailModal';
+import { BlindEntryModal } from '@/common/components/strategy/BlindEntryModal';
+import type { ImmediateTradeByTickerRequest } from '@/common/types/strategy';
 import { blendHex } from '@/lib/colorBlend';
 import type { OptionsContract, OptionsOpportunity } from '@/common/types/blogPosts/ticker';
 import {
@@ -244,6 +246,15 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
+  // Blind Entry — set when the backend couldn't verify a live stream tick
+  // within 8s (status: 'stream_unavailable'). Holds the exact request body
+  // that was in flight so "Enter Anyway" can resubmit it unchanged, just
+  // with bypass_stream_check added.
+  const [blindEntry, setBlindEntry] = useState<{
+    body: ImmediateTradeByTickerRequest;
+    lastPrice: number;
+  } | null>(null);
+
   const chain        = data?.success ? data.data : null;
   const currentPrice = chain?.current_price ?? 0;
 
@@ -251,6 +262,23 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
     if (!chain) return [];
     return side === 'CALL' ? chain.calls : chain.puts;
   }, [chain, side]);
+
+  // `selected` is a one-time snapshot captured on tap — without this, the
+  // detail modal's bid/ask/last stayed frozen at whatever they were the
+  // instant the row was tapped, even while query 2 kept polling fresh
+  // prices underneath every 4s (reported: a GOOGL 0DTE call's displayed
+  // price never moved for 30+ seconds while the underlying price header
+  // kept updating). Re-deriving the live contract by symbol on every poll,
+  // and feeding THAT into the modal instead of the frozen `selected`, keeps
+  // every displayed field (bid/ask/last/mark/spread) live for as long as
+  // the modal stays open. Falls back to `selected` itself when the symbol
+  // isn't found in the freshest poll (chain still loading, or the contract
+  // rolled off the returned page).
+  const liveSelected = useMemo(() => {
+    if (!selected || !chain) return selected;
+    const list = selected.option_type === 'CALL' ? chain.calls : chain.puts;
+    return list.find(c => c.symbol === selected.symbol) ?? selected;
+  }, [selected, chain]);
 
   const rows = useMemo(() => buildRows(sideContracts, currentPrice, side), [sideContracts, currentPrice, side]);
 
@@ -287,34 +315,44 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
     return () => clearTimeout(id);
   }, [sepIndex, rows.length, offsets]);
 
+  // Shared by the initial submit and the Blind Entry "Enter Anyway" retry, so
+  // both go through identical success/error handling — the retry just adds
+  // bypass_stream_check to an otherwise-unchanged body.
+  const runSubmit = (body: ImmediateTradeByTickerRequest) => {
+    submit(body, {
+      onSuccess: (r) => {
+        toast.success(r.message || 'Immediate trade submitted');
+        setBlindEntry(null);
+        setSelected(null);
+        setQty(profile.qty);
+        onSubmitted?.();
+      },
+      onError: (e) => {
+        if (e instanceof StreamUnavailableError) {
+          setBlindEntry({ body, lastPrice: e.payload.last_price ?? 0 });
+          return;
+        }
+        toast.error(e.message || 'Trade failed');
+        setBlindEntry(null);
+        setSelected(null);
+        onSubmitted?.();
+      },
+    });
+  };
+
   const doSubmit = () => {
     if (!ticker || !selected) return;
-    submit(
-      {
-        ticker,
-        direction:       selected.option_type,
-        contract_symbol: selected.symbol,
-        qty,
-        profile:         profile.key,
-        paper_mode:      paperMode,
-        volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
-        sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
-        ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
-      },
-      {
-        onSuccess: (r) => {
-          toast.success(r.message || 'Immediate trade submitted');
-          setSelected(null);
-          setQty(profile.qty);
-          onSubmitted?.();
-        },
-        onError: (e) => {
-          toast.error(e.message || 'Trade failed');
-          setSelected(null);
-          onSubmitted?.();
-        },
-      },
-    );
+    runSubmit({
+      ticker,
+      direction:       selected.option_type,
+      contract_symbol: selected.symbol,
+      qty,
+      profile:         profile.key,
+      paper_mode:      paperMode,
+      volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
+      sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
+      ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
+    });
   };
 
   const confirmSubmit = () => {
@@ -444,7 +482,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         <ManualSLPicker
           slPct={manualSlPct}
           onChangePct={setManualSlPct}
-          askPrice={selected.ask}
+          askPrice={(liveSelected ?? selected).ask}
           colors={colors}
         />
       )}
@@ -674,12 +712,34 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         <OptionsContractDetailModal
           visible
           onClose={() => setSelected(null)}
-          contract={asOpportunity(selected)}
+          contract={asOpportunity(liveSelected ?? selected)}
           ticker={ticker}
           currentPrice={currentPrice}
           footer={detailFooter}
           tintColor={modeTint}
           qty={qty}
+        />
+      )}
+
+      {/* Blind Entry — backend couldn't verify a live stream tick within 8s.
+          Lets the user enter off the last polled quote or skip, instead of
+          the trade just being blocked outright. */}
+      {blindEntry && (
+        <BlindEntryModal
+          visible
+          colors={colors}
+          contractSymbol={blindEntry.body.contract_symbol}
+          lastPrice={blindEntry.lastPrice}
+          qty={blindEntry.body.qty ?? qty}
+          direction={blindEntry.body.direction}
+          paperMode={blindEntry.body.paper_mode}
+          isSubmitting={isPending}
+          onConfirm={() => runSubmit({ ...blindEntry.body, bypass_stream_check: true })}
+          onSkip={() => {
+            setBlindEntry(null);
+            setSelected(null);
+            onSubmitted?.();
+          }}
         />
       )}
     </View>

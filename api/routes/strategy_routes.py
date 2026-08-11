@@ -1160,6 +1160,7 @@ def immediate_trade(strategy_id: str):
         qty=data.get("qty"),
         profile_key=data.get("profile"),
         exit_overrides=exit_overrides_cfg if exit_overrides_cfg else None,
+        bypass_stream_check=bool(data.get("bypass_stream_check", False)),
     )
     code = 200 if result.get("status") == "ok" else 409
     return jsonify(result), code
@@ -1216,6 +1217,7 @@ def immediate_trade_by_ticker():
         qty=data.get("qty"),
         profile_key=data.get("profile"),
         exit_overrides=exit_overrides or None,
+        bypass_stream_check=bool(data.get("bypass_stream_check", False)),
     )
     # Surface the engine id so the client can stream live P&L over the WS.
     result["strategy_id"] = engine.strategy_id

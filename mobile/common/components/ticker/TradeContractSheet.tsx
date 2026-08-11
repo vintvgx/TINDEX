@@ -5,13 +5,15 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useToast } from '@/common/components/ui/Toast';
-import { useImmediateTradeByTicker } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
+import { useImmediateTradeByTicker, StreamUnavailableError } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
 import {
   IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
   getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
 import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
+import { BlindEntryModal } from '@/common/components/strategy/BlindEntryModal';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
+import type { ImmediateTradeByTickerRequest } from '@/common/types/strategy';
 
 interface Props {
   visible: boolean;
@@ -45,6 +47,13 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
+  // Blind Entry — set when the backend couldn't verify a live stream tick
+  // within 8s (status: 'stream_unavailable'). See BlindEntryModal.
+  const [blindEntry, setBlindEntry] = useState<{
+    body: ImmediateTradeByTickerRequest;
+    lastPrice: number;
+  } | null>(null);
+
   // Reset to defaults + auto-suggest a grace stop-type for any sub-$0.50
   // contract every time a new contract is opened, mirroring ImmediateTradePanel.
   const autoGraceMinutes = contract ? getCheapContractAutoGraceMinutes(contract.ask) : null;
@@ -56,6 +65,7 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
     setVolumeExit(false);
     setManualSlPct(30);
     setPaperMode(true);
+    setBlindEntry(null);
   // Only re-run when a different contract is opened, not on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, contract?.symbol]);
@@ -65,25 +75,38 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
     setQty(IMMEDIATE_PROFILES[idx].qty);
   };
 
+  // Shared by the initial submit and the Blind Entry "Enter Anyway" retry.
+  const runSubmit = (body: ImmediateTradeByTickerRequest) => {
+    submit(body, {
+      onSuccess: (r) => {
+        toast.success(r.message || `${ticker} entered`);
+        setBlindEntry(null);
+        onClose();
+      },
+      onError: (e) => {
+        if (e instanceof StreamUnavailableError) {
+          setBlindEntry({ body, lastPrice: e.payload.last_price ?? 0 });
+          return;
+        }
+        toast.error(e.message || 'Trade failed');
+        setBlindEntry(null);
+      },
+    });
+  };
+
   const doSubmit = () => {
     if (!contract) return;
-    submit(
-      {
-        ticker,
-        direction:       contract.option_type,
-        contract_symbol: contract.symbol,
-        qty,
-        profile:         profile.key,
-        paper_mode:      paperMode,
-        volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
-        sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
-        ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
-      },
-      {
-        onSuccess: (r) => { toast.success(r.message || `${ticker} entered`); onClose(); },
-        onError:   (e) => toast.error(e.message || 'Trade failed'),
-      },
-    );
+    runSubmit({
+      ticker,
+      direction:       contract.option_type,
+      contract_symbol: contract.symbol,
+      qty,
+      profile:         profile.key,
+      paper_mode:      paperMode,
+      volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
+      sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
+      ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
+    });
   };
 
   const handleSubmitPress = () => {
@@ -227,6 +250,21 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
           </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
+
+      {blindEntry && (
+        <BlindEntryModal
+          visible
+          colors={colors}
+          contractSymbol={blindEntry.body.contract_symbol}
+          lastPrice={blindEntry.lastPrice}
+          qty={blindEntry.body.qty ?? qty}
+          direction={blindEntry.body.direction}
+          paperMode={blindEntry.body.paper_mode}
+          isSubmitting={isPending}
+          onConfirm={() => runSubmit({ ...blindEntry.body, bypass_stream_check: true })}
+          onSkip={() => setBlindEntry(null)}
+        />
+      )}
     </Modal>
   );
 }

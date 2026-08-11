@@ -208,6 +208,10 @@ export interface ImmediateTradeByTickerRequest {
   /** Stop type — null/omitted means Hard Stop, 5|10 arms the matching
    *  grace-timer window (see exit_manager.py's sl_grace_* fields). */
   sl_grace_minutes?: 5 | 10 | null;
+  /** Blind Entry confirmation — set true on retry after a "stream_unavailable"
+   *  response to skip the backend's 8s websocket-tick wait and enter off the
+   *  last REST-polled quote the user already confirmed. */
+  bypass_stream_check?: boolean;
 }
 
 /** An open position from a ticker-based immediate trade engine. */
