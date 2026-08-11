@@ -214,6 +214,7 @@ class StrategyNotifier:
         profile_key: str,
         exit_premium: float | None = None,
         paper_mode: bool = True,
+        strategy_id: str | None = None,
     ):
         """One or more contracts were closed (stop, TP1, TP2, EOD, etc.).
 
@@ -221,6 +222,20 @@ class StrategyNotifier:
         manual sell now sample the bid and/or use a limit order rather than
         firing an instant market order — see ORBEngine._execute_priced_exit)
         can show the user what price it actually sold at, not just the P&L.
+
+        strategy_id/qty/exit_premium/pnl in `data` (2026-08-11): this push is
+        dispatched from a background queue independent of the HTTP response
+        for whatever request triggered the exit (see _dispatch — a plain
+        queue.put(), already enqueued before the route even builds its JSON
+        response). A manual sell's REST response can be lost — dropped
+        connection, app backgrounded mid-request — while this notification
+        still lands, since it never depended on that response arriving.
+        Structured `data` lets the client's notification-received listener
+        resolve the mobile ticker tape's "Selling…" status to "Sold…" off
+        THIS delivery instead of the fragile HTTP round-trip — see
+        useNotifications.ts's foreground listener and useSellStatus's
+        markSoldByStrategyId. strategy_id is the correlation key; the
+        client's own SellStatus.id is generated locally and unknown here.
         """
         tag   = _account_tag(paper_mode)
         sign  = "+" if pnl >= 0 else ""
@@ -248,10 +263,14 @@ class StrategyNotifier:
             title=f"{emoji} [{tag}] {readable} — {label}  [{profile_key}]",
             body=f"{qty} contracts{price_str}  P&L: {sign}${pnl:,.2f}",
             data={
-                "screen":      "tradelog",
-                "symbol":      contract_symbol,
-                "exit_reason": exit_reason,
-                "paper_mode":  paper_mode,
+                "screen":       "tradelog",
+                "symbol":       contract_symbol,
+                "exit_reason":  exit_reason,
+                "paper_mode":   paper_mode,
+                "strategy_id":  strategy_id,
+                "qty":          qty,
+                "exit_premium": exit_premium,
+                "pnl":          round(pnl, 2),
             },
             priority=P_TRADE_EXIT,
         )

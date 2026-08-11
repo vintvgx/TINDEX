@@ -69,9 +69,9 @@ export function useSellStatus() {
 
   // Sold status sticks around for SOLD_DISPLAY_MS then removes itself — the
   // tape reverts to its normal content with no further action needed.
-  const markSold = useCallback((id: string, price: number, qty: number, pnl?: number) => {
+  const resolveSold = useCallback((id: string, price: number, qty: number, pnl?: number) => {
     const current = qc.getQueryData<SellStatusMap>(QUERY_KEY) ?? {};
-    if (!current[id]) return;
+    if (!current[id] || current[id].phase !== 'selling') return false;
     qc.setQueryData(QUERY_KEY, { ...current, [id]: { ...current[id], phase: 'sold' as const, price, qty, pnl } });
     setTimeout(() => {
       const latest = qc.getQueryData<SellStatusMap>(QUERY_KEY) ?? {};
@@ -79,7 +79,33 @@ export function useSellStatus() {
       const { [id]: _drop, ...rest } = latest;
       qc.setQueryData(QUERY_KEY, rest);
     }, SOLD_DISPLAY_MS);
+    return true;
   }, [qc]);
+
+  const markSold = useCallback((id: string, price: number, qty: number, pnl?: number) => {
+    resolveSold(id, price, qty, pnl);
+  }, [resolveSold]);
+
+  // Notification-driven resolution (2026-08-11) — the push notification
+  // fired by StrategyNotifier.notify_exit is dispatched from an independent
+  // background queue, already enqueued before the backend even builds the
+  // HTTP response for the sell request. That response can be lost (dropped
+  // connection, app backgrounded mid-request) while the notification still
+  // lands — see useNotifications.ts's foreground listener, which calls this
+  // on receipt. Looked up by strategyId, not the exact SellStatus.id: the
+  // id is generated client-side in ExitTradeModal and the backend has no
+  // way to know it, but strategy_id is already in notify_exit's data
+  // payload. Safe to call unconditionally on every exit notification
+  // (automated TP1/stop/EOD exits included) — resolveSold() is a no-op
+  // whenever nothing in 'selling' phase matches, which is the case for any
+  // exit that didn't originate from ExitTradeModal in the first place.
+  const markSoldByStrategyId = useCallback((strategyId: string, price: number, qty: number, pnl?: number) => {
+    const current = qc.getQueryData<SellStatusMap>(QUERY_KEY) ?? {};
+    const match = Object.values(current).find(
+      s => s.phase === 'selling' && s.strategyId === strategyId,
+    );
+    if (match) resolveSold(match.id, price, qty, pnl);
+  }, [qc, resolveSold]);
 
   // Sell failed — drop it immediately rather than leaving a stale "Selling…"
   // line up; the failure toast (already shown by the caller) covers it.
@@ -90,5 +116,5 @@ export function useSellStatus() {
     qc.setQueryData(QUERY_KEY, rest);
   }, [qc]);
 
-  return { statuses: Object.values(statusMap), startSelling, markSold, clearSelling };
+  return { statuses: Object.values(statusMap), startSelling, markSold, markSoldByStrategyId, clearSelling };
 }

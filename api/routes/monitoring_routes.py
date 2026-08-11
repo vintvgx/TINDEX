@@ -410,14 +410,36 @@ def _svc_status_contracts() -> dict:
 # stream) depend on these running continuously. A toggle here would be an
 # easy way to accidentally blind a live trade — status-only, on purpose.
 
+# Option quotes are subscribe-on-demand (a symbol only streams while a
+# position is open or a verify_stream probe is in flight) — unlike the ORB
+# bar feed, which flows continuously for every actively-monitored ticker
+# regardless of position state. So "stale" only means anything when there's
+# actually something subscribed; zero subscriptions with no recent quote is
+# the normal idle state, not an outage. 60s (vs. the bar feed's 180s) — an
+# open position's stop-loss/TP monitoring wants a much tighter bound than a
+# once-a-minute bar cadence.
+OPTION_STREAM_STALE_THRESHOLD_SEC = 60
+
+
 def _get_option_stream_status() -> dict:
     try:
         from routes.strategy_routes import _stream_manager
         if _stream_manager is None:
             return {"running": False, "toggle": False}
-        thread = getattr(_stream_manager, "_thread", None)
-        running = bool(getattr(_stream_manager, "_started", False) and thread and thread.is_alive())
-        return {"running": running, "toggle": False}
+        health = _stream_manager.get_health()
+        age = health["last_quote_age_seconds"]
+        stale = (
+            health["running"] and health["subscribed_count"] > 0
+            and (age is None or age > OPTION_STREAM_STALE_THRESHOLD_SEC)
+        )
+        return {
+            "running":            health["running"],
+            "toggle":             False,
+            "subscribed_count":   health["subscribed_count"],
+            "subscribed_symbols": health["subscribed_symbols"],
+            "last_quote_age_seconds": age,
+            "stale":              stale,
+        }
     except Exception as exc:
         return {"running": False, "toggle": False, "error": str(exc)}
 

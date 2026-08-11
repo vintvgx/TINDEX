@@ -37,9 +37,15 @@ interface RowProps {
   busy?: boolean;
   onToggle?: (next: boolean) => void;
   extra?: string;
+  /** Connected but not actually delivering data — the "zombie WS" case
+   *  thread-liveness alone can't see (see option_stream.py's staleness
+   *  tracking). Distinct from `running=false`: the connection is up, it's
+   *  just not doing its job. Overrides the dot to amber and the status line
+   *  to call it out explicitly instead of reading as healthy. */
+  stale?: boolean;
 }
 
-const ServiceRow: React.FC<RowProps> = ({ label, description, running, liveSince, toggle, busy, onToggle, extra }) => {
+const ServiceRow: React.FC<RowProps> = ({ label, description, running, liveSince, toggle, busy, onToggle, extra, stale }) => {
   const colors = useThemeColors();
   const [, forceTick] = useState(0);
 
@@ -48,6 +54,8 @@ const ServiceRow: React.FC<RowProps> = ({ label, description, running, liveSince
     const id = setInterval(() => forceTick((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, [running, liveSince]);
+
+  const dotColor = stale ? colors.warning : running ? colors.success : colors.textTertiary;
 
   return (
     <View
@@ -65,17 +73,19 @@ const ServiceRow: React.FC<RowProps> = ({ label, description, running, liveSince
           width: 10,
           height: 10,
           borderRadius: 5,
-          backgroundColor: running ? colors.success : colors.textTertiary,
+          backgroundColor: dotColor,
           marginRight: 12,
         }}
       />
       <View style={{ flex: 1 }}>
         <Text style={{ color: colors.text, fontSize: 15, fontWeight: '600' }}>{label}</Text>
-        <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+        <Text style={{ color: stale ? colors.warning : colors.textSecondary, fontSize: 12, marginTop: 2 }}>
           {running
-            ? liveSince
-              ? `Live since ${formatLiveSince(liveSince)} ago${extra ? ` · ${extra}` : ''}`
-              : `Running${extra ? ` · ${extra}` : ''}`
+            ? stale
+              ? `Connected but not receiving quotes${extra ? ` · ${extra}` : ''}`
+              : liveSince
+                ? `Live since ${formatLiveSince(liveSince)} ago${extra ? ` · ${extra}` : ''}`
+                : `Running${extra ? ` · ${extra}` : ''}`
             : 'Stopped'}
         </Text>
         {description && !running && (
@@ -261,6 +271,15 @@ export const ServiceStatusModal: React.FC<ServiceStatusModalProps> = ({ visible,
               description="Powers open-position stop-loss/TP monitoring"
               running={services?.option_quote_stream.running ?? false}
               toggle={false}
+              stale={services?.option_quote_stream.stale ?? false}
+              extra={
+                services?.option_quote_stream.subscribed_count
+                  ? `${services.option_quote_stream.subscribed_count} symbol${services.option_quote_stream.subscribed_count === 1 ? '' : 's'}` +
+                    (services.option_quote_stream.last_quote_age_seconds != null
+                      ? ` · last quote ${Math.round(services.option_quote_stream.last_quote_age_seconds)}s ago`
+                      : '')
+                  : 'idle — no open positions or active entries'
+              }
             />
             <ServiceRow
               label="Price Stream"

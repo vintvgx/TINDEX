@@ -23,6 +23,7 @@ import { SecureStorageService } from "@/common/services/SecureStorageService";
 import { NotificationService } from "@/common/services/NotificationService";
 import { navigateFromNotification } from "@/common/services/NotificationNavigationService";
 import { SchedulableTriggerInputTypes } from "expo-notifications";
+import { useSellStatus } from "@/hooks/useSellStatus";
 
 /**
  * Interface for notification content data.
@@ -75,6 +76,27 @@ export function useNotifications() {
   const notificationListener =
     useRef<Notifications.EventSubscription>(undefined);
   const responseListener = useRef<Notifications.EventSubscription>(undefined);
+
+  // 2026-08-11 — resolves the ticker tape's "Selling…" status off the push
+  // notification itself, not the mutation's own HTTP response (see
+  // StrategyNotifier.notify_exit / useSellStatus.markSoldByStrategyId's
+  // docstrings for why: the notification is dispatched from an independent
+  // background queue, already enqueued before the backend even builds the
+  // HTTP response for the sell request, so it can arrive even when that
+  // response is lost — a dropped connection, the app backgrounded
+  // mid-request). Runs on EVERY exit notification (automated TP1/stop/EOD
+  // included) — markSoldByStrategyId is a no-op whenever nothing is
+  // currently in 'selling' phase for that strategy, which is the normal
+  // case for any exit that didn't originate from ExitTradeModal.
+  const { markSoldByStrategyId } = useSellStatus();
+  const handleExitNotificationData = useCallback((data: Record<string, any> | undefined) => {
+    if (!data || data.screen !== "tradelog" || !data.strategy_id) return;
+    const price = Number(data.exit_premium);
+    const qty = Number(data.qty);
+    const pnl = data.pnl != null ? Number(data.pnl) : undefined;
+    if (!Number.isFinite(price) || !Number.isFinite(qty)) return;
+    markSoldByStrategyId(String(data.strategy_id), price, qty, pnl);
+  }, [markSoldByStrategyId]);
 
   /**
    * Initializes the notification system for the authenticated user.
@@ -131,6 +153,7 @@ export function useNotifications() {
         Notifications.addNotificationReceivedListener((notification) => {
           console.log("Notification received:", notification);
           setNotification(notification);
+          handleExitNotificationData(notification.request.content.data as Record<string, any> | undefined);
         });
 
       // Set up response listener for handling user interaction with notifications
@@ -157,7 +180,7 @@ export function useNotifications() {
     } finally {
       setIsRegistering(false);
     }
-  }, [authState.user?.id]);
+  }, [authState.user?.id, handleExitNotificationData]);
 
   /**
    * Effect hook that manages notification setup and cleanup based on authentication state.

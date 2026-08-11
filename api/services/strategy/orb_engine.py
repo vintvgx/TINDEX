@@ -1012,11 +1012,52 @@ class ORBEngine:
             symbol_to_verify = contract["symbol"]
             logger.info("[ORBEngine] Verifying stream for %s ...", symbol_to_verify)
             if not self.stream_manager.verify_stream(symbol_to_verify, timeout=8.0):
-                logger.warning("[ORBEngine] Stream unavailable for %s — trade skipped",
+                # REST fallback (2026-08-11) — mirrors the same fallback
+                # added to the manual entry path. Re-fetch ONE fresh REST
+                # quote for the SAME already-selected contract (not a new
+                # chain scan — select_contract() above already committed to
+                # this strike/expiry) before giving up. This is a genuinely
+                # different data path from the WS stream, so it succeeds
+                # independently of whatever's wrong there — including the
+                # common case where the stream is fine but every tick during
+                # a fast breakout happened to be one-sided (see
+                # option_stream.py's handler, which now tolerates that too,
+                # so this fallback should only be needed for a real gap).
+                logger.warning("[ORBEngine] Stream unverified for %s — trying REST fallback",
                                symbol_to_verify)
-                self.debug.emit("ERROR", f"Entry blocked — stream unavailable for {symbol_to_verify}")
-                self.notifier.notify_stream_failed(self.ticker, symbol_to_verify)
-                return
+                fresh = self._resolve_contract(symbol_to_verify, direction)
+                if fresh:
+                    contract = fresh
+                    logger.info("[ORBEngine] REST fallback OK for %s — proceeding",
+                               symbol_to_verify)
+                    self.debug.emit(
+                        "WARN",
+                        f"Stream didn't confirm for {symbol_to_verify} — "
+                        f"entered off a fresh REST quote instead",
+                    )
+                else:
+                    # Both the stream AND a fresh REST quote failed — a real
+                    # pricing gap, not a transient one-sided-quote blip.
+                    # Recorded as a proper skip_reason (2026-08-11 — this
+                    # used to just `return` with no skip_reason at all,
+                    # invisible in the Trade Log's skipped-sessions list;
+                    # see docs/incidents or the 2026-08-10 daily review for
+                    # the "SPY did not enter, blind-entry" report this
+                    # fixes). stream_health is attached to the debug log so
+                    # a specific historical skip can be diagnosed after the
+                    # fact instead of only showing the timeout outcome.
+                    health = self.stream_manager.get_health()
+                    logger.warning("[ORBEngine] Stream unavailable for %s — trade skipped "
+                                   "(stream health: %s)", symbol_to_verify, health)
+                    self.debug.emit(
+                        "ERROR",
+                        f"Entry blocked — stream unavailable for {symbol_to_verify} "
+                        f"and REST fallback also failed",
+                        data={"stream_health": health},
+                    )
+                    self.notifier.notify_stream_failed(self.ticker, symbol_to_verify)
+                    self._skip("STREAM_UNAVAILABLE")
+                    return
 
         if ticker_conflict is not None:
             conflict_context = {
@@ -2403,6 +2444,7 @@ class ORBEngine:
                 profile_key=self.profile_key,
                 exit_premium=exit_premium,
                 paper_mode=self.paper,
+                strategy_id=self.strategy_id,
             )
             logger.info("[ORBEngine] Exit %s qty=%d reason=%s @ $%.2f",
                         action["type"], qty_closed, reason, exit_premium)

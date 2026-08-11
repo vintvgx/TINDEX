@@ -25,6 +25,16 @@ export interface InfraStreamStatus {
   clients?: number;
   toggle?: boolean;
   error?: string;
+  /** option_quote_stream only — subscribe-on-demand (a symbol only streams
+   *  while a position is open or a verify_stream probe is running), so an
+   *  empty/old last_quote_age_seconds with subscribed_count=0 is normal
+   *  idle state, not an outage. `stale` is already computed server-side
+   *  against that distinction — see monitoring_routes.py's
+   *  OPTION_STREAM_STALE_THRESHOLD_SEC. */
+  subscribed_count?: number;
+  subscribed_symbols?: string[];
+  last_quote_age_seconds?: number | null;
+  stale?: boolean;
 }
 
 export interface ServicesStatus {

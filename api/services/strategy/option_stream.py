@@ -15,6 +15,7 @@ Lifecycle per trade:
 import os
 import queue
 import threading
+import time
 import logging
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,19 @@ class OptionStreamManager:
         self._lock       = threading.Lock()
         self._start_lock = threading.Lock()
         self._started    = False
+        # Staleness tracking (2026-08-11) — _ensure_started's thread-liveness
+        # check catches a fully DEAD thread, but not a "connected zombie": a
+        # WS that's technically still running but has quietly stopped
+        # delivering ticks (a degraded connection Alpaca hasn't formally
+        # closed, a subscribe that silently no-op'd). Recording wall-clock
+        # time of the last quote actually received — globally and per-symbol
+        # — is what lets a caller distinguish "no ticks for this ONE thin
+        # contract" from "nothing has arrived on this connection in minutes,"
+        # and is what get_health() below surfaces to the Service Status
+        # screen and to _enter_trade's post-failure diagnostics.
+        self._last_quote_at: dict[str, float] = {}   # symbol → epoch seconds
+        self._last_quote_at_any: float | None = None  # across ALL symbols
+        self._quote_count: dict[str, int]     = {}   # symbol → lifetime tick count (this process)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -157,6 +171,34 @@ class OptionStreamManager:
         finally:
             self.unsubscribe(symbol, _probe)
 
+    def get_health(self) -> dict:
+        """
+        Snapshot for the Service Status screen (GET /services/status) and for
+        _enter_trade's post-verify_stream-failure diagnostics. Deliberately
+        does NOT decide "stale" here — that requires knowing whether the
+        market is even open, which this class has no business knowing about;
+        the caller (monitoring_routes.py, which already has market-hours
+        context for the ORB hub's own health check) applies that threshold.
+        """
+        with self._lock:
+            running = bool(self._started and self._thread and self._thread.is_alive())
+            subscribed = sorted(self._callbacks.keys())
+            last_any = self._last_quote_at_any
+            per_symbol = {
+                sym: {
+                    "last_quote_age_seconds": round(time.time() - ts, 1),
+                    "quote_count": self._quote_count.get(sym, 0),
+                }
+                for sym, ts in self._last_quote_at.items()
+            }
+        return {
+            "running":                 running,
+            "subscribed_symbols":      subscribed,
+            "subscribed_count":        len(subscribed),
+            "last_quote_age_seconds":  round(time.time() - last_any, 1) if last_any is not None else None,
+            "symbols":                 per_symbol,
+        }
+
     def stop(self):
         """Shut down the WebSocket connection."""
         if self._stream:
@@ -228,10 +270,35 @@ class OptionStreamManager:
         async def _handler(quote):
             ask = getattr(quote, "ask_price", None)
             bid = getattr(quote, "bid_price", None)
-            if not ask or not bid or float(ask) <= 0 or float(bid) <= 0:
+            ask_ok = ask is not None and float(ask) > 0
+            bid_ok = bid is not None and float(bid) > 0
+            # Relaxed 2026-08-11 — this used to require BOTH sides present,
+            # silently dropping the entire tick otherwise. Option quotes are
+            # routinely one-sided for brief stretches during fast/thin
+            # conditions — exactly the moment an ORB breakout entry is
+            # trying to verify the stream is alive. That meant verify_stream
+            # could time out (and an automated SPY entry get skipped as
+            # "blind") even while Alpaca was actively sending real ticks for
+            # the symbol, just never with both sides simultaneously present
+            # within the 8s window. A one-sided price is still meaningfully
+            # better than treating the tick as if it never arrived at all —
+            # both for the verify_stream liveness probe (which only cares
+            # "is this symbol being quoted") and for live exit management on
+            # an open position (a stale mid during a fast move is worse than
+            # a slightly-approximate one). Only a genuinely empty quote
+            # (neither side present) is still dropped.
+            if not ask_ok and not bid_ok:
                 return
-            mid = (float(ask) + float(bid)) / 2
+            if ask_ok and bid_ok:
+                mid = (float(ask) + float(bid)) / 2
+            else:
+                mid = float(ask) if ask_ok else float(bid)
+
+            now = time.time()
             with self._lock:
+                self._last_quote_at[symbol] = now
+                self._last_quote_at_any     = now
+                self._quote_count[symbol]   = self._quote_count.get(symbol, 0) + 1
                 targets = list(self._callbacks.get(symbol, []))
             for cb in targets:
                 try:
