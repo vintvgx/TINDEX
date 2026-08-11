@@ -1761,14 +1761,21 @@ class ORBEngine:
 
     def submit_manual_trade(self, direction: str, contract_symbol: str,
                             qty: int | None = None, profile_key: str | None = None,
-                            exit_overrides: dict | None = None) -> dict:
+                            exit_overrides: dict | None = None,
+                            bypass_stream_check: bool = False) -> dict:
         """
         Immediately submit a conviction trade for a user-chosen 0DTE contract,
         skipping the breakout wait / sentiment filters. Exits are managed
         by the chosen profile (premium-based TP/SL), exactly like an auto trade.
 
-        Returns {"status": "ok"|"error", "message": ...}. Called by the
-        POST /strategy/configs/<id>/immediate-trade route.
+        Returns {"status": "ok"|"error"|"stream_unavailable", "message": ...}.
+        Called by the POST /strategy/configs/<id>/immediate-trade route.
+
+        bypass_stream_check=True is the "Blind Entry" path: the client already
+        saw a "stream_unavailable" response (with the last REST-polled
+        bid/ask) and the user explicitly confirmed entering anyway, so the
+        8s websocket-tick wait is skipped entirely and entry proceeds off the
+        REST quote already resolved below.
         """
         direction = (direction or "").upper()
         if direction not in ("CALL", "PUT"):
@@ -1874,14 +1881,27 @@ class ORBEngine:
             days_to_expiry = 0  # unparseable — treat as 0DTE, the stricter/safer default
         is_zero_dte = days_to_expiry <= 0
 
-        if is_zero_dte and self.stream_manager:
+        if is_zero_dte and self.stream_manager and not bypass_stream_check:
             self.debug.emit("INFO",
                 f"Verifying stream for {contract['symbol']} (timeout=8s) ...")
             if not self.stream_manager.verify_stream(contract["symbol"], timeout=8.0):
                 msg = f"Real-time stream unavailable for {contract['symbol']}"
-                self.debug.emit("ERROR", f"Manual trade blocked — {msg}")
-                return {"status": "error", "message": msg}
+                self.debug.emit("WARN", f"Manual trade held for blind-entry confirmation — {msg} "
+                                        f"(last polled ask=${contract['ask']:.2f} bid=${contract['bid']:.2f})")
+                return {
+                    "status":     "stream_unavailable",
+                    "message":    msg,
+                    "contract":   contract["symbol"],
+                    "last_price": contract["ask"],
+                    "bid":        contract["bid"],
+                    "ask":        contract["ask"],
+                    "qty":        qty,
+                }
             self.debug.emit("INFO", f"Stream verified for {contract['symbol']}")
+        elif is_zero_dte and bypass_stream_check:
+            self.debug.emit("WARN",
+                f"Blind entry confirmed by user — proceeding without live stream for "
+                f"{contract['symbol']} (last polled ask=${contract['ask']:.2f} bid=${contract['bid']:.2f})")
 
         try:
             self._execute_entry(direction, contract, qty, effective_profile, fib_levels,
