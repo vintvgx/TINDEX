@@ -42,6 +42,26 @@ export function ReviewNoteActionModal({ note, onClose }: Props) {
     });
   };
 
+  // Deferring forces is_done true server-side (see the PATCH route) so a
+  // deferred TODO drops out of the open backlog/the /work-todos skill just
+  // like a resolved one — is_deferred only exists to tell the two apart in
+  // the UI. Un-deferring goes through is_done:false (reopen) rather than
+  // is_deferred:false directly, since "deferred" isn't a state a TODO can
+  // be in without also being marked done.
+  const handleToggleDeferred = () => {
+    const deferring = !note.is_deferred;
+    updateNote.mutate(
+      deferring ? { id: note.id, is_deferred: true } : { id: note.id, is_done: false },
+      {
+        onSuccess: () => {
+          toast.success(deferring ? 'Marked as deferred' : 'Marked as open');
+          onClose();
+        },
+        onError: (e) => toast.error((e as Error).message),
+      },
+    );
+  };
+
   const handleSaveReassign = () => {
     if (!reassignDate || reassignDate === note.note_date) { setReassignDate(null); return; }
     updateNote.mutate({ id: note.id, note_date: reassignDate }, {
@@ -81,7 +101,18 @@ export function ReviewNoteActionModal({ note, onClose }: Props) {
 
             <Text style={{ color: colors.text, fontSize: 15, lineHeight: 21 }}>{note.content}</Text>
 
-            {note.kind === 'todo' && note.is_done && note.completion_note && (
+            {note.kind === 'todo' && note.is_done && note.is_deferred && (
+              <View style={{
+                borderRadius: 10, padding: 12, gap: 4,
+                backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border,
+              }}>
+                <Text style={{ color: '#F59E0B', fontSize: 11, fontWeight: '700' }}>
+                  DEFERRED{note.completed_at ? ` · ${format(parseISO(note.completed_at), 'MMM d, h:mm a')}` : ''}
+                </Text>
+              </View>
+            )}
+
+            {note.kind === 'todo' && note.is_done && !note.is_deferred && note.completion_note && (
               <View style={{
                 borderRadius: 10, padding: 12, gap: 4,
                 backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border,
@@ -124,6 +155,20 @@ export function ReviewNoteActionModal({ note, onClose }: Props) {
                     label={note.is_done ? 'Mark as not finished' : 'Mark as finished'}
                     color={colors.success}
                     onPress={handleToggleDone}
+                    disabled={busy}
+                    colors={colors}
+                  />
+                )}
+                {/* Hidden once genuinely completed (is_done && !is_deferred) —
+                    deferring is an alternative to resolving, not a modifier
+                    on top of already-resolved work; reopen via the row above
+                    first if that's what's actually wanted. */}
+                {note.kind === 'todo' && (!note.is_done || note.is_deferred) && (
+                  <ActionRow
+                    icon={note.is_deferred ? 'time' : 'time-outline'}
+                    label={note.is_deferred ? 'Un-defer' : 'Mark as deferred'}
+                    color="#F59E0B"
+                    onPress={handleToggleDeferred}
                     disabled={busy}
                     colors={colors}
                   />

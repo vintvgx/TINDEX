@@ -88,12 +88,21 @@ def create_note():
 @bp.route("/review/notes/<note_id>", methods=["PATCH"])
 def update_note(note_id: str):
     """
-    Body (all optional): { note_date?, kind?, content?, is_done?, completion_note? }
+    Body (all optional): { note_date?, kind?, content?, is_done?, is_deferred?, completion_note? }
     Covers the "reassign to a different date" / "mark finished" toggle, plus
     recording what was actually done to resolve a TODO (e.g. from Claude Code).
 
     completed_at is derived, not settable directly: it's stamped when is_done
     flips to true and cleared when a TODO is reopened.
+
+    is_deferred is a third state, distinct from "resolved" — set aside for
+    later without claiming the work was actually done. Setting is_deferred
+    true always forces is_done true too (so a deferred item drops out of
+    every existing ?done=false query — the backlog's open list, the
+    /work-todos skill — with no change needed to any read/filter path);
+    explicitly setting is_done false in the SAME request re-opens the note
+    and clears is_deferred, since "reopened" and "deferred" can't both be
+    true at once.
     """
     body = request.get_json(silent=True) or {}
     patch = {}
@@ -114,6 +123,19 @@ def update_note(note_id: str):
         is_done = bool(body["is_done"])
         patch["is_done"] = is_done
         patch["completed_at"] = datetime.now(timezone.utc).isoformat() if is_done else None
+        # Either direction supersedes a prior deferred state — reopening
+        # clearly isn't "still deferred," and a plain resolve (not through
+        # the defer action) means it's actually done now, not just set
+        # aside. The is_deferred block below runs after and wins if the
+        # SAME request also explicitly passes is_deferred.
+        patch["is_deferred"] = False
+    if "is_deferred" in body:
+        is_deferred = bool(body["is_deferred"])
+        patch["is_deferred"] = is_deferred
+        if is_deferred:
+            patch["is_done"] = True
+            if "completed_at" not in patch:
+                patch["completed_at"] = datetime.now(timezone.utc).isoformat()
     if not patch:
         return jsonify({"success": False, "error": "nothing to update"}), 400
     patch["updated_at"] = datetime.now(timezone.utc).isoformat()

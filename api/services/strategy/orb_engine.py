@@ -1878,10 +1878,31 @@ class ORBEngine:
             self.debug.emit("INFO",
                 f"Verifying stream for {contract['symbol']} (timeout=8s) ...")
             if not self.stream_manager.verify_stream(contract["symbol"], timeout=8.0):
-                msg = f"Real-time stream unavailable for {contract['symbol']}"
-                self.debug.emit("ERROR", f"Manual trade blocked — {msg}")
-                return {"status": "error", "message": msg}
-            self.debug.emit("INFO", f"Stream verified for {contract['symbol']}")
+                # REST fallback (2026-08-10): the WS not ticking within 8s
+                # doesn't mean the contract isn't tradeable — it's a common,
+                # innocuous gap (thin quoting, a momentary stream hiccup),
+                # distinct from "can't price this at all." Re-fetch a FRESH
+                # REST quote (not just reuse the one from moments ago, at
+                # the top of this function) before trusting it — if that
+                # still prices cleanly, proceed off it instead of blind-
+                # blocking a trade the backend can clearly still price.
+                # Only a genuine failure to get ANY quote still blocks the
+                # trade. Reuses the same _resolve_contract() call already
+                # proven to work moments earlier in this function — this was
+                # the exact reported symptom ("real time data not found"
+                # blocking a trade the backend could clearly still price).
+                self.debug.emit("WARN",
+                    f"Stream didn't confirm for {contract['symbol']} — falling back to a fresh REST quote")
+                fresh = self._resolve_contract(contract["symbol"], direction)
+                if not fresh:
+                    msg = f"Real-time stream unavailable and no REST quote for {contract['symbol']}"
+                    self.debug.emit("ERROR", f"Manual trade blocked — {msg}")
+                    return {"status": "error", "message": msg}
+                contract = fresh
+                self.debug.emit("INFO",
+                    f"REST fallback OK — {contract['symbol']} ask=${contract['ask']:.2f} bid=${contract['bid']:.2f}")
+            else:
+                self.debug.emit("INFO", f"Stream verified for {contract['symbol']}")
 
         try:
             self._execute_entry(direction, contract, qty, effective_profile, fib_levels,

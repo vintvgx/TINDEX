@@ -95,19 +95,19 @@ export default function BacklogScreen() {
                   opacity: n.kind === 'todo' && n.is_done ? 0.55 : 1,
                 }}
               >
-                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: tint, marginTop: 6 }} />
+                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: n.is_deferred ? '#F59E0B' : tint, marginTop: 6 }} />
                 <View style={{ flex: 1 }}>
                   <Text
                     style={{
                       color: colors.text, fontSize: 13,
-                      textDecorationLine: n.kind === 'todo' && n.is_done ? 'line-through' : 'none',
+                      textDecorationLine: n.kind === 'todo' && n.is_done && !n.is_deferred ? 'line-through' : 'none',
                     }}
                   >
                     {n.content}
                   </Text>
                   <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 3 }}>
                     {n.kind.toUpperCase()} · {format(parseISO(n.note_date), 'MMM d, yyyy')}
-                    {n.kind === 'todo' && n.is_done ? ' · Finished' : ''}
+                    {n.kind === 'todo' && n.is_deferred ? ' · Deferred' : n.kind === 'todo' && n.is_done ? ' · Finished' : ''}
                   </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />

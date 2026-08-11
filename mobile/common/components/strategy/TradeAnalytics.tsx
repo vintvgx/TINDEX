@@ -448,7 +448,8 @@ export function ExitQualityCard({ trades, colors }: { trades: ORBTrade[]; colors
 
 const PROFILE_EMOJI: Record<string, string> = {
   BULL_DOG: '🐂', THUNDER_CAT: '🐱', WOLF: '🐺', TREND_RIDER: '🚀',
-  RETESTER: '🎯', REVERSAL: '🔄', SCALPER: '⚡', PRECISION: '🎯',
+  RETESTER: '🎯', REVERSAL: '🔄', SCALPER: '⚡', SCALPER_SMALL: '⚡',
+  SCALPER_LARGE: '⚡', SCALPER_XL: '⚡', PRECISION: '🎯',
   MOMENTUM: '📈', CONVICTION: '💎', ALL_IN: '🔥', OTM_RUNNER: '🏃',
   OTM_CONVICTION: '🎯', MANUAL: '🖐️', NO_STOP_LOSS: '🧗',
   SL_5: '⏱️', SL_10: '⏳',

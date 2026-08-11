@@ -31,6 +31,17 @@ export interface ImmediateProfile {
 
 export const IMMEDIATE_PROFILES: ImmediateProfile[] = [
   {
+    key: 'SCALPER_SMALL',
+    emoji: '⚡',
+    name: 'Scalper Small',
+    qty: 1,
+    maxLoss: 30,
+    tp1: 30,
+    tp2: 60,
+    risk: 'Low',
+    description: 'Same as Scalper, sized down to 1 contract.',
+  },
+  {
     key: 'SCALPER',
     emoji: '⚡',
     name: 'Scalper',
@@ -40,6 +51,28 @@ export const IMMEDIATE_PROFILES: ImmediateProfile[] = [
     tp2: 60,
     risk: 'Low',
     description: 'Quick locks, take gains fast, tight trail on the runner.',
+  },
+  {
+    key: 'SCALPER_LARGE',
+    emoji: '⚡',
+    name: 'Scalper Large',
+    qty: 6,
+    maxLoss: 30,
+    tp1: 30,
+    tp2: 60,
+    risk: 'Low-Med',
+    description: 'Same as Scalper, sized up to 6 contracts.',
+  },
+  {
+    key: 'SCALPER_XL',
+    emoji: '⚡',
+    name: 'Scalper XL',
+    qty: 10,
+    maxLoss: 30,
+    tp1: 30,
+    tp2: 60,
+    risk: 'Medium',
+    description: 'Same as Scalper, sized up to 10 contracts.',
   },
   {
     key: 'PRECISION',

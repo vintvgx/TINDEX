@@ -14,6 +14,10 @@ interface UpdateNoteArgs {
   kind?: ReviewNoteKind;
   content?: string;
   is_done?: boolean;
+  /** Set aside for later, not resolved. Forces is_done true server-side —
+   *  see the backend PATCH route's docstring. Passing is_done:false in the
+   *  same call re-opens the note and clears this back to false. */
+  is_deferred?: boolean;
   completion_note?: string;
 }
 

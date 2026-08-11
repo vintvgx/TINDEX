@@ -6,6 +6,10 @@ export interface ReviewNote {
   kind: ReviewNoteKind;
   content: string;
   is_done: boolean;
+  /** Set aside for later, distinct from actually resolved — see
+   *  useUpdateReviewNote's docstring. Always true implies is_done true too
+   *  (deferring forces is_done — see the backend PATCH route). */
+  is_deferred: boolean;
   completion_note: string | null;
   completed_at: string | null;
   created_at: string;

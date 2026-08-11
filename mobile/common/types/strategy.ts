@@ -1,7 +1,8 @@
 export type ProfileKey =
   | 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'TREND_RIDER' | 'RETESTER' | 'REVERSAL' | 'CUSTOM'
   // Immediate trade profiles (conviction / manual entries)
-  | 'SCALPER' | 'PRECISION' | 'MOMENTUM' | 'CONVICTION' | 'ALL_IN'
+  | 'SCALPER' | 'SCALPER_SMALL' | 'SCALPER_LARGE' | 'SCALPER_XL'
+  | 'PRECISION' | 'MOMENTUM' | 'CONVICTION' | 'ALL_IN'
   // OTM-specific profiles (auto-selected for cheap out-of-money contracts)
   | 'OTM_RUNNER' | 'OTM_CONVICTION'
   // Sub-$0.50 stop-loss grace-timer profiles — auto-selected server-side at
