@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, Pressable, ScrollView, Switch, ActivityIndicator } from 'react-native';
+import { Modal, View, Pressable, ScrollView, Switch, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '@/common/components/ui/text';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useServicesStatus } from '@/hooks/queries/services/useServicesStatus';
-import { useStartServices, useStopServices } from '@/hooks/mutations/services/useServicesControl';
+import { useServicesStatus, type OptionStreamSubscription } from '@/hooks/queries/services/useServicesStatus';
+import {
+  useStartServices, useStopServices,
+  useUnsubscribeOptionStreamSymbol, useClearUnusedOptionSubscriptions,
+} from '@/hooks/mutations/services/useServicesControl';
 import { useSocialIngestStatus } from '@/hooks/queries/social/useSocialIngestStatus';
 import { useStartSocialIngest, useStopSocialIngest } from '@/hooks/mutations/social/useSocialIngestControl';
 import { useToast } from '@/common/components/ui/Toast';
@@ -119,9 +122,87 @@ const ServiceRow: React.FC<RowProps> = ({ label, description, running, liveSince
   );
 };
 
+function formatLastQuote(seconds: number | null): string {
+  if (seconds == null) return 'no data yet';
+  if (seconds < 60) return `${Math.round(seconds)}s ago`;
+  const m = Math.round(seconds / 60);
+  return `${m}m ago`;
+}
+
+interface SubscriptionRowProps {
+  sub: OptionStreamSubscription;
+  colors: any;
+  onUnsubscribe: (symbol: string) => void;
+  busy: boolean;
+}
+
+const SubscriptionRow: React.FC<SubscriptionRowProps> = ({ sub, colors, onUnsubscribe, busy }) => {
+  const handlePress = () => {
+    if (sub.in_use) {
+      Alert.alert(
+        'Backing an Open Position',
+        `${sub.symbol} is currently backing an open position. Unsubscribing stops its stop-loss/take-profit monitoring until something re-subscribes it — nothing does automatically.\n\nUnsubscribe anyway?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Unsubscribe', style: 'destructive', onPress: () => onUnsubscribe(sub.symbol) },
+        ],
+      );
+      return;
+    }
+    onUnsubscribe(sub.symbol);
+  };
+
+  return (
+    <View
+      style={{
+        flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10,
+        borderBottomWidth: 1, borderBottomColor: colors.separator, gap: 8,
+      }}
+    >
+      <View style={{ flex: 1 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <Text style={{ color: colors.text, fontSize: 12, fontWeight: '600' }} numberOfLines={1}>
+            {sub.symbol}
+          </Text>
+          {sub.in_use ? (
+            <View style={{ paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, backgroundColor: colors.accent + '22' }}>
+              <Text style={{ color: colors.accent, fontSize: 9, fontWeight: '700' }}>OPEN POSITION</Text>
+            </View>
+          ) : (
+            <View style={{ paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, backgroundColor: colors.surfaceTertiary }}>
+              <Text style={{ color: colors.textTertiary, fontSize: 9, fontWeight: '700' }}>UNUSED</Text>
+            </View>
+          )}
+          {sub.expired && (
+            <View style={{ paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, backgroundColor: colors.errorBg }}>
+              <Text style={{ color: colors.error, fontSize: 9, fontWeight: '700' }}>EXPIRED</Text>
+            </View>
+          )}
+        </View>
+        <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 2 }}>
+          {formatLastQuote(sub.last_quote_age_seconds)}
+          {sub.quote_count > 0 ? ` · ${sub.quote_count} tick${sub.quote_count === 1 ? '' : 's'}` : ''}
+        </Text>
+      </View>
+      <Pressable
+        onPress={handlePress}
+        disabled={busy}
+        hitSlop={8}
+        style={{
+          width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center',
+          backgroundColor: colors.errorBg, opacity: busy ? 0.5 : 1,
+        }}
+      >
+        <Ionicons name="close" size={16} color={colors.error} />
+      </Pressable>
+    </View>
+  );
+};
+
 export const ServiceStatusModal: React.FC<ServiceStatusModalProps> = ({ visible, onClose }) => {
   const colors = useThemeColors();
   const toast = useToast();
+  const [subsExpanded, setSubsExpanded] = useState(false);
 
   const { data: services } = useServicesStatus({ alwaysPoll: visible });
   const startServices = useStartServices();
@@ -131,6 +212,36 @@ export const ServiceStatusModal: React.FC<ServiceStatusModalProps> = ({ visible,
   const startIngest = useStartSocialIngest();
   const stopIngest = useStopSocialIngest();
   const ingestAccountErrors = (ingest?.accounts ?? []).filter((a) => a.last_poll_error);
+
+  const unsubscribeSymbol = useUnsubscribeOptionStreamSymbol();
+  const clearUnused = useClearUnusedOptionSubscriptions();
+
+  const handleUnsubscribe = (symbol: string) => {
+    unsubscribeSymbol.mutate(symbol, {
+      onSuccess: () => toast.success(`Unsubscribed ${symbol}`),
+      onError: (err) => toast.error(err.message || `Failed to unsubscribe ${symbol}`),
+    });
+  };
+
+  const handleClearUnused = () => {
+    const count = services?.option_quote_stream.unused_count ?? 0;
+    if (count === 0) return;
+    Alert.alert(
+      'Clear Unused Subscriptions',
+      `Unsubscribe ${count} symbol${count === 1 ? '' : 's'} not backing any open position?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: () => clearUnused.mutate(undefined, {
+            onSuccess: (r) => toast.success(`Cleared ${r.cleared_count} unused subscription${r.cleared_count === 1 ? '' : 's'}`),
+            onError: (err) => toast.error(err.message || 'Failed to clear unused subscriptions'),
+          }),
+        },
+      ],
+    );
+  };
 
   const toggleService = (name: 'orb' | 'contracts', next: boolean) => {
     const mutation = next ? startServices : stopServices;
@@ -281,6 +392,87 @@ export const ServiceStatusModal: React.FC<ServiceStatusModalProps> = ({ visible,
                   : 'idle — no open positions or active entries'
               }
             />
+
+            {/* Expired-but-still-subscribed contracts — proof a close/exit
+                path didn't unsubscribe. Subscriptions are additive on
+                Alpaca's side with no automatic expiry, so this is the signal
+                that the connection is slowly leaking toward the account's
+                channel cap. Always visible (not collapsed) when nonzero,
+                since it's the actionable part. */}
+            {!!services?.option_quote_stream.expired_count && (
+              <View
+                style={{
+                  paddingHorizontal: 16,
+                  paddingVertical: 12,
+                  backgroundColor: colors.errorBg,
+                  borderBottomWidth: 1,
+                  borderBottomColor: colors.separator,
+                }}
+              >
+                <Text style={{ color: colors.error, fontSize: 12, fontWeight: '700', marginBottom: 4 }}>
+                  {services.option_quote_stream.expired_count} expired contract
+                  {services.option_quote_stream.expired_count === 1 ? '' : 's'} still subscribed
+                </Text>
+                <Text style={{ color: colors.error, fontSize: 11, lineHeight: 15 }}>
+                  {services.option_quote_stream.expired_symbols?.join(', ')}
+                </Text>
+              </View>
+            )}
+
+            {/* Full subscription list — collapsed by default. Each row can be
+                unsubscribed individually; "Clear Unused" bulk-removes every
+                symbol not currently backing an open position, which is the
+                remediation for a connection that's slowly leaked dead
+                symbols across weeks of uptime without a restart. */}
+            {!!services?.option_quote_stream.subscribed_count && (
+              <View>
+                <Pressable
+                  onPress={() => setSubsExpanded((v) => !v)}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                    paddingHorizontal: 16, paddingVertical: 10,
+                    backgroundColor: colors.surfaceTertiary,
+                    borderBottomWidth: subsExpanded ? 1 : 0,
+                    borderBottomColor: colors.separator,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Ionicons name={subsExpanded ? 'chevron-up' : 'chevron-down'} size={14} color={colors.textTertiary} />
+                    <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '600' }}>
+                      {subsExpanded ? 'Hide' : 'View'} subscribed symbols
+                    </Text>
+                  </View>
+                  {!!services.option_quote_stream.unused_count && (
+                    <Pressable
+                      onPress={handleClearUnused}
+                      disabled={clearUnused.isPending}
+                      style={{
+                        paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
+                        backgroundColor: colors.errorBg, opacity: clearUnused.isPending ? 0.5 : 1,
+                      }}
+                    >
+                      {clearUnused.isPending ? (
+                        <ActivityIndicator size="small" color={colors.error} />
+                      ) : (
+                        <Text style={{ color: colors.error, fontSize: 11, fontWeight: '700' }}>
+                          Clear Unused ({services.option_quote_stream.unused_count})
+                        </Text>
+                      )}
+                    </Pressable>
+                  )}
+                </Pressable>
+                {subsExpanded && (services.option_quote_stream.subscriptions ?? []).map((sub) => (
+                  <SubscriptionRow
+                    key={sub.symbol}
+                    sub={sub}
+                    colors={colors}
+                    onUnsubscribe={handleUnsubscribe}
+                    busy={unsubscribeSymbol.isPending && unsubscribeSymbol.variables === sub.symbol}
+                  />
+                ))}
+              </View>
+            )}
+
             <ServiceRow
               label="Price Stream"
               description="Live ticker prices across the app"

@@ -610,6 +610,20 @@ def delete_config(strategy_id: str):
     # Safe to remove now — position is closed (or never existed)
     _engines.pop(strategy_id, None)
     if engine:
+        # Unsubscribe the option-stream callback for this engine's contract
+        # (if any) BEFORE it's discarded. Every other close path (auto exit,
+        # manual sell, force-close, the daily 15:30 ET EOD sweep) already
+        # goes through reset_session() for this — this delete flow was the
+        # one exception: it sells the position directly (above) without ever
+        # calling it, and a few lines below removes this engine's eod_reset
+        # cron job, which was the only other thing that would have
+        # unconditionally unsubscribed it (regardless of trade_taken) at
+        # 15:30 ET. Without this, deleting a strategy with (or that recently
+        # had) an open position permanently orphans its option-stream
+        # subscription — nothing is left to ever unsubscribe it again short
+        # of a full process restart. 2026-08-12 — found auditing subscription
+        # leaks (see option_stream.py's get_health()/expired_symbols).
+        engine.reset_session()
         # Detach from the hub bar feed so no stale callback is retained.
         try:
             engine.unsubscribe_data()

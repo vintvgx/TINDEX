@@ -17,8 +17,23 @@ import queue
 import threading
 import time
 import logging
+from datetime import date, datetime
 
 logger = logging.getLogger(__name__)
+
+# How often the background health-logger dumps the full subscription list to
+# the server log (2026-08-12 — added after a suspicion that subscriptions
+# are additive/persistent on Alpaca's side with no automatic expiry: every
+# subscribe() that isn't matched by a later unsubscribe() stays on this
+# connection indefinitely, across reconnects too, since _ensure_started's
+# post-restart resubscribe walks self._callbacks verbatim. A 0DTE-heavy usage
+# pattern generates a brand-new symbol every trading day, so a leak here
+# creeps quietly toward whatever channel cap the account's data plan has —
+# invisible in week one, a real problem after months of running. This is the
+# log trail to confirm (or rule out) that theory over time, independent of
+# whatever's currently visible in the Service Status screen at any one
+# moment.
+HEALTH_LOG_INTERVAL_SEC = 1800
 
 try:
     from alpaca.data.live.option import OptionDataStream
@@ -68,6 +83,7 @@ class OptionStreamManager:
         self._last_quote_at: dict[str, float] = {}   # symbol → epoch seconds
         self._last_quote_at_any: float | None = None  # across ALL symbols
         self._quote_count: dict[str, int]     = {}   # symbol → lifetime tick count (this process)
+        self._health_log_started = False
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -171,6 +187,19 @@ class OptionStreamManager:
         finally:
             self.unsubscribe(symbol, _probe)
 
+    @staticmethod
+    def _occ_expiry(symbol: str) -> "date | None":
+        """Best-effort expiry date parsed from an OCC option symbol
+        (<ROOT><YYMMDD><C|P><strike*1000, 8 digits>). None if unparseable —
+        callers treat that as "can't tell, don't flag it" rather than expired.
+        """
+        try:
+            body = symbol[-15:]
+            yy, mm, dd = body[0:2], body[2:4], body[4:6]
+            return date(2000 + int(yy), int(mm), int(dd))
+        except Exception:
+            return None
+
     def get_health(self) -> dict:
         """
         Snapshot for the Service Status screen (GET /services/status) and for
@@ -179,7 +208,15 @@ class OptionStreamManager:
         market is even open, which this class has no business knowing about;
         the caller (monitoring_routes.py, which already has market-hours
         context for the ORB hub's own health check) applies that threshold.
+
+        expired_symbols/expired_count (2026-08-12): subscriptions are
+        additive on Alpaca's side with no automatic expiry — a symbol only
+        comes off this connection when unsubscribe() is explicitly called.
+        Any OCC symbol in here whose parsed expiry is already in the past is
+        proof a close/exit path failed to unsubscribe; this is the signal to
+        watch for a slow leak toward the account's channel cap.
         """
+        today = datetime.now().astimezone().date()
         with self._lock:
             running = bool(self._started and self._thread and self._thread.is_alive())
             subscribed = sorted(self._callbacks.keys())
@@ -191,10 +228,16 @@ class OptionStreamManager:
                 }
                 for sym, ts in self._last_quote_at.items()
             }
+        expired = sorted(
+            sym for sym in subscribed
+            if (exp := self._occ_expiry(sym)) is not None and exp < today
+        )
         return {
             "running":                 running,
             "subscribed_symbols":      subscribed,
             "subscribed_count":        len(subscribed),
+            "expired_symbols":         expired,
+            "expired_count":           len(expired),
             "last_quote_age_seconds":  round(time.time() - last_any, 1) if last_any is not None else None,
             "symbols":                 per_symbol,
         }
@@ -243,6 +286,13 @@ class OptionStreamManager:
                 logger.error("[OptionStream] Failed to start: %s", ex)
                 return
 
+            if not self._health_log_started:
+                self._health_log_started = True
+                threading.Thread(
+                    target=self._health_log_loop, daemon=True,
+                    name="OptionStream-health-log",
+                ).start()
+
             if was_running:
                 # A brand-new OptionDataStream instance starts with zero
                 # subscriptions of its own — the normal alpaca-py reconnect
@@ -264,6 +314,35 @@ class OptionStreamManager:
                 if symbols:
                     logger.info("[OptionStream] Re-subscribing %d symbol(s) after "
                                 "restart: %s", len(symbols), symbols)
+
+    def _health_log_loop(self):
+        """
+        Runs for the life of the process (started once, from _ensure_started).
+        Dumps the full subscription list every HEALTH_LOG_INTERVAL_SEC so the
+        server log has a standing trail of how it grows over days/weeks —
+        the Service Status screen only shows a point-in-time snapshot, which
+        is enough to confirm a leak but not to see how fast it's growing or
+        catch it happening between checks.
+        """
+        while True:
+            time.sleep(HEALTH_LOG_INTERVAL_SEC)
+            try:
+                health = self.get_health()
+            except Exception as ex:
+                logger.error("[OptionStream] health-log tick failed: %s", ex)
+                continue
+            if health["expired_count"] > 0:
+                logger.warning(
+                    "[OptionStream] subscription audit — %d active (%d EXPIRED, never "
+                    "unsubscribed): %s | full list: %s",
+                    health["subscribed_count"], health["expired_count"],
+                    health["expired_symbols"], health["subscribed_symbols"],
+                )
+            else:
+                logger.info(
+                    "[OptionStream] subscription audit — %d active, 0 expired: %s",
+                    health["subscribed_count"], health["subscribed_symbols"],
+                )
 
     def _make_handler(self, symbol: str):
         """Return an async quote handler that fans out to all registered callbacks."""

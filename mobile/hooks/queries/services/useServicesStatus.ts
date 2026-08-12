@@ -33,8 +33,30 @@ export interface InfraStreamStatus {
    *  OPTION_STREAM_STALE_THRESHOLD_SEC. */
   subscribed_count?: number;
   subscribed_symbols?: string[];
+  /** OCC symbols still subscribed whose parsed expiry date is already in the
+   *  past — proof a close/exit path didn't unsubscribe. Subscriptions are
+   *  additive on Alpaca's side with no automatic expiry, so a nonzero count
+   *  here means the connection is slowly leaking toward the account's
+   *  channel cap. See option_stream.py's get_health(). */
+  expired_count?: number;
+  expired_symbols?: string[];
+  /** Subscribed but not backing any currently-open position — safe to
+   *  unsubscribe. See the "Clear Unused" action on the Service Status screen. */
+  unused_count?: number;
+  subscriptions?: OptionStreamSubscription[];
   last_quote_age_seconds?: number | null;
   stale?: boolean;
+}
+
+/** Per-symbol row for the Service Status screen's subscription list. */
+export interface OptionStreamSubscription {
+  symbol: string;
+  /** Backing an open position right now — unsubscribing blinds its TP/SL monitoring. */
+  in_use: boolean;
+  /** Parsed OCC expiry is already in the past — should have been unsubscribed on close. */
+  expired: boolean;
+  last_quote_age_seconds: number | null;
+  quote_count: number;
 }
 
 export interface ServicesStatus {
