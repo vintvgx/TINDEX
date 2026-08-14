@@ -203,6 +203,45 @@ def update_tracked_option(contract_id: str):
         return jsonify({"success": False, "error": f"Failed to update contract: {str(e)}"}), 500
 
 
+@bp.route("/track-option/<contract_id>/alerts", methods=["PATCH"])
+def update_tracked_option_alerts(contract_id: str):
+    """
+    Set per-contract entered-position alert threshold overrides. Independent
+    of the status PUT above — can be called any time; only takes effect once
+    the contract is 'entered' (see OptionsContractMonitorService). Body keys
+    map 1:1 to the alert_* columns; a null value resets that tier to the
+    25/50/100 default.
+    Body: { userId, gain25?, gain50?, gain100?, loss25?, loss50?, loss100? }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "Request body is required"}), 400
+
+        user_id = data.get("userId")
+        if not user_id:
+            return jsonify({"success": False, "error": "userId is required"}), 400
+
+        field_map = {
+            "gain25": "alert_gain_25", "gain50": "alert_gain_50", "gain100": "alert_gain_100",
+            "loss25": "alert_loss_25", "loss50": "alert_loss_50", "loss100": "alert_loss_100",
+        }
+        thresholds = {
+            col: data[key] for key, col in field_map.items() if key in data
+        }
+        if not thresholds:
+            return jsonify({"success": False, "error": "No threshold fields provided"}), 400
+
+        service = get_supabase_service()
+        service.verify_user(user_id=user_id)
+        result = service.update_contract_alert_thresholds(user_id, contract_id, thresholds)
+        return jsonify(result), 200 if result.get("success") else 400
+
+    except Exception as e:
+        logger.error("Failed to update alert thresholds: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": f"Failed to update alert thresholds: {str(e)}"}), 500
+
+
 @bp.route("/track-option/<contract_id>", methods=["DELETE"])
 def delete_tracked_option(contract_id: str):
     try:

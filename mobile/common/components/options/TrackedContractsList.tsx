@@ -12,6 +12,7 @@ import type { TrackedOptionContract } from '@/common/types/options';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 import type { ContractScore } from '@/common/types/agent';
 import { AddContractSheet } from './AddContractSheet';
+import { AlertThresholdsModal } from './AlertThresholdsModal';
 import { useToast } from '@/common/components/ui/Toast';
 import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
@@ -75,6 +76,7 @@ interface ContractCardProps {
 
 const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress, onUntrack, isUntracking, colors }) => {
   const { toTicker } = useBaseNavigation();
+  const [alertsOpen, setAlertsOpen] = useState(false);
   const today = toDateStr(new Date());
   const farDate = (() => { const d = new Date(); d.setFullYear(d.getFullYear() + 1); return toDateStr(d); })();
 
@@ -235,17 +237,36 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
         <View style={[cc.statusPill, { backgroundColor: colors.background }]}>
           <Text style={[cc.statusText, { color: colors.textTertiary }]}>{contract.status}</Text>
         </View>
-        <TouchableOpacity
-          onPress={onUntrack}
-          disabled={isUntracking}
-          hitSlop={8}
-          style={[cc.trashBtn, { borderColor: colors.error + '40' }]}
-        >
-          {isUntracking
-            ? <ActivityIndicator size="small" color={colors.error} />
-            : <Ionicons name="trash-outline" size={13} color={colors.error} />}
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          {contract.status === 'entered' && (
+            <TouchableOpacity
+              onPress={(e) => { e.stopPropagation(); setAlertsOpen(true); }}
+              hitSlop={8}
+              style={[cc.trashBtn, { borderColor: colors.accent + '40' }]}
+            >
+              <Ionicons name="notifications-outline" size={13} color={colors.accent} />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            onPress={onUntrack}
+            disabled={isUntracking}
+            hitSlop={8}
+            style={[cc.trashBtn, { borderColor: colors.error + '40' }]}
+          >
+            {isUntracking
+              ? <ActivityIndicator size="small" color={colors.error} />
+              : <Ionicons name="trash-outline" size={13} color={colors.error} />}
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {contract.status === 'entered' && (
+        <AlertThresholdsModal
+          visible={alertsOpen}
+          onClose={() => setAlertsOpen(false)}
+          contract={contract}
+        />
+      )}
     </TouchableOpacity>
   );
 };

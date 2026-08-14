@@ -520,7 +520,7 @@ def create_config():
             "profile", "trade_days", "strategy_name", "capital_limit",
             "bypass_breakout_window", "custom_thresholds", "exit_overrides",
             "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
-            "confirm_entry", "paired_strategy_id",
+            "confirm_entry", "paired_strategy_id", "paused_by_kill_switch",
         ) if k in data
     }}
     config.pop("id", None)   # force new UUID
@@ -562,7 +562,7 @@ def update_config(strategy_id: str):
                "profile", "trade_days", "strategy_name", "capital_limit",
                "bypass_breakout_window", "custom_thresholds", "exit_overrides",
                "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
-               "confirm_entry", "paired_strategy_id"}
+               "confirm_entry", "paired_strategy_id", "paused_by_kill_switch"}
     for key in allowed:
         if key in data:
             engine.config[key] = data[key]
@@ -647,6 +647,72 @@ def delete_config(strategy_id: str):
 
     logger_svc.delete_strategy_config(strategy_id)
     return jsonify({"status": "ok"})
+
+
+@strategy_bp.route("/configs/pause-all", methods=["POST"])
+def pause_all_strategies():
+    """
+    Bulk kill-switch: pause (or resume) every strategy config matching
+    `scope`, in one call. Only blocks NEW entries — 'active' gates
+    calculate_orb (see ORBEngine.calculate_orb), it never touches an already
+    open position, so nothing gets force-closed by this.
+
+    Body: { scope: "paper" | "live" | "all", active: bool }
+      active: false → pause. Only configs currently active are touched, and
+        each one gets paused_by_kill_switch=True so resume knows it was this
+        switch (not a manual per-strategy toggle) that turned it off.
+      active: true  → resume. Only configs with paused_by_kill_switch=True
+        are touched, so strategies you'd disabled individually for unrelated
+        reasons stay off — resume never re-activates those.
+    """
+    data = request.get_json() or {}
+    scope = data.get("scope")
+    if scope not in ("paper", "live", "all"):
+        return jsonify({"error": "scope must be 'paper', 'live', or 'all'"}), 400
+    if "active" not in data:
+        return jsonify({"error": "active (bool) is required"}), 400
+    turn_on = bool(data["active"])
+
+    configs = logger_svc.load_configs()
+
+    def in_scope(cfg: dict) -> bool:
+        if scope == "all":
+            return True
+        is_paper = cfg.get("paper_mode", True)
+        return is_paper if scope == "paper" else not is_paper
+
+    if turn_on:
+        targets = [c for c in configs if in_scope(c) and c.get("paused_by_kill_switch")]
+    else:
+        targets = [c for c in configs if in_scope(c) and c.get("active", True)]
+
+    touched = []
+    for base in targets:
+        sid = base["id"]
+        engine = _engines.get(sid)
+        if engine is None:
+            engine = ORBEngine(base, stream_manager=_stream_manager)
+            _engines[sid] = engine
+            reschedule_jobs(engine, strategy_id=sid)
+
+        engine.config["active"] = turn_on
+        engine.config["paused_by_kill_switch"] = not turn_on
+        engine.config["id"] = sid
+        engine.reload_config(engine.config)
+        reschedule_jobs(engine, strategy_id=sid)
+
+        saved = logger_svc.save_strategy_config(engine.config)
+        if saved:
+            touched.append(sid)
+        else:
+            logger.error("[strategy] pause-all failed to persist config %s", sid)
+
+    return jsonify({
+        "status": "ok",
+        "scope": scope,
+        "active": turn_on,
+        "strategy_ids": touched,
+    })
 
 
 @strategy_bp.route("/configs/<strategy_id>/reset-session", methods=["POST"])

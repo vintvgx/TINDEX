@@ -117,6 +117,7 @@ class TradeLogger:
                 "smart_contracts":        config.get("smart_contracts", False),
                 "confirm_entry":          config.get("confirm_entry", False),
                 "paired_strategy_id":     config.get("paired_strategy_id"),
+                "paused_by_kill_switch":  config.get("paused_by_kill_switch", False),
                 "updated_at":             datetime.utcnow().isoformat(),
             }
             if "id" in config and config["id"]:

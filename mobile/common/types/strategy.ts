@@ -117,6 +117,10 @@ export interface StrategyConfig {
   paired_strategy_id?: string | null;
   has_position?: boolean;
   qty_remaining?: number | null;
+  // True when the bulk pause-all kill switch (not a manual per-strategy
+  // toggle) is the reason this config is inactive — lets "resume" bring
+  // back only what the switch itself paused. See POST /strategy/configs/pause-all.
+  paused_by_kill_switch?: boolean;
 }
 
 export type PendingConfirmationStatus = 'PENDING' | 'APPROVED' | 'SKIPPED' | 'EXPIRED';

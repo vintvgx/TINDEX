@@ -14,6 +14,7 @@ import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccount
 import { useCreateStrategyConfig } from '@/hooks/mutations/strategy/useCreateStrategyConfig';
 import { useUpdateStrategyConfig } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
 import { useDeleteStrategyConfig } from '@/hooks/mutations/strategy/useDeleteStrategyConfig';
+import { usePauseAllStrategies, type KillSwitchScope } from '@/hooks/mutations/strategy/usePauseAllStrategies';
 import { TradeDaysSelector } from '@/common/components/strategy/TradeDaysSelector';
 import { ProfileCard } from '@/common/components/strategy/ProfileCard';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
@@ -411,6 +412,11 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
               colors={colors}
             />
           </View>
+        )}
+
+        {/* Kill switch — spans both accounts regardless of the LIVE/PAPER tab above */}
+        {configs && configs.length > 0 && (
+          <KillSwitchPanel configs={configs} colors={colors} toast={toast} />
         )}
 
         {/* ── LIVE POSITIONS ─────────────────────────────────────────────────── */}
@@ -958,6 +964,125 @@ function AccountBannerSide({ label, accentColor, account, colors }: AccountBanne
     </View>
   );
 }
+
+// ── Kill switch ──────────────────────────────────────────────────────────────
+// Bulk pause/resume of new strategy entries, scoped to Paper/Live/Both. Only
+// blocks new entries (ORBEngine.calculate_orb gate) — never touches open
+// positions. See POST /strategy/configs/pause-all.
+
+const KILL_SCOPES: { key: KillSwitchScope; label: string }[] = [
+  { key: 'live',  label: 'Live' },
+  { key: 'paper', label: 'Paper' },
+  { key: 'all',   label: 'Live & Paper' },
+];
+
+const KillSwitchPanel = ({ configs, colors, toast }: {
+  configs: StrategyConfig[]; colors: any; toast: ReturnType<typeof useToast>;
+}) => {
+  const { mutate: pauseAll, isPending } = usePauseAllStrategies();
+  const [scope, setScope] = useState<KillSwitchScope>('all');
+
+  const inScope = useMemo(() => {
+    if (scope === 'all') return configs;
+    return configs.filter(c => c.paper_mode === (scope === 'paper'));
+  }, [configs, scope]);
+  const activeCount = inScope.filter(c => c.active).length;
+  const pausedByCount = inScope.filter(c => c.paused_by_kill_switch).length;
+
+  const scopeLabel = KILL_SCOPES.find(s => s.key === scope)!.label;
+
+  const handlePause = () => {
+    Alert.alert(
+      'Pause New Entries?',
+      `${scopeLabel} strategies will stop opening any new trades. Open positions are not affected.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Pause', style: 'destructive',
+          onPress: () => pauseAll({ scope, active: false }, {
+            onSuccess: (res) => toast.info(
+              res.strategy_ids.length > 0
+                ? `Paused ${res.strategy_ids.length} ${res.strategy_ids.length === 1 ? 'strategy' : 'strategies'}`
+                : 'Nothing to pause'
+            ),
+            onError: (err: Error) => toast.error(err.message),
+          }),
+        },
+      ]
+    );
+  };
+
+  const handleResume = () => {
+    pauseAll({ scope, active: true }, {
+      onSuccess: (res) => toast.info(
+        res.strategy_ids.length > 0
+          ? `Resumed ${res.strategy_ids.length} ${res.strategy_ids.length === 1 ? 'strategy' : 'strategies'}`
+          : 'Nothing to resume'
+      ),
+      onError: (err: Error) => toast.error(err.message),
+    });
+  };
+
+  return (
+    <View style={[styles.accountCard, { flexDirection: 'column', backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+        <Ionicons name="power-outline" size={15} color={colors.error} />
+        <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>Kill Switch</Text>
+      </View>
+
+      <View style={{ flexDirection: 'row', borderRadius: 10, borderWidth: 1, borderColor: colors.border, padding: 3, marginBottom: 10 }}>
+        {KILL_SCOPES.map(({ key, label }) => {
+          const active = scope === key;
+          return (
+            <TouchableOpacity
+              key={key}
+              onPress={() => setScope(key)}
+              style={{
+                flex: 1, alignItems: 'center', paddingVertical: 6, borderRadius: 8,
+                backgroundColor: active ? colors.accent + '22' : 'transparent',
+              }}
+            >
+              <Text style={{ fontSize: 12, fontWeight: active ? '700' : '500', color: active ? colors.accent : colors.tabBarInactive }}>
+                {label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <TouchableOpacity
+          onPress={handlePause}
+          disabled={isPending || activeCount === 0}
+          style={{
+            flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 10,
+            backgroundColor: colors.error + '18', borderWidth: 1, borderColor: colors.error + '40',
+            opacity: (isPending || activeCount === 0) ? 0.5 : 1,
+          }}
+        >
+          <Text style={{ color: colors.error, fontSize: 13, fontWeight: '700' }}>
+            Pause All{activeCount > 0 ? ` (${activeCount})` : ''}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={handleResume}
+          disabled={isPending || pausedByCount === 0}
+          style={{
+            flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 10,
+            backgroundColor: colors.success + '18', borderWidth: 1, borderColor: colors.success + '40',
+            opacity: (isPending || pausedByCount === 0) ? 0.5 : 1,
+          }}
+        >
+          {isPending ? <ActivityIndicator size="small" color={colors.success} /> : (
+            <Text style={{ color: colors.success, fontSize: 13, fontWeight: '700' }}>
+              Resume{pausedByCount > 0 ? ` (${pausedByCount})` : ''}
+            </Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+};
 
 // ── Small helpers ──────────────────────────────────────────────────────────────
 

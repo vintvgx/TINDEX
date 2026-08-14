@@ -68,6 +68,10 @@ STRATEGY_DEFAULTS = {
     "debug_mode":              False,
     "smart_contracts":         False,
     "confirm_entry":           False,  # True = pause for user approval before every auto entry
+    "paused_by_kill_switch":   False,  # True = this config was auto-paused by the bulk
+                                        # pause-all switch (not a manual per-strategy pause) —
+                                        # see POST /strategy/configs/pause-all. Lets "resume"
+                                        # reactivate only what the switch itself paused.
     "id":                      None,
 }
 
