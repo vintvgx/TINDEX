@@ -55,6 +55,13 @@ interface Props {
    * callers (watchlist tracking) that have no qty concept.
    */
   qty?: number;
+  /**
+   * Opens the Simulated Returns view for this contract — only meaningful
+   * once it's tracked (needs a cost basis). Omitted entirely by callers
+   * that don't support it (e.g. this modal used for plain chain browsing
+   * with nothing tracked yet).
+   */
+  onSimulate?: () => void;
 }
 
 const fc = (v: number) =>
@@ -89,6 +96,7 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
   onTrade,
   tintColor,
   qty,
+  onSimulate,
 }) => {
   const colors = useThemeColors();
   const [greeksInfoOpen, setGreeksInfoOpen] = useState(false);
@@ -405,6 +413,17 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
                   )}
                 </TouchableOpacity>
               ) : null}
+
+              {isTracked && onSimulate && (
+                <TouchableOpacity
+                  onPress={onSimulate}
+                  activeOpacity={0.8}
+                  style={[s.actionBtn, { flex: 1, backgroundColor: colors.accent + '18', borderColor: colors.accent + '50' }]}
+                >
+                  <Ionicons name="analytics" size={18} color={colors.accent} />
+                  <Text style={[s.actionText, { color: colors.accent }]}>Simulate</Text>
+                </TouchableOpacity>
+              )}
 
               {onTrade && (
                 <TouchableOpacity

@@ -12,6 +12,11 @@ from flask import Blueprint, jsonify, request
 from log.logging_config import get_logger
 from services.supabase.supabase_service import get_supabase_service
 from services.utils.research_service import get_research_service
+from services.utils.black_scholes import (
+    build_simulated_returns_grid,
+    DEFAULT_SPOT_RANGE_PCT,
+    DEFAULT_RISK_FREE_RATE,
+)
 
 logger = get_logger(__name__)
 
@@ -281,3 +286,69 @@ def get_suggested_contracts(ticker: str):
     except Exception as e:
         logger.error("Failed to get suggested contracts for %s: %s", ticker, e, exc_info=True)
         return jsonify({"success": False, "error": f"Failed to get suggested contracts: {str(e)}", "ticker": ticker}), 500
+
+
+@bp.route("/options/simulate-returns", methods=["POST"])
+def simulate_returns():
+    """
+    Black-Scholes P&L grid for the Simulated Returns view — see
+    docs/SIMULATED_RETURNS_PLAN.md. Pure compute: no DB writes, no Alpaca
+    calls (every input is already sitting in the client's own React Query
+    cache from data it fetched to render the contract card/detail sheet).
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "Request body is required"}), 400
+
+        option_type = (data.get("optionType") or "").strip().upper()
+        if option_type not in ("CALL", "PUT"):
+            return jsonify({"success": False, "error": "optionType must be 'CALL' or 'PUT'"}), 400
+
+        required = ["strike", "expirationDate", "currentSpot", "impliedVolatility", "currentContractPrice", "costBasis"]
+        missing = [f for f in required if data.get(f) is None]
+        if missing:
+            return jsonify({"success": False, "error": f"Missing required field(s): {', '.join(missing)}"}), 400
+
+        try:
+            strike = float(data["strike"])
+            current_spot = float(data["currentSpot"])
+            implied_volatility = float(data["impliedVolatility"])
+            current_contract_price = float(data["currentContractPrice"])
+            cost_basis = float(data["costBasis"])
+            quantity = int(data.get("quantity", 1))
+            spot_range_pct = float(data.get("spotRangePct", DEFAULT_SPOT_RANGE_PCT))
+            risk_free_rate = float(data.get("riskFreeRate", DEFAULT_RISK_FREE_RATE))
+            expiration_date = datetime.strptime(data["expirationDate"], "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "One or more fields had an invalid type/format (expirationDate must be YYYY-MM-DD)"}), 400
+
+        if strike <= 0 or current_spot <= 0 or implied_volatility <= 0 or quantity <= 0 or spot_range_pct <= 0:
+            return jsonify({"success": False, "error": "strike, currentSpot, impliedVolatility, quantity, and spotRangePct must all be positive"}), 400
+
+        grid = build_simulated_returns_grid(
+            current_spot=current_spot,
+            strike=strike,
+            expiration_date=expiration_date,
+            volatility=implied_volatility,
+            current_contract_price=current_contract_price,
+            cost_basis=cost_basis,
+            quantity=quantity,
+            option_type=option_type,
+            spot_range_pct=spot_range_pct,
+            risk_free_rate=risk_free_rate,
+        )
+        return jsonify({
+            "success": True,
+            "data": {
+                "dates": grid["dates"],
+                "spotPrices": grid["spot_prices"],
+                "pnl": grid["pnl"],
+                "maxLoss": grid["max_loss"],
+                "riskFreeRateUsed": grid["risk_free_rate_used"],
+            },
+        }), 200
+
+    except Exception as e:
+        logger.error("Failed to simulate returns: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": f"Failed to simulate returns: {str(e)}"}), 500

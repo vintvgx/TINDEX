@@ -12,7 +12,6 @@ import time
 from typing import Optional
 
 from log.logging_config import get_logger
-from services.utils.market_hours import is_market_hours
 
 logger = get_logger(__name__)
 
@@ -89,10 +88,13 @@ class PriceStreamService:
     # ── background loop ───────────────────────────────────────────────
 
     def _loop(self):
+        # Deliberately NOT gated on is_market_hours() — unlike ORB / options
+        # contract monitor / social signals, this feeds the ticker tape,
+        # which needs to show data (last close, off-hours quotes) any time
+        # the app is open, not just during the NYSE session.
         while self._running:
             try:
-                if is_market_hours():
-                    self._broadcast()
+                self._broadcast()
             except Exception as exc:
                 logger.error("[PriceStream] broadcast error: %s", exc)
             time.sleep(POLL_INTERVAL)

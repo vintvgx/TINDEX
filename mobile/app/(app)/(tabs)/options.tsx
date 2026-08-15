@@ -18,6 +18,7 @@ import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 import type { TrackedOptionContract } from '@/common/types/options';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsContractDetailModal';
+import { SimulatedReturnsModal } from '@/common/components/options/SimulatedReturnsModal';
 import { TradeContractSheet } from '@/common/components/ticker/TradeContractSheet';
 import { TrackedContractsList } from '@/common/components/options/TrackedContractsList';
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
@@ -281,6 +282,14 @@ const OptionsScreen = () => {
   const [tradeSheetContract, setTradeSheetContract] = useState<OptionsContract | null>(null);
   const [tradeSheetCurrentPrice, setTradeSheetCurrentPrice] = useState(0);
 
+  // Simulated Returns — same snapshot-before-close pattern as the trade
+  // sheet above (RN can't reliably present a second native Modal while the
+  // first is still mid-dismiss-animation).
+  const [simulateVisible, setSimulateVisible] = useState(false);
+  const [simulateContract, setSimulateContract] = useState<TrackedOptionContract | null>(null);
+  const [simulateSpot, setSimulateSpot] = useState(0);
+  const [simulateContractPrice, setSimulateContractPrice] = useState(0);
+
   // Service status (shared React Query cache — no extra network call if ORB screen is mounted)
   const { data: servicesStatus } = useServicesStatus();
   const isContractsRunning = servicesStatus?.contracts?.running ?? false;
@@ -522,6 +531,17 @@ const OptionsScreen = () => {
     // on iOS. Wait for the close animation (~300ms) to actually finish first.
     setTimeout(() => setTradeSheetVisible(true), 350);
   }, [detailContract, detailCurrentPrice, closeDetail]);
+
+  const handleSimulatePress = useCallback(() => {
+    if (!detailTrackedId) return;
+    const tracked = trackedContracts?.find(t => t.id === detailTrackedId);
+    if (!tracked) return;
+    setSimulateContract(tracked);
+    setSimulateSpot(detailCurrentPrice);
+    setSimulateContractPrice(detailLiveContractPrice ?? detailTrackedPrice ?? 0);
+    closeDetail();
+    setTimeout(() => setSimulateVisible(true), 350);
+  }, [detailTrackedId, trackedContracts, detailCurrentPrice, detailLiveContractPrice, detailTrackedPrice, closeDetail]);
 
   // ── Chain render helpers ─────────────────────────────────────────────────────
 
@@ -967,6 +987,17 @@ const OptionsScreen = () => {
           trackedPrice={detailTrackedId ? detailTrackedPrice : null}
           liveContractPrice={detailTrackedId ? detailLiveContractPrice : null}
           onTrade={handleTradePress}
+          onSimulate={detailTrackedId ? handleSimulatePress : undefined}
+        />
+      )}
+
+      {simulateContract && (
+        <SimulatedReturnsModal
+          visible={simulateVisible}
+          onClose={() => setSimulateVisible(false)}
+          contract={simulateContract}
+          currentSpot={simulateSpot}
+          currentContractPrice={simulateContractPrice}
         />
       )}
 
