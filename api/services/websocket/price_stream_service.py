@@ -12,6 +12,7 @@ import time
 from typing import Optional
 
 from log.logging_config import get_logger
+from services.utils.market_hours import is_market_hours
 
 logger = get_logger(__name__)
 
@@ -90,7 +91,8 @@ class PriceStreamService:
     def _loop(self):
         while self._running:
             try:
-                self._broadcast()
+                if is_market_hours():
+                    self._broadcast()
             except Exception as exc:
                 logger.error("[PriceStream] broadcast error: %s", exc)
             time.sleep(POLL_INTERVAL)

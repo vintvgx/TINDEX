@@ -16,6 +16,7 @@ from services.strategy.profiles import PROFILES, describe_profile, grace_fields_
 from services.strategy.scheduler import reschedule_jobs, schedule_eod_close
 from services.strategy.orb_engine import ORBEngine, STRATEGY_DEFAULTS
 from services.strategy.contract_selector import select_contract, _parse_occ_strike
+from services.utils.market_hours import is_market_hours
 
 logger = logging.getLogger(__name__)
 
@@ -1032,7 +1033,16 @@ def sweep_pending_confirmations():
     each live in-memory engine (so its preview price stream is unsubscribed
     cleanly), then a DB-level bulk expiry as a safety net for confirmations
     left behind by an engine that no longer exists (e.g. after a redeploy).
+
+    Cheap early-return outside market hours — no pending confirmation can
+    exist outside the trading day (0DTE-only strategies), so there's
+    nothing to sweep. Belt-and-suspenders alongside the cron's own Mon-Fri
+    schedule (see the migration referenced above) in case this ever gets
+    pinged off-schedule (redeploy artifact, misconfigured cron, etc).
     """
+    if not is_market_hours():
+        return jsonify({"status": "ok", "skipped": "outside market hours", "engine_expired": 0, "bulk_expired": 0})
+
     engine_expired = 0
     for sid, eng in _all_engines():
         try:
