@@ -5,6 +5,7 @@ Reads config back from strategy_config table.
 
 import os
 import uuid
+import asyncio
 import logging
 from datetime import datetime, date
 from typing import Optional
@@ -12,6 +13,65 @@ from typing import Optional
 from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
+
+
+def _run_async(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def enrich_open_trades_with_live_pnl(trades: list) -> list:
+    """
+    orb_trades.pnl/pnl_pct are only ever written by TradeLogger.log_exit() —
+    they stay NULL for the entire life of an open position, so a bare trade
+    list showed "no P&L" at all for a still-open row, even a swing/weekly
+    hold sitting open for days. Attaches a live, unrealized
+    live_price/live_pnl/live_pnl_pct to each still-open row — a separate
+    field from the real (realized) pnl/pnl_pct, never written to the DB, so
+    a partially-closed (TP1-hit) row's real partial-realized pnl is never
+    confused with this estimate.
+
+    Shared by strategy_routes.py's /strategy/trades (Trade Log) and
+    ReviewGenerator's open-positions section (Daily Review) — module-level,
+    not a TradeLogger method, so ReviewGenerator (which only holds a raw
+    Supabase client, not a TradeLogger instance) can import it directly
+    without a circular import back through strategy_routes.py.
+
+    Always goes straight to a REST quote (AlpacaOptionService.
+    get_contract_prices_batch) rather than trying to reuse a resident
+    ORBEngine's in-memory price — a multi-day swing/weekly hold has no
+    guarantee its option-stream subscription is still alive or its cached
+    price is fresh, whereas a REST snapshot is correct regardless of how
+    long the position has been open or whether the process restarted since.
+    """
+    open_rows = [t for t in trades if t.get("exit_time") is None and t.get("contract_symbol")]
+    if not open_rows:
+        return trades
+
+    from services.alpaca.alpaca_option_service import get_alpaca_option_service
+
+    symbols = list({t["contract_symbol"] for t in open_rows})
+    try:
+        prices = _run_async(get_alpaca_option_service().get_contract_prices_batch(symbols))
+    except Exception as e:
+        logger.warning("[trades] live price fetch failed for %d open row(s): %s", len(open_rows), e)
+        return trades
+
+    for row in open_rows:
+        price = prices.get(row["contract_symbol"])
+        entry = row.get("entry_premium")
+        qty   = (row.get("qty_entered") or 0) - (row.get("qty_exited") or 0)
+        if price is None or not entry or qty <= 0:
+            continue
+        row["live_price"]   = round(price, 4)
+        row["live_pnl"]     = round((price - entry) * qty * 100, 2)
+        row["live_pnl_pct"] = round((price - entry) / entry * 100, 2)
+
+    return trades
 
 
 class TradeLogger:
@@ -56,6 +116,8 @@ class TradeLogger:
                 "debug_mode":             config.get("debug_mode", False),
                 "smart_contracts":        config.get("smart_contracts", False),
                 "confirm_entry":          config.get("confirm_entry", False),
+                "paired_strategy_id":     config.get("paired_strategy_id"),
+                "paused_by_kill_switch":  config.get("paused_by_kill_switch", False),
                 "updated_at":             datetime.utcnow().isoformat(),
             }
             if "id" in config and config["id"]:
@@ -77,6 +139,16 @@ class TradeLogger:
                     self.client.table(table).update({"strategy_id": None}).eq("strategy_id", strategy_id).execute()
                 except Exception:
                     pass  # table may not have strategy_id column — safe to ignore
+            # Belt-and-suspenders: unlink any config still pointing at this one as
+            # its paired sibling. The route layer (_sync_paired_strategy) already
+            # does this for normal delete requests, but this covers any other
+            # caller of delete_strategy_config directly.
+            try:
+                self.client.table("strategy_configs").update(
+                    {"paired_strategy_id": None}
+                ).eq("paired_strategy_id", strategy_id).execute()
+            except Exception:
+                pass
             self.client.table("strategy_configs").delete().eq("id", strategy_id).execute()
         except Exception as e:
             logger.error("[TradeLogger] delete_strategy_config failed: %s", e)
@@ -347,6 +419,79 @@ class TradeLogger:
                 logger.error("[TradeLogger] log_add_to_position failed: %s", e)
                 return False
 
+    def update_exit_levels(self, trade_id: str,
+                            hard_stop_price: Optional[float] = None,
+                            tp1_price: Optional[float] = None,
+                            tp2_price: Optional[float] = None,
+                            runner_mode: Optional[str] = None,
+                            cascade_enabled: Optional[bool] = None) -> bool:
+        """
+        Persist a mid-trade exit-level edit (PATCH /configs/<id>/exits →
+        ExitManager.apply_overrides()) to the open orb_trades row, so
+        recover_position() can restore the EDITED level after a restart
+        instead of silently reverting to whatever was set at entry.
+
+        Root cause this closes (2026-08-04): apply_overrides() only ever
+        mutated the in-memory ExitManager — a user raising TP1 from 1.21 to
+        5, or switching runner_mode to "none", had that change vanish on the
+        next Railway redeploy because recover_position() rebuilds hard_stop/
+        tp1/tp2/runner_mode from this row, which was last written at entry
+        and never touched again. See docs/incidents/
+        2026-07-14-position-lost-on-restart.md for the original version of
+        this same class of bug (that one was about state disappearing
+        entirely; this is state silently reverting to a stale value).
+
+        Sparse by design — only the fields actually passed get written, same
+        convention as apply_overrides()'s own kwargs. Best-effort: a failed
+        write here does not undo the in-memory edit, which stays in effect
+        for the rest of this process's life either way; only a subsequent
+        restart would be affected, so this logs rather than raises.
+        """
+        update: dict = {}
+        if hard_stop_price is not None:
+            update["hard_stop_price"] = hard_stop_price
+        if tp1_price is not None:
+            update["tp1_price"] = tp1_price
+        if tp2_price is not None:
+            update["tp2_price"] = tp2_price
+        if runner_mode is not None:
+            update["runner_mode"] = runner_mode
+        if cascade_enabled is not None:
+            update["cascade_enabled"] = cascade_enabled
+        if not update:
+            return True  # nothing to persist — not an error
+
+        try:
+            res = self.client.table("orb_trades").update(update).eq("id", trade_id).execute()
+            return bool(res.data)
+        except Exception as e:
+            err_str = str(e)
+            # runner_mode/cascade_enabled require the 2026-08-04 migration,
+            # which may not have run yet — retry with just the older,
+            # already-existing hard_stop/tp1/tp2 columns so at least those
+            # keep persisting instead of the whole update failing outright.
+            if "runner_mode" in err_str or "cascade_enabled" in err_str:
+                fallback = {k: v for k, v in update.items() if k in ("hard_stop_price", "tp1_price", "tp2_price")}
+                if not fallback:
+                    logger.warning(
+                        "[TradeLogger] update_exit_levels: runner_mode/cascade_enabled "
+                        "column(s) missing and nothing else to persist — run the Supabase "
+                        "migration (skipping, in-memory edit still in effect this session)"
+                    )
+                    return False
+                logger.warning(
+                    "[TradeLogger] update_exit_levels: runner_mode/cascade_enabled column(s) "
+                    "missing — retrying with hard_stop/tp1/tp2 only (run Supabase migration to fix)"
+                )
+                try:
+                    res2 = self.client.table("orb_trades").update(fallback).eq("id", trade_id).execute()
+                    return bool(res2.data)
+                except Exception as e2:
+                    logger.error("[TradeLogger] update_exit_levels fallback failed: %s", e2)
+                    return False
+            logger.error("[TradeLogger] update_exit_levels failed: %s", e)
+            return False
+
     def log_exit(self, contract_symbol: str, exit_reason: str,
                  exit_premium: Optional[float], qty_closed: int, profile: str,
                  strategy_id: str = None,
@@ -533,14 +678,39 @@ class TradeLogger:
     def reconcile_orphaned_trades(self):
         """
         Close any orb_trades rows that are still open (exit_time IS NULL) but
-        whose expiry date is in the past. This catches trades that were never
-        properly closed due to a crash or redeploy.
+        whose expiry date is strictly before today. This catches trades that were
+        never properly closed due to a crash/redeploy, or an option that just
+        ran out the clock (no tick-driven exit ever fires for an untraded
+        0DTE contract — expiration isn't a fill event, so nothing else in the
+        app notices).
+
+        Uses .lt (not .lte) so a contract expiring TODAY is never blind-closed
+        here — it's still live and tradeable all day today, with no broker
+        check in this function at all. 2026-07-31: .lte was closing today-
+        expiring 0DTE contracts as EXPIRED_WORTHLESS mid-session on every
+        boot/restart and every 09:35 ET calculate_orb() run, even though they
+        were still genuinely open at the broker (this fires purely off
+        expiry <= today, with no position lookup). Same-day rows now fall
+        through to get_open_trades() -> _reconcile_trade_with_broker() in
+        recover_open_positions(), which actually checks Alpaca before ever
+        closing anything.
+
+        Recorded as a full loss of the premium paid (exit_premium=0,
+        qty_exited=full remaining qty), since an expired contract with no
+        broker record of a sell fill overwhelmingly means it expired
+        worthless — the same convention _reconcile_trade_with_broker uses.
+        Previously this recorded a fictitious $0 P&L "close" with
+        qty_exited=0, which not only misreported the loss but also excluded
+        the trade from win/loss stats entirely (pnl=0 counts as neither).
+        NOTE: doesn't cover the rarer case of an ITM auto-exercise (Alpaca
+        assigns/converts to a stock position instead of the contract just
+        vanishing) — that shows up as a broker mismatch elsewhere, not here.
         """
         try:
             today = date.today().isoformat()
             res = (
                 self.client.table("orb_trades")
-                .select("id, contract_symbol, entry_premium, expiry")
+                .select("id, contract_symbol, entry_premium, qty_entered, qty_exited, expiry")
                 .is_("exit_time", "null")
                 .lt("expiry", today)
                 .execute()
@@ -550,17 +720,21 @@ class TradeLogger:
                 return
             now = datetime.utcnow().isoformat()
             for row in rows:
+                entry_premium = row.get("entry_premium") or 0
+                qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
+                loss = round(entry_premium * qty_remaining * 100, 2)
                 self.client.table("orb_trades").update({
                     "exit_time":    now,
-                    "exit_premium": row.get("entry_premium"),
-                    "exit_reason":  "EOD_HARD_CLOSE",
-                    "pnl":          0.0,
-                    "pnl_pct":      0.0,
-                    "qty_exited":   0,
+                    "exit_premium": 0.0,
+                    "exit_reason":  "EXPIRED_WORTHLESS",
+                    "pnl":          -loss,
+                    "pnl_pct":      -100.0 if entry_premium else 0.0,
+                    "qty_exited":   row["qty_entered"],
                 }).eq("id", row["id"]).execute()
                 logger.warning(
-                    "[TradeLogger] Orphaned trade reconciled: %s (id=%s)",
-                    row.get("contract_symbol"), row["id"],
+                    "[TradeLogger] Orphaned trade reconciled as expired worthless: %s "
+                    "(id=%s, loss=$%.2f)",
+                    row.get("contract_symbol"), row["id"], loss,
                 )
             logger.info("[TradeLogger] Reconciled %d orphaned trade(s)", len(rows))
         except Exception as e:

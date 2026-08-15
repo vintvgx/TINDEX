@@ -2,24 +2,33 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, SafeAreaView,
   ActivityIndicator, RefreshControl, StyleSheet,
+  LayoutAnimation, Platform, UIManager,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useMarketStream } from '@/hooks/useMarketStream';
-import { useStrategyPositions, type PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
-import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
+import { useAnimatedNumber } from '@/hooks/useAnimatedNumber';
+import { Skeleton } from '@/common/components/ui/Skeleton';
 import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
+import { usePendingConfirmations } from '@/hooks/queries/strategy/usePendingConfirmations';
+import { PendingConfirmationCard } from '@/common/components/strategy/PendingConfirmationCard';
+import { useCandidateBreakouts } from '@/hooks/queries/strategy/useCandidateBreakouts';
+import { CandidateBreakoutCard } from '@/common/components/strategy/CandidateBreakoutCard';
+import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
+import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useOrbServiceAlert } from '@/hooks/useOrbServiceAlert';
-import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import {
   ORBNotificationModal,
   type ORBBreakoutNotificationData,
 } from '@/common/components/FEED/modals/ORBNotificationModal';
 import { useQueryClient } from '@tanstack/react-query';
-import type { ImmediatePosition } from '@/common/types/strategy';
-import { formatContractSymbolShort, getTradeHorizon, TRADE_HORIZON_RANK } from '@/lib/formatContract';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -33,13 +42,6 @@ const SENTIMENT_COLOR: Record<string, string> = {
   red:    '#FF453A',
 };
 
-const PROFILE_EMOJI: Record<string, string> = {
-  BULL_DOG: '🐂', THUNDER_CAT: '🐱', WOLF: '🐺', TREND_RIDER: '🚀',
-  RETESTER: '🎯', REVERSAL: '🔄', CUSTOM: '⚙️', SCALPER: '⚡',
-  PRECISION: '🎯', MOMENTUM: '📈', CONVICTION: '💎', ALL_IN: '🔥',
-  OTM_RUNNER: '🏃', OTM_CONVICTION: '💎', MANUAL: '🖐️',
-};
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function todayLabel(): string {
@@ -48,252 +50,56 @@ function todayLabel(): string {
   });
 }
 
-function fmtPrice(n: number | null | undefined): string {
-  if (n == null) return '—';
-  return `$${n.toFixed(2)}`;
-}
-
 // ─── Market Tile ─────────────────────────────────────────────────────────────
 
 function MarketTile({
-  label, value, sub, accentColor, colors,
-}: { label: string; value: string; sub?: string; accentColor: string; colors: any }) {
+  label, value, formatValue, sub, accentColor, colors, loading,
+}: {
+  label: string;
+  /** Raw numeric value — null while nothing has arrived yet. */
+  value: number | null;
+  formatValue: (n: number) => string;
+  sub?: string;
+  accentColor: string;
+  colors: any;
+  /** Extra readiness gate beyond `value == null` (e.g. ORB range data). */
+  loading?: boolean;
+}) {
+  // Counts up from 0 on first arrival, then smoothly tracks each later tick —
+  // "stock number" style, not a flat pop-in.
+  const animatedValue = useAnimatedNumber(value);
+  const showSkeleton = loading || value == null;
+
   return (
     <View style={[styles.tile, { backgroundColor: accentColor + '12', borderColor: accentColor + '30' }]}>
       <Text style={[styles.tileLabel, { color: colors.textTertiary }]}>{label}</Text>
-      <Text style={[styles.tileValue, { color: accentColor }]}>{value}</Text>
-      {sub != null && (
-        <Text style={[styles.tileSub, { color: accentColor + 'CC' }]}>{sub}</Text>
+      {showSkeleton ? (
+        <>
+          <Skeleton width={56} height={22} borderRadius={5} style={{ marginTop: 3 }} />
+          <Skeleton width={64} height={11} borderRadius={4} style={{ marginTop: 6 }} />
+        </>
+      ) : (
+        <Animated.View entering={FadeIn.duration(700)}>
+          <Text style={[styles.tileValue, { color: accentColor }]}>
+            {formatValue(animatedValue ?? value)}
+          </Text>
+          {sub != null && (
+            <Text style={[styles.tileSub, { color: accentColor + 'CC' }]}>{sub}</Text>
+          )}
+        </Animated.View>
       )}
     </View>
   );
 }
 
-// ─── Position Card ────────────────────────────────────────────────────────────
-
-interface ExitTarget {
-  strategyId: string;
-  ticker: string;
-  contract?: string;
-  qtyRemaining: number;
-  paperMode: boolean;
-}
-
-function StrategyPositionCard({
-  pos, colors, onExit,
-}: { pos: PositionEntry; colors: any; onExit: (t: ExitTarget) => void }) {
-  const pnl     = pos.unrealized_pnl ?? 0;
-  const pnlPct  = pos.unrealized_pnl_pct ?? 0;
-  const pnlColor = pnl >= 0 ? colors.success : colors.error;
-  const dirColor = pos.direction === 'CALL' ? colors.success : colors.error;
-  const isLive   = pos.paper_mode === false;
-
-  const stages = [
-    { label: 'Stop', value: pos.hard_stop,      active: !pos.tp1_hit && !pos.be_stop_active, color: colors.error },
-    { label: 'BE',   value: pos.entry_premium,   active: !!pos.be_stop_active,                color: '#FF9F0A' },
-    { label: 'TP1',  value: pos.tp1,             active: !!pos.tp1_hit && !pos.tp2_hit,       color: '#4A9EFF' },
-    { label: 'TP2',  value: pos.tp2,             active: !!pos.tp2_hit,                       color: colors.success },
-  ];
-
-  return (
-    <View style={[styles.posCard, { backgroundColor: colors.card, borderColor: colors.border,
-                                    borderLeftColor: pnlColor, borderLeftWidth: 3 }]}>
-      {/* Top row */}
-      <View style={styles.posHeader}>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.posTicker, { color: colors.text }]}>
-            {PROFILE_EMOJI[pos.profile] ?? '📊'} {pos.ticker}
-          </Text>
-          <Text style={[styles.posContract, { color: colors.textSecondary }]} numberOfLines={1}>
-            {pos.contract ? formatContractSymbolShort(pos.contract) : '—'}
-          </Text>
-          <View style={styles.posBadges}>
-            <View style={[styles.badge, { backgroundColor: dirColor + '22' }]}>
-              <Text style={[styles.badgeText, { color: dirColor }]}>{pos.direction}</Text>
-            </View>
-            <View style={[styles.badge, { backgroundColor: colors.border }]}>
-              <Text style={[styles.badgeText, { color: colors.text }]}>
-                {pos.profile.replace('_', ' ')}
-              </Text>
-            </View>
-            <View style={[styles.badge, { backgroundColor: isLive ? '#30D15822' : '#FF9F0A22' }]}>
-              <Text style={[styles.badgeText, { color: isLive ? '#30D158' : '#FF9F0A' }]}>
-                {isLive ? 'LIVE' : 'PAPER'}
-              </Text>
-            </View>
-            {pos.contract && getTradeHorizon(pos.contract) === 'SWING' && (
-              <View style={[styles.badge, { backgroundColor: '#6366F122' }]}>
-                <Text style={[styles.badgeText, { color: '#6366F1' }]}>SWING</Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        {/* P&L */}
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[styles.posPnl, { color: pnlColor }]}>
-            {pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toFixed(2)}
-          </Text>
-          <Text style={[styles.posPnlPct, { color: pnlColor }]}>
-            {pnlPct >= 0 ? '+' : '-'}{Math.abs(pnlPct).toFixed(1)}%
-          </Text>
-          {pos.current_price != null && pos.qty_remaining != null && (
-            <Text style={[styles.posMktVal, { color: colors.textTertiary }]}>
-              Mkt ${(pos.current_price * pos.qty_remaining * 100).toFixed(2)}
-            </Text>
-          )}
-        </View>
-      </View>
-
-      {/* Entry / Current / Qty */}
-      <View style={styles.posLevels}>
-        {[
-          { label: 'Entry',   value: fmtPrice(pos.entry_premium) },
-          { label: 'Current', value: fmtPrice(pos.current_price), accent: true },
-          { label: 'Qty',     value: `${pos.qty_remaining ?? '?'}/${pos.qty_total ?? '?'}` },
-        ].map(({ label, value, accent }) => (
-          <View key={label} style={{ alignItems: 'center', flex: 1 }}>
-            <Text style={[styles.levelLabel, { color: colors.textTertiary }]}>{label}</Text>
-            <Text style={[styles.levelValue, { color: accent ? colors.accent : colors.text }]}>{value}</Text>
-          </View>
-        ))}
-      </View>
-
-      {/* Stage bar */}
-      <View style={styles.stageBar}>
-        {stages.map((s, i) => (
-          <View key={i} style={{ alignItems: 'center', flex: 1 }}>
-            <View style={[styles.stageDot, { backgroundColor: s.active ? s.color : colors.border }]} />
-            <Text style={[styles.stageLabel, { color: s.active ? s.color : colors.textTertiary }]}>
-              {s.label}
-            </Text>
-            {s.value != null && (
-              <Text style={[styles.stageValue, { color: colors.textTertiary }]}>
-                ${s.value.toFixed(2)}
-              </Text>
-            )}
-          </View>
-        ))}
-      </View>
-
-      {/* Exit button */}
-      <TouchableOpacity
-        onPress={() => onExit({
-          strategyId:   pos.strategy_id,
-          ticker:       pos.ticker,
-          contract:     pos.contract,
-          qtyRemaining: pos.qty_remaining ?? 0,
-          paperMode:    pos.paper_mode !== false,
-        })}
-        style={[styles.exitBtn, { borderColor: colors.error + '88' }]}
-      >
-        <Ionicons name="close-circle-outline" size={16} color={colors.error} />
-        <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-function ImmediatePositionCard({
-  pos, colors, onExit,
-}: { pos: ImmediatePosition; colors: any; onExit: (t: ExitTarget) => void }) {
-  const pnl     = pos.pnl ?? 0;
-  const pnlPct  = pos.pnl_pct ?? 0;
-  const pnlColor = pnl >= 0 ? colors.success : colors.error;
-  const dirColor = pos.direction === 'CALL' ? colors.success : colors.error;
-  const isLive   = pos.paper_mode === false;
-
-  return (
-    <View style={[styles.posCard, { backgroundColor: colors.card, borderColor: colors.border,
-                                    borderLeftColor: pnlColor, borderLeftWidth: 3 }]}>
-      <View style={styles.posHeader}>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.posTicker, { color: colors.text }]}>
-            {PROFILE_EMOJI[pos.profile] ?? '📊'} {pos.ticker}
-          </Text>
-          <Text style={[styles.posContract, { color: colors.textSecondary }]} numberOfLines={1}>
-            {pos.contract ? formatContractSymbolShort(pos.contract) : '—'}
-          </Text>
-          <View style={styles.posBadges}>
-            <View style={[styles.badge, { backgroundColor: dirColor + '22' }]}>
-              <Text style={[styles.badgeText, { color: dirColor }]}>{pos.direction}</Text>
-            </View>
-            <View style={[styles.badge, { backgroundColor: '#A855F722' }]}>
-              <Text style={[styles.badgeText, { color: '#A855F7' }]}>IMMEDIATE</Text>
-            </View>
-            <View style={[styles.badge, { backgroundColor: isLive ? '#30D15822' : '#FF9F0A22' }]}>
-              <Text style={[styles.badgeText, { color: isLive ? '#30D158' : '#FF9F0A' }]}>
-                {isLive ? 'LIVE' : 'PAPER'}
-              </Text>
-            </View>
-            {pos.contract && getTradeHorizon(pos.contract) === 'SWING' && (
-              <View style={[styles.badge, { backgroundColor: '#6366F122' }]}>
-                <Text style={[styles.badgeText, { color: '#6366F1' }]}>SWING</Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        <View style={{ alignItems: 'flex-end' }}>
-          <Text style={[styles.posPnl, { color: pnlColor }]}>
-            {pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toFixed(2)}
-          </Text>
-          <Text style={[styles.posPnlPct, { color: pnlColor }]}>
-            {pnlPct >= 0 ? '+' : '-'}{Math.abs(pnlPct).toFixed(1)}%
-          </Text>
-          {pos.mid_price != null && pos.qty_remaining != null && (
-            <Text style={[styles.posMktVal, { color: colors.textTertiary }]}>
-              Mkt ${(pos.mid_price * pos.qty_remaining * 100).toFixed(2)}
-            </Text>
-          )}
-        </View>
-      </View>
-
-      <View style={styles.posLevels}>
-        {[
-          { label: 'Entry',   value: fmtPrice(pos.entry_premium) },
-          { label: 'Current', value: fmtPrice(pos.mid_price), accent: true },
-          { label: 'Qty',     value: String(pos.qty_remaining ?? '?') },
-        ].map(({ label, value, accent }) => (
-          <View key={label} style={{ alignItems: 'center', flex: 1 }}>
-            <Text style={[styles.levelLabel, { color: colors.textTertiary }]}>{label}</Text>
-            <Text style={[styles.levelValue, { color: accent ? colors.accent : colors.text }]}>{value}</Text>
-          </View>
-        ))}
-      </View>
-
-      {/* TP milestone badges */}
-      <View style={styles.stageBar}>
-        {[
-          { label: 'Stop',  active: !pos.tp1_hit,                      color: colors.error },
-          { label: 'TP1',   active: pos.tp1_hit && !pos.tp2_hit,        color: '#4A9EFF' },
-          { label: 'TP2',   active: pos.tp2_hit,                        color: colors.success },
-        ].map((s, i) => (
-          <View key={i} style={{ alignItems: 'center', flex: 1 }}>
-            <View style={[styles.stageDot, { backgroundColor: s.active ? s.color : colors.border }]} />
-            <Text style={[styles.stageLabel, { color: s.active ? s.color : colors.textTertiary }]}>
-              {s.label}
-            </Text>
-          </View>
-        ))}
-      </View>
-
-      <TouchableOpacity
-        onPress={() => onExit({
-          strategyId:   pos.strategy_id,
-          ticker:       pos.ticker,
-          contract:     pos.contract,
-          qtyRemaining: pos.qty_remaining ?? 0,
-          paperMode:    pos.paper_mode !== false,
-        })}
-        style={[styles.exitBtn, { borderColor: colors.error + '88' }]}
-      >
-        <Ionicons name="close-circle-outline" size={16} color={colors.error} />
-        <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
+// Position cards previously lived here as Dashboard-only components
+// (StrategyPositionCard/ImmediatePositionCard) that silently drifted out of
+// sync with the Live Positions tab's own cards — different fields, no SL/TP
+// dropdown, bunched-up buttons. Removed in favor of the shared
+// LivePositionsSection.tsx components (useLivePositionsData +
+// LivePositionsBody), the same ones position.tsx/accounts_overview.tsx/
+// PriceChartFullScreen already use — one card design, everywhere, always in
+// sync (2026-07-30 redesign).
 
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
@@ -304,17 +110,41 @@ const DashboardScreen = () => {
   const queryClient = useQueryClient();
 
   // ── Data ──────────────────────────────────────────────────────────────────
-  const { livePrices, vix, spy, sentiment, connected } = useMarketStream(WATCHED_TICKERS);
-  const { data: orbData } = useORBMonitoringState(false, false);
-  const { data: stratPositions, isLoading: stratLoading, refetch: refetchStrat } = useStrategyPositions();
-  const { data: immPositions,   isLoading: immLoading,   refetch: refetchImm }   = useImmediatePositions();
+  // Live/Paper positions — same shared fetch+filter+hidden-trades logic as
+  // position.tsx/accounts_overview.tsx/PriceChartFullScreen (see
+  // LivePositionsSection.tsx), so this screen can never drift out of sync
+  // with what those show for the same trade.
+  const livePositions  = useLivePositionsData('live');
+  const paperPositions = useLivePositionsData('paper');
+  const totalActive = livePositions.filteredPositions.length + paperPositions.filteredPositions.length;
+  const isLoading = livePositions.isLoading || paperPositions.isLoading;
+
+  // Tickers with an active LIVE option position — shown as their own Market
+  // tiles ahead of the default watchlist (VIX always stays first). Only
+  // live (not paper) per the request. Deduped, and the market stream needs
+  // to actually subscribe to these too (it only knew about WATCHED_TICKERS
+  // otherwise) so a ticker like TSLA that isn't already on the default
+  // watchlist still gets a live price.
+  const activeLiveTickers = useMemo(() => {
+    const set = new Set(livePositions.filteredPositions.map(p => p.ticker.toUpperCase()));
+    return Array.from(set);
+  }, [livePositions.filteredPositions]);
+  const extraActiveTickers = useMemo(
+    () => activeLiveTickers.filter(t => !WATCHED_TICKERS.includes(t)),
+    [activeLiveTickers],
+  );
+  const marketStreamTickers = useMemo(
+    () => Array.from(new Set([...WATCHED_TICKERS, ...activeLiveTickers])),
+    [activeLiveTickers],
+  );
+
+  const { livePrices, vix, spy, sentiment, connected } = useMarketStream(marketStreamTickers);
+  const { data: orbData, isLoading: orbLoading } = useORBMonitoringState(false, false);
   const { data: sessionStates } = useStrategySessionState();
 
-  const isLoading = stratLoading || immLoading;
-
   const refresh = () => {
-    refetchStrat();
-    refetchImm();
+    queryClient.invalidateQueries({ queryKey: ['strategy-positions'] });
+    queryClient.invalidateQueries({ queryKey: ['immediate-positions'] });
     queryClient.invalidateQueries({ queryKey: ['strategy-session-state'] });
   };
 
@@ -346,51 +176,36 @@ const DashboardScreen = () => {
     return '◉ In Range';
   }
 
-  // ── Active positions (combined, split by mode) ────────────────────────────
-  const activeStrat = useMemo(
-    () => (stratPositions ?? []).filter(p => p.active),
-    [stratPositions],
-  );
-  const activeImm = useMemo(
-    () => (immPositions ?? []).filter(p => (p.qty_remaining ?? 0) > 0),
-    [immPositions],
-  );
-
-  const liveStrat  = useMemo(() => activeStrat.filter(p => p.paper_mode === false), [activeStrat]);
-  const paperStrat = useMemo(() => activeStrat.filter(p => p.paper_mode !== false),  [activeStrat]);
-  const liveImm    = useMemo(() => activeImm.filter(p => p.paper_mode === false),    [activeImm]);
-  const paperImm   = useMemo(() => activeImm.filter(p => p.paper_mode !== false),    [activeImm]);
-
-  // Combined + sorted so a swing trade never ranks above a 0DTE/weekly one —
-  // sort is stable, so saved-strategy vs immediate order is otherwise
-  // unchanged within the same horizon tier.
-  type CombinedPos = { kind: 'strat'; pos: PositionEntry } | { kind: 'imm'; pos: ImmediatePosition };
-  const byHorizon = (items: CombinedPos[]) =>
-    [...items].sort((a, b) =>
-      TRADE_HORIZON_RANK[getTradeHorizon(a.pos.contract ?? '')] -
-      TRADE_HORIZON_RANK[getTradeHorizon(b.pos.contract ?? '')],
-    );
-  const liveCombined = useMemo(
-    () => byHorizon([
-      ...liveStrat.map(pos => ({ kind: 'strat' as const, pos })),
-      ...liveImm.map(pos => ({ kind: 'imm' as const, pos })),
-    ]),
-    [liveStrat, liveImm],
-  );
-  const paperCombined = useMemo(
-    () => byHorizon([
-      ...paperStrat.map(pos => ({ kind: 'strat' as const, pos })),
-      ...paperImm.map(pos => ({ kind: 'imm' as const, pos })),
-    ]),
-    [paperStrat, paperImm],
-  );
-
-  const totalLive   = liveStrat.length + liveImm.length;
-  const totalPaper  = paperStrat.length + paperImm.length;
-  const totalActive = totalLive + totalPaper;
-
   // ── ORB service-down alert (toast every hour + persistent banner) ─────────
   const { serviceDown } = useOrbServiceAlert();
+
+  // ── Trades awaiting confirm_entry approval — non-blocking cards (see
+  // PendingConfirmationCard); TickerTape shows an "Awaiting Trade
+  // Confirmation" banner from anywhere in the app while any of these exist.
+  const { data: pendingConfirmations } = usePendingConfirmations();
+
+  // ── Candidate breakouts — live-only, pre-confirmation preview cards. See
+  // useCandidateBreakouts's own docstring for the full state machine; a
+  // candidate here and a real pendingConfirmations row above are mutually
+  // exclusive for the same strategy (the hook excludes anything that's
+  // already graduated to a real pending row).
+  const { candidates: candidateBreakouts, handleSkip: handleSkipCandidate } = useCandidateBreakouts();
+  const pendingSectionCount = (pendingConfirmations?.length ?? 0) + candidateBreakouts.length;
+
+  // ── Collapse toggles — Positions/Pending share the same chevron +
+  // LayoutAnimation pattern LivePositionPanel already uses elsewhere in the
+  // app; both default open since these are the time-sensitive items on this
+  // screen, not something to hide by default.
+  const [positionsExpanded, setPositionsExpanded] = useState(true);
+  const [pendingExpanded, setPendingExpanded] = useState(true);
+  const togglePositions = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setPositionsExpanded(v => !v);
+  };
+  const togglePending = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setPendingExpanded(v => !v);
+  };
 
   // ── Session risk state ────────────────────────────────────────────────────
   const haltedEngines = useMemo(() => {
@@ -404,9 +219,6 @@ const DashboardScreen = () => {
     if (vals.length === 0) return null;
     return vals.reduce((a, b) => a + b, 0);
   }, [sessionStates]);
-
-  // ── Panel / exit state ────────────────────────────────────────────────────
-  const [exitTarget, setExitTarget] = useState<ExitTarget | null>(null);
 
   // ── ORB notification modal ────────────────────────────────────────────────
   const [orbNotificationModalVisible, setOrbNotificationModalVisible] = useState(false);
@@ -436,6 +248,7 @@ const DashboardScreen = () => {
   const sentimentHex = sentiment
     ? (SENTIMENT_COLOR[sentiment.color] ?? colors.textSecondary)
     : colors.textSecondary;
+  const tabBarHeight = useFloatingTabBarHeight();
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: colors.background }]}>
@@ -445,7 +258,7 @@ const DashboardScreen = () => {
           <RefreshControl refreshing={isLoading} onRefresh={refresh}
                           tintColor={colors.accent} colors={[colors.accent]} />
         }
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight }]}
       >
         {/* ── Header ──────────────────────────────────────────────────────── */}
         {/* No page title here — the "Dashboard" segment pill above already
@@ -502,37 +315,109 @@ const DashboardScreen = () => {
                     contentContainerStyle={styles.tilesRow}>
           <MarketTile
             label="VIX"
-            value={vix != null ? vix.toFixed(2) : '—'}
-            sub={sentiment?.label ?? '—'}
+            value={vix}
+            formatValue={(n) => n.toFixed(2)}
+            sub={sentiment?.label}
             accentColor={sentimentHex}
             colors={colors}
           />
+          {extraActiveTickers.map(ticker => (
+            <MarketTile
+              key={ticker}
+              label={ticker}
+              value={livePrices[ticker] ?? null}
+              formatValue={(n) => `$${n.toFixed(2)}`}
+              sub={orbSub(ticker, livePrices[ticker] ?? null)}
+              accentColor={orbColor(ticker, livePrices[ticker] ?? null)}
+              colors={colors}
+            />
+          ))}
           <MarketTile
             label="SPY"
-            value={spyPrice != null ? `$${spyPrice.toFixed(2)}` : '—'}
+            value={spyPrice}
+            formatValue={(n) => `$${n.toFixed(2)}`}
             sub={orbSub('SPY', spyPrice)}
             accentColor={orbColor('SPY', spyPrice)}
             colors={colors}
+            loading={orbLoading}
           />
           <MarketTile
             label="IWM"
-            value={iwmPrice != null ? `$${iwmPrice.toFixed(2)}` : '—'}
+            value={iwmPrice}
+            formatValue={(n) => `$${n.toFixed(2)}`}
             sub={orbSub('IWM', iwmPrice)}
             accentColor={orbColor('IWM', iwmPrice)}
             colors={colors}
+            loading={orbLoading}
           />
           <MarketTile
             label="QQQ"
-            value={qqqPrice != null ? `$${qqqPrice.toFixed(2)}` : '—'}
+            value={qqqPrice}
+            formatValue={(n) => `$${n.toFixed(2)}`}
             sub={orbSub('QQQ', qqqPrice)}
             accentColor={orbColor('QQQ', qqqPrice)}
             colors={colors}
+            loading={orbLoading}
           />
         </ScrollView>
 
-        {/* ── Positions ───────────────────────────────────────────────────── */}
-        <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>POSITIONS</Text>
+        {/* ── Pending & Awaiting Confirmation — candidate breakouts (live-only,
+            pre-confirmation preview) above real pending-confirmation cards.
+            Renders nothing at all, not even a header, when both are empty —
+            this section only exists while something is actually being
+            tracked, never as a permanent empty-state fixture. ── */}
+        {pendingSectionCount > 0 && (
+          <>
+            <TouchableOpacity onPress={togglePending} activeOpacity={0.7} style={styles.sectionHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
+                  PENDING &amp; AWAITING CONFIRMATION
+                </Text>
+                <Ionicons
+                  name={pendingExpanded ? 'chevron-up' : 'chevron-down'}
+                  size={14}
+                  color={colors.textTertiary}
+                />
+              </View>
+              <View style={[styles.activeBadge, { backgroundColor: '#F59E0B22' }]}>
+                <View style={[styles.activeDot, { backgroundColor: '#F59E0B' }]} />
+                <Text style={[styles.activeBadgeText, { color: '#F59E0B' }]}>
+                  {pendingSectionCount}
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {pendingExpanded && (
+              <>
+                {candidateBreakouts.map(c => (
+                  <CandidateBreakoutCard
+                    key={c.key}
+                    candidate={c}
+                    colors={colors}
+                    onSkip={() => handleSkipCandidate(c)}
+                  />
+                ))}
+                {(pendingConfirmations ?? []).map(p => (
+                  <PendingConfirmationCard key={p.id} pending={p} colors={colors} />
+                ))}
+              </>
+            )}
+          </>
+        )}
+
+        {/* ── Positions — same shared cards as Live Positions/Accounts/
+            PriceChartFullScreen (see LivePositionsSection.tsx): Edit/Add/Exit
+            + the SL/TP dropdown, identical everywhere, always in sync. Each
+            mode section renders its own hidden-trades banner internally. ── */}
+        <TouchableOpacity onPress={togglePositions} activeOpacity={0.7} style={styles.sectionHeader}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>POSITIONS</Text>
+            <Ionicons
+              name={positionsExpanded ? 'chevron-up' : 'chevron-down'}
+              size={14}
+              color={colors.textTertiary}
+            />
+          </View>
           {totalActive > 0 && (
             <View style={[styles.activeBadge, { backgroundColor: colors.success + '22' }]}>
               <View style={[styles.activeDot, { backgroundColor: colors.success }]} />
@@ -541,77 +426,54 @@ const DashboardScreen = () => {
               </Text>
             </View>
           )}
-        </View>
+        </TouchableOpacity>
 
-        {isLoading && totalActive === 0 ? (
-          <ActivityIndicator color={colors.accent} style={{ marginTop: 20 }} />
-        ) : totalActive === 0 ? (
-          <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Ionicons name="moon-outline" size={32} color={colors.textTertiary} />
-            <Text style={[styles.emptyTitle, { color: colors.text }]}>No Active Positions</Text>
-            <Text style={[styles.emptySub, { color: colors.textTertiary }]}>
-              Watching for the next ORB breakout
-            </Text>
-          </View>
-        ) : (
-          <>
-            {/* ── LIVE positions ────────────────────────────── */}
-            {totalLive > 0 && (
-              <>
-                <View style={styles.modeSubHeader}>
-                  <View style={[styles.modeSubDot, { backgroundColor: '#30D158' }]} />
-                  <Text style={[styles.modeSubLabel, { color: '#30D158' }]}>LIVE</Text>
-                  <Text style={[styles.modeSubCount, { color: colors.textTertiary }]}>
-                    {totalLive} active
-                  </Text>
-                </View>
-                {liveCombined.map(item => item.kind === 'strat' ? (
-                  <StrategyPositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
-                ) : (
-                  <ImmediatePositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
-                ))}
-              </>
-            )}
+        {positionsExpanded && (
+          isLoading && totalActive === 0 ? (
+            <ActivityIndicator color={colors.accent} style={{ marginTop: 20 }} />
+          ) : totalActive === 0 ? (
+            <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Ionicons name="moon-outline" size={32} color={colors.textTertiary} />
+              <Text style={[styles.emptyTitle, { color: colors.text }]}>No Active Positions</Text>
+              <Text style={[styles.emptySub, { color: colors.textTertiary }]}>
+                Watching for the next ORB breakout
+              </Text>
+            </View>
+          ) : (
+            <>
+              {/* ── LIVE positions ────────────────────────────── */}
+              {livePositions.filteredPositions.length > 0 && (
+                <>
+                  <View style={styles.modeSubHeader}>
+                    <View style={[styles.modeSubDot, { backgroundColor: '#30D158' }]} />
+                    <Text style={[styles.modeSubLabel, { color: '#30D158' }]}>LIVE</Text>
+                    <Text style={[styles.modeSubCount, { color: colors.textTertiary }]}>
+                      {livePositions.filteredPositions.length} active
+                    </Text>
+                  </View>
+                  <LivePositionsBody data={livePositions} mode="live" colors={colors} />
+                </>
+              )}
 
-            {/* ── PAPER positions ───────────────────────────── */}
-            {totalPaper > 0 && (
-              <>
-                <View style={[styles.modeSubHeader, totalLive > 0 && { marginTop: 8 }]}>
-                  <View style={[styles.modeSubDot, { backgroundColor: '#FF9F0A' }]} />
-                  <Text style={[styles.modeSubLabel, { color: '#FF9F0A' }]}>PAPER</Text>
-                  <Text style={[styles.modeSubCount, { color: colors.textTertiary }]}>
-                    {totalPaper} active
-                  </Text>
-                </View>
-                {paperCombined.map(item => item.kind === 'strat' ? (
-                  <StrategyPositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
-                ) : (
-                  <ImmediatePositionCard key={item.pos.strategy_id} pos={item.pos} colors={colors} onExit={setExitTarget} />
-                ))}
-              </>
-            )}
-          </>
+              {/* ── PAPER positions ───────────────────────────── */}
+              {paperPositions.filteredPositions.length > 0 && (
+                <>
+                  <View style={[styles.modeSubHeader, livePositions.filteredPositions.length > 0 && { marginTop: 8 }]}>
+                    <View style={[styles.modeSubDot, { backgroundColor: '#FF9F0A' }]} />
+                    <Text style={[styles.modeSubLabel, { color: '#FF9F0A' }]}>PAPER</Text>
+                    <Text style={[styles.modeSubCount, { color: colors.textTertiary }]}>
+                      {paperPositions.filteredPositions.length} active
+                    </Text>
+                  </View>
+                  <LivePositionsBody data={paperPositions} mode="paper" colors={colors} />
+                </>
+              )}
+            </>
+          )
         )}
 
         <View style={{ height: 32 }} />
       </ScrollView>
-
-      {/* ── Exit modal ──────────────────────────────────────────────────── */}
-      {exitTarget && (
-        <ExitTradeModal
-          visible
-          colors={colors}
-          strategyId={exitTarget.strategyId}
-          ticker={exitTarget.ticker}
-          contract={exitTarget.contract}
-          qtyRemaining={exitTarget.qtyRemaining}
-          paperMode={exitTarget.paperMode}
-          onClose={() => {
-            setExitTarget(null);
-            refresh();
-          }}
-        />
-      )}
 
       {/* ── ORB notification modal ───────────────────────────────────────── */}
       <ORBNotificationModal
@@ -674,30 +536,6 @@ const styles = StyleSheet.create({
                    letterSpacing: 0.7, marginBottom: 6 },
   tileValue:     { fontSize: 22, fontWeight: '800', letterSpacing: -0.5 },
   tileSub:       { fontSize: 11, fontWeight: '600', marginTop: 4 },
-
-  posCard:       { borderRadius: 14, borderWidth: 1, padding: 16, gap: 14, marginBottom: 12 },
-  posHeader:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  posTicker:     { fontSize: 17, fontWeight: '700', marginBottom: 3 },
-  posContract:   { fontSize: 12, fontWeight: '500', marginBottom: 6 },
-  posBadges:     { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
-  badge:         { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 5 },
-  badgeText:     { fontSize: 10, fontWeight: '700' },
-  posPnl:        { fontSize: 22, fontWeight: '700' },
-  posPnlPct:     { fontSize: 13, fontWeight: '600', marginTop: 2 },
-  posMktVal:     { fontSize: 11, fontWeight: '500', marginTop: 2 },
-
-  posLevels:     { flexDirection: 'row', justifyContent: 'space-between' },
-  levelLabel:    { fontSize: 10, fontWeight: '600', marginBottom: 3 },
-  levelValue:    { fontSize: 14, fontWeight: '600' },
-
-  stageBar:      { flexDirection: 'row', justifyContent: 'space-between', paddingTop: 2 },
-  stageDot:      { width: 8, height: 8, borderRadius: 4, marginBottom: 4 },
-  stageLabel:    { fontSize: 10, fontWeight: '600' },
-  stageValue:    { fontSize: 9, marginTop: 2 },
-
-  exitBtn:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-                   gap: 6, borderWidth: 1, borderRadius: 10, paddingVertical: 10, marginTop: 2 },
-  exitBtnText:   { fontSize: 13, fontWeight: '600' },
 
   emptyCard:     { borderRadius: 14, borderWidth: 1, padding: 32,
                    alignItems: 'center', gap: 8 },

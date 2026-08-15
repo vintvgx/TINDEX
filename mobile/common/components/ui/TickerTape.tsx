@@ -19,12 +19,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, Animated, Easing, StyleSheet, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { useWatchlists } from '@/hooks/queries/watchlist/useWatchlist';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useOrbHubHealth } from '@/hooks/queries/orb/useOrbHubHealth';
+import { usePendingConfirmations } from '@/hooks/queries/strategy/usePendingConfirmations';
+import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import { useSellStatus, type SellStatus } from '@/hooks/useSellStatus';
+import { Skeleton } from '@/common/components/ui/Skeleton';
 import type { WatchlistStock } from '@/common/types/watchlist';
 
 // Live-stream symbols (SPY arrives on its own field; the rest via livePrices).
@@ -78,12 +83,97 @@ function TapeRow({
   );
 }
 
+/**
+ * One "Selling…" / "Sold…" line in the sell-status takeover (see the
+ * `sellStatuses.length > 0` branch below). Split out from TickerTape itself
+ * because it needs its own useStrategyLivePrice subscription while selling —
+ * a hook can't be called conditionally per array item inline in the parent.
+ */
+function SellStatusLine({ status, colors }: { status: SellStatus; colors: ReturnType<typeof useThemeColors> }) {
+  const { data } = useStrategyLivePrice(status.strategyId, status.phase === 'selling');
+  const livePrice = data?.mid_price ?? null;
+
+  const pnlSuffix = status.pnl != null
+    ? ` (${status.pnl >= 0 ? '+' : '-'}$${Math.abs(status.pnl).toFixed(2)})`
+    : '';
+  const label = status.phase === 'selling'
+    ? `Selling ${status.qty} ${status.contractLabel}${livePrice != null ? ` ($${livePrice.toFixed(2)})` : ''}`
+    : `Sold ${status.qty} ${status.contractLabel} at $${(status.price ?? 0).toFixed(2)}${pnlSuffix}`;
+  // Reflect win/loss once it's known, same green/red convention as PnL
+  // everywhere else in the app — not just a flat "sold" green regardless of
+  // whether this particular sell actually made money.
+  const color = status.phase === 'selling'
+    ? colors.warning
+    : status.pnl != null && status.pnl < 0
+      ? colors.error
+      : colors.success;
+
+  // Same PAPER/LIVE color convention as PendingConfirmationCard's account
+  // badge — real money selling reads as more urgent than paper.
+  const modeTag = status.paperMode ? 'PAPER' : 'LIVE';
+  const modeColor = status.paperMode ? '#FF9F0A' : colors.error;
+
+  return (
+    <View style={styles.item}>
+      <Text style={[styles.confirmText, { color }]} numberOfLines={1}>
+        <Text style={{ color: modeColor, fontWeight: '800' }}>[{modeTag}] </Text>
+        {label}
+      </Text>
+      <Text style={[styles.dot, { color: colors.tapeMuted }]}>•</Text>
+    </View>
+  );
+}
+
 export function TickerTape() {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
 
   const [modeIndex, setModeIndex] = useState(0);
   const mode = MODES[modeIndex];
+
+  // ── Trade confirmations pending — takes over the whole tape (see the early
+  // return below) until every one is resolved. Polls independently of
+  // PendingConfirmationProvider/Dashboard so this stays accurate even when
+  // neither of those is mounted/focused. ────────────────────────────────────
+  const { data: pendingList } = usePendingConfirmations();
+  const pendingCount = pendingList?.length ?? 0;
+
+  // ── Manual sell in flight / just filled — see ExitTradeModal, which closes
+  // itself immediately on submit instead of blocking on the sell, and
+  // useSellStatus for the "Selling…" → "Sold…" (15s) lifecycle. Checked below
+  // pendingCount so an awaiting-confirmation takeover (action-required) is
+  // never hidden behind a transient sell status.
+  const { statuses: sellStatuses } = useSellStatus();
+  const hasSellStatus = pendingCount === 0 && sellStatuses.length > 0;
+
+  // Crossfades the sell-status overlay in/out over the (never-unmounted,
+  // see the 2026-08-10 fix above) marquee, instead of it just popping in
+  // and snapping back to the tracked tickers. sellOverlayMounted stays true
+  // slightly longer than hasSellStatus — long enough for the fade-out to
+  // finish — so the overlay isn't yanked off-screen mid-animation; nothing
+  // else needs to change since the marquee underneath was already scrolling
+  // the whole time and just becomes visible again as this fades to 0.
+  const [sellOverlayMounted, setSellOverlayMounted] = useState(false);
+  const sellOverlayOpacity = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (hasSellStatus) {
+      setSellOverlayMounted(true);
+      Animated.timing(sellOverlayOpacity, {
+        toValue: 1, duration: 500, easing: Easing.out(Easing.quad), useNativeDriver: true,
+      }).start();
+    } else if (sellOverlayMounted) {
+      Animated.timing(sellOverlayOpacity, {
+        toValue: 0, duration: 500, easing: Easing.in(Easing.quad), useNativeDriver: true,
+      }).start(() => setSellOverlayMounted(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSellStatus]);
+  // sellStatuses itself is already empty by the time hasSellStatus flips
+  // false and the fade-out starts — hold on to the last non-empty list so
+  // the overlay keeps showing real content while it fades away instead of
+  // flashing blank first.
+  const lastSellStatusesRef = useRef(sellStatuses);
+  if (hasSellStatus) lastSellStatusesRef.current = sellStatuses;
 
   // ── Data sources ──────────────────────────────────────────────────────────
   const { livePrices, spy, vix, sentiment } = useMarketStream(STREAM_TICKERS);
@@ -146,6 +236,27 @@ export function TickerTape() {
   const display = items.length > 0
     ? items
     : STREAM_TICKERS.map(s => ({ symbol: s, value: '—' as string }));
+
+  // ── First-load skeleton ─────────────────────────────────────────────────────
+  // Only gates the very first reveal (cold start before any stream tick has
+  // landed) — mode-cycle loading already has its own title-overlay transition
+  // below, so this never re-triggers on a later mode switch. Stays mounted
+  // (with fading opacity) until the crossfade finishes, then unmounts.
+  const everReady = items.length > 0;
+  const [skeletonVisible, setSkeletonVisible] = useState(true);
+  const skeletonOpacity = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (everReady && skeletonVisible) {
+      Animated.timing(skeletonOpacity, {
+        toValue: 0,
+        duration: 700,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }).start(() => setSkeletonVisible(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [everReady]);
+  const marqueeVisibility = skeletonOpacity.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
 
   // ── Marquee scroll ──────────────────────────────────────────────────────────
   const translateX = useRef(new Animated.Value(0)).current;
@@ -216,16 +327,44 @@ export function TickerTape() {
 
   useEffect(() => () => { if (maxWaitRef.current) clearTimeout(maxWaitRef.current); }, []);
 
+  // ── Awaiting confirmation — replaces ticker prices entirely, not just an
+  // overlay, so it can't be mistaken for a passing banner among the market
+  // data. Stays up (and blocks the normal mode-cycle tap) until every pending
+  // confirmation is resolved (entered or skipped) — see the Dashboard's
+  // pending-confirmation cards, which is where tapping this sends you.
+  //
+  // 2026-08-10: this (and the sell-status takeover below it) used to be a
+  // full early `return` swapping in a completely different tree — which
+  // meant the marquee's Animated.View got unmounted every time a takeover
+  // started and freshly remounted when it cleared. A native-driven
+  // (useNativeDriver: true) Animated.Value's connection to a specific host
+  // view doesn't reliably reattach to a brand-new view just because a later
+  // effect calls .start() again on the same JS-side value — the scroll loop
+  // came back "started" but never visibly moved. Fixed by never unmounting
+  // the marquee at all: both takeovers now render as an opaque overlay
+  // ON TOP of it instead of replacing it, so there's nothing to reconnect.
   return (
     <View style={{ backgroundColor: colors.tape, paddingTop: insets.top }}>
       <Pressable style={styles.tape} onPress={cycle} accessibilityRole="button" accessibilityLabel={`Ticker tape: ${mode.label}. Tap to change.`}>
         <View style={[styles.liveDot, { backgroundColor: orbDotColor }]} />
 
-        {/* Marquee */}
-        <Animated.View style={[styles.track, { opacity: contentOpacity, transform: [{ translateX }] }]}>
+        {/* Marquee — hidden (opacity 0) under the skeleton until the first
+            batch of data ever arrives, then crossfades in. */}
+        <Animated.View style={[styles.track, { opacity: Animated.multiply(contentOpacity, marqueeVisibility), transform: [{ translateX }] }]}>
           <TapeRow items={display} onWidth={handleWidth} colors={colors} />
           <TapeRow items={display} colors={colors} />
         </Animated.View>
+
+        {/* First-load skeleton — crossfades out once real data lands */}
+        {skeletonVisible && (
+          <Animated.View style={[styles.skeletonRow, { opacity: skeletonOpacity }]} pointerEvents="none">
+            {[42, 34, 46, 38, 50, 36].map((w, i) => (
+              <View key={i} style={styles.skeletonItem}>
+                <Skeleton width={w} height={10} borderRadius={4} />
+              </View>
+            ))}
+          </Animated.View>
+        )}
 
         {/* Centered mode title (during a transition) */}
         <Animated.View style={[styles.titleOverlay, { opacity: titleOpacity }]} pointerEvents="none">
@@ -237,6 +376,35 @@ export function TickerTape() {
           <Ionicons name="swap-horizontal" size={13} color={colors.tapeMuted} />
         </View>
       </Pressable>
+
+      {/* Opaque overlay, positioned to exactly cover the Pressable above
+          (not StyleSheet.absoluteFillObject — that would also cover the
+          paddingTop safe-area inset). Fully covers + is rendered after the
+          marquee, so it naturally swallows taps meant for the cycle
+          Pressable underneath — no pointerEvents juggling needed. */}
+      {pendingCount > 0 && (
+        <Pressable
+          style={[styles.tape, styles.confirmTape, styles.overlay, { top: insets.top, backgroundColor: colors.warningBg }]}
+          onPress={() => router.push('/(app)/(tabs)/dashboard')}
+          accessibilityRole="button"
+          accessibilityLabel={`${pendingCount} trade confirmation(s) awaiting review. Tap to open Dashboard.`}
+        >
+          <Ionicons name="warning" size={13} color={colors.warning} style={{ marginLeft: 12, marginRight: 6 }} />
+          <Text style={[styles.confirmText, { color: colors.warning }]} numberOfLines={1}>
+            Awaiting Confirmation
+          </Text>
+        </Pressable>
+      )}
+
+      {pendingCount === 0 && sellOverlayMounted && (
+        <Animated.View
+          style={[styles.tape, styles.confirmTape, styles.overlay, { top: insets.top, backgroundColor: colors.tape, opacity: sellOverlayOpacity }]}
+        >
+          <View style={[styles.row, { paddingLeft: 12 }]}>
+            {lastSellStatusesRef.current.map(s => <SellStatusLine key={s.id} status={s} colors={colors} />)}
+          </View>
+        </Animated.View>
+      )}
     </View>
   );
 }
@@ -248,6 +416,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     overflow: 'hidden',
   },
+  confirmTape: {
+    justifyContent: 'flex-start',
+  },
+  // `top` is set inline (to insets.top) rather than baked in here, since it
+  // depends on the device's safe-area inset. Deliberately not
+  // StyleSheet.absoluteFillObject — that anchors to the OUTER container
+  // (which already has paddingTop: insets.top applied), so it would also
+  // cover the safe-area padding above the tape row, not just the row itself.
+  overlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+  },
+  confirmText: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
   liveDot: {
     width: 6,
     height: 6,
@@ -255,6 +441,15 @@ const styles = StyleSheet.create({
     marginLeft: 12,
     marginRight: 4,
     zIndex: 2,
+  },
+  skeletonRow: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: 24,
+  },
+  skeletonItem: {
+    marginRight: 18,
   },
   track: {
     flexDirection: 'row',

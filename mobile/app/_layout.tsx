@@ -14,6 +14,7 @@ import { ThemeProvider as AppThemeProvider } from "@/lib/ThemeContext";
 import { useAppColorScheme } from "@/lib/useColorScheme";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useFonts } from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
@@ -31,6 +32,8 @@ import "@/common/services/LogService";
 import LoadingScreen from "@/common/components/LoadingScreen";
 import { ToastProvider } from "@/common/components/ui/Toast";
 import { PendingConfirmationProvider } from "@/common/components/strategy/PendingConfirmationProvider";
+import { TickerSheetProvider } from "@/common/utils/context/ticker/TickerSheetProvider";
+import { MarketStreamProvider } from "@/common/utils/context/market/MarketStreamContext";
 import { FONT_ASSETS } from "@/lib/typography";
 
 import { applyGlobalFont } from "@/lib/applyGlobalFont";
@@ -42,6 +45,7 @@ applyGlobalFont();
 // import LoadingScreen from "./components/LoadingScreen";
 import { Slot } from "expo-router";
 import { useNotifications } from "@/hooks/notifications/useNotifications";
+import { useAppBootstrap } from "@/hooks/useAppBootstrap";
 import { useRef } from "react";
 import { isValidWatchlistType } from "@/common/types/watchlist";
 import { ORBBreakoutNotificationData } from "@/common/components/FEED/modals/ORBNotificationModal";
@@ -97,15 +101,17 @@ export default function RootLayout() {
 
   // Render the AuthProvider, once font is loaded
   return (
-    <SafeAreaProvider>
-      <QueryClientProvider client={queryClient}>
-        <AppThemeProvider>
-          <AuthProvider>
-            <AppContent />
-          </AuthProvider>
-        </AppThemeProvider>
-      </QueryClientProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <QueryClientProvider client={queryClient}>
+          <AppThemeProvider>
+            <AuthProvider>
+              <AppContent />
+            </AuthProvider>
+          </AppThemeProvider>
+        </QueryClientProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
@@ -114,6 +120,9 @@ function AppContent() {
   const { authState } = useAuth();
   const { colorScheme } = useAppColorScheme();
   const { expoPushToken, isRegistering } = useNotifications();
+  const { ready: bootstrapReady } = useAppBootstrap(
+    authState.isAuthenticated && !authState.isLoading,
+  );
 
   // Add ref for notification subscription
   const notificationResponseListener = useRef<Notifications.EventSubscription | null>(null);
@@ -172,14 +181,13 @@ function AppContent() {
           return;
         }
 
-        // confirm_entry gate: the modal itself is driven by polling
-        // (PendingConfirmationProvider) so it appears regardless of which
-        // screen is active — this tap handler is just a convenience deep
-        // link to the ORB tab's Strategy page where that modal naturally surfaces.
-        if (data.type === 'confirm_entry') {
-          router.push({ pathname: '/(app)/(tabs)/orb', params: { section: 'strategy' } });
-          return;
-        }
+        // confirm_entry is NOT handled here (removed 2026-07-29) — it now
+        // carries data.screen="dashboard" and falls through to
+        // useNotifications.ts's own listener (NotificationNavigationService),
+        // which routes generically off data.screen. Handling it here too used
+        // to double-fire two independent router.push calls to two different
+        // destinations (this one to the old ORB/Strategy page, the other to
+        // Dashboard) racing on every tap.
 
         // Handle different screen types
         if (data.screen === 'watchlists' && isValidWatchlistType(data.watchlistType)) {
@@ -216,7 +224,35 @@ function AppContent() {
     <ToastProvider>
       <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
         <PendingConfirmationProvider>
-          <Slot />
+          <MarketStreamProvider>
+            {/* TickerSheetProvider must be INSIDE MarketStreamProvider, not
+                the other way around: it renders its ticker-detail <Modal>
+                as a sibling of {children}, not nested inside it — so
+                anything in that modal (PriceChartFullScreen calls
+                useMarketStream unconditionally on every mount, regardless of
+                its own `visible` prop) needs MarketStreamProvider to be an
+                ancestor of TickerSheetProvider itself, not just of <Slot/>.
+                Previously reversed, so opening the ticker sheet crashed the
+                app immediately with "useMarketStream must be used within a
+                MarketStreamProvider". */}
+            <TickerSheetProvider>
+              {/* <Slot/> must always mount as soon as auth resolves — AuthContext's
+                  own navigation effect calls router.replace() the instant
+                  authState.isAuthenticated flips true, independent of
+                  bootstrapReady. Gating this return on bootstrapReady used to
+                  unmount the root Slot right when that replace() call landed,
+                  so the navigation silently failed (nothing mounted to act on)
+                  and the app got stuck showing this screen forever. The
+                  bootstrap loading screen is now an overlay on top of the
+                  already-mounted Slot instead of replacing it. */}
+              <Slot />
+              {authState.isAuthenticated && !bootstrapReady && (
+                <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}>
+                  <LoadingScreen message="Initializing Alethia..." />
+                </View>
+              )}
+            </TickerSheetProvider>
+          </MarketStreamProvider>
         </PendingConfirmationProvider>
         <StatusBar style={colorScheme === "dark" ? "light" : "dark"} />
       </ThemeProvider>

@@ -5,9 +5,122 @@ from log.logging_config import get_logger
 
 from datetime import datetime, timedelta, timezone
 
-from urllib.parse import urlparse
-
 logger = get_logger(__name__)
+
+# Maps a chart timeframe key to the (period, interval) args yfinance expects.
+PERIOD_MAP = {
+    "1D": ("1d", "5m"),
+    "1W": ("5d", "30m"),
+    "1M": ("1mo", "1d"),
+    "3M": ("3mo", "1d"),
+    "YTD": ("ytd", "1d"),
+    "1Y": ("1y", "1d"),
+    "5Y": ("5y", "1wk"),
+}
+
+
+def get_historical_prices(ticker: str, period_key: str) -> dict:
+    """
+    Fetch a single timeframe's historical price series for the chart.
+
+    Args:
+        ticker: The stock ticker
+        period_key: One of PERIOD_MAP's keys (e.g. "1D", "1Y"); falls back to "1M"
+
+    Returns:
+        Dict with "dates", "prices" (closes), "volumes", plus "opens"/"highs"/"lows"
+        so the mobile chart can render candlesticks (empty lists on failure)
+    """
+    period, interval = PERIOD_MAP.get(period_key, PERIOD_MAP["1M"])
+    try:
+        hist = yf.Ticker(ticker).history(period=period, interval=interval)
+        # Intraday intervals can include rows with NaN prices (halts, thin
+        # bars at the session edges). NaN isn't valid JSON and breaks the
+        # mobile JSON.parse, so drop those rows before serializing.
+        if not hist.empty and "Close" in hist.columns:
+            hist = hist.dropna(subset=["Close"])
+    except Exception as e:
+        logger.warning(f"Failed to get historical prices for {ticker} ({period_key}): {str(e)}")
+        hist = pd.DataFrame()
+
+    def _col(name: str) -> list:
+        return hist[name].tolist() if not hist.empty and name in hist.columns else []
+
+    return {
+        "dates": (
+            hist.index.strftime("%Y-%m-%dT%H:%M:%S%z").tolist()
+            if not hist.empty and hasattr(hist.index, "strftime")
+            else []
+        ),
+        "prices": _col("Close"),
+        "volumes": _col("Volume"),
+        "opens": _col("Open"),
+        "highs": _col("High"),
+        "lows": _col("Low"),
+    }
+
+
+def get_intraday_chart_for_date(ticker: str, date_str: str, interval: str = "5m") -> dict:
+    """
+    Intraday OHLCV + VWAP + RSI(14) for ONE specific past calendar day —
+    used by the Daily Review's per-trade chart (see routes/ticker_routes.py's
+    /ticker/<ticker>/history-date) so a trade card can show what actually
+    happened around its entry/exit, not just the numbers.
+
+    yfinance only serves intraday intervals for a limited lookback window
+    (roughly 60 days for 5m/15m bars, far less for 1m) — a request for an
+    older session_date simply comes back empty. That's expected, not an
+    error: callers must check "available" and show a graceful fallback
+    rather than treating an empty result as a fetch failure.
+
+    RSI-14 uses the same simple-rolling-mean convention as
+    technical_service.get_technicals (not true Wilder smoothing) — kept
+    consistent with the rest of this codebase rather than mixing conventions.
+    VWAP resets each session (cumulative from the first bar of THIS date only),
+    matching how VWAP is meant to be read on an intraday chart.
+    """
+    import pandas as pd
+
+    try:
+        start = datetime.strptime(date_str, "%Y-%m-%d")
+        end = start + timedelta(days=1)
+        hist = yf.Ticker(ticker).history(start=start, end=end, interval=interval)
+        if not hist.empty and "Close" in hist.columns:
+            hist = hist.dropna(subset=["Close"])
+    except Exception as e:
+        logger.warning(f"Failed to get intraday chart for {ticker} on {date_str}: {str(e)}")
+        hist = pd.DataFrame()
+
+    if hist.empty:
+        return {"available": False, "dates": [], "opens": [], "highs": [], "lows": [],
+                "closes": [], "volumes": [], "vwap": [], "rsi": []}
+
+    typical = (hist["High"] + hist["Low"] + hist["Close"]) / 3
+    cum_pv  = (typical * hist["Volume"]).cumsum()
+    cum_vol = hist["Volume"].cumsum().replace(0, float("nan"))
+    vwap    = (cum_pv / cum_vol).bfill().fillna(hist["Close"]).tolist()
+
+    close = hist["Close"]
+    delta = close.diff()
+    gain  = delta.clip(lower=0).rolling(14).mean()
+    loss  = (-delta.clip(upper=0)).rolling(14).mean()
+    rs    = gain / loss.replace(0, float("nan"))
+    rsi_series = (100 - 100 / (1 + rs))
+    # First 14 bars have no RSI yet (insufficient window) — null, not 0/NaN,
+    # so the frontend can skip plotting them instead of drawing a false floor.
+    rsi = [None if pd.isna(v) else float(v) for v in rsi_series.tolist()]
+
+    return {
+        "available": True,
+        "dates":   hist.index.strftime("%Y-%m-%dT%H:%M:%S%z").tolist(),
+        "opens":   hist["Open"].tolist(),
+        "highs":   hist["High"].tolist(),
+        "lows":    hist["Low"].tolist(),
+        "closes":  hist["Close"].tolist(),
+        "volumes": hist["Volume"].tolist(),
+        "vwap":    [round(float(v), 4) for v in vwap],
+        "rsi":     rsi,
+    }
 
 
 def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_options_analysis: bool | None = True) -> dict:
@@ -56,8 +169,14 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_opt
             logger.warning(f"Failed to get recommendations for {topic}: {str(e)}")
             recommendations_list = []
 
-        # Get current price and change
-        current_price = info.get("currentPrice", 0)
+        # Get current price and change.
+        # ETFs (and some other non-equity tickers) don't populate "currentPrice" —
+        # that field is equity-specific — so it comes back 0/missing. Fall back to
+        # "regularMarketPrice", then to the most recent trading day's close from
+        # the historical data already fetched above, before giving up at 0.
+        current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+        if not current_price and not hist.empty and "Close" in hist.columns:
+            current_price = float(hist["Close"].iloc[-1])
         previous_close = info.get("previousClose", current_price)
         price_change = current_price - previous_close
         price_change_percent = (
@@ -199,15 +318,16 @@ def perform_yfinance_search(ticker: str) -> dict:
             logger.warning(f"Failed to get basic info for {ticker}: {str(e)}")
             info = {}
 
-        # Get current price and change
-        current_price = info.get("currentPrice", 0)
+        # Get current price and change. See perform_yfinance_research for why
+        # ETFs need the "regularMarketPrice" fallback.
+        current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
         previous_close = info.get("previousClose", current_price)
         price_change = current_price - previous_close
         price_change_percent = (
             (price_change / previous_close * 100) if previous_close else 0
         )
 
-        
+
         search_data = {
             "ticker": ticker,
             "company_name": info.get("longName", info.get("shortName", ticker)),
@@ -339,18 +459,21 @@ def analyze_sentiment(research_data: dict) -> dict:
 
 
 def get_company_logo(info: dict, ticker: str) -> str:
-    """Get company logo URL with fallbacks."""
-    
+    """Get company logo URL with fallbacks.
+
+    Clearbit's free logo API (the previous primary source here) is no longer
+    reliably reachable, so Financial Modeling Prep's ticker-keyed logo CDN —
+    confirmed working and doesn't depend on yfinance having a `website` field —
+    is used instead. The frontend falls back to a text placeholder if a given
+    ticker has no logo there (FMP 404s rather than erroring).
+    """
+
     # Try yFinance logo_url first
     logo_url = info.get("logo_url")
     if logo_url:
         return logo_url
-    
-    # Try Clearbit with company website
-    website = info.get("website")
-    if website:
-        domain = urlparse(website).netloc or website
-        return f"https://logo.clearbit.com/{domain}"
-    
-    # Fallback to a default or placeholder
-    return "https://craftsnippets.com/articles_images/placeholder/placeholder.jpg" 
+
+    if ticker:
+        return f"https://financialmodelingprep.com/image-stock/{ticker.upper()}.png"
+
+    return "https://craftsnippets.com/articles_images/placeholder/placeholder.jpg"

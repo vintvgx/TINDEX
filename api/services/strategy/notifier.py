@@ -67,6 +67,10 @@ def _fmt_contract(symbol: str) -> str:
     return f"{ticker} {strike_str}{opt} {date_str}"
 
 
+def _account_tag(paper_mode: bool) -> str:
+    return "PAPER" if paper_mode else "LIVE"
+
+
 class StrategyNotifier:
     """
     Wraps Expo push delivery for ORB strategy events.
@@ -94,7 +98,7 @@ class StrategyNotifier:
 
     # ── Public event methods ────────────────────────────────────────────────────
     def notify_position_recovered(self, ticker: str, contract_symbol: str, direction: str,
-                                   qty: int, entry_premium: float):
+                                   qty: int, entry_premium: float, paper_mode: bool = True):
         """
         A restart happened while this position was open, and its exit
         management (stop-loss/TP monitoring) has just been reattached —
@@ -105,11 +109,12 @@ class StrategyNotifier:
         confirms the position is visible and protected again, not just that
         something recovered somewhere.
         """
+        tag = _account_tag(paper_mode)
         readable = _fmt_contract(contract_symbol)
         self._dispatch(
-            title=f"🔄 {readable} — position recovered",
+            title=f"🔄 [{tag}] {readable} — position recovered",
             body=f"{direction} qty={qty} @ ${entry_premium:.2f} — stop-loss monitoring resumed after restart.",
-            data={"screen": "position", "symbol": contract_symbol},
+            data={"screen": "position", "symbol": contract_symbol, "paper_mode": paper_mode},
             priority=P_TRADE_ENTRY,
         )
 
@@ -141,48 +146,9 @@ class StrategyNotifier:
             title=f"{dir_emoji} {ticker} Retest Watch Armed",
             body=(f"Breakout @ ${breakout_price:.2f} — waiting for {level_label} "
                   f"retest at ${level:.2f}"),
-            data={"type": "retest_watching", "ticker": ticker,
+            data={"screen": "strategy", "type": "retest_watching", "ticker": ticker,
                   "profile": profile_key, "level": level},
             priority=P_MARKET,
-        )
-
-    def notify_no_trade_eod(self, ticker: str, profile_key: str, orh: float, orl: float):
-        """Session closed at EOD with no entry taken."""
-        self._dispatch(
-            title=f"{ticker} — No trade today  [{profile_key}]",
-            body=f"Watched ORH ${orh:.2f} / ORL ${orl:.2f} — no breakout triggered.",
-            data={"screen": "tradelog"},
-            priority=P_INFO,
-        )
-
-    def notify_skip(self, ticker: str, reason: str):
-        """Session skipped before ORB could be evaluated."""
-        # For dynamic reasons (e.g. "RE_ENTRY_COOLDOWN (CALL — 32m remaining)"),
-        # check prefix first so the detail is preserved in the body.
-        _prefix_map = {
-            "RE_ENTRY_COOLDOWN":  "re-entry cooldown active",
-            "DAILY_LOSS_LIMIT":   "daily loss limit reached — session halted",
-        }
-        _exact_map = {
-            "NOT_TRADE_DAY":                "not a scheduled trade day",
-            "STRATEGY_DISABLED":            "strategy is disabled",
-            "NO_DATA":                      "no price data available",
-            "ORB_RANGE_TOO_TIGHT":          "ORB range too tight",
-            "VIX_TOO_LOW":                  "VIX too low",
-            "VIX_TOO_HIGH":                 "VIX too high",
-            "MACRO_EVENT":                  "macro event today",
-            "BREAKOUT_TIME_LIMIT_EXCEEDED": "breakout window expired",
-            "RETEST_TIMEOUT":               "retest timed out",
-            "RETEST_INVALIDATED":           "retest invalidated — price crossed level",
-        }
-        prefix_hit = next((v for k, v in _prefix_map.items() if reason.startswith(k)), None)
-        readable = prefix_hit or _exact_map.get(reason, reason)
-
-        self._dispatch(
-            title=f"No trade — {ticker}",
-            body=f"Session skipped: {readable}.",
-            data={"screen": "tradelog", "reason": reason},
-            priority=P_INFO,
         )
 
     def notify_no_contract(self, ticker: str):
@@ -216,21 +182,24 @@ class StrategyNotifier:
         trade_id: str | None,
         profile_key: str,
         macro_event: bool = False,
+        paper_mode: bool = True,
     ):
         """A market order was successfully submitted."""
+        tag        = _account_tag(paper_mode)
         symbol     = contract.get("symbol", "")
         label      = _fmt_contract(symbol) if symbol else f"{ticker} option"
         cost       = entry_premium * qty * 100
         macro_warn = "  ⚠ Macro event today" if macro_event else ""
 
         self._dispatch(
-            title=f"{label} entered  [{profile_key}]",
+            title=f"[{tag}] {label} entered  [{profile_key}]",
             body=f"@ ${entry_premium:.2f} × {qty} contracts  (${cost:,.0f} total){macro_warn}",
             data={
                 "screen":      "position",
                 "trade_id":    trade_id,
                 "symbol":      symbol,
                 "macro_event": macro_event,
+                "paper_mode":  paper_mode,
             },
             priority=P_TRADE_ENTRY,
         )
@@ -243,8 +212,32 @@ class StrategyNotifier:
         pnl: float,
         qty: int,
         profile_key: str,
+        exit_premium: float | None = None,
+        paper_mode: bool = True,
+        strategy_id: str | None = None,
     ):
-        """One or more contracts were closed (stop, TP1, TP2, EOD, etc.)."""
+        """One or more contracts were closed (stop, TP1, TP2, EOD, etc.).
+
+        exit_premium — the actual fill price. Added so a priced exit (TP1/TP2/
+        manual sell now sample the bid and/or use a limit order rather than
+        firing an instant market order — see ORBEngine._execute_priced_exit)
+        can show the user what price it actually sold at, not just the P&L.
+
+        strategy_id/qty/exit_premium/pnl in `data` (2026-08-11): this push is
+        dispatched from a background queue independent of the HTTP response
+        for whatever request triggered the exit (see _dispatch — a plain
+        queue.put(), already enqueued before the route even builds its JSON
+        response). A manual sell's REST response can be lost — dropped
+        connection, app backgrounded mid-request — while this notification
+        still lands, since it never depended on that response arriving.
+        Structured `data` lets the client's notification-received listener
+        resolve the mobile ticker tape's "Selling…" status to "Sold…" off
+        THIS delivery instead of the fragile HTTP round-trip — see
+        useNotifications.ts's foreground listener and useSellStatus's
+        markSoldByStrategyId. strategy_id is the correlation key; the
+        client's own SellStatus.id is generated locally and unknown here.
+        """
+        tag   = _account_tag(paper_mode)
         sign  = "+" if pnl >= 0 else ""
         emoji = "✅" if pnl >= 0 else "🛑"
 
@@ -257,21 +250,59 @@ class StrategyNotifier:
             "EOD_CLOSE":          "EOD close",
             "EOD_HARD_CLOSE":     "EOD hard close",
             "BREAKEVEN_STOP":     "Breakeven stop hit",
-            "CONSOLIDATION":      "Consolidation exit",
             "LOW_VOLUME_EXIT":    "Low-volume exit",
             "MANUAL_CLOSE":       "Manually closed",
+            "MANUAL_EXIT":        "Manually sold",
             "FORCE_CLOSE":        "Force-closed",
         }
         label = labels.get(exit_reason, exit_reason)
+        price_str = f" @ ${exit_premium:.2f}" if exit_premium is not None else ""
 
         readable = _fmt_contract(contract_symbol)
         self._dispatch(
-            title=f"{emoji} {readable} — {label}  [{profile_key}]",
-            body=f"{qty} contracts  P&L: {sign}${pnl:,.2f}",
+            title=f"{emoji} [{tag}] {readable} — {label}  [{profile_key}]",
+            body=f"{qty} contracts{price_str}  P&L: {sign}${pnl:,.2f}",
             data={
-                "screen":      "tradelog",
+                "screen":       "tradelog",
+                "symbol":       contract_symbol,
+                "exit_reason":  exit_reason,
+                "paper_mode":   paper_mode,
+                "strategy_id":  strategy_id,
+                "qty":          qty,
+                "exit_premium": exit_premium,
+                "pnl":          round(pnl, 2),
+            },
+            priority=P_TRADE_EXIT,
+        )
+
+    def notify_sl_grace_started(
+        self,
+        ticker: str,
+        contract_symbol: str,
+        current_premium: float,
+        hard_stop: float,
+        grace_seconds: int,
+        paper_mode: bool = True,
+    ):
+        """
+        The premium just confirmed at/below the hard stop, but this profile
+        (SL_5/SL_10 — or REVERSAL's bars-based grace) doesn't exit instantly:
+        it's now waiting out a grace window before force-closing. This is the
+        user's window to intervene manually (close it themselves, or just
+        let it ride) if they disagree with the pending auto-exit — fires
+        once per breach, not on every tick. See ORBEngine._process_tick.
+        """
+        tag = _account_tag(paper_mode)
+        readable = _fmt_contract(contract_symbol)
+        mins = grace_seconds // 60
+        self._dispatch(
+            title=f"⏱️ [{tag}] {readable} — SL breach, {mins}-min grace started",
+            body=f"@ ${current_premium:.2f} (stop ${hard_stop:.2f}) — will sell at best price if still below in {mins} min.",
+            data={
+                "screen":      "position",
                 "symbol":      contract_symbol,
-                "exit_reason": exit_reason,
+                "type":        "sl_grace_started",
+                "paper_mode":  paper_mode,
             },
             priority=P_TRADE_EXIT,
         )
@@ -283,15 +314,17 @@ class StrategyNotifier:
         current_pnl: float,
         entry_premium: float,
         current_premium: float,
+        paper_mode: bool = True,
     ):
         """30-minute mark: P&L update while trade is live."""
+        tag   = _account_tag(paper_mode)
         sign  = "+" if current_pnl >= 0 else ""
         arrow = "↑" if current_pnl >= 0 else "↓"
         chg   = current_premium - entry_premium
 
         readable = _fmt_contract(contract_symbol)
         self._dispatch(
-            title=f"{readable} update (30 min)",
+            title=f"[{tag}] {readable} update (30 min)",
             body=(
                 f"{arrow} ${current_premium:.2f}  "
                 f"({sign}${chg:.2f}/contract)  "
@@ -300,12 +333,14 @@ class StrategyNotifier:
             data={
                 "screen": "position",
                 "symbol": contract_symbol,
+                "paper_mode": paper_mode,
             },
             priority=P_MARKET,
         )
 
     def notify_expiry_reminder(self, contract_symbol: str, days_to_expiry: int,
-                                milestone: str, qty: int, direction: str):
+                                milestone: str, qty: int, direction: str,
+                                paper_mode: bool = True):
         """
         Heads-up that an open (typically swing/LEAPS) position is approaching
         its own expiration — purely informational, no automatic action taken.
@@ -313,6 +348,7 @@ class StrategyNotifier:
         app no longer force-closes a multi-day hold, so this is the
         replacement safety net — a reminder, not a forced exit.
         """
+        tag = _account_tag(paper_mode)
         milestone_label = {
             "week":     "expires this week",
             "two_day":  "expires in 2 days",
@@ -320,9 +356,10 @@ class StrategyNotifier:
         }.get(milestone, f"expires in {days_to_expiry}d")
         readable = _fmt_contract(contract_symbol)
         self._dispatch(
-            title=f"⏳ {readable} — {milestone_label}",
+            title=f"⏳ [{tag}] {readable} — {milestone_label}",
             body=f"{direction} · {qty} contract(s) · {days_to_expiry} day(s) to expiration.",
-            data={"screen": "position", "symbol": contract_symbol, "type": "expiry_reminder"},
+            data={"screen": "position", "symbol": contract_symbol, "type": "expiry_reminder",
+                  "paper_mode": paper_mode},
             priority=P_MARKET,
         )
 
@@ -343,18 +380,21 @@ class StrategyNotifier:
         qty: int,
         entry_premium: float,
         profile_key: str,
+        paper_mode: bool = True,
     ):
         """A second entry was taken after a partial exit (runner re-entered)."""
+        tag     = _account_tag(paper_mode)
         symbol  = contract.get("symbol", "")
         label   = _fmt_contract(symbol) if symbol else f"{ticker} option"
 
         self._dispatch(
-            title=f"{label} re-entered  [{profile_key}]",
+            title=f"[{tag}] {label} re-entered  [{profile_key}]",
             body=f"@ ${entry_premium:.2f} × {qty} contracts",
             data={
                 "screen": "position",
                 "symbol": contract.get("symbol"),
                 "re_entry": True,
+                "paper_mode": paper_mode,
             },
             priority=P_TRADE_ENTRY,
         )
@@ -368,27 +408,48 @@ class StrategyNotifier:
         contract: dict,
         pending_id: str,
         expires_in_min: int,
+        paper_mode: bool = True,
+        conflict_context: dict | None = None,
     ):
         """
-        confirm_entry gate: a breakout/reversal was confirmed and a contract was
-        selected, but the strategy is configured to wait for user approval before
-        the order is actually submitted. Tapping this opens the in-app
-        Enter/Skip confirmation modal (the modal itself is also shown from
-        foregrounding the app while a confirmation is open, not only from the tap).
+        A breakout/reversal was confirmed and a contract was selected, but
+        entry is paused for user approval instead of being submitted —
+        either because the strategy has confirm_entry enabled, or because
+        conflict_context is set (another engine already holds this same
+        ticker+direction open — see ORBEngine._find_ticker_conflict).
+        Tapping this opens the Dashboard, where every pending confirmation
+        shows as its own card (Edit/Skip/Enter) — see dashboard.tsx and
+        TickerTape's "Awaiting Trade Confirmation" banner, both of which
+        already surface this independent of the tap (2026-07-29 redesign:
+        this used to be a blocking full-screen modal that could stack two
+        deep and lock up the UI).
         """
+        tag    = _account_tag(paper_mode)
         symbol = contract.get("symbol", "")
         label  = _fmt_contract(symbol) if symbol else f"{ticker} option"
-        self._dispatch(
-            title=f"Confirm {ticker} Trade",
-            body=(
+        if conflict_context:
+            conflict_tag = _account_tag(conflict_context.get("paper_mode", True))
+            title = f"[{tag}] {ticker} Already Open — Confirm?"
+            body = (
+                f"{label}  [{profile_key}]  ·  You already have an open "
+                f"{conflict_context.get('profile', 'position')} {direction} on "
+                f"{ticker} ({conflict_tag})  ·  expires in {expires_in_min} min"
+            )
+        else:
+            title = f"[{tag}] Confirm {ticker} Trade"
+            body = (
                 f"{label}  [{profile_key}]  ·  Confidence {confidence:.0f}/100  ·  "
                 f"expires in {expires_in_min} min"
-            ),
+            )
+        self._dispatch(
+            title=title,
+            body=body,
             data={
-                "screen":     "strategy",
+                "screen":     "dashboard",
                 "type":       "confirm_entry",
                 "pending_id": pending_id,
                 "symbol":     symbol,
+                "paper_mode": paper_mode,
             },
             priority=P_TRADE_ENTRY,
         )
@@ -444,6 +505,15 @@ class StrategyNotifier:
             data={"screen": "daily_review", "review_date": review_date},
             priority=P_INFO,
         )
+
+    def notify_test(self, title: str, body: str):
+        """
+        Free-form push with no domain fields — used only by the Profile >
+        Simulator screen's "Send Test Push" action (see
+        POST /strategy/debug/test-push) to verify a device actually receives
+        pushes without needing a real or simulated trade first.
+        """
+        self._dispatch(title=title, body=body, priority=P_INFO)
 
     # ── Internal helpers ────────────────────────────────────────────────────────
 

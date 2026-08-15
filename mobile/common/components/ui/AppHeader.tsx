@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
+import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 
 const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
 
@@ -33,6 +34,7 @@ export function AppHeader() {
   const colors = useThemeColors();
   const { data: followedTickers } = useUserORBFollows();
   const [tradePanelVisible, setTradePanelVisible] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const tickerOptions = useMemo(() => {
     const followed = (followedTickers ?? []).map((f: any) => f.ticker as string).filter(Boolean);
@@ -53,18 +55,32 @@ export function AppHeader() {
         <Text style={[styles.logoText, { color: colors.text }]}>tindex</Text>
       </View>
 
-      {/* Quick immediate trade */}
-      <TouchableOpacity
-        onPress={() => setTradePanelVisible(true)}
-        style={[styles.quickTradeBtn, { backgroundColor: colors.accent }]}
-        accessibilityRole="button"
-        accessibilityLabel="Immediate trade"
-      >
-        <Ionicons name="flash" size={14} color={colors.accentForeground} />
-        <Text style={[styles.quickTradeBtnText, { color: colors.accentForeground }]}>
-          Trade
-        </Text>
-      </TouchableOpacity>
+      <View style={styles.rightActions}>
+        {/* Quick ticker search */}
+        <TouchableOpacity
+          onPress={() => setSearchOpen(true)}
+          style={[styles.searchBtn, { backgroundColor: colors.iconButton, borderColor: colors.iconButtonBorder }]}
+          accessibilityRole="button"
+          accessibilityLabel="Search stocks"
+        >
+          <Ionicons name="search" size={16} color={colors.text} />
+        </TouchableOpacity>
+
+        {/* Quick immediate trade */}
+        <TouchableOpacity
+          onPress={() => setTradePanelVisible(true)}
+          style={[styles.quickTradeBtn, { backgroundColor: colors.accent }]}
+          accessibilityRole="button"
+          accessibilityLabel="Immediate trade"
+        >
+          <Ionicons name="flash" size={14} color={colors.accentForeground} />
+          <Text style={[styles.quickTradeBtnText, { color: colors.accentForeground }]}>
+            Trade
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <SearchBottomSheet visible={searchOpen} onClose={() => setSearchOpen(false)} />
 
       {/* Immediate trade panel — full pageSheet modal, reachable from any screen */}
       <Modal
@@ -110,6 +126,19 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  rightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  searchBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
   },
   quickTradeBtn: {
     flexDirection: 'row',

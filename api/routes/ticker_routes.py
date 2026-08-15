@@ -15,6 +15,7 @@ from services.anthropic.anthropic_service import anthropic_service
 from services.supabase.supabase_service import get_supabase_service
 from services.utils.research_service import get_research_service
 from services.utils.blog_generation_service import get_blog_service
+from services.yfinance.yfinance_service import get_historical_prices, PERIOD_MAP, get_intraday_chart_for_date
 from utils.cache import TrendingStocksCache
 
 import requests as _requests
@@ -124,6 +125,59 @@ def get_ticker_data(ticker: str):
     except Exception as e:
         logger.error("Ticker research failed for ticker '%s': %s", ticker, e, exc_info=True)
         return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
+
+
+@bp.route("/ticker/<ticker>/history", methods=["POST"])
+def get_ticker_history(ticker: str):
+    try:
+        ticker = ticker.strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({"success": False, "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."}), 400
+
+        data = request.get_json() or {}
+        period = data.get("period", "1M")
+        if period not in PERIOD_MAP:
+            return jsonify({"success": False, "error": f"Invalid period. Must be one of: {', '.join(PERIOD_MAP.keys())}"}), 400
+
+        historical_data = get_historical_prices(ticker, period)
+
+        return jsonify({"success": True, "data": historical_data, "period": period, "timestamp": time.time(), "from_cache": False})
+
+    except Exception as e:
+        logger.error("Ticker history fetch failed for ticker '%s': %s", ticker, e, exc_info=True)
+        return jsonify({"success": False, "error": f"History fetch failed: {str(e)}"}), 500
+
+
+@bp.route("/ticker/<ticker>/history-date", methods=["POST"])
+def get_ticker_history_for_date(ticker: str):
+    """
+    Intraday OHLCV + VWAP + RSI(14) for one specific past calendar day — used
+    by the Daily Review's per-trade chart (see ReviewTradeChart.tsx) so a
+    trade card can show the actual price/volume/RSI/VWAP action around its
+    entry/exit, not just the logged numbers.
+
+    yfinance only serves intraday bars for a limited lookback window (roughly
+    60 days for 5-minute bars) — a request for an older date comes back with
+    "available": False rather than an error; the client shows a graceful
+    "chart unavailable" state for those instead of treating it as a failure.
+    """
+    date_str = "?"
+    try:
+        ticker = ticker.strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({"success": False, "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."}), 400
+
+        data = request.get_json() or {}
+        date_str = data.get("date", "")
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
+            return jsonify({"success": False, "error": "date must be YYYY-MM-DD"}), 400
+
+        chart = get_intraday_chart_for_date(ticker, date_str)
+        return jsonify({"success": True, "data": chart, "date": date_str})
+
+    except Exception as e:
+        logger.error("Intraday chart fetch failed for ticker '%s' on %s: %s", ticker, date_str, e, exc_info=True)
+        return jsonify({"success": False, "error": f"Chart fetch failed: {str(e)}"}), 500
 
 
 @bp.route("/search/<ticker>", methods=["POST"])

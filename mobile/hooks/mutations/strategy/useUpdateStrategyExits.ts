@@ -7,6 +7,24 @@ interface UpdateStrategyExitsPayload {
   hard_stop?: number;
   tp1?: number;
   tp2?: number;
+  /** "Advanced" per-level contract counts — how many of the remaining
+   *  position to sell at that level, replacing the profile's fixed close
+   *  percentage. sl_qty is a one-time partial: it leaves whatever's left
+   *  running unprotected rather than re-firing on the same breach. */
+  sl_qty?: number;
+  tp1_qty?: number;
+  tp2_qty?: number;
+  /** Stop type — null switches to Hard Stop, 5/10/15 arms the matching
+   *  grace-timer window (see exit_manager.py's sl_grace_* fields). */
+  sl_grace_minutes?: number | null;
+  /** How the runner is managed post-TP1 for the rest of THIS open trade —
+   *  independent of the profile's default (see exit_manager.py's
+   *  apply_overrides). */
+  runner_mode?: 'trail' | 'be_hold' | 'none';
+  /** On/off switch for cascade partial-sells for the rest of this trade.
+   *  Never overrides the qty_remaining > 1 exemption — a 1-contract runner
+   *  stays cascade-exempt regardless of this flag. */
+  cascade_enabled?: boolean;
 }
 
 export function useUpdateStrategyExits() {

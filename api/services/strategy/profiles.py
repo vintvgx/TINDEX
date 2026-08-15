@@ -7,6 +7,8 @@ All profile-dependent logic in other modules reads from here — nothing hardcod
 runner_mode controls what happens to remaining contracts after TP1 is hit:
   "be_hold" — runner sits at breakeven stop, rides to TP2 target then EOD. No trail noise.
   "trail"   — traditional high-water-mark trailing stop (runner_trail_pct from peak).
+  "none"    — runner keeps its original pre-TP1 hard stop (max_loss_pct). No BE floor,
+              no trail — exits only via TP2, cascade, EOD, or manual close.
 """
 
 import logging
@@ -29,10 +31,8 @@ PROFILES = {
         "tp2_close_pct": 0.30,
         "runner_trail_pct": 0.15,
         "runner_mode": "be_hold",   # high-qty aggressive — ride the full move, B/E protects runner
-        "consol_exit": False,
+        "sl_confirm_ticks": 2,      # require 2 consecutive ticks at/below SL before firing — filters one bad quote
         "volume_exit": False,
-        "consol_range_pct": 0.0005,
-        "consol_bars": 6,
         "volume_exit_threshold": 0.10,
         "strike_offset_min": 1.00,
         "strike_offset_max": 3.00,
@@ -59,10 +59,8 @@ PROFILES = {
         "tp2_close_pct": 0.50,
         "runner_trail_pct": 0.22,   # loosened from 0.20 — less noise sensitivity
         "runner_mode": "trail",
-        "consol_exit": False,
+        "sl_confirm_ticks": 2,
         "volume_exit": False,
-        "consol_range_pct": 0.0008,
-        "consol_bars": 4,
         "volume_exit_threshold": 0.20,
         "strike_offset_min": 1.00,  # raised from 0.50 — confirmation entry is already past the ORH; 0.50 selects strikes that are ITM at fill
         "strike_offset_max": 2.00,
@@ -89,10 +87,8 @@ PROFILES = {
         "tp2_close_pct": 1.00,
         "runner_trail_pct": 0.20,   # loosened from 0.10 — 10% was firing on bid/ask spread alone
         "runner_mode": "trail",
-        "consol_exit": False,
+        "sl_confirm_ticks": 3,      # low qty/conservative — a bit more noise tolerance before cutting
         "volume_exit": False,
-        "consol_range_pct": 0.0012,
-        "consol_bars": 3,
         "volume_exit_threshold": 0.30,
         "strike_offset_min": 0.50,
         "strike_offset_max": 1.25,
@@ -119,10 +115,8 @@ PROFILES = {
         "tp2_close_pct": 0.35,
         "runner_trail_pct": 0.18,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode": "be_hold",   # designed for this — lock TP1, ride runner to TP2/EOD risk-free
-        "consol_exit": False,
+        "sl_confirm_ticks": 2,
         "volume_exit": False,
-        "consol_range_pct": 0.0010,
-        "consol_bars": 8,
         "volume_exit_threshold": 0.10,
         "strike_offset_min": 1.25,  # raised from 0.50 — BREAK entry fires after confirmation, underlying is already past ORH; force at least 1.25 OTM so we're not buying ITM at fill
         "strike_offset_max": 2.50,  # widened from 2.00 — give scorer room to find a cleaner OTM strike
@@ -155,10 +149,29 @@ PROFILES = {
         "tp2_close_pct":          0.50,   # close 1 of 2 remaining at TP2, leave 1 runner
         "runner_trail_pct":       0.18,   # kept for reference; ignored in be_hold mode
         "runner_mode":            "be_hold", # trail exited within seconds on fast moves; cascade (now direction-aware) handles runner reduction
-        "consol_exit":            False,
+        "sl_confirm_ticks":       3,    # cheap OTM prints are noisy — require 3 consecutive ticks at/below SL, not 1
+        # ── Pre-TP1 SL grace window (2026-07-24) ──────────────────────────────
+        # A single quote piercing SL on a cheap ($0.10-0.30) OTM reversal contract
+        # is often bid/ask noise, not a real breakdown — the 2026-07-23 SPY trade
+        # was stopped out in 2m39s on exactly this. Once SL is first touched
+        # (and sl_confirm_ticks above has confirmed it's not a 1-tick flicker),
+        # this holds the position open a bit longer instead of closing instantly:
+        #   - sl_grace_bars consecutive adverse 1-min underlying closes → exit
+        #     immediately (real, sustained move against us — don't wait out
+        #     the rest of the window).
+        #   - otherwise, exit once sl_grace_seconds has elapsed without the
+        #     price recovering back above SL (consolidating at the stop is
+        #     still eventually a loser).
+        #   - if price recovers above SL at any point before either fires,
+        #     the grace state clears and the trade holds normally.
+        # sl_outer_floor_pct is the escape hatch: an absolute worst-case stop
+        # that bypasses grace (and tick-confirm) entirely, so "give it time"
+        # can never turn into "ride it to zero" while waiting out the window.
+        "sl_grace_enabled":       True,
+        "sl_grace_bars":          3,     # ~3 consecutive 1-min bars against = genuine move, don't wait
+        "sl_grace_seconds":       300,   # 5 minutes max before forcing the exit regardless
+        "sl_outer_floor_pct":     0.40,  # hard floor at -40% (vs. -25% normal SL) — bypasses grace/confirm
         "volume_exit":            False,
-        "consol_range_pct":       0.0008,
-        "consol_bars":            4,
         "volume_exit_threshold":  0.20,
         "strike_offset_min":      0.50,
         "strike_offset_max":      2.00,
@@ -174,29 +187,35 @@ PROFILES = {
     # ── IMMEDIATE TRADE PROFILES ──────────────────────────────────────────────────
 
     # ─── NO_STOP_LOSS — Fully manual, hold until sold ────────────────────────────
-    # No automatic exit of any kind: max_loss_pct=1.0 means hard_stop computes to
-    # entry*0=0 (never triggers on a real quote), tp1/tp2 multiples are unreachable,
+    # No automatic exit of any kind: hard_stop=0 never triggers on a real quote,
+    # disable_tp1_exit=True makes ExitManager.evaluate() skip the TP1 branch
+    # entirely (see exit_manager.py) rather than relying on an unreachable price,
     # and disable_eod_close=True skips BOTH the ExitManager.evaluate() EOD_CLOSE
     # branch AND the separate scheduler._eod_reset() 15:30 ET hard-close cron (see
     # scheduler.py) — the two are independent mechanisms and both must respect this
     # flag for "hold until I sell" to actually mean never, not just "not before 3:30".
+    # tp1_mult/tp2_mult are now a normal, relative-looking target (not the old
+    # 999x-entry sentinel) purely for display — disable_tp1_exit (and use_tp2
+    # =False for TP2) guarantees neither can ever actually fire regardless of
+    # what these numbers are, so there's no tension between "looks like a sane
+    # price" and "still 100% manual" (2026-07-29: the old 999x number read as
+    # an outlandish, confusing price on the position card).
     # qty_contracts=1 by design — no-stop-loss risk should default to the smallest
     # possible size; submit_manual_trade only overrides qty if the caller passes one.
     "NO_STOP_LOSS": {
         "qty_contracts":           1,
         "use_tp2":                 False,
+        "disable_tp1_exit":        True,
         "max_loss_pct":            1.0,
-        "tp1_mult":                999.0,
-        "tp2_mult":                999.0,
+        "tp1_mult":                1.20,
+        "tp2_mult":                1.35,
         "tp1_close_pct":           0.00,
         "tp2_close_pct":           0.00,
         "runner_trail_pct":        0.00,
         "runner_mode":             "trail",
+        "sl_confirm_ticks":        2,   # irrelevant in practice — max_loss_pct=1.0 means hard_stop=0, never reached
         "disable_eod_close":       True,
-        "consol_exit":             False,
         "volume_exit":             False,
-        "consol_range_pct":        0.0008,
-        "consol_bars":             4,
         "volume_exit_threshold":   0.20,
         "strike_offset_min":       0.50,
         "strike_offset_max":       2.00,
@@ -205,6 +224,70 @@ PROFILES = {
         "eod_buffer_minutes":      25,
         "breakout_time_limit_min": 240,
         "vix_max_override":        50,
+    },
+    # ─── SL_5 — Sub-$0.50 contracts, 5-min stop-loss grace timer ────────────────
+    # For cheap/leveraged contracts where a normal instant stop whipsaws on
+    # noise: once the premium confirms at/below the hard stop, this DOESN'T
+    # sell immediately — it starts a 5-minute clock (sl_grace_seconds). Only
+    # force-closes at "best price" if the premium is STILL at/below the stop
+    # when the clock runs out. A recovery above the stop only cancels the
+    # clock once it holds for sl_grace_recovery_seconds (60s) continuously —
+    # a single tick back above the line doesn't reset anything (see
+    # ExitManager.evaluate()/2026-07-27 discussion). sl_outer_floor_pct is an
+    # absolute worst-case bypass so a real breakdown can't hide behind the grace
+    # window. TP/sizing otherwise mirrors OTM_CONVICTION ($0.25–$0.50 band).
+    "SL_5": {
+        "qty_contracts":            6,
+        "use_tp2":                  True,
+        "max_loss_pct":             0.55,
+        "tp1_mult":                 1.75,
+        "tp2_mult":                 3.00,
+        "tp1_close_pct":            0.33,
+        "tp2_close_pct":            0.50,
+        "runner_trail_pct":         0.20,
+        "runner_mode":              "be_hold",
+        "sl_confirm_ticks":         3,
+        "sl_grace_enabled":         True,
+        "sl_grace_seconds":         300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct":       0.80,
+        "volume_exit":              False,
+        "volume_exit_threshold":    0.12,
+        "strike_offset_min":        1.00,
+        "strike_offset_max":        4.00,
+        "target_delta_min":         0.10,
+        "target_delta_max":         0.35,
+        "eod_buffer_minutes":       15,
+        "breakout_time_limit_min":  240,
+        "vix_max_override":         55,
+    },
+    # ─── SL_10 — Sub-$0.25 contracts, 10-min stop-loss grace timer ──────────────
+    # Same mechanism as SL_5, doubled to 10 minutes — for the noisiest, most
+    # leveraged tier (sub-$0.25). TP/sizing mirrors OTM_RUNNER.
+    "SL_10": {
+        "qty_contracts":            10,
+        "use_tp2":                  True,
+        "max_loss_pct":             0.60,
+        "tp1_mult":                 2.00,
+        "tp2_mult":                 3.50,
+        "tp1_close_pct":            0.25,
+        "tp2_close_pct":            0.33,
+        "runner_trail_pct":         0.20,
+        "runner_mode":              "trail",
+        "sl_confirm_ticks":         4,
+        "sl_grace_enabled":         True,
+        "sl_grace_seconds":         600,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct":       0.85,
+        "volume_exit":              False,
+        "volume_exit_threshold":    0.10,
+        "strike_offset_min":        1.00,
+        "strike_offset_max":        5.00,
+        "target_delta_min":         0.08,
+        "target_delta_max":         0.28,
+        "eod_buffer_minutes":       15,
+        "breakout_time_limit_min":  240,
+        "vix_max_override":         60,
     },
     # ─── SCALPER — Quick locks, tight trail ──────────────────────────────────────
     "SCALPER": {
@@ -216,10 +299,75 @@ PROFILES = {
         "tp2_close_pct":           1.00,
         "runner_trail_pct":        0.25,   # intentionally tight — scalper exits fast
         "runner_mode":             "trail",
-        "consol_exit":             False,
+        "sl_confirm_ticks":        1,   # scalper is designed to cut fast — no added delay on the SL either
         "volume_exit":             False,
-        "consol_range_pct":        0.0006,
-        "consol_bars":             4,
+        "volume_exit_threshold":   0.25,
+        "strike_offset_min":       0.50,
+        "strike_offset_max":       1.50,
+        "target_delta_min":        0.40,
+        "target_delta_max":        0.55,
+        "eod_buffer_minutes":      30,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        35,
+    },
+    # ─── SCALPER size tiers (2026-08-10) ─────────────────────────────────────
+    # Same strategy as SCALPER above — every field identical except
+    # qty_contracts. Deliberately NOT scaling max_loss_pct/tp mults/anything
+    # else with size: XL's dollar risk per trade is proportionally larger at
+    # the same stop %, by design — that's a capital-allocation choice for the
+    # user to make via which tier they pick, not something this profile
+    # should compensate for on its own.
+    "SCALPER_SMALL": {
+        "qty_contracts":           1,
+        "max_loss_pct":            0.30,
+        "tp1_mult":                1.30,
+        "tp2_mult":                1.60,
+        "tp1_close_pct":           0.67,
+        "tp2_close_pct":           1.00,
+        "runner_trail_pct":        0.25,
+        "runner_mode":             "trail",
+        "sl_confirm_ticks":        1,
+        "volume_exit":             False,
+        "volume_exit_threshold":   0.25,
+        "strike_offset_min":       0.50,
+        "strike_offset_max":       1.50,
+        "target_delta_min":        0.40,
+        "target_delta_max":        0.55,
+        "eod_buffer_minutes":      30,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        35,
+    },
+    "SCALPER_LARGE": {
+        "qty_contracts":           6,
+        "max_loss_pct":            0.30,
+        "tp1_mult":                1.30,
+        "tp2_mult":                1.60,
+        "tp1_close_pct":           0.67,
+        "tp2_close_pct":           1.00,
+        "runner_trail_pct":        0.25,
+        "runner_mode":             "trail",
+        "sl_confirm_ticks":        1,
+        "volume_exit":             False,
+        "volume_exit_threshold":   0.25,
+        "strike_offset_min":       0.50,
+        "strike_offset_max":       1.50,
+        "target_delta_min":        0.40,
+        "target_delta_max":        0.55,
+        "eod_buffer_minutes":      30,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        35,
+    },
+    "SCALPER_XL": {
+        "qty_contracts":           10,
+        "max_loss_pct":            0.30,
+        "tp1_mult":                1.30,
+        "tp2_mult":                1.60,
+        "tp1_close_pct":           0.67,
+        "tp2_close_pct":           1.00,
+        "runner_trail_pct":        0.25,
+        "runner_mode":             "trail",
+        "sl_confirm_ticks":        1,
+        "volume_exit":             False,
         "volume_exit_threshold":   0.25,
         "strike_offset_min":       0.50,
         "strike_offset_max":       1.50,
@@ -239,10 +387,8 @@ PROFILES = {
         "tp2_close_pct":           1.00,
         "runner_trail_pct":        0.22,   # loosened from 0.20
         "runner_mode":             "trail",
-        "consol_exit":             False,
+        "sl_confirm_ticks":        2,   # disciplined/tight by design — light noise filter only
         "volume_exit":             False,
-        "consol_range_pct":        0.0008,
-        "consol_bars":             4,
         "volume_exit_threshold":   0.20,
         "strike_offset_min":       0.50,
         "strike_offset_max":       1.50,
@@ -262,10 +408,8 @@ PROFILES = {
         "tp2_close_pct":           0.50,
         "runner_trail_pct":        0.18,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode":             "be_hold", # small TP1 close → runner rides to TP2 then EOD
-        "consol_exit":             False,
+        "sl_confirm_ticks":        3,
         "volume_exit":             False,
-        "consol_range_pct":        0.0010,
-        "consol_bars":             6,
         "volume_exit_threshold":   0.15,
         "strike_offset_min":       0.50,
         "strike_offset_max":       2.00,
@@ -285,10 +429,8 @@ PROFILES = {
         "tp2_close_pct":           0.35,
         "runner_trail_pct":        0.15,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode":             "be_hold", # tiny TP1 close — almost all rides to TP2/EOD
-        "consol_exit":             False,
+        "sl_confirm_ticks":        3,
         "volume_exit":             False,
-        "consol_range_pct":        0.0012,
-        "consol_bars":             8,
         "volume_exit_threshold":   0.10,
         "strike_offset_min":       0.50,
         "strike_offset_max":       2.00,
@@ -309,10 +451,8 @@ PROFILES = {
         "tp2_close_pct":           0.00,
         "runner_trail_pct":        0.12,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode":             "be_hold", # close half at TP1, ride the rest to EOD or B/E
-        "consol_exit":             False,
+        "sl_confirm_ticks":        2,
         "volume_exit":             False,
-        "consol_range_pct":        0.0015,
-        "consol_bars":             10,
         "volume_exit_threshold":   0.08,
         "strike_offset_min":       0.50,
         "strike_offset_max":       2.50,
@@ -334,10 +474,8 @@ PROFILES = {
         "tp2_close_pct":           0.33,   # close 33% of remainder at TP2
         "runner_trail_pct":        0.20,
         "runner_mode":             "trail",
-        "consol_exit":             False,  # OTM contracts don't consolidate cleanly
+        "sl_confirm_ticks":        4,   # sub-$0.25 contracts — noisiest quotes in the book, needs the most confirmation
         "volume_exit":             False,
-        "consol_range_pct":        0.0015,
-        "consol_bars":             8,
         "volume_exit_threshold":   0.10,
         "strike_offset_min":       1.00,
         "strike_offset_max":       5.00,
@@ -358,10 +496,8 @@ PROFILES = {
         "tp2_close_pct":           0.50,   # close 50% of remainder at TP2
         "runner_trail_pct":        0.20,
         "runner_mode":             "be_hold",
-        "consol_exit":             False,
+        "sl_confirm_ticks":        3,   # $0.25-0.40 contracts — noisier than a normal ATM/OTM breakout play
         "volume_exit":             False,
-        "consol_range_pct":        0.0012,
-        "consol_bars":             6,
         "volume_exit_threshold":   0.12,
         "strike_offset_min":       1.00,
         "strike_offset_max":       4.00,
@@ -372,20 +508,23 @@ PROFILES = {
         "vix_max_override":        55,
     },
     # ─── MANUAL — User-controlled exit, only a hard stop fires automatically ─────
+    # Same "unreachable TP1" pattern as NO_STOP_LOSS above (and the same fix,
+    # 2026-07-29): disable_tp1_exit guarantees TP1 never auto-fires regardless
+    # of the number, so tp1_mult/tp2_mult can be a normal, sane-looking target
+    # instead of a 999x-entry sentinel.
     "MANUAL": {
         "qty_contracts":          2,
         "use_tp2":                False,
+        "disable_tp1_exit":       True,
         "max_loss_pct":           0.30,   # default SL — overridden by user's picker selection
-        "tp1_mult":               999.0,  # unreachable — TP1 never auto-fires
-        "tp2_mult":               999.0,
+        "tp1_mult":               1.20,
+        "tp2_mult":               1.35,
         "tp1_close_pct":          0.00,
         "tp2_close_pct":          0.00,
         "runner_trail_pct":       0.00,
         "runner_mode":            "trail",
-        "consol_exit":            False,
+        "sl_confirm_ticks":       2,
         "volume_exit":            False,
-        "consol_range_pct":       0.0008,
-        "consol_bars":            4,
         "volume_exit_threshold":  0.20,
         "strike_offset_min":      0.50,
         "strike_offset_max":      2.00,
@@ -410,10 +549,8 @@ PROFILES = {
         "tp2_close_pct": 0.35,
         "runner_trail_pct": 0.22,   # loosened from 0.15 — entered at confirmed level, give room
         "runner_mode": "trail",     # retest entry = confirmed level; protect gains dynamically
-        "consol_exit": False,
+        "sl_confirm_ticks": 2,
         "volume_exit": False,
-        "consol_range_pct": 0.0008,
-        "consol_bars": 4,
         "volume_exit_threshold": 0.20,
         "strike_offset_min": 1.00,  # raised from 0.50 — RETEST entry fires after underlying retests ORH; 0.50 selects near-ATM at fill
         "strike_offset_max": 2.00,
@@ -457,10 +594,8 @@ CUSTOM_DEFAULTS = {
     "tp2_close_pct":          0.50,
     "runner_trail_pct":       0.20,
     "runner_mode":            "trail",
-    "consol_exit":            False,
+    "sl_confirm_ticks":       2,
     "volume_exit":            False,
-    "consol_range_pct":       0.0008,
-    "consol_bars":            4,
     "volume_exit_threshold":  0.20,
     "strike_offset_min":      0.50,
     "strike_offset_max":      2.00,
@@ -480,6 +615,9 @@ _DISPLAY_NAMES = {
     "REVERSAL":    "Reversal",
     "CUSTOM":      "Custom",
     "SCALPER":    "Scalper",
+    "SCALPER_SMALL": "Scalper Small",
+    "SCALPER_LARGE":  "Scalper Large",
+    "SCALPER_XL":     "Scalper XL",
     "PRECISION":  "Precision",
     "MOMENTUM":   "Momentum",
     "CONVICTION": "Conviction",
@@ -488,6 +626,8 @@ _DISPLAY_NAMES = {
     "OTM_CONVICTION": "OTM Conviction",
     "MANUAL":         "Manual",
     "NO_STOP_LOSS":   "No Stop Loss",
+    "SL_5":           "SL-5",
+    "SL_10":          "SL-10",
 }
 
 _EMOJIS = {
@@ -499,6 +639,9 @@ _EMOJIS = {
     "REVERSAL":    "🔄",
     "CUSTOM":      "⚙️",
     "SCALPER":    "⚡",
+    "SCALPER_SMALL": "⚡",
+    "SCALPER_LARGE":  "⚡",
+    "SCALPER_XL":     "⚡",
     "PRECISION":  "🎯",
     "MOMENTUM":   "📈",
     "CONVICTION": "💎",
@@ -507,7 +650,61 @@ _EMOJIS = {
     "OTM_CONVICTION": "🎯",
     "MANUAL":         "✋",
     "NO_STOP_LOSS":   "🧗",
+    "SL_5":           "⏱️",
+    "SL_10":          "⏳",
 }
+
+
+# Fields that are always overridable via custom_thresholds regardless of
+# whether the base profile already declares them. Originally just the
+# grace-timer fields — the stop-timer (Hard Stop / SL-5 / SL-10) is an
+# independent per-trade choice (see grace_fields_for_minutes) layered on top
+# of ANY sizing profile, not just SL_5/SL_10 themselves — without this
+# allow-list, get_profile()'s "only override existing keys" rule below would
+# silently drop a grace override on any profile that doesn't itself define
+# sl_grace_* (i.e. everything except SL_5/SL_10/REVERSAL), logged as an
+# "ignoring unknown key" warning instead of doing what was asked (2026-07-30).
+#
+# runner_trail_confirm_seconds joined this set 2026-08-07 for the same
+# reason: a per-strategy tuning knob (see ExitManager's trail-confirm logic —
+# elapsed wall-clock time at/below the ratcheted trail floor, not a tick
+# count) that should be settable from any strategy's own config without
+# requiring a profiles.py edit first.
+GRACE_OVERRIDE_KEYS = {
+    "sl_grace_enabled", "sl_grace_seconds",
+    "sl_grace_recovery_seconds", "sl_outer_floor_pct",
+    "runner_trail_confirm_seconds",
+}
+
+
+def grace_fields_for_minutes(minutes: int | None) -> dict:
+    """
+    Translate a user-facing stop-timer choice into ExitManager's grace
+    fields. `None` means Hard Stop (grace off). Shared by the entry route
+    and the mid-trade PATCH /configs/<id>/exits route so the two surfaces
+    can never drift apart. sl_outer_floor_pct rises with the timer length —
+    a longer grace window needs a deeper absolute worst-case floor so it can
+    never turn into an unbounded hold (see ExitManager.evaluate()'s outer-
+    floor check).
+    """
+    if minutes is None:
+        return {"sl_grace_enabled": False}
+    if minutes == 5:
+        return {
+            "sl_grace_enabled": True, "sl_grace_seconds": 300,
+            "sl_grace_recovery_seconds": 60, "sl_outer_floor_pct": 0.80,
+        }
+    if minutes == 10:
+        return {
+            "sl_grace_enabled": True, "sl_grace_seconds": 600,
+            "sl_grace_recovery_seconds": 60, "sl_outer_floor_pct": 0.85,
+        }
+    if minutes == 15:
+        return {
+            "sl_grace_enabled": True, "sl_grace_seconds": 900,
+            "sl_grace_recovery_seconds": 60, "sl_outer_floor_pct": 0.90,
+        }
+    raise ValueError(f"sl_grace_minutes must be 5, 10, 15, or null (Hard Stop) — got {minutes!r}")
 
 
 def get_profile(name: str, custom_thresholds: dict | None = None) -> dict:
@@ -519,7 +716,7 @@ def get_profile(name: str, custom_thresholds: dict | None = None) -> dict:
     base = dict(PROFILES[key])
     if custom_thresholds:
         for k, v in custom_thresholds.items():
-            if k in base:
+            if k in base or k in GRACE_OVERRIDE_KEYS:
                 base[k] = v
             else:
                 logger.warning(
@@ -540,6 +737,9 @@ def describe_profile(key: str, custom_thresholds: dict | None = None) -> dict:
         "RETESTER":    "Medium",
         "REVERSAL":    "Medium-High",
         "SCALPER":     "Low",
+        "SCALPER_SMALL": "Low",
+        "SCALPER_LARGE":  "Low-Med",
+        "SCALPER_XL":     "Medium",
         "PRECISION":   "Low-Med",
         "MOMENTUM":    "Medium",
         "CONVICTION":  "Med-High",
@@ -547,6 +747,8 @@ def describe_profile(key: str, custom_thresholds: dict | None = None) -> dict:
         "OTM_RUNNER":      "High",
         "OTM_CONVICTION":  "Med-High",
         "NO_STOP_LOSS":    "Unbounded",
+        "SL_5":            "High (5-min grace stop)",
+        "SL_10":           "High (10-min grace stop)",
     }.get(k, "Custom")
     has_runner = (not p.get("use_tp2", True)) or p["tp2_close_pct"] < 1.0
     return {

@@ -1,10 +1,16 @@
 export type ProfileKey =
   | 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'TREND_RIDER' | 'RETESTER' | 'REVERSAL' | 'CUSTOM'
   // Immediate trade profiles (conviction / manual entries)
-  | 'SCALPER' | 'PRECISION' | 'MOMENTUM' | 'CONVICTION' | 'ALL_IN'
+  | 'SCALPER' | 'SCALPER_SMALL' | 'SCALPER_LARGE' | 'SCALPER_XL'
+  | 'PRECISION' | 'MOMENTUM' | 'CONVICTION' | 'ALL_IN'
   // OTM-specific profiles (auto-selected for cheap out-of-money contracts)
   | 'OTM_RUNNER' | 'OTM_CONVICTION'
-  | 'MANUAL';
+  // Sub-$0.50 stop-loss grace-timer profiles — auto-selected server-side at
+  // entry for any fill under $0.50 (see orb_engine.py's _execute_entry),
+  // also directly selectable. SL_5 = $0.25-$0.50 band (5-min grace), SL_10 =
+  // sub-$0.25 band (10-min grace). See exit_manager.py's sl_grace_* fields.
+  | 'SL_5' | 'SL_10'
+  | 'MANUAL' | 'NO_STOP_LOSS';
 
 export type TradeType = 'STRATEGY' | 'IMMEDIATE';
 
@@ -16,10 +22,18 @@ export interface CustomThresholds {
   tp1_close_pct:           number;
   tp2_close_pct:           number;
   runner_trail_pct:        number;
-  consol_exit:             boolean;
+  /** "trail" (high-water-mark trailing stop), "be_hold" (breakeven floor,
+   *  rides to TP2/EOD, no trail), or "none" (original pre-TP1 hard stop —
+   *  no BE floor, no trail; exits only via TP2/cascade/EOD/manual). See
+   *  exit_manager.py's runner_mode handling. */
+  runner_mode:              'trail' | 'be_hold' | 'none';
+  /** Consecutive against-the-trade underlying ticks that trigger a cascade
+   *  partial-sell (of non-runner contracts only — see exit_manager.py's
+   *  qty_remaining > 1 gate, which makes a 1-contract entry cascade-exempt). */
+  cascade_ticks:           number;
+  /** Fraction of sellable (non-runner) contracts a cascade event closes. */
+  cascade_close_pct:       number;
   volume_exit:             boolean;
-  consol_range_pct:        number;
-  consol_bars:             number;
   volume_exit_threshold:   number;
   strike_offset_min:       number;
   strike_offset_max:       number;
@@ -38,10 +52,10 @@ export interface ProfileThresholds {
   tp1_close_pct: number;
   tp2_close_pct: number;
   runner_trail_pct: number;
-  consol_exit: boolean;
+  runner_mode?: 'trail' | 'be_hold' | 'none';
+  cascade_ticks?: number;
+  cascade_close_pct?: number;
   volume_exit: boolean;
-  consol_range_pct: number;
-  consol_bars: number;
   volume_exit_threshold: number;
   strike_offset_min: number;
   strike_offset_max: number;
@@ -62,6 +76,10 @@ export interface StrategyProfile {
   tp2_pct: number;        // integer percent, e.g. 100
   runner: boolean;
   use_tp2: boolean;
+  /** "trail" (high-water-mark trailing stop), "be_hold" (rides to TP2/
+   *  breakeven-stop/EOD, no trail), or "none" (original pre-TP1 hard stop,
+   *  no BE floor) — see profiles.py's describe_profile(). */
+  runner_mode?: 'trail' | 'be_hold' | 'none';
   risk_level: 'Low' | 'Medium' | 'High' | 'Medium-High' | 'Custom';
   vix_max: number;
   breakout_limit_min: number;
@@ -72,7 +90,6 @@ export interface StrategyProfile {
 export type OtmFibLevel = '1.0' | '1.618' | '2.618';
 
 export interface ExitOverrides {
-  consol_exit: boolean;
   volume_exit: boolean;
 }
 
@@ -93,8 +110,17 @@ export interface StrategyConfig {
   smart_contracts: boolean;
   debug_mode: boolean;
   confirm_entry: boolean;
+  // Explicit link to this strategy's paper/live counterpart (symmetric —
+  // kept in sync both ways by the backend). When set, a signal for this
+  // ticker/direction won't pause-for-confirmation against the paired
+  // sibling; see ORBEngine._find_ticker_conflict.
+  paired_strategy_id?: string | null;
   has_position?: boolean;
   qty_remaining?: number | null;
+  // True when the bulk pause-all kill switch (not a manual per-strategy
+  // toggle) is the reason this config is inactive — lets "resume" bring
+  // back only what the switch itself paused. See POST /strategy/configs/pause-all.
+  paused_by_kill_switch?: boolean;
 }
 
 export type PendingConfirmationStatus = 'PENDING' | 'APPROVED' | 'SKIPPED' | 'EXPIRED';
@@ -108,6 +134,10 @@ export interface PendingConfirmation {
   contract_symbol: string;
   strike: number;
   qty: number;
+  /** This strategy's OWN account mode — distinct from
+   *  conflict_context.paper_mode below, which describes a DIFFERENT
+   *  (conflicting) position's mode. */
+  paper_mode: boolean;
   trigger_price: number;
   entry_estimate: number;
   confidence: number;   // 0-100
@@ -124,6 +154,19 @@ export interface PendingConfirmation {
   expires_at: string;
   created_at: string;
   resolved_at: string | null;
+  /** Set only when this pause was triggered by another engine already
+   *  holding the same ticker+direction open (not the opt-in confirm_entry
+   *  toggle) — describes that other position so the modal can explain why. */
+  conflict_context: {
+    ticker: string;
+    direction: 'CALL' | 'PUT';
+    profile: ProfileKey;
+    strategy_id: string | null;
+    strategy_name: string | null;
+    paper_mode: boolean;
+    entry_premium: number | null;
+    entry_time: string | null;
+  } | null;
 }
 
 /** Live price message shape pushed over /ws/strategy/<id>/live while a
@@ -164,9 +207,15 @@ export interface ImmediateTradeByTickerRequest {
   qty?: number;
   profile?: ProfileKey;
   paper_mode: boolean;
-  consol_exit?: boolean;
   volume_exit?: boolean;
   max_loss_pct?: number; // MANUAL profile: decimal (e.g. 0.30 = 30% SL)
+  /** Stop type — null/omitted means Hard Stop, 5|10 arms the matching
+   *  grace-timer window (see exit_manager.py's sl_grace_* fields). */
+  sl_grace_minutes?: 5 | 10 | null;
+  /** Blind Entry confirmation — set true on retry after a "stream_unavailable"
+   *  response to skip the backend's 8s websocket-tick wait and enter off the
+   *  last REST-polled quote the user already confirmed. */
+  bypass_stream_check?: boolean;
 }
 
 /** An open position from a ticker-based immediate trade engine. */
@@ -218,7 +267,15 @@ export interface StrategyPosition {
   tp2_hit?: boolean;
   be_stop_active?: boolean;
   runner_trail?: number;
+  runner_mode?: 'trail' | 'be_hold' | 'none';
   fib_levels?: FibLevels;
+  /** False for a 1-contract entry regardless of profile — TP2 is never
+   *  reachable (TP1 always closes the sole contract in full). See
+   *  ExitManager.__init__ / _engine_position_response. */
+  use_tp2?: boolean;
+  /** Current stop-type configuration — see ExitManager.to_dict(). */
+  sl_grace_enabled?: boolean;
+  sl_grace_minutes?: number | null;
 }
 
 export interface ExitStage {
@@ -269,6 +326,14 @@ export interface ORBTrade {
   account_balance_before?: number | null;
   account_balance_after?: number | null;
   account_balance_change?: number | null;
+  // ── Live unrealized P&L — only present while the row is still open
+  //    (exit_time is null). Computed at response time from a live quote,
+  //    never written to the DB, and distinct from pnl/pnl_pct above (which
+  //    stay null until a real exit/partial-close event). See
+  //    api/routes/strategy_routes.py's _enrich_open_trades_with_live_pnl.
+  live_price?: number;
+  live_pnl?: number;
+  live_pnl_pct?: number;
 }
 
 export interface StrategyStats {
@@ -327,12 +392,21 @@ export interface LiveOptionPrice {
 
 export interface AlpacaAccount {
   equity: number;
+  /** Start-of-day equity baseline — lets the client recompute today's P&L
+   *  against a live-derived equity instead of only this endpoint's own. */
+  last_equity?: number;
   cash: number;
   buying_power: number;
   day_trade_count: number;
   pnl_today: number;
   pnl_today_pct: number;
   paper_mode: boolean;
+  /** Non-marginable buying power — the account's actual unlevered spending
+   *  power, distinct from buying_power (which reflects margin). */
+  available_balance?: number;
+  options_buying_power?: number;
+  long_market_value?: number;
+  short_market_value?: number;
 }
 
 export interface ORBSession {

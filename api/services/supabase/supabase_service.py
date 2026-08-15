@@ -1081,6 +1081,16 @@ class SupabaseService:
                 update_data['entry_date'] = datetime.now(timezone.utc).isoformat()
                 if position_size is not None:
                     update_data['position_size'] = position_size
+                # Fresh entry cycle — reset entered-phase alert latches so a
+                # contract that's re-entered after a prior exit (same row,
+                # upserted on user_id+contract_symbol) gets its alerts again
+                # instead of staying suppressed by flags latched last time.
+                for flag_col in (
+                    'notified_entered_gain_25', 'notified_entered_loss_25',
+                    'notified_entered_gain_50', 'notified_entered_loss_50',
+                    'notified_entered_gain_100', 'notified_entered_loss_100',
+                ):
+                    update_data[flag_col] = False
             
             if status == 'exited' and exit_price is not None:
                 update_data['exit_price'] = exit_price
@@ -1111,7 +1121,52 @@ class SupabaseService:
             return self._handle_database_error(
                 e, f"update_contract_status for contract {contract_id}"
             )
-    
+
+    def update_contract_alert_thresholds(
+        self, user_id: str, contract_id: str, thresholds: Dict[str, Optional[float]]
+    ) -> Dict[str, Any]:
+        """
+        Set per-contract entered-position alert threshold overrides
+        (alert_gain_25/50/100, alert_loss_25/50/100 on tracked_options_contracts).
+        Independent of status — can be set any time, before or after entry —
+        but only takes effect once the contract's status is 'entered' (see
+        OptionsContractMonitorService._check_and_notify's ENTERED_THRESHOLDS
+        branch). Passing null for a key resets that tier back to the default
+        (25/50/100).
+        """
+        allowed = {
+            "alert_gain_25", "alert_gain_50", "alert_gain_100",
+            "alert_loss_25", "alert_loss_50", "alert_loss_100",
+        }
+        update_data = {k: v for k, v in thresholds.items() if k in allowed}
+        if not update_data:
+            return {"success": False, "error": "No valid threshold fields provided"}
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        try:
+            result = (
+                self.client.table("tracked_options_contracts")
+                .update(update_data)
+                .eq("id", contract_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if result.data and len(result.data) > 0:
+                return {
+                    "success": True,
+                    "message": "Alert thresholds updated",
+                    "data": result.data[0],
+                }
+            return {"success": False, "error": "Contract not found or access denied"}
+        except Exception as e:
+            logger.error(
+                "Failed to update alert thresholds for contract %s: %s", contract_id, str(e),
+                exc_info=True,
+            )
+            return self._handle_database_error(
+                e, f"update_contract_alert_thresholds for contract {contract_id}"
+            )
+
     def delete_tracked_contract(self, user_id: str, contract_id: str) -> Dict[str, Any]:
         """
         Delete (untrack) an options contract for a user.
@@ -1223,6 +1278,47 @@ class SupabaseService:
             return result.data[0] if result.data else None
         except Exception as e:
             logger.error("save_contract_score failed: %s", str(e), exc_info=True)
+            return None
+
+    # ── Robinhood session persistence ────────────────────────────────────────
+    #
+    # See supabase/migrations/20260802_robinhood_session.sql for why this
+    # exists: robin_stocks pickles its session (access/refresh/device token)
+    # to the container's local disk, which Railway wipes on every restart,
+    # forcing a fresh SMS challenge each time. robinhood_service.py round-trips
+    # that same pickle's bytes through this singleton row so the device_token
+    # survives restarts.
+
+    def save_robinhood_session(self, pickle_b64: str) -> bool:
+        """Upsert the single robinhood_sessions row with fresh pickle bytes."""
+        try:
+            self.client.table("robinhood_sessions").upsert({
+                "id": 1,
+                "pickle_b64": pickle_b64,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+            return True
+        except Exception as e:
+            # Non-fatal: the process falls back to a fresh login/MFA flow,
+            # same as before this persistence existed.
+            logger.warning("save_robinhood_session failed: %s", str(e))
+            return False
+
+    def get_robinhood_session(self) -> Optional[str]:
+        """Return the persisted pickle's base64 bytes, or None if never saved."""
+        try:
+            result = (
+                self.client.table("robinhood_sessions")
+                .select("pickle_b64")
+                .eq("id", 1)
+                .limit(1)
+                .execute()
+            )
+            if result.data:
+                return result.data[0].get("pickle_b64")
+            return None
+        except Exception as e:
+            logger.warning("get_robinhood_session failed: %s", str(e))
             return None
 
 

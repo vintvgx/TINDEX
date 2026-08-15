@@ -295,49 +295,79 @@ class SignalIngestService:
         entry_price = prices.get(contract_symbol)
 
         representative_id: Optional[str] = None
+        insert_failures = 0
         for user_id in follower_ids:
-            dup = await loop.run_in_executor(None, lambda uid=user_id: (
-                self.supabase.table("tracked_options_contracts")
-                .select("id")
-                .eq("contract_symbol", contract_symbol)
-                .eq("tracked_from_source", "social_signal")
-                .eq("user_id", uid)
-                .gte("created_at", today)
-                .limit(1)
-                .execute()
-            ))
-            if dup.data:
-                if representative_id is None:
-                    representative_id = dup.data[0]["id"]
-                continue
+            try:
+                dup = await loop.run_in_executor(None, lambda uid=user_id: (
+                    self.supabase.table("tracked_options_contracts")
+                    .select("id")
+                    .eq("contract_symbol", contract_symbol)
+                    .eq("tracked_from_source", "social_signal")
+                    .eq("user_id", uid)
+                    .gte("created_at", today)
+                    .limit(1)
+                    .execute()
+                ))
+                if dup.data:
+                    if representative_id is None:
+                        representative_id = dup.data[0]["id"]
+                    continue
 
-            insert_row = {
-                "user_id": user_id,
-                "ticker": contract.ticker,
-                "contract_symbol": contract_symbol,
-                "option_type": contract.option_type,
-                "strike": contract.strike,
-                "expiration_date": contract.expiry,
-                "tracking_snapshot": {
-                    "source": "social_signal",
-                    "parser": "text",
-                    "account_handle": account["handle"],
-                    "tweet_id": tweet.tweet_id,
-                    "tweet_url": f"https://x.com/{account['handle']}/status/{tweet.tweet_id}",
-                    "parse_method": contract.method,
-                },
-                "status": "tracking",
-                "tracked_from_source": "social_signal",
-                "tracking_reason": f"@{account['handle']}: \"{tweet.text[:200]}\"",
-                "tracked_entry_price": entry_price,
-            }
-            res = await loop.run_in_executor(None, lambda row=insert_row: (
-                self.supabase.table("tracked_options_contracts").insert(row).execute()
-            ))
-            if res.data and representative_id is None:
-                representative_id = res.data[0]["id"]
+                insert_row = {
+                    "user_id": user_id,
+                    "ticker": contract.ticker,
+                    "contract_symbol": contract_symbol,
+                    "option_type": contract.option_type,
+                    "strike": contract.strike,
+                    "expiration_date": contract.expiry,
+                    "tracking_snapshot": {
+                        "source": "social_signal",
+                        "parser": "text",
+                        "account_handle": account["handle"],
+                        "tweet_id": tweet.tweet_id,
+                        "tweet_url": f"https://x.com/{account['handle']}/status/{tweet.tweet_id}",
+                        "parse_method": contract.method,
+                    },
+                    "status": "tracking",
+                    "tracked_from_source": "social_signal",
+                    "tracking_reason": f"@{account['handle']}: \"{tweet.text[:200]}\"",
+                    "tracked_entry_price": entry_price,
+                }
+                res = await loop.run_in_executor(None, lambda row=insert_row: (
+                    self.supabase.table("tracked_options_contracts").insert(row).execute()
+                ))
+                if res.data:
+                    if representative_id is None:
+                        representative_id = res.data[0]["id"]
+                else:
+                    # No exception, but nothing came back either (e.g. an RLS
+                    # policy silently blocking the row read-back) — previously
+                    # indistinguishable from success since neither path logged
+                    # anything, so a persistently-failing insert here looked
+                    # identical to "notifications just haven't fired yet."
+                    insert_failures += 1
+                    logger.error(
+                        "SignalIngestService: tracked_options_contracts insert for "
+                        "user %s / %s returned no data (no exception, but nothing "
+                        "written) — %s", user_id, contract_symbol, account["handle"],
+                    )
+            except Exception as e:
+                insert_failures += 1
+                msg = (f"tracked_options_contracts insert failed for user {user_id} / "
+                       f"{contract_symbol}: {e}")
+                logger.error("SignalIngestService: %s", msg)
+                self.last_account_errors[account["id"]] = msg
 
         if representative_id is None:
+            if insert_failures == 0:
+                # Shouldn't happen — follower_ids was non-empty, so every
+                # iteration either hit the dup path (setting representative_id)
+                # or fell into one of the two logged failure branches above.
+                logger.warning(
+                    "SignalIngestService: %s tracked-contract creation for %s "
+                    "produced no rows and no errors — unexpected",
+                    account["handle"], contract_symbol,
+                )
             return None
 
         from services.strategy.notifier import StrategyNotifier

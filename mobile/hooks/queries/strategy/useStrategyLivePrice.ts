@@ -9,11 +9,66 @@ export interface LivePriceData {
   pnl:           number;
   pnl_pct:       number;
   qty_remaining: number;
+  /** mid_price * qty_remaining * 100 — the position's live mark-to-market
+   *  value, already computed server-side on every tick (orb_engine.py's
+   *  broadcast_price_update). Lets the client derive live account equity
+   *  without a separate REST poll. */
+  market_value:  number;
   tp1_hit:       boolean;
   tp2_hit:       boolean;
   hard_stop:     number;
   tp1:           number;
   tp2:           number;
+  /** Live ratcheting trail floor — only meaningful once `runner_mode ===
+   *  "trail"` and tp1_hit; the runner force-sells if mid_price dips to/below
+   *  this. Recomputed every tick server-side (ExitManager.evaluate()), only
+   *  ever moves up. */
+  runner_trail?: number;
+  /** True while a SL_5/SL_10 (or REVERSAL) grace window is open — the
+   *  premium is at/below hard_stop but hasn't been force-sold yet. See
+   *  exit_manager.py's sl_grace_enabled. */
+  sl_grace_active?:      boolean;
+  /** Absolute ISO timestamp the grace window force-sells at, if still below
+   *  the stop then. Always compute a countdown as `deadline - Date.now()`
+   *  every render — never run an independent local timer — so the displayed
+   *  countdown can't drift from the backend's own clock. */
+  sl_grace_deadline?:    string | null;
+  /** Absolute ISO timestamp: if the premium is currently recovered above the
+   *  stop, this is when that recovery will have held long enough (60s) to
+   *  cancel the grace window. Null while price is still at/below the stop. */
+  sl_recovery_deadline?: string | null;
+  /** False for a 1-contract entry regardless of profile — TP2 is never
+   *  reachable. See common/types/strategy.ts's StrategyPosition.use_tp2. */
+  use_tp2?: boolean;
+  /** Current stop-type CONFIGURATION (Hard Stop vs SL timer, and which
+   *  duration) — distinct from sl_grace_active above, which is only true
+   *  while a grace window is actively counting down. See
+   *  ExitManager.to_dict(). */
+  sl_grace_enabled?: boolean;
+  sl_grace_minutes?: number | null;
+  /** Current runner/cascade CONFIGURATION for this open trade (not just the
+   *  profile default) — see exit_manager.py's to_dict(). Lets EditExitsModal
+   *  pre-select the toggle to what's actually in effect right now. */
+  runner_mode?: 'trail' | 'be_hold' | 'none';
+  cascade_enabled?: boolean;
+  // ── Simulation-only fields (all optional — absent on a real live position) ──
+  sim?:               boolean;
+  sim_tick?:          number;
+  sim_total?:         number;
+  sim_scenario?:      string;
+  sim_leg?:           'call' | 'put';
+  call_pnl?:          number;
+  /** Synthetic IWM underlying price mapped from the option premium — see
+   *  api/services/strategy/simulation.py's _underlying_at. Feeds the
+   *  simulation chart's candles/reference lines, which plot on a real
+   *  price axis rather than the raw option premium. */
+  underlying_price?:  number;
+  entry_underlying?:  number;
+  tp1_underlying?:    number;
+  tp2_underlying?:    number;
+  /** Recomputed every tick — moves to entry_underlying once TP1 fires
+   *  (breakeven stop), same as hard_stop does on the premium side. */
+  stop_underlying?:   number;
 }
 
 interface UseStrategyLivePriceResult {
@@ -24,6 +79,11 @@ interface UseStrategyLivePriceResult {
   pendingPriceData:   PendingPriceUpdate | null;
   connected:          boolean;
   disconnect:         () => void;
+  /** Merge fields into the current WS snapshot immediately (e.g. right after
+   *  a stop/TP edit succeeds server-side) instead of waiting for the next
+   *  "price_update" tick to catch up — the server confirms the edit over
+   *  REST well before the next tick would otherwise reflect it. */
+  patchData:          (patch: Partial<LivePriceData>) => void;
 }
 
 /**
@@ -144,5 +204,9 @@ export function useStrategyLivePrice(
     // re-runs exactly when the target socket changes (no reconnect storm).
   }, [connect, disconnect, enabled, wsUrl]);
 
-  return { data, pendingPriceData, connected, disconnect };
+  const patchData = useCallback((patch: Partial<LivePriceData>) => {
+    setData(prev => (prev ? { ...prev, ...patch } : prev));
+  }, []);
+
+  return { data, pendingPriceData, connected, disconnect, patchData };
 }

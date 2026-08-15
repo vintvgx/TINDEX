@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   View, Text, ScrollView, SafeAreaView, TouchableOpacity,
   StyleSheet, ActivityIndicator, Alert, Modal, TextInput,
@@ -14,6 +14,7 @@ import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccount
 import { useCreateStrategyConfig } from '@/hooks/mutations/strategy/useCreateStrategyConfig';
 import { useUpdateStrategyConfig } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
 import { useDeleteStrategyConfig } from '@/hooks/mutations/strategy/useDeleteStrategyConfig';
+import { usePauseAllStrategies, type KillSwitchScope } from '@/hooks/mutations/strategy/usePauseAllStrategies';
 import { TradeDaysSelector } from '@/common/components/strategy/TradeDaysSelector';
 import { ProfileCard } from '@/common/components/strategy/ProfileCard';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
@@ -22,14 +23,17 @@ import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/comp
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
 import { StrategyDetailModal } from '@/common/components/strategy/StrategyDetailModal';
+import { PROFILE_EMOJI } from '@/common/components/strategy/PositionCard';
+import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
+import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { OrbHubHealthBanner } from '@/common/components/strategy/OrbHubHealthBanner';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
-import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
+import { positionHideKey } from '@/lib/positionHideKey';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
-import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, ImmediatePosition, LiveOptionPrice, ExitOverrides, ORBTrade } from '@/common/types/strategy';
+import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, LiveOptionPrice, ExitOverrides, ORBTrade } from '@/common/types/strategy';
 import { formatContractSymbolShort } from '@/lib/formatContract';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -65,6 +69,9 @@ const PROFILE_COLORS: Record<ProfileKey, string> = {
   REVERSAL:    '#FF453A',
   CUSTOM:      '#A855F7',
   SCALPER:     '#22C55E',
+  SCALPER_SMALL: '#22C55E',
+  SCALPER_LARGE:  '#22C55E',
+  SCALPER_XL:     '#22C55E',
   PRECISION:   '#84CC16',
   MOMENTUM:    '#F59E0B',
   CONVICTION:    '#F97316',
@@ -72,6 +79,9 @@ const PROFILE_COLORS: Record<ProfileKey, string> = {
   OTM_RUNNER:    '#8B5CF6',
   OTM_CONVICTION:'#EC4899',
   MANUAL:        '#94A3B8',
+  NO_STOP_LOSS:  '#64748B',
+  SL_5:          '#FF9F0A',
+  SL_10:         '#FF7A00',
 };
 
 const DAY_LABELS = ['M', 'T', 'W', 'T', 'F'];
@@ -105,8 +115,8 @@ type FormState = {
   otm_fib_level:          OtmFibLevel;
   smart_contracts:        boolean;
   confirm_entry:          boolean;
-  consol_exit:            boolean;
   volume_exit:            boolean;
+  paired_strategy_id:     string | null;
 };
 
 const DEFAULT_FORM: FormState = {
@@ -123,8 +133,8 @@ const DEFAULT_FORM: FormState = {
   otm_fib_level:          '1.0',
   smart_contracts:        false,
   confirm_entry:          false,
-  consol_exit:            false,
   volume_exit:            false,
+  paired_strategy_id:     null,
 };
 
 function configToForm(cfg: StrategyConfig): FormState {
@@ -142,8 +152,8 @@ function configToForm(cfg: StrategyConfig): FormState {
     otm_fib_level:          cfg.otm_fib_level ?? '1.0',
     smart_contracts:        cfg.smart_contracts ?? false,
     confirm_entry:          cfg.confirm_entry ?? false,
-    consol_exit:            cfg.exit_overrides?.consol_exit ?? false,
     volume_exit:            cfg.exit_overrides?.volume_exit ?? false,
+    paired_strategy_id:     cfg.paired_strategy_id ?? null,
   };
 }
 
@@ -158,12 +168,12 @@ interface StrategyScreenProps {
 export default function StrategyScreen({ embedded = false }: StrategyScreenProps) {
   const colors  = useThemeColors();
   const toast   = useToast();
+  const tabBarHeight = useFloatingTabBarHeight();
 
   const { data: configs,  isLoading: configsLoading  } = useStrategyConfigs();
   const { data: profiles, isLoading: profilesLoading } = useStrategyProfiles();
   const { data: accounts } = useAlpacaBothAccounts(!!(configs && configs.length > 0));
   const { data: monitoringState } = useORBMonitoringState();
-  const { data: immediatePositions } = useImmediatePositions();
   const { data: recentTrades } = useStrategyTrades({ limit: 50 });
 
   // Decoupled LIVE/PAPER view — everything below (positions, strategies,
@@ -195,10 +205,6 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
     () => (configs ?? []).filter(c => c.paper_mode === wantPaper),
     [configs, wantPaper],
   );
-  const modeImmediatePositions = useMemo(
-    () => (immediatePositions ?? []).filter(p => p.paper_mode === wantPaper),
-    [immediatePositions, wantPaper],
-  );
   const modeTodayCompletedTrades = useMemo(
     () => todayCompletedTrades.filter(t => (t.paper_mode ?? false) === wantPaper),
     [todayCompletedTrades, wantPaper],
@@ -225,17 +231,8 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
     );
   }, [modeTodayCompletedTrades, liveStrategyConfigs]);
 
-  const completedImmediateTrades = useMemo<ORBTrade[]>(() => {
-    const activeContracts = new Set(modeImmediatePositions.map(p => p.contract));
-    return modeTodayCompletedTrades.filter(
-      t => t.trade_type === 'IMMEDIATE' && !activeContracts.has(t.contract_symbol)
-    );
-  }, [modeTodayCompletedTrades, modeImmediatePositions]);
-
-  const hasLiveActivity =
-    liveStrategyConfigs.length > 0 || modeImmediatePositions.length > 0;
-  const hasCompletedToday =
-    completedStrategyTrades.length > 0 || completedImmediateTrades.length > 0;
+  const hasLiveActivity = liveStrategyConfigs.length > 0;
+  const hasCompletedToday = completedStrategyTrades.length > 0;
 
   const { mutate: createConfig } = useCreateStrategyConfig();
   const { mutate: updateConfig } = useUpdateStrategyConfig();
@@ -253,6 +250,29 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
   const openCreate = () => { setEditingConfig(null); setForm(DEFAULT_FORM); setModalVisible(true); };
   const openEdit   = (cfg: StrategyConfig) => { setEditingConfig(cfg); setForm(configToForm(cfg)); setModalVisible(true); };
   const openDetail = (cfg: StrategyConfig) => { setDetailConfig(cfg); setDetailVisible(true); };
+
+  // detailConfig is a snapshot taken when the modal opened — re-point it at
+  // the latest matching row whenever `configs` refetches (e.g. right after
+  // the Active toggle inside the modal itself PATCHes and invalidates the
+  // query), so the modal — and the card behind it once closed — shows the
+  // update immediately instead of the stale value until reopened.
+  useEffect(() => {
+    if (!detailConfig || !configs) return;
+    const fresh = configs.find(c => c.id === detailConfig.id);
+    if (fresh && fresh !== detailConfig) setDetailConfig(fresh);
+  }, [configs, detailConfig]);
+
+  // Candidates for "Paired Strategy": same ticker, the opposite paper/live
+  // mode, excluding the config being edited — this is what
+  // ORBEngine._find_ticker_conflict treats as an intentional mirrored pair.
+  const pairOptions = useMemo(() => {
+    const formPaperMode = form.mode === 'paper';
+    return (configs ?? []).filter(c =>
+      c.id !== editingConfig?.id &&
+      c.ticker === form.ticker &&
+      c.paper_mode !== formPaperMode
+    );
+  }, [configs, editingConfig, form.mode, form.ticker]);
 
   const handleDelete = (cfg: StrategyConfig) => {
     const label = cfg.strategy_name || `${cfg.ticker} ${cfg.profile.replace('_', ' ')}`;
@@ -302,7 +322,7 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
       toast.error('Select at least one trade day');
       return;
     }
-    const exitOverrides: ExitOverrides = { consol_exit: form.consol_exit, volume_exit: form.volume_exit };
+    const exitOverrides: ExitOverrides = { volume_exit: form.volume_exit };
     const payload = {
       strategy_name:          form.strategy_name.trim(),
       ticker:                 form.ticker,
@@ -316,6 +336,7 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
       otm_fib_level:          form.otm_fib_level,
       smart_contracts:        form.smart_contracts,
       confirm_entry:          form.confirm_entry,
+      paired_strategy_id:     form.paired_strategy_id,
       ...modeToConfig(form.mode),
     };
     setSaving(true);
@@ -366,7 +387,7 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
         </TouchableOpacity>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight }]}>
 
         <OrbHubHealthBanner colors={colors} />
 
@@ -393,16 +414,22 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
           </View>
         )}
 
+        {/* Kill switch — spans both accounts regardless of the LIVE/PAPER tab above */}
+        {configs && configs.length > 0 && (
+          <KillSwitchPanel configs={configs} colors={colors} toast={toast} />
+        )}
+
         {/* ── LIVE POSITIONS ─────────────────────────────────────────────────── */}
+        {/* Strategy view shows only saved-strategy positions — immediate
+            (manual/ad-hoc) trades belong on Dashboard/Live Positions, not here. */}
         {hasLiveActivity && (
           <>
             <SectionHeader
-              title={`Open Positions (${liveStrategyConfigs.length + modeImmediatePositions.length})`}
+              title={`Open Positions (${liveStrategyConfigs.length})`}
               accent
               colors={colors}
             />
 
-            {/* Strategy live positions */}
             {liveStrategyConfigs.map(cfg => (
               <StrategyCard
                 key={cfg.id}
@@ -412,11 +439,6 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
                 onPress={() => openDetail(cfg)}
               />
             ))}
-
-            {/* Immediate positions */}
-            {modeImmediatePositions.map(pos => (
-              <ImmediatePositionCard key={pos.strategy_id} position={pos} colors={colors} />
-            ))}
           </>
         )}
 
@@ -425,9 +447,6 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
           <>
             <SectionHeader title="Today's Results" colors={colors} />
             {completedStrategyTrades.map(trade => (
-              <CompletedTradeCard key={trade.id} trade={trade} colors={colors} />
-            ))}
-            {completedImmediateTrades.map(trade => (
               <CompletedTradeCard key={trade.id} trade={trade} colors={colors} />
             ))}
           </>
@@ -493,6 +512,7 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
         form={form}
         profiles={profiles ?? []}
         tickerOptions={tickerOptions}
+        pairOptions={pairOptions}
         saving={saving}
         colors={colors}
         onClose={() => setModalVisible(false)}
@@ -536,13 +556,20 @@ interface StrategyCardProps {
 }
 
 function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) {
-  const mode         = getMode(config);
-  const modeMeta     = MODE_META[mode];
   const profileColor = PROFILE_COLORS[config.profile] ?? colors.accent;
   const activeDays   = config.trade_days ?? [];
   const hasPosition  = config.has_position === true;
   const qtyContracts = config.custom_thresholds?.qty_contracts
     ?? profiles.find(p => p.key === config.profile)?.thresholds.qty_contracts;
+  const effectiveThresholds = config.custom_thresholds
+    ?? profiles.find(p => p.key === config.profile)?.thresholds;
+  const runnerMode = effectiveThresholds?.runner_mode ?? 'trail';
+  const hasCascade = (qtyContracts ?? 0) > 1 && (effectiveThresholds?.cascade_close_pct ?? 0) > 0;
+
+  // Display only — too easy to fat-finger a real trading toggle sitting in
+  // the corner of a scrolling list. The actual switch lives in
+  // StrategyDetailModal, reached by tapping into the card.
+  const activeColor = config.active ? '#30D158' : '#8E8E93';
 
   const queryClient = useQueryClient();
   const onPositionClosed = useCallback(() => {
@@ -550,13 +577,14 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
     queryClient.invalidateQueries({ queryKey: ['strategy-trades'] });
   }, [queryClient]);
 
-  const { data: live, connected: streaming } = useStrategyLivePrice(
+  const { data: live, connected: streaming, patchData } = useStrategyLivePrice(
     config.id,
     hasPosition,
     onPositionClosed,
   );
   const [exitOpen, setExitOpen]   = useState(false);
   const [expanded, setExpanded]   = useState(false);
+  const [infoVisible, setInfoVisible] = useState(false);
 
   const toggleExpanded = useCallback(() => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -587,9 +615,15 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
               </Text>
             ) : null}
           </View>
-          <View style={[styles.modeBadge, { backgroundColor: modeMeta.color + '22' }]}>
-            <View style={[styles.modeDot, { backgroundColor: modeMeta.color }]} />
-            <Text style={[styles.modeBadgeText, { color: modeMeta.color }]}>{modeMeta.label}</Text>
+          {/* Active/Not Active — read-only here; toggle it from the detail
+              modal (tap the card) instead of a one-tap badge in a scrolling
+              list. Paper/Live is already conveyed by which account-mode tab
+              is selected above, so this spot no longer repeats it. */}
+          <View style={[styles.modeBadge, { backgroundColor: activeColor + '22' }]}>
+            <View style={[styles.modeDot, { backgroundColor: activeColor }]} />
+            <Text style={[styles.modeBadgeText, { color: activeColor }]}>
+              {config.active ? 'Active' : 'Not Active'}
+            </Text>
           </View>
         </View>
 
@@ -600,11 +634,13 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
           {config.bypass_breakout_window && <MetaChip label="No Window" color="#FF9F0A" />}
         </View>
 
-        {/* Row 3: contracts + confirm-entry flags */}
+        {/* Row 3: contracts + exit style + confirm-entry flags */}
         <View style={styles.stratMeta}>
           {qtyContracts != null && (
             <MetaChip label={`${qtyContracts} contract${qtyContracts === 1 ? '' : 's'}`} color={colors.tabBarInactive} />
           )}
+          <MetaChip label={RUNNER_MODE_LABEL[runnerMode]} color="#A855F7" />
+          {hasCascade && <MetaChip label="Cascade" color="#A855F7" />}
           <MetaChip
             label={config.confirm_entry ? 'Confirm Entry' : 'Auto Entry'}
             color={config.confirm_entry ? '#30D158' : colors.tabBarInactive}
@@ -627,6 +663,18 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
                 <View style={[styles.modeDot, {
                   backgroundColor: streaming ? colors.success : colors.tabBarInactive,
                 }]} />
+                {/* Profile badge — tap opens the Profile Guide pre-jumped to
+                    this trade's profile (initialKey), same pattern as the
+                    shared LivePositionPanel used on Live Positions/Dashboard. */}
+                <TouchableOpacity
+                  onPress={(e) => { e.stopPropagation(); setInfoVisible(true); }}
+                  hitSlop={6}
+                  activeOpacity={0.7}
+                  style={styles.profileBadge}
+                >
+                  <Text style={styles.profileEmoji}>{PROFILE_EMOJI[config.profile] ?? '⚙️'}</Text>
+                  <Ionicons name="information-circle-outline" size={13} color={colors.tabBarInactive} />
+                </TouchableOpacity>
                 <Text style={[styles.liveLabel, { color: streaming ? colors.success : colors.tabBarInactive }]}>
                   {streaming ? 'LIVE' : 'CONNECTING'}
                 </Text>
@@ -713,6 +761,11 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
                   entry_premium={live.entry_premium}
                   tp1_hit={live.tp1_hit}
                   tp2_hit={live.tp2_hit}
+                  qty_remaining={live.qty_remaining}
+                  runner_mode={live.runner_mode}
+                  cascade_enabled={live.cascade_enabled}
+                  hideKey={positionHideKey({ strategy_id: config.id, contract: live.contract, entry_premium: live.entry_premium })}
+                  onUpdated={patchData}
                   style={{ flex: 1 }}
                 />
               )}
@@ -739,6 +792,13 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
         paperMode={config.paper_mode}
         onClose={() => setExitOpen(false)}
       />
+
+      <ProfileGuideModal
+        visible={infoVisible}
+        onClose={() => setInfoVisible(false)}
+        colors={colors}
+        initialKey={config.profile}
+      />
     </TouchableOpacity>
   );
 }
@@ -760,143 +820,6 @@ function PositionStopBar({ live, colors }: { live: LiveOptionPrice; colors: any 
           <Text style={[styles.stopValue, { color: colors.tabBarInactive }]}>${s.value.toFixed(2)}</Text>
         </View>
       ))}
-    </View>
-  );
-}
-
-// ── ImmediatePositionCard ──────────────────────────────────────────────────────
-
-function ImmediatePositionCard({ position, colors }: { position: ImmediatePosition; colors: any }) {
-  const { data: live, connected } = useStrategyLivePrice(position.strategy_id, true);
-  const [exitOpen, setExitOpen]   = useState(false);
-  const [expanded, setExpanded]   = useState(false);
-
-  const toggleExpanded = useCallback(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpanded(v => !v);
-  }, []);
-
-  const pnl    = live?.pnl     ?? position.pnl     ?? 0;
-  const pnlPct = live?.pnl_pct ?? position.pnl_pct ?? 0;
-  const mid    = live?.mid_price ?? position.mid_price;
-  const qty    = live?.qty_remaining ?? position.qty_remaining;
-  const tp1    = live?.tp1_hit ?? position.tp1_hit;
-  const tp2    = live?.tp2_hit ?? position.tp2_hit;
-
-  const dirColor  = position.direction === 'CALL' ? colors.success : colors.error;
-  const pnlColor  = pnl >= 0 ? colors.success : colors.error;
-  const modeColor = position.paper_mode ? '#FF9F0A' : colors.success;
-
-  return (
-    <View style={[styles.stratCard, { backgroundColor: colors.card, borderColor: dirColor + '44' }]}>
-      <View style={[styles.stratAccent, { backgroundColor: dirColor }]} />
-      <View style={styles.stratBody}>
-        <View style={styles.stratRow}>
-          <View style={styles.stratTitleGroup}>
-            <Text style={[styles.stratTicker, { color: colors.text }]}>
-              {position.ticker}{' '}
-              <Text style={{ color: dirColor, fontSize: 14 }}>{position.direction}</Text>
-            </Text>
-            <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>
-              {formatContractSymbolShort(position.contract)}
-            </Text>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <MetaChip label="IMMED" color="#F59E0B" />
-            <View style={[styles.modeBadge, { backgroundColor: modeColor + '22' }]}>
-              <View style={[styles.modeDot, { backgroundColor: modeColor }]} />
-              <Text style={[styles.modeBadgeText, { color: modeColor }]}>
-                {position.paper_mode ? 'Paper' : 'Live'}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={[styles.livePnlCard, { backgroundColor: colors.background, borderColor: dirColor + '33' }]}>
-          {/* Header row */}
-          <TouchableOpacity onPress={toggleExpanded} activeOpacity={0.7} style={styles.liveHeaderRow}>
-            <View style={styles.liveHeaderLeft}>
-              <View style={[styles.modeDot, { backgroundColor: connected ? colors.success : colors.tabBarInactive }]} />
-              <Text style={[styles.liveLabel, { color: connected ? colors.success : colors.tabBarInactive }]}>
-                {connected ? 'LIVE' : 'CONNECTING'}
-              </Text>
-              <MetaChip label={position.profile.replace('_', ' ')} color={PROFILE_COLORS[position.profile] ?? colors.accent} />
-            </View>
-            <View style={styles.liveHeaderRight}>
-              <Text style={[styles.livePnlValue, { color: pnlColor }]}>
-                {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
-              </Text>
-              <View style={[styles.pnlPctPill, { backgroundColor: pnlColor + '1A' }]}>
-                <Text style={[styles.pnlPctText, { color: pnlColor }]}>
-                  {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
-                </Text>
-              </View>
-              {mid != null && qty != null && (
-                <Text style={[styles.mktValText, { color: colors.tabBarInactive }]}>
-                  Mkt ${(mid * qty * 100).toFixed(2)}
-                </Text>
-              )}
-            </View>
-            <Ionicons
-              name={expanded ? 'chevron-up' : 'chevron-down'}
-              size={14}
-              color={colors.tabBarInactive}
-              style={{ marginLeft: 8 }}
-            />
-          </TouchableOpacity>
-
-          <View style={styles.liveStats}>
-            <LiveStat label="Entry" value={position.entry_premium != null ? `$${position.entry_premium.toFixed(2)}` : '—'} colors={colors} />
-            <LiveStat label="Price" value={mid != null ? `$${mid.toFixed(2)}` : '—'} colors={colors} highlight />
-            <LiveStat label="Qty"   value={String(qty)}  colors={colors} />
-          </View>
-
-          {(tp1 || tp2) && (
-            <View style={styles.tpRow}>
-              {tp1 && <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}><Text style={[styles.tpBadgeText, { color: colors.success }]}>TP1 ✓</Text></View>}
-              {tp2 && <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}><Text style={[styles.tpBadgeText, { color: colors.success }]}>TP2 ✓</Text></View>}
-            </View>
-          )}
-
-          {expanded && live && <LivePositionDetail live={live} colors={colors} />}
-
-          <View style={styles.liveActionsRow}>
-            {live && (
-              <EditExitsButton
-                mode="orb"
-                strategy_id={position.strategy_id}
-                ticker={position.ticker}
-                hard_stop={live.hard_stop}
-                tp1={live.tp1}
-                tp2={live.tp2}
-                entry_premium={live.entry_premium}
-                tp1_hit={live.tp1_hit}
-                tp2_hit={live.tp2_hit}
-                style={{ flex: 1 }}
-              />
-            )}
-            <TouchableOpacity
-              onPress={() => setExitOpen(true)}
-              activeOpacity={0.8}
-              style={[styles.exitBtn, { flex: 1, marginTop: 0, borderColor: colors.error + '55', backgroundColor: colors.error + '14' }]}
-            >
-              <Ionicons name="exit-outline" size={16} color={colors.error} />
-              <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-
-      <ExitTradeModal
-        visible={exitOpen}
-        colors={colors}
-        strategyId={position.strategy_id}
-        ticker={position.ticker}
-        contract={position.contract}
-        qtyRemaining={qty}
-        paperMode={position.paper_mode}
-        onClose={() => setExitOpen(false)}
-      />
     </View>
   );
 }
@@ -1042,6 +965,125 @@ function AccountBannerSide({ label, accentColor, account, colors }: AccountBanne
   );
 }
 
+// ── Kill switch ──────────────────────────────────────────────────────────────
+// Bulk pause/resume of new strategy entries, scoped to Paper/Live/Both. Only
+// blocks new entries (ORBEngine.calculate_orb gate) — never touches open
+// positions. See POST /strategy/configs/pause-all.
+
+const KILL_SCOPES: { key: KillSwitchScope; label: string }[] = [
+  { key: 'live',  label: 'Live' },
+  { key: 'paper', label: 'Paper' },
+  { key: 'all',   label: 'Live & Paper' },
+];
+
+const KillSwitchPanel = ({ configs, colors, toast }: {
+  configs: StrategyConfig[]; colors: any; toast: ReturnType<typeof useToast>;
+}) => {
+  const { mutate: pauseAll, isPending } = usePauseAllStrategies();
+  const [scope, setScope] = useState<KillSwitchScope>('all');
+
+  const inScope = useMemo(() => {
+    if (scope === 'all') return configs;
+    return configs.filter(c => c.paper_mode === (scope === 'paper'));
+  }, [configs, scope]);
+  const activeCount = inScope.filter(c => c.active).length;
+  const pausedByCount = inScope.filter(c => c.paused_by_kill_switch).length;
+
+  const scopeLabel = KILL_SCOPES.find(s => s.key === scope)!.label;
+
+  const handlePause = () => {
+    Alert.alert(
+      'Pause New Entries?',
+      `${scopeLabel} strategies will stop opening any new trades. Open positions are not affected.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Pause', style: 'destructive',
+          onPress: () => pauseAll({ scope, active: false }, {
+            onSuccess: (res) => toast.info(
+              res.strategy_ids.length > 0
+                ? `Paused ${res.strategy_ids.length} ${res.strategy_ids.length === 1 ? 'strategy' : 'strategies'}`
+                : 'Nothing to pause'
+            ),
+            onError: (err: Error) => toast.error(err.message),
+          }),
+        },
+      ]
+    );
+  };
+
+  const handleResume = () => {
+    pauseAll({ scope, active: true }, {
+      onSuccess: (res) => toast.info(
+        res.strategy_ids.length > 0
+          ? `Resumed ${res.strategy_ids.length} ${res.strategy_ids.length === 1 ? 'strategy' : 'strategies'}`
+          : 'Nothing to resume'
+      ),
+      onError: (err: Error) => toast.error(err.message),
+    });
+  };
+
+  return (
+    <View style={[styles.accountCard, { flexDirection: 'column', backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+        <Ionicons name="power-outline" size={15} color={colors.error} />
+        <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>Kill Switch</Text>
+      </View>
+
+      <View style={{ flexDirection: 'row', borderRadius: 10, borderWidth: 1, borderColor: colors.border, padding: 3, marginBottom: 10 }}>
+        {KILL_SCOPES.map(({ key, label }) => {
+          const active = scope === key;
+          return (
+            <TouchableOpacity
+              key={key}
+              onPress={() => setScope(key)}
+              style={{
+                flex: 1, alignItems: 'center', paddingVertical: 6, borderRadius: 8,
+                backgroundColor: active ? colors.accent + '22' : 'transparent',
+              }}
+            >
+              <Text style={{ fontSize: 12, fontWeight: active ? '700' : '500', color: active ? colors.accent : colors.tabBarInactive }}>
+                {label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <TouchableOpacity
+          onPress={handlePause}
+          disabled={isPending || activeCount === 0}
+          style={{
+            flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 10,
+            backgroundColor: colors.error + '18', borderWidth: 1, borderColor: colors.error + '40',
+            opacity: (isPending || activeCount === 0) ? 0.5 : 1,
+          }}
+        >
+          <Text style={{ color: colors.error, fontSize: 13, fontWeight: '700' }}>
+            Pause All{activeCount > 0 ? ` (${activeCount})` : ''}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={handleResume}
+          disabled={isPending || pausedByCount === 0}
+          style={{
+            flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 10,
+            backgroundColor: colors.success + '18', borderWidth: 1, borderColor: colors.success + '40',
+            opacity: (isPending || pausedByCount === 0) ? 0.5 : 1,
+          }}
+        >
+          {isPending ? <ActivityIndicator size="small" color={colors.success} /> : (
+            <Text style={{ color: colors.success, fontSize: 13, fontWeight: '700' }}>
+              Resume{pausedByCount > 0 ? ` (${pausedByCount})` : ''}
+            </Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+};
+
 // ── Small helpers ──────────────────────────────────────────────────────────────
 
 const MetaChip = ({ label, color }: { label: string; color: string }) => (
@@ -1085,6 +1127,7 @@ interface FormModalProps {
   form: FormState;
   profiles: StrategyProfile[];
   tickerOptions: string[];
+  pairOptions: StrategyConfig[];
   saving: boolean;
   colors: any;
   onClose: () => void;
@@ -1097,10 +1140,11 @@ const PRIMARY_PROFILES: ProfileKey[] = ['TREND_RIDER', 'RETESTER', 'REVERSAL'];
 const SECONDARY_PROFILES: ProfileKey[] = ['BULL_DOG', 'THUNDER_CAT', 'WOLF'];
 
 function StrategyFormModal({
-  visible, isEditing, form, profiles, tickerOptions, saving, colors,
+  visible, isEditing, form, profiles, tickerOptions, pairOptions, saving, colors,
   onClose, onPatch, onModeSelect, onSave,
 }: FormModalProps) {
   const [tickerOpen, setTickerOpen]       = useState(false);
+  const [pairOpen, setPairOpen]           = useState(false);
   const [scrollEnabled, setScrollEnabled] = useState(true);
   const [tab, setTab]                     = useState<'strategy' | 'immediate'>('strategy');
   const isSecondaryActive = SECONDARY_PROFILES.includes(form.profile) || form.profile === 'CUSTOM';
@@ -1219,6 +1263,63 @@ function StrategyFormModal({
                 );
               })}
             </View>
+
+            <SectionHeader title="Paired Strategy" colors={colors} />
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <ConfigRow label="Linked Config" colors={colors} last={!pairOpen}>
+                <TouchableOpacity
+                  onPress={() => pairOptions.length > 0 && setPairOpen(o => !o)}
+                  activeOpacity={0.7}
+                  disabled={pairOptions.length === 0}
+                  style={[styles.tickerSelect, { backgroundColor: colors.border, borderColor: colors.border }]}
+                >
+                  <Text style={[styles.tickerSelectText, { color: colors.text }]} numberOfLines={1}>
+                    {form.paired_strategy_id
+                      ? (pairOptions.find(o => o.id === form.paired_strategy_id)?.strategy_name || 'Linked')
+                      : (pairOptions.length > 0 ? 'None' : 'No match')}
+                  </Text>
+                  {pairOptions.length > 0 && (
+                    <Ionicons name={pairOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.tabBarInactive} />
+                  )}
+                </TouchableOpacity>
+              </ConfigRow>
+
+              {pairOpen && (
+                <View style={[styles.tickerMenu, { borderTopColor: colors.border }]}>
+                  <TouchableOpacity
+                    onPress={() => { onPatch('paired_strategy_id', null); setPairOpen(false); }}
+                    activeOpacity={0.7}
+                    style={[styles.tickerMenuItem, form.paired_strategy_id === null && { backgroundColor: colors.accent + '1A' }]}
+                  >
+                    <Text style={[styles.tickerMenuItemText, { color: form.paired_strategy_id === null ? colors.accent : colors.text, fontWeight: form.paired_strategy_id === null ? '700' : '500' }]}>
+                      None
+                    </Text>
+                    {form.paired_strategy_id === null && <Ionicons name="checkmark" size={16} color={colors.accent} />}
+                  </TouchableOpacity>
+                  {pairOptions.map(opt => {
+                    const selected = form.paired_strategy_id === opt.id;
+                    return (
+                      <TouchableOpacity
+                        key={opt.id}
+                        onPress={() => { onPatch('paired_strategy_id', opt.id); setPairOpen(false); }}
+                        activeOpacity={0.7}
+                        style={[styles.tickerMenuItem, selected && { backgroundColor: colors.accent + '1A' }]}
+                      >
+                        <Text style={[styles.tickerMenuItemText, { color: selected ? colors.accent : colors.text, fontWeight: selected ? '700' : '500' }]}>
+                          {opt.strategy_name || `${opt.ticker} ${opt.profile}`} ({opt.paper_mode ? 'Paper' : 'Live'})
+                        </Text>
+                        {selected && <Ionicons name="checkmark" size={16} color={colors.accent} />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+            <Text style={[styles.hint, { color: colors.tabBarInactive }]}>
+              {pairOptions.length > 0
+                ? 'Linking a paper and live config for the same signal means neither one pauses for confirmation when the other takes the same trade — they mirror each other intentionally instead of being treated as a conflict.'
+                : `No opposite-mode ${form.ticker} strategy exists yet to pair with.`}
+            </Text>
 
             <SectionHeader title="Configuration" colors={colors} />
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -1471,13 +1572,6 @@ function StrategyFormModal({
               <>
                 <SectionHeader title="Exit Controls" colors={colors} />
                 <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <View style={[styles.configRow, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.configLabel, { color: colors.text }]}>Consolidation Exit</Text>
-                      <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>Close when price stops moving after 5 min</Text>
-                    </View>
-                    <Switch value={form.consol_exit} onValueChange={v => onPatch('consol_exit', v)} thumbColor={form.consol_exit ? '#4A9EFF' : '#ccc'} trackColor={{ true: '#4A9EFF55', false: colors.border }} />
-                  </View>
                   <View style={[styles.configRow, { borderBottomWidth: 0 }]}>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.configLabel, { color: colors.text }]}>Volume Exit</Text>
@@ -1486,7 +1580,7 @@ function StrategyFormModal({
                     <Switch value={form.volume_exit} onValueChange={v => onPatch('volume_exit', v)} thumbColor={form.volume_exit ? '#4A9EFF' : '#ccc'} trackColor={{ true: '#4A9EFF55', false: colors.border }} />
                   </View>
                 </View>
-                <Text style={[styles.hint, { color: colors.tabBarInactive }]}>Both are off by default.</Text>
+                <Text style={[styles.hint, { color: colors.tabBarInactive }]}>Off by default.</Text>
               </>
             )}
 
@@ -1595,6 +1689,8 @@ const styles = StyleSheet.create({
   liveHeaderLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
   liveHeaderRight:{ alignItems: 'flex-end', gap: 3 },
   liveLabel:      { fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
+  profileBadge:   { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  profileEmoji:   { fontSize: 12 },
   liveContract:   { fontSize: 10, color: '#888' },
 
   livePnlValue:   { fontSize: 18, fontWeight: '700' },

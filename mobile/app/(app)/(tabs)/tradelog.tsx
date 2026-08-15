@@ -1,44 +1,31 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
-import { useStrategyStats, useStrategyStatsByProfile, useStrategyPerformance } from '@/hooks/queries/strategy/useStrategyStats';
+import { useStrategyPerformance } from '@/hooks/queries/strategy/useStrategyStats';
 import { useStrategyDebugLogs } from '@/hooks/queries/strategy/useStrategyDebugLogs';
+import {
+  PnlSummaryCard, DayHeader, StatsHero, DailyPnlChart,
+  KeyMetricsGrid, ExitQualityCard, ProfileLeaderboard, groupTradesByDay,
+  filterTradesByRange, TIME_RANGES, type TimeRange,
+} from '@/common/components/strategy/TradeAnalytics';
 import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
 import { useAlpacaAccountsHistory } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useReconcileTrades } from '@/hooks/mutations/strategy/useReconcileTrades';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
-import { useQuery } from '@tanstack/react-query';
-import type { ProfileKey, ORBTrade, StrategyStats, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel, TradeType, ExitStage } from '@/common/types/strategy';
+import type { ORBTrade, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel, ExitStage } from '@/common/types/strategy';
 import { formatContractSymbol, getTradeHorizon } from '@/lib/formatContract';
 import { useToast } from '@/common/components/ui/Toast';
-
-// ET calendar date, not UTC — trade_date is always stamped from the ET session
-// date server-side (see ORBEngine._execute_entry), so a UTC-based "today" here
-// would silently exclude trades (or include the wrong ones) for hours around
-// each ET midnight, and would only happen to agree with the server the rest
-// of the day by coincidence. 'en-CA' formats as YYYY-MM-DD directly.
-const TODAY = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-type DateFilter = 'ALL' | 'TODAY';
-type Filter = 'ALL' | ProfileKey;
 type Tab = 'log' | 'stats' | 'debug';
-
-interface SkippedSession {
-  id?: string;
-  session_date: string;
-  ticker: string;
-  profile: string;
-  skip_reason: string | null;
-  strategy_id: string | null;
-}
 
 const DEBUG_COLORS: Record<DebugLevel, string> = {
   ERROR:   '#EF4444',
@@ -48,22 +35,6 @@ const DEBUG_COLORS: Record<DebugLevel, string> = {
   SUCCESS: '#22C55E',
 };
 
-const FILTERS: { label: string; value: Filter }[] = [
-  { label: 'All',           value: 'ALL' },
-  { label: '⚡ Scalper',    value: 'SCALPER' },
-  { label: '🎯 Precision',  value: 'PRECISION' },
-  { label: '📈 Momentum',   value: 'MOMENTUM' },
-  { label: '💎 Conviction', value: 'CONVICTION' },
-  { label: '🔥 All In',     value: 'ALL_IN' },
-  { label: '🚀 Trend Rider',value: 'TREND_RIDER' },
-  { label: '🔄 Reversal',   value: 'REVERSAL' },
-  { label: '🐂 Bull Dog',   value: 'BULL_DOG' },
-  { label: '🐱 Thunder Cat',value: 'THUNDER_CAT' },
-  { label: '🐺 Wolf',       value: 'WOLF' },
-  { label: '🎯 OTM Runner',     value: 'OTM_RUNNER' },
-  { label: '💎 OTM Conviction', value: 'OTM_CONVICTION' },
-];
-
 const PROFILE_EMOJI: Record<string, string> = {
   BULL_DOG:       '🐂',
   THUNDER_CAT:    '🐱',
@@ -72,6 +43,9 @@ const PROFILE_EMOJI: Record<string, string> = {
   RETESTER:       '🎯',
   REVERSAL:       '🔄',
   SCALPER:        '⚡',
+  SCALPER_SMALL:  '⚡',
+  SCALPER_LARGE:  '⚡',
+  SCALPER_XL:     '⚡',
   PRECISION:      '🎯',
   MOMENTUM:       '📈',
   CONVICTION:     '💎',
@@ -80,19 +54,6 @@ const PROFILE_EMOJI: Record<string, string> = {
   OTM_CONVICTION: '🎯',
   MANUAL:         '🖐️',
 };
-
-function useSkippedSessions() {
-  return useQuery<SkippedSession[]>({
-    queryKey: ['skipped-sessions'],
-    queryFn: async () => {
-      const res = await fetch(`${RAILWAY_BASE_URL}/strategy/skipped-sessions`);
-      if (!res.ok) return [];
-      return res.json();
-    },
-    staleTime: 60_000,
-    retry: 1,
-  });
-}
 
 interface Props {
   /** True when rendered as a SegmentedPager scene (ORB tab) — hides the back
@@ -103,23 +64,31 @@ interface Props {
 export default function TradeLogScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
   const toast = useToast();
-  const [filter, setFilter]         = useState<Filter>('ALL');
-  const [dateFilter, setDateFilter] = useState<DateFilter>('ALL');
   const [tab, setTab]               = useState<Tab>('log');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [mode, setMode]             = useState<AccountMode>('live');
+  const [range, setRange]           = useState<TimeRange>('TODAY');
   const [refreshing, setRefreshing] = useState(false);
 
-  const tradeDate = dateFilter === 'TODAY' ? TODAY : null;
+  // Deep-link from a notification tap (see NotificationNavigationService) —
+  // consume `paper_mode` exactly once, same pattern as orb.tsx's `section`.
+  const { paper_mode: paperModeParam } = useLocalSearchParams<{ paper_mode?: string }>();
+  useFocusEffect(
+    useCallback(() => {
+      if (paperModeParam != null) {
+        setMode(paperModeParam === 'true' ? 'paper' : 'live');
+        router.setParams({ paper_mode: undefined });
+      }
+    }, [paperModeParam]),
+  );
+
   const wantPaper = mode === 'paper';
 
-  const { data: trades,  isLoading: tradesLoading } = useStrategyTrades({
-    profile: filter, limit: 100, trade_date: tradeDate,
-  });
-  const { data: stats,   isLoading: statsLoading }  = useStrategyStats(filter);
-  const { data: byProfile }                         = useStrategyStatsByProfile();
+  // One deep fetch feeds both the log and every Stats-tab figure — stats are
+  // computed client-side AFTER the paper/live split (see TradeAnalytics.tsx),
+  // so the toggle changes the actual numbers, not just which rows render.
+  const { data: trades,  isLoading: tradesLoading } = useStrategyTrades({ limit: 500 });
   const { data: performance }                       = useStrategyPerformance();
-  const { data: skipped }                           = useSkippedSessions();
   const { data: sessionStates }                     = useStrategySessionState();
   const { data: acctHistory }                       = useAlpacaAccountsHistory();
   const reconcileTrades                             = useReconcileTrades();
@@ -160,6 +129,8 @@ export default function TradeLogScreen({ embedded = false }: Props) {
     paper: (trades ?? []).filter(t => !!t.paper_mode).length,
   }), [trades]);
   const modeAccountEquity = wantPaper ? acctHistory?.paper?.equity : acctHistory?.live?.equity;
+  const rangeTrades = useMemo(() => filterTradesByRange(modeTrades, range), [modeTrades, range]);
+  const dayGroups = useMemo(() => groupTradesByDay(rangeTrades), [rangeTrades]);
 
   const haltedEngines = useMemo(() => {
     if (!sessionStates) return [];
@@ -197,9 +168,33 @@ export default function TradeLogScreen({ embedded = false }: Props) {
         </View>
       </View>
 
-      {/* Live/Paper account toggle — same pattern as position.tsx/strategy.tsx */}
-      {tab === 'log' && (
+      {/* Live/Paper account toggle — applies to both the log AND every Stats
+          figure (stats are computed from the mode-filtered trades). */}
+      {tab !== 'debug' && (
         <LiveModeToggle mode={mode} onChange={setMode} counts={modeCounts} colors={colors} />
+      )}
+
+      {/* Time range — applies to both the log AND every Stats figure, same as
+          the account toggle above. Defaults to Today. */}
+      {tab !== 'debug' && (
+        <View style={styles.rangeRow}>
+          {TIME_RANGES.map(r => {
+            const active = range === r.value;
+            return (
+              <TouchableOpacity
+                key={r.value}
+                onPress={() => setRange(r.value)}
+                style={[styles.rangeChip, {
+                  backgroundColor: active ? colors.accent : 'transparent',
+                }]}
+              >
+                <Text style={[styles.rangeChipText, { color: active ? colors.accentForeground : colors.text }]}>
+                  {r.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       )}
 
       {/* Session halt banner */}
@@ -225,97 +220,56 @@ export default function TradeLogScreen({ embedded = false }: Props) {
         }
       >
 
-        {/* Date + Profile filter row */}
-        <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 12 }}>
-          {(['ALL', 'TODAY'] as const).map(d => (
-            <TouchableOpacity
-              key={d}
-              onPress={() => setDateFilter(d)}
-              style={[styles.filterChip, {
-                backgroundColor: dateFilter === d ? '#6366f1' : colors.card,
-                borderColor: dateFilter === d ? '#6366f1' : colors.border,
-              }]}
-            >
-              <Text style={[styles.filterText, { color: dateFilter === d ? '#fff' : colors.text }]}>
-                {d === 'TODAY' ? 'Today' : 'All Time'}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* Profile filter chips */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow}>
-          {FILTERS.map(f => (
-            <TouchableOpacity
-              key={f.value}
-              onPress={() => setFilter(f.value)}
-              style={[
-                styles.filterChip,
-                {
-                  backgroundColor: filter === f.value ? colors.accent : colors.card,
-                  borderColor: filter === f.value ? colors.accent : colors.border,
-                },
-              ]}
-            >
-              <Text style={[styles.filterText, { color: filter === f.value ? '#fff' : colors.text }]}>
-                {f.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-
         {tab === 'log' ? (
           tradesLoading ? (
             <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
           ) : (
             <>
-              {modeTrades.length === 0 && (
+              {rangeTrades.length === 0 ? (
                 <Text style={[styles.empty, { color: colors.tabBarInactive }]}>
-                  No {mode} trades yet
+                  No {mode} trades {range === 'TODAY' ? 'today' : range === 'ALL' ? 'yet' : 'in this range'}
                 </Text>
-              )}
-              {modeTrades.map(trade => (
-                <TradeRow
-                  key={trade.id}
-                  trade={trade}
-                  colors={colors}
-                  expanded={expandedId === trade.id}
-                  onToggle={() => setExpandedId(id => id === trade.id ? null : trade.id)}
-                  accountEquity={modeAccountEquity}
-                  accountLabel={mode === 'live' ? 'Live' : 'Paper'}
-                />
-              ))}
-
-              {/* Skipped sessions section */}
-              {skipped && skipped.length > 0 && (
+              ) : (
                 <>
-                  <Text style={[styles.sectionHeader, { color: colors.tabBarInactive }]}>
-                    NO-TRADE SESSIONS
-                  </Text>
-                  {skipped.map((s, i) => (
-                    <SkippedRow key={`${s.session_date}-${s.strategy_id ?? i}`} session={s} colors={colors} />
+                  {/* P&L story first: hero summary + equity curve */}
+                  <PnlSummaryCard trades={rangeTrades} colors={colors} />
+
+                  {/* Trades grouped by session day with a per-day net */}
+                  {dayGroups.map(group => (
+                    <View key={group.date} style={{ gap: 10 }}>
+                      <DayHeader group={group} colors={colors} />
+                      {group.trades.map(trade => (
+                        <TradeRow
+                          key={trade.id}
+                          trade={trade}
+                          colors={colors}
+                          expanded={expandedId === trade.id}
+                          onToggle={() => setExpandedId(id => id === trade.id ? null : trade.id)}
+                          accountEquity={modeAccountEquity}
+                          accountLabel={mode === 'live' ? 'Live' : 'Paper'}
+                        />
+                      ))}
+                    </View>
                   ))}
                 </>
               )}
             </>
           )
         ) : (
-          statsLoading ? (
+          tradesLoading ? (
             <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
+          ) : rangeTrades.length === 0 ? (
+            <Text style={[styles.empty, { color: colors.tabBarInactive }]}>
+              No {mode} trades to analyze {range === 'TODAY' ? 'today' : range === 'ALL' ? 'yet' : 'in this range'}
+            </Text>
           ) : (
             <>
+              <StatsHero trades={rangeTrades} colors={colors} />
+              <DailyPnlChart trades={rangeTrades} colors={colors} />
+              <KeyMetricsGrid trades={rangeTrades} colors={colors} />
+              <ExitQualityCard trades={rangeTrades} colors={colors} />
+              <ProfileLeaderboard trades={rangeTrades} colors={colors} />
               {performance && <RatingCard performance={performance} colors={colors} />}
-              {stats && <StatsPanel stats={stats} label={filter === 'ALL' ? 'All Profiles' : filter} colors={colors} />}
-              {byProfile && (
-                <>
-                  <Text style={[styles.byProfileTitle, { color: colors.tabBarInactive }]}>
-                    PERFORMANCE BY PROFILE
-                  </Text>
-                  {byProfile.map(s => (
-                    <StatsPanel key={s.profile} stats={s} label={s.profile ?? ''} colors={colors} compact />
-                  ))}
-                </>
-              )}
             </>
           )
         )}
@@ -347,6 +301,8 @@ const EXIT_REASON_LABELS: Record<string, string> = {
   REVERSAL_TIME_CUT:   'Reversal Bleed Stop (20m)',
   'RECONCILED FROM ALPACA':         'Exit Reason: Reconciled from Alpaca',
   'UNKNOWN — RECONCILED FROM ALPACA': 'Exit Reason: Unknown — pulled from Alpaca',
+  EXPIRED_WORTHLESS: 'Expired Worthless',
+  'RECONCILED — QTY ALREADY ZERO': 'Reconciled — Already Closed',
 };
 
 const fmtEt = (iso: string): string => {
@@ -407,9 +363,22 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
   // per trade, but we can show a note if the exit was HARD_STOP.
   const stopHit = trade.exit_reason === 'HARD_STOP';
 
-  const pnlColor = trade.pnl == null
+  const isOpen = trade.exit_time == null;
+  // A partial exit (TP1/cascade) already locked in a real, non-null pnl
+  // even though the row stays open — see trade_logger.py's log_exit. Show
+  // that realized figure plus the still-open remainder's live estimate
+  // separately, rather than one number standing in for both. A fully-open
+  // trade (zero exits yet) has nothing realized — falls back to the live
+  // estimate alone, same as before.
+  const isPartial = isOpen && (trade.qty_exited ?? 0) > 0;
+  const displayPnl    = isPartial ? trade.pnl : isOpen ? trade.live_pnl ?? null : trade.pnl;
+  const displayPnlPct = isPartial ? trade.pnl_pct : isOpen ? trade.live_pnl_pct ?? null : trade.pnl_pct;
+  const pnlColor = displayPnl == null
     ? undefined
-    : trade.pnl >= 0 ? colors.success : colors.error;
+    : displayPnl >= 0 ? colors.success : colors.error;
+  const unrealizedColor = trade.live_pnl == null
+    ? undefined
+    : trade.live_pnl >= 0 ? colors.success : colors.error;
 
   return (
     <View style={[styles.detailSection, { borderTopColor: colors.border }]}>
@@ -447,11 +416,16 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
       <DetailRow label="Duration"          value={duration}                                                  colors={colors} />
       <DetailRow label="Entry Premium"     value={`$${trade.entry_premium?.toFixed(2) ?? '—'}`}             colors={colors} />
       <DetailRow
-        label="Exit Premium"
-        value={trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—'}
+        label={isOpen ? 'Current Price (live)' : 'Exit Premium'}
+        value={
+          isOpen
+            ? (trade.live_price != null ? `$${trade.live_price.toFixed(2)}` : '—')
+            : (trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—')
+        }
         valueColor={
-          trade.exit_premium == null ? undefined
-          : trade.exit_premium >= trade.entry_premium ? colors.success : colors.error
+          isOpen
+            ? (trade.live_price == null ? undefined : trade.live_price >= trade.entry_premium ? colors.success : colors.error)
+            : (trade.exit_premium == null ? undefined : trade.exit_premium >= trade.entry_premium ? colors.success : colors.error)
         }
         colors={colors}
       />
@@ -461,17 +435,33 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
         colors={colors}
       />
       <DetailRow
-        label="P&L"
-        value={trade.pnl != null ? `${trade.pnl >= 0 ? '+' : ''}$${trade.pnl.toFixed(2)}` : '—'}
+        label={isPartial ? 'Realized (so far)' : isOpen ? 'P&L (live, unrealized)' : 'P&L'}
+        value={displayPnl != null ? `${displayPnl >= 0 ? '+' : ''}$${displayPnl.toFixed(2)}` : '—'}
         valueColor={pnlColor}
         colors={colors}
       />
       <DetailRow
-        label="P&L %"
-        value={trade.pnl_pct != null ? `${trade.pnl_pct >= 0 ? '+' : ''}${trade.pnl_pct.toFixed(1)}%` : '—'}
+        label={isPartial ? 'Realized %' : isOpen ? 'P&L % (live)' : 'P&L %'}
+        value={displayPnlPct != null ? `${displayPnlPct >= 0 ? '+' : ''}${displayPnlPct.toFixed(1)}%` : '—'}
         valueColor={pnlColor}
         colors={colors}
       />
+      {isPartial && (
+        <>
+          <DetailRow
+            label="Unrealized (remaining)"
+            value={trade.live_pnl != null ? `${trade.live_pnl >= 0 ? '+' : ''}$${trade.live_pnl.toFixed(2)}` : '—'}
+            valueColor={unrealizedColor}
+            colors={colors}
+          />
+          <DetailRow
+            label="Unrealized %"
+            value={trade.live_pnl_pct != null ? `${trade.live_pnl_pct >= 0 ? '+' : ''}${trade.live_pnl_pct.toFixed(1)}%` : '—'}
+            valueColor={unrealizedColor}
+            colors={colors}
+          />
+        </>
+      )}
       <DetailRow
         label="Exit Reason"
         value={exitLabel}
@@ -564,9 +554,19 @@ const TradeRow = ({
 }) => {
   const pnl          = trade.pnl ?? 0;
   const isOpen       = trade.exit_time == null;
-  const pnlColor     = isOpen ? colors.accent
-                     : pnl > 0 ? colors.success
-                     : pnl < 0 ? colors.error : colors.tabBarInactive;
+  // A partial exit (TP1/cascade) already wrote a real, non-null, running
+  // REALIZED total into pnl/pnl_pct even though the row stays open — see
+  // trade_logger.py's log_exit. So an open trade with qty_exited > 0 has
+  // two genuinely different numbers: pnl (locked in) and live_pnl (still
+  // moving on whatever's left). Show both instead of one replacing the
+  // other. A fully-open trade (zero exits yet) has nothing realized —
+  // falls back to live_pnl alone, same as before.
+  const isPartial     = isOpen && (trade.qty_exited ?? 0) > 0;
+  const displayPnl    = isPartial ? pnl : isOpen ? trade.live_pnl ?? null : pnl;
+  const displayPnlPct = isPartial ? trade.pnl_pct : isOpen ? trade.live_pnl_pct ?? null : trade.pnl_pct;
+  const pnlColor     = displayPnl == null ? colors.accent
+                     : displayPnl > 0 ? colors.success
+                     : displayPnl < 0 ? colors.error : colors.tabBarInactive;
   const accentColor  = isOpen ? colors.accent
                      : pnl > 0 ? colors.success
                      : pnl < 0 ? colors.error : colors.border;
@@ -659,12 +659,26 @@ const TradeRow = ({
         {/* P&L */}
         <View style={styles.tradeRight}>
           <Text style={[styles.tradePnl, { color: pnlColor }]}>
-            {isOpen ? 'OPEN' : `${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}`}
+            {displayPnl == null
+              ? (isOpen ? 'OPEN' : `${pnl > 0 ? '+' : ''}$${pnl.toFixed(2)}`)
+              : `${displayPnl > 0 ? '+' : ''}$${displayPnl.toFixed(2)}`}
           </Text>
-          {trade.pnl_pct != null && !isOpen && (
+          {isPartial ? (
+            trade.live_pnl != null && (
+              <Text style={{ fontSize: 10, fontWeight: '600', marginTop: 1, color: trade.live_pnl >= 0 ? colors.success : colors.error }}>
+                Unrealized {trade.live_pnl >= 0 ? '+' : ''}${trade.live_pnl.toFixed(2)}
+                {trade.live_pnl_pct != null ? ` (${trade.live_pnl_pct >= 0 ? '+' : ''}${trade.live_pnl_pct.toFixed(1)}%)` : ''}
+              </Text>
+            )
+          ) : isOpen && displayPnl != null && (
+            <Text style={{ fontSize: 9, fontWeight: '700', letterSpacing: 0.4, color: colors.accent, marginTop: 1 }}>
+              OPEN · LIVE
+            </Text>
+          )}
+          {displayPnlPct != null && (
             <View style={[styles.pnlPctPill, { backgroundColor: pnlColor + '1A' }]}>
               <Text style={[styles.tradePnlPct, { color: pnlColor }]}>
-                {trade.pnl_pct > 0 ? '+' : ''}{trade.pnl_pct.toFixed(1)}%
+                {displayPnlPct > 0 ? '+' : ''}{displayPnlPct.toFixed(1)}%
               </Text>
             </View>
           )}
@@ -679,47 +693,6 @@ const TradeRow = ({
 
       {expanded && <TradeDetail trade={trade} colors={colors} />}
     </TouchableOpacity>
-  );
-};
-
-// ── SkippedRow ────────────────────────────────────────────────────────────────
-
-const SKIP_REASON_LABELS: Record<string, string> = {
-  VIX_TOO_HIGH:        'VIX too high',
-  VIX_TOO_LOW:         'VIX too low',
-  NO_ORB_RANGE:        'ORB range not established',
-  ORB_RANGE_TOO_SMALL: 'ORB range too small',
-  NOT_TRADE_DAY:       'Not a scheduled trade day',
-  ALREADY_TRADED:      'Already traded today',
-  NO_BREAKOUT:         'No breakout confirmed',
-  MARKET_CLOSED:       'Market closed',
-  FLOW_REJECTED:       'Flow confirmation failed',
-  REVERSAL_UNSCORED:   'Reversal confidence too low',
-};
-
-const SkippedRow = ({ session, colors }: { session: SkippedSession; colors: any }) => {
-  const emoji  = PROFILE_EMOJI[session.profile] ?? '📊';
-  const reason = session.skip_reason
-    ? (SKIP_REASON_LABELS[session.skip_reason] ?? session.skip_reason.replace(/_/g, ' '))
-    : 'No trade taken';
-  return (
-    <View style={[styles.skippedRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={[styles.skippedLeft, { backgroundColor: colors.tabBarInactive + '22' }]}>
-        <Text style={[styles.skippedDate, { color: colors.tabBarInactive }]}>
-          {session.session_date}
-        </Text>
-        <Text style={[styles.skippedTicker, { color: colors.text }]}>
-          {emoji} {session.ticker}
-        </Text>
-        <Text style={[styles.skippedProfile, { color: colors.tabBarInactive }]}>
-          {session.profile.replace(/_/g, ' ')}
-        </Text>
-      </View>
-      <View style={styles.skippedRight}>
-        <Ionicons name="ban-outline" size={14} color={colors.tabBarInactive} style={{ marginBottom: 2 }} />
-        <Text style={[styles.skippedReason, { color: colors.tabBarInactive }]}>{reason}</Text>
-      </View>
-    </View>
   );
 };
 
@@ -824,27 +797,6 @@ function RatingCard({ performance, colors }: { performance: StrategyPerformance;
     </View>
   );
 }
-
-const StatsPanel = ({ stats, label, colors, compact = false }: { stats: StrategyStats; label: string; colors: any; compact?: boolean }) => (
-  <View style={[styles.statsCard, { backgroundColor: colors.card, borderColor: colors.border }, compact && styles.statsCardCompact]}>
-    <Text style={[styles.statsLabel, { color: colors.text }]}>{label.replace('_', ' ')}</Text>
-    <View style={styles.statsGrid}>
-      <StatItem label="Win Rate"    value={`${stats.win_rate_pct}%`}   color={stats.win_rate_pct >= 60 ? colors.success : colors.text} colors={colors} />
-      <StatItem label="Total P&L"   value={`$${stats.total_pnl}`}       color={stats.total_pnl >= 0 ? colors.success : colors.error} colors={colors} />
-      <StatItem label="Trades"      value={String(stats.total_trades)}  colors={colors} />
-      <StatItem label="W/L"         value={`${stats.wins}/${stats.losses}`} colors={colors} />
-      <StatItem label="Avg Winner"  value={`$${stats.avg_winner}`}      color={colors.success} colors={colors} />
-      <StatItem label="Avg Loser"   value={`$${stats.avg_loser}`}       color={colors.error} colors={colors} />
-    </View>
-  </View>
-);
-
-const StatItem = ({ label, value, color, colors }: { label: string; value: string; color?: string; colors: any }) => (
-  <View style={styles.statItem}>
-    <Text style={[styles.statLabel, { color: colors.tabBarInactive }]}>{label}</Text>
-    <Text style={[styles.statValue, { color: color ?? colors.text }]}>{value}</Text>
-  </View>
-);
 
 // ── Debug log panel ──────────────────────────────────────────────────────────────
 
@@ -956,9 +908,9 @@ const styles = StyleSheet.create({
   tabToggle:      { flexDirection: 'row', borderRadius: 10, borderWidth: 1, overflow: 'hidden' },
   tabBtn:         { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10 },
   tabText:        { fontSize: 13, fontWeight: '600' },
-  filterRow:      { marginBottom: 4 },
-  filterChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 20, borderWidth: 1, marginRight: 8 },
-  filterText: { fontSize: 13, fontWeight: '600' },
+  rangeRow:       { flexDirection: 'row', gap: 6, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10 },
+  rangeChip:      { flex: 1, paddingVertical: 6, alignItems: 'center', borderRadius: 8 },
+  rangeChipText:  { fontSize: 12, fontWeight: '600' },
   empty:     { textAlign: 'center', marginTop: 40, fontSize: 14 },
   tradeRow:     { borderRadius: 12, borderWidth: 1, padding: 13, paddingLeft: 13 },
   tradeRowMain: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
@@ -983,13 +935,6 @@ const styles = StyleSheet.create({
   detailRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 },
   detailLabel: { fontSize: 11, fontWeight: '600', flex: 1 },
   detailValue: { fontSize: 11, flex: 2, textAlign: 'right' },
-  statsCard: { borderRadius: 14, borderWidth: 1, padding: 14 },
-  statsCardCompact: { padding: 10 },
-  statsLabel: { fontSize: 14, fontWeight: '700', marginBottom: 10 },
-  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  statItem:  { width: '30%' },
-  statLabel: { fontSize: 10, marginBottom: 2 },
-  statValue: { fontSize: 14, fontWeight: '700' },
   byProfileTitle: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 8 },
 
   // Rating card
@@ -1016,16 +961,6 @@ const styles = StyleSheet.create({
   stratRatingBadge:   { width: 44, height: 44, borderRadius: 22, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   stratRatingScore:   { fontSize: 14, fontWeight: '800', lineHeight: 16 },
   stratRatingGrade:   { fontSize: 10, fontWeight: '700' },
-
-  // Skipped sessions
-  sectionHeader:  { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 16, marginBottom: 4 },
-  skippedRow:     { borderRadius: 10, borderWidth: 1, flexDirection: 'row', overflow: 'hidden' },
-  skippedLeft:    { padding: 10, minWidth: 110, gap: 2 },
-  skippedDate:    { fontSize: 10 },
-  skippedTicker:  { fontSize: 13, fontWeight: '700' },
-  skippedProfile: { fontSize: 10 },
-  skippedRight:   { flex: 1, padding: 10, justifyContent: 'center', gap: 3 },
-  skippedReason:  { fontSize: 12 },
 
   // Debug tab
   debugControls:    { paddingHorizontal: 16, paddingTop: 6, paddingBottom: 10, borderBottomWidth: StyleSheet.hairlineWidth },

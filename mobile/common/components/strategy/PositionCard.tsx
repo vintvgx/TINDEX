@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import type { StrategyPosition, ProfileKey } from '@/common/types/strategy';
 
-const PROFILE_EMOJI: Record<ProfileKey, string> = {
+export const PROFILE_EMOJI: Record<ProfileKey, string> = {
   BULL_DOG:    '🐂',
   THUNDER_CAT: '🐱',
   WOLF:        '🐺',
@@ -13,6 +13,9 @@ const PROFILE_EMOJI: Record<ProfileKey, string> = {
   REVERSAL:    '🔄',
   CUSTOM:      '⚙️',
   SCALPER:     '⚡',
+  SCALPER_SMALL: '⚡',
+  SCALPER_LARGE:  '⚡',
+  SCALPER_XL:     '⚡',
   PRECISION:   '🎯',
   MOMENTUM:    '📈',
   CONVICTION:    '💎',
@@ -20,6 +23,9 @@ const PROFILE_EMOJI: Record<ProfileKey, string> = {
   OTM_RUNNER:    '🎯',
   OTM_CONVICTION:'💡',
   MANUAL:        '🛠️',
+  NO_STOP_LOSS:  '🧗',
+  SL_5:          '⏱️',
+  SL_10:         '⏳',
 };
 
 interface Props {

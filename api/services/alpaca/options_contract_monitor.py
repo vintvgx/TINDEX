@@ -2,15 +2,32 @@
 Options Contract Price Monitor Service
 
 Polls Alpaca every 5 minutes during market hours for all actively tracked
-options contracts. Updates current_price and price_change_pct in Supabase.
-Sends Expo push notifications when price crosses ±25%, ±50%, or ±100%
-thresholds from tracked_entry_price.
+AND entered options contracts. Updates current_price and price_change_pct
+in Supabase. Sends Expo push notifications when price crosses configured
+gain/loss thresholds.
 
-Notification rules:
+Two independent lifecycle phases, each with its own basis price, thresholds,
+and latch flags — deliberately kept separate so one phase's notifications
+can never suppress or be confused with the other's:
+  - status='tracking' (watching, not yet entered): basis is
+    tracked_entry_price, thresholds are the hardcoded THRESHOLDS constant
+    (±25/50/100%), latched via notified_gain_*/notified_loss_*. Unchanged
+    from the original behavior.
+  - status='entered' (an actual open position): basis is entry_price
+    (the real fill price, set via PUT /track-option/<id> status=entered —
+    may differ from tracked_entry_price if the contract was watched before
+    being entered). Thresholds default to the same ±25/50/100% but are
+    per-contract configurable via alert_gain_*/alert_loss_* columns
+    (PATCH /track-option/<id>/alerts), latched via separate
+    notified_entered_gain_*/notified_entered_loss_* flags.
+
+Notification rules (per phase):
   - Each threshold fires at most once per contract (flag is latched TRUE).
   - When multiple thresholds cross in the same poll, only the highest-magnitude
     one is sent to avoid notification spam.
   - 100% is the ceiling label ("100%+" shown in the notification).
+  - Entered-position alerts use distinct title/emoji/data.type from
+    tracking alerts so the two can't be mistaken for one another.
 """
 
 import asyncio
@@ -34,6 +51,19 @@ THRESHOLDS: List[Tuple[float, str, str]] = [
     ( -25.0, "loss", "notified_loss_25"),
     ( -50.0, "loss", "notified_loss_50"),
     (-100.0, "loss", "notified_loss_100"),
+]
+
+# (default_pct, direction, override_column, db_flag_column) for ENTERED
+# (open position) contracts. override_column is read off the contract row;
+# when null, default_pct is used instead. Same ±25/50/100 defaults as
+# THRESHOLDS above, but independently configurable per contract.
+ENTERED_THRESHOLDS: List[Tuple[float, str, str, str]] = [
+    ( 100.0, "gain", "alert_gain_100", "notified_entered_gain_100"),
+    (  50.0, "gain", "alert_gain_50",  "notified_entered_gain_50"),
+    (  25.0, "gain", "alert_gain_25",  "notified_entered_gain_25"),
+    ( -25.0, "loss", "alert_loss_25",  "notified_entered_loss_25"),
+    ( -50.0, "loss", "alert_loss_50",  "notified_entered_loss_50"),
+    (-100.0, "loss", "alert_loss_100", "notified_entered_loss_100"),
 ]
 
 POLL_INTERVAL_SECONDS = 300  # 5 minutes
@@ -117,11 +147,18 @@ class OptionsContractMonitorService:
                     logger.debug(f"OptionsContractMonitor: no price for {symbol}")
                     continue
 
-                tracked_entry = float(contract.get("tracked_entry_price") or 0)
-                if tracked_entry <= 0:
+                # Basis price depends on lifecycle phase: a 'tracking' contract's
+                # basis is the price captured when tracking started, while an
+                # 'entered' contract's basis is the actual fill price — these can
+                # differ (e.g. tracked for a while before being entered), so they
+                # must not be conflated.
+                is_entered = contract.get("status") == "entered"
+                basis_field = "entry_price" if is_entered else "tracked_entry_price"
+                basis = float(contract.get(basis_field) or 0)
+                if basis <= 0:
                     continue
 
-                pct_change = ((current_price - tracked_entry) / tracked_entry) * 100.0
+                pct_change = ((current_price - basis) / basis) * 100.0
 
                 await self._update_contract_price(
                     contract_id=contract["id"],
@@ -130,7 +167,7 @@ class OptionsContractMonitorService:
                     checked_at=checked_at,
                 )
 
-                await self._check_and_notify(contract, current_price, pct_change)
+                await self._check_and_notify(contract, current_price, pct_change, is_entered)
 
         except Exception as e:
             logger.error(f"OptionsContractMonitor: poll cycle error: {e}", exc_info=True)
@@ -145,14 +182,18 @@ class OptionsContractMonitorService:
                 self.supabase
                 .table("tracked_options_contracts")
                 .select(
-                    "id, user_id, contract_symbol, ticker, option_type, strike, "
-                    "tracked_entry_price, "
+                    "id, user_id, contract_symbol, ticker, option_type, strike, status, "
+                    "tracked_entry_price, entry_price, "
                     "notified_gain_25, notified_loss_25, "
                     "notified_gain_50, notified_loss_50, "
-                    "notified_gain_100, notified_loss_100"
+                    "notified_gain_100, notified_loss_100, "
+                    "alert_gain_25, alert_loss_25, alert_gain_50, alert_loss_50, "
+                    "alert_gain_100, alert_loss_100, "
+                    "notified_entered_gain_25, notified_entered_loss_25, "
+                    "notified_entered_gain_50, notified_entered_loss_50, "
+                    "notified_entered_gain_100, notified_entered_loss_100"
                 )
-                .eq("status", "tracking")
-                .not_.is_("tracked_entry_price", "null")
+                .in_("status", ["tracking", "entered"])
                 .execute()
             )
 
@@ -184,16 +225,28 @@ class OptionsContractMonitorService:
         contract: Dict,
         current_price: float,
         pct_change: float,
+        is_entered: bool = False,
     ):
         newly_crossed: List[Tuple[float, str, str]] = []
 
-        for threshold_pct, direction, flag_col in THRESHOLDS:
-            if contract.get(flag_col, False):
-                continue  # already notified for this threshold
-            if direction == "gain" and pct_change >= threshold_pct:
-                newly_crossed.append((threshold_pct, direction, flag_col))
-            elif direction == "loss" and pct_change <= threshold_pct:
-                newly_crossed.append((threshold_pct, direction, flag_col))
+        if is_entered:
+            for default_pct, direction, override_col, flag_col in ENTERED_THRESHOLDS:
+                if contract.get(flag_col, False):
+                    continue  # already notified for this threshold
+                override = contract.get(override_col)
+                threshold_pct = float(override) if override is not None else default_pct
+                if direction == "gain" and pct_change >= threshold_pct:
+                    newly_crossed.append((threshold_pct, direction, flag_col))
+                elif direction == "loss" and pct_change <= threshold_pct:
+                    newly_crossed.append((threshold_pct, direction, flag_col))
+        else:
+            for threshold_pct, direction, flag_col in THRESHOLDS:
+                if contract.get(flag_col, False):
+                    continue  # already notified for this threshold
+                if direction == "gain" and pct_change >= threshold_pct:
+                    newly_crossed.append((threshold_pct, direction, flag_col))
+                elif direction == "loss" and pct_change <= threshold_pct:
+                    newly_crossed.append((threshold_pct, direction, flag_col))
 
         if not newly_crossed:
             return
@@ -211,6 +264,7 @@ class OptionsContractMonitorService:
                 pct_change=pct_change,
                 threshold_pct=threshold_pct,
                 direction=direction,
+                is_entered=is_entered,
             )
 
         # Latch all newly-crossed flags so we don't re-fire
@@ -259,6 +313,7 @@ class OptionsContractMonitorService:
         pct_change: float,
         threshold_pct: float,
         direction: str,
+        is_entered: bool = False,
     ):
         symbol = contract["contract_symbol"]
         ticker = contract["ticker"]
@@ -266,18 +321,33 @@ class OptionsContractMonitorService:
         strike = contract["strike"]
 
         is_gain = direction == "gain"
-        emoji = "📈" if is_gain else "📉"
         direction_word = "gained" if is_gain else "dropped"
 
         # Label caps at "100%+" for the ±100 threshold
         abs_thresh = abs(threshold_pct)
         label = "100%+" if abs_thresh >= 100 else f"{abs_thresh:.0f}%"
 
-        title = f"{emoji} {ticker} {option_type} ${float(strike):.2f} — {label} {'gain' if is_gain else 'loss'}"
-        body = (
-            f"{symbol} has {direction_word} {abs(pct_change):.1f}% since tracked. "
-            f"Now: ${current_price:.2f}"
-        )
+        # Entered (open position) alerts get visibly distinct copy, emoji, and
+        # data.type from tracking (watch-only) alerts — deliberately, so the
+        # two can never be confused for one another in the notification tray.
+        if is_entered:
+            emoji = "🟢" if is_gain else "🔴"
+            title = f"{emoji} Position: {ticker} {option_type} ${float(strike):.2f} — {label} {'gain' if is_gain else 'loss'}"
+            body = (
+                f"{symbol} has {direction_word} {abs(pct_change):.1f}% since entry. "
+                f"Now: ${current_price:.2f}"
+            )
+            notif_type = "position_price_alert"
+            channel_id = "position-alerts"
+        else:
+            emoji = "📈" if is_gain else "📉"
+            title = f"{emoji} {ticker} {option_type} ${float(strike):.2f} — {label} {'gain' if is_gain else 'loss'}"
+            body = (
+                f"{symbol} has {direction_word} {abs(pct_change):.1f}% since tracked. "
+                f"Now: ${current_price:.2f}"
+            )
+            notif_type = "contract_price_alert"
+            channel_id = "contract-alerts"
 
         message = {
             "to": expo_token,
@@ -285,7 +355,7 @@ class OptionsContractMonitorService:
             "title": title,
             "body": body,
             "data": {
-                "type": "contract_price_alert",
+                "type": notif_type,
                 "contract_symbol": symbol,
                 "ticker": ticker,
                 "option_type": option_type,
@@ -293,11 +363,12 @@ class OptionsContractMonitorService:
                 "pct_change": round(pct_change, 2),
                 "threshold_pct": threshold_pct,
                 "direction": direction,
+                "is_entered": is_entered,
                 "screen": "options",
             },
             "badge": 1,
             "priority": "high",
-            "channelId": "contract-alerts",
+            "channelId": channel_id,
         }
 
         try:

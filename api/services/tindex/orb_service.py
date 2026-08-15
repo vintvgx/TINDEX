@@ -166,14 +166,20 @@ class OrbService:
         #   UNBROKEN -> BROKEN (first break, needs 3-min hold) -> CONFIRMED
         #                  |
         #                  v (price falls back inside range before confirming)
-        #             RETESTING (re-armed, capped at _max_retest_attempts) -> CONFIRMED
+        #             RETESTING (re-armed, capped at max_retest_attempts) -> CONFIRMED
         #                  |
         #                  v (cap exhausted)
-        #             EXHAUSTED (dead for the rest of the session)
+        #             EXHAUSTED -> CONFIRMED (still, if price later fully
+        #                          reclaims the prior extension — see
+        #                          _process_breakout_side; only the "weak"
+        #                          bar-close-on-partial-reclaim shortcut is
+        #                          actually capped, not a genuine reclaim)
         # {ticker: {"high": {...}, "low": {...}}}
         self._retest_state: Dict[str, Dict] = {}
-        # One retry after the first invalidation before a level is written off
-        # for the rest of the session — bounds re-arming against choppy PA.
+        # Fallback cap when no engine has registered a preference for this
+        # ticker via the hub (see OrbDataHub.set_max_retest_attempts) — bounds
+        # re-arming of the "weak" retest path against choppy PA. A full
+        # extension reclaim is never subject to this cap.
         self._max_retest_attempts = 1
     
     def get_current_et_time(self) -> datetime:
@@ -1223,7 +1229,9 @@ class OrbService:
                 ticker, "low", is_below_orb_low, current_price,
                 bar_close, stock_bar, orb_high, orb_low,
             )
-            breakout_type_to_set = high_label or low_label
+            breakout_type_to_set = self._pick_breakout_label(
+                high_label, low_label, is_above_orb_high, is_below_orb_low,
+            )
 
             if breakout_type_to_set is None and is_within_orb:
                 # Price is within ORB - MUST set to "none" or keep reversal if active
@@ -1244,6 +1252,18 @@ class OrbService:
             
             # Update cache state (NO DATABASE CALL)
             if breakout_type_to_set is not None:
+                # Only the original, not-yet-confirmed break carries a live
+                # countdown — everything else (confirmed, invalidated,
+                # retesting, in-range, reversal) clears it. Read straight
+                # from the retest state machine rather than re-deriving the
+                # deadline here, so this can never drift from the value
+                # _process_breakout_side actually holds.
+                if breakout_type_to_set == "Bullish":
+                    confirm_deadline_dt = self._get_side_state(ticker, "high").get("confirm_deadline")
+                elif breakout_type_to_set == "Bearish":
+                    confirm_deadline_dt = self._get_side_state(ticker, "low").get("confirm_deadline")
+                else:
+                    confirm_deadline_dt = None
                 self._state_cache.update_state(
                     ticker=ticker,
                     trade_date=trade_date,
@@ -1251,6 +1271,7 @@ class OrbService:
                     orb_high=float(orb_high),
                     orb_low=float(orb_low),
                     breakout_type=breakout_type_to_set,
+                    confirm_deadline=confirm_deadline_dt.isoformat() if confirm_deadline_dt else None,
                     percentage_change=round(percentage_change, 2) if percentage_change is not None else None,
                     timestamp=self.get_current_et_time().isoformat(),
                 )
@@ -1362,6 +1383,28 @@ class OrbService:
             self._reset_side_state(ticker, side)
         return ticker_state[side]
 
+    @staticmethod
+    def _confirmed_breakout_label(side: str) -> str:
+        return "Confirmed Bullish" if side == "high" else "Confirmed Bearish"
+
+    @staticmethod
+    def _pick_breakout_label(
+        high_label: Optional[str],
+        low_label: Optional[str],
+        is_above_orb_high: bool,
+        is_below_orb_low: bool,
+    ) -> Optional[str]:
+        """Prefer the label for the side price is actually on — avoids high_label
+        winning on full-bar whipsaws when the bearish side confirmed."""
+        if is_below_orb_low and low_label:
+            return low_label
+        if is_above_orb_high and high_label:
+            return high_label
+        for label in (low_label, high_label):
+            if label and label.startswith("Confirmed"):
+                return label
+        return high_label or low_label
+
     async def _process_breakout_side(
         self,
         ticker: str,
@@ -1386,28 +1429,44 @@ class OrbService:
         - Retest reclaim that clears the prior extension (the highest/lowest
           point the price reached before it got rejected): confirms immediately
           — clearing that level is itself the confirmation signal, no need to
-          re-derive it with a timer.
+          re-derive it with a timer. This is ALWAYS available, even after the
+          retest-attempt cap below is exhausted — buyers/sellers fighting to a
+          decisive resolution at the same extreme is a strong signal on its
+          own merits, not "more of the same chop" the cap exists to filter.
         - Retest reclaim that merely crosses back over ORH/ORL without clearing
           the prior extension: needs one full bar close on the correct side
           before confirming, cheaper than the original 3-minute wait since this
           attempt already has more information behind it than the first break.
+          This is the "weak" path the attempt cap actually governs (see below).
+        - max_retest_attempts (per-ticker, via the hub — see
+          set_max_retest_attempts) bounds only the weak path: how many times a
+          fresh extension-and-pullback cycle gets the benefit of the doubt on
+          a partial re-cross. Once exhausted, this side stops offering that
+          bar-close shortcut, but keeps watching for a full extension reclaim
+          indefinitely — a session can no longer get permanently capped out of
+          a later, genuinely clean continuation (2026-07-20 incident: IWM's
+          bearish side exhausted on early chop, then a clean break never
+          confirmed even though it fully cleared the prior low).
 
         Returns the breakout_type label to display for this bar, or None if
         nothing changed (caller leaves the existing display state alone).
         """
         st = self._get_side_state(ticker, side)
-        if st["state"] in ("CONFIRMED", "EXHAUSTED"):
-            # CONFIRMED is owned by the separate reversal-scoring pathway from
-            # here on; EXHAUSTED never re-arms — that's the whole point of the cap.
+        if st["state"] == "CONFIRMED":
+            # Owned by the separate reversal-scoring pathway from here on.
             return None
 
         bullish = side == "high"
         direction = "above" if bullish else "below"
         display_label = "Bullish" if bullish else "Bearish"
+        exhausted = st["state"] == "EXHAUSTED"
+        max_attempts = self._hub.get_max_retest_attempts(ticker, default=self._max_retest_attempts)
 
         if is_over:
             # Track the running extension (best price reached) continuously —
             # this is the benchmark a later retest must reclaim to fast-confirm.
+            # Kept updated even while EXHAUSTED: the reclaim check below is the
+            # one path that must keep working regardless of attempt count.
             if st["extension"] is None:
                 st["extension"] = current_price
             elif bullish:
@@ -1422,50 +1481,83 @@ class OrbService:
                     f"[BREAKOUT DETECTED] {ticker} {direction} ORB! "
                     f"Current Price={current_price:.2f}"
                 )
+                self._hub.publish_retest_event(
+                    ticker, "INFO",
+                    f"{direction.upper()} breakout detected @ {current_price:.2f} — "
+                    f"holding for 3-min confirmation",
+                )
                 await self.record_breakout(ticker, direction, bar_close, bar_data=stock_bar)
                 return display_label
 
             if st["state"] == "BROKEN":
                 if self.get_current_et_time() >= st["confirm_deadline"]:
-                    await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
                     st["state"] = "CONFIRMED"
-                    return f"Confirmed {display_label}"
+                    await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
+                    return self._confirmed_breakout_label(side)
                 return None  # still waiting out the original 3-minute hold
 
-            if st["state"] == "RETESTING":
-                reclaimed_extension = (
-                    current_price >= st["extension"] if bullish else current_price <= st["extension"]
-                )
-                if reclaimed_extension:
-                    # Didn't just reclaim the level — erased the entire rejection.
-                    # That's self-confirming; no need to also wait out a bar.
-                    await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
-                    st["state"] = "CONFIRMED"
-                    return f"Confirmed {display_label}"
-                if not st["reclaim_bar_seen"]:
-                    st["reclaim_bar_seen"] = True
-                    return f"Retesting {display_label}"
-                await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
+            # RETESTING or EXHAUSTED — the reclaim check applies to both.
+            reclaimed_extension = (
+                current_price >= st["extension"] if bullish else current_price <= st["extension"]
+            )
+            if reclaimed_extension:
+                # Didn't just reclaim the level — erased the entire rejection.
+                # That's self-confirming; no need to also wait out a bar, and
+                # no cap applies to this path.
                 st["state"] = "CONFIRMED"
-                return f"Confirmed {display_label}"
+                self._hub.publish_retest_event(
+                    ticker, "SUCCESS",
+                    f"{direction.upper()} reclaimed its prior extension "
+                    f"({current_price:.2f}) — confirmed"
+                    + (" (past retry cap, but a full reclaim always confirms)" if exhausted else ""),
+                )
+                await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
+                return self._confirmed_breakout_label(side)
+
+            if exhausted:
+                # Crossed back over the level but hasn't cleared the prior
+                # extreme yet, and the weak (bar-close) path is capped out for
+                # this side — keep watching for the reclaim above, don't fire
+                # on a shallower poke.
+                return None
+
+            if not st["reclaim_bar_seen"]:
+                st["reclaim_bar_seen"] = True
+                return f"Retesting {display_label}"
+            st["state"] = "CONFIRMED"
+            await self._confirm_breakout(ticker, direction, current_price, orb_high, orb_low)
+            return self._confirmed_breakout_label(side)
 
         else:
             # Price is back on the wrong side of the level for this direction.
+            if exhausted:
+                return None  # already capped; still just watching for a reclaim
             if st["state"] in ("BROKEN", "RETESTING"):
                 st["reclaim_bar_seen"] = False
-                if st["retest_count"] >= self._max_retest_attempts:
+                if st["retest_count"] >= max_attempts:
                     st["state"] = "EXHAUSTED"
                     logger.info(
                         f"[RETEST] {ticker} {direction} exhausted after "
-                        f"{st['retest_count']} retest(s) — no further re-arm this session"
+                        f"{st['retest_count']} retest(s) — no more bar-close shortcuts "
+                        f"this session, but still watching for a full extension reclaim"
+                    )
+                    self._hub.publish_retest_event(
+                        ticker, "WARN",
+                        f"{direction.upper()} retest cap ({max_attempts}) reached — "
+                        f"still watching for price to reclaim {st['extension']:.2f}",
                     )
                     return "invalidated"
                 st["retest_count"] += 1
                 st["state"] = "RETESTING"
                 logger.info(
                     f"[RETEST] {ticker} {direction} invalidated — re-armed "
-                    f"(attempt {st['retest_count']}/{self._max_retest_attempts}), "
+                    f"(attempt {st['retest_count']}/{max_attempts}), "
                     f"extension so far {st['extension']:.2f}"
+                )
+                self._hub.publish_retest_event(
+                    ticker, "INFO",
+                    f"{direction.upper()} retest invalidated — re-armed "
+                    f"(attempt {st['retest_count']}/{max_attempts})",
                 )
                 return f"Retesting {display_label}"
 
@@ -2128,6 +2220,12 @@ class OrbService:
                         self.orb_ranges.clear()
                         self.monitoring_state.clear()
                         self._retest_state.clear()
+                        # Strategies re-register their tolerance in
+                        # ORBEngine.calculate_orb once it runs for the new
+                        # session (after this clear, before any breakout can
+                        # occur) — clearing here bounds how long a deleted/
+                        # lowered strategy's registration can linger.
+                        self._hub.clear_max_retest_attempts()
                         self._bars_received_count = 0
                         
                         tickers = await self.load_followed_stocks()

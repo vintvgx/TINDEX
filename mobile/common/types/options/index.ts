@@ -24,6 +24,15 @@ export interface TrackedOptionContract {
     orb_breakout_id?: string;
     initial_analysis_score?: number;
     tracking_reason?: string;
+    // Entered-position alert threshold overrides — null/undefined means the
+    // 25/50/100 default applies. Only take effect once status === 'entered';
+    // tracking-phase alerts always use the fixed 25/50/100 defaults.
+    alert_gain_25?: number | null;
+    alert_gain_50?: number | null;
+    alert_gain_100?: number | null;
+    alert_loss_25?: number | null;
+    alert_loss_50?: number | null;
+    alert_loss_100?: number | null;
     created_at: string;
     updated_at: string;
   }

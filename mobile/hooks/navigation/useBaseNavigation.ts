@@ -111,10 +111,10 @@ export const useBaseNavigation = () => {
    * Navigate to ticker detail screen
    * Debounced to prevent accidental double-taps
    */
-  const toTicker = useCallback((ticker: string) => {
+  const toTicker = useCallback((ticker: string, options?: { fullScreenChart?: boolean }) => {
     debounceNavigation(() => {
       console.log("Navigating to [ticker]:", ticker);
-      navigationService.toTicker(ticker);
+      navigationService.toTicker(ticker, options);
     });
   }, [navigationService, debounceNavigation]);
 

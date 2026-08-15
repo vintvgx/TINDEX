@@ -167,6 +167,7 @@ def _eod_reset(engine):
                 pnl=0.0,
                 qty=qty_closed,
                 profile_key=engine.profile_key,
+                paper_mode=engine.paper,
             )
         except Exception as ex:
             logger.error("[Scheduler] EOD log/notify failed: %s", ex)
@@ -284,6 +285,7 @@ def check_expiry_reminders():
                 milestone=milestone,
                 qty=qty_remaining,
                 direction=row["direction"],
+                paper_mode=row.get("paper_mode", True),
             )
             logger_svc.mark_expiry_reminder_sent(row["id"], milestone, already_sent)
         except Exception as e:

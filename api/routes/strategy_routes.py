@@ -11,10 +11,12 @@ import concurrent.futures
 from datetime import date, datetime
 
 from flask import Blueprint, jsonify, request
-from services.strategy.trade_logger import TradeLogger
-from services.strategy.profiles import PROFILES, describe_profile
+from services.strategy.trade_logger import TradeLogger, enrich_open_trades_with_live_pnl
+from services.strategy.profiles import PROFILES, describe_profile, grace_fields_for_minutes
 from services.strategy.scheduler import reschedule_jobs, schedule_eod_close
 from services.strategy.orb_engine import ORBEngine, STRATEGY_DEFAULTS
+from services.strategy.contract_selector import select_contract, _parse_occ_strike
+from services.utils.market_hours import is_market_hours
 
 logger = logging.getLogger(__name__)
 
@@ -104,10 +106,77 @@ def _resolve_any_engine(strategy_id: str) -> ORBEngine | None:
     return _engines.get(strategy_id) or get_immediate_engine(strategy_id)
 
 
+def _sync_paired_strategy(sid: str, new_pair_id, old_pair_id) -> None:
+    """
+    Keep paired_strategy_id symmetric: if A.paired_strategy_id == B.id then
+    B.paired_strategy_id must equal A.id (or both are None). Call this
+    whenever sid's own pairing changes (create/update/delete) — it only
+    touches the OTHER side(s) of the link, since sid's own row is saved by
+    the caller. A stale partner pointer would make ORBEngine._find_ticker_conflict
+    silently stop excluding a pair that still thinks it's linked.
+    """
+    new_pair_id = new_pair_id or None
+    old_pair_id = old_pair_id or None
+    if new_pair_id == old_pair_id:
+        return
+
+    def _set_pair(target_id: str, value):
+        eng = _engines.get(target_id)
+        if eng:
+            eng.config["paired_strategy_id"] = value
+            eng.reload_config(eng.config)
+            logger_svc.save_strategy_config(eng.config)
+        else:
+            configs = logger_svc.load_configs()
+            base = next((c for c in configs if c.get("id") == target_id), None)
+            if base:
+                base["paired_strategy_id"] = value
+                logger_svc.save_strategy_config(base)
+
+    # Unlink the old partner — it no longer points back to sid.
+    if old_pair_id and old_pair_id != new_pair_id:
+        _set_pair(old_pair_id, None)
+
+    if new_pair_id:
+        # Steal the new partner away from whatever it previously pointed at,
+        # so the relationship stays strictly one-to-one.
+        eng = _engines.get(new_pair_id)
+        if eng:
+            prev = eng.config.get("paired_strategy_id")
+        else:
+            configs = logger_svc.load_configs()
+            base = next((c for c in configs if c.get("id") == new_pair_id), None)
+            prev = base.get("paired_strategy_id") if base else None
+        if prev and prev != sid:
+            _set_pair(prev, None)
+        _set_pair(new_pair_id, sid)
+
+
 def _get_or_create_immediate_engine(ticker: str, paper_mode: bool) -> ORBEngine:
-    """Return the immediate engine for (ticker, paper/live), creating it on first use."""
-    key = _immediate_key(ticker, paper_mode)
-    eng = _immediate_engines.get(key)
+    """
+    Return a free immediate engine for (ticker, paper/live) — reusing the base
+    slot if it exists and its prior position has closed (trade_taken=False),
+    otherwise spinning up an additional slot (base key + "-2", "-3", ...).
+
+    Immediate trades must NEVER be blocked just because another one is
+    already open on the same ticker+mode (2026-07-29 — a user hedging a live
+    IWM call with a put got refused entirely, which defeats the entire point
+    of an ad-hoc/manual trade: the user is deliberately overriding the
+    system's usual same-ticket caution). One ORBEngine can only track a
+    single open position at a time, so a genuinely concurrent second
+    position (a hedge, or scaling into a second contract) needs its own
+    engine instance rather than reusing a busy one.
+    """
+    base_key = _immediate_key(ticker, paper_mode)
+    key = base_key
+    suffix = 1
+    while True:
+        eng = _immediate_engines.get(key)
+        if eng is None or not eng.trade_taken:
+            break
+        suffix += 1
+        key = f"{base_key}-{suffix}"
+
     if eng is None:
         cfg = {
             **STRATEGY_DEFAULTS.copy(),
@@ -256,6 +325,21 @@ def _reconcile_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
 
     qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
     if qty_remaining <= 0:
+        # qty_exited already accounts for the full position (e.g. a partial-
+        # exit write that landed twice, or a prior interrupted close) but
+        # exit_time was never stamped — this row came from get_open_trades(),
+        # i.e. exit_time IS NULL, so without this it stays "open" forever with
+        # every future reconcile pass silently no-op'ing on it (nothing left
+        # to exit, by qty). Stamp exit_time now so it stops appearing open;
+        # don't touch pnl/qty_exited since they're already accounted for.
+        try:
+            logger_svc.client.table("orb_trades").update({
+                "exit_time": datetime.utcnow().isoformat(),
+                "exit_reason": row.get("exit_reason") or "RECONCILED — QTY ALREADY ZERO",
+            }).eq("id", row["id"]).execute()
+        except Exception as e:
+            logger.error("[reconcile] failed to stamp exit_time for zero-qty row %s: %s",
+                         row.get("id"), e)
         return {"contract_symbol": symbol, "status": "already_closed"}
 
     exit_price = None
@@ -275,13 +359,28 @@ def _reconcile_trade_with_broker(row: dict, engine: ORBEngine) -> dict:
     except Exception as e:
         logger.warning("[reconcile] order lookup failed for %s: %s", symbol, e)
 
-    # Fall back to entry_premium (pnl=0) when the real fill can't be found —
-    # same convention TradeLogger.reconcile_orphaned_trades already uses for
-    # "we know it closed but not at what price" rather than fabricating a
-    # gain/loss that didn't happen.
+    # No sell fill found. If the contract's expiry has passed, the broker
+    # having no position AND no sell order overwhelmingly means it expired
+    # worthless — record the real loss (exit_premium=0), not a fictitious
+    # breakeven. Previously this always fell back to entry_premium (pnl=0)
+    # regardless of expiry, which silently turned every unmonitored expired
+    # contract into a fake $0 close (and hid it from win/loss stats, since
+    # pnl=0 counts as neither). Only genuinely unexplained closures (not yet
+    # expired, no fill found) still fall back to entry_premium — we don't
+    # know what happened there, so we don't guess a loss that may not have
+    # occurred. NOTE: doesn't cover ITM auto-exercise (Alpaca converts to a
+    # stock position rather than the contract vanishing) — a real edge case
+    # this heuristic can't distinguish from a plain worthless expiration.
+    expiry = row.get("expiry")
+    is_expired = bool(expiry) and expiry <= date.today().isoformat()
+    if exit_price is None and is_expired:
+        exit_price = 0.0
+        exit_reason = "EXPIRED_WORTHLESS"
+    exit_price_final = exit_price if exit_price is not None else row.get("entry_premium")
+
     exit_persisted = logger_svc.log_exit(
         symbol, exit_reason,
-        exit_price if exit_price is not None else row.get("entry_premium"),
+        exit_price_final,
         qty_remaining, row.get("profile"),
         strategy_id=row.get("strategy_id"), trading_client=engine.trading_client,
         trade_id=row.get("id"),
@@ -422,7 +521,7 @@ def create_config():
             "profile", "trade_days", "strategy_name", "capital_limit",
             "bypass_breakout_window", "custom_thresholds", "exit_overrides",
             "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
-            "confirm_entry",
+            "confirm_entry", "paired_strategy_id", "paused_by_kill_switch",
         ) if k in data
     }}
     config.pop("id", None)   # force new UUID
@@ -436,6 +535,7 @@ def create_config():
     engine = ORBEngine(saved_config, stream_manager=_stream_manager)
     _engines[sid] = engine
     reschedule_jobs(engine, strategy_id=sid)
+    _sync_paired_strategy(sid, saved_config.get("paired_strategy_id"), None)
 
     return jsonify(saved), 201
 
@@ -458,11 +558,12 @@ def update_config(strategy_id: str):
         logger.info("[strategy] Rebuilt missing engine for %s during PATCH", strategy_id)
 
     engine = _engines[strategy_id]
+    old_pair_id = engine.config.get("paired_strategy_id")
     allowed = {"ticker", "paper_mode", "active",
                "profile", "trade_days", "strategy_name", "capital_limit",
                "bypass_breakout_window", "custom_thresholds", "exit_overrides",
                "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
-               "confirm_entry"}
+               "confirm_entry", "paired_strategy_id", "paused_by_kill_switch"}
     for key in allowed:
         if key in data:
             engine.config[key] = data[key]
@@ -474,6 +575,9 @@ def update_config(strategy_id: str):
     saved = logger_svc.save_strategy_config(engine.config)
     if not saved:
         return jsonify({"error": "Config updated in memory but failed to persist to database"}), 500
+
+    if "paired_strategy_id" in data:
+        _sync_paired_strategy(strategy_id, engine.config.get("paired_strategy_id"), old_pair_id)
 
     return jsonify({"status": "ok", "config": engine.config})
 
@@ -507,6 +611,20 @@ def delete_config(strategy_id: str):
     # Safe to remove now — position is closed (or never existed)
     _engines.pop(strategy_id, None)
     if engine:
+        # Unsubscribe the option-stream callback for this engine's contract
+        # (if any) BEFORE it's discarded. Every other close path (auto exit,
+        # manual sell, force-close, the daily 15:30 ET EOD sweep) already
+        # goes through reset_session() for this — this delete flow was the
+        # one exception: it sells the position directly (above) without ever
+        # calling it, and a few lines below removes this engine's eod_reset
+        # cron job, which was the only other thing that would have
+        # unconditionally unsubscribed it (regardless of trade_taken) at
+        # 15:30 ET. Without this, deleting a strategy with (or that recently
+        # had) an open position permanently orphans its option-stream
+        # subscription — nothing is left to ever unsubscribe it again short
+        # of a full process restart. 2026-08-12 — found auditing subscription
+        # leaks (see option_stream.py's get_health()/expired_symbols).
+        engine.reset_session()
         # Detach from the hub bar feed so no stale callback is retained.
         try:
             engine.unsubscribe_data()
@@ -521,8 +639,81 @@ def delete_config(strategy_id: str):
                 except Exception:
                     pass
 
+    old_pair_id = engine.config.get("paired_strategy_id") if engine else None
+    if old_pair_id is None and engine is None:
+        configs = logger_svc.load_configs()
+        base = next((c for c in configs if c.get("id") == strategy_id), None)
+        old_pair_id = base.get("paired_strategy_id") if base else None
+    _sync_paired_strategy(strategy_id, None, old_pair_id)
+
     logger_svc.delete_strategy_config(strategy_id)
     return jsonify({"status": "ok"})
+
+
+@strategy_bp.route("/configs/pause-all", methods=["POST"])
+def pause_all_strategies():
+    """
+    Bulk kill-switch: pause (or resume) every strategy config matching
+    `scope`, in one call. Only blocks NEW entries — 'active' gates
+    calculate_orb (see ORBEngine.calculate_orb), it never touches an already
+    open position, so nothing gets force-closed by this.
+
+    Body: { scope: "paper" | "live" | "all", active: bool }
+      active: false → pause. Only configs currently active are touched, and
+        each one gets paused_by_kill_switch=True so resume knows it was this
+        switch (not a manual per-strategy toggle) that turned it off.
+      active: true  → resume. Only configs with paused_by_kill_switch=True
+        are touched, so strategies you'd disabled individually for unrelated
+        reasons stay off — resume never re-activates those.
+    """
+    data = request.get_json() or {}
+    scope = data.get("scope")
+    if scope not in ("paper", "live", "all"):
+        return jsonify({"error": "scope must be 'paper', 'live', or 'all'"}), 400
+    if "active" not in data:
+        return jsonify({"error": "active (bool) is required"}), 400
+    turn_on = bool(data["active"])
+
+    configs = logger_svc.load_configs()
+
+    def in_scope(cfg: dict) -> bool:
+        if scope == "all":
+            return True
+        is_paper = cfg.get("paper_mode", True)
+        return is_paper if scope == "paper" else not is_paper
+
+    if turn_on:
+        targets = [c for c in configs if in_scope(c) and c.get("paused_by_kill_switch")]
+    else:
+        targets = [c for c in configs if in_scope(c) and c.get("active", True)]
+
+    touched = []
+    for base in targets:
+        sid = base["id"]
+        engine = _engines.get(sid)
+        if engine is None:
+            engine = ORBEngine(base, stream_manager=_stream_manager)
+            _engines[sid] = engine
+            reschedule_jobs(engine, strategy_id=sid)
+
+        engine.config["active"] = turn_on
+        engine.config["paused_by_kill_switch"] = not turn_on
+        engine.config["id"] = sid
+        engine.reload_config(engine.config)
+        reschedule_jobs(engine, strategy_id=sid)
+
+        saved = logger_svc.save_strategy_config(engine.config)
+        if saved:
+            touched.append(sid)
+        else:
+            logger.error("[strategy] pause-all failed to persist config %s", sid)
+
+    return jsonify({
+        "status": "ok",
+        "scope": scope,
+        "active": turn_on,
+        "strategy_ids": touched,
+    })
 
 
 @strategy_bp.route("/configs/<strategy_id>/reset-session", methods=["POST"])
@@ -569,6 +760,8 @@ def force_close_strategy(strategy_id: str):
             pnl=pnl,
             qty=qty,
             profile_key=engine.profile_key,
+            exit_premium=exit_price,
+            paper_mode=engine.paper,
         )
         engine.debug.emit("SUCCESS",
             f"Force-closed {engine.contract_symbol} qty={qty} "
@@ -583,15 +776,27 @@ def force_close_strategy(strategy_id: str):
 def sell_position(strategy_id: str):
     """
     Manually sell contracts of an open position. Works for both saved strategies
-    and ad-hoc immediate-trade engines (resolved by id). Body: {qty?} — omit qty
-    to sell the entire remaining position.
+    and ad-hoc immediate-trade engines (resolved by id). Body: {qty?, limit_price?}
+    — omit qty to sell the entire remaining position; omit limit_price to let
+    the engine seek a good price itself (sample the bid, try a limit order,
+    fall back to market after ~10s — see ORBEngine._execute_priced_exit), or
+    supply one to use that exact price instead.
+
+    NOTE: this request can legitimately take up to ~10s to return — the
+    gunicorn worker timeout (120s, see Procfile) and the mobile client both
+    need to tolerate that; this isn't a hang.
     """
     engine = _resolve_any_engine(strategy_id)
     if not engine:
         return jsonify({"status": "error", "message": "Position not found"}), 404
     data = request.get_json() or {}
     qty = data.get("qty")
-    result = engine.submit_manual_exit(int(qty) if qty is not None else None)
+    limit_price = data.get("limit_price")
+    try:
+        limit_price = float(limit_price) if limit_price is not None else None
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "limit_price must be a number"}), 400
+    result = engine.submit_manual_exit(int(qty) if qty is not None else None, limit_price)
     code = 200 if result.get("status") == "ok" else 409
     return jsonify(result), code
 
@@ -623,7 +828,13 @@ def add_to_position(strategy_id: str):
 def update_strategy_exits(strategy_id: str):
     """
     Update the live ExitManager's stop-loss and/or TP levels mid-trade.
-    Body: { hard_stop?, tp1?, tp2? }  — all optional, only provided fields are changed.
+    Body: { hard_stop?, tp1?, tp2?, sl_qty?, tp1_qty?, tp2_qty?, sl_grace_minutes?,
+            runner_mode?, cascade_enabled? }
+    — all optional, only provided fields are changed. sl_qty/tp1_qty/tp2_qty
+    are per-level contract counts; sl_grace_minutes is the stop-type choice
+    (null = Hard Stop, 5/10/15 = SL timer); runner_mode is "trail"/"be_hold"/
+    "none"; cascade_enabled toggles cascade on/off for the rest of this trade
+    (see ExitManager.apply_overrides).
     Returns the updated exit state so the client can confirm the new levels.
     """
     engine = _resolve_any_engine(strategy_id)
@@ -634,17 +845,56 @@ def update_strategy_exits(strategy_id: str):
         return jsonify({"status": "error", "message": "No active position — nothing to update"}), 409
 
     data = request.get_json() or {}
+    kwargs = {
+        "hard_stop": float(data["hard_stop"]) if "hard_stop" in data else None,
+        "tp1":       float(data["tp1"]) if "tp1" in data else None,
+        "tp2":       float(data["tp2"]) if "tp2" in data else None,
+        "sl_qty":    int(data["sl_qty"]) if "sl_qty" in data else None,
+        "tp1_qty":   int(data["tp1_qty"]) if "tp1_qty" in data else None,
+        "tp2_qty":   int(data["tp2_qty"]) if "tp2_qty" in data else None,
+        "runner_mode":     data.get("runner_mode"),
+        "cascade_enabled": data["cascade_enabled"] if "cascade_enabled" in data else None,
+    }
+    if "sl_grace_minutes" in data:
+        raw = data["sl_grace_minutes"]
+        kwargs["sl_grace_minutes"] = int(raw) if raw is not None else None
     try:
-        changed = em.apply_overrides(
-            hard_stop=float(data["hard_stop"]) if "hard_stop" in data else None,
-            tp1=float(data["tp1"]) if "tp1" in data else None,
-            tp2=float(data["tp2"]) if "tp2" in data else None,
-        )
+        changed = em.apply_overrides(**kwargs)
     except ValueError as e:
         return jsonify({"status": "error", "message": str(e)}), 400
 
     if not changed:
         return jsonify({"status": "noop", "message": "No fields provided"}), 400
+
+    # Persist to the open orb_trades row too — apply_overrides() above only
+    # mutated the in-memory ExitManager, which a Railway restart wipes.
+    # Without this, recover_position() rebuilds hard_stop/tp1/tp2/runner_mode
+    # from whatever this row was last written with AT ENTRY, silently
+    # reverting any edit made after entry (2026-08-04 incident: a TP raised
+    # to 5 reverted to 1.21 after a routine redeploy). Best-effort — a failed
+    # persist here doesn't undo the in-memory edit, only a later restart
+    # would be affected, so this logs rather than fails the request.
+    if engine.active_trade_id:
+        try:
+            persisted = logger_svc.update_exit_levels(
+                trade_id=engine.active_trade_id,
+                hard_stop_price=changed.get("hard_stop"),
+                tp1_price=changed.get("tp1"),
+                tp2_price=changed.get("tp2"),
+                runner_mode=changed.get("runner_mode"),
+                cascade_enabled=changed.get("cascade_enabled"),
+            )
+            if not persisted:
+                logger.error(
+                    "[strategy] Exit-level edit for %s applied in-memory but FAILED to persist "
+                    "(trade_id=%s) — will revert to entry-time levels on the next restart",
+                    strategy_id, engine.active_trade_id,
+                )
+        except Exception as e:
+            logger.error(
+                "[strategy] Failed to persist exit-level edit for trade %s: %s",
+                engine.active_trade_id, e, exc_info=True,
+            )
 
     logger.info("[strategy] Updated exits for %s: %s", strategy_id, changed)
     return jsonify({
@@ -652,6 +902,118 @@ def update_strategy_exits(strategy_id: str):
         "updated": changed,
         "exit_state": em.to_dict(),
     })
+
+
+def _find_adjacent_strike(engine: ORBEngine, direction: str, default: dict) -> dict | None:
+    """
+    One strike further OTM than `default` in the breakout's own direction —
+    a cheaper, more leveraged "alt" contract for the Dashboard's candidate
+    breakout card. Re-fetches the same chain select_contract() just used
+    rather than threading a second return value through that function, so
+    select_contract's signature (and its live-trading callers) stays
+    untouched. Read-only — no capital checks, no engine/position state.
+    """
+    from datetime import date as _date
+    from alpaca.data.requests import OptionChainRequest
+    from alpaca.data.enums import OptionsFeed
+
+    option_type = "call" if direction == "CALL" else "put"
+    try:
+        chain = engine.option_client.get_option_chain(OptionChainRequest(
+            underlying_symbol=engine.ticker,
+            expiration_date=_date.today(),
+            type=option_type,
+            feed=OptionsFeed.INDICATIVE,
+        ))
+    except Exception as exc:
+        logger.warning("[candidate-contract] alt-strike chain fetch failed: %s", exc)
+        return None
+
+    default_strike = default["strike"]
+    candidates = []
+    for symbol, contract in chain.items():
+        strike = _parse_occ_strike(symbol)
+        if strike is None:
+            continue
+        q = getattr(contract, "latest_quote", None)
+        ask = getattr(q, "ask_price", None) if q else None
+        if not ask or float(ask) <= 0:
+            continue
+        # "Further OTM" = a higher strike for a CALL, a lower strike for a PUT.
+        if direction == "CALL" and strike <= default_strike:
+            continue
+        if direction == "PUT" and strike >= default_strike:
+            continue
+        raw_delta = contract.greeks.delta if getattr(contract, "greeks", None) else None
+        candidates.append({
+            "symbol": symbol, "strike": strike,
+            "delta": abs(raw_delta) if raw_delta is not None else 0.0,
+            "ask": float(ask), "bid": float(getattr(q, "bid_price", 0) or 0),
+        })
+
+    if not candidates:
+        return None
+    # Nearest strike beyond default, on the correct side — the real
+    # next-strike-out, not just whatever the chain happens to sort first.
+    return min(candidates, key=lambda c: abs(c["strike"] - default_strike))
+
+
+@strategy_bp.route("/configs/<strategy_id>/candidate-contract", methods=["GET"])
+def candidate_contract(strategy_id: str):
+    """
+    Preview of what select_contract() would pick for this strategy RIGHT NOW,
+    plus one strike further OTM in the same direction — backs the Dashboard's
+    candidate breakout card, shown BEFORE the 3-minute confirmation hold
+    clears. Purely read-only: no capital/risk checks, no engine or position
+    state touched, safe to poll.
+
+    Query params: direction ("CALL" | "PUT", required).
+    """
+    direction = (request.args.get("direction") or "").upper()
+    if direction not in ("CALL", "PUT"):
+        return jsonify({"success": False, "error": "direction must be CALL or PUT"}), 400
+
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        return jsonify({"success": False, "error": "Engine not found"}), 404
+    if engine.orh is None or engine.orl is None:
+        return jsonify({"success": False, "error": "ORB range not established yet"}), 409
+
+    trigger_price = engine.orh if direction == "CALL" else engine.orl
+    try:
+        default = select_contract(
+            ticker=engine.ticker,
+            direction=direction,
+            trigger_price=trigger_price,
+            orh=engine.orh,
+            orl=engine.orl,
+            fib_levels=engine.fib_levels,
+            data_client=engine.option_client,
+            profile=engine.profile,
+            vwap=engine.session_vwap,
+        )
+    except Exception as e:
+        logger.error("[candidate-contract] %s select_contract failed: %s", strategy_id, e, exc_info=True)
+        return jsonify({"success": False, "error": "Contract lookup failed"}), 500
+
+    if not default:
+        return jsonify({"success": False, "error": "No suitable contract found"}), 404
+
+    alt = _find_adjacent_strike(engine, direction, default)
+
+    def _fmt(row: dict | None) -> dict | None:
+        if not row:
+            return None
+        return {
+            "symbol": row["symbol"],
+            "strike": row["strike"],
+            "delta":  row["delta"],
+            "bid":    row["bid"],
+            "ask":    row["ask"],
+            "mid":    round((row["bid"] + row["ask"]) / 2, 4),
+        }
+
+    return jsonify({"success": True, "default": _fmt(default), "alt": _fmt(alt)})
 
 
 @strategy_bp.route("/pending-confirmations", methods=["GET"])
@@ -671,7 +1033,16 @@ def sweep_pending_confirmations():
     each live in-memory engine (so its preview price stream is unsubscribed
     cleanly), then a DB-level bulk expiry as a safety net for confirmations
     left behind by an engine that no longer exists (e.g. after a redeploy).
+
+    Cheap early-return outside market hours — no pending confirmation can
+    exist outside the trading day (0DTE-only strategies), so there's
+    nothing to sweep. Belt-and-suspenders alongside the cron's own Mon-Fri
+    schedule (see the migration referenced above) in case this ever gets
+    pinged off-schedule (redeploy artifact, misconfigured cron, etc).
     """
+    if not is_market_hours():
+        return jsonify({"status": "ok", "skipped": "outside market hours", "engine_expired": 0, "bulk_expired": 0})
+
     engine_expired = 0
     for sid, eng in _all_engines():
         try:
@@ -855,11 +1226,22 @@ def immediate_trade(strategy_id: str):
         return jsonify({"status": "error",
                         "message": "direction and contract_symbol are required"}), 400
 
+    is_no_stop_loss = (data.get("profile") or "").upper() == "NO_STOP_LOSS"
+
     exit_overrides_cfg = {}
     if "max_loss_pct" in data:
         val = float(data["max_loss_pct"])
         if 0.05 <= val <= 0.95:
             exit_overrides_cfg["max_loss_pct"] = val
+    # Stop type (Hard Stop / SL-5 / SL-10) — an independent per-trade choice
+    # layered onto whatever profile was selected (see grace_fields_for_minutes).
+    # Skipped for NO_STOP_LOSS, same as every other exit-override field here.
+    if "sl_grace_minutes" in data and not is_no_stop_loss:
+        raw = data["sl_grace_minutes"]
+        try:
+            exit_overrides_cfg.update(grace_fields_for_minutes(int(raw) if raw is not None else None))
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
 
     result = _submit_manual_trade_bounded(
         engine,
@@ -868,6 +1250,7 @@ def immediate_trade(strategy_id: str):
         qty=data.get("qty"),
         profile_key=data.get("profile"),
         exit_overrides=exit_overrides_cfg if exit_overrides_cfg else None,
+        bypass_stream_check=bool(data.get("bypass_stream_check", False)),
     )
     code = 200 if result.get("status") == "ok" else 409
     return jsonify(result), code
@@ -894,20 +1277,27 @@ def immediate_trade_by_ticker():
     is_no_stop_loss = (profile_key or "").upper() == "NO_STOP_LOSS"
 
     exit_overrides = {}
-    # NO_STOP_LOSS means NO automatic exit of any kind — consol/volume exit
-    # and max_loss_pct overrides are intentionally ignored for it rather than
+    # NO_STOP_LOSS means NO automatic exit of any kind — volume exit and
+    # max_loss_pct overrides are intentionally ignored for it rather than
     # merged in, so a client can't accidentally (or a stale UI can't) partially
     # re-enable an automatic close on a position the user explicitly chose to
     # hold with zero automatic exits.
     if not is_no_stop_loss:
-        if "consol_exit" in data:
-            exit_overrides["consol_exit"] = bool(data["consol_exit"])
         if "volume_exit" in data:
             exit_overrides["volume_exit"] = bool(data["volume_exit"])
         if "max_loss_pct" in data:
             val = float(data["max_loss_pct"])
             if 0.05 <= val <= 0.95:   # sanity clamp: 5%–95%
                 exit_overrides["max_loss_pct"] = val
+        # Stop type (Hard Stop / SL-5 / SL-10) — independent per-trade choice
+        # layered onto whatever profile was selected (see
+        # grace_fields_for_minutes); null/omitted means Hard Stop.
+        if "sl_grace_minutes" in data:
+            raw = data["sl_grace_minutes"]
+            try:
+                exit_overrides.update(grace_fields_for_minutes(int(raw) if raw is not None else None))
+            except ValueError as e:
+                return jsonify({"status": "error", "message": str(e)}), 400
 
     engine = _get_or_create_immediate_engine(ticker, paper_mode)
     result = _submit_manual_trade_bounded(
@@ -917,6 +1307,7 @@ def immediate_trade_by_ticker():
         qty=data.get("qty"),
         profile_key=data.get("profile"),
         exit_overrides=exit_overrides or None,
+        bypass_stream_check=bool(data.get("bypass_stream_check", False)),
     )
     # Surface the engine id so the client can stream live P&L over the WS.
     result["strategy_id"] = engine.strategy_id
@@ -1038,12 +1429,26 @@ def get_both_accounts():
             last_equity = float(acct.last_equity)
             pnl_today   = equity - last_equity
             return {
-                "equity":          equity,
-                "cash":            float(acct.cash),
-                "buying_power":    float(acct.buying_power),
-                "day_trade_count": acct.daytrade_count,
-                "pnl_today":       round(pnl_today, 2),
-                "pnl_today_pct":   round(pnl_today / last_equity * 100, 3) if last_equity > 0 else 0,
+                "equity":                equity,
+                # Exposed so the client can recompute today's P&L against a
+                # live-derived equity (cash + streamed position market value)
+                # instead of only this endpoint's own slower equity figure.
+                "last_equity":           last_equity,
+                "cash":                  float(acct.cash),
+                "buying_power":          float(acct.buying_power),
+                # Optional[int] on Alpaca's model — coerced to 0 rather than
+                # left None, which the mobile Live Positions screen used to
+                # render as the literal string "null" (position.tsx wasn't
+                # guarding it the way this endpoint's other consumer does).
+                "day_trade_count":       acct.daytrade_count or 0,
+                "pnl_today":             round(pnl_today, 2),
+                "pnl_today_pct":         round(pnl_today / last_equity * 100, 3) if last_equity > 0 else 0,
+                # "Available balance" — the account's actual unlevered spending
+                # power, distinct from buying_power (which reflects margin).
+                "available_balance":     float(acct.non_marginable_buying_power or 0),
+                "options_buying_power":  float(acct.options_buying_power or 0),
+                "long_market_value":     float(acct.long_market_value or 0),
+                "short_market_value":    float(acct.short_market_value or 0),
                 "paper_mode":      paper,
                 "available":       True,
             }
@@ -1058,6 +1463,48 @@ def get_both_accounts():
         "paper":       _fetch(True),
         "live":        _fetch(False),
     })
+
+
+@strategy_bp.route("/accounts/transfers", methods=["GET"])
+def get_account_transfers():
+    """
+    Real ACH transfer history (deposits/withdrawals) for the live account.
+
+    Alpaca paper accounts start with a fixed virtual balance and don't take
+    real ACH transfers, so this is live-only — a "Paper transfers" section
+    would always be empty and just be noise.
+
+    The retail TradingClient has no typed get_account_activities()/
+    get_transfers() method (that only exists on the separate Broker API,
+    alpaca.broker.client, which this app doesn't use) — TradingClient extends
+    RESTClient, which does expose a generic authenticated .get(path, data),
+    so the retail Activities endpoint is reached directly through that.
+    """
+    import os
+    from alpaca.trading.client import TradingClient
+
+    try:
+        key    = os.getenv("ALPACA_LIVE_API_KEY")
+        secret = os.getenv("ALPACA_LIVE_SECRET_KEY")
+        client = TradingClient(key, secret, paper=False)
+
+        raw = client.get("/account/activities", {"activity_types": "CSD,CSW"})
+        transfers = []
+        for item in raw or []:
+            net_amount = float(item.get("net_amount", 0) or 0)
+            transfers.append({
+                "id":          item.get("id"),
+                "date":        item.get("date"),
+                "amount":      net_amount,
+                "direction":   "deposit" if net_amount >= 0 else "withdrawal",
+                "status":      item.get("status"),
+                "description": item.get("description", ""),
+            })
+        transfers.sort(key=lambda t: t["date"] or "", reverse=True)
+        return jsonify({"success": True, "transfers": transfers})
+    except Exception as e:
+        logger.error("[strategy] get_account_transfers failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e), "transfers": []}), 502
 
 
 @strategy_bp.route("/accounts/history", methods=["GET"])
@@ -1084,7 +1531,6 @@ def get_accounts_history():
     from datetime import date as _date
     from alpaca.trading.client import TradingClient
     from alpaca.trading.requests import GetPortfolioHistoryRequest
-    from alpaca.trading.enums import ActivityType
 
     def _nearest_index_on_or_before(timestamps: list, target_ts: float) -> int:
         """Index of the latest daily bar at/before target_ts, clamped to [0, len-1]."""
@@ -1095,6 +1541,35 @@ def get_accounts_history():
             else:
                 break
         return idx
+
+    def _fetch_deposits_withdrawn(client) -> tuple[float, float]:
+        """
+        Total deposited/withdrawn via the same direct Activities endpoint
+        /accounts/transfers uses (client.get("/account/activities", ...)),
+        rather than get_portfolio_history's `cashflow` sub-object below.
+
+        That sub-object requires cashflow_types to exactly match Alpaca's
+        expected format and only reports cashflow that falls inside the
+        returned daily-bar timestamp range — for at least one real account
+        this came back empty (0 deposited) despite $500+ in confirmed CSD
+        activity, silently breaking both the All-Time P&L % and the app's
+        "Overall P&L vs. net deposits" figure (position.tsx). The Activities
+        endpoint is what actually lists each settled transfer directly, so
+        summing it here can't miss what /accounts/transfers already shows.
+        """
+        try:
+            raw = client.get("/account/activities", {"activity_types": "CSD,CSW"})
+        except Exception as e:
+            logger.warning("[strategy] deposit/withdrawal activities fetch failed: %s", e)
+            return 0.0, 0.0
+        deposited = withdrawn = 0.0
+        for item in raw or []:
+            net_amount = float(item.get("net_amount", 0) or 0)
+            if net_amount >= 0:
+                deposited += net_amount
+            else:
+                withdrawn += abs(net_amount)
+        return deposited, withdrawn
 
     def _fetch_with_history(paper: bool) -> dict:
         try:
@@ -1115,31 +1590,19 @@ def get_accounts_history():
             pnl_month = pnl_month_pct = None
             pnl_ytd = pnl_ytd_pct = None
             pnl_all_time = pnl_all_time_pct = None
-            total_deposited = total_withdrawn = 0.0
+
+            # Deposits/withdrawals via the direct Activities endpoint — see
+            # _fetch_deposits_withdrawn's docstring for why this replaced
+            # get_portfolio_history's cashflow sub-object.
+            total_deposited, total_withdrawn = _fetch_deposits_withdrawn(client)
 
             try:
-                # `cashflow_types` must be requested explicitly — Alpaca omits
-                # the cashflow dict entirely otherwise (confirmed against
-                # alpaca-py 0.43.2's GetPortfolioHistoryRequest, which defaults
-                # cashflow_types to None).
                 hist = client.get_portfolio_history(
-                    GetPortfolioHistoryRequest(
-                        period="all", timeframe="1D",
-                        cashflow_types=f"{ActivityType.CSD.value},{ActivityType.CSW.value}",
-                    )
+                    GetPortfolioHistoryRequest(period="all", timeframe="1D")
                 )
                 timestamps = list(hist.timestamp or [])
                 equities   = [float(e) if e is not None else None for e in (hist.equity or [])]
                 pls        = [float(p) if p is not None else None for p in (hist.profit_loss or [])]
-                cashflow   = hist.cashflow or {}
-
-                for activity, values in cashflow.items():
-                    total = sum(float(v) for v in values if v is not None)
-                    key_name = activity.value if hasattr(activity, "value") else str(activity)
-                    if key_name == "CSD":
-                        total_deposited += total
-                    elif key_name == "CSW":
-                        total_withdrawn += abs(total)
 
                 if timestamps and pls:
                     now_ts = timestamps[-1]
@@ -1266,9 +1729,24 @@ def get_alpaca_positions():
 @strategy_bp.route("/data/reset", methods=["POST"])
 def reset_strategy_data():
     """
-    Danger-zone: delete all rows from orb_trades and orb_session so the user
-    can start fresh.  Optionally also wipes orb_debug_logs when
-    clear_debug_logs=true is passed in the JSON body.
+    Danger-zone: delete all rows from orb_trades, orb_session,
+    performance_reviews, and orb_pending_confirmations so the user can start
+    fresh and re-rate the system from a clean slate. Optionally also wipes
+    orb_debug_logs when clear_debug_logs=true is passed in the JSON body.
+
+    performance_reviews and orb_pending_confirmations are cleared
+    unconditionally (not gated behind a flag) — both are entirely derived
+    from trades that no longer exist after this call, so leaving them behind
+    would show stale AI reviews / confirmation prompts referencing deleted
+    history, which defeats the point of a "clean slate."
+
+    Also resets every currently-loaded engine's in-memory session state
+    (_session_halted, _session_realized_pnl, re-entry cooldowns, etc. — see
+    ORBEngine.reset_session). Without this, an engine that halted on
+    daily_loss_limit or is sitting in a post-loss cooldown earlier today would
+    keep enforcing that against trades that no longer exist in the DB until
+    the next 9:35 ET calculate_orb or a server restart — the DB would say
+    "clean slate" while the live engine still didn't believe it.
 
     Intended for development / paper-trading only.  The route does not require
     a confirmation token beyond the explicit POST — the frontend handles the
@@ -1282,14 +1760,58 @@ def reset_strategy_data():
         # UUID or integer — avoids the cast error from a hardcoded UUID sentinel.
         client.table("orb_trades").delete().not_.is_("id", "null").execute()
         client.table("orb_session").delete().not_.is_("id", "null").execute()
+        # performance_reviews has no guaranteed "id" column usage elsewhere in
+        # this codebase (upserts key on review_date+paper_mode) — filter on
+        # review_date instead, which is always populated and part of that
+        # composite key, so this can't silently no-op on a schema mismatch.
+        client.table("performance_reviews").delete().not_.is_("review_date", "null").execute()
+        client.table("orb_pending_confirmations").delete().not_.is_("id", "null").execute()
+        cleared = ["orb_trades", "orb_session", "performance_reviews", "orb_pending_confirmations"]
         if clear_debug:
             client.table("orb_debug_logs").delete().not_.is_("id", "null").execute()
-        logger.warning("[strategy] Trade data reset performed — orb_trades and orb_session cleared")
+            cleared.append("orb_debug_logs")
+
+        # Reset every live engine's session state so halts/cooldowns/realized
+        # P&L don't keep enforcing against trades that no longer exist.
+        # Skip any engine that currently holds an OPEN position — resetting
+        # it would wipe its self.exit_manager/self.trade_taken and silently
+        # orphan a real broker position with no more SL/TP monitoring. That
+        # position's own orb_trades row was just deleted above too, so its
+        # eventual exit won't have a row left to log against; this is
+        # surfaced to the caller via open_position_engines rather than
+        # silently swallowed, since it's the one real risk of resetting
+        # while something is still open.
+        reset_count = 0
+        open_position_skips = []
+        for eng in list(_engines.values()) + list(_immediate_engines.values()):
+            if getattr(eng, "trade_taken", False):
+                open_position_skips.append(f"{eng.ticker} {getattr(eng, 'contract_symbol', '?')}")
+                continue
+            try:
+                eng.reset_session()
+                reset_count += 1
+            except Exception as e:
+                logger.warning("[strategy] reset_session failed for %s during data/reset: %s",
+                               getattr(eng, "strategy_id", "?"), e)
+
+        logger.warning(
+            "[strategy] Trade data reset performed — %s cleared, %d live engine(s) session-reset, "
+            "%d skipped (open position)",
+            ", ".join(cleared), reset_count, len(open_position_skips),
+        )
+        warning = (
+            f" WARNING: {len(open_position_skips)} engine(s) have an open position "
+            f"({', '.join(open_position_skips)}) — left running as-is, but its trade "
+            f"history was just deleted, so its eventual exit won't be logged."
+            if open_position_skips else ""
+        )
         return jsonify({
             "status":  "ok",
-            "message": "Trade data cleared. orb_trades and orb_session wiped."
-                       + (" orb_debug_logs also cleared." if clear_debug else ""),
-            "cleared": ["orb_trades", "orb_session"] + (["orb_debug_logs"] if clear_debug else []),
+            "message": f"Trade data cleared ({', '.join(cleared)}). "
+                       f"{reset_count} live engine(s) session-reset.{warning}",
+            "cleared": cleared,
+            "engines_reset": reset_count,
+            "open_position_skips": open_position_skips,
         })
     except Exception as e:
         logger.error("[strategy] data/reset failed: %s", e)
@@ -1302,8 +1824,10 @@ def get_trade_history():
     ticker     = request.args.get("ticker", None)
     profile    = request.args.get("profile", None)
     trade_date = request.args.get("trade_date", None)
-    return jsonify(logger_svc.get_trades(limit=limit, ticker=ticker, profile=profile,
-                                         trade_date=trade_date))
+    trades = logger_svc.get_trades(limit=limit, ticker=ticker, profile=profile,
+                                    trade_date=trade_date)
+    trades = enrich_open_trades_with_live_pnl(trades)
+    return jsonify(trades)
 
 
 @strategy_bp.route("/skipped-sessions", methods=["GET"])
@@ -1351,30 +1875,47 @@ def get_performance():
 @strategy_bp.route("/simulate", methods=["POST"])
 def run_simulation():
     """
-    POST { "scenario": "profit"|"loss", "strategy_id": "<uuid>" (optional) }
+    POST { "scenario": "profit"|"loss"|"reversal",
+           "strategy_id": "<uuid>" (optional),
+           "profile": "<ORB profile key>" (optional, default THUNDER_CAT),
+           "suppress_push": bool (optional, default false) }
 
-    Starts a 10-tick synthetic session (6 s/tick, ~60 s total) that fires
-    real Expo push notifications and WebSocket fan-outs to any client
-    connected on /ws/strategy/<id>/live.  No Alpaca orders, no Supabase writes.
+    Starts a 10-tick synthetic session (6 s/tick, ~60 s total) that fans out
+    over WebSocket to any client connected on /ws/strategy/<id>/live, and —
+    unless suppress_push is set — fires real Expo push notifications.
+    No Alpaca orders, no Supabase writes.
+
+    strategy_id is optional: when omitted, falls back to an existing engine
+    or a throwaway IWM engine (same ad-hoc pattern as the immediate-trade
+    flow — never auto-trades, no strategy config required), so this is
+    reachable from a standalone "Run Simulation" entry point with no
+    pre-configured strategy.
     """
-    from services.strategy.simulation import SimulationRunner
+    from services.strategy.simulation import SimulationRunner, VALID_SIM_PROFILES, _build_pre_entry_history, SIM_ORH, SIM_ORL
 
-    data        = request.get_json() or {}
-    scenario    = data.get("scenario", "profit")
-    strategy_id = data.get("strategy_id")
+    data          = request.get_json() or {}
+    scenario      = data.get("scenario", "profit")
+    strategy_id   = data.get("strategy_id")
+    profile       = data.get("profile", "THUNDER_CAT")
+    suppress_push = bool(data.get("suppress_push", False))
 
     if scenario not in ("profit", "loss", "reversal"):
         return jsonify({"error": "scenario must be 'profit', 'loss', or 'reversal'"}), 400
 
-    engine = _engines.get(strategy_id) if strategy_id else _first_engine()
-    if not engine:
+    if profile not in VALID_SIM_PROFILES:
         return jsonify({
-            "error": "No strategy engine running — add a strategy first",
-        }), 404
+            "error": f"profile must be one of: {', '.join(VALID_SIM_PROFILES)}",
+        }), 400
 
-    active_sid = strategy_id or next(iter(_engines))
-    runner = SimulationRunner(engine)
-    if not runner.start(scenario):
+    engine = _engines.get(strategy_id) if strategy_id else (
+        _first_engine() or _get_or_create_immediate_engine("IWM", paper_mode=True)
+    )
+    if strategy_id and not engine:
+        return jsonify({"error": "Strategy not found"}), 404
+
+    active_sid = strategy_id or getattr(engine, "strategy_id", None)
+    runner = SimulationRunner(engine, suppress_push=suppress_push)
+    if not runner.start(scenario, profile_key=profile):
         return jsonify({"error": "A simulation is already running"}), 409
 
     duration = 90 if scenario == "reversal" else 60
@@ -1387,10 +1928,39 @@ def run_simulation():
         "ticks":            ticks,
         "ticker":           "IWM",
         "entry_premium":    1.50,
-        "profile":          "THUNDER_CAT",
+        "profile":          profile,
+        "orb_high":         SIM_ORH,
+        "orb_low":          SIM_ORL,
+        "history":          _build_pre_entry_history(SIM_ORH, SIM_ORL),
     }), 202
 
 
+@strategy_bp.route("/debug/test-push", methods=["POST"])
+def send_test_push():
+    """
+    POST { "title"?: str, "body"?: str }
+
+    Fires one real Expo push through the exact same StrategyNotifier queue
+    every other notification in the app goes through — no engine, no
+    strategy_id, no synthetic trade required. Added for the Profile >
+    Simulator screen so "does my device actually receive pushes" can be
+    checked in isolation from a whole trade simulation. Delivery is
+    fire-and-forget (same as every other _dispatch call in this codebase) —
+    a 200 here means "queued," not "delivered."
+    """
+    from services.supabase.supabase_service import get_supabase_service
+    from services.strategy.notifier import StrategyNotifier
+
+    data  = request.get_json(silent=True) or {}
+    title = (data.get("title") or "Test Notification").strip()
+    body  = (data.get("body") or "This is a test push from the Simulator screen.").strip()
+
+    try:
+        StrategyNotifier(get_supabase_service().client).notify_test(title, body)
+        return jsonify({"status": "ok", "message": "Test push queued"})
+    except Exception as e:
+        logger.error("[debug/test-push] %s", e, exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # ── Performance reviews ───────────────────────────────────────────────────────
@@ -1562,6 +2132,16 @@ def get_batch_technicals():
     return jsonify({"success": True, "data": results})
 
 
+@strategy_bp.route("/support-resistance/<ticker>", methods=["GET"])
+def get_ticker_support_resistance(ticker: str):
+    from services.technical_service import get_support_resistance
+    force = request.args.get("force", "false").lower() == "true"
+    data = get_support_resistance(ticker.upper(), force_refresh=force)
+    if data.get("error"):
+        return jsonify({"success": False, "error": data["error"]}), 422
+    return jsonify({"success": True, "data": data})
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _engine_position_response(engine: ORBEngine):
@@ -1588,6 +2168,7 @@ def _engine_position_response(engine: ORBEngine):
         qty_rem         = em.qty_remaining if em else 0
         unrealized_pnl  = (current_price - entry_p) * qty_rem * 100
         unrealized_pct  = ((current_price - entry_p) / entry_p * 100) if entry_p > 0 else 0
+        em_state = em.to_dict() if em else {}
         return jsonify({
             "active":              True,
             "ticker":              engine.config["ticker"],
@@ -1609,6 +2190,17 @@ def _engine_position_response(engine: ORBEngine):
             "be_stop_active":      em.be_stop_active if em else False,
             "runner_trail":        em.runner_trail if em else None,
             "fib_levels":          engine.fib_levels,
+            # Whether TP2 is even reachable for this trade — false for a
+            # 1-contract entry regardless of profile (see ExitManager.__init__).
+            # Lets the client hide TP2 entirely instead of showing a number
+            # that can never fire.
+            "use_tp2":             em._use_tp2 if em else False,
+            # Current stop-type configuration (Hard Stop vs SL timer) — lets
+            # the card/Edit modal know which to show as active.
+            "sl_grace_enabled":    em_state.get("sl_grace_enabled", False),
+            "sl_grace_minutes":    em_state.get("sl_grace_minutes"),
+            "runner_mode":         em_state.get("runner_mode", "trail"),
+            "cascade_enabled":     em_state.get("cascade_enabled", True),
         })
     except Exception:
         return jsonify({"active": False, "position": None, "paper_mode": engine.paper})

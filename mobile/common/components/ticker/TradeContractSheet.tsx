@@ -5,12 +5,15 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useToast } from '@/common/components/ui/Toast';
-import { useImmediateTradeByTicker } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
+import { useImmediateTradeByTicker, StreamUnavailableError } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
 import {
   IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
-  getOtmAutoProfileIndex, ProfileDropdown, ManualSLPicker,
+  getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
+import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
+import { BlindEntryModal } from '@/common/components/strategy/BlindEntryModal';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
+import type { ImmediateTradeByTickerRequest } from '@/common/types/strategy';
 
 interface Props {
   visible: boolean;
@@ -18,7 +21,8 @@ interface Props {
   colors: any;
   ticker: string;
   contract: OptionsContract | null;
-  /** Underlying price at the time the contract was looked up — drives OTM auto-profile selection. */
+  /** Underlying price at the time the contract was looked up (unused by the
+   *  cheap-contract auto-profile check itself, kept for signature stability). */
   currentPrice: number;
 }
 
@@ -33,7 +37,7 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
   const [paperMode, setPaperMode]       = useState(true);
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [qty, setQty]                   = useState(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
-  const [consolExit, setConsolExit]     = useState(false);
+  const [stopType, setStopType]         = useState<StopType>('HARD');
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
 
@@ -43,18 +47,25 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
-  // Reset to defaults + auto-pick an OTM profile for a cheap OTM contract
-  // every time a new contract is opened, mirroring ImmediateTradePanel.
+  // Blind Entry — set when the backend couldn't verify a live stream tick
+  // within 8s (status: 'stream_unavailable'). See BlindEntryModal.
+  const [blindEntry, setBlindEntry] = useState<{
+    body: ImmediateTradeByTickerRequest;
+    lastPrice: number;
+  } | null>(null);
+
+  // Reset to defaults + auto-suggest a grace stop-type for any sub-$0.50
+  // contract every time a new contract is opened, mirroring ImmediateTradePanel.
+  const autoGraceMinutes = contract ? getCheapContractAutoGraceMinutes(contract.ask) : null;
   useEffect(() => {
     if (!visible || !contract) return;
-    const otmIdx = getOtmAutoProfileIndex(contract, currentPrice);
-    const idx = otmIdx ?? DEFAULT_PROFILE_INDEX;
-    setProfileIndex(idx);
-    setQty(IMMEDIATE_PROFILES[idx].qty);
-    setConsolExit(false);
+    setProfileIndex(DEFAULT_PROFILE_INDEX);
+    setQty(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
+    setStopType(getCheapContractAutoGraceMinutes(contract.ask) ?? 'HARD');
     setVolumeExit(false);
     setManualSlPct(30);
     setPaperMode(true);
+    setBlindEntry(null);
   // Only re-run when a different contract is opened, not on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, contract?.symbol]);
@@ -64,25 +75,38 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
     setQty(IMMEDIATE_PROFILES[idx].qty);
   };
 
+  // Shared by the initial submit and the Blind Entry "Enter Anyway" retry.
+  const runSubmit = (body: ImmediateTradeByTickerRequest) => {
+    submit(body, {
+      onSuccess: (r) => {
+        toast.success(r.message || `${ticker} entered`);
+        setBlindEntry(null);
+        onClose();
+      },
+      onError: (e) => {
+        if (e instanceof StreamUnavailableError) {
+          setBlindEntry({ body, lastPrice: e.payload.last_price ?? 0 });
+          return;
+        }
+        toast.error(e.message || 'Trade failed');
+        setBlindEntry(null);
+      },
+    });
+  };
+
   const doSubmit = () => {
     if (!contract) return;
-    submit(
-      {
-        ticker,
-        direction:       contract.option_type,
-        contract_symbol: contract.symbol,
-        qty,
-        profile:         profile.key,
-        paper_mode:      paperMode,
-        consol_exit:     (isManual || isNoStopLoss) ? false : consolExit,
-        volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
-        ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
-      },
-      {
-        onSuccess: (r) => { toast.success(r.message || `${ticker} entered`); onClose(); },
-        onError:   (e) => toast.error(e.message || 'Trade failed'),
-      },
-    );
+    runSubmit({
+      ticker,
+      direction:       contract.option_type,
+      contract_symbol: contract.symbol,
+      qty,
+      profile:         profile.key,
+      paper_mode:      paperMode,
+      volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
+      sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
+      ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
+    });
   };
 
   const handleSubmitPress = () => {
@@ -185,32 +209,25 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
             </Text>
           </View>
 
-          {/* Exit toggles — hidden for MANUAL/NO_STOP_LOSS (no automatic exit to configure) */}
-          {!isManual && !isNoStopLoss && (
+          {/* Exit Controls — hidden for NO_STOP_LOSS (no automatic exit to configure) */}
+          {!isNoStopLoss && (
             <>
-              <Text style={[s.label, { color: colors.tabBarInactive, marginTop: 18 }]}>EXTRA EXITS</Text>
-              <View style={[s.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <View style={[s.exitRow, { borderBottomColor: colors.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
-                  <Text style={[s.exitLabel, { color: colors.text }]}>Consolidation Exit</Text>
-                  <TouchableOpacity onPress={() => setConsolExit(v => !v)} hitSlop={8}>
-                    <Ionicons
-                      name={consolExit ? 'checkbox' : 'square-outline'}
-                      size={22}
-                      color={consolExit ? colors.accent : colors.tabBarInactive}
-                    />
-                  </TouchableOpacity>
+              <Text style={[s.label, { color: colors.tabBarInactive, marginTop: 18 }]}>EXIT CONTROLS</Text>
+              <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
+              {!isManual && (
+                <View style={[s.exitToggles, { backgroundColor: colors.card, borderColor: colors.border, marginTop: 10 }]}>
+                  <View style={s.exitRow}>
+                    <Text style={[s.exitLabel, { color: colors.text }]}>Volume Exit</Text>
+                    <TouchableOpacity onPress={() => setVolumeExit(v => !v)} hitSlop={8}>
+                      <Ionicons
+                        name={volumeExit ? 'checkbox' : 'square-outline'}
+                        size={22}
+                        color={volumeExit ? colors.accent : colors.tabBarInactive}
+                      />
+                    </TouchableOpacity>
+                  </View>
                 </View>
-                <View style={s.exitRow}>
-                  <Text style={[s.exitLabel, { color: colors.text }]}>Volume Exit</Text>
-                  <TouchableOpacity onPress={() => setVolumeExit(v => !v)} hitSlop={8}>
-                    <Ionicons
-                      name={volumeExit ? 'checkbox' : 'square-outline'}
-                      size={22}
-                      color={volumeExit ? colors.accent : colors.tabBarInactive}
-                    />
-                  </TouchableOpacity>
-                </View>
-              </View>
+              )}
             </>
           )}
 
@@ -233,6 +250,21 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
           </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
+
+      {blindEntry && (
+        <BlindEntryModal
+          visible
+          colors={colors}
+          contractSymbol={blindEntry.body.contract_symbol}
+          lastPrice={blindEntry.lastPrice}
+          qty={blindEntry.body.qty ?? qty}
+          direction={blindEntry.body.direction}
+          paperMode={blindEntry.body.paper_mode}
+          isSubmitting={isPending}
+          onConfirm={() => runSubmit({ ...blindEntry.body, bypass_stream_check: true })}
+          onSkip={() => setBlindEntry(null)}
+        />
+      )}
     </Modal>
   );
 }

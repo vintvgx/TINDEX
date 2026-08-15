@@ -7,6 +7,7 @@ import type { GapTrendContext } from '@/common/types/orb';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useTickerTechnicals } from '@/hooks/queries/technicals/useTickerTechnicals';
 import { EMAZoneBadge } from '@/common/components/shared/EMAZoneBadge';
+import { getOrbStatus } from '@/common/utils/orb/getOrbStatus';
 
 interface ORBCardProps {
   data: ORBMonitoringState;
@@ -38,9 +39,10 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
   const orbHigh = data.orb_high ?? 0;
   const orbLow = data.orb_low ?? 0;
   const currentPrice = livePrice ?? data.current_price ?? 0;
-  const isAboveHigh = currentPrice > orbHigh;
-  const isBelowLow = currentPrice < orbLow;
-  const isInRange = !isAboveHigh && !isBelowLow && orbHigh - orbLow > 0;
+  const orbStatus = getOrbStatus(currentPrice, orbHigh, orbLow);
+  const isAboveHigh = orbStatus === 'above';
+  const isBelowLow = orbStatus === 'below';
+  const isInRange = orbStatus === 'in-range' && orbHigh - orbLow > 0;
 
   let priceColor = colors.text;
   if (isAboveHigh) priceColor = colors.success;

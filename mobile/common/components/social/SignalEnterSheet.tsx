@@ -1,14 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, SafeAreaView, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
-import { useImmediateTradeByTicker } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
+import { useImmediateTradeByTicker, StreamUnavailableError } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
 import {
   IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
-  ProfileDropdown, ManualSLPicker,
+  getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
+import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
+import { BlindEntryModal } from '@/common/components/strategy/BlindEntryModal';
 import { formatContractSymbol } from '@/lib/formatContract';
 import type { SocialSignalContract } from '@/common/types/social';
+import type { ImmediateTradeByTickerRequest } from '@/common/types/strategy';
 
 interface Props {
   contract: SocialSignalContract | null;
@@ -30,46 +33,75 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
   const [paperMode, setPaperMode] = useState(true);
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [qty, setQty] = useState(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
-  const [consolExit, setConsolExit] = useState(false);
+  const [stopType, setStopType] = useState<StopType>('HARD');
   const [volumeExit, setVolumeExit] = useState(false);
   const [manualSlPct, setManualSlPct] = useState(30);
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
+  // Blind Entry — set when the backend couldn't verify a live stream tick
+  // within 8s (status: 'stream_unavailable'). See BlindEntryModal.
+  const [blindEntry, setBlindEntry] = useState<{
+    body: ImmediateTradeByTickerRequest;
+    lastPrice: number;
+  } | null>(null);
+
+  const askPrice = livePrice ?? contract?.current_price ?? contract?.tracked_entry_price ?? 0;
+  const autoGraceMinutes = contract ? getCheapContractAutoGraceMinutes(askPrice) : null;
+
+  // Auto-suggest the grace stop-type for a cheap signal contract, mirroring
+  // the other two entry sheets — this one previously had no auto-detect at
+  // all, since SocialSignalContract has no `.ask` field to key off directly.
+  useEffect(() => {
+    if (!contract) return;
+    setStopType(getCheapContractAutoGraceMinutes(askPrice) ?? 'HARD');
+    setBlindEntry(null);
+  // Only re-run when a different contract is opened, not on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contract?.contract_symbol]);
+
   if (!contract) return null;
 
   const profile = IMMEDIATE_PROFILES[profileIndex];
   const isManual = profile.isManual === true;
-  const askPrice = livePrice ?? contract.current_price ?? contract.tracked_entry_price ?? 0;
+  const isNoStopLoss = profile.isNoStopLoss === true;
 
   const handleProfileSelect = (idx: number) => {
     setProfileIndex(idx);
     setQty(IMMEDIATE_PROFILES[idx].qty);
   };
 
+  // Shared by the initial submit and the Blind Entry "Enter Anyway" retry.
+  const runSubmit = (body: ImmediateTradeByTickerRequest) => {
+    submit(body, {
+      onSuccess: (r) => {
+        toast.success(r.message || 'Trade submitted');
+        setBlindEntry(null);
+        onClose();
+      },
+      onError: (e) => {
+        if (e instanceof StreamUnavailableError) {
+          setBlindEntry({ body, lastPrice: e.payload.last_price ?? 0 });
+          return;
+        }
+        toast.error(e.message || 'Trade failed');
+        setBlindEntry(null);
+      },
+    });
+  };
+
   const doSubmit = () => {
-    submit(
-      {
-        ticker: contract.ticker,
-        direction: contract.option_type,
-        contract_symbol: contract.contract_symbol,
-        qty,
-        profile: profile.key,
-        paper_mode: paperMode,
-        consol_exit: isManual ? false : consolExit,
-        volume_exit: isManual ? false : volumeExit,
-        ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
-      },
-      {
-        onSuccess: (r) => {
-          toast.success(r.message || 'Trade submitted');
-          onClose();
-        },
-        onError: (e) => {
-          toast.error(e.message || 'Trade failed');
-        },
-      },
-    );
+    runSubmit({
+      ticker: contract.ticker,
+      direction: contract.option_type,
+      contract_symbol: contract.contract_symbol,
+      qty,
+      profile: profile.key,
+      paper_mode: paperMode,
+      volume_exit: (isManual || isNoStopLoss) ? false : volumeExit,
+      sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
+      ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
+    });
   };
 
   const confirmSubmit = () => {
@@ -152,24 +184,14 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
             </View>
           </View>
 
-          {/* Exit controls */}
-          {!isManual && (
+          {/* Exit controls — hidden for NO_STOP_LOSS (no automatic exit to configure) */}
+          {!isNoStopLoss && (
             <View style={{ marginTop: 16 }}>
               <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>EXIT CONTROLS</Text>
-              <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
+              {!isManual && (
+              <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border, marginTop: 10 }]}>
                 <View style={styles.exitToggleRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Consolidation Exit</Text>
-                    <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Close when price stops moving</Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => setConsolExit(v => !v)}
-                    style={[styles.togglePill, { backgroundColor: consolExit ? colors.accent + '33' : colors.border + '55', borderColor: consolExit ? colors.accent : colors.border }]}
-                  >
-                    <View style={[styles.toggleThumb, { backgroundColor: consolExit ? colors.accent : colors.tabBarInactive, transform: [{ translateX: consolExit ? 14 : 0 }] }]} />
-                  </TouchableOpacity>
-                </View>
-                <View style={[styles.exitToggleRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Volume Exit</Text>
                     <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Close half on low volume</Text>
@@ -182,6 +204,7 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
                   </TouchableOpacity>
                 </View>
               </View>
+              )}
             </View>
           )}
 
@@ -206,6 +229,21 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
           </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
+
+      {blindEntry && (
+        <BlindEntryModal
+          visible
+          colors={colors}
+          contractSymbol={blindEntry.body.contract_symbol}
+          lastPrice={blindEntry.lastPrice}
+          qty={blindEntry.body.qty ?? qty}
+          direction={blindEntry.body.direction}
+          paperMode={blindEntry.body.paper_mode}
+          isSubmitting={isPending}
+          onConfirm={() => runSubmit({ ...blindEntry.body, bypass_stream_check: true })}
+          onSkip={() => setBlindEntry(null)}
+        />
+      )}
     </Modal>
   );
 }

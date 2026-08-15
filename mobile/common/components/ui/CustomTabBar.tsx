@@ -8,14 +8,15 @@ import { useThemeColors, useAppColorScheme } from '@/lib/useColorScheme';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { AgentModal } from '@/common/components/agent/AgentModal';
 import { useToast } from '@/common/components/ui/Toast';
+import { useSearchBarVisibility } from '@/hooks/useSearchBarVisibility';
 
-const VISIBLE_ROUTE_ORDER = ['feed', 'orb', 'accounts', 'menu'] as const;
+const VISIBLE_ROUTE_ORDER = ['feed', 'orb', 'accounts', 'profile'] as const;
 
 const ROUTE_TITLES: Record<string, string> = {
   feed: 'Home',
   orb: 'ORB',
   accounts: 'Accounts',
-  menu: 'Menu',
+  profile: 'Profile',
 };
 
 const SEARCH_RADIUS = 22;
@@ -80,6 +81,7 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
   const insets = useSafeAreaInsets();
   const [searchOpen, setSearchOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
+  const { hidden: searchBarHidden } = useSearchBarVisibility();
   const toast = useToast();
   const keyboardOffset = useRef(new Animated.Value(0)).current;
   const [keyboardVisible, setKeyboardVisible] = useState(false);
@@ -130,10 +132,10 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
   // Glass styling derived from the active theme.
   const blurTint: 'light' | 'dark' = isDark ? 'dark' : 'light';
   const glassBorder   = isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.12)';
-  const glassFallback = isDark ? 'rgba(28,28,30,0.35)' : 'rgba(255,255,255,0.45)';
+  const glassFallback = isDark ? 'rgba(22,23,29,0.35)' : 'rgba(250,249,245,0.45)';
   // When the search field is focused, lay a near-opaque themed sheet behind the
   // text so it stays legible against busy content showing through the glass.
-  const focusOverlay  = isDark ? 'rgba(28,28,30,0.88)' : 'rgba(255,255,255,0.92)';
+  const focusOverlay  = isDark ? 'rgba(22,23,29,0.88)' : 'rgba(250,249,245,0.92)';
 
   useEffect(() => {
     bottomPaddingRef.current = bottomPadding;
@@ -192,8 +194,8 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
         return <Ionicons name="pulse-outline" size={20} color={color} />;
       case 'accounts':
         return <Ionicons name="wallet-outline" size={20} color={color} />;
-      case 'menu':
-        return <Ionicons name="menu-outline" size={22} color={color} />;
+      case 'profile':
+        return <Ionicons name="person-outline" size={20} color={color} />;
       default:
         return null;
     }
@@ -207,29 +209,34 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
         <Pressable style={StyleSheet.absoluteFillObject} onPress={Keyboard.dismiss} />
       )}
       <View pointerEvents="box-none" style={styles.container}>
-        {/* Floating glass search + AI row (hovers over content) */}
-        <Animated.View style={[styles.searchRow, { transform: [{ translateY: keyboardOffset }] }]}>
-          <TouchableOpacity
-            onPress={() => setSearchOpen(true)}
-            activeOpacity={0.82}
-            style={[styles.searchBar, { flex: 1 }]}
-          >
-            <GlassBacking radius={SEARCH_RADIUS} intensity={30} {...glassProps} />
-            <Ionicons name="search" size={15} color={colors.tabBarInactive} style={{ marginRight: 9 }} />
-            <Text style={[styles.searchPlaceholder, { color: colors.tabBarInactive }]}>
-              Search stocks...
-            </Text>
-          </TouchableOpacity>
+        {/* Floating glass search + AI row (hovers over content) — the
+            Profile "Hide Search Bar" setting hides this whole row (search
+            field + AI button together); the AI assistant stays reachable
+            from Profile's own "Open AI Assistant" button in that case. */}
+        {!searchBarHidden && (
+          <Animated.View style={[styles.searchRow, { transform: [{ translateY: keyboardOffset }] }]}>
+            <TouchableOpacity
+              onPress={() => setSearchOpen(true)}
+              activeOpacity={0.82}
+              style={[styles.searchBar, { flex: 1 }]}
+            >
+              <GlassBacking radius={SEARCH_RADIUS} intensity={30} {...glassProps} />
+              <Ionicons name="search" size={15} color={colors.tabBarInactive} style={{ marginRight: 9 }} />
+              <Text style={[styles.searchPlaceholder, { color: colors.tabBarInactive }]}>
+                Search stocks...
+              </Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            onPress={() => setAgentOpen(true)}
-            activeOpacity={0.82}
-            style={styles.agentBtn}
-          >
-            <GlassBacking radius={AGENT_RADIUS} intensity={30} {...glassProps} />
-            <Ionicons name="sparkles" size={16} color={colors.accent} />
-          </TouchableOpacity>
-        </Animated.View>
+            <TouchableOpacity
+              onPress={() => setAgentOpen(true)}
+              activeOpacity={0.82}
+              style={styles.agentBtn}
+            >
+              <GlassBacking radius={AGENT_RADIUS} intensity={30} {...glassProps} />
+              <Ionicons name="sparkles" size={16} color={colors.accent} />
+            </TouchableOpacity>
+          </Animated.View>
+        )}
 
         {/* Floating pill bottom tab bar — Astor-style, active tab gets a
             filled sub-pill instead of the bar being flush/full-width. */}
@@ -308,6 +315,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     marginBottom: 10,
+  },
+  searchRowCollapsed: {
+    justifyContent: 'flex-end',
   },
   searchBar: {
     flexDirection: 'row',

@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { ProfileKey } from '@/common/types/strategy';
-import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 
 /**
  * Profile picker + manual stop-loss picker shared by any "trade this specific
@@ -32,6 +31,17 @@ export interface ImmediateProfile {
 
 export const IMMEDIATE_PROFILES: ImmediateProfile[] = [
   {
+    key: 'SCALPER_SMALL',
+    emoji: '⚡',
+    name: 'Scalper Small',
+    qty: 1,
+    maxLoss: 30,
+    tp1: 30,
+    tp2: 60,
+    risk: 'Low',
+    description: 'Same as Scalper, sized down to 1 contract.',
+  },
+  {
     key: 'SCALPER',
     emoji: '⚡',
     name: 'Scalper',
@@ -41,6 +51,28 @@ export const IMMEDIATE_PROFILES: ImmediateProfile[] = [
     tp2: 60,
     risk: 'Low',
     description: 'Quick locks, take gains fast, tight trail on the runner.',
+  },
+  {
+    key: 'SCALPER_LARGE',
+    emoji: '⚡',
+    name: 'Scalper Large',
+    qty: 6,
+    maxLoss: 30,
+    tp1: 30,
+    tp2: 60,
+    risk: 'Low-Med',
+    description: 'Same as Scalper, sized up to 6 contracts.',
+  },
+  {
+    key: 'SCALPER_XL',
+    emoji: '⚡',
+    name: 'Scalper XL',
+    qty: 10,
+    maxLoss: 30,
+    tp1: 30,
+    tp2: 60,
+    risk: 'Medium',
+    description: 'Same as Scalper, sized up to 10 contracts.',
   },
   {
     key: 'PRECISION',
@@ -139,26 +171,24 @@ export const IMMEDIATE_PROFILES: ImmediateProfile[] = [
 export const DEFAULT_PROFILE_INDEX = 2; // MOMENTUM
 export const SL_PRESETS = [20, 30, 40, 50];
 
-// ── OTM auto-selection ────────────────────────────────────────────────────────
-// Above this ask price, OTM contracts are priced well enough for normal profiles.
-const OTM_PRICE_CEILING = 0.50;
-// Below this ask price, use OTM_RUNNER (cheaper lottery-ticket contracts).
-// Between OTM_RUNNER_CEILING and OTM_PRICE_CEILING, use OTM_CONVICTION.
-const OTM_RUNNER_CEILING = 0.25;
+// ── Cheap-contract auto stop-type suggestion ──────────────────────────────────
+// Above this ask price, a contract is priced well enough that an instant Hard
+// Stop is fine — this mirrors the server-side rule in orb_engine.py's
+// _execute_entry, which force-applies a grace-timer stop to any fill under
+// $0.50 REGARDLESS of what stop type was picked (see the 2026-07-27/2026-07-30
+// SL-5/SL-10 discussions). Sizing/profile is no longer part of this — stop
+// type is now independent of which profile is selected — so this only
+// previews which STOP-TYPE tab the backend will force, not a profile switch.
+// Deliberately NOT gated on OTM-ness (the backend rule isn't either — a cheap
+// ITM/ATM contract gets the same treatment).
+const AUTO_PRICE_CEILING = 0.50;
+// Below this ask price, suggest the 10-min timer (longer grace — the noisiest
+// tier). Between SL_10_CEILING and AUTO_PRICE_CEILING, suggest 5 min.
+const SL_10_CEILING = 0.25;
 
-export function getOtmAutoProfileIndex(
-  contract: OptionsContract,
-  underlyingPrice: number,
-): number | null {
-  if (!underlyingPrice || underlyingPrice <= 0) return null;
-  const isOTM =
-    contract.option_type === 'CALL'
-      ? contract.strike > underlyingPrice
-      : contract.strike < underlyingPrice;
-  if (!isOTM || contract.ask <= 0 || contract.ask >= OTM_PRICE_CEILING) return null;
-  const targetKey: ProfileKey =
-    contract.ask < OTM_RUNNER_CEILING ? 'OTM_RUNNER' : 'OTM_CONVICTION';
-  return IMMEDIATE_PROFILES.findIndex(p => p.key === targetKey);
+export function getCheapContractAutoGraceMinutes(askPrice: number): 5 | 10 | null {
+  if (askPrice <= 0 || askPrice >= AUTO_PRICE_CEILING) return null;
+  return askPrice < SL_10_CEILING ? 10 : 5;
 }
 
 export const riskColor = (r: string, colors: any): string => {

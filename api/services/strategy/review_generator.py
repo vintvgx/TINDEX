@@ -20,6 +20,8 @@ from datetime import date, datetime, timedelta
 import pytz
 import anthropic
 
+from services.strategy.trade_logger import enrich_open_trades_with_live_pnl
+
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
@@ -92,6 +94,17 @@ IMMEDIATE — Entered manually by the trader, on purpose, specifically because
             happened, never in the trade's failure to match a strategy
             profile it was never meant to follow.
 
+─── Open Positions ──────────────────────────────────────────────────────────
+Some trades in the data below may still be OPEN (no exit yet) — these are
+swing/weekly holds that stay open across multiple days, not same-day 0DTE
+positions. Each one appears in every day's review for as long as it remains
+open, not only the day it was entered. For each open position you're given a
+live, unrealized quote taken at generation time (live_price/live_pnl/
+live_pnl_pct — NOT the same as the realized pnl/pnl_pct a closed trade has),
+how many days it's been open, and days remaining to expiry. Give a direct,
+actionable recommendation for each — see the Open Positions output section
+below.
+
 ─── Exit Reason Glossary ────────────────────────────────────────────────────
 HARD_STOP           Full stop before TP1. Worst outcome — full position loss.
 BREAKEVEN_STOP      Runner hit entry price after TP1. Net positive or flat.
@@ -146,6 +159,20 @@ gap-and-reverse, trending breakout, range-bound, VIX conditions, etc.]
    (ORH/ORL, underlying trend, VIX), and exit discipline. Do not comment on
    the absence of a strategy signal; that was the intended premise of the
    trade, not a gap to explain.]
+
+---
+
+## Open Positions
+
+[If there are any entries under "### Open Positions" in the data below, one
+paragraph per position: name it, state how long it's been open and its live
+unrealized P&L, then give a direct, unambiguous recommendation — KEEP OPEN,
+CLOSE NOW, or WATCH CLOSELY (with the specific thing to watch) — grounded
+only in the data provided: unrealized P&L direction/magnitude, days held,
+and days remaining to expiry (flag explicitly if expiry is close and the
+position is still underwater or flat). Do not speculate about news or price
+action you have not been given. If there are no open positions, write "No
+open positions." and skip the rest of this section.]
 
 ---
 
@@ -218,16 +245,22 @@ class ReviewGenerator:
         live strategy's real track record is never blended with paper
         testing activity, in either the numbers or the AI narrative.
 
-        metadata keys: net_pnl, trade_count, win_rate, winners, losers.
+        metadata keys: net_pnl, trade_count, win_rate, winners, losers,
+        open_positions (list — still-open trades from BEFORE today, each with
+        a live_price/live_pnl/live_pnl_pct snapshot taken at generation time;
+        embedded in meta rather than a new return value so existing callers
+        that only look at content/net_pnl/etc. are unaffected).
         Raises on Claude API failure — caller decides whether to swallow.
         """
-        session_date = session_date or date.today()
-        trades   = self._fetch_trades(session_date, paper_mode)
-        sessions = self._fetch_sessions(session_date)
-        recent   = self._fetch_recent_pnl(session_date, paper_mode, days=5)
+        session_date   = session_date or date.today()
+        trades         = self._fetch_trades(session_date, paper_mode)
+        open_positions = self._fetch_open_positions(session_date, paper_mode)
+        sessions       = self._fetch_sessions(session_date)
+        recent         = self._fetch_recent_pnl(session_date, paper_mode, days=5)
 
         meta     = self._compute_meta(trades)
-        prompt   = self._build_prompt(trades, sessions, recent, session_date, meta, paper_mode)
+        meta["open_positions"] = open_positions
+        prompt   = self._build_prompt(trades, sessions, recent, session_date, meta, paper_mode, open_positions)
         content  = self._call_claude(prompt, paper_mode)
         return content, meta
 
@@ -250,6 +283,7 @@ class ReviewGenerator:
                 "losers":         meta["losers"],
                 "markdown":       content,
                 "trades_json":    trades,
+                "open_positions_json": meta.get("open_positions", []),
                 "created_at":     datetime.utcnow().isoformat(),
             }, on_conflict="review_date,paper_mode").execute()
             logger.info("[ReviewGenerator] Saved %s review for %s to Supabase",
@@ -280,6 +314,35 @@ class ReviewGenerator:
             return res.data or []
         except Exception as e:
             logger.error("[ReviewGenerator] fetch_trades failed: %s", e)
+            return []
+
+    def _fetch_open_positions(self, session_date: date, paper_mode: bool = True) -> list:
+        """
+        Still-open trades entered on a PRIOR day (same-day opens already
+        appear via _fetch_trades) — the swing/weekly holds that should keep
+        surfacing in every day's review for as long as they stay open, not
+        just their entry day. trade_date is pinned at entry and never
+        updated, so this can't just re-run _fetch_trades with today's date;
+        it has to query by exit_time IS NULL instead.
+        """
+        try:
+            res = (
+                self._sb.table("orb_trades")
+                .select(
+                    "ticker, profile, direction, contract_symbol, strike, expiry, "
+                    "entry_premium, qty_entered, qty_exited, entry_time, trade_date, "
+                    "underlying_price_entry, vix_at_entry, orh, orl, paper_mode, trade_type"
+                )
+                .is_("exit_time", "null")
+                .eq("paper_mode", paper_mode)
+                .lt("trade_date", str(session_date))
+                .order("entry_time")
+                .execute()
+            )
+            rows = res.data or []
+            return enrich_open_trades_with_live_pnl(rows)
+        except Exception as e:
+            logger.warning("[ReviewGenerator] fetch_open_positions failed: %s", e)
             return []
 
     def _fetch_sessions(self, session_date: date) -> list:
@@ -410,6 +473,51 @@ class ReviewGenerator:
             + stages_str
         )
 
+    def _fmt_open_position(self, idx: int, t: dict, session_date: date) -> str:
+        entry_t     = self._fmt_et_time(t.get("entry_time"))
+        entry_p     = t.get("entry_premium") or 0.0
+        qty_open    = (t.get("qty_entered") or 0) - (t.get("qty_exited") or 0)
+        trade_type  = t.get("trade_type") or "STRATEGY"
+        profile_str = t.get("profile") or ("—" if trade_type == "IMMEDIATE" else "?")
+
+        days_open = "n/a"
+        try:
+            entry_date = datetime.strptime(t["trade_date"], "%Y-%m-%d").date()
+            days_open  = (session_date - entry_date).days
+        except (ValueError, TypeError, KeyError):
+            pass
+
+        dte_str = "n/a"
+        expiry = t.get("expiry")
+        if expiry:
+            try:
+                dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - session_date).days
+                dte_str = f"{dte}d" if dte >= 0 else "EXPIRED"
+            except ValueError:
+                pass
+
+        live_price = t.get("live_price")
+        if live_price is not None:
+            live_pnl     = t.get("live_pnl") or 0.0
+            live_pnl_pct = t.get("live_pnl_pct") or 0.0
+            live_str = (
+                f"${live_price:.2f}  Unrealized P&L: "
+                f"{'+' if live_pnl >= 0 else ''}${live_pnl:.2f} ({live_pnl_pct:+.1f}%)"
+            )
+        else:
+            live_str = "quote unavailable at generation time"
+
+        return (
+            f"Open Position {idx}: {t.get('ticker') or '?'} {profile_str} "
+            f"{t.get('direction') or '?'} ({trade_type})\n"
+            f"  Contract: {t.get('contract_symbol') or '?'}  Strike: ${t.get('strike') or '?'}  "
+            f"Expiry: {expiry or '?'} ({dte_str} to expiry)\n"
+            f"  Entered: ${entry_p:.2f} × {qty_open} remaining, on {t.get('trade_date')} "
+            f"@ {entry_t} ({days_open}d ago)\n"
+            f"  Underlying at entry: {self._fv(t.get('underlying_price_entry'))}\n"
+            f"  Current option price: {live_str}"
+        )
+
     def _build_prompt(
         self,
         trades: list,
@@ -418,6 +526,7 @@ class ReviewGenerator:
         session_date: date,
         meta: dict,
         paper_mode: bool = True,
+        open_positions: list | None = None,
     ) -> str:
         account_label = "PAPER" if paper_mode else "LIVE"
         lines = [
@@ -458,6 +567,12 @@ class ReviewGenerator:
             lines.append("### Trades")
             lines.append("No trades taken today.")
             lines.append("")
+
+        if open_positions:
+            lines.append("### Open Positions (still open — not yet closed)")
+            for i, p in enumerate(open_positions):
+                lines.append(self._fmt_open_position(i, p, session_date))
+                lines.append("")
 
         lines.append(
             "Please generate the full Markdown performance review following the "

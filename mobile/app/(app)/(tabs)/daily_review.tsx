@@ -1,9 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
   ActivityIndicator, SafeAreaView, Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   format, addMonths, subMonths, startOfMonth, endOfMonth,
   eachDayOfInterval, getISODay, isSameDay, isAfter, startOfDay, parseISO,
@@ -11,10 +13,16 @@ import {
 import { useThemeColors } from '@/lib/useColorScheme';
 import { usePerformanceReviews } from '@/hooks/queries/review/usePerformanceReviews';
 import { useGenerateReview } from '@/hooks/mutations/review/useGenerateReview';
+import { useReviewNotes } from '@/hooks/queries/review/useReviewNotes';
 import { ReviewDetailModal } from '@/common/components/review/ReviewDetailModal';
+import { AddReviewNoteModal } from '@/common/components/review/AddReviewNoteModal';
+import { ReviewNoteActionModal } from '@/common/components/review/ReviewNoteActionModal';
 import { useToast } from '@/common/components/ui/Toast';
 import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
+import type { ReviewNote } from '@/common/types/reviewNotes';
+
+const NOTE_COLOR = '#F59E0B';
 
 const WEEKDAY_LABELS = ['Mo', 'Tu', 'We', 'Th', 'Fr'];
 
@@ -69,10 +77,54 @@ export default function DailyReviewScreen() {
   const [mode, setMode] = useState<AccountMode>('live');
   const paperMode = mode === 'paper';
 
+  // Deep-link from a notification tap (see NotificationNavigationService) —
+  // consume `review_date`/`paper_mode` exactly once, same pattern as
+  // orb.tsx's `section`. Opens the detail modal directly since a
+  // notify_review_ready* tap only ever fires once that review already exists.
+  const { review_date: reviewDateParam, paper_mode: paperModeParam } =
+    useLocalSearchParams<{ review_date?: string; paper_mode?: string }>();
+  useFocusEffect(
+    useCallback(() => {
+      if (reviewDateParam != null) {
+        if (paperModeParam != null) setMode(paperModeParam === 'true' ? 'paper' : 'live');
+        setCurrentMonth(parseISO(reviewDateParam));
+        setModalDate(reviewDateParam);
+        router.setParams({ review_date: undefined, paper_mode: undefined });
+      }
+    }, [reviewDateParam, paperModeParam]),
+  );
+
   const { data, isLoading, isFetching, refetch } = usePerformanceReviews(180, paperMode);
   const generateReview = useGenerateReview();
   const toast = useToast();
   const tabBarHeight = useFloatingTabBarHeight();
+
+  // Notes/TODOs are account-mode-independent (general project notes, not
+  // trade commentary) — fetched unfiltered so the calendar dots cover every
+  // month and the TODO list below covers the full backlog, not just the
+  // visible one.
+  const { data: notesData } = useReviewNotes();
+  const notes = notesData?.data ?? [];
+  const [addNoteDate, setAddNoteDate] = useState<string | null>(null);
+  const [actionNote, setActionNote] = useState<ReviewNote | null>(null);
+
+  const noteIndicatorsByDay = useMemo(() => {
+    const map = new Map<string, { hasNote: boolean; hasTodo: boolean }>();
+    for (const n of notes) {
+      const entry = map.get(n.note_date) ?? { hasNote: false, hasTodo: false };
+      if (n.kind === 'note') entry.hasNote = true;
+      if (n.kind === 'todo' && !n.is_done) entry.hasTodo = true;
+      map.set(n.note_date, entry);
+    }
+    return map;
+  }, [notes]);
+
+  const openTodos = useMemo(
+    () => notes
+      .filter(n => n.kind === 'todo' && !n.is_done)
+      .sort((a, b) => (a.note_date < b.note_date ? -1 : a.note_date > b.note_date ? 1 : 0)),
+    [notes],
+  );
 
   const reviewedDates = useMemo(() => {
     const s = new Set<string>();
@@ -87,6 +139,14 @@ export default function DailyReviewScreen() {
 
   const selectedIsReviewed = selectedDate ? reviewedDates.has(selectedDate) : false;
   const selectedIsFuture = selectedDate ? isAfter(parseISO(selectedDate), today) : false;
+
+  // Everything pinned to the selected day — drives the dynamic button/list
+  // set in the bottom panel below (a day can have any mix of review, notes,
+  // and TODOs, or none at all).
+  const selectedDateNotes = useMemo(
+    () => (selectedDate ? notes.filter(n => n.note_date === selectedDate) : []),
+    [notes, selectedDate],
+  );
 
   const handleGenerate = () => {
     if (!selectedDate || selectedIsReviewed || selectedIsFuture || generateReview.isPending) return;
@@ -118,18 +178,12 @@ export default function DailyReviewScreen() {
     // can be generated at a time, for any day.
     if (generateReview.isPending) return;
 
+    // Every day (past, today, or future) opens the same preview panel —
+    // whatever mix of review/notes/TODOs it has, all viewable in one place.
+    // Review/TODO generation actions inside the panel disable themselves
+    // per-day as needed (see the button block below).
     const key = dateKey(day);
-    const isFuture = isAfter(day, today);
-    if (isFuture) return;
-
-    if (reviewedDates.has(key)) {
-      // Tap reviewed day → open review modal directly
-      setSelectedDate(null);
-      setModalDate(key);
-    } else {
-      // Tap unreviewed day → toggle selection to show generate panel
-      setSelectedDate(prev => (prev === key ? null : key));
-    }
+    setSelectedDate(prev => (prev === key ? null : key));
   };
 
   return (
@@ -138,13 +192,28 @@ export default function DailyReviewScreen() {
       <View style={{
         paddingHorizontal: 20, paddingTop: 12, paddingBottom: 12,
         borderBottomWidth: 1, borderBottomColor: colors.border,
+        flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between',
       }}>
-        <Text style={{ color: colors.text, fontSize: 28, fontWeight: '800', letterSpacing: -0.5 }}>
-          Daily Review
-        </Text>
-        <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 2 }}>
-          Auto-generated at 4:15 PM ET · {mode === 'live' ? 'live account only' : 'paper account only'}
-        </Text>
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: colors.text, fontSize: 28, fontWeight: '800', letterSpacing: -0.5 }}>
+            Daily Review
+          </Text>
+          <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 2 }}>
+            Auto-generated at 4:15 PM ET · {mode === 'live' ? 'live account only' : 'paper account only'}
+          </Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+          <TouchableOpacity onPress={() => router.push('/backlog')} hitSlop={10} style={{ padding: 6 }}>
+            <Ionicons name="list-outline" size={22} color={colors.text} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setAddNoteDate(selectedDate ?? dateKey(today))}
+            hitSlop={10}
+            style={{ padding: 6 }}
+          >
+            <Ionicons name="add-circle" size={26} color={colors.accent} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <LiveModeToggle mode={mode} onChange={handleModeChange} colors={colors} />
@@ -245,13 +314,22 @@ export default function DailyReviewScreen() {
                           </Text>
                         )}
                       </View>
-                      {/* Dot indicator under reviewed days */}
-                      {isReviewed && !isSelected && !isGenerating && (
-                        <View style={{
-                          width: 4, height: 4, borderRadius: 2,
-                          backgroundColor: colors.success, marginTop: 2,
-                        }} />
-                      )}
+                      {/* Dot indicators — green reviewed, orange note, red open TODO */}
+                      {!isSelected && !isGenerating && (() => {
+                        const noteInfo = noteIndicatorsByDay.get(key);
+                        const dotColors: string[] = [];
+                        if (isReviewed) dotColors.push(colors.success);
+                        if (noteInfo?.hasNote) dotColors.push(NOTE_COLOR);
+                        if (noteInfo?.hasTodo) dotColors.push(colors.error);
+                        if (dotColors.length === 0) return null;
+                        return (
+                          <View style={{ flexDirection: 'row', gap: 3, marginTop: 2 }}>
+                            {dotColors.map((c, i) => (
+                              <View key={i} style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: c }} />
+                            ))}
+                          </View>
+                        );
+                      })()}
                     </Pressable>
                   );
                 })}
@@ -261,7 +339,7 @@ export default function DailyReviewScreen() {
         </View>
 
         {/* Legend */}
-        <View style={{ flexDirection: 'row', gap: 16, paddingHorizontal: 20, marginTop: 20 }}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 14, paddingHorizontal: 20, marginTop: 20 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: colors.success }} />
             <Text style={{ color: colors.textTertiary, fontSize: 11 }}>Reviewed</Text>
@@ -274,13 +352,57 @@ export default function DailyReviewScreen() {
             <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: colors.accent }} />
             <Text style={{ color: colors.textTertiary, fontSize: 11 }}>Selected</Text>
           </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: NOTE_COLOR }} />
+            <Text style={{ color: colors.textTertiary, fontSize: 11 }}>Note</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: colors.error }} />
+            <Text style={{ color: colors.textTertiary, fontSize: 11 }}>TODO</Text>
+          </View>
         </View>
+
+        {/* TODOs — earliest date to latest, across every month */}
+        {openTodos.length > 0 && (
+          <View style={{ paddingHorizontal: 20, marginTop: 24 }}>
+            <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700', marginBottom: 10 }}>
+              TODOs ({openTodos.length})
+            </Text>
+            <View style={{ gap: 8 }}>
+              {openTodos.map(t => (
+                <TouchableOpacity
+                  key={t.id}
+                  onPress={() => setActionNote(t)}
+                  activeOpacity={0.7}
+                  style={{
+                    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+                    padding: 12, borderRadius: 12,
+                    backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
+                  }}
+                >
+                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.error, marginTop: 6 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.text, fontSize: 13 }} numberOfLines={2}>{t.content}</Text>
+                    <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 3 }}>
+                      {format(parseISO(t.note_date), 'MMM d, yyyy')}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        )}
       </ScrollView>
 
-      {/* Bottom action panel — shown when an unreviewed day is selected */}
+      {/* Day preview panel — shown for any selected day (past, today, or
+          future) and dynamically surfaces whatever that day actually has:
+          a review button (view or generate, never both), and every
+          note/TODO pinned to it. */}
       {selectedDate && (
         <View style={{
           position: 'absolute', bottom: 0, left: 0, right: 0,
+          maxHeight: '70%',
           backgroundColor: colors.surface,
           borderTopWidth: 1, borderTopColor: colors.border,
           paddingHorizontal: 20, paddingTop: 16, paddingBottom: tabBarHeight + 16,
@@ -294,7 +416,9 @@ export default function DailyReviewScreen() {
               <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 2 }}>
                 {generateReview.isPending
                   ? 'Generating…'
-                  : selectedIsReviewed ? 'Review already exists' : 'No review generated yet'}
+                  : selectedIsReviewed
+                    ? 'Review ready'
+                    : selectedIsFuture ? "Upcoming — can't review yet" : 'No review generated yet'}
               </Text>
             </View>
             <TouchableOpacity
@@ -306,39 +430,102 @@ export default function DailyReviewScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Generate Review button */}
-          <TouchableOpacity
-            onPress={handleGenerate}
-            disabled={selectedIsReviewed || selectedIsFuture || generateReview.isPending}
-            activeOpacity={0.8}
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              paddingVertical: 14,
-              borderRadius: 12,
-              backgroundColor: (selectedIsReviewed || selectedIsFuture)
-                ? colors.border
-                : colors.accent,
-              opacity: generateReview.isPending ? 0.7 : 1,
-            }}
-          >
-            {generateReview.isPending
-              ? <ActivityIndicator size="small" color="#fff" />
-              : <Ionicons
-                  name="sparkles"
-                  size={16}
-                  color={(selectedIsReviewed || selectedIsFuture) ? colors.textTertiary : '#fff'}
-                />
-            }
-            <Text style={{
-              fontSize: 15, fontWeight: '700',
-              color: (selectedIsReviewed || selectedIsFuture) ? colors.textTertiary : '#fff',
-            }}>
-              {generateReview.isPending ? 'Generating…' : selectedIsReviewed ? 'Already Reviewed' : 'Generate Review'}
-            </Text>
-          </TouchableOpacity>
+          <ScrollView style={{ maxHeight: 360 }} contentContainerStyle={{ gap: 10 }}>
+            {/* Review button — "View" once it exists, "Generate" while it
+                doesn't and the day isn't in the future; neither for a
+                future day since there's nothing to review yet. */}
+            {selectedIsReviewed ? (
+              <TouchableOpacity
+                onPress={() => { setModalDate(selectedDate); setSelectedDate(null); }}
+                activeOpacity={0.8}
+                style={{
+                  flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  paddingVertical: 14, borderRadius: 12, backgroundColor: colors.success + '22',
+                  borderWidth: 1, borderColor: colors.success,
+                }}
+              >
+                <Ionicons name="document-text" size={16} color={colors.success} />
+                <Text style={{ fontSize: 15, fontWeight: '700', color: colors.success }}>View Review</Text>
+              </TouchableOpacity>
+            ) : !selectedIsFuture && (
+              <TouchableOpacity
+                onPress={handleGenerate}
+                disabled={generateReview.isPending}
+                activeOpacity={0.8}
+                style={{
+                  flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  paddingVertical: 14, borderRadius: 12, backgroundColor: colors.accent,
+                  opacity: generateReview.isPending ? 0.7 : 1,
+                }}
+              >
+                {generateReview.isPending
+                  ? <ActivityIndicator size="small" color="#fff" />
+                  : <Ionicons name="sparkles" size={16} color="#fff" />}
+                <Text style={{ fontSize: 15, fontWeight: '700', color: '#fff' }}>
+                  {generateReview.isPending ? 'Generating…' : 'Generate Review'}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Notes/TODOs pinned to this day — only rendered when there are any */}
+            {selectedDateNotes.length > 0 && (
+              <View style={{ gap: 8 }}>
+                {selectedDateNotes.map(n => {
+                  const tint = n.kind === 'todo' ? colors.error : NOTE_COLOR;
+                  return (
+                    <TouchableOpacity
+                      key={n.id}
+                      onPress={() => setActionNote(n)}
+                      activeOpacity={0.7}
+                      style={{
+                        flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+                        padding: 12, borderRadius: 12,
+                        backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
+                        opacity: n.kind === 'todo' && n.is_done ? 0.55 : 1,
+                      }}
+                    >
+                      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: n.is_deferred ? '#F59E0B' : tint, marginTop: 6 }} />
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={{
+                            color: colors.text, fontSize: 13,
+                            // Deferred skips the strikethrough — that reads
+                            // as "crossed off," which isn't right for
+                            // "set aside for later." The dimmed opacity
+                            // above already marks it as not actively open.
+                            textDecorationLine: n.kind === 'todo' && n.is_done && !n.is_deferred ? 'line-through' : 'none',
+                          }}
+                        >
+                          {n.content}
+                        </Text>
+                        <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 3 }}>
+                          {n.kind.toUpperCase()}
+                          {n.kind === 'todo' && n.is_deferred ? ' · Deferred' : n.kind === 'todo' && n.is_done ? ' · Finished' : ''}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* Add a note/TODO pinned to this specific day */}
+            <TouchableOpacity
+              onPress={() => setAddNoteDate(selectedDate)}
+              activeOpacity={0.7}
+              style={{
+                flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+                paddingVertical: 12, borderRadius: 12,
+                borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed',
+              }}
+            >
+              <Ionicons name="add" size={16} color={colors.textSecondary} />
+              <Text style={{ fontSize: 13, fontWeight: '600', color: colors.textSecondary }}>
+                Add Note / TODO for this day
+              </Text>
+            </TouchableOpacity>
+          </ScrollView>
         </View>
       )}
 
@@ -348,6 +535,13 @@ export default function DailyReviewScreen() {
         visible={!!modalDate}
         onClose={() => { setModalDate(null); refetch(); }}
       />
+
+      <AddReviewNoteModal
+        visible={!!addNoteDate}
+        initialDate={addNoteDate ?? dateKey(today)}
+        onClose={() => setAddNoteDate(null)}
+      />
+      <ReviewNoteActionModal note={actionNote} onClose={() => setActionNote(null)} />
     </SafeAreaView>
   );
 }

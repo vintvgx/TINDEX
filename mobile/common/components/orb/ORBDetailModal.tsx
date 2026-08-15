@@ -21,6 +21,10 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useTickerTechnicals } from '@/hooks/queries/technicals/useTickerTechnicals';
 import { EMAZoneBadge } from '@/common/components/shared/EMAZoneBadge';
+import { AdvancedPriceChart } from '@/common/components/ticker/AdvancedPriceChart';
+import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
+import type { PricePeriod } from '@/common/types/blogPosts/ticker';
+import { TickerLogo } from '@/common/components/ui/TickerLogo';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -127,6 +131,19 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   const { data: followState } = useIsFollowingORB(data?.ticker ?? '');
   const updateNotificationTypes = useUpdateORBNotificationTypes(data?.ticker ?? '');
 
+  // Price history feeding the advanced chart. Only fetch while the modal is
+  // actually open — an empty ticker disables the query.
+  const [chartPeriod, setChartPeriod] = useState<PricePeriod>('1D');
+  const { data: historyResponse, isLoading: historyLoading } = useTickerHistoryQuery(
+    visible && data?.ticker ? data.ticker : '',
+    chartPeriod,
+  );
+  const historyData = historyResponse?.data;
+  const periodPositive =
+    historyData && historyData.prices.length > 1
+      ? historyData.prices[historyData.prices.length - 1] >= historyData.prices[0]
+      : true;
+
   const handleUnfollow = () => {
     if (!data?.ticker) return;
     setMonitoringActive.mutate(
@@ -145,17 +162,6 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   const isAboveHigh = currentPrice > orbHigh;
   const isBelowLow = currentPrice < orbLow;
   const isInRange = !isAboveHigh && !isBelowLow && orbRange > 0;
-
-  // Visual range bounds
-  let visualMin = orbLow;
-  let visualMax = orbHigh;
-  if (orbRange > 0) {
-    if (isAboveHigh) visualMax = Math.max(orbHigh + orbRange * 2, currentPrice + orbRange * 0.1);
-    else if (isBelowLow) visualMin = Math.min(orbLow - orbRange * 2, currentPrice - orbRange * 0.1);
-  }
-  const visualRange = visualMax - visualMin;
-  const pct = (price: number) =>
-    visualRange > 0 ? Math.max(0, Math.min(100, ((price - visualMin) / visualRange) * 100)) : 50;
 
   const fibLevels = orbRange > 0 ? getFibLevels(orbHigh, orbLow) : { above: [], below: [] };
   const priceColor = isAboveHigh ? colors.success : isBelowLow ? colors.error : colors.text;
@@ -241,91 +247,6 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
       target: `Watch ORH $${orbHigh.toFixed(2)} and ORL $${orbLow.toFixed(2)}`,
     };
   })();
-
-  // ── ORB Range Bar ──────────────────────────────────────────────────────────
-  const ORBRangeBar = () => {
-    if (orbRange <= 0) return null;
-    const orhPct = pct(orbHigh);
-    const orlPct = pct(orbLow);
-    const pricePct = pct(currentPrice);
-
-    return (
-      <View style={styles.rangeSection}>
-        {/* Bar */}
-        <View style={[styles.rangeBar, { backgroundColor: colors.surfaceSecondary }]}>
-          {/* Zone tints */}
-          {isInRange && (
-            <View style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.accent + '12' }]} />
-          )}
-          {isAboveHigh && (
-            <View style={[StyleSheet.absoluteFillObject, { left: `${orhPct}%`, backgroundColor: colors.success + '20' }]} />
-          )}
-          {isBelowLow && (
-            <View style={[StyleSheet.absoluteFillObject, { right: `${100 - orlPct}%`, backgroundColor: colors.error + '20' }]} />
-          )}
-
-          {/* ORL line */}
-          {(isInRange || isBelowLow) && (
-            <View style={[styles.rangeLine, { left: `${orlPct}%`, backgroundColor: colors.error }]} />
-          )}
-
-          {/* ORH line */}
-          {(isInRange || isAboveHigh) && (
-            <View style={[styles.rangeLine, { left: `${orhPct}%`, backgroundColor: colors.success }]} />
-          )}
-
-          {/* Fibonacci lines */}
-          {isAboveHigh && fibLevels.above.map(l => (
-            <View key={l.multiplier} style={[styles.fibLine, { left: `${pct(l.price)}%`, backgroundColor: l.color }]} />
-          ))}
-          {isBelowLow && fibLevels.below.map(l => (
-            <View key={l.multiplier} style={[styles.fibLine, { left: `${pct(l.price)}%`, backgroundColor: l.color }]} />
-          ))}
-
-          {/* Price marker */}
-          <View style={[styles.priceMarker, { left: `${pricePct}%`, backgroundColor: priceColor }]} />
-
-          {/* Price label floating on bar */}
-          <View style={[styles.priceBubbleWrap, { left: `${pricePct}%` }]}>
-            <View style={[styles.priceBubble, { backgroundColor: priceColor }]}>
-              <Text style={styles.priceBubbleText}>${currentPrice.toFixed(2)}</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Labels below bar */}
-        <View style={styles.barLabelRow}>
-          {/* ORL label */}
-          {(isInRange || isBelowLow) && (
-            <View style={[styles.barLabelPin, { left: `${orlPct}%` }]}>
-              <Text style={[styles.barLabelTop, { color: colors.error }]}>ORL</Text>
-              <Text style={[styles.barLabelBot, { color: colors.error }]}>{fp(orbLow)}</Text>
-            </View>
-          )}
-          {/* ORH label */}
-          {(isInRange || isAboveHigh) && (
-            <View style={[styles.barLabelPin, { left: `${orhPct}%` }]}>
-              <Text style={[styles.barLabelTop, { color: colors.success }]}>ORH</Text>
-              <Text style={[styles.barLabelBot, { color: colors.success }]}>{fp(orbHigh)}</Text>
-            </View>
-          )}
-          {/* Fibonacci labels */}
-          {isAboveHigh && fibLevels.above.map(l => (
-            <View key={l.multiplier} style={[styles.barLabelPin, { left: `${pct(l.price)}%` }]}>
-              <Text style={[styles.barLabelTop, { color: l.color }]}>{l.label}</Text>
-              <Text style={[styles.barLabelBot, { color: l.color }]}>${l.price.toFixed(0)}</Text>
-            </View>
-          ))}
-          {isBelowLow && fibLevels.below.map(l => (
-            <View key={l.multiplier} style={[styles.barLabelPin, { left: `${pct(l.price)}%` }]}>
-              <Text style={[styles.barLabelTop, { color: l.color }]}>{l.label}</Text>
-              <Text style={[styles.barLabelBot, { color: l.color }]}>${l.price.toFixed(0)}</Text>
-            </View>
-          ))}
-        </View>
-      </View>
-    );
-  };
 
   // ── Tab content ────────────────────────────────────────────────────────────
 
@@ -419,7 +340,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   );
 
   const LevelsTab = () => (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.tabContent} showsVerticalScrollIndicator={false}>
+    <View style={styles.tabContent}>
       {/* ORB Key Levels */}
       <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <Text style={[styles.cardTitle, { color: colors.textTertiary }]}>ORB Key Levels</Text>
@@ -509,11 +430,11 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
           ))}
         </View>
       )}
-    </ScrollView>
+    </View>
   );
 
   const DetailsTab = () => (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.tabContent, { paddingBottom: 32 }]} showsVerticalScrollIndicator={false}>
+    <View style={styles.tabContent}>
       {/* Trade Info */}
       <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <Text style={[styles.cardTitle, { color: colors.textTertiary }]}>Trade Info</Text>
@@ -642,7 +563,7 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
           </TouchableOpacity>
         )}
       </View>
-    </ScrollView>
+    </View>
   );
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -662,7 +583,18 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
         <View style={[styles.header, { borderBottomColor: colors.separator }]}>
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-              <Text style={[styles.ticker, { color: colors.text }]}>{data.ticker}</Text>
+              <TouchableOpacity
+                onPress={() => { onClose(); onNavigateToTicker?.(data.ticker); }}
+                hitSlop={6}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+              >
+                <TickerLogo
+                  uri={`https://financialmodelingprep.com/image-stock/${data.ticker.toUpperCase()}.png`}
+                  ticker={data.ticker}
+                  size={26}
+                />
+                <Text style={[styles.ticker, { color: colors.text }]}>{data.ticker}</Text>
+              </TouchableOpacity>
               {/* Suggestion type pill */}
               <View style={[styles.typeBadge, { backgroundColor: suggestion.color + '25', borderColor: suggestion.color + '60' }]}>
                 <Text style={[styles.typeBadgeText, { color: suggestion.color }]}>{suggestion.type}</Text>
@@ -687,34 +619,53 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
           </TouchableOpacity>
         </View>
 
-        {/* ORB Range Bar */}
-        <ORBRangeBar />
+        {/* Body scrolls as one unit: the advanced chart is much taller than
+            the old range bar, so chart + tabs + tab content share one
+            ScrollView instead of per-tab scroll areas. */}
+        <ScrollView
+          style={{ flex: 1 }}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 24 }}
+        >
+          {/* Advanced chart with the ORB band overlaid (1D) */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+            <AdvancedPriceChart
+              data={historyData}
+              isLoading={historyLoading}
+              period={chartPeriod}
+              onPeriodChange={setChartPeriod}
+              positive={periodPositive}
+              height={300}
+              orbRange={orbRange > 0 ? { high: orbHigh, low: orbLow } : null}
+              showOrbRange
+              livePrice={currentPrice || null}
+            />
+          </View>
 
-        {/* Tab bar */}
-        <View style={[styles.tabRow, { borderBottomColor: colors.separator }]}>
-          {(['Overview', 'Levels', 'Details'] as Tab[]).map(tab => {
-            const active = activeTab === tab;
-            return (
-              <TouchableOpacity
-                key={tab}
-                onPress={() => setActiveTab(tab)}
-                style={[styles.tabBtn, active && { borderBottomColor: colors.accent, borderBottomWidth: 2 }]}
-                activeOpacity={0.75}
-              >
-                <Text style={[styles.tabBtnText, { color: active ? colors.accent : colors.textTertiary }]}>
-                  {tab}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+          {/* Tab bar */}
+          <View style={[styles.tabRow, { borderBottomColor: colors.separator }]}>
+            {(['Overview', 'Levels', 'Details'] as Tab[]).map(tab => {
+              const active = activeTab === tab;
+              return (
+                <TouchableOpacity
+                  key={tab}
+                  onPress={() => setActiveTab(tab)}
+                  style={[styles.tabBtn, active && { borderBottomColor: colors.accent, borderBottomWidth: 2 }]}
+                  activeOpacity={0.75}
+                >
+                  <Text style={[styles.tabBtnText, { color: active ? colors.accent : colors.textTertiary }]}>
+                    {tab}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
 
-        {/* Tab content */}
-        <View style={{ flex: 1 }}>
+          {/* Tab content */}
           {activeTab === 'Overview' && <OverviewTab />}
           {activeTab === 'Levels' && <LevelsTab />}
           {activeTab === 'Details' && <DetailsTab />}
-        </View>
+        </ScrollView>
 
       </SafeAreaView>
     </Modal>
@@ -782,39 +733,6 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
     marginTop: 4,
   },
-
-  // ORB Range Bar
-  rangeSection: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 },
-  rangeBar: {
-    height: 88, borderRadius: 12, overflow: 'hidden', position: 'relative',
-  },
-  rangeLine: {
-    position: 'absolute', top: 0, bottom: 0, width: 2,
-  },
-  fibLine: {
-    position: 'absolute', top: 0, bottom: 0, width: 1.5,
-  },
-  priceMarker: {
-    position: 'absolute', top: 0, bottom: 0, width: 3, borderRadius: 2,
-  },
-  priceBubbleWrap: {
-    position: 'absolute', top: 8, transform: [{ translateX: -32 }],
-  },
-  priceBubble: {
-    paddingHorizontal: 7, paddingVertical: 3, borderRadius: 6,
-  },
-  priceBubbleText: {
-    fontSize: 11, fontWeight: '700', color: '#fff',
-  },
-  barLabelRow: {
-    position: 'relative', height: 36, marginTop: 4,
-  },
-  barLabelPin: {
-    position: 'absolute', top: 0, transform: [{ translateX: -18 }],
-    alignItems: 'center',
-  },
-  barLabelTop: { fontSize: 10, fontWeight: '600' },
-  barLabelBot: { fontSize: 10, fontWeight: '500' },
 
   // Tabs
   tabRow: {
