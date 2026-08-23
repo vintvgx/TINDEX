@@ -8,6 +8,8 @@ import type {
   AgentStreamChunk,
   ContractScoreRequest,
   ContractScore,
+  ParseScreenshotRequest,
+  ParseScreenshotResponse,
 } from '@/common/types/agent';
 
 const AGENT_SYSTEM_PROMPT = `You are TINDEX, an expert AI financial assistant specializing in options trading and market analysis. You provide data-driven, actionable insights about options contracts, market trends, and trading strategies.
@@ -135,6 +137,35 @@ export async function streamAgentChat(
     }
   } catch (error) {
     onError(toFriendlyError(error));
+  }
+}
+
+export async function parseFlowScreenshot(request: ParseScreenshotRequest): Promise<ParseScreenshotResponse> {
+  try {
+    const response = await fetch(`${RAILWAY_BASE_URL}/api/agent/parse-screenshot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: request.userId,
+        conversation_id: request.conversationId,
+        message: request.message,
+        image_base64: request.imageBase64,
+        media_type: request.mediaType,
+        previous_checklist: request.previousChecklist,
+        system_prompt: AGENT_SYSTEM_PROMPT,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error((err as any).error || `HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data.success) throw new Error(data.error || 'Failed to parse screenshot');
+    return data.data as ParseScreenshotResponse;
+  } catch (error) {
+    throw new Error(toFriendlyError(error));
   }
 }
 

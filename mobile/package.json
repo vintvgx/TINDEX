@@ -1,7 +1,7 @@
 {
   "name": "mobile",
   "main": "expo-router/entry",
-  "version": "0.5.02",
+  "version": "0.5.04",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
@@ -28,7 +28,7 @@
     "@rn-primitives/radio-group": "^1.2.0",
     "@rn-primitives/slot": "^1.2.0",
     "@rn-primitives/tooltip": "^1.2.0",
-    "@supabase/supabase-js": "^2.50.0", 
+    "@supabase/supabase-js": "^2.50.0",
     "@tanstack/react-query": "^5.81.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -72,7 +72,9 @@
     "react-native-web": "~0.20.0",
     "react-native-webview": "13.13.5",
     "tailwind-merge": "^3.3.1",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwindcss-animate": "^1.0.7",
+    "expo-image-picker": "~16.1.4",
+    "expo-clipboard": "~7.1.5"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

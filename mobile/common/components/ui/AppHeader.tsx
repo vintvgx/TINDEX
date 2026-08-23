@@ -17,6 +17,8 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
+import { AgentModal } from '@/common/components/agent/AgentModal';
+import { useToast } from '@/common/components/ui/Toast';
 
 const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
 
@@ -35,6 +37,8 @@ export function AppHeader() {
   const { data: followedTickers } = useUserORBFollows();
   const [tradePanelVisible, setTradePanelVisible] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const toast = useToast();
 
   const tickerOptions = useMemo(() => {
     const followed = (followedTickers ?? []).map((f: any) => f.ticker as string).filter(Boolean);
@@ -49,11 +53,17 @@ export function AppHeader() {
         { backgroundColor: colors.headerBg, borderBottomColor: colors.headerBorder },
       ]}
     >
-      {/* Left-aligned wordmark */}
-      <View style={styles.logo} pointerEvents="none">
+      {/* Left-aligned wordmark — doubles as the AI assistant entry point */}
+      <TouchableOpacity
+        onPress={() => setAgentOpen(true)}
+        style={styles.logo}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel="Open AI assistant"
+      >
         <Ionicons name="sparkles" size={16} color={colors.brand} style={{ marginRight: 6 }} />
         <Text style={[styles.logoText, { color: colors.text }]}>tindex</Text>
-      </View>
+      </TouchableOpacity>
 
       <View style={styles.rightActions}>
         {/* Quick ticker search */}
@@ -114,6 +124,12 @@ export function AppHeader() {
           />
         </KeyboardAvoidingView>
       </Modal>
+
+      <AgentModal
+        visible={agentOpen}
+        onClose={() => setAgentOpen(false)}
+        onError={(msg) => toast.error(msg)}
+      />
     </View>
   );
 }

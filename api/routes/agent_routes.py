@@ -166,6 +166,84 @@ def agent_chat():
     )
 
 
+@bp.route("/api/agent/parse-screenshot", methods=["POST"])
+def agent_parse_screenshot():
+    """
+    Extract a watch checklist from an options-flow alert screenshot, or
+    revise a previously-extracted checklist from a text-only correction.
+
+    Body (initial parse): { user_id, conversation_id?, message?, image_base64, media_type? }
+    Body (revision):      { user_id, conversation_id?, message, previous_checklist }
+
+    The image itself is never persisted — only the assistant's text reply is
+    saved to ai_messages, same as a normal chat turn, so the conversation
+    reads sensibly in history without storing the screenshot anywhere.
+    """
+    body = request.get_json(silent=True) or {}
+    user_id = body.get("user_id")
+    conversation_id = body.get("conversation_id")
+    message = (body.get("message") or "").strip()
+    image_base64 = body.get("image_base64")
+    media_type = body.get("media_type") or "image/jpeg"
+    previous_checklist = body.get("previous_checklist")
+    system_prompt = body.get("system_prompt") or DEFAULT_AGENT_SYSTEM_PROMPT
+
+    if not user_id:
+        return jsonify({"success": False, "error": "user_id is required"}), 400
+    if not image_base64 and not previous_checklist:
+        return jsonify({"success": False, "error": "image_base64 or previous_checklist is required"}), 400
+
+    supabase = get_supabase_service()
+
+    is_new = not conversation_id
+    if is_new:
+        convo = supabase.create_ai_conversation(
+            user_id=user_id,
+            title="Flow screenshot" if image_base64 else (message[:60] or "Flow checklist"),
+            ticker=None,
+        )
+        if not convo:
+            return jsonify({"success": False, "error": "Failed to create conversation"}), 500
+        conversation_id = convo["id"]
+
+    # Persist the user's turn as text only — the screenshot itself is never saved.
+    user_text = message or ("[Attached a flow screenshot]" if image_base64 else "[Correction]")
+    supabase.add_ai_message(conversation_id, "user", user_text)
+
+    try:
+        from datetime import date
+        result = anthropic_service.parse_flow_screenshot(
+            image_base64=image_base64,
+            media_type=media_type,
+            message=message or None,
+            previous_checklist=previous_checklist,
+            today=date.today().isoformat(),
+            system_prompt=system_prompt,
+        )
+    except Exception as exc:
+        logger.error("[agent] parse_flow_screenshot failed: %s", exc, exc_info=True)
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+    saved = supabase.add_ai_message(conversation_id, "assistant", result.get("reply") or "")
+
+    title = None
+    if is_new:
+        title = f"{result['ticker']} flow screenshot" if result.get("ticker") else "Flow screenshot"
+        supabase.touch_ai_conversation(conversation_id, title=title)
+    else:
+        supabase.touch_ai_conversation(conversation_id)
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "conversationId": conversation_id,
+            "messageId": (saved or {}).get("id", ""),
+            "checklist": result,
+            "title": title,
+        },
+    })
+
+
 @bp.route("/api/agent/score_contract", methods=["POST"])
 def agent_score_contract():
     body = request.get_json(silent=True) or {}

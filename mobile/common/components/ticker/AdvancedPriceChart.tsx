@@ -45,6 +45,25 @@ export interface ChartEventMarker {
   color?: string;
 }
 
+/** An existing watched price level/zone (from watched_price_levels) drawn
+ *  directly on the chart — see the "Watch" toggle in the chart toolbar. */
+export interface ChartWatchZone {
+  id: string;
+  low: number;
+  high: number;
+  direction: 'bullish' | 'bearish';
+  status: 'watching' | 'confirmed';
+}
+
+/** A newly-drawn-but-not-yet-saved watch zone, reported once the user lifts
+ *  their finger after a long-press-drag in Watch mode. The chart itself
+ *  never calls the API — the parent owns persistence (see onWatchConfirm). */
+export interface ChartWatchDraft {
+  low: number;
+  high: number;
+  direction: 'bullish' | 'bearish';
+}
+
 interface AdvancedPriceChartProps {
   data: TickerHistoryData | undefined;
   isLoading?: boolean;
@@ -71,6 +90,19 @@ interface AdvancedPriceChartProps {
   referenceLines?: ChartReferenceLine[] | null;
   /** Point-in-time annotations drawn on top of the price marks. */
   eventMarkers?: ChartEventMarker[] | null;
+  /** Existing watched levels/zones for this ticker, drawn as shaded bands.
+   *  Folded into the y-axis domain like referenceLines. */
+  watchZones?: ChartWatchZone[] | null;
+  /** Fired when the user finishes drawing a new zone in Watch mode (finger
+   *  lifted). The chart clears its own draft immediately after calling this
+   *  — the caller is responsible for actually persisting it (or not, on
+   *  failure) and passing the updated `watchZones` back down. */
+  onWatchConfirm?: (draft: ChartWatchDraft) => void;
+  /** Bump/change this (e.g. pass the ticker) whenever the chart is showing
+   *  a genuinely different instrument — clears Watch mode and any
+   *  in-progress/pending draft so a stale drawing never survives a ticker
+   *  swap. Left undefined, Watch state simply persists across re-renders. */
+  resetKey?: string | number;
 }
 
 // ── Layout constants ─────────────────────────────────────────────────────
@@ -172,6 +204,9 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   livePrice,
   referenceLines,
   eventMarkers,
+  watchZones,
+  onWatchConfirm,
+  resetKey,
 }) => {
   const colors = useThemeColors();
   const [width, setWidth] = useState(0);
@@ -334,6 +369,14 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         max = Math.max(max, line.price);
       }
     }
+    // Watched zones — same reasoning: a level called out well above/below
+    // the currently-visible range should still pull the domain out to show it.
+    if (watchZones?.length) {
+      for (const z of watchZones) {
+        min = Math.min(min, z.low);
+        max = Math.max(max, z.high);
+      }
+    }
 
     let lo: number, hi: number;
     if (yOverride) {
@@ -348,6 +391,11 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     const step = plotW / visibleCount;
     const xForIndex = (i: number) => (i - visibleStart + 0.5) * step;
     const yForPrice = (p: number) => priceH - ((p - lo) / (hi - lo)) * priceH;
+    // Inverse of yForPrice — converts a pixel Y (within the price pane) back
+    // to a price. Used only from JS-thread callbacks (never inside a
+    // 'worklet' block directly — this closes over `lo`/`hi`/`priceH` from
+    // this render's scope, which a UI-thread worklet can't safely call).
+    const priceForY = (y: number) => lo + (1 - y / priceH) * (hi - lo);
 
     // Y ticks on round numbers within the domain.
     const tickStep = niceStep(hi - lo, 4);
@@ -364,8 +412,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     const visVolumes = visibleIndices.map(i => volumes[i] ?? 0);
     const maxVolume = visVolumes.length ? Math.max(...visVolumes) : 0;
 
-    return { lo, hi, step, xForIndex, yForPrice, yTicks, xTicks, maxVolume };
-  }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, referenceLines, yOverride, visibleIndices, visibleStart, visibleCount]);
+    return { lo, hi, step, xForIndex, yForPrice, priceForY, yTicks, xTicks, maxVolume };
+  }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, referenceLines, watchZones, yOverride, visibleIndices, visibleStart, visibleCount]);
 
   // Line-mode path built from closes — the last point tracks the live tick.
   // Only the visible window is drawn.
@@ -386,6 +434,9 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // only when the index changes) is enough — no per-frame animation needed.
   const [scrubIndex, setScrubIndex] = useState(-1);
   const scrubIndexShared = useSharedValue(-1);
+  // Touch-down Y for a Watch-mode drag — captured in onBegin, read (not
+  // relied on via translation math) throughout onUpdate.
+  const watchStartYShared = useSharedValue(0);
 
   const notifyScrub = useCallback(
     (index: number) => {
@@ -414,11 +465,71 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   }, []);
 
+  // ── Watch mode: draw a new price level/zone directly on the chart ──────
+  // Repurposes the SAME long-press-then-drag gesture that normally drives
+  // the crosshair scrub (see scrubGesture below) — plain drag (pan) and
+  // pinch (zoom) are completely untouched by Watch mode, so panning/zooming
+  // to find the right spot before marking a level still works exactly as
+  // it does everywhere else on this chart.
+  const [watchMode, setWatchMode] = useState(false);
+  // Live pixel Y bounds while a drag is in progress (before release).
+  const [watchDraftPx, setWatchDraftPx] = useState<{ startY: number; endY: number } | null>(null);
+  // Finalized price range, set on release, awaiting Confirm/Cancel.
+  const [watchDraftCommitted, setWatchDraftCommitted] = useState<{ low: number; high: number } | null>(null);
+  const [watchDirection, setWatchDirection] = useState<'bullish' | 'bearish'>('bullish');
+
+  // Clears any in-progress/pending draft (and turns Watch mode back off)
+  // whenever the caller signals this is now a genuinely different chart —
+  // see the `resetKey` prop doc. Deliberately NOT keyed off `data` itself,
+  // which changes on every routine live-price poll and would otherwise wipe
+  // an awaiting-confirmation draft out from under the user mid-decision.
+  useEffect(() => {
+    setWatchMode(false);
+    setWatchDraftPx(null);
+    setWatchDraftCommitted(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey]);
+
+  const updateWatchDraft = useCallback((startY: number, endY: number) => {
+    setWatchDraftPx({ startY, endY });
+  }, []);
+
+  // Current live price, for defaulting the direction pill — whichever side
+  // of the current price the drawn zone mostly sits on.
+  const watchCurrentPrice = livePrice ?? ePrices[ePrices.length - 1];
+
+  const commitWatchDraft = useCallback(() => {
+    setWatchDraftPx((prev) => {
+      if (prev && scale) {
+        const pxTop = Math.min(prev.startY, prev.endY);
+        const pxBottom = Math.max(prev.startY, prev.endY);
+        // Smaller Y (higher on screen) is the higher price.
+        const high = scale.priceForY(pxTop);
+        const low = scale.priceForY(pxBottom);
+        if (Number.isFinite(low) && Number.isFinite(high) && high >= low) {
+          setWatchDraftCommitted({ low, high });
+          const mid = (low + high) / 2;
+          setWatchDirection(watchCurrentPrice != null && mid < watchCurrentPrice ? 'bearish' : 'bullish');
+        }
+      }
+      return null;
+    });
+  }, [scale, watchCurrentPrice]);
+
+  const cancelWatchDraft = useCallback(() => setWatchDraftCommitted(null), []);
+
+  const confirmWatchDraft = useCallback(() => {
+    if (!watchDraftCommitted) return;
+    onWatchConfirm?.({ ...watchDraftCommitted, direction: watchDirection });
+    setWatchDraftCommitted(null);
+  }, [watchDraftCommitted, watchDirection, onWatchConfirm]);
+
   // Chart-body gestures — four distinct interactions, deliberately kept
   // from stepping on one another:
   //   1. Quick tap        → reveal X/Y values at that point (singleTapGesture)
   //   2. Press-and-hold,
-  //      then drag         → slide through data, live-updating (scrubGesture)
+  //      then drag         → slide through data, live-updating (scrubGesture) —
+  //                          or, in Watch mode, draw a price level/zone instead
   //   3. Immediate drag    → scroll/pan the visible time window (manipulateGesture)
   //   4. Drag on the Y-axis gutter → expand/compress the price scale (manipulateGesture)
   // (2) and (3) are disambiguated by TIME: manipulateGesture has no
@@ -445,6 +556,12 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         .activateAfterLongPress(SCRUB_LONG_PRESS_MS)
         .onBegin((e) => {
           'worklet';
+          if (watchMode) {
+            watchStartYShared.value = e.y;
+            runOnJS(triggerHaptic)();
+            runOnJS(updateWatchDraft)(e.y, e.y);
+            return;
+          }
           if (visibleCount < 2 || plotW === 0) return;
           const step = plotW / visibleCount;
           const idx = Math.max(visibleStart, Math.min(visibleEnd, visibleStart + Math.floor(e.x / step)));
@@ -454,6 +571,10 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         })
         .onUpdate((e) => {
           'worklet';
+          if (watchMode) {
+            runOnJS(updateWatchDraft)(watchStartYShared.value, e.y);
+            return;
+          }
           if (visibleCount < 2 || plotW === 0) return;
           const step = plotW / visibleCount;
           const idx = Math.max(visibleStart, Math.min(visibleEnd, visibleStart + Math.floor(e.x / step)));
@@ -464,11 +585,15 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         })
         .onFinalize(() => {
           'worklet';
+          if (watchMode) {
+            runOnJS(commitWatchDraft)();
+            return;
+          }
           scrubIndexShared.value = -1;
           runOnJS(notifyScrub)(-1);
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [visibleStart, visibleEnd, visibleCount, plotW, notifyScrub, triggerHaptic],
+    [watchMode, visibleStart, visibleEnd, visibleCount, plotW, notifyScrub, triggerHaptic, updateWatchDraft, commitWatchDraft],
   );
 
   // Double-tap anywhere resets both axes back to auto-fit. Defined before
@@ -712,6 +837,32 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                 </Pressable>
               );
             })}
+          <Pressable
+            onPress={() => {
+              setWatchMode(v => !v);
+              setWatchDraftPx(null);
+              setWatchDraftCommitted(null);
+            }}
+            hitSlop={6}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 3,
+              paddingHorizontal: 8,
+              height: 26,
+              borderRadius: 8,
+              backgroundColor: watchMode ? colors.accent + '22' : 'transparent',
+            }}
+          >
+            <Ionicons
+              name={watchMode ? 'eye' : 'eye-outline'}
+              size={14}
+              color={watchMode ? colors.accent : colors.textTertiary}
+            />
+            <Text style={{ fontSize: 11, fontWeight: '700', color: watchMode ? colors.accent : colors.textTertiary }}>
+              Watch
+            </Text>
+          </Pressable>
           {isZoomed && (
             <Pressable
               onPress={resetZoom}
@@ -731,9 +882,13 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             </Pressable>
           )}
         </View>
-        {labelText && (
+        {watchMode && !watchDraftPx && !watchDraftCommitted ? (
+          <Text style={{ color: colors.accent, fontSize: 11.5, fontWeight: '600' }}>
+            Long-press &amp; drag to mark a level
+          </Text>
+        ) : labelText && !watchMode ? (
           <Text style={{ color: colors.textTertiary, fontSize: 12, fontWeight: '500' }}>{labelText}</Text>
-        )}
+        ) : null}
       </View>
 
       <View onLayout={onLayout} style={{ height, width: '100%' }}>
@@ -872,6 +1027,59 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                   </Fragment>
                 );
               })}
+
+              {/* Existing watched zones — shaded band, dashed while still
+                  'watching', solid once 'confirmed'. */}
+              {watchZones?.map((z) => {
+                const color = z.direction === 'bullish' ? colors.success : colors.error;
+                const yHigh = scale.yForPrice(z.high);
+                const yLow = scale.yForPrice(z.low);
+                const isPoint = z.high === z.low;
+                return (
+                  <Fragment key={z.id}>
+                    {!isPoint && (
+                      <Rect x={0} y={yHigh} width={plotW} height={Math.max(1, yLow - yHigh)} fill={color} opacity={0.08} />
+                    )}
+                    <Line
+                      x1={0} x2={plotW} y1={yHigh} y2={yHigh}
+                      stroke={color} strokeWidth={1.25}
+                      strokeDasharray={z.status === 'watching' ? '4,4' : undefined}
+                      opacity={0.85}
+                    />
+                    {!isPoint && (
+                      <Line
+                        x1={0} x2={plotW} y1={yLow} y2={yLow}
+                        stroke={color} strokeWidth={1.25}
+                        strokeDasharray={z.status === 'watching' ? '4,4' : undefined}
+                        opacity={0.85}
+                      />
+                    )}
+                  </Fragment>
+                );
+              })}
+
+              {/* Watch-mode draft — live while dragging, held while a
+                  Confirm/Cancel bar is up after release. */}
+              {watchMode && (watchDraftPx || watchDraftCommitted) && (() => {
+                const color = watchDirection === 'bullish' ? colors.success : colors.error;
+                const yTop = watchDraftPx ? Math.min(watchDraftPx.startY, watchDraftPx.endY) : scale.yForPrice(watchDraftCommitted!.high);
+                const yBottom = watchDraftPx ? Math.max(watchDraftPx.startY, watchDraftPx.endY) : scale.yForPrice(watchDraftCommitted!.low);
+                const priceHigh = watchDraftPx ? scale.priceForY(yTop) : watchDraftCommitted!.high;
+                const priceLow = watchDraftPx ? scale.priceForY(yBottom) : watchDraftCommitted!.low;
+                return (
+                  <Fragment>
+                    <Rect x={0} y={yTop} width={plotW} height={Math.max(1, yBottom - yTop)} fill={color} opacity={0.16} />
+                    <Line x1={0} x2={plotW} y1={yTop} y2={yTop} stroke={color} strokeWidth={1.5} strokeDasharray="5,3" />
+                    <Line x1={0} x2={plotW} y1={yBottom} y2={yBottom} stroke={color} strokeWidth={1.5} strokeDasharray="5,3" />
+                    <Rect x={plotW / 2 - 46} y={(yTop + yBottom) / 2 - 10} width={92} height={20} rx={5} fill={colors.background} opacity={0.92} />
+                    <SvgText x={plotW / 2} y={(yTop + yBottom) / 2 + 4} fill={color} fontSize={11} fontWeight="700" textAnchor="middle">
+                      {priceHigh - priceLow < 0.005
+                        ? formatAxisPrice(priceHigh)
+                        : `${formatAxisPrice(priceLow)}–${formatAxisPrice(priceHigh)}`}
+                    </SvgText>
+                  </Fragment>
+                );
+              })()}
 
               {/* Price marks */}
               {mode === 'line' ? (
@@ -1061,6 +1269,74 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               )}
             </Svg>
           </GestureDetector>
+        )}
+
+        {/* Confirm bar — appears once a Watch-mode drag is released, floating
+            over the top of the chart. Direction defaults from which side of
+            the live price the drawn zone sits on; still editable here before
+            committing, since the auto-guess can be wrong for a zone that
+            straddles the current price. */}
+        {watchDraftCommitted && (
+          <View
+            style={{
+              position: 'absolute',
+              top: 8,
+              left: 8,
+              right: 8,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              padding: 6,
+              borderRadius: 12,
+              backgroundColor: colors.surface,
+              borderWidth: 1,
+              borderColor: colors.border,
+              shadowColor: '#000',
+              shadowOpacity: 0.15,
+              shadowRadius: 6,
+              shadowOffset: { width: 0, height: 2 },
+              elevation: 4,
+            }}
+          >
+            <View style={{ flexDirection: 'row', borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: colors.border }}>
+              {(['bullish', 'bearish'] as const).map((d) => {
+                const active = watchDirection === d;
+                const c = d === 'bullish' ? colors.success : colors.error;
+                return (
+                  <Pressable
+                    key={d}
+                    onPress={() => setWatchDirection(d)}
+                    style={{
+                      paddingHorizontal: 8, paddingVertical: 7,
+                      backgroundColor: active ? c + '22' : 'transparent',
+                    }}
+                  >
+                    <Ionicons name={d === 'bullish' ? 'trending-up' : 'trending-down'} size={14} color={active ? c : colors.textTertiary} />
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={{ flex: 1, fontSize: 12.5, fontWeight: '700', color: colors.text }} numberOfLines={1}>
+              {watchDraftCommitted.high - watchDraftCommitted.low < 0.005
+                ? `Watch $${formatAxisPrice(watchDraftCommitted.high)}`
+                : `Watch $${formatAxisPrice(watchDraftCommitted.low)}–$${formatAxisPrice(watchDraftCommitted.high)}`}
+            </Text>
+            <Pressable onPress={cancelWatchDraft} hitSlop={6} style={{ padding: 6 }}>
+              <Ionicons name="close" size={18} color={colors.textTertiary} />
+            </Pressable>
+            <Pressable
+              onPress={confirmWatchDraft}
+              hitSlop={6}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 4,
+                paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8,
+                backgroundColor: colors.accent,
+              }}
+            >
+              <Ionicons name="checkmark" size={14} color={colors.accentForeground} />
+              <Text style={{ fontSize: 12.5, fontWeight: '700', color: colors.accentForeground }}>Watch</Text>
+            </Pressable>
+          </View>
         )}
       </View>
 

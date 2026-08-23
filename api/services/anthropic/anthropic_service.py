@@ -722,6 +722,139 @@ TAGS: [comma-separated list of applicable tags from the list above, e.g., "Volat
             "factors": data.get("factors") if isinstance(data.get("factors"), dict) else None,
         }
 
+    def parse_flow_screenshot(
+        self,
+        image_base64: Optional[str],
+        media_type: Optional[str],
+        message: Optional[str],
+        previous_checklist: Optional[Dict[str, Any]],
+        today: str,
+        system_prompt: str,
+    ) -> Dict[str, Any]:
+        """
+        Extract a watch checklist (ticker, watch zone, target contracts) from
+        an options-flow alert screenshot (e.g. a Discord bot post), or revise
+        a previously-extracted checklist from a text-only follow-up
+        correction. Exactly one of `image_base64` (initial parse) or
+        `previous_checklist` (revision) is expected — the image itself is
+        never persisted; a revision works purely off the JSON already
+        extracted plus the user's correction text.
+        """
+        instructions = (
+            "You are TINDEX, parsing an options order-flow alert screenshot (e.g. from a "
+            "Discord flow-alert bot) into a structured watch checklist.\n\n"
+            "Extract, if present:\n"
+            "- ticker: the stock symbol (e.g. \"PLTR\"), without the $ sign\n"
+            "- sentiment: \"bullish\" or \"bearish\" based on the overall flow read\n"
+            "- watch_zone: a price zone or level called out (e.g. a \"$185-$190 zone\") as "
+            "{\"low\": <number>, \"high\": <number>}. If only a single price is called out, "
+            "set low and high to that same value.\n"
+            "- contracts: every specific options contract mentioned (strike + expiry), each as "
+            "{\"option_type\": \"CALL\"|\"PUT\", \"strike\": <number>, "
+            "\"expiration_date\": \"YYYY-MM-DD\", \"note\": \"<short context, e.g. "
+            "'250 contracts, ~$82.5K premium, unusual'>\"}.\n"
+            f"  - Resolve bare dates like \"8/28\" or \"9/21\" to the nearest UPCOMING date "
+            f"from today ({today}), in YYYY-MM-DD format.\n"
+            "  - Fold volume/OI/premium/\"highest volume\" callouts into that contract's note.\n"
+            "- summary: a 1-2 sentence plain-language summary of the flow read.\n"
+            "- reply: a short conversational reply (2-4 sentences) telling the user what you "
+            "found and inviting them to review the checklist below — do not restate the raw "
+            "JSON in this field.\n\n"
+            "If the image isn't a flow/options screenshot, or a field genuinely isn't present, "
+            "use null (or an empty array for contracts) rather than guessing.\n\n"
+            "Respond with ONLY a JSON object (no markdown, no prose) of exactly this shape:\n"
+            "{\n"
+            '  "ticker": <string or null>,\n'
+            '  "sentiment": "bullish" | "bearish" | null,\n'
+            '  "watch_zone": {"low": <number>, "high": <number>} | null,\n'
+            '  "contracts": [{"option_type": "CALL" | "PUT", "strike": <number>, '
+            '"expiration_date": "YYYY-MM-DD", "note": <string>}],\n'
+            '  "summary": <string>,\n'
+            '  "reply": <string>\n'
+            "}"
+        )
+
+        if image_base64:
+            text_block = instructions
+            if message:
+                text_block += f"\n\nThe user also said: \"{message}\""
+            content: Any = [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type or "image/jpeg",
+                        "data": image_base64,
+                    },
+                },
+                {"type": "text", "text": text_block},
+            ]
+        else:
+            content = (
+                instructions
+                + f"\n\nHere is the checklist you previously extracted:\n"
+                + json.dumps(previous_checklist or {}, indent=2, default=str)
+                + f"\n\nThe user's correction/follow-up: \"{message or ''}\"\n"
+                + "Update the checklist to reflect this, keeping any fields the user didn't "
+                + "mention unchanged. Respond with the same JSON shape as before."
+            )
+
+        response = self.sync_client.messages.create(
+            model=AGENT_MODEL,
+            max_tokens=1536,
+            system=system_prompt,
+            messages=[{"role": "user", "content": content}],
+        )
+
+        raw = next((b.text for b in response.content if b.type == "text"), "{}")
+        data = self._parse_json_object(raw)
+
+        contracts: List[Dict[str, Any]] = []
+        for c in (data.get("contracts") or []):
+            if not isinstance(c, dict):
+                continue
+            option_type = str(c.get("option_type", "")).upper()
+            if option_type not in ("CALL", "PUT"):
+                continue
+            try:
+                strike = float(c.get("strike"))
+            except (TypeError, ValueError):
+                continue
+            expiry = str(c.get("expiration_date") or "")
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", expiry):
+                continue
+            contracts.append({
+                "option_type": option_type,
+                "strike": strike,
+                "expiration_date": expiry,
+                "note": str(c.get("note") or "").strip(),
+            })
+
+        watch_zone = data.get("watch_zone")
+        if isinstance(watch_zone, dict) and "low" in watch_zone and "high" in watch_zone:
+            try:
+                watch_zone = {"low": float(watch_zone["low"]), "high": float(watch_zone["high"])}
+            except (TypeError, ValueError):
+                watch_zone = None
+        else:
+            watch_zone = None
+
+        sentiment = data.get("sentiment")
+        sentiment = sentiment if sentiment in ("bullish", "bearish") else None
+
+        ticker = data.get("ticker")
+        ticker = str(ticker).upper().strip() if ticker else None
+
+        return {
+            "ticker": ticker,
+            "sentiment": sentiment,
+            "watch_zone": watch_zone,
+            "contracts": contracts,
+            "summary": str(data.get("summary") or "").strip(),
+            "reply": str(data.get("reply") or data.get("summary") or
+                         "Here's what I found — take a look at the checklist below.").strip(),
+        }
+
     @staticmethod
     def _parse_json_object(raw: str) -> Dict[str, Any]:
         """Extract the first JSON object from a model response (handles ```json fences)."""

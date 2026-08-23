@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
+  Image,
   Modal,
   TextInput,
   TouchableOpacity,
@@ -12,15 +13,18 @@ import {
   StyleSheet,
   ActivityIndicator,
   ScrollView,
-  Clipboard,
+  Alert,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import * as ExpoClipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useAgentConversations, useAgentMessages } from '@/hooks/queries/agent/useAgentConversations';
-import { streamAgentChat } from '@/common/services/AgentService';
+import { streamAgentChat, parseFlowScreenshot } from '@/common/services/AgentService';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useQueryClient } from '@tanstack/react-query';
-import type { AgentConversation } from '@/common/types/agent';
+import { ChecklistCard, type ChecklistStatus } from '@/common/components/agent/ChecklistCard';
+import type { AgentConversation, FlowChecklist } from '@/common/types/agent';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,7 +40,16 @@ type LocalMessage = {
   role: 'user' | 'assistant';
   content: string;
   isStreaming?: boolean;
+  imageUri?: string;
+  checklist?: FlowChecklist;
+  checklistStatus?: ChecklistStatus;
 };
+
+interface PendingImage {
+  base64: string;    // raw base64, no "data:" prefix
+  mediaType: string;
+  previewUri: string;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -74,7 +87,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ item, colors, accentColor
   const isUser = item.role === 'user';
 
   const handleLongPress = useCallback(() => {
-    if (item.content) Clipboard.setString(item.content);
+    if (item.content) ExpoClipboard.setStringAsync(item.content);
   }, [item.content]);
 
   return (
@@ -87,6 +100,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ item, colors, accentColor
       <TouchableOpacity
         onLongPress={handleLongPress}
         activeOpacity={0.85}
+        disabled={!item.content}
         style={[
           ms.bubble,
           isUser
@@ -94,13 +108,16 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ item, colors, accentColor
             : [ms.bubbleAI, { backgroundColor: colors.surface, borderColor: colors.border }],
         ]}
       >
+        {item.imageUri ? (
+          <Image source={{ uri: item.imageUri }} style={ms.attachedImage} resizeMode="cover" />
+        ) : null}
         {item.isStreaming && !item.content ? (
           <TypingDots color={colors.textTertiary} />
-        ) : (
-          <Text style={[ms.text, { color: isUser ? '#fff' : colors.text }]}>
+        ) : item.content ? (
+          <Text style={[ms.text, { color: isUser ? '#fff' : colors.text, marginTop: item.imageUri ? 8 : 0 }]}>
             {item.content}
           </Text>
-        )}
+        ) : null}
         {item.isStreaming && item.content ? (
           <View style={ms.streamingCursor}>
             <View style={[ms.cursor, { backgroundColor: colors.textTertiary }]} />
@@ -125,12 +142,18 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
+  const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
 
   const scrollRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   // Ref to avoid stale closure on conversationId during streaming
   const conversationIdRef = useRef<string | null>(null);
   useEffect(() => { conversationIdRef.current = activeConversationId; }, [activeConversationId]);
+  // Id of the most recent still-pending checklist message — while set, a
+  // plain text send is treated as a correction to THAT checklist (re-parsed
+  // from the extracted JSON, not the original image, which is never resent
+  // or stored) rather than a normal chat turn.
+  const activeChecklistIdRef = useRef<string | null>(null);
 
   const { data: conversations = [], refetch: refetchConversations } = useAgentConversations();
   const { data: savedMessages = [] } = useAgentMessages(activeConversationId);
@@ -145,6 +168,8 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
       setIsStreaming(false);
       setError(null);
       setPendingPrompt(null);
+      setPendingImage(null);
+      activeChecklistIdRef.current = null;
     }
   }, [visible]);
 
@@ -166,21 +191,76 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
     }
   }, [view, pendingPrompt]);
 
-  const sendMessage = useCallback(async (text: string) => {
+  const handleChecklistResolved = useCallback((msgId: string, status: 'submitted' | 'skipped') => {
+    setLocalMessages(prev => prev.map(m => (m.id === msgId ? { ...m, checklistStatus: status } : m)));
+    if (activeChecklistIdRef.current === msgId) activeChecklistIdRef.current = null;
+  }, []);
+
+  const sendMessage = useCallback(async (text: string, image?: PendingImage | null) => {
     const trimmed = text.trim();
-    if (!trimmed || isStreaming || !user?.id) return;
+    const revisingId = image ? null : activeChecklistIdRef.current;
+    if ((!trimmed && !image) || isStreaming || !user?.id) return;
 
     setInputText('');
+    setPendingImage(null);
     setError(null);
 
     const userMsgId = `local-user-${Date.now()}`;
-    const aiMsgId = `local-ai-${Date.now()}`;
-
     setLocalMessages(prev => [
       ...prev,
-      { id: userMsgId, role: 'user', content: trimmed },
-      { id: aiMsgId, role: 'assistant', content: '', isStreaming: true },
+      { id: userMsgId, role: 'user', content: trimmed, imageUri: image?.previewUri },
     ]);
+    scrollRef.current?.scrollToEnd({ animated: false });
+
+    // Screenshot parse (image attached) or a checklist revision (plain text
+    // while a checklist is still pending) — both hit the non-streaming
+    // parse-screenshot endpoint instead of the normal chat stream.
+    if (image || revisingId) {
+      setIsStreaming(true);
+      const aiMsgId = `local-ai-${Date.now()}`;
+      setLocalMessages(prev => [...prev, { id: aiMsgId, role: 'assistant', content: '', isStreaming: true }]);
+
+      const previousChecklist = revisingId
+        ? localMessages.find(m => m.id === revisingId)?.checklist
+        : undefined;
+
+      try {
+        const result = await parseFlowScreenshot({
+          userId: user.id,
+          conversationId: conversationIdRef.current ?? undefined,
+          message: trimmed || undefined,
+          imageBase64: image?.base64,
+          mediaType: image?.mediaType,
+          previousChecklist,
+        });
+        if (result.conversationId && !conversationIdRef.current) {
+          setActiveConversationId(result.conversationId);
+        }
+        const checklistMsgId = `local-checklist-${Date.now()}`;
+        setLocalMessages(prev =>
+          prev
+            .map(m => (m.id === aiMsgId ? { ...m, content: result.checklist.reply, isStreaming: false } : m))
+            .concat({ id: checklistMsgId, role: 'assistant', content: '', checklist: result.checklist, checklistStatus: 'pending' }),
+        );
+        activeChecklistIdRef.current = checklistMsgId;
+        setIsStreaming(false);
+        refetchConversations();
+        if (result.conversationId) {
+          queryClient.invalidateQueries({ queryKey: ['agent-messages', result.conversationId] });
+        }
+        scrollRef.current?.scrollToEnd({ animated: false });
+      } catch (e) {
+        setIsStreaming(false);
+        setLocalMessages(prev => prev.filter(m => m.id !== aiMsgId));
+        const msg = e instanceof Error ? e.message : 'Failed to parse screenshot';
+        setError(msg);
+        onError?.(msg);
+      }
+      return;
+    }
+
+    const aiMsgId = `local-ai-${Date.now()}`;
+    setLocalMessages(prev => [...prev, { id: aiMsgId, role: 'assistant', content: '', isStreaming: true }]);
     setIsStreaming(true);
 
     let accumulated = '';
@@ -224,7 +304,7 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
         onError?.(err);
       },
     );
-  }, [isStreaming, user, ticker, refetchConversations, queryClient, onError]);
+  }, [isStreaming, user, ticker, refetchConversations, queryClient, onError, localMessages]);
 
   const openConversation = useCallback((convo: AgentConversation) => {
     setActiveConversationId(convo.id);
@@ -251,6 +331,8 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
     setActiveConversationId(null);
     setLocalMessages([]);
     setError(null);
+    setPendingImage(null);
+    activeChecklistIdRef.current = null;
   }, []);
 
   const handleHomeInput = useCallback((text: string) => {
@@ -259,6 +341,50 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
       setView('thread');
     }
   }, []);
+
+  const handlePickImage = useCallback(async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      onError?.('Photo library permission is required to attach a screenshot.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      base64: true,
+      quality: 0.7,
+      allowsEditing: false,
+    });
+    if (result.canceled || !result.assets?.[0]?.base64) return;
+    const asset = result.assets[0];
+    setView('thread');
+    setPendingImage({
+      base64: asset.base64!,
+      mediaType: asset.mimeType || 'image/jpeg',
+      previewUri: asset.uri,
+    });
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }, [onError]);
+
+  const handlePasteImage = useCallback(async () => {
+    const img = await ExpoClipboard.getImageAsync({ format: 'png' });
+    if (!img) {
+      onError?.('No image found on the clipboard.');
+      return;
+    }
+    const match = img.data.match(/^data:(image\/\w+);base64,([\s\S]*)$/);
+    if (!match) return;
+    setView('thread');
+    setPendingImage({ base64: match[2], mediaType: match[1], previewUri: img.data });
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }, [onError]);
+
+  const handleAttachPress = useCallback(() => {
+    Alert.alert('Attach a Screenshot', 'Add a flow-alert screenshot to parse into a watch checklist.', [
+      { text: 'Choose from Photos', onPress: handlePickImage },
+      { text: 'Paste from Clipboard', onPress: handlePasteImage },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [handlePickImage, handlePasteImage]);
 
   const suggestedPrompts = ticker
     ? [
@@ -275,10 +401,23 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
       ];
 
   const renderMessage = useCallback(
-    ({ item }: { item: LocalMessage }) => (
-      <MessageBubble item={item} colors={colors} accentColor={colors.accent} />
-    ),
-    [colors],
+    ({ item }: { item: LocalMessage }) =>
+      item.checklist ? (
+        <View style={[ms.row, ms.rowAI]}>
+          <View style={[ms.avatar, { backgroundColor: colors.accent + '20' }]}>
+            <Ionicons name="sparkles" size={13} color={colors.accent} />
+          </View>
+          <ChecklistCard
+            checklist={item.checklist}
+            status={item.checklistStatus ?? 'pending'}
+            onResolved={(status) => handleChecklistResolved(item.id, status)}
+            colors={colors}
+          />
+        </View>
+      ) : (
+        <MessageBubble item={item} colors={colors} accentColor={colors.accent} />
+      ),
+    [colors, handleChecklistResolved],
   );
 
   const renderConversation = useCallback(
@@ -407,7 +546,8 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
                     {ticker ? `Ask about ${ticker}` : 'What can I help you with?'}
                   </Text>
                   <Text style={[s.emptySubtitle, { color: colors.textSecondary }]}>
-                    I can analyze options, explain strategies, and search for the latest market news.
+                    I can analyze options, explain strategies, search for the latest market news —
+                    or read a flow-alert screenshot and turn it into a watch checklist.
                   </Text>
                 </View>
               }
@@ -425,13 +565,48 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
             </View>
           ) : null}
 
+          {/* ── Revising-checklist hint ── */}
+          {view === 'thread' && activeChecklistIdRef.current && !pendingImage ? (
+            <View style={[s.hintBanner, { backgroundColor: colors.accent + '14' }]}>
+              <Ionicons name="pencil-outline" size={12} color={colors.accent} />
+              <Text style={{ color: colors.accent, fontSize: 11.5, fontWeight: '600', flex: 1 }}>
+                Replying will revise the checklist above
+              </Text>
+            </View>
+          ) : null}
+
+          {/* ── Pending image preview ── */}
+          {pendingImage ? (
+            <View style={[s.imageChip, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <Image source={{ uri: pendingImage.previewUri }} style={s.imageChipThumb} resizeMode="cover" />
+              <Text style={{ color: colors.textSecondary, fontSize: 12, flex: 1 }} numberOfLines={1}>
+                Screenshot attached — add a caption or just send
+              </Text>
+              <TouchableOpacity onPress={() => setPendingImage(null)} hitSlop={8}>
+                <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
           {/* ── Input row ── */}
           <View style={[s.inputRow, { backgroundColor: colors.background, borderTopColor: colors.separator }]}>
+            <TouchableOpacity
+              onPress={handleAttachPress}
+              disabled={isStreaming}
+              hitSlop={6}
+              style={[s.attachBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
+            >
+              <Ionicons name="add" size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
             <TextInput
               ref={inputRef}
               value={inputText}
               onChangeText={view === 'home' ? handleHomeInput : setInputText}
-              placeholder={ticker ? `Ask about ${ticker}...` : 'Ask anything...'}
+              placeholder={
+                pendingImage ? 'Add a caption (optional)...'
+                  : activeChecklistIdRef.current ? 'Describe the correction...'
+                  : ticker ? `Ask about ${ticker}...` : 'Ask anything...'
+              }
               placeholderTextColor={colors.textTertiary}
               style={[s.input, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
               multiline
@@ -446,14 +621,14 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
                   setPendingPrompt(inputText);
                   setInputText('');
                 } else {
-                  sendMessage(inputText);
+                  sendMessage(inputText, pendingImage);
                 }
               }}
-              disabled={!inputText.trim() || isStreaming}
+              disabled={(!inputText.trim() && !pendingImage) || isStreaming}
               style={[
                 s.sendBtn,
                 {
-                  backgroundColor: inputText.trim() && !isStreaming ? colors.accent : colors.surface,
+                  backgroundColor: (inputText.trim() || pendingImage) && !isStreaming ? colors.accent : colors.surface,
                   borderColor: colors.border,
                 },
               ]}
@@ -463,7 +638,7 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
                 : <Ionicons
                     name="arrow-up"
                     size={18}
-                    color={inputText.trim() && !isStreaming ? '#fff' : colors.textTertiary}
+                    color={(inputText.trim() || pendingImage) && !isStreaming ? '#fff' : colors.textTertiary}
                   />
               }
             </TouchableOpacity>
@@ -490,6 +665,7 @@ const ms = StyleSheet.create({
   text: { fontSize: 15, lineHeight: 22 },
   streamingCursor: { marginTop: 4 },
   cursor: { width: 2, height: 16, borderRadius: 1 },
+  attachedImage: { width: 200, height: 150, borderRadius: 12 },
 });
 
 // ─── Screen styles ─────────────────────────────────────────────────────────────
@@ -563,10 +739,25 @@ const s = StyleSheet.create({
     borderRadius: 10,
   },
   errorText: { flex: 1, fontSize: 12 },
+  hintBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginHorizontal: 16, marginBottom: 6,
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10,
+  },
+  imageChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    marginHorizontal: 12, marginBottom: 8,
+    padding: 8, borderRadius: 12, borderWidth: 1,
+  },
+  imageChipThumb: { width: 40, height: 40, borderRadius: 8 },
   inputRow: {
     flexDirection: 'row', alignItems: 'flex-end', gap: 8,
     paddingHorizontal: 12, paddingVertical: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  attachBtn: {
+    width: 42, height: 42, borderRadius: 21,
+    alignItems: 'center', justifyContent: 'center', borderWidth: 1,
   },
   input: {
     flex: 1, borderRadius: 22, borderWidth: 1,

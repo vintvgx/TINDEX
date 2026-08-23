@@ -10,11 +10,14 @@ import { useToast } from '@/common/components/ui/Toast';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
 import { useTickerSupportResistance } from '@/hooks/queries/technicals/useTickerSupportResistance';
-import { AdvancedPriceChart, AdvancedScrubPoint, ChartReferenceLine } from '@/common/components/ticker/AdvancedPriceChart';
+import { AdvancedPriceChart, AdvancedScrubPoint, ChartReferenceLine, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
 import type { PricePeriod, TickerHistoryData } from '@/common/types/blogPosts/ticker';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
 import { LiveModeToggle } from '@/common/components/strategy/LiveModeToggle';
 import { LiveTradesTickerTape } from '@/common/components/ticker/LiveTradesTickerTape';
+import { useAuth } from '@/common/utils/context/auth/AuthContext';
+import { useKeyLevels } from '@/hooks/queries/priceLevels/useKeyLevels';
+import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
 
 interface PriceChartFullScreenProps {
   visible: boolean;
@@ -63,6 +66,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const [scrubPoint, setScrubPoint] = useState<AdvancedScrubPoint | null>(null);
+  const { authState: { user } } = useAuth();
 
   // Feeds the shaded ORB band drawn directly on the chart (see
   // AdvancedPriceChart) — the separate "ORB Range" status card that used to
@@ -131,6 +135,41 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   }, [visible]);
 
   const toast = useToast();
+
+  // Watched price levels drawn on the chart via the "Watch" toggle — see
+  // AdvancedPriceChart's Watch mode. useKeyLevels has no per-ticker filter
+  // server-side, so this is scoped down client-side; only active levels are
+  // worth drawing (a cancelled/expired one has nothing useful to show).
+  const { data: allKeyLevels } = useKeyLevels();
+  const chartWatchZones: ChartWatchZone[] = (allKeyLevels ?? [])
+    .filter(l => l.ticker === ticker && (l.status === 'watching' || l.status === 'confirmed'))
+    .map(l => ({
+      id: l.id, low: l.level_low, high: l.level_high, direction: l.direction,
+      status: l.status as 'watching' | 'confirmed',
+    }));
+
+  const { mutateAsync: createKeyLevel } = useCreateKeyLevel();
+  const handleWatchConfirm = async (draft: ChartWatchDraft) => {
+    if (!user?.id) return;
+    try {
+      await createKeyLevel({
+        userId: user.id,
+        ticker,
+        direction: draft.direction,
+        levelLow: draft.low,
+        levelHigh: draft.high,
+        source: 'self',
+      });
+      toast.success(
+        draft.high - draft.low < 0.005
+          ? `Watching ${ticker} $${draft.high.toFixed(2)}`
+          : `Watching ${ticker} $${draft.low.toFixed(2)}–$${draft.high.toFixed(2)}`,
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to save the watch level');
+    }
+  };
+
   // Alpaca paper-key stream is force-disabled — see useChartPriceSource.
   const useAlpacaStream = false;
 
@@ -290,6 +329,9 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             showOrbRange
             livePrice={visible ? resolvedLivePrice ?? null : null}
             referenceLines={showSR ? srReferenceLines : null}
+            watchZones={chartWatchZones}
+            onWatchConfirm={handleWatchConfirm}
+            resetKey={ticker}
           />
 
           {/* Open contracts for this ticker — full data + editable SL/TP via

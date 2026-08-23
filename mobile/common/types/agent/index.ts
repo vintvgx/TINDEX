@@ -46,6 +46,45 @@ export type AgentStreamChunk = {
   error?: string;
 };
 
+// ─── Flow-screenshot checklist ─────────────────────────────────────────────
+
+export interface FlowChecklistContract {
+  option_type: 'CALL' | 'PUT';
+  strike: number;
+  expiration_date: string;
+  note: string;
+}
+
+export interface FlowWatchZone {
+  low: number;
+  high: number;
+}
+
+export interface FlowChecklist {
+  ticker: string | null;
+  sentiment: 'bullish' | 'bearish' | null;
+  watch_zone: FlowWatchZone | null;
+  contracts: FlowChecklistContract[];
+  summary: string;
+  reply: string;
+}
+
+export interface ParseScreenshotRequest {
+  userId: string;
+  conversationId?: string;
+  message?: string;
+  imageBase64?: string;
+  mediaType?: string;
+  previousChecklist?: FlowChecklist;
+}
+
+export interface ParseScreenshotResponse {
+  conversationId: string;
+  messageId: string;
+  checklist: FlowChecklist;
+  title?: string;
+}
+
 export interface ContractScoreRequest {
   userId: string;
   trackedContractId: string;

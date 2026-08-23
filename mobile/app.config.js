@@ -2,7 +2,7 @@ export default {
   expo: {
     name: "Tindex",
     slug: "alethia",
-    version: "0.5.02",
+    version: "0.5.04",
     orientation: "portrait",
     icon: "./assets/logo/tindex_spark.png",
     scheme: "mobile",
@@ -89,6 +89,12 @@ export default {
           icon: "./assets/icons/tindex_spark.png",
           color: "#ffffff",
           sounds: ["./assets/sounds/notification_sound.wav"],
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          photosPermission: "Allow $(PRODUCT_NAME) to access your photos so you can attach a flow screenshot to the AI assistant."
         }
       ]
     ],
