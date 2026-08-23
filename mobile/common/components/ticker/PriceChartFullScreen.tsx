@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { useChartLiveStream } from '@/hooks/queries/ticker/useChartLiveStream';
+import { useChartPriceSource } from '@/hooks/useChartPriceSource';
 import { useToast } from '@/common/components/ui/Toast';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
@@ -178,15 +179,21 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
     }
   };
 
-  // Alpaca paper-key stream is force-disabled — see useChartPriceSource.
-  const useAlpacaStream = false;
+  // User-selectable in Profile (Alpaca Stream vs Yahoo Polling) — see
+  // useChartPriceSource. Re-enabled now that the paper-key stream runs
+  // under a genuinely separate Alpaca account, no longer contending with
+  // OrbService's own live-key stock stream for the account's single
+  // market-data connection slot (see docs/incidents/2026-07-13-orb-stream-
+  // connection-limit.md and stock_chart_stream.py's docstring).
+  const { source: chartPriceSource } = useChartPriceSource();
+  const useAlpacaStream = chartPriceSource === 'alpaca';
 
   // Real-time paper-key Alpaca trade stream — see
   // useChartLiveStream/stock_chart_stream.py. Kept separate from the
   // yfinance-backed useMarketStream below (which stays subscribed
   // regardless of the chosen source) so a bad Alpaca connection can fall
   // back instantly instead of needing a fresh subscribe.
-  const chartStream = useChartLiveStream(ticker, false);
+  const chartStream = useChartLiveStream(ticker, useAlpacaStream && visible);
   const { livePrices } = useMarketStream([ticker], { enabled: visible });
 
   const alpacaUsable = useAlpacaStream && !chartStream.error && chartStream.price != null;

@@ -1,21 +1,26 @@
 """
 Real-time equity last-trade streaming for chart viewing, via Alpaca's
-StockDataStream — deliberately using the PAPER account's key pair
-(ALPACA_PAPER_API_KEY/SECRET_KEY) rather than the live keys.
+StockDataStream, using the ALPACA_PAPER_API_KEY/SECRET_KEY key pair.
 
-Alpaca allows only one live market-data WebSocket connection per account
-per feed (see AlpacaStreamingService's incident notes — the ORB engines'
-own stock stream already claims that slot on the LIVE account). Paper and
-live are distinct Alpaca accounts with independent connection allowances,
-so a stream opened under the paper keys is fully isolated from the ORB
-engines' feed — it can never contend with, delay, or drop the live trading
-engine's own bar-close detection. The paper key pair is otherwise only used
-elsewhere in this app for REST TradingClient calls (account/positions/
-orders), never for a streaming connection, so this is the sole consumer of
-that connection slot.
+Alpaca allows only one live market-data WebSocket connection PER USER — this
+is a per-USER cap, not per sub-account. Paper and live are two trading
+sub-accounts under the same user, sharing the same market-data connection
+allowance, NOT independent slots (confirmed against Alpaca's own docs/forum,
+2026-08-24 — see docs/incidents/2026-07-13-orb-stream-connection-limit.md
+for the "connection limit exceeded" failure this originally caused: the
+ORB engines' own live-key stock stream already held this account's one
+slot, so a paper-keyed stream under the SAME Alpaca user collided with it
+regardless of using different credentials). ALPACA_PAPER_API_KEY/SECRET_KEY
+must point to a genuinely separate Alpaca account (its own signup, not
+another paper sub-account spun up under the primary user) for this stream
+to actually be isolated from the ORB engines' feed. If those env vars ever
+get pointed back at a paper sub-account of the SAME user as the live keys,
+this will silently start colliding with OrbService's stream again.
 
-Read-only / display-only: never places orders or touches the paper
-trading client itself, just reuses its market-data entitlement.
+Read-only / display-only: never places orders. Since the credentials now
+point to an entirely separate account from the one used for real trading,
+this is no longer "reusing the paper trading client's entitlement" — it's
+an account that exists solely to hold this stream's connection slot.
 """
 
 import os
@@ -113,6 +118,19 @@ class ChartStreamManager:
             logger.info("[ChartStream] Unsubscribed %s", symbol)
         except Exception as ex:
             logger.debug("[ChartStream] unsubscribe_trades: %s", ex)
+
+    def stop(self):
+        """Shut down the WebSocket connection. Mirrors OptionStreamManager.stop()
+        — not currently called anywhere (this manager lives for the process
+        lifetime, same as OptionStreamManager), but present so a future
+        graceful-shutdown path has something to call rather than abandoning
+        the connection for the OS/Alpaca's server-side timeout to notice."""
+        if self._stream:
+            try:
+                self._stream.stop_ws()
+            except Exception:
+                pass
+        self._started = False
 
     # ── Internal ───────────────────────────────────────────────────────────────
 

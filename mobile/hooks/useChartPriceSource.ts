@@ -6,27 +6,30 @@ export type ChartPriceSource = 'alpaca' | 'yfinance';
 
 const STORAGE_KEY = 'chart_price_source_v1';
 const QUERY_KEY = ['chart-price-source'];
-const DEFAULT_SOURCE: ChartPriceSource = 'yfinance';
+// 'alpaca' as of 2026-08-24 — the paper-key stream now runs under a
+// genuinely separate Alpaca account (its own connection allowance; Alpaca's
+// "one connection" cap is per-user, not per paper/live sub-account, so the
+// original same-account paper key collided with OrbService's own live-key
+// stock stream — see docs/incidents/2026-07-13-orb-stream-connection-limit.md
+// and stock_chart_stream.py's docstring). 'yfinance' stays available as a
+// fallback via the Profile toggle if the new connection ever misbehaves.
+const DEFAULT_SOURCE: ChartPriceSource = 'alpaca';
 
 async function loadSource(): Promise<ChartPriceSource> {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    return raw === 'yfinance' ? 'yfinance' : DEFAULT_SOURCE;
+    return raw === 'alpaca' || raw === 'yfinance' ? raw : DEFAULT_SOURCE;
   } catch {
     return DEFAULT_SOURCE;
   }
 }
 
 /**
- * Which live-price source PriceChartFullScreen uses — the real-time
- * paper-key Alpaca trade stream (useChartLiveStream) or the existing ~5s
- * yfinance poll (useMarketStream). The Alpaca stream is force-disabled
- * (Railway errors from the paper-key connection) — 'alpaca' is never
- * returned even if a device has it persisted from before, and the Profile
- * toggle's Alpaca option is disabled so it can't be re-selected. Persisted
- * to AsyncStorage and mirrored into the React Query cache (same pattern as
- * useSearchBarVisibility) so PriceChartFullScreen re-renders if this is
- * ever re-enabled.
+ * Which live-price source PriceChartFullScreen and the Charts tab use — the
+ * real-time Alpaca trade stream (useChartLiveStream) or the ~5s yfinance
+ * poll (useMarketStream). User-selectable from Profile; persisted to
+ * AsyncStorage and mirrored into the React Query cache (same pattern as
+ * useSearchBarVisibility) so both chart screens re-render on a change.
  */
 export function useChartPriceSource() {
   const qc = useQueryClient();

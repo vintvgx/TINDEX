@@ -17,6 +17,8 @@ import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQu
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
 import { useMarketStream } from '@/hooks/useMarketStream';
+import { useChartLiveStream } from '@/hooks/queries/ticker/useChartLiveStream';
+import { useChartPriceSource } from '@/hooks/useChartPriceSource';
 import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
@@ -144,13 +146,18 @@ export default function ChartsScreen() {
       ? { high: fallbackOrb.orb_high, low: fallbackOrb.orb_low }
       : null;
 
-  // Live price — same shared /ws/prices stream (useMarketStream) the ticker
-  // tape and watchlists already use; the dedicated per-ticker Alpaca stream
-  // (useChartLiveStream) is intentionally NOT wired in here, matching
-  // PriceChartFullScreen's own "force-disabled" choice (see its comment on
-  // useAlpacaStream) rather than diverging from that established decision.
+  // Live price — the real-time per-ticker Alpaca stream when selected in
+  // Profile (see useChartPriceSource; same wiring as PriceChartFullScreen),
+  // falling back to the shared /ws/prices yfinance poll (useMarketStream —
+  // stays subscribed regardless of source, same rationale as
+  // PriceChartFullScreen: a bad Alpaca connection falls back instantly
+  // instead of needing a fresh subscribe) or the last REST snapshot.
+  const { source: chartPriceSource } = useChartPriceSource();
+  const useAlpacaStream = chartPriceSource === 'alpaca';
+  const chartStream = useChartLiveStream(activeTicker, useAlpacaStream);
   const { livePrices } = useMarketStream([activeTicker], { enabled: true });
-  const resolvedLivePrice = livePrices[activeTicker] ?? stockData?.current_price;
+  const alpacaUsable = useAlpacaStream && !chartStream.error && chartStream.price != null;
+  const resolvedLivePrice = alpacaUsable ? chartStream.price! : livePrices[activeTicker] ?? stockData?.current_price;
 
   const dayRefPrice = (stockData?.current_price != null && stockData?.price_change != null)
     ? stockData.current_price - stockData.price_change

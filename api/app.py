@@ -31,11 +31,17 @@ def log_response_info(response):
 from services.websocket.price_stream_service import price_stream
 price_stream.start()
 
-# Per-chart real-time equity stream (ws_chart_live below) polls yfinance
-# directly rather than importing stock_chart_stream's paper-key Alpaca
-# stream — that connection was erroring on Railway, so it's been pulled out
-# of this path. stock_chart_stream.py is left in place, unused, in case the
-# Alpaca stream gets re-enabled later.
+# Per-chart real-time equity stream (ws_chart_live below) — see
+# stock_chart_stream.py's docstring for why this uses a dedicated Alpaca key
+# pair, now credentialed against a genuinely separate Alpaca account (as of
+# 2026-08-24) rather than a paper sub-account under the same user as
+# OrbService's own live-key stock stream. Previously disabled after
+# "connection limit exceeded" errors on Railway — see
+# docs/incidents/2026-07-13-orb-stream-connection-limit.md: Alpaca's
+# market-data connection cap is per-USER, not per paper/live sub-account, so
+# the original paper key silently shared (and lost the race for) the same
+# account-wide slot OrbService's stream already held.
+from services.websocket.stock_chart_stream import chart_stream
 
 # Single shared Alpaca option-data-stream connection for the whole process.
 # Constructed here (module scope, before the ORB engine's try/except below)
@@ -160,40 +166,43 @@ def ws_prices(ws):
                 price_stream.unsubscribe(ticker)
 
 
-CHART_POLL_INTERVAL = 5  # seconds — matches price_stream_service's cadence
-
-# ── WebSocket: per-chart real-time equity stream (Yahoo-backed) ────────────────
+# ── WebSocket: per-chart real-time equity stream (Alpaca-backed) ───────────────
 
 @sock.route("/ws/chart/<ticker>/live")
 def ws_chart_live(ws, ticker: str):
     """
-    Last-trade price for exactly one ticker, for whichever chart is currently
-    open. Polls yfinance directly on this connection's own thread (via
-    batch_fetch_current_prices — the same yfinance path /ws/prices already
-    relies on) rather than the paper-key Alpaca stream in stock_chart_stream.py,
-    which was pulled from this path after it started erroring on Railway.
-    Independent of /ws/prices itself and of the ORB engines' own live-account
-    stock stream.
+    Real-time last-trade price for exactly one ticker, for whichever chart is
+    currently open — see stock_chart_stream.py. Independent of /ws/prices
+    (that stays on its existing yfinance poll for TickerTape/watchlists/etc.)
+    and independent of the ORB engines' own live-account stock stream — this
+    connection now runs under a separate Alpaca account's key pair
+    specifically so it can never contend with that one for the account-wide
+    market-data connection slot (see the import comment above).
     """
-    import time as _time
-    from services.portfolio.portfolio_service import batch_fetch_current_prices
+    import queue as _queue
 
     symbol = ticker.upper()
+    client_q: _queue.Queue = _queue.Queue(maxsize=20)
+
+    def _on_price(price: float):
+        try:
+            client_q.put_nowait(json.dumps({"type": "price_update", "price": price}))
+        except _queue.Full:
+            pass
+
+    chart_stream.subscribe(symbol, _on_price)
     try:
         while True:
-            price = None
             try:
-                price = batch_fetch_current_prices([symbol]).get(symbol)
-            except Exception as exc:
-                logger.warning("[WS/chart] price fetch failed for %s: %s", symbol, exc)
-
-            if price is not None:
-                ws.send(json.dumps({"type": "price_update", "price": price}))
-            else:
+                payload = client_q.get(timeout=30)
+                ws.send(payload)
+            except _queue.Empty:
                 ws.send(json.dumps({"type": "ping"}))
-            _time.sleep(CHART_POLL_INTERVAL)
     except Exception as exc:
         logger.debug("[WS/chart] client disconnected: %s", exc)
+    finally:
+        chart_stream.unsubscribe(symbol, _on_price)
+        logger.info("[WS] client cleanup done")
 
 
 # ── ORB Strategy Engine ────────────────────────────────────────────────────────
