@@ -741,12 +741,12 @@ const OptionsScreen = () => {
                 </Text>
                 {v.id === 'watchlist' && watchlistCount > 0 && (
                   <View style={[viewToggle.badge, { backgroundColor: colors.accent }]}>
-                    <Text style={viewToggle.badgeText}>{watchlistCount > 99 ? '99+' : watchlistCount}</Text>
+                    <Text style={[viewToggle.badgeText, { color: colors.accentForeground }]}>{watchlistCount > 99 ? '99+' : watchlistCount}</Text>
                   </View>
                 )}
                 {v.id === 'levels' && activeLevelsCount > 0 && (
                   <View style={[viewToggle.badge, { backgroundColor: colors.accent }]}>
-                    <Text style={viewToggle.badgeText}>{activeLevelsCount > 99 ? '99+' : activeLevelsCount}</Text>
+                    <Text style={[viewToggle.badgeText, { color: colors.accentForeground }]}>{activeLevelsCount > 99 ? '99+' : activeLevelsCount}</Text>
                   </View>
                 )}
               </View>
@@ -1050,7 +1050,7 @@ const viewToggle = StyleSheet.create({
   badge: {
     minWidth: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4,
   },
-  badgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+  badgeText: { fontSize: 10, fontWeight: '700' },
 });
 
 const styles = StyleSheet.create({

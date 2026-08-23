@@ -107,8 +107,8 @@ export const AlertThresholdsModal: React.FC<Props> = ({ visible, onClose, contra
             }}
           >
             {updateThresholds.isPending
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Save</Text>}
+              ? <ActivityIndicator color={colors.accentForeground} />
+              : <Text style={{ color: colors.accentForeground, fontSize: 14, fontWeight: '700' }}>Save</Text>}
           </TouchableOpacity>
         </View>
       </View>

@@ -216,7 +216,12 @@ export function useSimulationRunner({ strategyId, suppressPush }: UseSimulationR
           // entry_underlying == orb_high always (see _underlying_at in
           // simulation.py) — known from the POST response, no need to wait
           // for the first WS tick to place the entry marker.
-          setMarkers([{ tick: 0, kind: 'entry', label: 'Entry', price: res.orb_high, color: colors.accent }]);
+          // textSecondary, not accent — matches the "Entry" reference line
+          // elsewhere in SimulationChartScreen, and avoids colors.accent
+          // here specifically: the chart draws this marker's label in fixed
+          // white text, and accent is a LIGHT fill in dark mode, so white
+          // text on it would be barely legible.
+          setMarkers([{ tick: 0, kind: 'entry', label: 'Entry', price: res.orb_high, color: colors.textSecondary }]);
           timerRef.current = setInterval(() =>
             setElapsed(e => e + 1), 1000);
         },

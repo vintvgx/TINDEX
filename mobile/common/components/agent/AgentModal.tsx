@@ -132,24 +132,32 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ item, colors, accentColor
   // sit on colors.surface — each needs its own markdown palette rather than
   // one shared style set.
   const markdownStyles = useMemo(() => {
-    const textColor = isUser ? '#fff' : colors.text;
-    const mutedColor = isUser ? 'rgba(255,255,255,0.7)' : colors.textTertiary;
-    const codeBg = isUser ? 'rgba(255,255,255,0.16)' : colors.surfaceSecondary;
+    // User bubbles sit on a solid colors.accent fill — accentForeground is
+    // the theme's own pre-computed contrast color for that background (NOT
+    // hardcoded white: in this app's dark theme, accent is a light
+    // off-white fill, so white text on it would be nearly invisible —
+    // exactly the class of bug accentForeground exists to prevent).
+    const textColor = isUser ? colors.accentForeground : colors.text;
+    const mutedColor = isUser ? colors.accentForeground + 'B3' : colors.textTertiary;
+    const codeBg = isUser ? colors.accentForeground + '29' : colors.surfaceSecondary;
     const monoFont = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
     return {
       body: { color: textColor, fontSize: 15, lineHeight: 22 },
-      paragraph: { marginTop: 0, marginBottom: 6 },
+      paragraph: { marginTop: 0, marginBottom: 8 },
       strong: { fontWeight: '700' as const, color: textColor },
       em: { fontStyle: 'italic' as const },
-      heading1: { color: textColor, fontSize: 19, fontWeight: '800' as const, marginTop: 2, marginBottom: 6 },
-      heading2: { color: textColor, fontSize: 17, fontWeight: '700' as const, marginTop: 2, marginBottom: 5 },
-      heading3: { color: textColor, fontSize: 16, fontWeight: '700' as const, marginTop: 2, marginBottom: 4 },
-      bullet_list: { marginVertical: 2 },
-      ordered_list: { marginVertical: 2 },
-      list_item: { flexDirection: 'row' as const, marginBottom: 4 },
-      bullet_list_icon: { color: textColor, marginRight: 6, fontSize: 15, lineHeight: 22 },
+      // Headings get real separation from the body below them — this is the
+      // "$TICKER — setup" title line the reply is instructed to open with,
+      // so it needs to read as a distinct title, not just slightly-bigger text.
+      heading1: { color: textColor, fontSize: 20, fontWeight: '800' as const, marginTop: 0, marginBottom: 10 },
+      heading2: { color: textColor, fontSize: 18, fontWeight: '800' as const, marginTop: 0, marginBottom: 9 },
+      heading3: { color: textColor, fontSize: 16, fontWeight: '700' as const, marginTop: 4, marginBottom: 6 },
+      bullet_list: { marginVertical: 3 },
+      ordered_list: { marginVertical: 3 },
+      list_item: { flexDirection: 'row' as const, marginBottom: 7, alignItems: 'flex-start' as const },
+      bullet_list_icon: { color: mutedColor, marginRight: 8, fontSize: 15, lineHeight: 22 },
       bullet_list_content: { flex: 1 },
-      ordered_list_icon: { color: textColor, marginRight: 6, fontSize: 15, lineHeight: 22 },
+      ordered_list_icon: { color: textColor, marginRight: 8, fontSize: 15, lineHeight: 22, fontWeight: '700' as const },
       ordered_list_content: { flex: 1 },
       code_inline: {
         backgroundColor: codeBg, color: textColor, borderRadius: 4,
@@ -163,13 +171,13 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ item, colors, accentColor
         backgroundColor: codeBg, color: textColor, borderRadius: 8,
         padding: 10, fontFamily: monoFont, fontSize: 13,
       },
-      link: { color: isUser ? '#fff' : accentColor, textDecorationLine: 'underline' as const },
-      hr: { backgroundColor: mutedColor, height: 1, marginVertical: 8 },
+      link: { color: isUser ? colors.accentForeground : accentColor, textDecorationLine: 'underline' as const },
+      hr: { backgroundColor: mutedColor, height: 1, marginVertical: 10 },
       blockquote: {
         borderLeftWidth: 3, borderLeftColor: mutedColor, paddingLeft: 10,
-        marginVertical: 4, opacity: 0.9,
+        marginVertical: 6, opacity: 0.9,
       },
-      table: { borderColor: mutedColor, borderWidth: 1, borderRadius: 6, marginVertical: 4 },
+      table: { borderColor: mutedColor, borderWidth: 1, borderRadius: 6, marginVertical: 6 },
       thead: { backgroundColor: codeBg },
       th: { padding: 6, fontWeight: '700' as const, color: textColor },
       td: { padding: 6, color: textColor, borderColor: mutedColor },
@@ -766,7 +774,7 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
                 : <Ionicons
                     name="arrow-up"
                     size={18}
-                    color={(inputText.trim() || pendingImage) && !isStreaming ? '#fff' : colors.textTertiary}
+                    color={(inputText.trim() || pendingImage) && !isStreaming ? colors.accentForeground : colors.textTertiary}
                   />
               }
             </TouchableOpacity>

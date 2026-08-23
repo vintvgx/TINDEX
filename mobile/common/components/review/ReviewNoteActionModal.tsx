@@ -144,7 +144,7 @@ export function ReviewNoteActionModal({ note, onClose }: Props) {
                   disabled={busy}
                   style={{ paddingVertical: 13, borderRadius: 12, backgroundColor: colors.accent, alignItems: 'center', opacity: busy ? 0.6 : 1 }}
                 >
-                  {busy ? <ActivityIndicator size="small" color="#fff" /> : <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>Move to this date</Text>}
+                  {busy ? <ActivityIndicator size="small" color={colors.accentForeground} /> : <Text style={{ color: colors.accentForeground, fontSize: 14, fontWeight: '700' }}>Move to this date</Text>}
                 </TouchableOpacity>
               </View>
             ) : (

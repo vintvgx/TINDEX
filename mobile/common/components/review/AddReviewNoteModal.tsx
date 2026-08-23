@@ -126,8 +126,8 @@ export function AddReviewNoteModal({ visible, initialDate, onClose }: Props) {
                 }}
               >
                 {createNote.isPending
-                  ? <ActivityIndicator size="small" color="#fff" />
-                  : <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>Save</Text>}
+                  ? <ActivityIndicator size="small" color={colors.accentForeground} />
+                  : <Text style={{ color: colors.accentForeground, fontSize: 15, fontWeight: '700' }}>Save</Text>}
               </TouchableOpacity>
             </View>
           </SafeAreaView>

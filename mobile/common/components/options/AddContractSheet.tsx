@@ -252,5 +252,5 @@ const s = StyleSheet.create({
     marginTop: 24, paddingVertical: 15, borderRadius: 14,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
   },
-  addBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  addBtnText: { fontSize: 16, fontWeight: '700' },
 });

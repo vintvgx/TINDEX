@@ -98,7 +98,7 @@ export const MenuModal: React.FC<Props> = ({ visible, onClose, sections }) => {
                   <Text style={[styles.rowLabel, { color: colors.text }]}>{item.label}</Text>
                   {item.badge && (
                     <View style={[styles.badge, { backgroundColor: item.badgeColor ?? colors.accent }]}>
-                      <Text style={styles.badgeText}>{item.badge}</Text>
+                      <Text style={[styles.badgeText, { color: colors.accentForeground }]}>{item.badge}</Text>
                     </View>
                   )}
                   <Ionicons name="chevron-forward" size={14} color={colors.tabBarInactive} />
@@ -165,5 +165,5 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginRight: 4,
   },
-  badgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+  badgeText: { fontSize: 10, fontWeight: '700' },
 });

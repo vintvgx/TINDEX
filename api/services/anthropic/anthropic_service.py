@@ -776,8 +776,12 @@ TAGS: [comma-separated list of applicable tags from the list above, e.g., "Volat
             "downside target(s) if any, and notable volume/premium figures. Bold (**like "
             "this**) the key price level(s) in each bullet (the ticker's already in the "
             "heading — don't repeat it bolded in every line).\n"
-            "  Skip any bullet whose data isn't in the image — never pad with filler. End with "
-            "exactly one short line: \"Not financial advice.\"\n\n"
+            "  Skip any bullet whose data isn't in the image — never pad with filler.\n"
+            "  3. Leave ONE FULLY BLANK LINE after the last bullet, then end with exactly one "
+            "short line on its own: \"Not financial advice.\" — the blank line is required so it "
+            "renders as its own paragraph instead of getting swallowed into the last bullet's "
+            "text (Markdown treats a line placed directly under a list item, with no blank line "
+            "before it, as part of that same list item).\n\n"
             "If the image isn't a flow/options screenshot, or a field genuinely isn't present, "
             "use null (or an empty array for contracts) rather than guessing.\n\n"
             "Respond with ONLY a JSON object (no markdown, no prose) of exactly this shape:\n"
@@ -863,15 +867,37 @@ TAGS: [comma-separated list of applicable tags from the list above, e.g., "Volat
         ticker = data.get("ticker")
         ticker = str(ticker).upper().strip() if ticker else None
 
+        reply = str(data.get("reply") or data.get("summary") or
+                    "Here's what I found — take a look at the checklist below.").strip()
+
         return {
             "ticker": ticker,
             "sentiment": sentiment,
             "watch_zone": watch_zone,
             "contracts": contracts,
             "summary": str(data.get("summary") or "").strip(),
-            "reply": str(data.get("reply") or data.get("summary") or
-                         "Here's what I found — take a look at the checklist below.").strip(),
+            "reply": self._ensure_disclaimer_paragraph(reply),
         }
+
+    @staticmethod
+    def _ensure_disclaimer_paragraph(reply: str) -> str:
+        """
+        The model is instructed to blank-line-separate a trailing "Not
+        financial advice." from the bullet list above it, but occasionally
+        glues it directly onto the last line instead — which Markdown then
+        renders as part of that bullet's own text (CommonMark's "lazy
+        continuation" rule swallows a line with no blank line before it into
+        the preceding list item) rather than as its own paragraph. Split it
+        onto its own line with a blank line before it whenever found stuck
+        to the end of the preceding text.
+        """
+        marker = "Not financial advice."
+        idx = reply.rfind(marker)
+        if idx <= 0:
+            return reply
+        before = reply[:idx].rstrip()
+        after = reply[idx + len(marker):]
+        return f"{before}\n\n{marker}{after}"
 
     @staticmethod
     def _parse_json_object(raw: str) -> Dict[str, Any]:

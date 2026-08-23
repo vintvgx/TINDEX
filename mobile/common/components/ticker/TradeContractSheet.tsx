@@ -238,11 +238,14 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
             style={[s.submitBtn, { backgroundColor: isPending ? colors.border : (paperMode ? colors.accent : colors.error), marginTop: 22 }]}
           >
             {isPending ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color={colors.textSecondary} />
             ) : (
               <>
-                <Ionicons name="flash" size={18} color="#fff" />
-                <Text style={s.submitText}>
+                {/* colors.accent flips light/dark between themes — the fixed
+                    white here only stayed contrast-safe on the live (colors.error)
+                    branch, which is why paperMode gets accentForeground instead. */}
+                <Ionicons name="flash" size={18} color={paperMode ? colors.accentForeground : '#fff'} />
+                <Text style={[s.submitText, { color: paperMode ? colors.accentForeground : '#fff' }]}>
                   {paperMode ? '' : 'LIVE '}Enter {contract.option_type} × {qty}
                 </Text>
               </>
@@ -291,5 +294,5 @@ const s = StyleSheet.create({
   exitLabel:   { fontSize: 14, fontWeight: '500' },
 
   submitBtn:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 15, borderRadius: 12 },
-  submitText:  { color: '#fff', fontSize: 15, fontWeight: '700' },
+  submitText:  { fontSize: 15, fontWeight: '700' },
 });

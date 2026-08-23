@@ -459,9 +459,9 @@ export default function DailyReviewScreen() {
                 }}
               >
                 {generateReview.isPending
-                  ? <ActivityIndicator size="small" color="#fff" />
-                  : <Ionicons name="sparkles" size={16} color="#fff" />}
-                <Text style={{ fontSize: 15, fontWeight: '700', color: '#fff' }}>
+                  ? <ActivityIndicator size="small" color={colors.accentForeground} />
+                  : <Ionicons name="sparkles" size={16} color={colors.accentForeground} />}
+                <Text style={{ fontSize: 15, fontWeight: '700', color: colors.accentForeground }}>
                   {generateReview.isPending ? 'Generating…' : 'Generate Review'}
                 </Text>
               </TouchableOpacity>
