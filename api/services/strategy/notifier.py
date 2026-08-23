@@ -477,6 +477,35 @@ class StrategyNotifier:
             pref_key="flow_signals",
         )
 
+    def notify_level_confirmed(self, ticker: str, direction: str, level_low: float,
+                                level_high: float, price: float, level_id: str,
+                                contract_count: int = 0):
+        """
+        A user-watched key level (self-identified or from a Discord flow
+        call — see watched_price_levels / KeyLevelWatcher) just had a
+        1-minute bar close through it. Suggested contracts have already
+        been scored and attached to the row by the time this fires.
+        """
+        emoji = "📈" if direction == "bullish" else "📉"
+        side = "above" if direction == "bullish" else "below"
+        level_label = (
+            f"${level_low:.2f}" if level_low == level_high
+            else f"${level_low:.2f}-${level_high:.2f}"
+        )
+        suggestion_note = f" · {contract_count} suggestion(s) ready" if contract_count else ""
+        self._dispatch(
+            title=f"{emoji} {ticker} Key Level Confirmed",
+            body=f"Closed {side} {level_label} @ ${price:.2f}{suggestion_note}",
+            data={
+                "screen": "options",
+                "type": "level_confirmed",
+                "ticker": ticker,
+                "level_id": level_id,
+            },
+            priority=P_MARKET,
+            pref_key="flow_signals",
+        )
+
     def notify_review_ready(self, review_date: str, trade_count: int, net_pnl: float,
                              paper_mode: bool = True):
         """Daily performance review finished generating and saving for ONE account.

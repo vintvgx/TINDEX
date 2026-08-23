@@ -10,11 +10,12 @@ import { AgentModal } from '@/common/components/agent/AgentModal';
 import { useToast } from '@/common/components/ui/Toast';
 import { useSearchBarVisibility } from '@/hooks/useSearchBarVisibility';
 
-const VISIBLE_ROUTE_ORDER = ['feed', 'orb', 'accounts', 'profile'] as const;
+const VISIBLE_ROUTE_ORDER = ['feed', 'orb', 'charts', 'accounts', 'profile'] as const;
 
 const ROUTE_TITLES: Record<string, string> = {
   feed: 'Home',
   orb: 'ORB',
+  charts: 'Charts',
   accounts: 'Accounts',
   profile: 'Profile',
 };
@@ -22,8 +23,9 @@ const ROUTE_TITLES: Record<string, string> = {
 const SEARCH_RADIUS = 22;
 const AGENT_RADIUS = 23;
 
-// Approximate height of the anchored tab bar (content) + the gap above it, used
-// to lift the floating search row clear of the keyboard.
+// Rendered content height of the docked tab bar (icon+label buttons, not
+// counting the safe-area inset padding below them) — used both by the bar
+// itself and to anchor the floating search row just above it.
 const TAB_BAR_CONTENT_HEIGHT = 56;
 const SEARCH_ROW_GAP = 10;
 const SEARCH_BAR_MARGIN = 8;
@@ -31,15 +33,25 @@ const SEARCH_BAR_MARGIN = 8;
 const SEARCH_BAR_HEIGHT = 46;
 
 /**
- * Total height the floating search row + tab bar occupy above the real screen
- * bottom. Screens with their own fixed-position bottom content (action panels,
- * sticky buttons) should add this to their bottom offset/padding so it isn't
- * hidden behind the floating overlay.
+ * The tab bar itself is now docked (a normal, non-absolute flex child —
+ * see the component below), so it reserves real layout space on its own;
+ * screens no longer need to pad around it. The search+AI row is the only
+ * thing left floating over content (anchored just above the docked bar),
+ * so this is what screens with their own fixed-position bottom content
+ * (action panels, sticky buttons) should still add to their bottom
+ * offset/padding to clear.
  */
 export function useFloatingTabBarHeight(): number {
+  return SEARCH_ROW_GAP + SEARCH_BAR_HEIGHT + SEARCH_BAR_MARGIN;
+}
+
+/** Actual rendered height of the docked tab bar, safe-area inset included —
+ *  exported so the Charts screen (and anything else laying out flush
+ *  against it) can size itself precisely instead of guessing. */
+export function useDockedTabBarHeight(): number {
   const insets = useSafeAreaInsets();
   const bottomPadding = Math.max(insets.bottom, 12) + 8;
-  return bottomPadding + TAB_BAR_CONTENT_HEIGHT + SEARCH_ROW_GAP + SEARCH_BAR_HEIGHT;
+  return bottomPadding + TAB_BAR_CONTENT_HEIGHT;
 }
 
 /**
@@ -93,41 +105,6 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
   // Extra breathing room below the tab labels so they clear the home-indicator /
   // gesture (Siri) bar at the very bottom of the screen.
   const bottomPadding = Math.max(insets.bottom, 12) + 8;
-
-  // Index within `visibleRoutes` (not `state.index`, which indexes the full
-  // route list including hidden href:null screens) — -1 when the focused
-  // screen isn't one of the 4 visible tabs (e.g. a pushed detail screen).
-  const focusedVisibleIndex = visibleRoutes.findIndex(
-    route => state.routes[state.index]?.name === route.name,
-  );
-
-  // Same sliding-pill technique as SegmentedPager's top tabs, adapted for
-  // discrete tab presses instead of a continuous swipe gesture: measure each
-  // button's real (variable) width/x via onLayout, then spring the shared
-  // highlight pill to the newly focused button instead of it just appearing.
-  const [buttonLayouts, setButtonLayouts] = useState<Record<number, { x: number; width: number }>>({});
-  const pillX = useRef(new Animated.Value(0)).current;
-  const pillWidth = useRef(new Animated.Value(0)).current;
-  const pillReady = useRef(false);
-
-  useEffect(() => {
-    const active = buttonLayouts[focusedVisibleIndex];
-    if (!active) return;
-    if (!pillReady.current) {
-      pillX.setValue(active.x);
-      pillWidth.setValue(active.width);
-      pillReady.current = true;
-      return;
-    }
-    Animated.parallel([
-      Animated.spring(pillX, {
-        toValue: active.x, useNativeDriver: false, damping: 20, stiffness: 220, mass: 0.6,
-      }),
-      Animated.spring(pillWidth, {
-        toValue: active.width, useNativeDriver: false, damping: 20, stiffness: 220, mass: 0.6,
-      }),
-    ]).start();
-  }, [focusedVisibleIndex, buttonLayouts, pillX, pillWidth]);
 
   // Glass styling derived from the active theme.
   const blurTint: 'light' | 'dark' = isDark ? 'dark' : 'light';
@@ -192,6 +169,8 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
         return <Ionicons name="home-outline" size={20} color={color} />;
       case 'orb':
         return <Ionicons name="pulse-outline" size={20} color={color} />;
+      case 'charts':
+        return <Ionicons name="stats-chart-outline" size={20} color={color} />;
       case 'accounts':
         return <Ionicons name="wallet-outline" size={20} color={color} />;
       case 'profile':
@@ -208,12 +187,15 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
       {keyboardVisible && (
         <Pressable style={StyleSheet.absoluteFillObject} onPress={Keyboard.dismiss} />
       )}
-      <View pointerEvents="box-none" style={styles.container}>
-        {/* Floating glass search + AI row (hovers over content) — the
-            Profile "Hide Search Bar" setting hides this whole row (search
-            field + AI button together); the AI assistant stays reachable
-            from Profile's own "Open AI Assistant" button in that case. */}
-        {!searchBarHidden && (
+
+      {/* Floating glass search + AI row — still overlays content (it needs
+          to hover above whatever's on screen, not push it down), anchored
+          just above the docked tab bar below rather than sitting inside it.
+          The Profile "Hide Search Bar" setting hides this whole row (search
+          field + AI button together); the AI assistant stays reachable from
+          Profile's own "Open AI Assistant" button in that case. */}
+      {!searchBarHidden && (
+        <View pointerEvents="box-none" style={[styles.searchRowOuter, { bottom: bottomPadding + TAB_BAR_CONTENT_HEIGHT }]}>
           <Animated.View style={[styles.searchRow, { transform: [{ translateY: keyboardOffset }] }]}>
             <TouchableOpacity
               onPress={() => setSearchOpen(true)}
@@ -236,58 +218,39 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
               <Ionicons name="sparkles" size={16} color={colors.accent} />
             </TouchableOpacity>
           </Animated.View>
-        )}
-
-        {/* Floating pill bottom tab bar — Astor-style, active tab gets a
-            filled sub-pill instead of the bar being flush/full-width. */}
-        <View style={[styles.tabBarOuter, { paddingBottom: bottomPadding }]}>
-          <View
-            style={[
-              styles.tabBar,
-              { backgroundColor: colors.tabBar, borderColor: colors.tabBarBorder },
-            ]}
-          >
-            {focusedVisibleIndex >= 0 && buttonLayouts[focusedVisibleIndex] && (
-              <Animated.View
-                pointerEvents="none"
-                style={[
-                  styles.activePill,
-                  {
-                    backgroundColor: colors.tabBarActive,
-                    width: pillWidth,
-                    transform: [{ translateX: pillX }],
-                  },
-                ]}
-              />
-            )}
-            {visibleRoutes.map((route, i) => {
-              const isFocused = i === focusedVisibleIndex;
-              const color = isFocused ? colors.iconButton ?? '#fff' : colors.tabBarInactive;
-              const label = ROUTE_TITLES[route.name] ?? route.name;
-
-              return (
-                <TouchableOpacity
-                  key={route.key}
-                  onPress={() => handleTabPress(route, isFocused)}
-                  onLayout={e => {
-                    const { x, width } = e.nativeEvent.layout;
-                    setButtonLayouts(prev =>
-                      prev[i]?.x === x && prev[i]?.width === width ? prev : { ...prev, [i]: { x, width } },
-                    );
-                  }}
-                  style={styles.tabButton}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityState={isFocused ? { selected: true } : {}}
-                  accessibilityLabel={label}
-                >
-                  {getIcon(route.name, color)}
-                  <Text style={[styles.label, { color }]}>{label}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
         </View>
+      )}
+
+      {/* Docked bottom tab bar — a normal (non-absolute) flex child now, so
+          it reserves real layout space instead of floating over content.
+          Flush, full-width, opaque, hairline top border — no more rounded
+          floating pill. */}
+      <View
+        style={[
+          styles.tabBar,
+          { backgroundColor: colors.background, borderTopColor: colors.tabBarBorder, paddingBottom: bottomPadding },
+        ]}
+      >
+        {visibleRoutes.map((route) => {
+          const isFocused = route.name === state.routes[state.index]?.name;
+          const color = isFocused ? colors.accent : colors.tabBarInactive;
+          const label = ROUTE_TITLES[route.name] ?? route.name;
+
+          return (
+            <TouchableOpacity
+              key={route.key}
+              onPress={() => handleTabPress(route, isFocused)}
+              style={styles.tabButton}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityState={isFocused ? { selected: true } : {}}
+              accessibilityLabel={label}
+            >
+              {getIcon(route.name, color)}
+              <Text style={[styles.label, { color }]}>{label}</Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       <SearchBottomSheet visible={searchOpen} onClose={() => setSearchOpen(false)} />
@@ -302,9 +265,8 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
 };
 
 const styles = StyleSheet.create({
-  container: {
+  searchRowOuter: {
     position: 'absolute',
-    bottom: 0,
     left: 0,
     right: 0,
   },
@@ -314,10 +276,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 10,
-  },
-  searchRowCollapsed: {
-    justifyContent: 'flex-end',
+    marginBottom: SEARCH_ROW_GAP,
   },
   searchBar: {
     flexDirection: 'row',
@@ -336,39 +295,17 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   searchPlaceholder: { fontSize: 14, flex: 1 },
-  tabBarOuter: {
-    alignItems: 'center',
-    paddingHorizontal: 16,
-  },
   tabBar: {
     flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 100,
-    borderWidth: 1,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    gap: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-    elevation: 8,
+    alignItems: 'flex-start',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 8,
   },
   tabButton: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 2,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 100,
-    minWidth: 68,
-  },
-  activePill: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 0,
-    borderRadius: 100,
   },
   label: {
     fontSize: 10,

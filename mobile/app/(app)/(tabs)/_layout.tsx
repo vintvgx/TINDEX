@@ -12,17 +12,22 @@ import { useThemeColors } from '@/lib/useColorScheme';
  * Global app shell: dark ticker tape → app header (logo | bell) → the tab
  * navigator. The tape/header own the top safe-area inset, so we override the
  * inset context to `top: 0` / `bottom: 0` for the navigator subtree —
- * per-screen SafeAreaViews sit flush under the header and above the floating
- * tab bar (which owns the home-indicator inset).
+ * per-screen SafeAreaViews sit flush under the header and above the docked
+ * tab bar (CustomTabBar applies the home-indicator inset itself, in its own
+ * bottom padding — it's a normal flex sibling now, not a floating overlay,
+ * so screens no longer need to guess its height to avoid being hidden
+ * under it).
  *
- * Bottom tabs: Home / ORB / Accounts / Profile. Home, ORB, and Accounts each
- * page between several sub-screens via SegmentedPager (see feed.tsx, orb.tsx,
- * accounts.tsx) — those sub-screens (position, options, strategy, tradelog,
- * daily_review, etc.) stay registered here with href:null so they're still
- * real routes `router.push` can target directly, but aren't their own tabs.
- * Profile replaces the old Menu list screen (menu.tsx, removed) — its
- * navigable rows (Watchlists/Track Portfolio/Notifications/Run Simulation)
- * and Sign Out moved into profile.tsx, above its Developer section.
+ * Bottom tabs: Home / ORB / Charts / Accounts / Profile. Home, ORB, and
+ * Accounts each page between several sub-screens via SegmentedPager (see
+ * feed.tsx, orb.tsx, accounts.tsx) — those sub-screens (position, options,
+ * strategy, tradelog, daily_review, etc.) stay registered here with
+ * href:null so they're still real routes `router.push` can target directly,
+ * but aren't their own tabs. Charts is its own standalone tab (charts.tsx),
+ * not a pager. Profile replaces the old Menu list screen (menu.tsx,
+ * removed) — its navigable rows (Watchlists/Track Portfolio/Notifications/
+ * Run Simulation) and Sign Out moved into profile.tsx, above its Developer
+ * section.
  */
 function Shell() {
   const colors = useThemeColors();
@@ -41,19 +46,15 @@ function Shell() {
             initialRouteName="feed"
             screenOptions={{
               headerShown: false,
-              tabBarStyle: {
-                position: 'absolute',
-                backgroundColor: 'transparent',
-                borderTopWidth: 0,
-                elevation: 0,
-                borderBottomWidth: 10,
-                paddingBottom: 20
-              },
+              // No tabBarStyle here — a custom `tabBar` render prop (below)
+              // takes full control of rendering, so React Navigation never
+              // applies this to it. CustomTabBar owns its own styling now.
             }}
             tabBar={(props) => <CustomTabBar {...props} />}
           >
             <Tabs.Screen name="feed" options={{ title: 'Home' }} />
             <Tabs.Screen name="orb" options={{ title: 'ORB' }} />
+            <Tabs.Screen name="charts" options={{ title: 'Charts' }} />
             <Tabs.Screen name="accounts" options={{ title: 'Accounts' }} />
             <Tabs.Screen name="profile" options={{ title: 'Profile' }} />
 

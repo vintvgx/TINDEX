@@ -93,6 +93,7 @@ from routes.swing_routes import bp as swing_bp
 from routes.social_routes import bp as social_bp
 from routes.robinhood_routes import bp as robinhood_bp
 from routes.review_notes_routes import bp as review_notes_bp
+from routes.price_level_routes import bp as price_levels_bp
 
 app.register_blueprint(ticker_bp)
 app.register_blueprint(yahoo_bp)
@@ -104,6 +105,7 @@ app.register_blueprint(swing_bp)
 app.register_blueprint(social_bp)
 app.register_blueprint(robinhood_bp)
 app.register_blueprint(review_notes_bp)
+app.register_blueprint(price_levels_bp)
 
 
 # ── WebSocket: live price stream ───────────────────────────────────────────────
@@ -304,6 +306,18 @@ try:
             "monitor — outside market hours (9:30 AM-4 PM ET, Mon-Fri). The 9:20 "
             "AM cron (or a manual Admin start) will bring them up normally."
         )
+
+    # Key-level watcher: reload any levels still in 'watching' status and
+    # re-subscribe to their tickers' bars. Cheap (one DB read + in-memory
+    # callback registration, no network/streaming of its own) so this runs
+    # unconditionally, not gated on is_market_hours() like the blocks above —
+    # it just needs to be ready to receive bars whenever OrbService is
+    # running, and outside market hours it simply sees none yet.
+    try:
+        from services.strategy.key_level_watcher import get_key_level_watcher
+        get_key_level_watcher().start()
+    except Exception as _key_level_boot_err:
+        logger.warning("[App] Key level watcher start failed: %s", _key_level_boot_err)
 
     # Daily 9 AM ET heads-up (1 day / 2 days / this week) for any open position
     # approaching its own expiration — the replacement for the blanket EOD

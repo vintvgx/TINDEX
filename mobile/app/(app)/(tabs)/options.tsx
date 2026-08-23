@@ -10,6 +10,7 @@ import {
   Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams } from 'expo-router';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
 import { useTrackedContracts } from '@/hooks/queries/track/useTrackedContracts';
 import { useTrackContract } from '@/hooks/mutations/track/useTrackContract';
@@ -21,6 +22,8 @@ import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsCo
 import { SimulatedReturnsModal } from '@/common/components/options/SimulatedReturnsModal';
 import { TradeContractSheet } from '@/common/components/ticker/TradeContractSheet';
 import { TrackedContractsList } from '@/common/components/options/TrackedContractsList';
+import { KeyLevelsList } from '@/common/components/options/KeyLevelsList';
+import { useKeyLevels } from '@/hooks/queries/priceLevels/useKeyLevels';
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useServicesStatus } from '@/hooks/queries/services/useServicesStatus';
@@ -31,7 +34,7 @@ import { useToast } from '@/common/components/ui/Toast';
 
 type OptionSide = 'CALL' | 'PUT';
 type DatePreset = '1W' | '2W' | '1M' | '3M';
-type ScreenView = 'chain' | 'watchlist';
+type ScreenView = 'chain' | 'watchlist' | 'levels';
 
 type TableRow =
   | { type: 'contract'; data: OptionsContract; isITM: boolean }
@@ -255,9 +258,14 @@ const OptionsScreen = () => {
   const colors = useThemeColors();
   const { authState: { user } } = useAuth();
   const { optionsTicker: activeTicker, setOptionsTicker } = useOptionsTicker();
+  const { level_id } = useLocalSearchParams<{ level_id?: string }>();
 
-  // View toggle
-  const [view, setView] = useState<ScreenView>('watchlist');
+  // View toggle — a tapped "Key Level Confirmed" push (data.level_id) lands
+  // here and should open straight to the Levels tab, not whatever was last active.
+  const [view, setView] = useState<ScreenView>(level_id ? 'levels' : 'watchlist');
+  useEffect(() => {
+    if (level_id) setView('levels');
+  }, [level_id]);
 
   // Chain state
   const [side, setSide] = useState<OptionSide>('CALL');
@@ -299,6 +307,7 @@ const OptionsScreen = () => {
   const untrackContract = useUntrackContract();
   const scoreContract = useScoreContract();
   const { data: trackedContracts } = useTrackedContracts();
+  const { data: keyLevels } = useKeyLevels();
   const toast = useToast();
 
   // Live countdown
@@ -624,6 +633,7 @@ const OptionsScreen = () => {
 
   // Watchlist badge count
   const watchlistCount = trackedContracts?.length ?? 0;
+  const activeLevelsCount = (keyLevels ?? []).filter(l => l.status === 'watching' || l.status === 'confirmed').length;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
@@ -647,6 +657,8 @@ const OptionsScreen = () => {
               ? `${activeTicker} · $${currentPrice.toFixed(2)}`
               : view === 'watchlist'
               ? `${watchlistCount} contract${watchlistCount !== 1 ? 's' : ''} tracked`
+              : view === 'levels'
+              ? `${activeLevelsCount} key level${activeLevelsCount !== 1 ? 's' : ''} watched`
               : 'Enter a ticker in the search bar'}
           </Text>
         </View>
@@ -703,8 +715,9 @@ const OptionsScreen = () => {
       {/* ── View toggle: Chain / Watchlist ── */}
       <View style={[viewToggle.container, { borderBottomColor: colors.separator }]}>
         {([
-          { id: 'watchlist', icon: 'bookmark-outline', label: 'Watchlist' },
-          { id: 'chain',     icon: 'layers-outline',   label: 'Chain' },
+          { id: 'watchlist', icon: 'bookmark-outline',  label: 'Watchlist' },
+          { id: 'chain',     icon: 'layers-outline',    label: 'Chain' },
+          { id: 'levels',    icon: 'analytics-outline', label: 'Levels' },
         ] as { id: ScreenView; icon: string; label: string }[]).map(v => {
           const active = view === v.id;
           return (
@@ -731,6 +744,11 @@ const OptionsScreen = () => {
                     <Text style={viewToggle.badgeText}>{watchlistCount > 99 ? '99+' : watchlistCount}</Text>
                   </View>
                 )}
+                {v.id === 'levels' && activeLevelsCount > 0 && (
+                  <View style={[viewToggle.badge, { backgroundColor: colors.accent }]}>
+                    <Text style={viewToggle.badgeText}>{activeLevelsCount > 99 ? '99+' : activeLevelsCount}</Text>
+                  </View>
+                )}
               </View>
               {active && <View style={[viewToggle.underline, { backgroundColor: colors.accent }]} />}
             </TouchableOpacity>
@@ -743,6 +761,8 @@ const OptionsScreen = () => {
           onContractPress={openWatchlistDetail}
           activeTicker={activeTicker || undefined}
         />
+      ) : view === 'levels' ? (
+        <KeyLevelsList activeTicker={activeTicker || undefined} />
       ) : (
         <>
           {/* ── Mock data banner ── */}

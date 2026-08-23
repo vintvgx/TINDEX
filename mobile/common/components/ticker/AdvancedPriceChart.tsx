@@ -1,6 +1,6 @@
 import type React from 'react';
-import { Fragment, useMemo, useState, useCallback, useEffect } from 'react';
-import { View, Text, Pressable, LayoutChangeEvent, SafeAreaView } from 'react-native';
+import { Fragment, useMemo, useState, useCallback, useEffect, useRef } from 'react';
+import { View, Text, Pressable, LayoutChangeEvent, SafeAreaView, ActivityIndicator } from 'react-native';
 import Svg, { Path, Rect, Line, Circle, Defs, LinearGradient, Stop, Text as SvgText } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSharedValue, runOnJS } from 'react-native-reanimated';
@@ -80,6 +80,21 @@ const Y_AXIS_W = 54; // right gutter for price labels
 const X_AXIS_H = 34;
 const VOL_H = 44; // volume pane height
 const PANE_GAP = 6; // gap between price pane and volume pane
+
+// ── Pan/zoom (Phase 1 — see docs/CHARTS_TAB_PLAN.md) ────────────────────
+// Never zoom in past this many visible bars — a handful of candles is
+// still readable; fewer than that and the chart stops being useful.
+const MIN_VISIBLE_BARS = 5;
+// Clamp factor per gesture update to a sane range so a fast/erratic touch
+// can't collapse or blow out the window in one frame. Called from inside
+// gesture worklets (UI thread) — needs its own 'worklet' directive so
+// Reanimated's Babel plugin compiles it for that thread too, rather than
+// leaving it as a plain JS-thread function the worklet can't synchronously
+// call (see https://docs.swmansion.com/react-native-reanimated/docs/guides/troubleshooting#tried-to-synchronously-call-a-non-worklet-function-on-the-ui-thread).
+const clampZoomFactor = (f: number) => {
+  'worklet';
+  return Math.max(0.2, Math.min(5, f));
+};
 
 /**
  * Round-number y-axis step: 1/2/5 × 10^k that yields ~targetTicks divisions.
@@ -222,9 +237,68 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const hasData = prices.length > 1 && width > 0;
   const lineColor = positive ? colors.success : colors.error;
 
+  // "No chart data available" is a real dead-end state (bad ticker, API
+  // outage) — it should NOT flash on every ordinary switch. Right after a
+  // ticker/period change there's an unavoidable gap before `width` is
+  // re-measured and fresh data lands, during which hasData is briefly
+  // false too; without a buffer that gap rendered the empty-state message
+  // for a frame or two on every switch. Bridge it with the loading
+  // animation instead, and only commit to the empty state after a beat
+  // with still nothing to show.
+  const EMPTY_STATE_BUFFER_MS = 600;
+  const [showEmptyState, setShowEmptyState] = useState(false);
+  useEffect(() => {
+    if (isLoading || hasData) {
+      setShowEmptyState(false);
+      return;
+    }
+    const t = setTimeout(() => setShowEmptyState(true), EMPTY_STATE_BUFFER_MS);
+    return () => clearTimeout(t);
+  }, [isLoading, hasData]);
+
   const plotW = Math.max(0, width - Y_AXIS_W);
   const priceH = Math.max(0, height - X_AXIS_H - VOL_H - PANE_GAP);
   const volTop = priceH + PANE_GAP;
+
+  // ── Pan/zoom state ──────────────────────────────────────────────────────
+  // null means "auto" — the full fetched range (X) / auto-fit min-max (Y),
+  // exactly today's behavior. Once set, these override the defaults until
+  // reset (double-tap, the Reset pill, or a period change).
+  const [xWindow, setXWindow] = useState<{ start: number; end: number } | null>(null);
+  const [yOverride, setYOverride] = useState<{ lo: number; hi: number } | null>(null);
+  const count = ePrices.length;
+
+  // A new timeframe should always start at the default auto-fit view, same
+  // as TradingView's own behavior when you switch resolution. Deliberately
+  // NOT reset on every `data` refetch (e.g. 1D's background poll bringing
+  // in a new bar every ~30s) — that would wipe an in-progress zoom out from
+  // under the user constantly while they're actively looking at the chart.
+  const prevPeriodRef = useRef(period);
+  useEffect(() => {
+    if (prevPeriodRef.current !== period) {
+      setXWindow(null);
+      setYOverride(null);
+      prevPeriodRef.current = period;
+    }
+  }, [period]);
+
+  const resetZoom = useCallback(() => {
+    setXWindow(null);
+    setYOverride(null);
+  }, []);
+
+  // Clamped against the current data length so a stale window (e.g. if the
+  // underlying series shrinks/changes shape without a period change) can
+  // never index out of bounds.
+  const visibleStart = xWindow ? Math.max(0, Math.min(xWindow.start, count - 1)) : 0;
+  const visibleEnd = xWindow ? Math.max(visibleStart, Math.min(xWindow.end, count - 1)) : count - 1;
+  const visibleCount = Math.max(1, visibleEnd - visibleStart + 1);
+  const isZoomed = xWindow !== null || yOverride !== null;
+
+  const visibleIndices = useMemo(
+    () => Array.from({ length: visibleCount }, (_, k) => visibleStart + k),
+    [visibleStart, visibleCount],
+  );
 
   // ORB band only means anything on the trading day it was computed for.
   const orbVisible = !!(showOrbRange && orbRange && period === '1D');
@@ -232,8 +306,19 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const scale = useMemo(() => {
     if (!hasData) return null;
 
-    let min = hasOhlc ? Math.min(...eLows!) : Math.min(...ePrices);
-    let max = hasOhlc ? Math.max(...eHighs!) : Math.max(...ePrices);
+    // Auto-fit is computed from only the VISIBLE slice now, not the whole
+    // fetched series — zooming in on X (fewer bars) auto-tightens Y to what's
+    // on screen too, same as TradingView's default behavior, unless the user
+    // has explicitly overridden Y (yOverride) via pinch or the axis drag.
+    const visLows = hasOhlc
+      ? visibleIndices.map(i => eLows![i])
+      : visibleIndices.map(i => ePrices[i]);
+    const visHighs = hasOhlc
+      ? visibleIndices.map(i => eHighs![i])
+      : visibleIndices.map(i => ePrices[i]);
+
+    let min = Math.min(...visLows);
+    let max = Math.max(...visHighs);
     // The y-domain must contain the ORB band even after a breakout has
     // carried price well away from it — seeing price relative to the range
     // is the whole point of the overlay.
@@ -249,41 +334,52 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         max = Math.max(max, line.price);
       }
     }
-    const pad = (max - min) * 0.06 || 1;
-    const lo = min - pad;
-    const hi = max + pad;
 
-    const step = plotW / ePrices.length;
-    const xForIndex = (i: number) => (i + 0.5) * step;
+    let lo: number, hi: number;
+    if (yOverride) {
+      lo = yOverride.lo;
+      hi = yOverride.hi;
+    } else {
+      const pad = (max - min) * 0.06 || 1;
+      lo = min - pad;
+      hi = max + pad;
+    }
+
+    const step = plotW / visibleCount;
+    const xForIndex = (i: number) => (i - visibleStart + 0.5) * step;
     const yForPrice = (p: number) => priceH - ((p - lo) / (hi - lo)) * priceH;
 
-    // Y ticks on round numbers within the padded domain.
+    // Y ticks on round numbers within the domain.
     const tickStep = niceStep(hi - lo, 4);
     const yTicks: number[] = [];
     for (let t = Math.ceil(lo / tickStep) * tickStep; t <= hi; t += tickStep) yTicks.push(t);
 
-    // ~4 evenly spaced x labels, snapped to data indices.
-    const xTickCount = Math.min(4, ePrices.length);
+    // ~4 evenly spaced x labels, snapped to data indices within the visible window.
+    const xTickCount = Math.min(4, visibleCount);
     const xTicks: number[] = [];
     for (let k = 0; k < xTickCount; k++) {
-      xTicks.push(Math.round(((k + 0.5) / xTickCount) * (ePrices.length - 1)));
+      xTicks.push(visibleStart + Math.round(((k + 0.5) / xTickCount) * (visibleCount - 1)));
     }
 
-    const maxVolume = volumes.length ? Math.max(...volumes) : 0;
+    const visVolumes = visibleIndices.map(i => volumes[i] ?? 0);
+    const maxVolume = visVolumes.length ? Math.max(...visVolumes) : 0;
 
     return { lo, hi, step, xForIndex, yForPrice, yTicks, xTicks, maxVolume };
-  }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, referenceLines]);
+  }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, referenceLines, yOverride, visibleIndices, visibleStart, visibleCount]);
 
   // Line-mode path built from closes — the last point tracks the live tick.
+  // Only the visible window is drawn.
   const { linePath, areaPath } = useMemo(() => {
     if (!scale || mode !== 'line') return { linePath: '', areaPath: '' };
     let p = '';
-    ePrices.forEach((price, i) => {
-      p += `${i === 0 ? 'M' : ' L'}${scale.xForIndex(i)},${scale.yForPrice(price)}`;
+    visibleIndices.forEach((i, k) => {
+      p += `${k === 0 ? 'M' : ' L'}${scale.xForIndex(i)},${scale.yForPrice(ePrices[i])}`;
     });
-    const area = `${p} L${scale.xForIndex(ePrices.length - 1)},${priceH} L${scale.xForIndex(0)},${priceH} Z`;
+    const lastI = visibleIndices[visibleIndices.length - 1];
+    const firstI = visibleIndices[0];
+    const area = `${p} L${scale.xForIndex(lastI)},${priceH} L${scale.xForIndex(firstI)},${priceH} Z`;
     return { linePath: p, areaPath: area };
-  }, [scale, mode, ePrices, priceH]);
+  }, [scale, mode, ePrices, priceH, visibleIndices]);
 
   // ── Crosshair scrub ────────────────────────────────────────────────────
   // The crosshair snaps to whole bar indices, so plain React state (updated
@@ -318,25 +414,49 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   }, []);
 
-  const count = prices.length;
-  const gesture = useMemo(
+  // Chart-body gestures — four distinct interactions, deliberately kept
+  // from stepping on one another:
+  //   1. Quick tap        → reveal X/Y values at that point (singleTapGesture)
+  //   2. Press-and-hold,
+  //      then drag         → slide through data, live-updating (scrubGesture)
+  //   3. Immediate drag    → scroll/pan the visible time window (manipulateGesture)
+  //   4. Drag on the Y-axis gutter → expand/compress the price scale (manipulateGesture)
+  // (2) and (3) are disambiguated by TIME: manipulateGesture has no
+  // activation delay so it wins a race against scrubGesture on any drag
+  // that starts moving right away; scrubGesture only wins if the touch
+  // stays still for `SCRUB_LONG_PRESS_MS` before moving. That threshold
+  // needs to clear ordinary touch-down hesitation (people often rest a
+  // finger briefly before committing to a drag direction) without making
+  // a deliberate hold feel sluggish — 350ms is the balance point; the
+  // previous 150ms was short enough that normal pre-drag hesitation alone
+  // satisfied it, so scrub kept winning drags it shouldn't have.
+  // (1) and (2)/(3) are disambiguated by MOVEMENT + DURATION: a tap
+  // gesture only completes if the touch releases quickly with minimal
+  // movement, which naturally fails the instant real dragging starts.
+  const SCRUB_LONG_PRESS_MS = 350;
+
+  // Bar index math is scoped to the visible WINDOW, not the full series —
+  // scrubbing/tapping while zoomed should track the bar under the finger
+  // on screen, not the bar at that fractional position in the whole
+  // fetched dataset.
+  const scrubGesture = useMemo(
     () =>
       Gesture.Pan()
-        .activateAfterLongPress(150)
+        .activateAfterLongPress(SCRUB_LONG_PRESS_MS)
         .onBegin((e) => {
           'worklet';
-          if (count < 2 || plotW === 0) return;
-          const step = plotW / count;
-          const idx = Math.max(0, Math.min(count - 1, Math.floor(e.x / step)));
+          if (visibleCount < 2 || plotW === 0) return;
+          const step = plotW / visibleCount;
+          const idx = Math.max(visibleStart, Math.min(visibleEnd, visibleStart + Math.floor(e.x / step)));
           scrubIndexShared.value = idx;
           runOnJS(triggerHaptic)();
           runOnJS(notifyScrub)(idx);
         })
         .onUpdate((e) => {
           'worklet';
-          if (count < 2 || plotW === 0) return;
-          const step = plotW / count;
-          const idx = Math.max(0, Math.min(count - 1, Math.floor(e.x / step)));
+          if (visibleCount < 2 || plotW === 0) return;
+          const step = plotW / visibleCount;
+          const idx = Math.max(visibleStart, Math.min(visibleEnd, visibleStart + Math.floor(e.x / step)));
           if (idx !== scrubIndexShared.value) {
             scrubIndexShared.value = idx;
             runOnJS(notifyScrub)(idx);
@@ -348,7 +468,171 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           runOnJS(notifyScrub)(-1);
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [count, plotW, notifyScrub, triggerHaptic],
+    [visibleStart, visibleEnd, visibleCount, plotW, notifyScrub, triggerHaptic],
+  );
+
+  // Double-tap anywhere resets both axes back to auto-fit. Defined before
+  // singleTapGesture below since that one needs to reference it directly
+  // (requireExternalGestureToFail) to disambiguate the two.
+  const doubleTapGesture = useMemo(
+    () =>
+      Gesture.Tap()
+        .numberOfTaps(2)
+        .onEnd(() => {
+          'worklet';
+          runOnJS(resetZoom)();
+        }),
+    [resetZoom],
+  );
+
+  // Single quick tap — reveals the X/Y readout at that point and PINS it
+  // there (unlike scrubGesture's crosshair, which clears the moment you
+  // release). Stays showing until: another tap moves it, a press-and-hold
+  // slide takes over, or a pan/rescale drag begins (manipulateGesture
+  // clears it — see its onUpdate below). requireExternalGestureToFail
+  // makes this wait to see whether a second tap follows before firing, so
+  // a real double-tap (reset) never also fires this as a false single-tap
+  // first — the standard gesture-handler pattern for disambiguating the two.
+  const singleTapGesture = useMemo(
+    () =>
+      Gesture.Tap()
+        .maxDuration(250)
+        .requireExternalGestureToFail(doubleTapGesture)
+        .onEnd((e) => {
+          'worklet';
+          if (visibleCount < 2 || plotW === 0) return;
+          const step = plotW / visibleCount;
+          const idx = Math.max(visibleStart, Math.min(visibleEnd, visibleStart + Math.floor(e.x / step)));
+          scrubIndexShared.value = idx;
+          runOnJS(triggerHaptic)();
+          runOnJS(notifyScrub)(idx);
+        }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doubleTapGesture, visibleStart, visibleEnd, visibleCount, plotW, notifyScrub, triggerHaptic],
+  );
+
+  // ── Pan/zoom gestures ────────────────────────────────────────────────
+  // One plain (no-delay) Pan that branches by where the touch started:
+  // the right price-axis gutter rescales Y only, the bottom time-axis row
+  // rescales X only, anywhere else on the chart body pans through time.
+  // Having no activation delay is what lets it win the race against the
+  // long-press-gated scrub gesture above on a quick drag.
+  type PanZoomStart = { start: number; end: number; lo: number; hi: number };
+  const panStartShared = useSharedValue<PanZoomStart | null>(null);
+  const panModeShared = useSharedValue<'time-pan' | 'y-rescale' | 'x-rescale' | null>(null);
+
+  const manipulateGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .onBegin((e) => {
+          'worklet';
+          if (!scale) return;
+          panStartShared.value = { start: visibleStart, end: visibleEnd, lo: scale.lo, hi: scale.hi };
+          if (e.x > plotW) panModeShared.value = 'y-rescale';
+          else if (e.y > height - X_AXIS_H) panModeShared.value = 'x-rescale';
+          else panModeShared.value = 'time-pan';
+        })
+        .onUpdate((e) => {
+          'worklet';
+          const st = panStartShared.value;
+          const mode = panModeShared.value;
+          if (!st || !mode || plotW === 0) return;
+          // This only runs once real movement is underway, which under
+          // Gesture.Race only happens for whichever gesture actually won —
+          // i.e. it's safe to treat this as "a pan/rescale is genuinely
+          // happening now" and clear any pinned tap-reveal or in-progress
+          // scrub crosshair still showing from a moment ago.
+          if (scrubIndexShared.value !== -1) {
+            scrubIndexShared.value = -1;
+            runOnJS(notifyScrub)(-1);
+          }
+          const curCount = st.end - st.start + 1;
+
+          if (mode === 'time-pan') {
+            // Drag right → reveal earlier bars (window shifts back).
+            const barsShift = (e.translationX / plotW) * curCount;
+            let newStart = Math.round(st.start - barsShift);
+            let newEnd = newStart + curCount - 1;
+            if (newStart < 0) { newEnd -= newStart; newStart = 0; }
+            if (newEnd > count - 1) { newStart -= newEnd - (count - 1); newEnd = count - 1; }
+            newStart = Math.max(0, newStart);
+            runOnJS(setXWindow)({ start: newStart, end: newEnd });
+          } else if (mode === 'x-rescale') {
+            // Drag right narrows the visible window (zoom in on time),
+            // anchored at the window's current center.
+            const factor = clampZoomFactor(1 - e.translationX / plotW);
+            const centerIdx = (st.start + st.end) / 2;
+            const newCount = Math.max(MIN_VISIBLE_BARS, Math.min(count, Math.round(curCount * factor)));
+            let newStart = Math.round(centerIdx - newCount / 2);
+            let newEnd = newStart + newCount - 1;
+            if (newStart < 0) { newEnd -= newStart; newStart = 0; }
+            if (newEnd > count - 1) { newStart -= newEnd - (count - 1); newEnd = count - 1; }
+            newStart = Math.max(0, newStart);
+            runOnJS(setXWindow)({ start: newStart, end: newEnd });
+          } else {
+            // y-rescale — drag down narrows the price range (zoom in),
+            // anchored at the domain's current center price.
+            if (priceH === 0) return;
+            const factor = clampZoomFactor(1 + e.translationY / priceH);
+            const curRange = st.hi - st.lo;
+            const centerPrice = (st.hi + st.lo) / 2;
+            const newRange = curRange * factor;
+            runOnJS(setYOverride)({ lo: centerPrice - newRange / 2, hi: centerPrice + newRange / 2 });
+          }
+        }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scale, visibleStart, visibleEnd, plotW, priceH, height, count, notifyScrub],
+  );
+
+  // Two-finger pinch — zooms both axes together, centered on the pinch focal
+  // point. Composed via Gesture.Simultaneous alongside the pan race below,
+  // since it only ever engages with 2 fingers and can't conflict with them.
+  const pinchStartShared = useSharedValue<PanZoomStart | null>(null);
+  const pinchGesture = useMemo(
+    () =>
+      Gesture.Pinch()
+        .onBegin(() => {
+          'worklet';
+          pinchStartShared.value = scale ? { start: visibleStart, end: visibleEnd, lo: scale.lo, hi: scale.hi } : null;
+        })
+        .onUpdate((e) => {
+          'worklet';
+          const st = pinchStartShared.value;
+          if (!st || !(e.scale > 0) || plotW === 0) return;
+          // Pinching outward (scale > 1) zooms IN — narrower window, tighter range.
+          const factor = clampZoomFactor(1 / e.scale);
+          const curCount = st.end - st.start + 1;
+
+          const newCount = Math.max(MIN_VISIBLE_BARS, Math.min(count, Math.round(curCount * factor)));
+          const focalXFrac = e.focalX / plotW;
+          const focalIdx = st.start + focalXFrac * curCount;
+          let newStart = Math.round(focalIdx - focalXFrac * newCount);
+          let newEnd = newStart + newCount - 1;
+          if (newStart < 0) { newEnd -= newStart; newStart = 0; }
+          if (newEnd > count - 1) { newStart -= newEnd - (count - 1); newEnd = count - 1; }
+          newStart = Math.max(0, newStart);
+          runOnJS(setXWindow)({ start: newStart, end: newEnd });
+
+          if (priceH > 0) {
+            const curRange = st.hi - st.lo;
+            const newRange = curRange * factor;
+            const focalYFrac = e.focalY / priceH;
+            const focalPrice = st.hi - focalYFrac * curRange;
+            const newHi = focalPrice + focalYFrac * newRange;
+            runOnJS(setYOverride)({ lo: newHi - newRange, hi: newHi });
+          }
+        }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scale, visibleStart, visibleEnd, plotW, priceH, count],
+  );
+
+  const composedGesture = useMemo(
+    () =>
+      Gesture.Simultaneous(
+        pinchGesture,
+        Gesture.Race(doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture),
+      ),
+    [pinchGesture, doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture],
   );
 
   const onLayout = (e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width);
@@ -428,6 +712,24 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                 </Pressable>
               );
             })}
+          {isZoomed && (
+            <Pressable
+              onPress={resetZoom}
+              hitSlop={6}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 3,
+                paddingHorizontal: 8,
+                height: 26,
+                borderRadius: 8,
+                backgroundColor: colors.surfaceSecondary,
+              }}
+            >
+              <Ionicons name="contract-outline" size={13} color={colors.textSecondary} />
+              <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>Reset</Text>
+            </Pressable>
+          )}
         </View>
         {labelText && (
           <Text style={{ color: colors.textTertiary, fontSize: 12, fontWeight: '500' }}>{labelText}</Text>
@@ -436,26 +738,32 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
 
       <View onLayout={onLayout} style={{ height, width: '100%' }}>
         {isLoading || !hasData || !scale ? (
-          <View
-            style={{
-              flex: 1,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: 16,
-              backgroundColor: colors.surfaceSecondary,
-            }}
-          >
-            {!isLoading && (
-              <>
-                <Ionicons name="bar-chart-outline" size={36} color={colors.textTertiary} />
-                <Text style={{ color: colors.textTertiary, fontSize: 13, marginTop: 8 }}>
-                  No chart data available
-                </Text>
-              </>
-            )}
-          </View>
+          !hasData && showEmptyState ? (
+            <View
+              style={{
+                flex: 1,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 16,
+                backgroundColor: colors.surfaceSecondary,
+              }}
+            >
+              <Ionicons name="bar-chart-outline" size={36} color={colors.textTertiary} />
+              <Text style={{ color: colors.textTertiary, fontSize: 13, marginTop: 8 }}>
+                No chart data available
+              </Text>
+            </View>
+          ) : (
+            // Same background as the loaded chart sits on (colors.background,
+            // not the lighter surfaceSecondary) — a plain centered spinner
+            // over a matching backdrop, not a differently-colored placeholder
+            // block, so nothing visibly "pops" when the real chart swaps in.
+            <View style={{ flex: 1, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>
+              <ActivityIndicator size="large" color={colors.accent} />
+            </View>
+          )
         ) : (
-          <GestureDetector gesture={gesture}>
+          <GestureDetector gesture={composedGesture}>
             <Svg width={width} height={height}>
               <Defs>
                 <LinearGradient id="advPriceFill" x1="0" y1="0" x2="0" y2="1">
@@ -477,23 +785,18 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                 );
               })}
 
-              {/* Faint vertical gridlines + x-axis time labels */}
+              {/* Faint vertical gridlines — the actual x-axis time labels are
+                  drawn last (see below), on an opaque backing, so candle
+                  wicks/volume bars drawn after this point never bleed into
+                  the date text underneath them. */}
               {scale.xTicks.map((i) => {
                 const x = scale.xForIndex(i);
                 return (
-                  <Fragment key={`xtick-${i}`}>
-                    <Line x1={x} x2={x} y1={0} y2={volTop + VOL_H} stroke={colors.textTertiary} strokeWidth={1} opacity={0.07} />
-                    <SvgText
-                      x={x}
-                      y={height - 6}
-                      fill={colors.textTertiary}
-                      fontSize={10}
-                      fontWeight="500"
-                      textAnchor="middle"
-                    >
-                      {formatXLabel(dates[i], period)}
-                    </SvgText>
-                  </Fragment>
+                  <Line
+                    key={`xtick-${i}`}
+                    x1={x} x2={x} y1={0} y2={volTop + VOL_H}
+                    stroke={colors.textTertiary} strokeWidth={1} opacity={0.07}
+                  />
                 );
               })}
 
@@ -577,7 +880,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                   <Path d={linePath} stroke={lineColor} strokeWidth={2} fill="none" />
                 </>
               ) : (
-                ePrices.map((close, i) => {
+                visibleIndices.map((i) => {
+                  const close = ePrices[i];
                   const open = data!.opens![i];
                   const up = close >= open;
                   const color = up ? colors.success : colors.error;
@@ -600,7 +904,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               {/* Event markers — point-in-time annotations (e.g. "TP1 hit")
                   drawn on top of the candles/line, below the volume pane. */}
               {eventMarkers?.map((marker, i) => {
-                if (marker.index < 0 || marker.index >= ePrices.length) return null;
+                if (marker.index < visibleStart || marker.index > visibleEnd) return null;
                 const x = scale.xForIndex(marker.index);
                 const y = scale.yForPrice(marker.price);
                 const color = marker.color ?? colors.accent;
@@ -625,7 +929,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
 
               {/* Volume pane, bars colored by bar direction */}
               {scale.maxVolume > 0 &&
-                volumes.map((v, i) => {
+                visibleIndices.map((i) => {
+                  const v = volumes[i] ?? 0;
                   const h = Math.max(1, (v / scale.maxVolume) * VOL_H);
                   const up = hasOhlc ? ePrices[i] >= data!.opens![i] : i === 0 || ePrices[i] >= ePrices[i - 1];
                   return (
@@ -671,6 +976,32 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                       {candleCountdownLabel}
                     </SvgText>
                   )}
+                </>
+              )}
+
+              {/* X-axis label strip — an opaque backing drawn OVER the candles/
+                  volume/gridlines above (not before them), so wicks and volume
+                  bars that extend down near the bottom of the chart never
+                  visually blend into the date text. Skipped while scrubbing —
+                  the crosshair block right below draws its own opaque time/
+                  volume pill in the same strip, so this would just be
+                  immediately covered anyway. */}
+              {!scrubbing && (
+                <>
+                  <Rect x={0} y={height - X_AXIS_H} width={width} height={X_AXIS_H} fill={colors.background} />
+                  {scale.xTicks.map((i) => (
+                    <SvgText
+                      key={`xlabel-${i}`}
+                      x={scale.xForIndex(i)}
+                      y={height - 6}
+                      fill={colors.textTertiary}
+                      fontSize={10}
+                      fontWeight="500"
+                      textAnchor="middle"
+                    >
+                      {formatXLabel(dates[i], period)}
+                    </SvgText>
+                  ))}
                 </>
               )}
 

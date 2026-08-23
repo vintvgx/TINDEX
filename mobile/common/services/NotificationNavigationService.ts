@@ -46,6 +46,7 @@ export function navigateFromNotification(data: NotificationData | undefined | nu
   if (data.ticker != null)          params.ticker = String(data.ticker);
   if (data.contract_symbol != null) params.contract_symbol = String(data.contract_symbol);
   if (data.pending_id != null)      params.pending_id = String(data.pending_id);
+  if (data.level_id != null)        params.level_id = String(data.level_id);
 
   if (Object.keys(params).length > 0) {
     router.push({ pathname: path as any, params });
