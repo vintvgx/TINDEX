@@ -11,6 +11,7 @@ import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import { Skeleton } from '@/common/components/ui/Skeleton';
 import { AdvancedPriceChart, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
 import { TickerPickerOverlay } from '@/common/components/ticker/TickerPickerOverlay';
+import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
@@ -70,16 +71,27 @@ export default function ChartsScreen() {
   }, [follows, openPositionTickers]);
 
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
-  const activeTicker = selectedTicker && tickerList.includes(selectedTicker) ? selectedTicker : tickerList[0];
+
+  // A ticker reached via search (see handleSearchSelect below) might not be
+  // followed or have an open position yet — prepend it so it's immediately
+  // viewable and stays part of the swipe-cycle, instead of the selection
+  // silently falling back to tickerList[0] because it isn't in the list.
+  const effectiveTickerList = useMemo(
+    () => (selectedTicker && !tickerList.includes(selectedTicker) ? [selectedTicker, ...tickerList] : tickerList),
+    [selectedTicker, tickerList],
+  );
+  const activeTicker = selectedTicker && effectiveTickerList.includes(selectedTicker)
+    ? selectedTicker
+    : effectiveTickerList[0];
 
   // Swipe left/right on the identity header to cycle tickers — wraps
-  // around at either end of tickerList.
+  // around at either end of effectiveTickerList.
   const goToTicker = useCallback((direction: 1 | -1) => {
-    const idx = tickerList.indexOf(activeTicker);
+    const idx = effectiveTickerList.indexOf(activeTicker);
     if (idx === -1) return;
-    const nextIdx = (idx + direction + tickerList.length) % tickerList.length;
-    setSelectedTicker(tickerList[nextIdx]);
-  }, [tickerList, activeTicker]);
+    const nextIdx = (idx + direction + effectiveTickerList.length) % effectiveTickerList.length;
+    setSelectedTicker(effectiveTickerList[nextIdx]);
+  }, [effectiveTickerList, activeTicker]);
 
   const headerSwipeGesture = useMemo(
     () =>
@@ -97,6 +109,11 @@ export default function ChartsScreen() {
   // Long-press the active ticker (in the position bar) to open the
   // TradingView-style scroll-to-select picker.
   const [pickerVisible, setPickerVisible] = useState(false);
+  // Open-ended ticker lookup — unlike the picker above, not limited to
+  // followed/open-position tickers (see the user's actual ask: a watched-
+  // but-not-followed ticker, or any arbitrary symbol, needs to be reachable
+  // here too).
+  const [searchOpen, setSearchOpen] = useState(false);
 
   // ── Price + chart data for the active ticker ────────────────────────────
   const [period, setPeriod] = useState<PricePeriod>('1D');
@@ -212,9 +229,12 @@ export default function ChartsScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-      {/* Identity header — swipe left/right to cycle tickers (no separate
-          switcher row anymore); long-press the ticker name in the position
-          bar below opens the scroll-to-select picker instead. */}
+      {/* Identity header — swipe left/right to cycle tickers; tap the ticker
+          title to look up any symbol (not limited to tickerList's followed +
+          open-position set — a ticker you only just watched a level on, or
+          any arbitrary symbol, needs to be reachable here too). Long-press
+          the ticker name in the position bar below opens the scroll-to-select
+          picker instead. */}
       <GestureDetector gesture={headerSwipeGesture}>
         <View style={s.headerRow}>
           {tickerLoading && !stockData ? (
@@ -223,7 +243,15 @@ export default function ChartsScreen() {
             <TickerLogo uri={stockData?.logo_url} ticker={activeTicker} size={34} borderRadius={9} />
           )}
           <View style={{ flex: 1, gap: 5 }}>
-            <Text style={{ color: colors.text, fontSize: 17, fontWeight: '800' }}>{activeTicker}</Text>
+            <TouchableOpacity
+              onPress={() => setSearchOpen(true)}
+              hitSlop={8}
+              activeOpacity={0.7}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start' }}
+            >
+              <Text style={{ color: colors.text, fontSize: 17, fontWeight: '800' }}>{activeTicker}</Text>
+              <Ionicons name="chevron-down" size={14} color={colors.textTertiary} />
+            </TouchableOpacity>
             {tickerLoading && !stockData ? (
               <Skeleton width="60%" height={12} />
             ) : !!stockData?.company_name && (
@@ -312,10 +340,16 @@ export default function ChartsScreen() {
       <TickerPickerOverlay
         visible={pickerVisible}
         onClose={() => setPickerVisible(false)}
-        tickers={tickerList}
+        tickers={effectiveTickerList}
         activeTicker={activeTicker}
         openPositionTickers={openPositionTickers}
         onSelect={setSelectedTicker}
+      />
+
+      <SearchBottomSheet
+        visible={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onSelectTicker={setSelectedTicker}
       />
 
       {expanded && (

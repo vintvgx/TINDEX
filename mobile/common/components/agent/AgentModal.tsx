@@ -26,7 +26,9 @@ import { streamAgentChat, parseFlowScreenshot } from '@/common/services/AgentSer
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChecklistCard, type ChecklistStatus } from '@/common/components/agent/ChecklistCard';
+import { TradeContractSheet } from '@/common/components/ticker/TradeContractSheet';
 import type { AgentConversation, FlowChecklist } from '@/common/types/agent';
+import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -246,6 +248,18 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
 
+  // Trade-entry sheet, opened by long-pressing a contract in a checklist —
+  // reuses TradeContractSheet (the same profile/quantity/paper-live picker
+  // already used from the Contracts tab and detail modal), rather than a
+  // bespoke entry UI just for this flow. Deliberately NOT reset by the
+  // "modal closed" effect below — closing THIS modal is how we get a second
+  // native Modal to present cleanly (see handleTradeContract), so this state
+  // has to survive that transition.
+  const [tradeSheetVisible, setTradeSheetVisible] = useState(false);
+  const [tradeSheetTicker, setTradeSheetTicker] = useState('');
+  const [tradeSheetContract, setTradeSheetContract] = useState<OptionsContract | null>(null);
+  const [tradeSheetCurrentPrice, setTradeSheetCurrentPrice] = useState(0);
+
   const scrollRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   // Ref to avoid stale closure on conversationId during streaming
@@ -298,6 +312,22 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
     setLocalMessages(prev => prev.map(m => (m.id === msgId ? { ...m, checklistStatus: status } : m)));
     if (activeChecklistIdRef.current === msgId) activeChecklistIdRef.current = null;
   }, []);
+
+  // Long-pressing a contract in a checklist jumps straight to the real
+  // trade-entry sheet — same pattern options.tsx uses to hand off from its
+  // own contract detail modal to TradeContractSheet: RN can't reliably
+  // present a second native Modal while the first is still mid-dismiss, so
+  // this closes the assistant modal first and waits out its close animation
+  // before presenting the trade sheet, using a snapshot taken before the
+  // close (this modal's own message list gets cleared on close).
+  const handleTradeContract = useCallback((tickerArg: string, liveContract: OptionsContract, currentPrice: number) => {
+    if (!tickerArg) return;
+    setTradeSheetTicker(tickerArg);
+    setTradeSheetContract(liveContract);
+    setTradeSheetCurrentPrice(currentPrice);
+    onClose();
+    setTimeout(() => setTradeSheetVisible(true), 350);
+  }, [onClose]);
 
   const sendMessage = useCallback(async (text: string, image?: PendingImage | null) => {
     const trimmed = text.trim();
@@ -517,13 +547,14 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
             checklist={item.checklist}
             status={item.checklistStatus ?? 'pending'}
             onResolved={(status) => handleChecklistResolved(item.id, status)}
+            onTradeContract={handleTradeContract}
             colors={colors}
           />
         </View>
       ) : (
         <MessageBubble item={item} colors={colors} accentColor={colors.accent} />
       ),
-    [colors, handleChecklistResolved],
+    [colors, handleChecklistResolved, handleTradeContract],
   );
 
   const handleDeleteConversation = useCallback((item: AgentConversation) => {
@@ -579,6 +610,7 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
   );
 
   return (
+    <>
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
       <SafeAreaView style={[s.root, { backgroundColor: colors.background }]}>
 
@@ -782,6 +814,16 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
         </KeyboardAvoidingView>
       </SafeAreaView>
     </Modal>
+
+    <TradeContractSheet
+      visible={tradeSheetVisible}
+      onClose={() => setTradeSheetVisible(false)}
+      colors={colors}
+      ticker={tradeSheetTicker}
+      contract={tradeSheetContract}
+      currentPrice={tradeSheetCurrentPrice}
+    />
+    </>
   );
 };
 
@@ -795,9 +837,14 @@ const ms = StyleSheet.create({
     width: 28, height: 28, borderRadius: 14,
     alignItems: 'center', justifyContent: 'center', marginBottom: 2,
   },
-  bubble: { maxWidth: '78%', borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10 },
-  bubbleUser: { borderBottomRightRadius: 4 },
-  bubbleAI: { borderWidth: 1, borderBottomLeftRadius: 4 },
+  bubble: { borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10 },
+  // User messages are almost always short (a caption, a correction) — a cap
+  // keeps them reading as chat bubbles. Assistant responses are the actual
+  // content people are here to read (bulleted breakdowns, checklists) and
+  // were cramped into the same ~78% column with a wall of empty space next
+  // to them — those get the full row instead.
+  bubbleUser: { maxWidth: '80%', borderBottomRightRadius: 4 },
+  bubbleAI: { maxWidth: '95%', borderWidth: 1, borderBottomLeftRadius: 4 },
   text: { fontSize: 15, lineHeight: 22 },
   streamingCursor: { marginTop: 4 },
   cursor: { width: 2, height: 16, borderRadius: 1 },

@@ -8,6 +8,7 @@ import { useTrackContract } from '@/hooks/mutations/track/useTrackContract';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
 import { useToast } from '@/common/components/ui/Toast';
 import type { FlowChecklist, FlowChecklistContract } from '@/common/types/agent';
+import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 
 const toDateStr = (d: Date) => d.toISOString().split('T')[0];
 const farDateStr = () => { const d = new Date(); d.setFullYear(d.getFullYear() + 1); return toDateStr(d); };
@@ -37,8 +38,10 @@ const ChecklistContractRow: React.FC<{
   enabled: boolean;
   interactive: boolean;
   onToggle: () => void;
+  onLongPressTrade: (liveContract: OptionsContract, currentPrice: number) => void;
   colors: ReturnType<typeof useThemeColors>;
-}> = ({ ticker, contract, enabled, interactive, onToggle, colors }) => {
+}> = ({ ticker, contract, enabled, interactive, onToggle, onLongPressTrade, colors }) => {
+  const toast = useToast();
   const { data: liveData, isLoading } = useOptionsQuery(ticker, {
     limit: 200,
     expiration_date_gte: toDateStr(new Date()),
@@ -46,17 +49,27 @@ const ChecklistContractRow: React.FC<{
   });
 
   let livePrice: number | null = null;
+  let liveMatch: OptionsContract | null = null;
   if (liveData?.success) {
     const arr = contract.option_type === 'CALL' ? liveData.data.calls : liveData.data.puts;
-    const match = arr.find(c => c.strike === contract.strike && c.expiration === contract.expiration_date);
-    livePrice = match ? (match.last_price ?? (match.bid + match.ask) / 2) : null;
+    liveMatch = arr.find(c => c.strike === contract.strike && c.expiration === contract.expiration_date) ?? null;
+    livePrice = liveMatch ? (liveMatch.last_price ?? (liveMatch.bid + liveMatch.ask) / 2) : null;
   }
+
+  const handleLongPress = () => {
+    if (!liveMatch || !liveData?.success) {
+      toast.error("Can't enter this contract yet — no live price found for it");
+      return;
+    }
+    onLongPressTrade(liveMatch, liveData.data.current_price);
+  };
 
   return (
     <TouchableOpacity
       onPress={interactive ? onToggle : undefined}
-      activeOpacity={interactive ? 0.7 : 1}
-      disabled={!interactive}
+      onLongPress={handleLongPress}
+      delayLongPress={400}
+      activeOpacity={0.7}
       style={cc.row}
     >
       <Ionicons
@@ -101,10 +114,14 @@ interface Props {
   checklist: FlowChecklist;
   status: ChecklistStatus;
   onResolved: (status: 'submitted' | 'skipped') => void;
+  /** Long-press on a contract row — opens the same trade-entry sheet used
+   *  everywhere else in the app (profile, quantity, paper/live), rather than
+   *  requiring Submit first. */
+  onTradeContract: (ticker: string, liveContract: OptionsContract, currentPrice: number) => void;
   colors: ReturnType<typeof useThemeColors>;
 }
 
-export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, colors }) => {
+export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, onTradeContract, colors }) => {
   const { authState: { user } } = useAuth();
   const { mutateAsync: createLevel } = useCreateKeyLevel();
   const { mutateAsync: trackContract } = useTrackContract();
@@ -251,6 +268,12 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
             </TouchableOpacity>
           )}
 
+          {checklist.contracts.length > 0 && (
+            <Text style={{ color: colors.textTertiary, fontSize: 10.5, marginTop: -2, marginBottom: 2 }}>
+              Tap to include · long-press to enter now
+            </Text>
+          )}
+
           {checklist.contracts.map((c, i) => (
             <ChecklistContractRow
               key={`${c.option_type}-${c.strike}-${c.expiration_date}`}
@@ -259,6 +282,7 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
               enabled={contractsEnabled[i]}
               interactive
               onToggle={() => toggleContract(i)}
+              onLongPressTrade={(liveContract, currentPrice) => onTradeContract(checklist.ticker ?? '', liveContract, currentPrice)}
               colors={colors}
             />
           ))}
@@ -305,7 +329,7 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
 };
 
 const cc = StyleSheet.create({
-  card: { borderRadius: 14, borderWidth: 1, padding: 12, marginTop: 4, maxWidth: '92%' },
+  card: { borderRadius: 14, borderWidth: 1, padding: 12, marginTop: 4, maxWidth: '95%' },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   statusPill: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, borderWidth: 1 },
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 4 },

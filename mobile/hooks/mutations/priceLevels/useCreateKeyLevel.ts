@@ -41,6 +41,12 @@ export function useCreateKeyLevel() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["key-levels"] });
+      // Creating a level always enables ORB follow for its ticker server-side
+      // (see price_level_routes.py's create_price_level → follow_stock()) —
+      // without this, a newly-watched ticker that wasn't already followed
+      // stays invisible to every screen reading useUserORBFollows (e.g. the
+      // Charts tab's ticker list) until something else happens to refetch it.
+      queryClient.invalidateQueries({ queryKey: ["userORBFollows"] });
     },
   });
 }
