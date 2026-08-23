@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { supabase } from '@/lib/supabase/supabase';
 import type { AgentConversation, AgentMessage } from '@/common/types/agent';
@@ -21,6 +21,35 @@ export function useAgentConversations() {
     },
     enabled: !!user?.id,
     staleTime: 30_000,
+  });
+}
+
+/**
+ * Deletes a conversation (and, via ON DELETE CASCADE on ai_messages, its
+ * full message history — see mobile/supabase/ai_agent.sql). Worth surfacing
+ * explicitly since the screenshot itself is never saved (see AgentModal's
+ * parse-screenshot flow) — once a conversation's image context is gone, an
+ * old thread built around "here's what I found in this screenshot" reads as
+ * meaningless leftover clutter with nothing left to act on.
+ */
+export function useDeleteAgentConversation() {
+  const { authState: { user } } = useAuth();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (conversationId: string): Promise<void> => {
+      if (!user?.id) throw new Error('Not authenticated');
+      const { error } = await supabase
+        .from('ai_conversations')
+        .delete()
+        .eq('id', conversationId)
+        .eq('user_id', user.id);
+      if (error) throw error;
+    },
+    onSuccess: (_data, conversationId) => {
+      queryClient.invalidateQueries({ queryKey: ['agent-conversations'] });
+      queryClient.removeQueries({ queryKey: ['agent-messages', conversationId] });
+    },
   });
 }
 

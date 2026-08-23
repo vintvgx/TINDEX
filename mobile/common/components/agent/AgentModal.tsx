@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,9 +18,10 @@ import {
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ExpoClipboard from 'expo-clipboard';
+import Markdown from 'react-native-markdown-display';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useAgentConversations, useAgentMessages } from '@/hooks/queries/agent/useAgentConversations';
+import { useAgentConversations, useAgentMessages, useDeleteAgentConversation } from '@/hooks/queries/agent/useAgentConversations';
 import { streamAgentChat, parseFlowScreenshot } from '@/common/services/AgentService';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useQueryClient } from '@tanstack/react-query';
@@ -127,6 +128,55 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ item, colors, accentColor
     if (item.content) ExpoClipboard.setStringAsync(item.content);
   }, [item.content]);
 
+  // User bubbles sit on a solid accent fill (white text); assistant bubbles
+  // sit on colors.surface — each needs its own markdown palette rather than
+  // one shared style set.
+  const markdownStyles = useMemo(() => {
+    const textColor = isUser ? '#fff' : colors.text;
+    const mutedColor = isUser ? 'rgba(255,255,255,0.7)' : colors.textTertiary;
+    const codeBg = isUser ? 'rgba(255,255,255,0.16)' : colors.surfaceSecondary;
+    const monoFont = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
+    return {
+      body: { color: textColor, fontSize: 15, lineHeight: 22 },
+      paragraph: { marginTop: 0, marginBottom: 6 },
+      strong: { fontWeight: '700' as const, color: textColor },
+      em: { fontStyle: 'italic' as const },
+      heading1: { color: textColor, fontSize: 19, fontWeight: '800' as const, marginTop: 2, marginBottom: 6 },
+      heading2: { color: textColor, fontSize: 17, fontWeight: '700' as const, marginTop: 2, marginBottom: 5 },
+      heading3: { color: textColor, fontSize: 16, fontWeight: '700' as const, marginTop: 2, marginBottom: 4 },
+      bullet_list: { marginVertical: 2 },
+      ordered_list: { marginVertical: 2 },
+      list_item: { flexDirection: 'row' as const, marginBottom: 4 },
+      bullet_list_icon: { color: textColor, marginRight: 6, fontSize: 15, lineHeight: 22 },
+      bullet_list_content: { flex: 1 },
+      ordered_list_icon: { color: textColor, marginRight: 6, fontSize: 15, lineHeight: 22 },
+      ordered_list_content: { flex: 1 },
+      code_inline: {
+        backgroundColor: codeBg, color: textColor, borderRadius: 4,
+        paddingHorizontal: 4, fontFamily: monoFont, fontSize: 13,
+      },
+      code_block: {
+        backgroundColor: codeBg, color: textColor, borderRadius: 8,
+        padding: 10, fontFamily: monoFont, fontSize: 13,
+      },
+      fence: {
+        backgroundColor: codeBg, color: textColor, borderRadius: 8,
+        padding: 10, fontFamily: monoFont, fontSize: 13,
+      },
+      link: { color: isUser ? '#fff' : accentColor, textDecorationLine: 'underline' as const },
+      hr: { backgroundColor: mutedColor, height: 1, marginVertical: 8 },
+      blockquote: {
+        borderLeftWidth: 3, borderLeftColor: mutedColor, paddingLeft: 10,
+        marginVertical: 4, opacity: 0.9,
+      },
+      table: { borderColor: mutedColor, borderWidth: 1, borderRadius: 6, marginVertical: 4 },
+      thead: { backgroundColor: codeBg },
+      th: { padding: 6, fontWeight: '700' as const, color: textColor },
+      td: { padding: 6, color: textColor, borderColor: mutedColor },
+      tr: { borderColor: mutedColor },
+    };
+  }, [isUser, colors, accentColor]);
+
   return (
     <View style={[ms.row, isUser ? ms.rowUser : ms.rowAI]}>
       {!isUser && (
@@ -158,9 +208,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ item, colors, accentColor
             <TypingDots color={colors.textTertiary} />
           </View>
         ) : item.content ? (
-          <Text style={[ms.text, { color: isUser ? '#fff' : colors.text, marginTop: item.imageUri ? 8 : 0 }]}>
-            {item.content}
-          </Text>
+          <View style={item.imageUri ? { marginTop: 8 } : undefined}>
+            <Markdown style={markdownStyles}>{item.content}</Markdown>
+          </View>
         ) : null}
         {item.isStreaming && item.content ? (
           <View style={ms.streamingCursor}>
@@ -201,6 +251,7 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
 
   const { data: conversations = [], refetch: refetchConversations } = useAgentConversations();
   const { data: savedMessages = [] } = useAgentMessages(activeConversationId);
+  const { mutate: deleteConversation, isPending: isDeletingConvo, variables: deletingConvoId } = useDeleteAgentConversation();
 
   // Reset state when modal closes
   useEffect(() => {
@@ -467,26 +518,56 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
     [colors, handleChecklistResolved],
   );
 
+  const handleDeleteConversation = useCallback((item: AgentConversation) => {
+    Alert.alert(
+      'Delete conversation?',
+      `"${item.title}" will be permanently deleted. Any screenshot this thread was built around was never saved, so this can't be recovered.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => deleteConversation(item.id, {
+            onError: (e) => onError?.(e instanceof Error ? e.message : 'Failed to delete conversation'),
+          }),
+        },
+      ],
+    );
+  }, [deleteConversation, onError]);
+
   const renderConversation = useCallback(
-    ({ item }: { item: AgentConversation }) => (
-      <TouchableOpacity
-        onPress={() => openConversation(item)}
-        activeOpacity={0.7}
-        style={[s.convoItem, { backgroundColor: colors.surface, borderColor: colors.border }]}
-      >
-        <Ionicons name="chatbubble-outline" size={15} color={colors.textTertiary} />
-        <View style={{ flex: 1 }}>
-          <Text style={[s.convoTitle, { color: colors.text }]} numberOfLines={1}>
-            {item.title}
-          </Text>
-          <Text style={[s.convoMeta, { color: colors.textTertiary }]}>
-            {item.ticker ? `${item.ticker} · ` : ''}{formatRelative(item.updated_at)}
-          </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={13} color={colors.textTertiary} />
-      </TouchableOpacity>
-    ),
-    [colors, openConversation],
+    ({ item }: { item: AgentConversation }) => {
+      const isDeletingThis = isDeletingConvo && deletingConvoId === item.id;
+      return (
+        <TouchableOpacity
+          onPress={() => openConversation(item)}
+          disabled={isDeletingThis}
+          activeOpacity={0.7}
+          style={[s.convoItem, { backgroundColor: colors.surface, borderColor: colors.border, opacity: isDeletingThis ? 0.5 : 1 }]}
+        >
+          <Ionicons name="chatbubble-outline" size={15} color={colors.textTertiary} />
+          <View style={{ flex: 1 }}>
+            <Text style={[s.convoTitle, { color: colors.text }]} numberOfLines={1}>
+              {item.title}
+            </Text>
+            <Text style={[s.convoMeta, { color: colors.textTertiary }]}>
+              {item.ticker ? `${item.ticker} · ` : ''}{formatRelative(item.updated_at)}
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => handleDeleteConversation(item)}
+            disabled={isDeletingThis}
+            hitSlop={8}
+            style={{ padding: 4 }}
+          >
+            {isDeletingThis
+              ? <ActivityIndicator size="small" color={colors.textTertiary} />
+              : <Ionicons name="trash-outline" size={16} color={colors.textTertiary} />}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      );
+    },
+    [colors, openConversation, handleDeleteConversation, isDeletingConvo, deletingConvoId],
   );
 
   return (

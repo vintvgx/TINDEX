@@ -5,8 +5,12 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
 import { useTrackContract } from '@/hooks/mutations/track/useTrackContract';
+import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
 import { useToast } from '@/common/components/ui/Toast';
-import type { FlowChecklist } from '@/common/types/agent';
+import type { FlowChecklist, FlowChecklistContract } from '@/common/types/agent';
+
+const toDateStr = (d: Date) => d.toISOString().split('T')[0];
+const farDateStr = () => { const d = new Date(); d.setFullYear(d.getFullYear() + 1); return toDateStr(d); };
 
 // Build OCC option symbol: e.g. PLTR260828C00185000 (same convention as AddContractSheet)
 const buildOCCSymbol = (ticker: string, expiry: string, type: 'CALL' | 'PUT', strike: number) => {
@@ -21,6 +25,77 @@ const fmtExpiry = (d: string) => {
 };
 
 export type ChecklistStatus = 'pending' | 'submitted' | 'skipped';
+
+// ─── One contract row, with its own live-price lookup ──────────────────────
+// Matched against the live chain by strike + expiry + type — same lookup
+// pattern TrackedContractsList's ContractCard already uses — so what you see
+// here before submitting is the real current price, not the (possibly
+// stale, screenshot-extracted) number from the alert itself.
+const ChecklistContractRow: React.FC<{
+  ticker: string;
+  contract: FlowChecklistContract;
+  enabled: boolean;
+  interactive: boolean;
+  onToggle: () => void;
+  colors: ReturnType<typeof useThemeColors>;
+}> = ({ ticker, contract, enabled, interactive, onToggle, colors }) => {
+  const { data: liveData, isLoading } = useOptionsQuery(ticker, {
+    limit: 200,
+    expiration_date_gte: toDateStr(new Date()),
+    expiration_date_lte: farDateStr(),
+  });
+
+  let livePrice: number | null = null;
+  if (liveData?.success) {
+    const arr = contract.option_type === 'CALL' ? liveData.data.calls : liveData.data.puts;
+    const match = arr.find(c => c.strike === contract.strike && c.expiration === contract.expiration_date);
+    livePrice = match ? (match.last_price ?? (match.bid + match.ask) / 2) : null;
+  }
+
+  return (
+    <TouchableOpacity
+      onPress={interactive ? onToggle : undefined}
+      activeOpacity={interactive ? 0.7 : 1}
+      disabled={!interactive}
+      style={cc.row}
+    >
+      <Ionicons
+        name={enabled ? 'checkmark-circle' : 'ellipse-outline'}
+        size={19}
+        color={enabled ? colors.accent : colors.textTertiary}
+      />
+      <View style={{ flex: 1 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <View style={[cc.badge, {
+            backgroundColor: (contract.option_type === 'CALL' ? colors.success : colors.error) + '20',
+            borderColor: (contract.option_type === 'CALL' ? colors.success : colors.error) + '40',
+          }]}>
+            <Text style={{ fontSize: 10, fontWeight: '700', color: contract.option_type === 'CALL' ? colors.success : colors.error }}>
+              {contract.option_type}
+            </Text>
+          </View>
+          <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+            ${contract.strike % 1 === 0 ? contract.strike.toFixed(0) : contract.strike.toFixed(2)} · {fmtExpiry(contract.expiration_date)}
+          </Text>
+          {isLoading ? (
+            <ActivityIndicator size="small" color={colors.textTertiary} />
+          ) : livePrice != null ? (
+            <View style={[cc.priceBadge, { backgroundColor: colors.background, borderColor: colors.border }]}>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: colors.text }}>${livePrice.toFixed(2)}</Text>
+            </View>
+          ) : (
+            <Text style={{ fontSize: 10.5, color: colors.textTertiary, fontStyle: 'italic' }}>no live price</Text>
+          )}
+        </View>
+        {contract.note ? (
+          <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 1 }} numberOfLines={1}>
+            {contract.note}
+          </Text>
+        ) : null}
+      </View>
+    </TouchableOpacity>
+  );
+};
 
 interface Props {
   checklist: FlowChecklist;
@@ -177,33 +252,15 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
           )}
 
           {checklist.contracts.map((c, i) => (
-            <TouchableOpacity key={`${c.option_type}-${c.strike}-${c.expiration_date}`} onPress={() => toggleContract(i)} activeOpacity={0.7} style={cc.row}>
-              <Ionicons
-                name={contractsEnabled[i] ? 'checkmark-circle' : 'ellipse-outline'}
-                size={19}
-                color={contractsEnabled[i] ? colors.accent : colors.textTertiary}
-              />
-              <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <View style={[cc.badge, {
-                    backgroundColor: (c.option_type === 'CALL' ? colors.success : colors.error) + '20',
-                    borderColor: (c.option_type === 'CALL' ? colors.success : colors.error) + '40',
-                  }]}>
-                    <Text style={{ fontSize: 10, fontWeight: '700', color: c.option_type === 'CALL' ? colors.success : colors.error }}>
-                      {c.option_type}
-                    </Text>
-                  </View>
-                  <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
-                    ${c.strike % 1 === 0 ? c.strike.toFixed(0) : c.strike.toFixed(2)} · {fmtExpiry(c.expiration_date)}
-                  </Text>
-                </View>
-                {c.note ? (
-                  <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 1 }} numberOfLines={1}>
-                    {c.note}
-                  </Text>
-                ) : null}
-              </View>
-            </TouchableOpacity>
+            <ChecklistContractRow
+              key={`${c.option_type}-${c.strike}-${c.expiration_date}`}
+              ticker={checklist.ticker ?? ''}
+              contract={c}
+              enabled={contractsEnabled[i]}
+              interactive
+              onToggle={() => toggleContract(i)}
+              colors={colors}
+            />
           ))}
         </View>
       ) : (
@@ -253,6 +310,7 @@ const cc = StyleSheet.create({
   statusPill: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, borderWidth: 1 },
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 4 },
   badge: { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 5, borderWidth: 1 },
+  priceBadge: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 5, borderWidth: 1 },
   footer: { flexDirection: 'row', gap: 8, marginTop: 12 },
   footerBtn: { paddingVertical: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, paddingHorizontal: 16 },
 });
