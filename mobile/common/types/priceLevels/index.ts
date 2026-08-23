@@ -1,6 +1,10 @@
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 
-export type LevelDirection = 'bullish' | 'bearish';
+// 'either' only ever applies while status === 'watching' — a level watching
+// both sides of a two-sided setup (see backend key_level_watcher.py). Once
+// confirmed, the backend overwrites this with whichever side actually
+// triggered ('bullish' or 'bearish'), so a confirmed row is never 'either'.
+export type LevelDirection = 'bullish' | 'bearish' | 'either';
 export type LevelSource = 'self' | 'discord_admin';
 export type LevelStatus = 'watching' | 'confirmed' | 'expired' | 'cancelled';
 

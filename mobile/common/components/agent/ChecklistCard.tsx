@@ -43,7 +43,8 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isBullish = checklist.sentiment === 'bullish';
-  const dirColor = isBullish ? colors.success : checklist.sentiment === 'bearish' ? colors.error : colors.textTertiary;
+  const isEither = checklist.sentiment === 'either';
+  const dirColor = isEither ? colors.accent : isBullish ? colors.success : checklist.sentiment === 'bearish' ? colors.error : colors.textTertiary;
   const canAct = !!checklist.ticker && status === 'pending';
   const anySelected = zoneEnabled || contractsEnabled.some(Boolean);
 
@@ -124,7 +125,7 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
             {checklist.ticker ?? 'Unknown ticker'}
           </Text>
           {checklist.sentiment && (
-            <Ionicons name={isBullish ? 'trending-up' : 'trending-down'} size={13} color={dirColor} />
+            <Ionicons name={isEither ? 'swap-vertical' : isBullish ? 'trending-up' : 'trending-down'} size={13} color={dirColor} />
           )}
         </View>
         {status !== 'pending' && (
@@ -167,7 +168,9 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
                     : `$${checklist.watch_zone.low.toFixed(2)}–$${checklist.watch_zone.high.toFixed(2)}`}
                 </Text>
                 <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 1 }}>
-                  Confirms on a candle close {isBullish ? 'above' : 'below'} — you'll get suggested contracts then
+                  {isEither
+                    ? "Confirms on a candle close outside the zone, either way — you'll get suggested contracts then"
+                    : `Confirms on a candle close ${isBullish ? 'above' : 'below'} — you'll get suggested contracts then`}
                 </Text>
               </View>
             </TouchableOpacity>

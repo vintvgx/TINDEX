@@ -51,7 +51,9 @@ export interface ChartWatchZone {
   id: string;
   low: number;
   high: number;
-  direction: 'bullish' | 'bearish';
+  // 'either' only applies while status === 'watching' — once 'confirmed'
+  // the backend overwrites this with whichever side actually triggered.
+  direction: 'bullish' | 'bearish' | 'either';
   status: 'watching' | 'confirmed';
 }
 
@@ -61,7 +63,7 @@ export interface ChartWatchZone {
 export interface ChartWatchDraft {
   low: number;
   high: number;
-  direction: 'bullish' | 'bearish';
+  direction: 'bullish' | 'bearish' | 'either';
 }
 
 interface AdvancedPriceChartProps {
@@ -93,11 +95,15 @@ interface AdvancedPriceChartProps {
   /** Existing watched levels/zones for this ticker, drawn as shaded bands.
    *  Folded into the y-axis domain like referenceLines. */
   watchZones?: ChartWatchZone[] | null;
-  /** Fired when the user finishes drawing a new zone in Watch mode (finger
-   *  lifted). The chart clears its own draft immediately after calling this
-   *  — the caller is responsible for actually persisting it (or not, on
-   *  failure) and passing the updated `watchZones` back down. */
-  onWatchConfirm?: (draft: ChartWatchDraft) => void;
+  /** Fired when the user taps Confirm on a drawn zone. Return (or resolve
+   *  to) `false` to signal the save failed — the chart then keeps the band
+   *  and confirm bar up with an inline error instead of clearing it, so a
+   *  failure is never silently indistinguishable from success. Anything
+   *  else (including throwing) is NOT treated as success — throw or return
+   *  `false` on failure; return `true`/`undefined` only once actually
+   *  persisted. The caller is responsible for the actual persistence and
+   *  for passing the updated `watchZones` back down once it lands. */
+  onWatchConfirm?: (draft: ChartWatchDraft) => Promise<boolean> | boolean;
   /** Bump/change this (e.g. pass the ticker) whenever the chart is showing
    *  a genuinely different instrument — clears Watch mode and any
    *  in-progress/pending draft so a stale drawing never survives a ticker
@@ -397,8 +403,12 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     // this render's scope, which a UI-thread worklet can't safely call).
     const priceForY = (y: number) => lo + (1 - y / priceH) * (hi - lo);
 
-    // Y ticks on round numbers within the domain.
-    const tickStep = niceStep(hi - lo, 4);
+    // Y ticks on round numbers within the domain. Density scales with the
+    // pane's actual height (roughly one label per ~42px) rather than a flat
+    // 4 — a tall pane at a tight zoom otherwise still only got 4 gridlines,
+    // too coarse to read an exact price point off when marking a level.
+    const targetTicks = Math.max(4, Math.min(9, Math.round(priceH / 42)));
+    const tickStep = niceStep(hi - lo, targetTicks);
     const yTicks: number[] = [];
     for (let t = Math.ceil(lo / tickStep) * tickStep; t <= hi; t += tickStep) yTicks.push(t);
 
@@ -476,7 +486,9 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const [watchDraftPx, setWatchDraftPx] = useState<{ startY: number; endY: number } | null>(null);
   // Finalized price range, set on release, awaiting Confirm/Cancel.
   const [watchDraftCommitted, setWatchDraftCommitted] = useState<{ low: number; high: number } | null>(null);
-  const [watchDirection, setWatchDirection] = useState<'bullish' | 'bearish'>('bullish');
+  const [watchDirection, setWatchDirection] = useState<'bullish' | 'bearish' | 'either'>('bullish');
+  const [isSavingWatch, setIsSavingWatch] = useState(false);
+  const [watchSaveError, setWatchSaveError] = useState<string | null>(null);
 
   // Clears any in-progress/pending draft (and turns Watch mode back off)
   // whenever the caller signals this is now a genuinely different chart —
@@ -487,11 +499,21 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     setWatchMode(false);
     setWatchDraftPx(null);
     setWatchDraftCommitted(null);
+    setWatchSaveError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey]);
 
   const updateWatchDraft = useCallback((startY: number, endY: number) => {
     setWatchDraftPx({ startY, endY });
+  }, []);
+
+  // Starting a fresh drag replaces any earlier pending-confirmation draft
+  // (and clears a stale error from a previous failed save) rather than
+  // leaving it dangling underneath the new one.
+  const beginWatchDraft = useCallback((y: number) => {
+    setWatchDraftCommitted(null);
+    setWatchSaveError(null);
+    setWatchDraftPx({ startY: y, endY: y });
   }, []);
 
   // Current live price, for defaulting the direction pill — whichever side
@@ -516,13 +538,40 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     });
   }, [scale, watchCurrentPrice]);
 
-  const cancelWatchDraft = useCallback(() => setWatchDraftCommitted(null), []);
-
-  const confirmWatchDraft = useCallback(() => {
-    if (!watchDraftCommitted) return;
-    onWatchConfirm?.({ ...watchDraftCommitted, direction: watchDirection });
+  const cancelWatchDraft = useCallback(() => {
     setWatchDraftCommitted(null);
-  }, [watchDraftCommitted, watchDirection, onWatchConfirm]);
+    setWatchSaveError(null);
+  }, []);
+
+  // Deliberately does NOT clear the band/confirm bar until the save is
+  // actually confirmed successful — clearing unconditionally here meant a
+  // failed save (bad ticker, backend down, migration not applied, etc.)
+  // looked identical to a successful one: the band just vanished with
+  // nothing persisted and no visible sign anything went wrong.
+  const confirmWatchDraft = useCallback(async () => {
+    if (!watchDraftCommitted || isSavingWatch) return;
+    // No handler wired up at all (shouldn't happen — the button only
+    // renders when onWatchConfirm is provided) is a failure, not a no-op
+    // success — never silently discard a drawn level.
+    if (!onWatchConfirm) {
+      setWatchSaveError('Watch isn\'t available on this chart');
+      return;
+    }
+    setWatchSaveError(null);
+    setIsSavingWatch(true);
+    try {
+      const result = await onWatchConfirm({ ...watchDraftCommitted, direction: watchDirection });
+      if (result === false) {
+        setWatchSaveError('Failed to save — try again');
+      } else {
+        setWatchDraftCommitted(null);
+      }
+    } catch (e) {
+      setWatchSaveError(e instanceof Error ? e.message : 'Failed to save — try again');
+    } finally {
+      setIsSavingWatch(false);
+    }
+  }, [watchDraftCommitted, watchDirection, onWatchConfirm, isSavingWatch]);
 
   // Chart-body gestures — four distinct interactions, deliberately kept
   // from stepping on one another:
@@ -559,7 +608,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           if (watchMode) {
             watchStartYShared.value = e.y;
             runOnJS(triggerHaptic)();
-            runOnJS(updateWatchDraft)(e.y, e.y);
+            runOnJS(beginWatchDraft)(e.y);
             return;
           }
           if (visibleCount < 2 || plotW === 0) return;
@@ -593,7 +642,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           runOnJS(notifyScrub)(-1);
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [watchMode, visibleStart, visibleEnd, visibleCount, plotW, notifyScrub, triggerHaptic, updateWatchDraft, commitWatchDraft],
+    [watchMode, visibleStart, visibleEnd, visibleCount, plotW, notifyScrub, triggerHaptic, beginWatchDraft, updateWatchDraft, commitWatchDraft],
   );
 
   // Double-tap anywhere resets both axes back to auto-fit. Defined before
@@ -682,6 +731,19 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             if (newEnd > count - 1) { newStart -= newEnd - (count - 1); newEnd = count - 1; }
             newStart = Math.max(0, newStart);
             runOnJS(setXWindow)({ start: newStart, end: newEnd });
+
+            // Free vertical pan alongside the horizontal one — drag down
+            // reveals higher prices that were scrolled above the fold, same
+            // "grab and pull" feel as the X shift above. A near-horizontal
+            // drag naturally produces a near-zero Y shift here (proportional
+            // to how much vertical movement actually happened), so this
+            // doesn't fight a deliberately axis-locked drag. Needed so a
+            // price level well outside the auto-fit range (the whole point
+            // of Watch mode) is reachable without first having to zoom out.
+            if (priceH > 0 && st.hi > st.lo) {
+              const priceShift = (e.translationY / priceH) * (st.hi - st.lo);
+              runOnJS(setYOverride)({ lo: st.lo + priceShift, hi: st.hi + priceShift });
+            }
           } else if (mode === 'x-rescale') {
             // Drag right narrows the visible window (zoom in on time),
             // anchored at the window's current center.
@@ -837,32 +899,41 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                 </Pressable>
               );
             })}
-          <Pressable
-            onPress={() => {
-              setWatchMode(v => !v);
-              setWatchDraftPx(null);
-              setWatchDraftCommitted(null);
-            }}
-            hitSlop={6}
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 3,
-              paddingHorizontal: 8,
-              height: 26,
-              borderRadius: 8,
-              backgroundColor: watchMode ? colors.accent + '22' : 'transparent',
-            }}
-          >
-            <Ionicons
-              name={watchMode ? 'eye' : 'eye-outline'}
-              size={14}
-              color={watchMode ? colors.accent : colors.textTertiary}
-            />
-            <Text style={{ fontSize: 11, fontWeight: '700', color: watchMode ? colors.accent : colors.textTertiary }}>
-              Watch
-            </Text>
-          </Pressable>
+          {/* Only rendered where a caller actually wired up onWatchConfirm —
+              without it, the button would silently no-op: tapping "Watch"
+              would resolve an undefined callback as instant "success" with
+              nothing to await and nothing saved (no spinner, no error,
+              band just clears). See PriceChartFullScreen/charts.tsx for the
+              wired-up callers. */}
+          {onWatchConfirm && (
+            <Pressable
+              onPress={() => {
+                setWatchMode(v => !v);
+                setWatchDraftPx(null);
+                setWatchDraftCommitted(null);
+                setWatchSaveError(null);
+              }}
+              hitSlop={6}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 3,
+                paddingHorizontal: 8,
+                height: 26,
+                borderRadius: 8,
+                backgroundColor: watchMode ? colors.accent + '22' : 'transparent',
+              }}
+            >
+              <Ionicons
+                name={watchMode ? 'eye' : 'eye-outline'}
+                size={14}
+                color={watchMode ? colors.accent : colors.textTertiary}
+              />
+              <Text style={{ fontSize: 11, fontWeight: '700', color: watchMode ? colors.accent : colors.textTertiary }}>
+                Watch
+              </Text>
+            </Pressable>
+          )}
           {isZoomed && (
             <Pressable
               onPress={resetZoom}
@@ -1031,7 +1102,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               {/* Existing watched zones — shaded band, dashed while still
                   'watching', solid once 'confirmed'. */}
               {watchZones?.map((z) => {
-                const color = z.direction === 'bullish' ? colors.success : colors.error;
+                const color = z.direction === 'either' ? colors.accent : z.direction === 'bullish' ? colors.success : colors.error;
                 const yHigh = scale.yForPrice(z.high);
                 const yLow = scale.yForPrice(z.low);
                 const isPoint = z.high === z.low;
@@ -1061,7 +1132,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               {/* Watch-mode draft — live while dragging, held while a
                   Confirm/Cancel bar is up after release. */}
               {watchMode && (watchDraftPx || watchDraftCommitted) && (() => {
-                const color = watchDirection === 'bullish' ? colors.success : colors.error;
+                const color = watchDirection === 'either' ? colors.accent : watchDirection === 'bullish' ? colors.success : colors.error;
                 const yTop = watchDraftPx ? Math.min(watchDraftPx.startY, watchDraftPx.endY) : scale.yForPrice(watchDraftCommitted!.high);
                 const yBottom = watchDraftPx ? Math.max(watchDraftPx.startY, watchDraftPx.endY) : scale.yForPrice(watchDraftCommitted!.low);
                 const priceHigh = watchDraftPx ? scale.priceForY(yTop) : watchDraftCommitted!.high;
@@ -1277,65 +1348,88 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             committing, since the auto-guess can be wrong for a zone that
             straddles the current price. */}
         {watchDraftCommitted && (
-          <View
-            style={{
-              position: 'absolute',
-              top: 8,
-              left: 8,
-              right: 8,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 6,
-              padding: 6,
-              borderRadius: 12,
-              backgroundColor: colors.surface,
-              borderWidth: 1,
-              borderColor: colors.border,
-              shadowColor: '#000',
-              shadowOpacity: 0.15,
-              shadowRadius: 6,
-              shadowOffset: { width: 0, height: 2 },
-              elevation: 4,
-            }}
-          >
-            <View style={{ flexDirection: 'row', borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: colors.border }}>
-              {(['bullish', 'bearish'] as const).map((d) => {
-                const active = watchDirection === d;
-                const c = d === 'bullish' ? colors.success : colors.error;
-                return (
-                  <Pressable
-                    key={d}
-                    onPress={() => setWatchDirection(d)}
-                    style={{
-                      paddingHorizontal: 8, paddingVertical: 7,
-                      backgroundColor: active ? c + '22' : 'transparent',
-                    }}
-                  >
-                    <Ionicons name={d === 'bullish' ? 'trending-up' : 'trending-down'} size={14} color={active ? c : colors.textTertiary} />
-                  </Pressable>
-                );
-              })}
-            </View>
-            <Text style={{ flex: 1, fontSize: 12.5, fontWeight: '700', color: colors.text }} numberOfLines={1}>
-              {watchDraftCommitted.high - watchDraftCommitted.low < 0.005
-                ? `Watch $${formatAxisPrice(watchDraftCommitted.high)}`
-                : `Watch $${formatAxisPrice(watchDraftCommitted.low)}–$${formatAxisPrice(watchDraftCommitted.high)}`}
-            </Text>
-            <Pressable onPress={cancelWatchDraft} hitSlop={6} style={{ padding: 6 }}>
-              <Ionicons name="close" size={18} color={colors.textTertiary} />
-            </Pressable>
-            <Pressable
-              onPress={confirmWatchDraft}
-              hitSlop={6}
+          <View style={{ position: 'absolute', top: 8, left: 8, right: 8 }}>
+            <View
               style={{
-                flexDirection: 'row', alignItems: 'center', gap: 4,
-                paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8,
-                backgroundColor: colors.accent,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 6,
+                padding: 6,
+                borderRadius: 12,
+                backgroundColor: colors.surface,
+                borderWidth: 1,
+                borderColor: watchSaveError ? colors.error : colors.border,
+                shadowColor: '#000',
+                shadowOpacity: 0.15,
+                shadowRadius: 6,
+                shadowOffset: { width: 0, height: 2 },
+                elevation: 4,
               }}
             >
-              <Ionicons name="checkmark" size={14} color={colors.accentForeground} />
-              <Text style={{ fontSize: 12.5, fontWeight: '700', color: colors.accentForeground }}>Watch</Text>
-            </Pressable>
+              <View style={{ flexDirection: 'row', borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: colors.border }}>
+                {(['bullish', 'either', 'bearish'] as const).map((d) => {
+                  const active = watchDirection === d;
+                  const c = d === 'bullish' ? colors.success : d === 'bearish' ? colors.error : colors.accent;
+                  return (
+                    <Pressable
+                      key={d}
+                      onPress={() => setWatchDirection(d)}
+                      disabled={isSavingWatch}
+                      style={{
+                        paddingHorizontal: 8, paddingVertical: 7,
+                        backgroundColor: active ? c + '22' : 'transparent',
+                      }}
+                    >
+                      <Ionicons
+                        name={d === 'bullish' ? 'trending-up' : d === 'bearish' ? 'trending-down' : 'swap-vertical'}
+                        size={14}
+                        color={active ? c : colors.textTertiary}
+                      />
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={{ flex: 1, fontSize: 12.5, fontWeight: '700', color: colors.text }} numberOfLines={1}>
+                {watchDraftCommitted.high - watchDraftCommitted.low < 0.005
+                  ? `Watch $${formatAxisPrice(watchDraftCommitted.high)}`
+                  : `Watch $${formatAxisPrice(watchDraftCommitted.low)}–$${formatAxisPrice(watchDraftCommitted.high)}`}
+              </Text>
+              <Pressable onPress={cancelWatchDraft} disabled={isSavingWatch} hitSlop={6} style={{ padding: 6, opacity: isSavingWatch ? 0.4 : 1 }}>
+                <Ionicons name="close" size={18} color={colors.textTertiary} />
+              </Pressable>
+              <Pressable
+                onPress={confirmWatchDraft}
+                disabled={isSavingWatch}
+                hitSlop={6}
+                style={{
+                  flexDirection: 'row', alignItems: 'center', gap: 4,
+                  paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8,
+                  backgroundColor: colors.accent, opacity: isSavingWatch ? 0.7 : 1,
+                  minWidth: 66, justifyContent: 'center',
+                }}
+              >
+                {isSavingWatch ? (
+                  <ActivityIndicator size="small" color={colors.accentForeground} />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark" size={14} color={colors.accentForeground} />
+                    <Text style={{ fontSize: 12.5, fontWeight: '700', color: colors.accentForeground }}>Watch</Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
+            {watchSaveError && (
+              <View style={{
+                flexDirection: 'row', alignItems: 'center', gap: 5,
+                marginTop: 5, paddingHorizontal: 10, paddingVertical: 6,
+                borderRadius: 8, backgroundColor: colors.error + '18',
+              }}>
+                <Ionicons name="alert-circle-outline" size={13} color={colors.error} />
+                <Text style={{ color: colors.error, fontSize: 11.5, fontWeight: '600', flex: 1 }} numberOfLines={2}>
+                  {watchSaveError}
+                </Text>
+              </View>
+            )}
           </View>
         )}
       </View>

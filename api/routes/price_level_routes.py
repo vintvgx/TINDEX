@@ -21,7 +21,7 @@ bp = Blueprint("price_levels", __name__)
 def create_price_level():
     """
     Body: {
-      userId, ticker, direction ('bullish'|'bearish'),
+      userId, ticker, direction ('bullish'|'bearish'|'either'),
       levelLow, levelHigh?,             // levelHigh defaults to levelLow (a point)
       source? ('self'|'discord_admin'), notes?,
       namedContracts?: [{option_type, strike, expiration_date}]
@@ -38,8 +38,8 @@ def create_price_level():
             return jsonify({"success": False, "error": "Invalid ticker symbol format"}), 400
 
         direction = data.get("direction")
-        if direction not in ("bullish", "bearish"):
-            return jsonify({"success": False, "error": "direction must be 'bullish' or 'bearish'"}), 400
+        if direction not in ("bullish", "bearish", "either"):
+            return jsonify({"success": False, "error": "direction must be 'bullish', 'bearish', or 'either'"}), 400
 
         level_low_raw = data.get("levelLow")
         if level_low_raw is None:

@@ -77,7 +77,7 @@ export const AddKeyLevelSheet: React.FC<Props> = ({ visible, onClose, initialTic
   const addNamedContractRow = () => {
     setNamedContracts(prev => [
       ...prev,
-      { key: `${Date.now()}`, option_type: direction === 'bullish' ? 'CALL' : 'PUT', strike: '', expiry: '' },
+      { key: `${Date.now()}`, option_type: direction === 'bearish' ? 'PUT' : 'CALL', strike: '', expiry: '' },
     ]);
   };
 
@@ -154,9 +154,9 @@ export const AddKeyLevelSheet: React.FC<Props> = ({ visible, onClose, initialTic
             {/* Direction */}
             <Text style={[s.label, { color: colors.textSecondary }]}>Direction</Text>
             <View style={[s.toggle, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              {(['bullish', 'bearish'] as const).map(opt => {
+              {(['bullish', 'either', 'bearish'] as const).map(opt => {
                 const active = direction === opt;
-                const ac = opt === 'bullish' ? colors.success : colors.error;
+                const ac = opt === 'bullish' ? colors.success : opt === 'bearish' ? colors.error : colors.accent;
                 return (
                   <TouchableOpacity
                     key={opt}
@@ -165,13 +165,13 @@ export const AddKeyLevelSheet: React.FC<Props> = ({ visible, onClose, initialTic
                     style={[s.toggleBtn, active && { backgroundColor: ac + '22' }]}
                   >
                     <Ionicons
-                      name={opt === 'bullish' ? 'trending-up' : 'trending-down'}
+                      name={opt === 'bullish' ? 'trending-up' : opt === 'bearish' ? 'trending-down' : 'swap-vertical'}
                       size={15}
                       color={active ? ac : colors.textTertiary}
                       style={{ marginRight: 5 }}
                     />
                     <Text style={[s.toggleText, { color: active ? ac : colors.textSecondary, fontWeight: active ? '700' : '500' }]}>
-                      {opt === 'bullish' ? 'Bullish' : 'Bearish'}
+                      {opt === 'bullish' ? 'Bullish' : opt === 'bearish' ? 'Bearish' : 'Either'}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -180,7 +180,11 @@ export const AddKeyLevelSheet: React.FC<Props> = ({ visible, onClose, initialTic
 
             {/* Level */}
             <Text style={[s.label, { color: colors.textSecondary }]}>
-              Price Level {direction === 'bullish' ? '(confirms on a close above)' : '(confirms on a close below)'}
+              Price Level {
+                direction === 'bullish' ? '(confirms on a close above)'
+                  : direction === 'bearish' ? '(confirms on a close below)'
+                  : '(confirms on a close outside this zone, either way)'
+              }
             </Text>
             <TextInput
               style={[s.input, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}

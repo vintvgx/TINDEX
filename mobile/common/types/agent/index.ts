@@ -62,7 +62,7 @@ export interface FlowWatchZone {
 
 export interface FlowChecklist {
   ticker: string | null;
-  sentiment: 'bullish' | 'bearish' | null;
+  sentiment: 'bullish' | 'bearish' | 'either' | null;
   watch_zone: FlowWatchZone | null;
   contracts: FlowChecklistContract[];
   summary: string;

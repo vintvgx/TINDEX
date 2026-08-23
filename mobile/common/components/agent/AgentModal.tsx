@@ -14,6 +14,7 @@ import {
   ActivityIndicator,
   ScrollView,
   Alert,
+  Animated,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ExpoClipboard from 'expo-clipboard';
@@ -43,6 +44,10 @@ type LocalMessage = {
   imageUri?: string;
   checklist?: FlowChecklist;
   checklistStatus?: ChecklistStatus;
+  // Shown next to the loading dots while isStreaming && !content — gives
+  // the wait some context (parsing a screenshot takes noticeably longer
+  // than a normal chat reply) instead of a bare dots-only bubble.
+  loadingLabel?: string;
 };
 
 interface PendingImage {
@@ -68,13 +73,45 @@ function formatRelative(dateStr: string): string {
 
 // ─── Message bubble ───────────────────────────────────────────────────────────
 
+// Staggered 3-dot bounce (iMessage/Slack-style), replacing the old
+// text-cycling "·"/"··"/"···" — each dot lifts and brightens on its own
+// offset in a continuous loop, driven by the native driver so it stays
+// smooth regardless of JS-thread load while a request is in flight.
 const TypingDots: React.FC<{ color: string }> = ({ color }) => {
-  const [dots, setDots] = useState('');
+  const anims = useRef([0, 1, 2].map(() => new Animated.Value(0))).current;
+
   useEffect(() => {
-    const id = setInterval(() => setDots(d => (d.length >= 3 ? '' : d + '·')), 400);
-    return () => clearInterval(id);
-  }, []);
-  return <Text style={{ color, fontSize: 18, letterSpacing: 3 }}>{dots || '·'}</Text>;
+    const loops = anims.map((anim, i) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(i * 130),
+          Animated.timing(anim, { toValue: 1, duration: 260, useNativeDriver: true }),
+          Animated.timing(anim, { toValue: 0, duration: 260, useNativeDriver: true }),
+          Animated.delay((2 - i) * 130),
+        ]),
+      ),
+    );
+    loops.forEach(l => l.start());
+    return () => loops.forEach(l => l.stop());
+  }, [anims]);
+
+  return (
+    <View style={{ flexDirection: 'row', gap: 4, paddingVertical: 3 }}>
+      {anims.map((anim, i) => (
+        <Animated.View
+          key={i}
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: 3,
+            backgroundColor: color,
+            opacity: anim.interpolate({ inputRange: [0, 1], outputRange: [0.35, 1] }),
+            transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }],
+          }}
+        />
+      ))}
+    </View>
+  );
 };
 
 interface MessageBubbleProps {
@@ -112,7 +149,14 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ item, colors, accentColor
           <Image source={{ uri: item.imageUri }} style={ms.attachedImage} resizeMode="cover" />
         ) : null}
         {item.isStreaming && !item.content ? (
-          <TypingDots color={colors.textTertiary} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {item.loadingLabel ? (
+              <Text style={{ color: colors.textTertiary, fontSize: 13, fontWeight: '500' }}>
+                {item.loadingLabel}
+              </Text>
+            ) : null}
+            <TypingDots color={colors.textTertiary} />
+          </View>
         ) : item.content ? (
           <Text style={[ms.text, { color: isUser ? '#fff' : colors.text, marginTop: item.imageUri ? 8 : 0 }]}>
             {item.content}
@@ -218,7 +262,10 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
     if (image || revisingId) {
       setIsStreaming(true);
       const aiMsgId = `local-ai-${Date.now()}`;
-      setLocalMessages(prev => [...prev, { id: aiMsgId, role: 'assistant', content: '', isStreaming: true }]);
+      setLocalMessages(prev => [...prev, {
+        id: aiMsgId, role: 'assistant', content: '', isStreaming: true,
+        loadingLabel: image ? 'Reading screenshot…' : 'Revising…',
+      }]);
 
       const previousChecklist = revisingId
         ? localMessages.find(m => m.id === revisingId)?.checklist

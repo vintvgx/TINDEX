@@ -741,31 +741,43 @@ TAGS: [comma-separated list of applicable tags from the list above, e.g., "Volat
         extracted plus the user's correction text.
         """
         instructions = (
-            "You are TINDEX, parsing an options order-flow alert screenshot (e.g. from a "
-            "Discord flow-alert bot) into a structured watch checklist.\n\n"
+            "You are TINDEX, parsing an options order-flow or technical-levels alert "
+            "screenshot (e.g. from a Discord bot) into a structured watch checklist.\n\n"
             "Extract, if present:\n"
             "- ticker: the stock symbol (e.g. \"PLTR\"), without the $ sign\n"
-            "- sentiment: \"bullish\" or \"bearish\" based on the overall flow read\n"
-            "- watch_zone: a price zone or level called out (e.g. a \"$185-$190 zone\") as "
+            "- sentiment: \"bullish\" if only an upside scenario is highlighted, \"bearish\" if "
+            "only a downside scenario is highlighted, \"either\" if the alert describes BOTH an "
+            "upside continuation scenario AND a downside breakdown scenario off the same "
+            "zone/level (e.g. \"holds = bullish toward X, breaks = bearish toward Y\") — a "
+            "two-sided setup like that must be \"either\", never forced into just one side.\n"
+            "- watch_zone: the single most important price zone or level to watch — the one "
+            "whose break/hold decides which scenario plays out — as "
             "{\"low\": <number>, \"high\": <number>}. If only a single price is called out, "
             "set low and high to that same value.\n"
             "- contracts: every specific options contract mentioned (strike + expiry), each as "
             "{\"option_type\": \"CALL\"|\"PUT\", \"strike\": <number>, "
             "\"expiration_date\": \"YYYY-MM-DD\", \"note\": \"<short context, e.g. "
-            "'250 contracts, ~$82.5K premium, unusual'>\"}.\n"
+            "'250 contracts, ~$82.5K premium, unusual'>\"}. Leave empty if the image is a "
+            "technical-levels alert with no specific contracts named.\n"
             f"  - Resolve bare dates like \"8/28\" or \"9/21\" to the nearest UPCOMING date "
             f"from today ({today}), in YYYY-MM-DD format.\n"
             "  - Fold volume/OI/premium/\"highest volume\" callouts into that contract's note.\n"
-            "- summary: a 1-2 sentence plain-language summary of the flow read.\n"
-            "- reply: a short conversational reply (2-4 sentences) telling the user what you "
-            "found and inviting them to review the checklist below — do not restate the raw "
-            "JSON in this field.\n\n"
+            "- summary: one short plain-language sentence naming the setup — used as a card "
+            "subtitle, not read as a message.\n"
+            "- reply: a TERSE, BULLETED summary of exactly what was found — no greeting, no "
+            "meta-commentary, no closing questions or invitations to ask more, no restating the "
+            "JSON. 3-6 lines, each starting with \"• \", covering only what's actually in the "
+            "image: ticker, the kind of alert if it's not a standard options-flow alert (one "
+            "bullet, only when relevant), the key zone/level(s), upside target(s) if any, "
+            "downside target(s) if any, and notable volume/premium figures. Skip any bullet "
+            "whose data isn't in the image — never pad with filler. End with exactly one short "
+            "line: \"Not financial advice.\"\n\n"
             "If the image isn't a flow/options screenshot, or a field genuinely isn't present, "
             "use null (or an empty array for contracts) rather than guessing.\n\n"
             "Respond with ONLY a JSON object (no markdown, no prose) of exactly this shape:\n"
             "{\n"
             '  "ticker": <string or null>,\n'
-            '  "sentiment": "bullish" | "bearish" | null,\n'
+            '  "sentiment": "bullish" | "bearish" | "either" | null,\n'
             '  "watch_zone": {"low": <number>, "high": <number>} | null,\n'
             '  "contracts": [{"option_type": "CALL" | "PUT", "strike": <number>, '
             '"expiration_date": "YYYY-MM-DD", "note": <string>}],\n'
@@ -840,7 +852,7 @@ TAGS: [comma-separated list of applicable tags from the list above, e.g., "Volat
             watch_zone = None
 
         sentiment = data.get("sentiment")
-        sentiment = sentiment if sentiment in ("bullish", "bearish") else None
+        sentiment = sentiment if sentiment in ("bullish", "bearish", "either") else None
 
         ticker = data.get("ticker")
         ticker = str(ticker).upper().strip() if ticker else None

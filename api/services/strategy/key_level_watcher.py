@@ -137,10 +137,24 @@ class KeyLevelWatcher:
             direction = level["direction"]
             level_low = float(level["level_low"])
             level_high = float(level["level_high"])
-            confirmed = (
-                bar.close > level_high if direction == "bullish"
-                else bar.close < level_low
-            )
+
+            # 'either' watches BOTH sides at once — a two-sided technical
+            # setup (e.g. "holds = bullish continuation, breaks = bearish
+            # breakdown") shouldn't have to pick just one direction to watch
+            # and silently miss the other. Whichever side breaks first wins;
+            # the level's stored direction gets overwritten with that
+            # concrete outcome once confirmed (see _process_confirmation).
+            if direction == "bullish":
+                confirmed, triggered_direction = bar.close > level_high, "bullish"
+            elif direction == "bearish":
+                confirmed, triggered_direction = bar.close < level_low, "bearish"
+            else:
+                if bar.close > level_high:
+                    confirmed, triggered_direction = True, "bullish"
+                elif bar.close < level_low:
+                    confirmed, triggered_direction = True, "bearish"
+                else:
+                    confirmed, triggered_direction = False, None
             if not confirmed:
                 continue
 
@@ -150,22 +164,21 @@ class KeyLevelWatcher:
             with self._lock:
                 self._watching.get(ticker, {}).pop(level["id"], None)
 
-            logger.info("[KeyLevelWatcher] %s %s level %s confirmed @ %.2f",
-                        ticker, direction, level["id"], bar.close)
+            logger.info("[KeyLevelWatcher] %s %s level %s confirmed @ %.2f (watch was %s)",
+                        ticker, triggered_direction, level["id"], bar.close, direction)
             threading.Thread(
                 target=self._process_confirmation,
-                args=(level, bar.close),
+                args=(level, bar.close, triggered_direction),
                 daemon=True,
                 name=f"key-level-confirm-{level['id'][:8]}",
             ).start()
 
     # ── Confirmation processing (background thread) ─────────────────────────
 
-    def _process_confirmation(self, level: dict, confirmed_price: float) -> None:
+    def _process_confirmation(self, level: dict, confirmed_price: float, direction: str) -> None:
         ticker = level["ticker"]
-        direction = level["direction"]
         try:
-            suggestions = self._build_suggestions(level, confirmed_price)
+            suggestions = self._build_suggestions(level, confirmed_price, direction)
         except Exception as e:
             logger.error("[KeyLevelWatcher] suggestion build failed for %s: %s",
                          level["id"], e, exc_info=True)
@@ -176,6 +189,11 @@ class KeyLevelWatcher:
             sb = get_supabase_service().client
             sb.table("watched_price_levels").update({
                 "status": "confirmed",
+                # Overwrite 'either' (or re-confirm bullish/bearish as-is)
+                # with the concrete side that actually triggered — nothing
+                # downstream (mobile rendering, notifications) needs to know
+                # about 'either' once a level is past 'watching'.
+                "direction": direction,
                 "confirmed_at": datetime.now(timezone.utc).isoformat(),
                 "confirmed_price": confirmed_price,
                 "suggested_contracts": suggestions,
@@ -195,9 +213,8 @@ class KeyLevelWatcher:
             logger.error("[KeyLevelWatcher] confirmation save/notify failed for %s: %s",
                          level["id"], e, exc_info=True)
 
-    def _build_suggestions(self, level: dict, confirmed_price: float) -> list[dict]:
+    def _build_suggestions(self, level: dict, confirmed_price: float, direction: str) -> list[dict]:
         ticker = level["ticker"]
-        direction = level["direction"]
         named_contracts = level.get("named_contracts") or []
 
         from services.alpaca.alpaca_option_service import get_alpaca_option_service

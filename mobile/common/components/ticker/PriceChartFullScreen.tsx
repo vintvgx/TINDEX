@@ -149,8 +149,14 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
     }));
 
   const { mutateAsync: createKeyLevel } = useCreateKeyLevel();
-  const handleWatchConfirm = async (draft: ChartWatchDraft) => {
-    if (!user?.id) return;
+  // Returns whether the save actually succeeded — AdvancedPriceChart keeps
+  // its confirm bar + drawn band up with an inline error on `false`/throw,
+  // instead of clearing as if it had saved (see its onWatchConfirm doc).
+  const handleWatchConfirm = async (draft: ChartWatchDraft): Promise<boolean> => {
+    if (!user?.id) {
+      toast.error('Not authenticated');
+      return false;
+    }
     try {
       await createKeyLevel({
         userId: user.id,
@@ -165,8 +171,10 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
           ? `Watching ${ticker} $${draft.high.toFixed(2)}`
           : `Watching ${ticker} $${draft.low.toFixed(2)}–$${draft.high.toFixed(2)}`,
       );
+      return true;
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to save the watch level');
+      return false;
     }
   };
 

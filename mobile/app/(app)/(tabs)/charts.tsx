@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import { Skeleton } from '@/common/components/ui/Skeleton';
-import { AdvancedPriceChart } from '@/common/components/ticker/AdvancedPriceChart';
+import { AdvancedPriceChart, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
 import { TickerPickerOverlay } from '@/common/components/ticker/TickerPickerOverlay';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
@@ -20,6 +20,10 @@ import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
+import { useAuth } from '@/common/utils/context/auth/AuthContext';
+import { useToast } from '@/common/components/ui/Toast';
+import { useKeyLevels } from '@/hooks/queries/priceLevels/useKeyLevels';
+import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -165,6 +169,47 @@ export default function ChartsScreen() {
     setChartAreaHeight(e.nativeEvent.layout.height);
   }, []);
 
+  // ── Watch mode: draw a key price level directly on the chart ───────────
+  // Same wiring as PriceChartFullScreen's — see AdvancedPriceChart's Watch
+  // toggle. useKeyLevels has no per-ticker filter server-side, so it's
+  // scoped down client-side here.
+  const { authState: { user } } = useAuth();
+  const toast = useToast();
+  const { data: allKeyLevels } = useKeyLevels();
+  const chartWatchZones: ChartWatchZone[] = (allKeyLevels ?? [])
+    .filter(l => l.ticker === activeTicker && (l.status === 'watching' || l.status === 'confirmed'))
+    .map(l => ({
+      id: l.id, low: l.level_low, high: l.level_high, direction: l.direction,
+      status: l.status as 'watching' | 'confirmed',
+    }));
+
+  const { mutateAsync: createKeyLevel } = useCreateKeyLevel();
+  const handleWatchConfirm = async (draft: ChartWatchDraft): Promise<boolean> => {
+    if (!user?.id) {
+      toast.error('Not authenticated');
+      return false;
+    }
+    try {
+      await createKeyLevel({
+        userId: user.id,
+        ticker: activeTicker,
+        direction: draft.direction,
+        levelLow: draft.low,
+        levelHigh: draft.high,
+        source: 'self',
+      });
+      toast.success(
+        draft.high - draft.low < 0.005
+          ? `Watching ${activeTicker} $${draft.high.toFixed(2)}`
+          : `Watching ${activeTicker} $${draft.low.toFixed(2)}–$${draft.high.toFixed(2)}`,
+      );
+      return true;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to save the watch level');
+      return false;
+    }
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
       {/* Identity header — swipe left/right to cycle tickers (no separate
@@ -234,6 +279,9 @@ export default function ChartsScreen() {
             orbRange={effectiveOrb}
             showOrbRange
             livePrice={resolvedLivePrice ?? null}
+            watchZones={chartWatchZones}
+            onWatchConfirm={handleWatchConfirm}
+            resetKey={activeTicker}
           />
         )}
       </View>

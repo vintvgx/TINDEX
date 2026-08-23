@@ -142,7 +142,8 @@ const LevelCard: React.FC<{
 }> = ({ level, colors, onCancel, isCancelling }) => {
   const { toTicker } = useBaseNavigation();
   const isBullish = level.direction === 'bullish';
-  const dirColor = isBullish ? colors.success : colors.error;
+  const isEither = level.direction === 'either';
+  const dirColor = isEither ? colors.accent : isBullish ? colors.success : colors.error;
   const statusColor = STATUS_COLOR[level.status](colors);
 
   return (
@@ -155,7 +156,7 @@ const LevelCard: React.FC<{
             size={18}
           />
           <Text style={{ color: colors.text, fontSize: 16, fontWeight: '800' }}>{level.ticker}</Text>
-          <Ionicons name={isBullish ? 'trending-up' : 'trending-down'} size={14} color={dirColor} />
+          <Ionicons name={isEither ? 'swap-vertical' : isBullish ? 'trending-up' : 'trending-down'} size={14} color={dirColor} />
         </TouchableOpacity>
         <View style={[lc.statusPill, { backgroundColor: statusColor + '18', borderColor: statusColor + '40' }]}>
           <Text style={{ color: statusColor, fontSize: 11, fontWeight: '700', textTransform: 'capitalize' }}>
@@ -168,7 +169,7 @@ const LevelCard: React.FC<{
         {fmtLevel(level.level_low, level.level_high)}
       </Text>
       <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 2 }}>
-        {isBullish ? 'Confirms on close above' : 'Confirms on close below'} · {level.source === 'discord_admin' ? 'Discord admin' : 'Self-found'}
+        {isEither ? 'Confirms on close outside this zone, either way' : isBullish ? 'Confirms on close above' : 'Confirms on close below'} · {level.source === 'discord_admin' ? 'Discord admin' : 'Self-found'}
         {level.status === 'confirmed' && level.confirmed_price != null
           ? ` · Confirmed @ $${level.confirmed_price.toFixed(2)}${level.confirmed_at ? ` (${fmtDate(level.confirmed_at)})` : ''}`
           : ''}
