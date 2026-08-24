@@ -229,6 +229,15 @@ export interface TickerHistoryData {
   opens?: number[];
   highs?: number[];
   lows?: number[];
+  /** 1D-only: fixed extended-hours session boundary prices (see
+   *  yfinance_service._session_boundary_lines). Each field is only present
+   *  once that session has actually concluded. */
+  session_lines?: {
+    pre_market_close?: number;
+    market_close?: number;
+    post_market_close?: number;
+    overnight_price?: number;
+  } | null;
 }
 
 export type TickerHistoryResponse =

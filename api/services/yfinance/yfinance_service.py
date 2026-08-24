@@ -1,11 +1,14 @@
 from services.utils.options_analyzer import OptionsAnalyzer
 import yfinance as yf
 import pandas as pd
+import pytz
 from log.logging_config import get_logger
 
 from datetime import datetime, timedelta, timezone
 
 logger = get_logger(__name__)
+
+ET = pytz.timezone("America/New_York")
 
 # Maps a chart timeframe key to the (period, interval) args yfinance expects.
 PERIOD_MAP = {
@@ -19,6 +22,61 @@ PERIOD_MAP = {
 }
 
 
+def _session_boundary_lines(hist: "pd.DataFrame") -> dict | None:
+    """
+    1D-chart-only: fixed reference prices at each extended-hours session
+    boundary (Pre-Market/Market-Hours-close/Post-Market/Overnight), mirroring
+    TradingView's own guide lines. Derived entirely from the fetched bars'
+    own timestamps — NOT from wall-clock "now" — so this is correct whenever
+    the request happens to land (including hours after the session in
+    question, e.g. checking at 3 AM against yesterday's already-closed day).
+
+    A boundary's line is only included once the LATEST bar in `hist` has
+    already progressed past it — i.e. the session actually ended — never a
+    running/live value for a session still in progress. "overnight_price" is
+    the flip side: only present once post-market itself has concluded, using
+    the most recent known close as the standing price until pre-market data
+    resumes (there is no real overnight tick source here).
+    """
+    if hist.empty or "Close" not in hist.columns:
+        return None
+    idx = hist.index
+    if getattr(idx, "tz", None) is None:
+        return None
+    idx_et = idx.tz_convert(ET)
+    minutes_of_day = [t.hour * 60 + t.minute for t in idx_et]
+    closes = hist["Close"].tolist()
+
+    PRE_END, REG_END, POST_END = 9 * 60 + 30, 16 * 60, 20 * 60
+    latest_minute = minutes_of_day[-1]
+
+    def _last_close_before(cutoff: int) -> float | None:
+        best = None
+        for m, c in zip(minutes_of_day, closes):
+            if m < cutoff:
+                best = c
+            else:
+                break
+        return float(best) if best is not None else None
+
+    result: dict = {}
+    if latest_minute >= PRE_END:
+        v = _last_close_before(PRE_END)
+        if v is not None:
+            result["pre_market_close"] = v
+    if latest_minute >= REG_END:
+        v = _last_close_before(REG_END)
+        if v is not None:
+            result["market_close"] = v
+    if latest_minute >= POST_END:
+        v = _last_close_before(POST_END)
+        if v is not None:
+            result["post_market_close"] = v
+        result["overnight_price"] = float(closes[-1])
+
+    return result or None
+
+
 def get_historical_prices(ticker: str, period_key: str) -> dict:
     """
     Fetch a single timeframe's historical price series for the chart.
@@ -29,11 +87,17 @@ def get_historical_prices(ticker: str, period_key: str) -> dict:
 
     Returns:
         Dict with "dates", "prices" (closes), "volumes", plus "opens"/"highs"/"lows"
-        so the mobile chart can render candlesticks (empty lists on failure)
+        so the mobile chart can render candlesticks (empty lists on failure).
+        1D responses also include "session_lines" (pre/market/post-market
+        boundary prices) once available — see _session_boundary_lines.
     """
     period, interval = PERIOD_MAP.get(period_key, PERIOD_MAP["1M"])
+    # Extended-hours bars only requested for 1D — that's the only period
+    # where session boundaries (and the Pre-Market/Post-Market chart lines)
+    # are meaningful; every other period is already daily/weekly closes.
+    prepost = period_key == "1D"
     try:
-        hist = yf.Ticker(ticker).history(period=period, interval=interval)
+        hist = yf.Ticker(ticker).history(period=period, interval=interval, prepost=prepost)
         # Intraday intervals can include rows with NaN prices (halts, thin
         # bars at the session edges). NaN isn't valid JSON and breaks the
         # mobile JSON.parse, so drop those rows before serializing.
@@ -46,7 +110,7 @@ def get_historical_prices(ticker: str, period_key: str) -> dict:
     def _col(name: str) -> list:
         return hist[name].tolist() if not hist.empty and name in hist.columns else []
 
-    return {
+    result = {
         "dates": (
             hist.index.strftime("%Y-%m-%dT%H:%M:%S%z").tolist()
             if not hist.empty and hasattr(hist.index, "strftime")
@@ -58,6 +122,13 @@ def get_historical_prices(ticker: str, period_key: str) -> dict:
         "highs": _col("High"),
         "lows": _col("Low"),
     }
+
+    if prepost:
+        session_lines = _session_boundary_lines(hist)
+        if session_lines:
+            result["session_lines"] = session_lines
+
+    return result
 
 
 def get_intraday_chart_for_date(ticker: str, date_str: str, interval: str = "5m") -> dict:

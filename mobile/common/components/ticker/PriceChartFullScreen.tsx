@@ -121,6 +121,38 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
       ]
     : null;
 
+  // Extended-hours session boundary lines (Pre-Market/Market Close/
+  // Post-Market/Overnight) — 1D only, only once each session has actually
+  // concluded (see yfinance_service._session_boundary_lines). Merged with
+  // srReferenceLines below rather than replacing it — S/R and session lines
+  // are independent, both optional overlays on the same chart.
+  const sessionLines = historyData?.session_lines;
+  const sessionReferenceLines: ChartReferenceLine[] | null = (() => {
+    if (period !== '1D' || !sessionLines) return null;
+    const lines: ChartReferenceLine[] = [];
+    if (sessionLines.pre_market_close != null) {
+      lines.push({ label: 'Pre-Market', price: sessionLines.pre_market_close, color: colors.textSecondary, dash: '2,3' });
+    }
+    if (sessionLines.market_close != null) {
+      lines.push({ label: 'Market Close', price: sessionLines.market_close, color: colors.text, dash: '2,3' });
+    }
+    if (sessionLines.post_market_close != null) {
+      lines.push({ label: 'Post-Market', price: sessionLines.post_market_close, color: colors.textSecondary, dash: '2,3' });
+    }
+    if (sessionLines.overnight_price != null) {
+      lines.push({ label: 'Overnight', price: sessionLines.overnight_price, color: colors.accent, dash: '2,3' });
+    }
+    return lines.length ? lines : null;
+  })();
+
+  const combinedReferenceLines: ChartReferenceLine[] | null = (() => {
+    const lines = [
+      ...(showSR && srReferenceLines ? srReferenceLines : []),
+      ...(sessionReferenceLines ?? []),
+    ];
+    return lines.length ? lines : null;
+  })();
+
   // Open contracts for this ticker, below the chart — see LivePositionsSection.
   const [contractsMode, setContractsMode] = useState<'live' | 'paper'>('live');
   const positionsData = useLivePositionsData(contractsMode, ticker);
@@ -343,7 +375,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             orbRange={effectiveOrb}
             showOrbRange
             livePrice={visible ? resolvedLivePrice ?? null : null}
-            referenceLines={showSR ? srReferenceLines : null}
+            referenceLines={combinedReferenceLines}
             watchZones={chartWatchZones}
             onWatchConfirm={handleWatchConfirm}
             resetKey={ticker}

@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import { Skeleton } from '@/common/components/ui/Skeleton';
-import { AdvancedPriceChart, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
+import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
 import { TickerPickerOverlay } from '@/common/components/ticker/TickerPickerOverlay';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
@@ -162,6 +162,30 @@ export default function ChartsScreen() {
   const dayRefPrice = (stockData?.current_price != null && stockData?.price_change != null)
     ? stockData.current_price - stockData.price_change
     : undefined;
+
+  // Extended-hours session boundary lines (Pre-Market/Market Close/
+  // Post-Market/Overnight) — 1D only, only once each session has actually
+  // concluded (see yfinance_service._session_boundary_lines). Reuses the
+  // same dashed reference-line rendering AdvancedPriceChart already has for
+  // entry/TP/stop levels.
+  const sessionReferenceLines: ChartReferenceLine[] | null = useMemo(() => {
+    if (period !== '1D' || !historyData?.session_lines) return null;
+    const sl = historyData.session_lines;
+    const lines: ChartReferenceLine[] = [];
+    if (sl.pre_market_close != null) {
+      lines.push({ label: 'Pre-Market', price: sl.pre_market_close, color: colors.textSecondary, dash: '2,3' });
+    }
+    if (sl.market_close != null) {
+      lines.push({ label: 'Market Close', price: sl.market_close, color: colors.text, dash: '2,3' });
+    }
+    if (sl.post_market_close != null) {
+      lines.push({ label: 'Post-Market', price: sl.post_market_close, color: colors.textSecondary, dash: '2,3' });
+    }
+    if (sl.overnight_price != null) {
+      lines.push({ label: 'Overnight', price: sl.overnight_price, color: colors.accent, dash: '2,3' });
+    }
+    return lines.length ? lines : null;
+  }, [period, historyData?.session_lines, colors.textSecondary, colors.text, colors.accent]);
   const liveChange = (resolvedLivePrice != null && dayRefPrice != null)
     ? resolvedLivePrice - dayRefPrice
     : stockData?.price_change;
@@ -317,6 +341,7 @@ export default function ChartsScreen() {
             watchZones={chartWatchZones}
             onWatchConfirm={handleWatchConfirm}
             resetKey={activeTicker}
+            referenceLines={sessionReferenceLines}
           />
         )}
       </View>
