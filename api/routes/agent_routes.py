@@ -22,6 +22,46 @@ DEFAULT_AGENT_SYSTEM_PROMPT = (
 )
 
 
+def _annotate_already_tracked(result: dict, user_id: str, supabase) -> dict:
+    """
+    Mark a freshly-parsed checklist's watch_zone/contracts as already_tracked
+    when the user already has an active watch/track for the same thing, so
+    the mobile card can show "Already tracked" instead of a duplicate-risking
+    Submit toggle (see ChecklistCard.tsx).
+    """
+    ticker = result.get("ticker")
+    if not ticker:
+        return result
+
+    watch_zone = result.get("watch_zone")
+    if watch_zone:
+        levels = supabase.get_active_watched_price_levels(user_id, ticker)
+        low, high = watch_zone.get("low"), watch_zone.get("high")
+        # Overlapping ranges count as the same zone — an alert re-describing
+        # a level a few cents off a previously-saved one is still the same
+        # thing, not a new one.
+        watch_zone["already_tracked"] = low is not None and high is not None and any(
+            lv.get("level_low") is not None and lv.get("level_high") is not None
+            and lv["level_low"] <= high and lv["level_high"] >= low
+            for lv in levels
+        )
+
+    contracts = result.get("contracts") or []
+    if contracts:
+        tracked = supabase.get_active_tracked_contracts(user_id, ticker)
+        tracked_keys = {
+            (t.get("option_type"), round(float(t["strike"]), 2), t.get("expiration_date"))
+            for t in tracked if t.get("strike") is not None
+        }
+        for c in contracts:
+            if c.get("strike") is None:
+                continue
+            key = (c.get("option_type"), round(float(c["strike"]), 2), c.get("expiration_date"))
+            c["already_tracked"] = key in tracked_keys
+
+    return result
+
+
 def _build_ticker_context(symbols: list[str]) -> Optional[str]:
     import yfinance as yf
 
@@ -175,9 +215,16 @@ def agent_parse_screenshot():
     Body (initial parse): { user_id, conversation_id?, message?, image_base64, media_type? }
     Body (revision):      { user_id, conversation_id?, message, previous_checklist }
 
-    The image itself is never persisted — only the assistant's text reply is
-    saved to ai_messages, same as a normal chat turn, so the conversation
-    reads sensibly in history without storing the screenshot anywhere.
+    The image itself is never persisted. Two rows land in ai_messages: the
+    assistant's text reply (plain content, as usual), and a second row whose
+    metadata carries the full checklist JSON + a "pending" status — that
+    second row is what lets the mobile client reconstruct the same
+    interactive ChecklistCard (not just its text summary) after the
+    conversation is reloaded. Each contract/watch-zone in the checklist is
+    also annotated with already_tracked, cross-referenced against the user's
+    existing watched_price_levels/tracked_options_contracts, so re-parsing
+    the same alert twice shows "already tracked" instead of risking a
+    duplicate watch/track on Submit.
     """
     body = request.get_json(silent=True) or {}
     user_id = body.get("user_id")
@@ -224,7 +271,18 @@ def agent_parse_screenshot():
         logger.error("[agent] parse_flow_screenshot failed: %s", exc, exc_info=True)
         return jsonify({"success": False, "error": str(exc)}), 500
 
+    result = _annotate_already_tracked(result, user_id, supabase)
+
     saved = supabase.add_ai_message(conversation_id, "assistant", result.get("reply") or "")
+    # Separate row for the checklist itself (empty content — it renders as a
+    # card, not text) so it survives a reload: metadata carries the full
+    # checklist JSON plus its submit/skip status, read back by AgentModal to
+    # reconstruct the same interactive card instead of losing it to
+    # client-only state (see ai_messages.metadata's migration doc comment).
+    checklist_saved = supabase.add_ai_message(
+        conversation_id, "assistant", "",
+        metadata={"checklist": result, "checklist_status": "pending"},
+    )
 
     title = None
     if is_new:
@@ -238,6 +296,7 @@ def agent_parse_screenshot():
         "data": {
             "conversationId": conversation_id,
             "messageId": (saved or {}).get("id", ""),
+            "checklistMessageId": (checklist_saved or {}).get("id", ""),
             "checklist": result,
             "title": title,
         },

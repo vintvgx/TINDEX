@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, ScrollView, Modal,
+  Animated, Easing, Pressable, Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -27,12 +28,14 @@ interface Props {
 }
 
 /**
- * Trade-entry sheet for a contract already chosen via the Contracts tab (as
- * opposed to ImmediateTradePanel, which browses a chain first). Reuses the
- * exact same profile/SL pickers and submission path as Home's Trade flow so
- * behavior is identical regardless of where the contract was found.
+ * The actual form — account toggle, profile, qty, exit controls, submit —
+ * shared by both TradeContractSheet (a full native Modal, used from the
+ * Contracts tab / contract detail modal) and TradeContractQuickCard (an
+ * inline animated overlay, used from AgentModal so the AI Assistant chat
+ * never has to close to enter a trade). Neither wrapper duplicates any of
+ * this logic — only how it's presented differs.
  */
-export function TradeContractSheet({ visible, onClose, colors, ticker, contract, currentPrice }: Props) {
+function TradeContractForm({ visible, onClose, colors, ticker, contract, currentPrice }: Omit<Props, 'contract'> & { contract: OptionsContract }) {
   const toast = useToast();
   const [paperMode, setPaperMode]       = useState(true);
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
@@ -132,10 +135,8 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
     );
   };
 
-  if (!contract) return null;
-
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <>
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
         <View style={[s.header, { borderBottomColor: colors.separator ?? colors.border }]}>
           <View style={{ flex: 1 }}>
@@ -268,9 +269,104 @@ export function TradeContractSheet({ visible, onClose, colors, ticker, contract,
           onSkip={() => setBlindEntry(null)}
         />
       )}
+    </>
+  );
+}
+
+/**
+ * Trade-entry sheet for a contract already chosen via the Contracts tab (as
+ * opposed to ImmediateTradePanel, which browses a chain first). Reuses the
+ * exact same profile/SL pickers and submission path as Home's Trade flow so
+ * behavior is identical regardless of where the contract was found.
+ */
+export function TradeContractSheet({ visible, onClose, colors, ticker, contract, currentPrice }: Props) {
+  if (!contract) return null;
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <TradeContractForm
+        visible={visible} onClose={onClose} colors={colors}
+        ticker={ticker} contract={contract} currentPrice={currentPrice}
+      />
     </Modal>
   );
 }
+
+const SCREEN_H = Dimensions.get('window').height;
+
+/**
+ * Non-blocking inline variant of TradeContractSheet — same form, same
+ * submission path, but rendered as an animated bottom-sheet overlay INSIDE
+ * the caller's own view tree instead of a second native Modal. RN can only
+ * reliably present one native Modal at a time (see AgentModal's
+ * handleTradeContract history — closing the first, waiting out its dismiss
+ * animation, then presenting the second), which meant entering a contract
+ * from the AI Assistant's checklist used to close the assistant's own Modal
+ * first — losing its (unsaved, image-free) conversation state and adding a
+ * close/reopen animation. This exists so that flow can overlay AgentModal
+ * instead: AgentModal never closes, so there's nothing to lose and nothing
+ * to animate back open.
+ */
+export function TradeContractQuickCard({ visible, onClose, colors, ticker, contract, currentPrice }: Props) {
+  const translateY = useRef(new Animated.Value(SCREEN_H)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  // Kept mounted through the close animation (visible flips to false first,
+  // then this flips false once the slide-down finishes) — an immediate
+  // unmount on visible=false would cut the close animation off mid-flight.
+  const [mounted, setMounted] = useState(visible);
+
+  useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      Animated.parallel([
+        Animated.timing(translateY, {
+          toValue: 0, duration: 300, easing: Easing.out(Easing.cubic), useNativeDriver: true,
+        }),
+        Animated.timing(backdropOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(translateY, {
+          toValue: SCREEN_H, duration: 240, easing: Easing.in(Easing.cubic), useNativeDriver: true,
+        }),
+        Animated.timing(backdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+      ]).start(({ finished }) => { if (finished) setMounted(false); });
+    }
+  }, [visible]);
+
+  if (!mounted || !contract) return null;
+
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+      <Animated.View style={[StyleSheet.absoluteFill, qs.backdrop, { opacity: backdropOpacity }]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+      </Animated.View>
+      <Animated.View
+        style={[
+          qs.sheet,
+          { backgroundColor: colors.background, borderColor: colors.border, transform: [{ translateY }] },
+        ]}
+      >
+        <View style={[qs.grabber, { backgroundColor: colors.border }]} />
+        <TradeContractForm
+          visible={visible} onClose={onClose} colors={colors}
+          ticker={ticker} contract={contract} currentPrice={currentPrice}
+        />
+      </Animated.View>
+    </View>
+  );
+}
+
+const qs = StyleSheet.create({
+  backdrop: { backgroundColor: '#000' },
+  sheet: {
+    position: 'absolute', left: 0, right: 0, bottom: 0,
+    maxHeight: '88%', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    borderWidth: 1, borderBottomWidth: 0, overflow: 'hidden',
+  },
+  grabber: {
+    width: 36, height: 4, borderRadius: 2, alignSelf: 'center', marginTop: 8, marginBottom: 2,
+  },
+});
 
 const s = StyleSheet.create({
   header:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },

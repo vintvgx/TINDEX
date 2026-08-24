@@ -21,12 +21,12 @@ import * as ExpoClipboard from 'expo-clipboard';
 import Markdown from 'react-native-markdown-display';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useAgentConversations, useAgentMessages, useDeleteAgentConversation } from '@/hooks/queries/agent/useAgentConversations';
+import { useAgentConversations, useAgentMessages, useDeleteAgentConversation, useUpdateChecklistStatus } from '@/hooks/queries/agent/useAgentConversations';
 import { streamAgentChat, parseFlowScreenshot } from '@/common/services/AgentService';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChecklistCard, type ChecklistStatus } from '@/common/components/agent/ChecklistCard';
-import { TradeContractSheet } from '@/common/components/ticker/TradeContractSheet';
+import { TradeContractQuickCard } from '@/common/components/ticker/TradeContractSheet';
 import type { AgentConversation, FlowChecklist } from '@/common/types/agent';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 
@@ -248,13 +248,12 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
 
-  // Trade-entry sheet, opened by long-pressing a contract in a checklist —
-  // reuses TradeContractSheet (the same profile/quantity/paper-live picker
-  // already used from the Contracts tab and detail modal), rather than a
-  // bespoke entry UI just for this flow. Deliberately NOT reset by the
-  // "modal closed" effect below — closing THIS modal is how we get a second
-  // native Modal to present cleanly (see handleTradeContract), so this state
-  // has to survive that transition.
+  // Trade-entry overlay, opened by long-pressing a contract in a checklist —
+  // TradeContractQuickCard (same profile/quantity/paper-live form as
+  // TradeContractSheet, rendered as an animated overlay inside THIS modal
+  // instead of a second native Modal — see TradeContractSheet.tsx). Reset
+  // along with everything else when this modal closes (below); unlike the
+  // old close-and-reopen handoff, nothing here needs to survive that.
   const [tradeSheetVisible, setTradeSheetVisible] = useState(false);
   const [tradeSheetTicker, setTradeSheetTicker] = useState('');
   const [tradeSheetContract, setTradeSheetContract] = useState<OptionsContract | null>(null);
@@ -274,6 +273,7 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
   const { data: conversations = [], refetch: refetchConversations } = useAgentConversations();
   const { data: savedMessages = [] } = useAgentMessages(activeConversationId);
   const { mutate: deleteConversation, isPending: isDeletingConvo, variables: deletingConvoId } = useDeleteAgentConversation();
+  const { mutate: persistChecklistStatus } = useUpdateChecklistStatus();
 
   // Reset state when modal closes
   useEffect(() => {
@@ -286,15 +286,25 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
       setError(null);
       setPendingPrompt(null);
       setPendingImage(null);
+      setTradeSheetVisible(false);
       activeChecklistIdRef.current = null;
     }
   }, [visible]);
 
   // Populate local messages from Supabase when loading a saved conversation
+  // — a checklist message (empty content, metadata.checklist set) becomes a
+  // real ChecklistCard again, at whatever status it was last left in, not a
+  // blank bubble (see ai_messages.metadata's migration doc comment).
   useEffect(() => {
     if (savedMessages.length > 0 && localMessages.length === 0) {
       setLocalMessages(
-        savedMessages.map(m => ({ id: m.id, role: m.role, content: m.content })),
+        savedMessages.map(m => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          checklist: m.metadata?.checklist,
+          checklistStatus: m.metadata?.checklist_status,
+        })),
       );
     }
   }, [savedMessages]);
@@ -308,26 +318,29 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
     }
   }, [view, pendingPrompt]);
 
-  const handleChecklistResolved = useCallback((msgId: string, status: 'submitted' | 'skipped') => {
+  const handleChecklistResolved = useCallback((msgId: string, checklist: FlowChecklist, status: 'submitted' | 'skipped') => {
     setLocalMessages(prev => prev.map(m => (m.id === msgId ? { ...m, checklistStatus: status } : m)));
     if (activeChecklistIdRef.current === msgId) activeChecklistIdRef.current = null;
-  }, []);
+    // "local-" ids are client-only placeholders from a failed/unsent save —
+    // nothing to persist against. A real (backend-assigned) id means the
+    // checklist's own ai_messages row exists and can be updated in place.
+    if (!msgId.startsWith('local-')) {
+      persistChecklistStatus({ messageId: msgId, checklist, status });
+    }
+  }, [persistChecklistStatus]);
 
-  // Long-pressing a contract in a checklist jumps straight to the real
-  // trade-entry sheet — same pattern options.tsx uses to hand off from its
-  // own contract detail modal to TradeContractSheet: RN can't reliably
-  // present a second native Modal while the first is still mid-dismiss, so
-  // this closes the assistant modal first and waits out its close animation
-  // before presenting the trade sheet, using a snapshot taken before the
-  // close (this modal's own message list gets cleared on close).
+  // Long-pressing a contract in a checklist opens TradeContractQuickCard —
+  // an animated overlay INSIDE this same Modal (see TradeContractSheet.tsx),
+  // not a second native Modal. This assistant modal never closes for the
+  // handoff, so its conversation/checklist state is never lost and there's
+  // no close/reopen animation to wait out.
   const handleTradeContract = useCallback((tickerArg: string, liveContract: OptionsContract, currentPrice: number) => {
     if (!tickerArg) return;
     setTradeSheetTicker(tickerArg);
     setTradeSheetContract(liveContract);
     setTradeSheetCurrentPrice(currentPrice);
-    onClose();
-    setTimeout(() => setTradeSheetVisible(true), 350);
-  }, [onClose]);
+    setTradeSheetVisible(true);
+  }, []);
 
   const sendMessage = useCallback(async (text: string, image?: PendingImage | null) => {
     const trimmed = text.trim();
@@ -372,7 +385,10 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
         if (result.conversationId && !conversationIdRef.current) {
           setActiveConversationId(result.conversationId);
         }
-        const checklistMsgId = `local-checklist-${Date.now()}`;
+        // Real backend id when the checklist's own ai_messages row saved
+        // successfully — falls back to a local-only placeholder (never
+        // persisted, see handleChecklistResolved's guard) if it didn't.
+        const checklistMsgId = result.checklistMessageId || `local-checklist-${Date.now()}`;
         setLocalMessages(prev =>
           prev
             .map(m => (m.id === aiMsgId ? { ...m, content: result.checklist.reply, isStreaming: false } : m))
@@ -543,13 +559,19 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
           <View style={[ms.avatar, { backgroundColor: colors.accent + '20' }]}>
             <Ionicons name="sparkles" size={13} color={colors.accent} />
           </View>
-          <ChecklistCard
-            checklist={item.checklist}
-            status={item.checklistStatus ?? 'pending'}
-            onResolved={(status) => handleChecklistResolved(item.id, status)}
-            onTradeContract={handleTradeContract}
-            colors={colors}
-          />
+          {/* flex: 1, not the avatar-mirroring maxWidth used by chat
+              bubbles — a checklist is a form (ticker, watch zone, contract
+              picks), not a line of chat, so it should use all the width the
+              row has left, not stay bubble-width. */}
+          <View style={{ flex: 1 }}>
+            <ChecklistCard
+              checklist={item.checklist}
+              status={item.checklistStatus ?? 'pending'}
+              onResolved={(status) => handleChecklistResolved(item.id, item.checklist!, status)}
+              onTradeContract={handleTradeContract}
+              colors={colors}
+            />
+          </View>
         </View>
       ) : (
         <MessageBubble item={item} colors={colors} accentColor={colors.accent} />
@@ -610,7 +632,6 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
   );
 
   return (
-    <>
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
       <SafeAreaView style={[s.root, { backgroundColor: colors.background }]}>
 
@@ -812,18 +833,19 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
+
+        {/* Overlays this modal's own content instead of stacking a second
+            native Modal — see TradeContractQuickCard's doc comment. */}
+        <TradeContractQuickCard
+          visible={tradeSheetVisible}
+          onClose={() => setTradeSheetVisible(false)}
+          colors={colors}
+          ticker={tradeSheetTicker}
+          contract={tradeSheetContract}
+          currentPrice={tradeSheetCurrentPrice}
+        />
       </SafeAreaView>
     </Modal>
-
-    <TradeContractSheet
-      visible={tradeSheetVisible}
-      onClose={() => setTradeSheetVisible(false)}
-      colors={colors}
-      ticker={tradeSheetTicker}
-      contract={tradeSheetContract}
-      currentPrice={tradeSheetCurrentPrice}
-    />
-    </>
   );
 };
 

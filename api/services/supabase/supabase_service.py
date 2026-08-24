@@ -1240,15 +1240,21 @@ class SupabaseService:
             logger.warning("touch_ai_conversation failed for %s: %s", conversation_id, str(e))
 
     def add_ai_message(
-        self, conversation_id: str, role: str, content: str
+        self, conversation_id: str, role: str, content: str, metadata: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
-        """Persist a single chat message and return the inserted row."""
+        """
+        Persist a single chat message and return the inserted row.
+
+        `metadata` is set on a checklist message — {"checklist": <FlowChecklist>,
+        "checklist_status": "pending"|"submitted"|"skipped"} — so it can be
+        reconstructed (card, not plain text) when the conversation reloads.
+        Left unset for ordinary chat turns.
+        """
         try:
-            result = (
-                self.client.table("ai_messages")
-                .insert({"conversation_id": conversation_id, "role": role, "content": content})
-                .execute()
-            )
+            payload: Dict[str, Any] = {"conversation_id": conversation_id, "role": role, "content": content}
+            if metadata is not None:
+                payload["metadata"] = metadata
+            result = self.client.table("ai_messages").insert(payload).execute()
             return result.data[0] if result.data else None
         except Exception as e:
             logger.error("add_ai_message failed for %s: %s", conversation_id, str(e), exc_info=True)
@@ -1269,6 +1275,42 @@ class SupabaseService:
             return list(reversed(rows))  # back to chronological
         except Exception as e:
             logger.warning("get_ai_messages failed for %s: %s", conversation_id, str(e))
+            return []
+
+    def get_active_watched_price_levels(self, user_id: str, ticker: str) -> list:
+        """Active (watching/confirmed) watched_price_levels rows for a ticker —
+        used to flag a freshly-parsed checklist's watch zone as already
+        tracked instead of letting Submit create a duplicate level."""
+        try:
+            result = (
+                self.client.table("watched_price_levels")
+                .select("id, level_low, level_high, direction, status")
+                .eq("user_id", user_id)
+                .eq("ticker", ticker.upper())
+                .in_("status", ["watching", "confirmed"])
+                .execute()
+            )
+            return result.data or []
+        except Exception as e:
+            logger.warning("get_active_watched_price_levels failed for %s/%s: %s", user_id, ticker, e)
+            return []
+
+    def get_active_tracked_contracts(self, user_id: str, ticker: str) -> list:
+        """Actively-tracked (status='tracking') tracked_options_contracts rows
+        for a ticker — used to flag a freshly-parsed checklist's contracts as
+        already tracked instead of letting Submit create a duplicate."""
+        try:
+            result = (
+                self.client.table("tracked_options_contracts")
+                .select("id, option_type, strike, expiration_date, status")
+                .eq("user_id", user_id)
+                .eq("ticker", ticker.upper())
+                .eq("status", "tracking")
+                .execute()
+            )
+            return result.data or []
+        except Exception as e:
+            logger.warning("get_active_tracked_contracts failed for %s/%s: %s", user_id, ticker, e)
             return []
 
     def save_contract_score(self, score_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:

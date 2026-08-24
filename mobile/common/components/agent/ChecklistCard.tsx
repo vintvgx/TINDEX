@@ -42,6 +42,7 @@ const ChecklistContractRow: React.FC<{
   colors: ReturnType<typeof useThemeColors>;
 }> = ({ ticker, contract, enabled, interactive, onToggle, onLongPressTrade, colors }) => {
   const toast = useToast();
+  const alreadyTracked = !!contract.already_tracked;
   const { data: liveData, isLoading } = useOptionsQuery(ticker, {
     limit: 200,
     expiration_date_gte: toDateStr(new Date()),
@@ -66,16 +67,16 @@ const ChecklistContractRow: React.FC<{
 
   return (
     <TouchableOpacity
-      onPress={interactive ? onToggle : undefined}
+      onPress={interactive && !alreadyTracked ? onToggle : undefined}
       onLongPress={handleLongPress}
       delayLongPress={400}
       activeOpacity={0.7}
       style={cc.row}
     >
       <Ionicons
-        name={enabled ? 'checkmark-circle' : 'ellipse-outline'}
+        name={alreadyTracked ? 'checkmark-done-circle' : (enabled ? 'checkmark-circle' : 'ellipse-outline')}
         size={19}
-        color={enabled ? colors.accent : colors.textTertiary}
+        color={alreadyTracked ? colors.textTertiary : (enabled ? colors.accent : colors.textTertiary)}
       />
       <View style={{ flex: 1 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -90,7 +91,11 @@ const ChecklistContractRow: React.FC<{
           <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
             ${contract.strike % 1 === 0 ? contract.strike.toFixed(0) : contract.strike.toFixed(2)} · {fmtExpiry(contract.expiration_date)}
           </Text>
-          {isLoading ? (
+          {alreadyTracked ? (
+            <View style={[cc.trackedBadge, { backgroundColor: colors.textTertiary + '18', borderColor: colors.textTertiary + '40' }]}>
+              <Text style={{ fontSize: 9.5, fontWeight: '700', color: colors.textTertiary, letterSpacing: 0.3 }}>ALREADY TRACKED</Text>
+            </View>
+          ) : isLoading ? (
             <ActivityIndicator size="small" color={colors.textTertiary} />
           ) : livePrice != null ? (
             <View style={[cc.priceBadge, { backgroundColor: colors.background, borderColor: colors.border }]}>
@@ -128,9 +133,13 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
   const toast = useToast();
 
   const hasZone = !!checklist.watch_zone;
-  const [zoneEnabled, setZoneEnabled] = useState(hasZone);
+  const zoneAlreadyTracked = !!checklist.watch_zone?.already_tracked;
+  // Already-tracked items start UNselected — re-submitting them would
+  // create a duplicate watched_price_level / tracked_options_contracts row
+  // for something the user is already watching/tracking.
+  const [zoneEnabled, setZoneEnabled] = useState(hasZone && !zoneAlreadyTracked);
   const [contractsEnabled, setContractsEnabled] = useState<boolean[]>(
-    () => checklist.contracts.map(() => true),
+    () => checklist.contracts.map(c => !c.already_tracked),
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -247,25 +256,46 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
       {status === 'pending' ? (
         <View style={{ marginTop: 10, gap: 6 }}>
           {hasZone && checklist.watch_zone && (
-            <TouchableOpacity onPress={() => setZoneEnabled(v => !v)} activeOpacity={0.7} style={cc.row}>
-              <Ionicons
-                name={zoneEnabled ? 'checkmark-circle' : 'ellipse-outline'}
-                size={19}
-                color={zoneEnabled ? colors.accent : colors.textTertiary}
-              />
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
-                  Set watch zone {checklist.watch_zone.low === checklist.watch_zone.high
-                    ? `$${checklist.watch_zone.low.toFixed(2)}`
-                    : `$${checklist.watch_zone.low.toFixed(2)}–$${checklist.watch_zone.high.toFixed(2)}`}
-                </Text>
-                <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 1 }}>
-                  {isEither
-                    ? "Confirms on a candle close outside the zone, either way — you'll get suggested contracts then"
-                    : `Confirms on a candle close ${isBullish ? 'above' : 'below'} — you'll get suggested contracts then`}
-                </Text>
+            zoneAlreadyTracked ? (
+              <View style={cc.row}>
+                <Ionicons name="checkmark-done-circle" size={19} color={colors.textTertiary} />
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
+                      Watch zone {checklist.watch_zone.low === checklist.watch_zone.high
+                        ? `$${checklist.watch_zone.low.toFixed(2)}`
+                        : `$${checklist.watch_zone.low.toFixed(2)}–$${checklist.watch_zone.high.toFixed(2)}`}
+                    </Text>
+                    <View style={[cc.trackedBadge, { backgroundColor: colors.textTertiary + '18', borderColor: colors.textTertiary + '40' }]}>
+                      <Text style={{ fontSize: 9.5, fontWeight: '700', color: colors.textTertiary, letterSpacing: 0.3 }}>ALREADY TRACKED</Text>
+                    </View>
+                  </View>
+                  <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 1 }}>
+                    Already being watched — nothing to submit here.
+                  </Text>
+                </View>
               </View>
-            </TouchableOpacity>
+            ) : (
+              <TouchableOpacity onPress={() => setZoneEnabled(v => !v)} activeOpacity={0.7} style={cc.row}>
+                <Ionicons
+                  name={zoneEnabled ? 'checkmark-circle' : 'ellipse-outline'}
+                  size={19}
+                  color={zoneEnabled ? colors.accent : colors.textTertiary}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                    Set watch zone {checklist.watch_zone.low === checklist.watch_zone.high
+                      ? `$${checklist.watch_zone.low.toFixed(2)}`
+                      : `$${checklist.watch_zone.low.toFixed(2)}–$${checklist.watch_zone.high.toFixed(2)}`}
+                  </Text>
+                  <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 1 }}>
+                    {isEither
+                      ? "Confirms on a candle close outside the zone, either way — you'll get suggested contracts then"
+                      : `Confirms on a candle close ${isBullish ? 'above' : 'below'} — you'll get suggested contracts then`}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )
           )}
 
           {checklist.contracts.length > 0 && (
@@ -329,12 +359,13 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
 };
 
 const cc = StyleSheet.create({
-  card: { borderRadius: 14, borderWidth: 1, padding: 12, marginTop: 4, maxWidth: '95%' },
+  card: { borderRadius: 14, borderWidth: 1, padding: 12, marginTop: 4, width: '100%' },
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   statusPill: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, borderWidth: 1 },
   row: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 4 },
   badge: { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 5, borderWidth: 1 },
   priceBadge: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 5, borderWidth: 1 },
+  trackedBadge: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 5, borderWidth: 1 },
   footer: { flexDirection: 'row', gap: 8, marginTop: 12 },
   footerBtn: { paddingVertical: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, paddingHorizontal: 16 },
 });

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { supabase } from '@/lib/supabase/supabase';
-import type { AgentConversation, AgentMessage } from '@/common/types/agent';
+import type { AgentConversation, AgentMessage, FlowChecklist } from '@/common/types/agent';
 
 export function useAgentConversations() {
   const { authState: { user } } = useAuth();
@@ -49,6 +49,29 @@ export function useDeleteAgentConversation() {
     onSuccess: (_data, conversationId) => {
       queryClient.invalidateQueries({ queryKey: ['agent-conversations'] });
       queryClient.removeQueries({ queryKey: ['agent-messages', conversationId] });
+    },
+  });
+}
+
+/**
+ * Persists a checklist's resolution (submitted/skipped) directly to its
+ * ai_messages row so it survives a reload — the same row the backend wrote
+ * at parse time (see agent_routes.py's checklistMessageId). Writes the full
+ * checklist object back alongside the new status (not a partial column
+ * update) since Postgres JSONB columns are replaced wholesale, not merged.
+ */
+export function useUpdateChecklistStatus() {
+  return useMutation({
+    mutationFn: async ({ messageId, checklist, status }: {
+      messageId: string;
+      checklist: FlowChecklist;
+      status: 'submitted' | 'skipped';
+    }): Promise<void> => {
+      const { error } = await supabase
+        .from('ai_messages')
+        .update({ metadata: { checklist, checklist_status: status } })
+        .eq('id', messageId);
+      if (error) throw error;
     },
   });
 }
