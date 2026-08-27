@@ -1,12 +1,14 @@
 import type React from 'react';
 import { Fragment, useMemo, useState, useCallback, useEffect, useRef } from 'react';
-import { View, Text, Pressable, LayoutChangeEvent, SafeAreaView, ActivityIndicator } from 'react-native';
+import { View, Text, Pressable, LayoutChangeEvent, SafeAreaView, ActivityIndicator, Alert } from 'react-native';
 import Svg, { Path, Rect, Line, Circle, Defs, LinearGradient, Stop, Text as SvgText } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSharedValue, runOnJS } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
+import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
+import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import type { PricePeriod, TickerHistoryData } from '@/common/types/blogPosts/ticker';
 import type { OrbRangeLines } from '@/common/components/ticker/PriceChart';
 
@@ -68,6 +70,11 @@ export interface ChartWatchDraft {
 
 interface AdvancedPriceChartProps {
   data: TickerHistoryData | undefined;
+  /** Needed only to lazy-load earlier trading days as the user pans past
+   *  the left edge on 1D (see the "load earlier days" block below) — the
+   *  1D history-date endpoint is fetched directly from here, ticker-scoped.
+   *  Omit to leave 1D hard-clamped to whatever `data` already contains. */
+  ticker?: string;
   isLoading?: boolean;
   period: PricePeriod;
   onPeriodChange: (period: PricePeriod) => void;
@@ -90,6 +97,13 @@ interface AdvancedPriceChartProps {
   /** Labeled horizontal levels (e.g. entry/TP1/TP2/stop). Folded into the
    *  y-axis domain so a level is never clipped off-canvas. */
   referenceLines?: ChartReferenceLine[] | null;
+  /** Pre-Market/Market-Close/Post-Market/Overnight lines (see
+   *  yfinance_service._session_boundary_lines) — kept separate from
+   *  referenceLines so this component can own its own show/hide toggle
+   *  (button in the toolbar, defaults OFF) instead of every caller having
+   *  to remember to gate them. Folded into the y-axis domain exactly like
+   *  referenceLines, only while the toggle is on. */
+  sessionReferenceLines?: ChartReferenceLine[] | null;
   /** Point-in-time annotations drawn on top of the price marks. */
   eventMarkers?: ChartEventMarker[] | null;
   /** Existing watched levels/zones for this ticker, drawn as shaded bands.
@@ -104,6 +118,16 @@ interface AdvancedPriceChartProps {
    *  persisted. The caller is responsible for the actual persistence and
    *  for passing the updated `watchZones` back down once it lands. */
   onWatchConfirm?: (draft: ChartWatchDraft) => Promise<boolean> | boolean;
+  /** Fired when the user edits an existing zone (tap it while in Watch
+   *  mode, adjust, hit the confirm bar's "Update"). Same success/failure
+   *  contract as onWatchConfirm — return/resolve `false` or throw to keep
+   *  the band + confirm bar up with an inline error instead of clearing it. */
+  onUpdateWatchZone?: (zoneId: string, draft: ChartWatchDraft) => Promise<boolean> | boolean;
+  /** Fired after the user confirms (via the chart's own Alert) that they
+   *  want to remove an existing watched zone — the caller owns the actual
+   *  delete call (e.g. useCancelKeyLevel) and re-fetching `watchZones`,
+   *  same division of responsibility as onWatchConfirm. */
+  onDeleteWatchZone?: (zoneId: string) => void;
   /** Bump/change this (e.g. pass the ticker) whenever the chart is showing
    *  a genuinely different instrument — clears Watch mode and any
    *  in-progress/pending draft so a stale drawing never survives a ticker
@@ -199,6 +223,7 @@ const formatScrubLabel = (dateStr: string, period: PricePeriod) => {
  */
 export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   data,
+  ticker,
   isLoading,
   period,
   onPeriodChange,
@@ -209,29 +234,138 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   showOrbRange,
   livePrice,
   referenceLines,
+  sessionReferenceLines,
   eventMarkers,
   watchZones,
   onWatchConfirm,
+  onUpdateWatchZone,
+  onDeleteWatchZone,
   resetKey,
 }) => {
   const colors = useThemeColors();
   const [width, setWidth] = useState(0);
 
-  const prices = useMemo(() => data?.prices ?? [], [data]);
-  const dates = useMemo(() => data?.dates ?? [], [data]);
-  const volumes = useMemo(() => data?.volumes ?? [], [data]);
+  // ── Lazy-loaded earlier trading days (1D pan-past-the-left-edge) ────────
+  // `data` from the parent is always just the CURRENTLY SELECTED period's
+  // fetch (today's bars, for 1D) — panning used to hard-clamp at index 0
+  // because there was nothing before it in memory. This prepends whole
+  // prior trading days on demand as the user pans toward/past the start,
+  // capped at MAX_EARLIER_DAYS so the series can't grow unbounded. Oldest
+  // day first, so `[...earlierDays.flat, ...data]` is already in
+  // chronological order.
+  const MAX_EARLIER_DAYS = 8;
+  const [earlierDays, setEarlierDays] = useState<TickerHistoryData[]>([]);
+  const loadingEarlierRef = useRef(false);
+  const unavailableDatesRef = useRef<Set<string>>(new Set());
+
+  // A genuinely different instrument (or the caller's resetKey bump) means
+  // the earlier-days cache is for the wrong ticker entirely — never carry
+  // it across.
+  useEffect(() => {
+    setEarlierDays([]);
+    loadingEarlierRef.current = false;
+    unavailableDatesRef.current = new Set();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey, ticker]);
+
+  const earlierBarsCount = useMemo(
+    () => earlierDays.reduce((n, d) => n + d.dates.length, 0),
+    [earlierDays],
+  );
+
+  // The merged series everything below actually renders — `data` itself is
+  // read directly only where "today specifically" is what's meant (the ORB
+  // band's regular-session-start search, and the fetch-trigger's own
+  // day-stepping below).
+  const chartData: TickerHistoryData | undefined = useMemo(() => {
+    if (period !== '1D' || earlierDays.length === 0 || !data) return data;
+    const opensOk = earlierDays.every(d => Array.isArray(d.opens)) && Array.isArray(data.opens);
+    const highsOk = earlierDays.every(d => Array.isArray(d.highs)) && Array.isArray(data.highs);
+    const lowsOk = earlierDays.every(d => Array.isArray(d.lows)) && Array.isArray(data.lows);
+    return {
+      dates: [...earlierDays.flatMap(d => d.dates), ...data.dates],
+      prices: [...earlierDays.flatMap(d => d.prices), ...data.prices],
+      volumes: [...earlierDays.flatMap(d => d.volumes), ...data.volumes],
+      opens: opensOk ? [...earlierDays.flatMap(d => d.opens!), ...data.opens!] : data.opens,
+      highs: highsOk ? [...earlierDays.flatMap(d => d.highs!), ...data.highs!] : data.highs,
+      lows: lowsOk ? [...earlierDays.flatMap(d => d.lows!), ...data.lows!] : data.lows,
+      session_lines: data.session_lines,
+    };
+  }, [data, earlierDays, period]);
+
+  // Steps back one calendar day at a time (skipping weekends without a
+  // network call) from whatever's currently the oldest loaded bar, fetching
+  // the regular-session 5-minute bars for that date via the same endpoint
+  // the Daily Review's per-trade chart uses. A date already known empty
+  // (holiday, or past yfinance's ~60-day intraday lookback) is skipped on
+  // sight next time rather than re-requested. Stops after finding ONE
+  // day worth of bars — the next edge-hit fetches the day before that.
+  const fetchEarlierDay = useCallback(async () => {
+    if (!ticker || period !== '1D' || loadingEarlierRef.current) return;
+    if (earlierDays.length >= MAX_EARLIER_DAYS) return;
+    const oldestDateStr = earlierDays[0]?.dates[0] ?? data?.dates?.[0];
+    if (!oldestDateStr) return;
+
+    loadingEarlierRef.current = true;
+    try {
+      const cursor = new Date(oldestDateStr);
+      for (let attempt = 0; attempt < 5; attempt++) {
+        cursor.setDate(cursor.getDate() - 1);
+        const dow = cursor.getDay();
+        if (dow === 0 || dow === 6) continue; // weekend — no network call
+        const iso = cursor.toISOString().split('T')[0];
+        if (unavailableDatesRef.current.has(iso)) continue;
+
+        try {
+          const res = await fetch(`${RAILWAY_BASE_URL}/ticker/${ticker}/history-date`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date: iso }),
+          });
+          const json = await res.json();
+          if (json?.success && json.data?.available && json.data.dates?.length) {
+            const day: TickerHistoryData = {
+              dates: json.data.dates,
+              prices: json.data.closes,
+              volumes: json.data.volumes,
+              opens: json.data.opens,
+              highs: json.data.highs,
+              lows: json.data.lows,
+            };
+            const shiftBy = day.dates.length;
+            setEarlierDays(prev => [day, ...prev]);
+            // Keep whatever was on screen still on screen — the new bars
+            // slide in to the LEFT of it, not underneath it. xWindow==null
+            // (never zoomed) needs no shift: it always tracks "show
+            // everything," which already includes the new day for free.
+            setXWindow(w => (w ? { start: w.start + shiftBy, end: w.end + shiftBy } : null));
+            return;
+          }
+          unavailableDatesRef.current.add(iso);
+        } catch {
+          return; // network hiccup — a later edge-hit tries again
+        }
+      }
+    } finally {
+      loadingEarlierRef.current = false;
+    }
+  }, [ticker, period, earlierDays, data]);
+
+  const prices = useMemo(() => chartData?.prices ?? [], [chartData]);
+  const dates = useMemo(() => chartData?.dates ?? [], [chartData]);
+  const volumes = useMemo(() => chartData?.volumes ?? [], [chartData]);
 
   // OHLC is only usable if every array lines up with closes — a partial or
   // stale-cached payload silently degrades to line mode instead of drawing
   // misaligned candles.
   const hasOhlc =
-    !!data &&
-    Array.isArray(data.opens) &&
-    Array.isArray(data.highs) &&
-    Array.isArray(data.lows) &&
-    data.opens.length === prices.length &&
-    data.highs.length === prices.length &&
-    data.lows.length === prices.length;
+    !!chartData &&
+    Array.isArray(chartData.opens) &&
+    Array.isArray(chartData.highs) &&
+    Array.isArray(chartData.lows) &&
+    chartData.opens.length === prices.length &&
+    chartData.highs.length === prices.length &&
+    chartData.lows.length === prices.length;
 
   // Candles by default on intraday timeframes (where individual bars are
   // readable and matter for entries); line for long ranges. A manual toggle
@@ -259,21 +393,21 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
 
   const eHighs = useMemo<number[] | undefined>(() => {
     if (!hasOhlc) return undefined;
-    const base = data!.highs!;
+    const base = chartData!.highs!;
     if (!isLiveBar) return base;
     const next = base.slice();
     next[lastIdx] = Math.max(base[lastIdx], livePrice!);
     return next;
-  }, [hasOhlc, data, isLiveBar, lastIdx, livePrice]);
+  }, [hasOhlc, chartData, isLiveBar, lastIdx, livePrice]);
 
   const eLows = useMemo<number[] | undefined>(() => {
     if (!hasOhlc) return undefined;
-    const base = data!.lows!;
+    const base = chartData!.lows!;
     if (!isLiveBar) return base;
     const next = base.slice();
     next[lastIdx] = Math.min(base[lastIdx], livePrice!);
     return next;
-  }, [hasOhlc, data, isLiveBar, lastIdx, livePrice]);
+  }, [hasOhlc, chartData, isLiveBar, lastIdx, livePrice]);
 
   const hasData = prices.length > 1 && width > 0;
   const lineColor = positive ? colors.success : colors.error;
@@ -350,7 +484,11 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // pre-market, not the open; drawing the band from x=0 would visually
   // stretch it across the entire pre-market session even though orbRange's
   // own high/low are still correctly computed from only the 09:30-09:45
-  // window (2026-08-27 fix).
+  // window (2026-08-27 fix). Deliberately searches the ORIGINAL `data`
+  // (today only), never `chartData` — with earlier days now possibly
+  // prepended, searching from index 0 forward in the merged series would
+  // find an EARLIER day's 9:30 bar instead of today's; earlierBarsCount
+  // shifts the found index back into chartData's index space.
   const regularSessionStartIndex = useMemo(() => {
     if (!orbVisible || !data?.dates?.length) return 0;
     for (let i = 0; i < data.dates.length; i++) {
@@ -359,10 +497,36 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
       });
       const [hh, mm] = parts.split(':').map(Number);
-      if (hh * 60 + mm >= 9 * 60 + 30) return i;
+      if (hh * 60 + mm >= 9 * 60 + 30) return i + earlierBarsCount;
     }
-    return 0;
-  }, [orbVisible, data?.dates]);
+    return earlierBarsCount;
+  }, [orbVisible, data?.dates, earlierBarsCount]);
+
+  // Pre-Market/Market-Close/Post-Market/Overnight lines — off by default;
+  // toggled via the toolbar button below. Merged with the generic
+  // referenceLines prop (e.g. entry/TP/stop) into one array so both the
+  // y-domain fold-in and the render map only need to handle one list.
+  const [showSessionLines, setShowSessionLines] = useState(false);
+  const effectiveReferenceLines = useMemo(
+    () => [
+      ...(referenceLines ?? []),
+      ...(showSessionLines ? (sessionReferenceLines ?? []) : []),
+    ],
+    [referenceLines, sessionReferenceLines, showSessionLines],
+  );
+
+  // Watched zones (key levels) — ON by default, toggled off via the
+  // toolbar to view the ticker's raw price action without them. A GLOBAL
+  // persisted preference (useWatchZonesVisibility), not per-instance
+  // state — this component remounts on every ticker switch (`key=
+  // {activeTicker}` in charts.tsx), so a plain useState would silently
+  // reset to visible on every switch and every app restart; toggling it
+  // off must actually stay off everywhere until turned back on. Hidden
+  // zones are excluded from the y-axis fold-in too (below), so hiding them
+  // actually declutters the view rather than leaving the domain stretched
+  // to fit something no longer drawn.
+  const { visible: showWatchZones, setVisible: setShowWatchZones } = useWatchZonesVisibility();
+  const effectiveWatchZones = showWatchZones ? watchZones : null;
 
   const scale = useMemo(() => {
     if (!hasData) return null;
@@ -387,18 +551,21 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
       min = Math.min(min, orbRange.low);
       max = Math.max(max, orbRange.high);
     }
-    // Reference lines (entry/TP/stop) must stay visible even before price
-    // has actually approached them — same reasoning as the ORB band above.
-    if (referenceLines?.length) {
-      for (const line of referenceLines) {
+    // Reference lines (entry/TP/stop, and session lines while toggled on)
+    // must stay visible even before price has actually approached them —
+    // same reasoning as the ORB band above.
+    if (effectiveReferenceLines.length) {
+      for (const line of effectiveReferenceLines) {
         min = Math.min(min, line.price);
         max = Math.max(max, line.price);
       }
     }
     // Watched zones — same reasoning: a level called out well above/below
-    // the currently-visible range should still pull the domain out to show it.
-    if (watchZones?.length) {
-      for (const z of watchZones) {
+    // the currently-visible range should still pull the domain out to show
+    // it, but only while actually shown (effectiveWatchZones respects the
+    // toggle below).
+    if (effectiveWatchZones?.length) {
+      for (const z of effectiveWatchZones) {
         min = Math.min(min, z.low);
         max = Math.max(max, z.high);
       }
@@ -443,7 +610,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     const maxVolume = visVolumes.length ? Math.max(...visVolumes) : 0;
 
     return { lo, hi, step, xForIndex, yForPrice, priceForY, yTicks, xTicks, maxVolume };
-  }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, referenceLines, watchZones, yOverride, visibleIndices, visibleStart, visibleCount]);
+  }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, effectiveReferenceLines, effectiveWatchZones, yOverride, visibleIndices, visibleStart, visibleCount]);
 
   // Line-mode path built from closes — the last point tracks the live tick.
   // Only the visible window is drawn.
@@ -471,7 +638,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const notifyScrub = useCallback(
     (index: number) => {
       setScrubIndex(index);
-      if (index === -1 || !data) {
+      if (index === -1 || !chartData) {
         onScrub?.(null);
         return;
       }
@@ -480,15 +647,15 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
       const live = isLiveBar && index === lastIdx;
       onScrub?.({
         index,
-        date: data.dates[index],
-        price: live ? livePrice! : data.prices[index],
-        open: data.opens?.[index],
-        high: live && data.highs ? Math.max(data.highs[index], livePrice!) : data.highs?.[index],
-        low: live && data.lows ? Math.min(data.lows[index], livePrice!) : data.lows?.[index],
-        volume: data.volumes?.[index],
+        date: chartData.dates[index],
+        price: live ? livePrice! : chartData.prices[index],
+        open: chartData.opens?.[index],
+        high: live && chartData.highs ? Math.max(chartData.highs[index], livePrice!) : chartData.highs?.[index],
+        low: live && chartData.lows ? Math.min(chartData.lows[index], livePrice!) : chartData.lows?.[index],
+        volume: chartData.volumes?.[index],
       });
     },
-    [data, onScrub, isLiveBar, lastIdx, livePrice],
+    [chartData, onScrub, isLiveBar, lastIdx, livePrice],
   );
 
   const triggerHaptic = useCallback(() => {
@@ -509,6 +676,12 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const [watchDirection, setWatchDirection] = useState<'bullish' | 'bearish' | 'either'>('bullish');
   const [isSavingWatch, setIsSavingWatch] = useState(false);
   const [watchSaveError, setWatchSaveError] = useState<string | null>(null);
+  // Id of the existing zone currently being modified — set by tapping a
+  // zone's label while in Watch mode (see handleEditZonePress). null means
+  // the pending draft (if any) is a brand-new zone, not an edit of one that
+  // already exists; confirmWatchDraft branches on this to call
+  // onUpdateWatchZone instead of onWatchConfirm.
+  const [editingZoneId, setEditingZoneId] = useState<string | null>(null);
 
   // Clears any in-progress/pending draft (and turns Watch mode back off)
   // whenever the caller signals this is now a genuinely different chart —
@@ -520,8 +693,23 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     setWatchDraftPx(null);
     setWatchDraftCommitted(null);
     setWatchSaveError(null);
+    setEditingZoneId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey]);
+
+  // Tapping an existing zone's label while in Watch mode loads it into the
+  // same draft/confirm-bar flow used to draw a brand-new zone — dragging on
+  // the chart afterward redefines the bounds (beginWatchDraft doesn't touch
+  // editingZoneId, so it survives the redraw); leaving it un-dragged and
+  // just hitting the confirm bar's "Update" is a no-op save of the same
+  // bounds. Direction is copied so the picker starts on whatever it already
+  // was, not the live-price-relative default a fresh draw guesses.
+  const handleEditZonePress = useCallback((zone: ChartWatchZone) => {
+    setWatchDraftCommitted({ low: zone.low, high: zone.high });
+    setWatchDirection(zone.direction);
+    setEditingZoneId(zone.id);
+    setWatchSaveError(null);
+  }, []);
 
   const updateWatchDraft = useCallback((startY: number, endY: number) => {
     setWatchDraftPx({ startY, endY });
@@ -561,6 +749,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const cancelWatchDraft = useCallback(() => {
     setWatchDraftCommitted(null);
     setWatchSaveError(null);
+    setEditingZoneId(null);
   }, []);
 
   // Deliberately does NOT clear the band/confirm bar until the save is
@@ -570,28 +759,50 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // nothing persisted and no visible sign anything went wrong.
   const confirmWatchDraft = useCallback(async () => {
     if (!watchDraftCommitted || isSavingWatch) return;
+    const isEditing = !!editingZoneId;
     // No handler wired up at all (shouldn't happen — the button only
-    // renders when onWatchConfirm is provided) is a failure, not a no-op
-    // success — never silently discard a drawn level.
-    if (!onWatchConfirm) {
-      setWatchSaveError('Watch isn\'t available on this chart');
+    // renders when onWatchConfirm/onUpdateWatchZone is provided) is a
+    // failure, not a no-op success — never silently discard the draft.
+    if (isEditing ? !onUpdateWatchZone : !onWatchConfirm) {
+      setWatchSaveError(isEditing ? "Editing isn't available on this chart" : "Watch isn't available on this chart");
       return;
     }
     setWatchSaveError(null);
     setIsSavingWatch(true);
     try {
-      const result = await onWatchConfirm({ ...watchDraftCommitted, direction: watchDirection });
+      const result = isEditing
+        ? await onUpdateWatchZone!(editingZoneId!, { ...watchDraftCommitted, direction: watchDirection })
+        : await onWatchConfirm!({ ...watchDraftCommitted, direction: watchDirection });
       if (result === false) {
         setWatchSaveError('Failed to save — try again');
       } else {
         setWatchDraftCommitted(null);
+        setEditingZoneId(null);
       }
     } catch (e) {
       setWatchSaveError(e instanceof Error ? e.message : 'Failed to save — try again');
     } finally {
       setIsSavingWatch(false);
     }
-  }, [watchDraftCommitted, watchDirection, onWatchConfirm, isSavingWatch]);
+  }, [watchDraftCommitted, watchDirection, onWatchConfirm, onUpdateWatchZone, editingZoneId, isSavingWatch]);
+
+  // Delete affordance on each drawn watch zone (the small trash button in
+  // its label overlay below) — confirms here since it's a generic "are you
+  // sure", then hands off to the caller's actual delete call.
+  const handleDeleteZonePress = useCallback((zone: ChartWatchZone) => {
+    if (!onDeleteWatchZone) return;
+    const priceLabel = zone.high === zone.low
+      ? `$${zone.high.toFixed(2)}`
+      : `$${zone.low.toFixed(2)}–$${zone.high.toFixed(2)}`;
+    Alert.alert(
+      'Delete watch zone?',
+      `This removes ${priceLabel} from ${zone.direction} watch. This can't be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => onDeleteWatchZone(zone.id) },
+      ],
+    );
+  }, [onDeleteWatchZone]);
 
   // Chart-body gestures — four distinct interactions, deliberately kept
   // from stepping on one another:
@@ -747,7 +958,16 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             const barsShift = (e.translationX / plotW) * curCount;
             let newStart = Math.round(st.start - barsShift);
             let newEnd = newStart + curCount - 1;
-            if (newStart < 0) { newEnd -= newStart; newStart = 0; }
+            // Hitting this means the drag is trying to reveal bars before
+            // index 0 — exactly the "pan past the left edge" moment to kick
+            // off loading an earlier day (see fetchEarlierDay). Guarded
+            // there against overlapping calls, so firing on every frame of
+            // a sustained past-the-edge drag is fine.
+            if (newStart < 0) {
+              newEnd -= newStart;
+              newStart = 0;
+              runOnJS(fetchEarlierDay)();
+            }
             if (newEnd > count - 1) { newStart -= newEnd - (count - 1); newEnd = count - 1; }
             newStart = Math.max(0, newStart);
             runOnJS(setXWindow)({ start: newStart, end: newEnd });
@@ -788,7 +1008,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           }
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [scale, visibleStart, visibleEnd, plotW, priceH, height, count, notifyScrub],
+    [scale, visibleStart, visibleEnd, plotW, priceH, height, count, notifyScrub, fetchEarlierDay],
   );
 
   // Two-finger pinch — zooms both axes together, centered on the pinch focal
@@ -954,6 +1174,61 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               </Text>
             </Pressable>
           )}
+          {/* Only rendered when there's actually session-line data to show —
+              same "don't render a button with nothing to do" rule as Watch
+              above. Off by default (showSessionLines starts false). */}
+          {sessionReferenceLines && sessionReferenceLines.length > 0 && (
+            <Pressable
+              onPress={() => setShowSessionLines(v => !v)}
+              hitSlop={6}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 3,
+                paddingHorizontal: 8,
+                height: 26,
+                borderRadius: 8,
+                backgroundColor: showSessionLines ? colors.accent + '22' : 'transparent',
+              }}
+            >
+              <Ionicons
+                name={showSessionLines ? 'partly-sunny' : 'partly-sunny-outline'}
+                size={14}
+                color={showSessionLines ? colors.accent : colors.textTertiary}
+              />
+              <Text style={{ fontSize: 11, fontWeight: '700', color: showSessionLines ? colors.accent : colors.textTertiary }}>
+                Sessions
+              </Text>
+            </Pressable>
+          )}
+          {/* Show/hide watched zones (key levels) — ON by default, so this
+              only appears once there's actually a zone to hide. Lets a
+              ticker's raw price action be viewed without the level overlay,
+              without having to delete the level to get there. */}
+          {watchZones && watchZones.length > 0 && (
+            <Pressable
+              onPress={() => setShowWatchZones(!showWatchZones)}
+              hitSlop={6}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 3,
+                paddingHorizontal: 8,
+                height: 26,
+                borderRadius: 8,
+                backgroundColor: showWatchZones ? colors.accent + '22' : 'transparent',
+              }}
+            >
+              <Ionicons
+                name={showWatchZones ? 'layers' : 'layers-outline'}
+                size={14}
+                color={showWatchZones ? colors.accent : colors.textTertiary}
+              />
+              <Text style={{ fontSize: 11, fontWeight: '700', color: showWatchZones ? colors.accent : colors.textTertiary }}>
+                Levels
+              </Text>
+            </Pressable>
+          )}
           {isZoomed && (
             <Pressable
               onPress={resetZoom}
@@ -974,8 +1249,10 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           )}
         </View>
         {watchMode && !watchDraftPx && !watchDraftCommitted ? (
-          <Text style={{ color: colors.accent, fontSize: 11.5, fontWeight: '600' }}>
-            Long-press &amp; drag to mark a level
+          <Text style={{ color: colors.accent, fontSize: 11.5, fontWeight: '600' }} numberOfLines={1}>
+            {onUpdateWatchZone
+              ? 'Long-press & drag to mark a level · tap an existing one to edit'
+              : 'Long-press & drag to mark a level'}
           </Text>
         ) : labelText && !watchMode ? (
           <Text style={{ color: colors.textTertiary, fontSize: 12, fontWeight: '500' }}>{labelText}</Text>
@@ -1108,7 +1385,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               {/* Reference lines — e.g. entry/TP1/TP2/stop for a simulation
                   or live position. Dashed + left-anchored labels, distinct
                   from the ORB band's solid lines + right-anchored pills. */}
-              {referenceLines?.map((line) => {
+              {effectiveReferenceLines.map((line) => {
                 const y = scale.yForPrice(line.price);
                 const color = line.color ?? colors.textSecondary;
                 return (
@@ -1127,8 +1404,9 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               })}
 
               {/* Existing watched zones — shaded band, dashed while still
-                  'watching', solid once 'confirmed'. */}
-              {watchZones?.map((z) => {
+                  'watching', solid once 'confirmed'. Hidden entirely when
+                  showWatchZones is off (toolbar toggle, default on). */}
+              {effectiveWatchZones?.map((z) => {
                 const color = z.direction === 'either' ? colors.accent : z.direction === 'bullish' ? colors.success : colors.error;
                 const yHigh = scale.yForPrice(z.high);
                 const yLow = scale.yForPrice(z.low);
@@ -1188,7 +1466,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               ) : (
                 visibleIndices.map((i) => {
                   const close = ePrices[i];
-                  const open = data!.opens![i];
+                  const open = chartData!.opens![i];
                   const up = close >= open;
                   const color = up ? colors.success : colors.error;
                   const x = scale.xForIndex(i);
@@ -1238,7 +1516,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                 visibleIndices.map((i) => {
                   const v = volumes[i] ?? 0;
                   const h = Math.max(1, (v / scale.maxVolume) * VOL_H);
-                  const up = hasOhlc ? ePrices[i] >= data!.opens![i] : i === 0 || ePrices[i] >= ePrices[i - 1];
+                  const up = hasOhlc ? ePrices[i] >= chartData!.opens![i] : i === 0 || ePrices[i] >= ePrices[i - 1];
                   return (
                     <Rect
                       key={`v-${i}`}
@@ -1252,8 +1530,19 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                   );
                 })}
 
-              {/* Last/live price: dotted line + tag in the y-axis gutter */}
-              {lastPrice != null && lastPrice >= scale.lo && lastPrice <= scale.hi && (
+              {/* Last/live price: dotted line + a single tag in the y-axis
+                  gutter that holds BOTH the price and the next-candle
+                  countdown — one bordered/filled pill, not a separate
+                  floating label underneath it. Taller when the countdown is
+                  present (1D only), clamped so it can't overflow past the
+                  bottom of the chart when price sits near the low. */}
+              {lastPrice != null && lastPrice >= scale.lo && lastPrice <= scale.hi && (() => {
+                const tagH = candleCountdownLabel ? 30 : 18;
+                const tagY = Math.min(
+                  scale.yForPrice(lastPrice) - tagH / 2,
+                  volTop + VOL_H - 2 - tagH,
+                );
+                return (
                 <>
                   <Line
                     x1={0} x2={plotW}
@@ -1261,29 +1550,26 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                     stroke={lastPriceColor} strokeWidth={1} strokeDasharray="2,3"
                   />
                   <Rect
-                    x={plotW + 2} y={scale.yForPrice(lastPrice) - 9}
-                    width={Y_AXIS_W - 4} height={18} rx={4} fill={lastPriceColor}
+                    x={plotW + 2} y={tagY}
+                    width={Y_AXIS_W - 4} height={tagH} rx={4} fill={lastPriceColor}
                   />
                   <SvgText
-                    x={plotW + Y_AXIS_W / 2} y={scale.yForPrice(lastPrice) + 3.5}
+                    x={plotW + Y_AXIS_W / 2} y={tagY + (candleCountdownLabel ? 13 : 12.5)}
                     fill="#FFFFFF" fontSize={10} fontWeight="700" textAnchor="middle"
                   >
                     {formatAxisPrice(lastPrice)}
                   </SvgText>
-                  {/* Countdown to the next 5-min candle, just below the
-                      last-price tag — clamped so it can't overflow past the
-                      bottom of the chart when price sits near the low. */}
                   {candleCountdownLabel && (
                     <SvgText
-                      x={plotW + Y_AXIS_W / 2}
-                      y={Math.min(scale.yForPrice(lastPrice) + 20, volTop + VOL_H - 2)}
-                      fill={colors.textTertiary} fontSize={9} fontWeight="600" textAnchor="middle"
+                      x={plotW + Y_AXIS_W / 2} y={tagY + 25}
+                      fill="#FFFFFF" fillOpacity={0.85} fontSize={9} fontWeight="600" textAnchor="middle"
                     >
                       {candleCountdownLabel}
                     </SvgText>
                   )}
                 </>
-              )}
+                );
+              })()}
 
               {/* X-axis label strip — an opaque backing drawn OVER the candles/
                   volume/gridlines above (not before them), so wicks and volume
@@ -1417,9 +1703,10 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                 })}
               </View>
               <Text style={{ flex: 1, fontSize: 12.5, fontWeight: '700', color: colors.text }} numberOfLines={1}>
+                {editingZoneId ? 'Edit ' : 'Watch '}
                 {watchDraftCommitted.high - watchDraftCommitted.low < 0.005
-                  ? `Watch $${formatAxisPrice(watchDraftCommitted.high)}`
-                  : `Watch $${formatAxisPrice(watchDraftCommitted.low)}–$${formatAxisPrice(watchDraftCommitted.high)}`}
+                  ? `$${formatAxisPrice(watchDraftCommitted.high)}`
+                  : `$${formatAxisPrice(watchDraftCommitted.low)}–$${formatAxisPrice(watchDraftCommitted.high)}`}
               </Text>
               <Pressable onPress={cancelWatchDraft} disabled={isSavingWatch} hitSlop={6} style={{ padding: 6, opacity: isSavingWatch ? 0.4 : 1 }}>
                 <Ionicons name="close" size={18} color={colors.textTertiary} />
@@ -1440,7 +1727,9 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                 ) : (
                   <>
                     <Ionicons name="checkmark" size={14} color={colors.accentForeground} />
-                    <Text style={{ fontSize: 12.5, fontWeight: '700', color: colors.accentForeground }}>Watch</Text>
+                    <Text style={{ fontSize: 12.5, fontWeight: '700', color: colors.accentForeground }}>
+                      {editingZoneId ? 'Update' : 'Watch'}
+                    </Text>
                   </>
                 )}
               </Pressable>
@@ -1459,6 +1748,66 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             )}
           </View>
         )}
+
+        {/* Per-zone label (+ edit/delete once in Watch mode) — a real RN
+            touch target layered over the SVG canvas (raw SVG shapes aren't
+            reliably tappable across platforms), so it's a plain absolutely-
+            positioned sibling here rather than drawn inside <Svg>. Hidden
+            along with the zones themselves when showWatchZones is off.
+            Edit/delete only appear while watchMode is on — Levels stays a
+            pure viewing toggle; Watch is what turns this chart editable. */}
+        {showWatchZones && scale && effectiveWatchZones?.map((z) => {
+          const color = z.direction === 'either' ? colors.accent : z.direction === 'bullish' ? colors.success : colors.error;
+          const yHigh = scale!.yForPrice(z.high);
+          const label = z.high === z.low
+            ? `$${formatAxisPrice(z.high)}`
+            : `$${formatAxisPrice(z.low)}–$${formatAxisPrice(z.high)}`;
+          const editable = watchMode && !!onUpdateWatchZone;
+          return (
+            <View
+              key={`zone-label-${z.id}`}
+              pointerEvents="box-none"
+              style={{
+                position: 'absolute',
+                top: Math.max(0, yHigh - 20),
+                left: 6, right: Y_AXIS_W + 4,
+                flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+              }}
+            >
+              <Pressable
+                onPress={editable ? () => handleEditZonePress(z) : undefined}
+                disabled={!editable}
+                style={{
+                  flexDirection: 'row', alignItems: 'center', gap: 4,
+                  backgroundColor: colors.background + 'D9', borderRadius: 5,
+                  paddingHorizontal: 5, paddingVertical: 2,
+                  borderWidth: 1, borderColor: color + '55',
+                }}
+              >
+                <Ionicons
+                  name={z.direction === 'either' ? 'swap-vertical' : z.direction === 'bullish' ? 'trending-up' : 'trending-down'}
+                  size={10} color={color}
+                />
+                <Text style={{ fontSize: 10, fontWeight: '700', color }}>{label}</Text>
+                {editable && <Ionicons name="create-outline" size={10} color={color} />}
+              </Pressable>
+              {onDeleteWatchZone && watchMode && (
+                <Pressable
+                  onPress={() => handleDeleteZonePress(z)}
+                  hitSlop={8}
+                  style={{
+                    width: 22, height: 22, borderRadius: 11,
+                    alignItems: 'center', justifyContent: 'center',
+                    backgroundColor: colors.background + 'D9',
+                    borderWidth: 1, borderColor: colors.error + '55',
+                  }}
+                >
+                  <Ionicons name="trash-outline" size={12} color={colors.error} />
+                </Pressable>
+              )}
+            </View>
+          );
+        })}
       </View>
 
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>

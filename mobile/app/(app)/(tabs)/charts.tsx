@@ -27,6 +27,8 @@ import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useToast } from '@/common/components/ui/Toast';
 import { useKeyLevels } from '@/hooks/queries/priceLevels/useKeyLevels';
 import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
+import { useCancelKeyLevel } from '@/hooks/mutations/priceLevels/useCancelKeyLevel';
+import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLevel';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -258,6 +260,39 @@ export default function ChartsScreen() {
     }
   };
 
+  // Delete a watch zone straight from the chart — AdvancedPriceChart already
+  // confirmed with the user via its own Alert; this just does the actual
+  // cancel (same soft-delete useCancelKeyLevel/KeyLevelsList.tsx uses).
+  const { mutate: cancelKeyLevel } = useCancelKeyLevel();
+  const handleDeleteWatchZone = (zoneId: string) => {
+    cancelKeyLevel(zoneId, {
+      onSuccess: () => toast.info('Watch zone removed'),
+      onError: (e: Error) => toast.error(e.message || 'Failed to remove the watch level'),
+    });
+  };
+
+  const { mutateAsync: updateKeyLevel } = useUpdateKeyLevel();
+  const handleUpdateWatchZone = async (zoneId: string, draft: ChartWatchDraft): Promise<boolean> => {
+    if (!user?.id) {
+      toast.error('Not authenticated');
+      return false;
+    }
+    try {
+      await updateKeyLevel({
+        levelId: zoneId,
+        userId: user.id,
+        direction: draft.direction,
+        levelLow: draft.low,
+        levelHigh: draft.high,
+      });
+      toast.success('Watch zone updated');
+      return true;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to update the watch level');
+      return false;
+    }
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
       {/* Identity header — swipe left/right to cycle tickers; tap the ticker
@@ -330,6 +365,7 @@ export default function ChartsScreen() {
           <AdvancedPriceChart
             key={activeTicker}
             data={historyData}
+            ticker={activeTicker}
             isLoading={historyLoading || historyIsStale}
             period={period}
             onPeriodChange={setPeriod}
@@ -340,8 +376,10 @@ export default function ChartsScreen() {
             livePrice={resolvedLivePrice ?? null}
             watchZones={chartWatchZones}
             onWatchConfirm={handleWatchConfirm}
+            onDeleteWatchZone={handleDeleteWatchZone}
+            onUpdateWatchZone={handleUpdateWatchZone}
             resetKey={activeTicker}
-            referenceLines={sessionReferenceLines}
+            sessionReferenceLines={sessionReferenceLines}
           />
         )}
       </View>

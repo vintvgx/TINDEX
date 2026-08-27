@@ -50,3 +50,12 @@ export interface CreatePriceLevelRequest {
   notes?: string;
   namedContracts?: NamedContract[];
 }
+
+/** At least one of levelLow/levelHigh/direction must be present — ticker/
+ *  source/status aren't editable via this route (see PATCH /price-levels/<id>). */
+export interface UpdatePriceLevelRequest {
+  userId: string;
+  levelLow?: number;
+  levelHigh?: number;
+  direction?: LevelDirection;
+}

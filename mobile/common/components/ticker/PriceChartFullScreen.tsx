@@ -19,6 +19,8 @@ import { LiveTradesTickerTape } from '@/common/components/ticker/LiveTradesTicke
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useKeyLevels } from '@/hooks/queries/priceLevels/useKeyLevels';
 import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
+import { useCancelKeyLevel } from '@/hooks/mutations/priceLevels/useCancelKeyLevel';
+import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLevel';
 
 interface PriceChartFullScreenProps {
   visible: boolean;
@@ -122,10 +124,11 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
     : null;
 
   // Extended-hours session boundary lines (Pre-Market/Market Close/
-  // Post-Market/Overnight) — 1D only, only once each session has actually
-  // concluded (see yfinance_service._session_boundary_lines). Merged with
-  // srReferenceLines below rather than replacing it — S/R and session lines
-  // are independent, both optional overlays on the same chart.
+  // Post-Market/Overnight) — 1D only, only outside regular trading hours
+  // (see yfinance_service._session_boundary_lines). Passed to
+  // AdvancedPriceChart via its own dedicated prop, not merged into
+  // referenceLines — the component owns its own show/hide toggle for these
+  // (default off), independent of the S/R toggle below.
   const sessionLines = historyData?.session_lines;
   const sessionReferenceLines: ChartReferenceLine[] | null = (() => {
     if (period !== '1D' || !sessionLines) return null;
@@ -148,7 +151,6 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   const combinedReferenceLines: ChartReferenceLine[] | null = (() => {
     const lines = [
       ...(showSR && srReferenceLines ? srReferenceLines : []),
-      ...(sessionReferenceLines ?? []),
     ];
     return lines.length ? lines : null;
   })();
@@ -207,6 +209,39 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
       return true;
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to save the watch level');
+      return false;
+    }
+  };
+
+  // Delete a watch zone straight from the chart — AdvancedPriceChart already
+  // confirmed with the user via its own Alert; this just does the actual
+  // cancel (same soft-delete useCancelKeyLevel/KeyLevelsList.tsx uses).
+  const { mutate: cancelKeyLevel } = useCancelKeyLevel();
+  const handleDeleteWatchZone = (zoneId: string) => {
+    cancelKeyLevel(zoneId, {
+      onSuccess: () => toast.info('Watch zone removed'),
+      onError: (e: Error) => toast.error(e.message || 'Failed to remove the watch level'),
+    });
+  };
+
+  const { mutateAsync: updateKeyLevel } = useUpdateKeyLevel();
+  const handleUpdateWatchZone = async (zoneId: string, draft: ChartWatchDraft): Promise<boolean> => {
+    if (!user?.id) {
+      toast.error('Not authenticated');
+      return false;
+    }
+    try {
+      await updateKeyLevel({
+        levelId: zoneId,
+        userId: user.id,
+        direction: draft.direction,
+        levelLow: draft.low,
+        levelHigh: draft.high,
+      });
+      toast.success('Watch zone updated');
+      return true;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to update the watch level');
       return false;
     }
   };
@@ -366,6 +401,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
           </View>
           <AdvancedPriceChart
             data={historyData}
+            ticker={ticker}
             isLoading={historyLoading}
             period={period}
             onPeriodChange={onPeriodChange}
@@ -376,8 +412,11 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             showOrbRange
             livePrice={visible ? resolvedLivePrice ?? null : null}
             referenceLines={combinedReferenceLines}
+            sessionReferenceLines={sessionReferenceLines}
             watchZones={chartWatchZones}
             onWatchConfirm={handleWatchConfirm}
+            onDeleteWatchZone={handleDeleteWatchZone}
+            onUpdateWatchZone={handleUpdateWatchZone}
             resetKey={ticker}
           />
 

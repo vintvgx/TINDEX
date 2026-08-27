@@ -119,6 +119,85 @@ def list_price_levels():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@bp.route("/price-levels/<level_id>", methods=["PATCH"])
+def update_price_level(level_id: str):
+    """
+    Modify an existing level's bounds/direction in place (e.g. dragged to
+    new bounds from the chart's Watch-mode edit flow) — as opposed to
+    DELETE, which retires it entirely. Ticker/source/status aren't editable
+    here; a level that's moved to a different ticker is really a new level.
+
+    Body: { userId, levelLow?, levelHigh?, direction? } — at least one of
+    levelLow/levelHigh/direction must be present.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        user_id = data.get("userId")
+        if not user_id:
+            return jsonify({"success": False, "error": "userId is required"}), 400
+
+        service = get_supabase_service()
+        service.verify_user(user_id=user_id)
+
+        update: dict = {}
+
+        if "direction" in data:
+            direction = data.get("direction")
+            if direction not in ("bullish", "bearish", "either"):
+                return jsonify({"success": False, "error": "direction must be 'bullish', 'bearish', or 'either'"}), 400
+            update["direction"] = direction
+
+        if "levelLow" in data or "levelHigh" in data:
+            existing = (
+                service.client.table("watched_price_levels")
+                .select("level_low, level_high")
+                .eq("id", level_id).eq("user_id", user_id)
+                .execute()
+            )
+            if not existing.data:
+                return jsonify({"success": False, "error": "Price level not found"}), 404
+            current = existing.data[0]
+
+            try:
+                level_low = float(data["levelLow"]) if data.get("levelLow") is not None else float(current["level_low"])
+                level_high = float(data["levelHigh"]) if data.get("levelHigh") is not None else float(current["level_high"])
+            except (TypeError, ValueError):
+                return jsonify({"success": False, "error": "levelLow/levelHigh must be numbers"}), 400
+            if level_low <= 0 or level_high <= 0:
+                return jsonify({"success": False, "error": "levelLow/levelHigh must be positive"}), 400
+            if level_high < level_low:
+                level_low, level_high = level_high, level_low
+            update["level_low"] = level_low
+            update["level_high"] = level_high
+
+        if not update:
+            return jsonify({"success": False, "error": "Nothing to update — pass levelLow, levelHigh, and/or direction"}), 400
+
+        result = (
+            service.client.table("watched_price_levels")
+            .update(update)
+            .eq("id", level_id).eq("user_id", user_id)
+            .execute()
+        )
+        if not result.data:
+            return jsonify({"success": False, "error": "Price level not found"}), 404
+        updated = result.data[0]
+
+        # Refresh the in-memory watcher with the new bounds/direction —
+        # watch_level() is keyed by id and idempotent, so calling it again
+        # simply overwrites the stale entry rather than needing a separate
+        # "update" method on the watcher.
+        if updated.get("status") == "watching":
+            from services.strategy.key_level_watcher import get_key_level_watcher
+            get_key_level_watcher().watch_level(updated)
+
+        return jsonify({"success": True, "data": updated})
+
+    except Exception as e:
+        logger.error("Failed to update price level %s: %s", level_id, e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @bp.route("/price-levels/<level_id>", methods=["DELETE"])
 def delete_price_level(level_id: str):
     """Cancels a level. Soft-delete (status='cancelled') rather than a row
