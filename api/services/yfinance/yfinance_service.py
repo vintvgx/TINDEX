@@ -89,7 +89,13 @@ def get_historical_prices(ticker: str, period_key: str) -> dict:
         Dict with "dates", "prices" (closes), "volumes", plus "opens"/"highs"/"lows"
         so the mobile chart can render candlesticks (empty lists on failure).
         1D responses also include "session_lines" (pre/market/post-market
-        boundary prices) once available — see _session_boundary_lines.
+        boundary prices) — see _session_boundary_lines — but ONLY while the
+        request itself lands outside regular trading hours (before 09:30 or
+        at/after 16:00 ET). TradingView doesn't show pre-market/overnight
+        context while the regular session is live (the live price already
+        covers "now" then) — omitted entirely during regular hours rather
+        than computed and left for the mobile client to hide, so there's one
+        source of truth for "is this relevant right now" (2026-08-27 fix).
     """
     period, interval = PERIOD_MAP.get(period_key, PERIOD_MAP["1M"])
     # Extended-hours bars only requested for 1D — that's the only period
@@ -123,12 +129,23 @@ def get_historical_prices(ticker: str, period_key: str) -> dict:
         "lows": _col("Low"),
     }
 
-    if prepost:
+    if prepost and not _is_regular_trading_hours():
         session_lines = _session_boundary_lines(hist)
         if session_lines:
             result["session_lines"] = session_lines
 
     return result
+
+
+def _is_regular_trading_hours(now_et: "datetime | None" = None) -> bool:
+    """True Mon-Fri 09:30-16:00 ET. Weekday-only is good enough here — the
+    only cost of missing a holiday is session_lines staying suppressed on a
+    day the market was never open anyway, which is harmless."""
+    now_et = now_et or datetime.now(ET)
+    if now_et.weekday() >= 5:
+        return False
+    minutes = now_et.hour * 60 + now_et.minute
+    return 9 * 60 + 30 <= minutes < 16 * 60
 
 
 def get_intraday_chart_for_date(ticker: str, date_str: str, interval: str = "5m") -> dict:

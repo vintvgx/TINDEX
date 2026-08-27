@@ -344,6 +344,26 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // ORB band only means anything on the trading day it was computed for.
   const orbVisible = !!(showOrbRange && orbRange && period === '1D');
 
+  // Index of the first regular-session (09:30 ET) bar — the ORB band must
+  // start there, not at index 0. On 1D with extended-hours bars now mixed
+  // in (see yfinance_service._session_boundary_lines), index 0 is 04:00 ET
+  // pre-market, not the open; drawing the band from x=0 would visually
+  // stretch it across the entire pre-market session even though orbRange's
+  // own high/low are still correctly computed from only the 09:30-09:45
+  // window (2026-08-27 fix).
+  const regularSessionStartIndex = useMemo(() => {
+    if (!orbVisible || !data?.dates?.length) return 0;
+    for (let i = 0; i < data.dates.length; i++) {
+      const d = new Date(data.dates[i]);
+      const parts = d.toLocaleString('en-US', {
+        timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
+      });
+      const [hh, mm] = parts.split(':').map(Number);
+      if (hh * 60 + mm >= 9 * 60 + 30) return i;
+    }
+    return 0;
+  }, [orbVisible, data?.dates]);
+
   const scale = useMemo(() => {
     if (!hasData) return null;
 
@@ -1026,29 +1046,35 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                 );
               })}
 
-              {/* ORB band — shaded box between ORH/ORL like the TradingView overlay */}
-              {orbVisible && orbRange && (
+              {/* ORB band — shaded box between ORH/ORL like the TradingView overlay.
+                  Starts at the 09:30 ET bar (orbBandX), not the chart's left
+                  edge — see regularSessionStartIndex's doc comment. Clamped
+                  to 0 so zooming into a later part of the day (09:30 bar
+                  scrolled out of view to the left) doesn't push it negative. */}
+              {orbVisible && orbRange && (() => {
+                const orbBandX = Math.max(0, scale.xForIndex(regularSessionStartIndex));
+                return (
                 <>
                   <Rect
-                    x={0}
+                    x={orbBandX}
                     y={scale.yForPrice(orbRange.high)}
-                    width={plotW}
+                    width={Math.max(0, plotW - orbBandX)}
                     height={Math.max(0, scale.yForPrice(orbRange.low) - scale.yForPrice(orbRange.high))}
                     fill={colors.error}
                     opacity={0.08}
                   />
                   <Line
-                    x1={0} x2={plotW}
+                    x1={orbBandX} x2={plotW}
                     y1={scale.yForPrice(orbRange.high)} y2={scale.yForPrice(orbRange.high)}
                     stroke={colors.success} strokeWidth={1.25}
                   />
                   <Line
-                    x1={0} x2={plotW}
+                    x1={orbBandX} x2={plotW}
                     y1={scale.yForPrice(orbRange.low)} y2={scale.yForPrice(orbRange.low)}
                     stroke={colors.error} strokeWidth={1.25}
                   />
                   <Line
-                    x1={0} x2={plotW}
+                    x1={orbBandX} x2={plotW}
                     y1={scale.yForPrice((orbRange.high + orbRange.low) / 2)}
                     y2={scale.yForPrice((orbRange.high + orbRange.low) / 2)}
                     stroke={colors.textTertiary} strokeWidth={1} strokeDasharray="5,5" opacity={0.6}
@@ -1076,7 +1102,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                     {`ORL ${orbRange.low.toFixed(2)}`}
                   </SvgText>
                 </>
-              )}
+                );
+              })()}
 
               {/* Reference lines — e.g. entry/TP1/TP2/stop for a simulation
                   or live position. Dashed + left-anchored labels, distinct

@@ -305,14 +305,18 @@ class ORBEngine:
             self.stream_manager.unsubscribe(self.contract_symbol, self._on_stream_quote)
         self._reset_session_state()
 
-    # ── Step 1: Called at 9:35 AM ET ──────────────────────────────────────────
+    # ── Step 1: Called at 9:46 AM ET ──────────────────────────────────────────
 
     def calculate_orb(self) -> bool:
         """
-        Fetch the opening-range bars, compute ORH/ORL/Fibonacci levels, and run
+        Fetch the opening-range bar, compute ORH/ORL/Fibonacci levels, and run
         all sentiment filters (VIX, macro events, premarket gap).
 
-        NOTE: Called by the APScheduler cron job at 09:35 ET (scheduler.py).
+        NOTE: Called by the APScheduler cron job one minute after the 09:30-
+        09:45 window closes (scheduler.py computes this as orb_fire_hour/
+        orb_fire_minute — currently 09:46 for the default 15-minute window;
+        stale as "09:35" here previously, which predates that fire-time-past-
+        the-window-close logic).
         Returns True when the session is cleared for trading; False when skipped.
         """
         now_et = datetime.now(ET)
@@ -2897,7 +2901,12 @@ class ORBEngine:
                     feed="iex",
                 )
                 resp = self.stock_client.get_stock_bars(req)
-                raw_bars = resp.get(self.ticker, [])
+                # resp is a BarSet — a pydantic BaseModel, NOT a dict. It has
+                # no .get() (that raised AttributeError on every attempt,
+                # confirmed against the installed alpaca-py locally); index
+                # into its underlying .data dict instead, which is a real
+                # dict and supports .get() properly.
+                raw_bars = resp.data.get(self.ticker, [])
                 if raw_bars:
                     rb = raw_bars[0]
                     if rb.high is not None and rb.low is not None:
@@ -2916,6 +2925,13 @@ class ORBEngine:
             except Exception as e:
                 logger.error("[ORBEngine] Opening-range bar fetch failed for %s (attempt %d/%d): %s",
                              self.ticker, attempt, max_attempts, e)
+                # Also surfaced to the mobile Debug tab (logger.error above
+                # only reaches Railway's own logs) — an exception here was
+                # previously invisible short of pulling raw server logs,
+                # which is exactly how the resp.get() AttributeError bug
+                # (2026-08-26) went undetected for two full trading days.
+                self.debug.emit("WARN", f"Opening-range bar fetch attempt {attempt}/{max_attempts} "
+                                        f"raised {type(e).__name__}: {e}")
 
             if attempt < max_attempts:
                 time.sleep(2)
