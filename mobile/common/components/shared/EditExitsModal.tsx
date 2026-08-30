@@ -36,6 +36,10 @@ export interface CurrentExits {
    *  ExitManager.to_dict(). */
   runner_mode?: 'trail' | 'be_hold' | 'none';
   cascade_enabled?: boolean;
+  /** Whether the hard stop-loss / TP1+TP2 exits are currently active for
+   *  this trade — see ExitManager.to_dict(). Defaults true when absent. */
+  sl_enabled?: boolean;
+  tp_enabled?: boolean;
 }
 
 interface Props {
@@ -55,6 +59,8 @@ interface Props {
     sl_grace_minutes?: number | null;
     runner_mode?: 'trail' | 'be_hold' | 'none';
     cascade_enabled?: boolean;
+    sl_enabled?: boolean;
+    tp_enabled?: boolean;
   }) => Promise<void>;
   isLoading?: boolean;
   /** Whether this position is currently hidden from the Dashboard/Live
@@ -111,6 +117,13 @@ export function EditExitsModal({
   const [cascadeEnabledVal, setCascadeEnabledVal] = useState(true);
   const initialRunnerRef = useRef<{ mode: 'trail' | 'be_hold' | 'none'; cascade: boolean }>({ mode: 'trail', cascade: true });
 
+  // SL/TP enable — lets a runner run its course (or hold into close) on an
+  // already-open position, same convention as the entry-time toggle. Default
+  // true whenever `current` doesn't say otherwise (older cached data).
+  const [slEnabledVal, setSlEnabledVal] = useState(true);
+  const [tpEnabledVal, setTpEnabledVal] = useState(true);
+  const initialEnabledRef = useRef<{ sl: boolean; tp: boolean }>({ sl: true, tp: true });
+
   // TP2 is unreachable for this trade (1-contract entry, or a profile that
   // opts out, e.g. NO_STOP_LOSS's sentinel 999x-entry tp1/tp2) — its section
   // is never rendered (see below), so it must never be pre-filled or
@@ -144,6 +157,11 @@ export function EditExitsModal({
       setRunnerModeVal(startRunnerMode);
       setCascadeEnabledVal(startCascade);
       initialRunnerRef.current = { mode: startRunnerMode, cascade: startCascade };
+      const startSl = current.sl_enabled !== false;
+      const startTp = current.tp_enabled !== false;
+      setSlEnabledVal(startSl);
+      setTpEnabledVal(startTp);
+      initialEnabledRef.current = { sl: startSl, tp: startTp };
     }
     wasVisibleRef.current = visible;
   }, [visible, current]);
@@ -193,6 +211,21 @@ export function EditExitsModal({
       }
     }
 
+    // Turning Stop Loss/Take Profit back ON needs a real, reachable price —
+    // either typed in this same edit, or already set from before it was
+    // disabled (backend re-validates this too, see ExitManager.apply_
+    // overrides, but catching it here avoids a round-trip for the common case).
+    const slChanged = slEnabledVal !== initialEnabledRef.current.sl;
+    const tpChanged = tpEnabledVal !== initialEnabledRef.current.tp;
+    if (slChanged && slEnabledVal && stop === undefined && !(current.hard_stop > 0)) {
+      Alert.alert('Stop Loss Price Required', 'Enter a stop-loss price to turn Stop Loss back on.');
+      return;
+    }
+    if (tpChanged && tpEnabledVal && tp1 === undefined && !(current.tp1 > entry)) {
+      Alert.alert('Take Profit Price Required', 'Enter a TP1 price to turn Take Profit back on.');
+      return;
+    }
+
     const payload: Parameters<typeof onSubmit>[0] = {};
     if (stop !== undefined && !isNaN(stop)) payload.hard_stop = stop;
     if (tp1 !== undefined && !isNaN(tp1)) payload.tp1 = tp1;
@@ -200,6 +233,8 @@ export function EditExitsModal({
     if (slQty !== undefined) payload.sl_qty = slQty;
     if (tp1Qty !== undefined) payload.tp1_qty = tp1Qty;
     if (tp2Editable && tp2Qty !== undefined) payload.tp2_qty = tp2Qty;
+    if (slChanged) payload.sl_enabled = slEnabledVal;
+    if (tpChanged) payload.tp_enabled = tpEnabledVal;
 
     // Only send sl_grace_minutes if the stop type actually changed from what
     // it was when the sheet opened — same "sparse payload" convention as
@@ -353,10 +388,31 @@ export function EditExitsModal({
           </View>
 
           {/* Stop Loss */}
-          <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 10 }}>
-            STOP LOSS
-          </Text>
-          <View style={{ backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: colors.border, gap: 12 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8 }}>
+              STOP LOSS
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>
+                {slEnabledVal ? 'Enabled' : 'Disabled'}
+              </Text>
+              <Switch
+                value={slEnabledVal}
+                onValueChange={setSlEnabledVal}
+                trackColor={{ false: colors.border, true: '#FF453A55' }}
+                thumbColor={slEnabledVal ? '#FF453A' : undefined}
+              />
+            </View>
+          </View>
+          <View style={{
+            backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20,
+            borderWidth: 1, borderColor: colors.border, gap: 12, opacity: slEnabledVal ? 1 : 0.5,
+          }}>
+            {!slEnabledVal && (
+              <Text style={{ color: colors.textSecondary, fontSize: 12, lineHeight: 16 }}>
+                No stop loss — this runner rides its own course, including into close. Set a price below and toggle back on any time.
+              </Text>
+            )}
             <View>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
                 <Text style={{ color: colors.textSecondary, fontSize: 12 }}>Current: ${current.hard_stop.toFixed(2)}</Text>
@@ -400,15 +456,37 @@ export function EditExitsModal({
             )}
           </View>
 
-          {/* TP1 */}
-          <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8, marginBottom: 10 }}>
-            TAKE PROFIT 1{current.tp1_hit ? '  ✓ HIT' : ''}
-          </Text>
+          {/* TP1 — the enable toggle here governs Take Profit as a whole
+              (TP1 + TP2 both), same convention as the entry-time toggle:
+              TP2 can never fire without TP1 first, so one flag covers both. */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', letterSpacing: 0.8 }}>
+              TAKE PROFIT{current.tp1_hit ? '  ✓ TP1 HIT' : ''}
+            </Text>
+            {!current.tp1_hit && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>
+                  {tpEnabledVal ? 'Enabled' : 'Disabled'}
+                </Text>
+                <Switch
+                  value={tpEnabledVal}
+                  onValueChange={setTpEnabledVal}
+                  trackColor={{ false: colors.border, true: '#10B98155' }}
+                  thumbColor={tpEnabledVal ? '#10B981' : undefined}
+                />
+              </View>
+            )}
+          </View>
           <View style={{
             backgroundColor: colors.surface, borderRadius: 12, padding: 14, marginBottom: 20, gap: 12,
             borderWidth: 1, borderColor: current.tp1_hit ? '#10B98133' : colors.border,
-            opacity: current.tp1_hit ? 0.6 : 1,
+            opacity: current.tp1_hit ? 0.6 : (tpEnabledVal ? 1 : 0.5),
           }}>
+            {!tpEnabledVal && !current.tp1_hit && (
+              <Text style={{ color: colors.textSecondary, fontSize: 12, lineHeight: 16 }}>
+                No take profit — this runner rides its own course, including into close. Set a TP1 price below and toggle back on any time.
+              </Text>
+            )}
             <View>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
                 <Text style={{ color: colors.textSecondary, fontSize: 12 }}>Current: ${current.tp1.toFixed(2)}</Text>

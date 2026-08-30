@@ -829,12 +829,14 @@ def update_strategy_exits(strategy_id: str):
     """
     Update the live ExitManager's stop-loss and/or TP levels mid-trade.
     Body: { hard_stop?, tp1?, tp2?, sl_qty?, tp1_qty?, tp2_qty?, sl_grace_minutes?,
-            runner_mode?, cascade_enabled? }
+            runner_mode?, cascade_enabled?, sl_enabled?, tp_enabled? }
     — all optional, only provided fields are changed. sl_qty/tp1_qty/tp2_qty
     are per-level contract counts; sl_grace_minutes is the stop-type choice
     (null = Hard Stop, 5/10/15 = SL timer); runner_mode is "trail"/"be_hold"/
-    "none"; cascade_enabled toggles cascade on/off for the rest of this trade
-    (see ExitManager.apply_overrides).
+    "none"; cascade_enabled toggles cascade on/off for the rest of this trade;
+    sl_enabled/tp_enabled let a runner run its course (or hold into close)
+    mid-trade — re-enabling either requires a real price in this same call
+    unless one's already set (see ExitManager.apply_overrides).
     Returns the updated exit state so the client can confirm the new levels.
     """
     engine = _resolve_any_engine(strategy_id)
@@ -854,6 +856,8 @@ def update_strategy_exits(strategy_id: str):
         "tp2_qty":   int(data["tp2_qty"]) if "tp2_qty" in data else None,
         "runner_mode":     data.get("runner_mode"),
         "cascade_enabled": data["cascade_enabled"] if "cascade_enabled" in data else None,
+        "sl_enabled": data["sl_enabled"] if "sl_enabled" in data else None,
+        "tp_enabled": data["tp_enabled"] if "tp_enabled" in data else None,
     }
     if "sl_grace_minutes" in data:
         raw = data["sl_grace_minutes"]

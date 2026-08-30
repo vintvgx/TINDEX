@@ -6,8 +6,7 @@ import { formatContractSymbolShort, getTradeHorizon } from '@/lib/formatContract
 import { isMarketHours } from '@/lib/marketHours';
 import { useCardTintDarkMode } from '@/hooks/useCardTintDarkMode';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
-import { PROFILE_EMOJI } from '@/common/components/strategy/PositionCard';
-import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
+import { PositionInfoModal } from '@/common/components/strategy/PositionInfoModal';
 import type { ProfileKey } from '@/common/types/strategy';
 import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 
@@ -52,6 +51,7 @@ interface LivePositionPanelProps {
   accentColor: string;
   strategyId: string;
   ticker: string;
+  direction?: 'CALL' | 'PUT';
   paperMode?: boolean;
   onExitPress: () => void;
   /** Opens the add-to-position (average down/up) modal. Omit to hide the button
@@ -82,7 +82,7 @@ interface LivePositionPanelProps {
  */
 export function LivePositionPanel({
   live, staticFallback, streaming, isMock, accentColor,
-  strategyId, ticker, paperMode, onExitPress, onAddPress, profile,
+  strategyId, ticker, direction, paperMode, onExitPress, onAddPress, profile,
   colors, patchData, hideKey,
 }: LivePositionPanelProps) {
   const isNoStopLoss = profile === 'NO_STOP_LOSS';
@@ -171,63 +171,59 @@ export function LivePositionPanel({
         },
       ]}
     >
-      {/* ── Header (tap anywhere to expand): status + contract | P&L | chart · chevron ── */}
+      {/* ── Header (tap anywhere to expand): status + contract | P&L · ⓘ · chevron ──
+          Kept deliberately minimal — profile info and the SWING/NO SL/NO TP
+          flags all moved into PositionInfoModal (via the ⓘ button) instead
+          of stacking badges here; only the status dot/label, contract, and
+          P&L stay always-visible. */}
       <TouchableOpacity onPress={toggleExpanded} activeOpacity={0.7} style={styles.liveHeaderRow}>
         <View style={styles.liveHeaderLeft}>
           <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
           <Text style={[styles.liveLabel, { color: statusColor }]}>{statusLabel}</Text>
-          {/* Profile badge — tap opens the same Profile Guide used elsewhere,
-              pre-jumped to this trade's profile via initialKey. */}
-          {!!profile && (
-            <TouchableOpacity
-              onPress={() => setInfoVisible(true)}
-              hitSlop={6}
-              activeOpacity={0.7}
-              style={styles.profileBadge}
-            >
-              <Text style={styles.profileEmoji}>{PROFILE_EMOJI[profile as ProfileKey] ?? '⚙️'}</Text>
-              <Ionicons name="information-circle-outline" size={13} color={colors.tabBarInactive} />
-            </TouchableOpacity>
-          )}
           {display && (
             <Text style={[styles.liveContract, { color: colors.text }]} numberOfLines={1}>
               {formatContractSymbolShort(display.contract)}
             </Text>
           )}
-          {display && getTradeHorizon(display.contract) === 'SWING' && (
-            <View style={[styles.swingBadge, { backgroundColor: '#A855F722' }]}>
-              <Text style={[styles.swingBadgeText, { color: '#A855F7' }]}>SWING</Text>
-            </View>
-          )}
+          {/* Compact icon-only flags — full "No Stop Loss"/"No Take Profit"
+              wording lives in the info modal; here it's just a glanceable
+              warning glyph so the header row doesn't turn back into a wall
+              of pill badges. */}
           {display && !slEnabled && (
-            <View style={[styles.swingBadge, { backgroundColor: colors.error + '22' }]}>
-              <Text style={[styles.swingBadgeText, { color: colors.error }]}>NO SL</Text>
-            </View>
+            <Ionicons name="shield-outline" size={13} color={colors.error} />
           )}
           {display && !tpEnabled && (
-            <View style={[styles.swingBadge, { backgroundColor: '#FF9F0A22' }]}>
-              <Text style={[styles.swingBadgeText, { color: '#FF9F0A' }]}>NO TP</Text>
-            </View>
+            <Ionicons name="flag-outline" size={13} color="#FF9F0A" />
           )}
         </View>
-        {display && (
-          <View style={styles.liveHeaderRight}>
-            <Text style={[styles.livePnlValue, { color: pnlColor }]}>
-              {display.pnl >= 0 ? '+' : ''}${display.pnl.toFixed(2)}
-            </Text>
-            <View style={[styles.pnlPctPill, { backgroundColor: pnlColor + '1A' }]}>
-              <Text style={[styles.pnlPctText, { color: pnlColor }]}>
-                {display.pnl_pct >= 0 ? '+' : ''}{display.pnl_pct.toFixed(1)}%
+        <View style={styles.liveHeaderRight}>
+          {display && (
+            <>
+              <Text style={[styles.livePnlValue, { color: pnlColor }]}>
+                {display.pnl >= 0 ? '+' : ''}${display.pnl.toFixed(2)}
               </Text>
-            </View>
-          </View>
-        )}
-        <Ionicons
-          name={expanded ? 'chevron-up' : 'chevron-down'}
-          size={14}
-          color={colors.tabBarInactive}
-          style={{ marginLeft: 10 }}
-        />
+              <View style={[styles.pnlPctPill, { backgroundColor: pnlColor + '1A' }]}>
+                <Text style={[styles.pnlPctText, { color: pnlColor }]}>
+                  {display.pnl_pct >= 0 ? '+' : ''}{display.pnl_pct.toFixed(1)}%
+                </Text>
+              </View>
+            </>
+          )}
+          <TouchableOpacity
+            onPress={(e) => { e.stopPropagation(); setInfoVisible(true); }}
+            hitSlop={8}
+            activeOpacity={0.7}
+            style={{ marginLeft: 8 }}
+          >
+            <Ionicons name="information-circle-outline" size={19} color={colors.tabBarInactive} />
+          </TouchableOpacity>
+          <Ionicons
+            name={expanded ? 'chevron-up' : 'chevron-down'}
+            size={14}
+            color={colors.tabBarInactive}
+            style={{ marginLeft: 8 }}
+          />
+        </View>
       </TouchableOpacity>
 
       {display ? (
@@ -280,6 +276,8 @@ export function LivePositionPanel({
                     use_tp2={showTp2}
                     sl_grace_enabled={display.sl_grace_enabled}
                     sl_grace_minutes={display.sl_grace_minutes}
+                    sl_enabled={slEnabled}
+                    tp_enabled={tpEnabled}
                     runner_mode={display.runner_mode}
                     cascade_enabled={display.cascade_enabled}
                     hideKey={hideKey}
@@ -313,12 +311,36 @@ export function LivePositionPanel({
         <ActivityIndicator size="small" color={colors.accent} style={{ marginTop: 8 }} />
       )}
 
-      {!!profile && (
-        <ProfileGuideModal
+      {display && (
+        <PositionInfoModal
           visible={infoVisible}
           onClose={() => setInfoVisible(false)}
           colors={colors}
-          initialKey={profile as ProfileKey}
+          profile={profile as ProfileKey | undefined}
+          data={{
+            ticker,
+            direction,
+            contract: display.contract,
+            paperMode,
+            isSwing: getTradeHorizon(display.contract) === 'SWING',
+            entry_premium: display.entry_premium,
+            mid_price: display.mid_price,
+            qty_remaining: display.qty_remaining,
+            pnl: display.pnl,
+            pnl_pct: display.pnl_pct,
+            hard_stop: display.hard_stop,
+            tp1: display.tp1,
+            tp2: display.tp2,
+            tp1_hit: display.tp1_hit,
+            tp2_hit: display.tp2_hit,
+            showTp2,
+            slEnabled,
+            tpEnabled,
+            sl_grace_enabled: display.sl_grace_enabled,
+            sl_grace_minutes: display.sl_grace_minutes,
+            runner_mode: display.runner_mode,
+            runner_trail: display.runner_trail,
+          }}
         />
       )}
     </View>
@@ -482,11 +504,7 @@ const styles = StyleSheet.create({
   liveHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   statusDot:       { width: 6, height: 6, borderRadius: 3 },
   liveLabel:       { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
-  profileBadge:    { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  profileEmoji:    { fontSize: 12 },
   liveContract:    { fontSize: 12, fontWeight: '700', flexShrink: 1 },
-  swingBadge:      { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 },
-  swingBadgeText:  { fontSize: 9, fontWeight: '700', letterSpacing: 0.4 },
   livePnlValue:    { fontSize: 15, fontWeight: '700' },
   pnlPctPill:      { borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 },
   pnlPctText:      { fontSize: 10, fontWeight: '700' },

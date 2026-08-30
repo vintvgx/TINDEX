@@ -545,7 +545,9 @@ class ExitManager:
                         tp1_qty: int | None = None, tp2_qty: int | None = None,
                         sl_grace_minutes=_UNSET,
                         runner_mode: str | None = None,
-                        cascade_enabled: bool | None = None) -> dict:
+                        cascade_enabled: bool | None = None,
+                        sl_enabled: bool | None = None,
+                        tp_enabled: bool | None = None) -> dict:
         """
         Validate and apply user-supplied SL/TP1/TP2 price and/or qty overrides
         to this (already open) position. Raises ValueError with a user-facing
@@ -575,6 +577,20 @@ class ExitManager:
         off cascade mid-trade if they've decided to just let the runner ride.
         Neither touches qty_remaining > 1 in evaluate(), which always exempts
         a single-contract runner from both regardless of these flags.
+
+        sl_enabled/tp_enabled let a runner run its course (or hold into
+        close) on an already-open position, same convention as the
+        entry-time toggle (see immediate_trade_by_ticker). Disabling SL zeros
+        self.hard_stop (the evaluate() breach check compares against this
+        live float directly, not profile["max_loss_pct"], so this is what
+        actually silences it) and mirrors that onto profile["max_loss_pct"]
+        so to_dict()'s sl_enabled — which reads the profile, for parity with
+        the entry-time-disabled case — stays consistent. Disabling TP just
+        flips _disable_tp1_exit (TP2 can never fire without TP1 first, so
+        nothing else is needed). Re-enabling either requires a real price
+        provided in this SAME call (hard_stop/tp1 above) unless one already
+        exists — turning "on" a stop that's still 0 would silently stay
+        unreachable despite claiming to be active.
 
         Shared by the mid-trade PATCH /configs/<id>/exits route and the
         confirm-entry approve path (edited fields from the confirmation modal,
@@ -638,6 +654,33 @@ class ExitManager:
         if cascade_enabled is not None:
             self._cascade_enabled = cascade_enabled
             changed["cascade_enabled"] = cascade_enabled
+        if sl_enabled is not None:
+            if not sl_enabled:
+                self.hard_stop = 0.0
+                self.profile["max_loss_pct"] = 1.0
+                # Also stamp "hard_stop" itself so the route's existing
+                # persist-to-orb_trades call (keyed off changed.get(
+                # "hard_stop")) captures the 0.0 too — otherwise a restart
+                # would restore the pre-disable stop price from that row and
+                # silently re-enable SL, the same class of bug
+                # update_exit_levels' docstring describes.
+                changed["hard_stop"] = 0.0
+            else:
+                if hard_stop is None and self.hard_stop <= 0:
+                    raise ValueError("Set a stop-loss price to re-enable Stop Loss")
+                self.profile["max_loss_pct"] = (
+                    max(0.01, min(0.99, (self.entry_premium - self.hard_stop) / self.entry_premium))
+                    if self.entry_premium else 0.5
+                )
+            changed["sl_enabled"] = sl_enabled
+        if tp_enabled is not None:
+            if not tp_enabled:
+                self._disable_tp1_exit = True
+            else:
+                if tp1 is None and (self.tp1 is None or self.tp1 <= self.entry_premium):
+                    raise ValueError("Set a TP1 price to re-enable Take Profit")
+                self._disable_tp1_exit = False
+            changed["tp_enabled"] = tp_enabled
         return changed
 
     def to_dict(self) -> dict:

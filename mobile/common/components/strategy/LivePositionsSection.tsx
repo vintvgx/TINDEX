@@ -219,6 +219,7 @@ export function PositionRow({
         profile={pos.profile}
         strategyId={pos.strategy_id}
         ticker={pos.ticker}
+        direction={pos.direction}
         paperMode={pos.paper_mode}
         onExitPress={() => setExitOpen(true)}
         onAddPress={() => setAddOpen(true)}

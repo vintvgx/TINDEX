@@ -8,6 +8,7 @@ import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
+import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import type { PricePeriod, TickerHistoryData } from '@/common/types/blogPosts/ticker';
 import type { OrbRangeLines } from '@/common/components/ticker/PriceChart';
@@ -195,6 +196,34 @@ const formatXLabel = (dateStr: string, period: PricePeriod) => {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 };
 
+const isSameDay = (a: string, b: string) => {
+  const da = new Date(a);
+  const db = new Date(b);
+  return da.getFullYear() === db.getFullYear() && da.getMonth() === db.getMonth() && da.getDate() === db.getDate();
+};
+
+/** Date label for an x-axis tick that lands right where the calendar day
+ *  changes — plain day number ("27") normally, month+day once the month
+ *  also changed since the previous tick, plus year once the year changed
+ *  too. Mirrors TradingView's own adaptive axis: mostly time labels, with
+ *  the date stamped in exactly at day boundaries. Only relevant on the 1D
+ *  period once panning has loaded earlier days into the same view — see
+ *  fetchEarlierDay/MAX_EARLIER_DAYS. */
+const formatDayBoundaryLabel = (dateStr: string, prevDateStr: string | null) => {
+  const d = new Date(dateStr);
+  if (!prevDateStr) {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+  const prev = new Date(prevDateStr);
+  if (d.getFullYear() !== prev.getFullYear()) {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+  }
+  if (d.getMonth() !== prev.getMonth()) {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+  return String(d.getDate());
+};
+
 /** Full-precision label shown top-right while scrubbing. */
 const formatScrubLabel = (dateStr: string, period: PricePeriod) => {
   const d = new Date(dateStr);
@@ -205,6 +234,21 @@ const formatScrubLabel = (dateStr: string, period: PricePeriod) => {
     hour: period === '1D' || period === '1W' ? 'numeric' : undefined,
     minute: period === '1D' || period === '1W' ? '2-digit' : undefined,
   });
+};
+
+/** Crosshair pill label — plain time on the 1D period UNLESS the scrubbed
+ *  bar is on a different calendar day than the chart's most recent bar
+ *  (i.e. the user has panned back into an earlier loaded day), in which
+ *  case the date is spelled out alongside the time so it's never ambiguous
+ *  which day is being inspected. */
+const formatCrosshairLabel = (dateStr: string, period: PricePeriod, lastDateStr?: string) => {
+  if (period === '1D' && lastDateStr && !isSameDay(dateStr, lastDateStr)) {
+    const d = new Date(dateStr);
+    return d
+      .toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+      .replace(/\s?[AP]M/i, '');
+  }
+  return formatXLabel(dateStr, period);
 };
 
 /**
@@ -528,6 +572,11 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const { visible: showWatchZones, setVisible: setShowWatchZones } = useWatchZonesVisibility();
   const effectiveWatchZones = showWatchZones ? watchZones : null;
 
+  // Global, persisted toggle for the tap/press-and-hold crosshair — lets the
+  // user switch it off entirely to test whether its per-frame React state
+  // updates are a source of chart lag/snappiness. See useCrosshairEnabled.
+  const { enabled: crosshairEnabled } = useCrosshairEnabled();
+
   const scale = useMemo(() => {
     if (!hasData) return null;
 
@@ -611,6 +660,49 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
 
     return { lo, hi, step, xForIndex, yForPrice, priceForY, yTicks, xTicks, maxVolume };
   }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, effectiveReferenceLines, effectiveWatchZones, yOverride, visibleIndices, visibleStart, visibleCount]);
+
+  // X-axis tick labels — plain evenly-spaced time labels everywhere EXCEPT
+  // the 1D period, which can show multiple calendar days at once once
+  // fetchEarlierDay has loaded earlier days into view (see MAX_EARLIER_DAYS).
+  // There, insert a date label exactly at each day-boundary crossing —
+  // dropping any evenly-spaced time tick that would collide with one —
+  // mirroring TradingView's own adaptive axis (mostly times, date stamped
+  // in only where the day actually changes).
+  const xAxisTicks = useMemo(() => {
+    if (!scale || visibleCount < 2) return [] as { index: number; label: string; isBoundary: boolean }[];
+    const baseTicks = scale.xTicks;
+    if (period !== '1D') {
+      return baseTicks.map((i) => ({ index: i, label: formatXLabel(dates[i], period), isBoundary: false }));
+    }
+    const boundaries: number[] = [];
+    for (let i = visibleStart + 1; i <= visibleEnd; i++) {
+      if (dates[i - 1] && dates[i] && !isSameDay(dates[i - 1], dates[i])) boundaries.push(i);
+    }
+    if (boundaries.length === 0) {
+      return baseTicks.map((i) => ({ index: i, label: formatXLabel(dates[i], period), isBoundary: false }));
+    }
+    const MIN_GAP_PX = 30;
+    const thinned: number[] = [boundaries[0]];
+    for (let k = 1; k < boundaries.length; k++) {
+      if (scale.xForIndex(boundaries[k]) - scale.xForIndex(thinned[thinned.length - 1]) >= MIN_GAP_PX) {
+        thinned.push(boundaries[k]);
+      }
+    }
+    const keptBase = baseTicks.filter((bi) => {
+      const bx = scale.xForIndex(bi);
+      return thinned.every((ti) => Math.abs(scale.xForIndex(ti) - bx) >= MIN_GAP_PX);
+    });
+    return [...keptBase, ...thinned]
+      .sort((a, b) => a - b)
+      .map((i) => {
+        const isBoundary = thinned.includes(i);
+        return {
+          index: i,
+          label: isBoundary ? formatDayBoundaryLabel(dates[i], dates[i - 1] ?? null) : formatXLabel(dates[i], period),
+          isBoundary,
+        };
+      });
+  }, [scale, period, dates, visibleStart, visibleEnd, visibleCount]);
 
   // Line-mode path built from closes — the last point tracks the live tick.
   // Only the visible window is drawn.
@@ -808,23 +900,30 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // from stepping on one another:
   //   1. Quick tap        → reveal X/Y values at that point (singleTapGesture)
   //   2. Press-and-hold,
-  //      then drag         → slide through data, live-updating (scrubGesture) —
+  //      then drag         → crosshair inspection, live-updating (scrubGesture) —
   //                          or, in Watch mode, draw a price level/zone instead
-  //   3. Immediate drag    → scroll/pan the visible time window (manipulateGesture)
+  //   3. Any drag          → pan the visible time window, freely in X and Y
+  //                          (manipulateGesture) — this must ALWAYS win over
+  //                          scrubGesture the instant real movement starts,
+  //                          panning is the primary interaction and inspection
+  //                          is the secondary one, never the other way around
   //   4. Drag on the Y-axis gutter → expand/compress the price scale (manipulateGesture)
-  // (2) and (3) are disambiguated by TIME: manipulateGesture has no
-  // activation delay so it wins a race against scrubGesture on any drag
-  // that starts moving right away; scrubGesture only wins if the touch
-  // stays still for `SCRUB_LONG_PRESS_MS` before moving. That threshold
-  // needs to clear ordinary touch-down hesitation (people often rest a
-  // finger briefly before committing to a drag direction) without making
-  // a deliberate hold feel sluggish — 350ms is the balance point; the
-  // previous 150ms was short enough that normal pre-drag hesitation alone
-  // satisfied it, so scrub kept winning drags it shouldn't have.
+  //   5. Two-finger pinch  → zoom both axes together (pinchGesture)
+  // (2) and (3) are disambiguated by MOVEMENT, not time: manipulateGesture
+  // is given a tiny (3px) activation offset via activeOffsetX/Y below, so
+  // it wins the instant the touch moves at all — even a slow, deliberate
+  // drag — rather than only when it crosses the platform's implicit
+  // (much larger) default pan threshold within SCRUB_LONG_PRESS_MS. Without
+  // that tight offset, a careful/slow single-finger pan could fail to
+  // activate manipulateGesture before scrubGesture's timer fired, silently
+  // hijacking what was meant to be a pan into a crosshair-lock instead —
+  // exactly the "long press conflicts with sliding through the chart" bug
+  // this was tuned to fix. scrubGesture only ever wins when the touch stays
+  // essentially still (within that 3px) for the full SCRUB_LONG_PRESS_MS.
   // (1) and (2)/(3) are disambiguated by MOVEMENT + DURATION: a tap
   // gesture only completes if the touch releases quickly with minimal
   // movement, which naturally fails the instant real dragging starts.
-  const SCRUB_LONG_PRESS_MS = 350;
+  const SCRUB_LONG_PRESS_MS = 500;
 
   // Bar index math is scoped to the visible WINDOW, not the full series —
   // scrubbing/tapping while zoomed should track the bar under the finger
@@ -833,6 +932,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const scrubGesture = useMemo(
     () =>
       Gesture.Pan()
+        .maxPointers(1)
         .activateAfterLongPress(SCRUB_LONG_PRESS_MS)
         .onBegin((e) => {
           'worklet';
@@ -925,14 +1025,41 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   type PanZoomStart = { start: number; end: number; lo: number; hi: number };
   const panStartShared = useSharedValue<PanZoomStart | null>(null);
   const panModeShared = useSharedValue<'time-pan' | 'y-rescale' | 'x-rescale' | null>(null);
+  // Last X window actually committed to React state, from whichever of
+  // manipulateGesture/pinchGesture is driving it. setXWindow used to fire
+  // on EVERY onUpdate frame unconditionally — including the many
+  // sub-bar-width frames where newStart/newEnd rounded to the exact same
+  // values as last frame — forcing a full SVG re-render (candles, volume,
+  // gridlines, bands, zones) on every single pixel of finger movement, not
+  // just the frames where the visible window actually changed. On a
+  // zoomed-in view (each bar spanning 20-40px), that's dozens of wasted
+  // re-renders per real bar-shift, which reads as exactly the "snapped/
+  // laggy, can't navigate freely" feel this fixes. Only call setXWindow when
+  // the rounded window is actually different from what's already committed.
+  const lastXWindowShared = useSharedValue<{ start: number; end: number } | null>(null);
 
   const manipulateGesture = useMemo(
     () =>
       Gesture.Pan()
+        // Single-finger only — without this, an active pan keeps consuming
+        // a second finger's touch events too (translation math just blends
+        // them in), which starved pinchGesture of ever seeing 2 pointers at
+        // once and made two-finger pinch-zoom effectively not work. Failing
+        // this out the instant a 2nd finger lands hands both touches over
+        // to pinchGesture cleanly (see Gesture.Simultaneous below).
+        .maxPointers(1)
+        // Tight 3px activation offset — see the gesture-priority comment
+        // above scrubGesture: this is what makes ANY real movement, however
+        // slow, win the race against the long-press crosshair immediately,
+        // instead of only movement that crosses the platform's larger
+        // implicit default pan threshold.
+        .activeOffsetX([-3, 3])
+        .activeOffsetY([-3, 3])
         .onBegin((e) => {
           'worklet';
           if (!scale) return;
           panStartShared.value = { start: visibleStart, end: visibleEnd, lo: scale.lo, hi: scale.hi };
+          lastXWindowShared.value = { start: visibleStart, end: visibleEnd };
           if (e.x > plotW) panModeShared.value = 'y-rescale';
           else if (e.y > height - X_AXIS_H) panModeShared.value = 'x-rescale';
           else panModeShared.value = 'time-pan';
@@ -970,7 +1097,11 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             }
             if (newEnd > count - 1) { newStart -= newEnd - (count - 1); newEnd = count - 1; }
             newStart = Math.max(0, newStart);
-            runOnJS(setXWindow)({ start: newStart, end: newEnd });
+            const lastX = lastXWindowShared.value;
+            if (!lastX || lastX.start !== newStart || lastX.end !== newEnd) {
+              lastXWindowShared.value = { start: newStart, end: newEnd };
+              runOnJS(setXWindow)({ start: newStart, end: newEnd });
+            }
 
             // Free vertical pan alongside the horizontal one — drag down
             // reveals higher prices that were scrolled above the fold, same
@@ -995,7 +1126,11 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             if (newStart < 0) { newEnd -= newStart; newStart = 0; }
             if (newEnd > count - 1) { newStart -= newEnd - (count - 1); newEnd = count - 1; }
             newStart = Math.max(0, newStart);
-            runOnJS(setXWindow)({ start: newStart, end: newEnd });
+            const lastXR = lastXWindowShared.value;
+            if (!lastXR || lastXR.start !== newStart || lastXR.end !== newEnd) {
+              lastXWindowShared.value = { start: newStart, end: newEnd };
+              runOnJS(setXWindow)({ start: newStart, end: newEnd });
+            }
           } else {
             // y-rescale — drag down narrows the price range (zoom in),
             // anchored at the domain's current center price.
@@ -1021,6 +1156,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         .onBegin(() => {
           'worklet';
           pinchStartShared.value = scale ? { start: visibleStart, end: visibleEnd, lo: scale.lo, hi: scale.hi } : null;
+          lastXWindowShared.value = scale ? { start: visibleStart, end: visibleEnd } : null;
         })
         .onUpdate((e) => {
           'worklet';
@@ -1038,7 +1174,11 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           if (newStart < 0) { newEnd -= newStart; newStart = 0; }
           if (newEnd > count - 1) { newStart -= newEnd - (count - 1); newEnd = count - 1; }
           newStart = Math.max(0, newStart);
-          runOnJS(setXWindow)({ start: newStart, end: newEnd });
+          const lastXP = lastXWindowShared.value;
+          if (!lastXP || lastXP.start !== newStart || lastXP.end !== newEnd) {
+            lastXWindowShared.value = { start: newStart, end: newEnd };
+            runOnJS(setXWindow)({ start: newStart, end: newEnd });
+          }
 
           if (priceH > 0) {
             const curRange = st.hi - st.lo;
@@ -1057,9 +1197,14 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     () =>
       Gesture.Simultaneous(
         pinchGesture,
-        Gesture.Race(doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture),
+        // crosshairEnabled === false drops scrubGesture/singleTapGesture out
+        // of the race entirely (see useCrosshairEnabled) — pan and reset-zoom
+        // still work exactly the same either way.
+        crosshairEnabled
+          ? Gesture.Race(doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture)
+          : Gesture.Race(doubleTapGesture, manipulateGesture),
       ),
-    [pinchGesture, doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture],
+    [pinchGesture, doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture, crosshairEnabled],
   );
 
   const onLayout = (e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width);
@@ -1581,17 +1726,17 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               {!scrubbing && (
                 <>
                   <Rect x={0} y={height - X_AXIS_H} width={width} height={X_AXIS_H} fill={colors.background} />
-                  {scale.xTicks.map((i) => (
+                  {xAxisTicks.map(({ index, label, isBoundary }) => (
                     <SvgText
-                      key={`xlabel-${i}`}
-                      x={scale.xForIndex(i)}
+                      key={`xlabel-${index}`}
+                      x={scale.xForIndex(index)}
                       y={height - 6}
-                      fill={colors.textTertiary}
+                      fill={isBoundary ? colors.textSecondary : colors.textTertiary}
                       fontSize={10}
-                      fontWeight="500"
+                      fontWeight={isBoundary ? '700' : '500'}
                       textAnchor="middle"
                     >
-                      {formatXLabel(dates[i], period)}
+                      {label}
                     </SvgText>
                   ))}
                 </>
@@ -1627,28 +1772,39 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                   >
                     {formatAxisPrice(ePrices[scrubIndex])}
                   </SvgText>
-                  {/* Time + volume pill on the x-axis */}
-                  <Rect
-                    x={Math.min(Math.max(scale.xForIndex(scrubIndex) - 34, 0), plotW - 68)}
-                    y={height - X_AXIS_H + 2} width={68} height={30} rx={4} fill={colors.text}
-                  />
-                  <SvgText
-                    x={Math.min(Math.max(scale.xForIndex(scrubIndex), 34), plotW - 34)}
-                    y={height - X_AXIS_H + 13}
-                    fill={colors.background} fontSize={9.5} fontWeight="600" textAnchor="middle"
-                  >
-                    {formatXLabel(dates[scrubIndex], period)}
-                  </SvgText>
-                  {volumes[scrubIndex] != null && (
-                    <SvgText
-                      x={Math.min(Math.max(scale.xForIndex(scrubIndex), 34), plotW - 34)}
-                      y={height - X_AXIS_H + 25}
-                      fill={colors.background} fontSize={8.5} fontWeight="500"
-                      textAnchor="middle" opacity={0.8}
-                    >
-                      Vol {formatVolume(volumes[scrubIndex])}
-                    </SvgText>
-                  )}
+                  {/* Time + volume pill on the x-axis — widens to fit a full
+                      date once the scrubbed bar is on a different day than
+                      the chart's most recent bar (see formatCrosshairLabel). */}
+                  {(() => {
+                    const crosshairLabel = formatCrosshairLabel(dates[scrubIndex], period, dates[dates.length - 1]);
+                    const pillW = crosshairLabel.length > 6 ? 96 : 68;
+                    const halfW = pillW / 2;
+                    return (
+                      <>
+                        <Rect
+                          x={Math.min(Math.max(scale.xForIndex(scrubIndex) - halfW, 0), plotW - pillW)}
+                          y={height - X_AXIS_H + 2} width={pillW} height={30} rx={4} fill={colors.text}
+                        />
+                        <SvgText
+                          x={Math.min(Math.max(scale.xForIndex(scrubIndex), halfW), plotW - halfW)}
+                          y={height - X_AXIS_H + 13}
+                          fill={colors.background} fontSize={9.5} fontWeight="600" textAnchor="middle"
+                        >
+                          {crosshairLabel}
+                        </SvgText>
+                        {volumes[scrubIndex] != null && (
+                          <SvgText
+                            x={Math.min(Math.max(scale.xForIndex(scrubIndex), halfW), plotW - halfW)}
+                            y={height - X_AXIS_H + 25}
+                            fill={colors.background} fontSize={8.5} fontWeight="500"
+                            textAnchor="middle" opacity={0.8}
+                          >
+                            Vol {formatVolume(volumes[scrubIndex])}
+                          </SvgText>
+                        )}
+                      </>
+                    );
+                  })()}
                 </>
               )}
             </Svg>

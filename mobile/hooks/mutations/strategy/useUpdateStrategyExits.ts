@@ -25,6 +25,12 @@ interface UpdateStrategyExitsPayload {
    *  Never overrides the qty_remaining > 1 exemption — a 1-contract runner
    *  stays cascade-exempt regardless of this flag. */
   cascade_enabled?: boolean;
+  /** Whether the hard stop-loss / TP1+TP2 exits are active for this trade —
+   *  lets a runner run its course (or hold into close) mid-trade. Re-enabling
+   *  either requires a real price in this same call (hard_stop/tp1 above)
+   *  unless one's already set — see ExitManager.apply_overrides. */
+  sl_enabled?: boolean;
+  tp_enabled?: boolean;
 }
 
 export function useUpdateStrategyExits() {

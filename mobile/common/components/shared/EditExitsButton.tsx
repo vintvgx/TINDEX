@@ -28,6 +28,10 @@ interface BaseProps {
    *  profile default) — see ExitManager.to_dict(). */
   runner_mode?: 'trail' | 'be_hold' | 'none';
   cascade_enabled?: boolean;
+  /** Whether the hard stop-loss / TP1+TP2 exits are currently active for
+   *  this trade — see ExitManager.to_dict(). Defaults true when absent. */
+  sl_enabled?: boolean;
+  tp_enabled?: boolean;
   /** Stable per-trade key for the client-only hide feature — see
    *  lib/positionHideKey.ts. Never sent to the backend. */
   hideKey: string;
@@ -40,6 +44,7 @@ interface BaseProps {
     hard_stop?: number; tp1?: number; tp2?: number;
     sl_grace_enabled?: boolean; sl_grace_minutes?: number | null;
     runner_mode?: 'trail' | 'be_hold' | 'none'; cascade_enabled?: boolean;
+    sl_enabled?: boolean; tp_enabled?: boolean;
   }) => void;
 }
 
@@ -54,7 +59,7 @@ export function EditExitsButton(props: Props) {
   const {
     ticker, hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit,
     qty_remaining, use_tp2, sl_grace_enabled, sl_grace_minutes,
-    runner_mode, cascade_enabled,
+    runner_mode, cascade_enabled, sl_enabled, tp_enabled,
     hideKey, label, style, onUpdated,
   } = props;
   const colors = useThemeColors();
@@ -77,6 +82,8 @@ export function EditExitsButton(props: Props) {
     sl_grace_minutes?: number | null;
     runner_mode?: 'trail' | 'be_hold' | 'none';
     cascade_enabled?: boolean;
+    sl_enabled?: boolean;
+    tp_enabled?: boolean;
   }) => {
     await orbMutation.mutateAsync({ strategy_id: props.strategy_id, ...payload });
     // Derive sl_grace_enabled alongside sl_grace_minutes so a locally-patched
@@ -114,7 +121,7 @@ export function EditExitsButton(props: Props) {
         mode={props.mode as ExitEditMode}
         positionId={props.strategy_id}
         ticker={ticker}
-        current={{ hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit, qty_remaining, use_tp2, sl_grace_enabled, sl_grace_minutes, runner_mode, cascade_enabled }}
+        current={{ hard_stop, tp1, tp2, entry_premium, tp1_hit, tp2_hit, qty_remaining, use_tp2, sl_grace_enabled, sl_grace_minutes, runner_mode, cascade_enabled, sl_enabled, tp_enabled }}
         onSubmit={handleSubmit}
         isLoading={isPending}
         hidden={hidden}

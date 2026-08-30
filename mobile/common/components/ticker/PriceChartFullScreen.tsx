@@ -21,6 +21,7 @@ import { useKeyLevels } from '@/hooks/queries/priceLevels/useKeyLevels';
 import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
 import { useCancelKeyLevel } from '@/hooks/mutations/priceLevels/useCancelKeyLevel';
 import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLevel';
+import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
 
 interface PriceChartFullScreenProps {
   visible: boolean;
@@ -94,6 +95,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   // red, dashed to stay visually distinct from the ORB band's solid lines
   // and from any position SL/TP lines this chart might show elsewhere.
   const [showSR, setShowSR] = useState(false);
+  const { enabled: crosshairEnabled, setEnabled: setCrosshairEnabled } = useCrosshairEnabled();
   const { data: srData } = useTickerSupportResistance(visible && showSR ? ticker : null);
   // AdvancedPriceChart folds EVERY referenceLine price into the y-axis
   // min/max unconditionally (it has to — that's exactly right for an entry/
@@ -382,7 +384,26 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
         </View>
 
         <View style={{ paddingHorizontal: 16 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 6 }}>
+          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginBottom: 6 }}>
+            {/* Crosshair on/off — a quick A/B toggle to test whether the tap/
+                press-and-hold crosshair's per-frame state updates are a
+                source of chart lag. Off = plain pan/pinch/zoom only, no
+                data-point inspection. */}
+            <Pressable
+              onPress={() => setCrosshairEnabled(!crosshairEnabled)}
+              hitSlop={8}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 4,
+                paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14,
+                borderWidth: 1, borderColor: crosshairEnabled ? colors.separator : colors.accent,
+                backgroundColor: crosshairEnabled ? 'transparent' : colors.accent + '18',
+              }}
+            >
+              <Ionicons name={crosshairEnabled ? 'locate-outline' : 'locate'} size={12} color={crosshairEnabled ? colors.textTertiary : colors.accent} />
+              <Text style={{ fontSize: 11, fontWeight: '700', color: crosshairEnabled ? colors.textTertiary : colors.accent }}>
+                {crosshairEnabled ? 'Data Points' : 'Data Points Off'}
+              </Text>
+            </Pressable>
             <Pressable
               onPress={() => setShowSR(v => !v)}
               hitSlop={8}
