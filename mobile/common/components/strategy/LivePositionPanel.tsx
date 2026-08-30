@@ -36,6 +36,8 @@ export interface LivePositionStaticFallback {
   use_tp2?: boolean;
   sl_grace_enabled?: boolean;
   sl_grace_minutes?: number | null;
+  sl_enabled?: boolean;
+  tp_enabled?: boolean;
   runner_mode?: 'trail' | 'be_hold' | 'none';
   runner_trail?: number;
 }
@@ -116,6 +118,8 @@ export function LivePositionPanel({
         use_tp2:       staticFallback!.use_tp2,
         sl_grace_enabled: staticFallback!.sl_grace_enabled,
         sl_grace_minutes: staticFallback!.sl_grace_minutes,
+        sl_enabled:    staticFallback!.sl_enabled,
+        tp_enabled:    staticFallback!.tp_enabled,
         runner_mode:   staticFallback!.runner_mode,
         runner_trail:  staticFallback!.runner_trail,
         market_value:  (staticFallback!.mid_price ?? staticFallback!.entry_premium!) * (staticFallback!.qty_remaining ?? 0) * 100,
@@ -130,6 +134,11 @@ export function LivePositionPanel({
   // use_tp2 alone (profile flag or the qty<=1 hard override) still governs
   // whether TP2 specifically is reachable for this trade.
   const showTp2 = display?.use_tp2 !== false;
+  // sl_enabled/tp_enabled default true when absent (older cached data,
+  // pre-toggle trades). See ExitManager.to_dict().
+  const slEnabled = display?.sl_enabled !== false;
+  const tpEnabled = display?.tp_enabled !== false;
+  const noSL = isNoStopLoss || !slEnabled;
 
   const pnlColor = display
     ? (display.pnl >= 0 ? colors.success : colors.error)
@@ -190,6 +199,16 @@ export function LivePositionPanel({
               <Text style={[styles.swingBadgeText, { color: '#A855F7' }]}>SWING</Text>
             </View>
           )}
+          {display && !slEnabled && (
+            <View style={[styles.swingBadge, { backgroundColor: colors.error + '22' }]}>
+              <Text style={[styles.swingBadgeText, { color: colors.error }]}>NO SL</Text>
+            </View>
+          )}
+          {display && !tpEnabled && (
+            <View style={[styles.swingBadge, { backgroundColor: '#FF9F0A22' }]}>
+              <Text style={[styles.swingBadgeText, { color: '#FF9F0A' }]}>NO TP</Text>
+            </View>
+          )}
         </View>
         {display && (
           <View style={styles.liveHeaderRight}>
@@ -220,7 +239,7 @@ export function LivePositionPanel({
             <Text style={[styles.summaryText, { color: colors.textSecondary }]} numberOfLines={1}>
               ${display.entry_premium.toFixed(2)} → <Text style={{ color: colors.text, fontWeight: '700' }}>${display.mid_price.toFixed(2)}</Text>
               {'  ·  Qty '}{display.qty_remaining}
-              {`  ·  Stop $${display.hard_stop.toFixed(2)}`}
+              {slEnabled ? `  ·  Stop $${display.hard_stop.toFixed(2)}` : '  ·  No Stop'}
               {display.tp1_hit ? '  ·  ' : ''}
               {display.tp1_hit && <Text style={{ color: colors.success, fontWeight: '700' }}>TP1 ✓</Text>}
               {showTp2 && display.tp2_hit ? '  ' : ''}
@@ -233,7 +252,7 @@ export function LivePositionPanel({
 
           {/* SL grace-timer countdown — urgent, so never hidden behind the
               expand (SL_5/SL_10 — see exit_manager.py) */}
-          {!isNoStopLoss && <SlGraceBadge live={display} colors={colors} />}
+          {!noSL && <SlGraceBadge live={display} colors={colors} />}
 
           {expanded && (
             <>
@@ -241,8 +260,8 @@ export function LivePositionPanel({
                   defaults are unreachable placeholders (see profiles.py)
                   until the user sets real ones via Edit, at which point
                   they're genuine, live levels like any other position. */}
-              <PositionStopBar live={display} colors={colors} showTp2={showTp2} />
-              <LivePositionDetail live={display} colors={colors} showTp2={showTp2} />
+              <PositionStopBar live={display} colors={colors} showTp2={showTp2} slEnabled={slEnabled} tpEnabled={tpEnabled} />
+              <LivePositionDetail live={display} colors={colors} showTp2={showTp2} slEnabled={slEnabled} tpEnabled={tpEnabled} />
 
               {/* ── Actions: Edit | Add | Exit (chart lives in the header) ── */}
               {!isMock && (
@@ -306,7 +325,7 @@ export function LivePositionPanel({
   );
 }
 
-function PositionStopBar({ live, colors, showTp2 }: { live: DisplayData; colors: any; showTp2: boolean }) {
+function PositionStopBar({ live, colors, showTp2, slEnabled = true, tpEnabled = true }: { live: DisplayData; colors: any; showTp2: boolean; slEnabled?: boolean; tpEnabled?: boolean }) {
   // Once TP1 has fired and there's no live numeric target left to hit
   // (no TP2 at all, or TP2 already hit too), whatever's left is a genuine
   // runner — governed by runner_mode (trail/be_hold/none), not a fixed
@@ -328,15 +347,21 @@ function PositionStopBar({ live, colors, showTp2 }: { live: DisplayData; colors:
     ? `Trail $${live.runner_trail.toFixed(2)}`
     : RUNNER_MODE_LABEL[live.runner_mode ?? 'trail'];
 
+  const stopStage = slEnabled
+    ? { label: 'Stop', value: `$${live.hard_stop.toFixed(2)}`, active: !live.tp1_hit, color: colors.error }
+    : { label: 'Stop', value: 'Off', active: false, color: colors.textSecondary };
+
   const stages = isRunnerPhase
     ? [
-        { label: 'Stop',   value: `$${live.hard_stop.toFixed(2)}`, active: true, color: colors.error },
+        slEnabled ? { ...stopStage, active: true } : stopStage,
         { label: 'Runner', value: runnerValue, active: true, color: '#A855F7' },
       ]
     : [
-        { label: 'Stop', value: `$${live.hard_stop.toFixed(2)}`, active: !live.tp1_hit, color: colors.error },
-        { label: 'TP1',  value: `$${live.tp1.toFixed(2)}`,       active: live.tp1_hit && !live.tp2_hit, color: '#4A9EFF' },
-        ...(showTp2 ? [{ label: 'TP2', value: `$${live.tp2.toFixed(2)}`, active: live.tp2_hit, color: colors.success }] : []),
+        stopStage,
+        tpEnabled
+          ? { label: 'TP1', value: `$${live.tp1.toFixed(2)}`, active: live.tp1_hit && !live.tp2_hit, color: '#4A9EFF' }
+          : { label: 'TP1', value: 'Off', active: false, color: colors.textSecondary },
+        ...(tpEnabled && showTp2 ? [{ label: 'TP2', value: `$${live.tp2.toFixed(2)}`, active: live.tp2_hit, color: colors.success }] : []),
       ];
   return (
     <View style={styles.stopBar}>
@@ -417,16 +442,16 @@ function SlGraceBadge({ live, colors }: { live: DisplayData; colors: any }) {
   );
 }
 
-function LivePositionDetail({ live, colors, showTp2 }: { live: DisplayData; colors: any; showTp2: boolean }) {
+function LivePositionDetail({ live, colors, showTp2, slEnabled = true, tpEnabled = true }: { live: DisplayData; colors: any; showTp2: boolean; slEnabled?: boolean; tpEnabled?: boolean }) {
   return (
     <View style={[styles.liveDetail, { borderTopColor: colors.border }]}>
       <LiveDetailRow label="Entry"     value={`$${live.entry_premium.toFixed(2)}`} colors={colors} />
       <LiveDetailRow label="Current"   value={`$${live.mid_price.toFixed(2)}`} valueColor={colors.text} colors={colors} />
       <LiveDetailRow label="Qty Remaining" value={String(live.qty_remaining)} colors={colors} />
-      <LiveDetailRow label="Hard Stop" value={`$${live.hard_stop.toFixed(2)}`} valueColor={colors.error} colors={colors} />
-      <LiveDetailRow label="TP1" value={`$${live.tp1.toFixed(2)}`} badge={live.tp1_hit ? 'Hit' : undefined} badgeColor={colors.success} colors={colors} />
+      <LiveDetailRow label="Hard Stop" value={slEnabled ? `$${live.hard_stop.toFixed(2)}` : 'Disabled'} valueColor={slEnabled ? colors.error : colors.textSecondary} colors={colors} />
+      <LiveDetailRow label="TP1" value={tpEnabled ? `$${live.tp1.toFixed(2)}` : 'Disabled'} valueColor={tpEnabled ? undefined : colors.textSecondary} badge={tpEnabled && live.tp1_hit ? 'Hit' : undefined} badgeColor={colors.success} colors={colors} />
       {showTp2 && (
-        <LiveDetailRow label="TP2" value={`$${live.tp2.toFixed(2)}`} badge={live.tp2_hit ? 'Hit' : undefined} badgeColor={colors.success} colors={colors} />
+        <LiveDetailRow label="TP2" value={tpEnabled ? `$${live.tp2.toFixed(2)}` : 'Disabled'} valueColor={tpEnabled ? undefined : colors.textSecondary} badge={tpEnabled && live.tp2_hit ? 'Hit' : undefined} badgeColor={colors.success} colors={colors} />
       )}
     </View>
   );

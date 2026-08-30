@@ -258,6 +258,11 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
   const [tradeSheetTicker, setTradeSheetTicker] = useState('');
   const [tradeSheetContract, setTradeSheetContract] = useState<OptionsContract | null>(null);
   const [tradeSheetCurrentPrice, setTradeSheetCurrentPrice] = useState(0);
+  // Contract-premium entry/stop from the alert, when the checklist's parsed
+  // contract had one — lets TradeContractQuickCard pre-set a stop matched
+  // to what the alert specified (see its alertEntryPrice/alertStopLoss docs).
+  const [tradeSheetAlertEntry, setTradeSheetAlertEntry] = useState<number | null>(null);
+  const [tradeSheetAlertStopLoss, setTradeSheetAlertStopLoss] = useState<number | null>(null);
 
   const scrollRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
@@ -334,11 +339,16 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
   // not a second native Modal. This assistant modal never closes for the
   // handoff, so its conversation/checklist state is never lost and there's
   // no close/reopen animation to wait out.
-  const handleTradeContract = useCallback((tickerArg: string, liveContract: OptionsContract, currentPrice: number) => {
+  const handleTradeContract = useCallback((
+    tickerArg: string, liveContract: OptionsContract, currentPrice: number,
+    alertEntryPrice?: number | null, alertStopLoss?: number | null,
+  ) => {
     if (!tickerArg) return;
     setTradeSheetTicker(tickerArg);
     setTradeSheetContract(liveContract);
     setTradeSheetCurrentPrice(currentPrice);
+    setTradeSheetAlertEntry(alertEntryPrice ?? null);
+    setTradeSheetAlertStopLoss(alertStopLoss ?? null);
     setTradeSheetVisible(true);
   }, []);
 
@@ -843,6 +853,8 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
           ticker={tradeSheetTicker}
           contract={tradeSheetContract}
           currentPrice={tradeSheetCurrentPrice}
+          alertEntryPrice={tradeSheetAlertEntry}
+          alertStopLoss={tradeSheetAlertStopLoss}
         />
       </SafeAreaView>
     </Modal>

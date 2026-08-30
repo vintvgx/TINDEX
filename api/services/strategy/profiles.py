@@ -295,8 +295,15 @@ PROFILES = {
         "max_loss_pct":            0.30,
         "tp1_mult":                1.30,
         "tp2_mult":                1.60,
-        "tp1_close_pct":           0.67,
-        "tp2_close_pct":           1.00,
+        # 2026-08-30 — was 0.67/1.00: floor(3 * 0.67) = 2 closed at TP1
+        # (not the intended 1), and tp2_close_pct >= 1.0 force-closes
+        # everything at TP2, leaving no runner. 0.34 of the original 3
+        # closes exactly 1 at TP1 (max(1, floor(...)) floor guarantees
+        # >=1 regardless of rounding); 0.5 of what's left (2) closes
+        # exactly 1 more at TP2, leaving exactly 1 as the runner — the
+        # requested 1-at-TP1 / 1-at-TP2 / 1-runner split.
+        "tp1_close_pct":           0.34,
+        "tp2_close_pct":           0.50,
         "runner_trail_pct":        0.25,   # intentionally tight — scalper exits fast
         "runner_mode":             "trail",
         "sl_confirm_ticks":        1,   # scalper is designed to cut fast — no added delay on the SL either
@@ -322,8 +329,12 @@ PROFILES = {
         "max_loss_pct":            0.30,
         "tp1_mult":                1.30,
         "tp2_mult":                1.60,
-        "tp1_close_pct":           0.67,
-        "tp2_close_pct":           1.00,
+        # Same 0.34/0.5 as the other Scalper tiers for consistency — but
+        # with only 1 contract, max(1, floor(1 * pct)) is always 1 no
+        # matter the percentage, so this tier still just closes its one
+        # contract at TP1 either way; no real behavior change here.
+        "tp1_close_pct":           0.34,
+        "tp2_close_pct":           0.50,
         "runner_trail_pct":        0.25,
         "runner_mode":             "trail",
         "sl_confirm_ticks":        1,
@@ -342,8 +353,10 @@ PROFILES = {
         "max_loss_pct":            0.30,
         "tp1_mult":                1.30,
         "tp2_mult":                1.60,
-        "tp1_close_pct":           0.67,
-        "tp2_close_pct":           1.00,
+        # 2026-08-30 — same 0.34/0.5 as SCALPER: floor(6*0.34)=2 at TP1,
+        # floor(4*0.5)=2 at TP2, 2 left as runner (2/2/2 split).
+        "tp1_close_pct":           0.34,
+        "tp2_close_pct":           0.50,
         "runner_trail_pct":        0.25,
         "runner_mode":             "trail",
         "sl_confirm_ticks":        1,
@@ -362,8 +375,11 @@ PROFILES = {
         "max_loss_pct":            0.30,
         "tp1_mult":                1.30,
         "tp2_mult":                1.60,
-        "tp1_close_pct":           0.67,
-        "tp2_close_pct":           1.00,
+        # 2026-08-30 — same 0.34/0.5 as SCALPER: floor(10*0.34)=3 at TP1,
+        # floor(7*0.5)=3 at TP2, 4 left as runner (3/3/4 split — 10 doesn't
+        # divide evenly into thirds, closest even split).
+        "tp1_close_pct":           0.34,
+        "tp2_close_pct":           0.50,
         "runner_trail_pct":        0.25,
         "runner_mode":             "trail",
         "sl_confirm_ticks":        1,
@@ -670,10 +686,18 @@ _EMOJIS = {
 # elapsed wall-clock time at/below the ratcheted trail floor, not a tick
 # count) that should be settable from any strategy's own config without
 # requiring a profiles.py edit first.
+#
+# disable_tp1_exit/use_tp2/tp1_close_pct/tp2_close_pct joined 2026-08-30 for
+# the TP-enable/disable toggle (see /strategy/immediate-trade's tp_enabled
+# handling) — most profiles (BULL_DOG, THUNDER_CAT, MOMENTUM, etc.) never
+# declare disable_tp1_exit at all (only MANUAL/NO_STOP_LOSS did), so without
+# this the toggle would silently no-op on every OTHER profile — the exact
+# failure mode this allow-list exists to prevent, just for a new field.
 GRACE_OVERRIDE_KEYS = {
     "sl_grace_enabled", "sl_grace_seconds",
     "sl_grace_recovery_seconds", "sl_outer_floor_pct",
     "runner_trail_confirm_seconds",
+    "disable_tp1_exit", "use_tp2", "tp1_close_pct", "tp2_close_pct",
 }
 
 

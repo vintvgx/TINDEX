@@ -46,6 +46,10 @@ export interface LivePriceData {
    *  ExitManager.to_dict(). */
   sl_grace_enabled?: boolean;
   sl_grace_minutes?: number | null;
+  /** Whether the hard stop-loss / TP1+TP2 exits are active for this
+   *  position — see ExitManager.to_dict(). Defaults true when absent. */
+  sl_enabled?: boolean;
+  tp_enabled?: boolean;
   /** Current runner/cascade CONFIGURATION for this open trade (not just the
    *  profile default) — see exit_manager.py's to_dict(). Lets EditExitsModal
    *  pre-select the toggle to what's actually in effect right now. */

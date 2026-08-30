@@ -8,6 +8,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { useAlpacaPositionValues } from '@/hooks/queries/strategy/useAlpacaPositionValues';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
 import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 
@@ -52,15 +53,37 @@ export default function PositionScreen({ embedded = false }: Props) {
   const { filteredPositions, liveByStrategy } = positionsData;
   const activeCount = filteredPositions.length;
 
+  // Same REST market-value poll the Accounts screen's own equity figure is
+  // built from (useAccountValueDisplay → useAlpacaPositionValues). Joining
+  // against it here — rather than trusting only the per-row WebSocket ticks
+  // below — is what keeps this screen's "Live Equity" from disagreeing with
+  // Accounts: previously a position whose socket hadn't ticked yet fell
+  // straight to static entry-cost-basis, which drifts from the real mark the
+  // moment price moves, while Accounts was already showing Alpaca's actual
+  // REST value the whole time.
+  const { data: restPositions } = useAlpacaPositionValues(mode, { enabled: filteredPositions.length > 0 });
+  const restMarketValueBySymbol = useMemo(() => {
+    const side = mode === 'live' ? restPositions?.live : restPositions?.paper;
+    const map: Record<string, number> = {};
+    for (const p of side?.positions ?? []) map[p.symbol] = p.market_value;
+    return map;
+  }, [restPositions, mode]);
+
   // Live-derived equity = cash (stable mid-trade, from the slow account poll)
-  // + the sum of every open position's live market value. Falls back to a
-  // position's static cost basis (entry_premium * qty * 100) for the brief
-  // window before its socket delivers a first tick, and to the account's own
-  // (slower) equity field entirely when nothing is open to aggregate.
+  // + the sum of every open position's market value. Prefers the REST value
+  // above (same source Accounts uses); falls back to the WebSocket tick
+  // (lower latency once it's ticked) only when REST doesn't have that
+  // position yet, and to static cost basis (entry_premium * qty * 100) only
+  // as the last resort before either has delivered anything.
   const liveDerivedEquity = useMemo(() => {
     if (!account?.available || filteredPositions.length === 0) return null;
     let sumMarketValue = 0;
     for (const pos of filteredPositions) {
+      const restValue = pos.contract != null ? restMarketValueBySymbol[pos.contract] : undefined;
+      if (restValue != null) {
+        sumMarketValue += restValue;
+        continue;
+      }
       const live = liveByStrategy[pos.strategy_id];
       if (live?.market_value != null) {
         sumMarketValue += live.market_value;
@@ -69,7 +92,7 @@ export default function PositionScreen({ embedded = false }: Props) {
       }
     }
     return account.cash + sumMarketValue;
-  }, [account, filteredPositions, liveByStrategy]);
+  }, [account, filteredPositions, liveByStrategy, restMarketValueBySymbol]);
 
   const displayEquity = liveDerivedEquity ?? account?.equity ?? 0;
   const displayPnlToday =

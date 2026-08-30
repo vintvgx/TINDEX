@@ -150,10 +150,17 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
   const [autoGraceMinutes, setAutoGraceMinutes] = useState<5 | 10 | null>(null);
+  // SL/TP enable — on by default for every profile; turning either off lets
+  // a runner run its course (or hold into close) instead of auto-exiting.
+  const [slEnabled, setSlEnabled] = useState(true);
+  const [tpEnabled, setTpEnabled] = useState(true);
 
   const profile      = IMMEDIATE_PROFILES[profileIndex];
   const isManual     = profile.isManual === true;
   const isNoStopLoss = profile.isNoStopLoss === true;
+  // No stop loss in effect — either from a (legacy) NO_STOP_LOSS profile or
+  // the user unchecking Stop Loss directly.
+  const noSL = isNoStopLoss || !slEnabled;
 
   const handleProfileSelect = (idx: number) => {
     setProfileIndex(idx);
@@ -349,16 +356,18 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
       qty,
       profile:         profile.key,
       paper_mode:      paperMode,
-      volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
-      sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
-      ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
+      volume_exit:     isManual ? false : volumeExit,
+      sl_grace_minutes: (noSL || stopType === 'HARD') ? null : stopType,
+      sl_enabled: slEnabled,
+      tp_enabled: tpEnabled,
+      ...(slEnabled && isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
     });
   };
 
   const confirmSubmit = () => {
     if (!ticker || !selected) return;
-    const profileNote = isNoStopLoss
-      ? '\n\n⚠️ No Stop Loss — this contract will NOT auto-close for any reason, including end of day. It expires today (0DTE) if you don\'t sell it.'
+    const profileNote = noSL
+      ? `\n\n⚠️ No Stop Loss${!tpEnabled ? ' or Take Profit' : ''} — this contract will NOT auto-close on that leg${isNoStopLoss ? ', including end of day. It expires today (0DTE) if you don\'t sell it' : ''}.`
       : isManual ? `\nStop Loss: −${manualSlPct}%` : '';
     if (!paperMode) {
       Alert.alert(
@@ -369,9 +378,9 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
           { text: 'Submit', style: 'destructive', onPress: doSubmit },
         ],
       );
-    } else if (isNoStopLoss) {
+    } else if (noSL) {
       Alert.alert(
-        `${profile.emoji} No Stop Loss`,
+        '⚠️ No Stop Loss',
         `This will buy ${qty} × ${selected.symbol}.${profileNote}`,
         [
           { text: 'Cancel', style: 'cancel' },
@@ -477,8 +486,8 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         />
       </View>
 
-      {/* Manual SL picker — only when MANUAL selected */}
-      {isManual && (
+      {/* Manual SL picker — only when MANUAL selected and SL is enabled */}
+      {isManual && slEnabled && (
         <ManualSLPicker
           slPct={manualSlPct}
           onChangePct={setManualSlPct}
@@ -492,7 +501,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         <View>
           <Text style={[styles.footerLabel, { color: colors.tabBarInactive, marginBottom: 2 }]}>CONTRACTS</Text>
           <Text style={[styles.qtyHint, { color: colors.tabBarInactive }]}>
-            {isNoStopLoss ? 'No stop loss — size carefully' : `Default for ${profile.name}: ${profile.qty}`}
+            {noSL ? 'No stop loss — size carefully' : `Default for ${profile.name}: ${profile.qty}`}
           </Text>
         </View>
         <View style={styles.qtyGroup}>
@@ -512,29 +521,57 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         </View>
       </View>
 
-      {/* Exit Controls — hidden for NO_STOP_LOSS (no automatic exit to configure) */}
-      {!isNoStopLoss && (
-        <View>
-          <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>EXIT CONTROLS</Text>
-          <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
+      {/* Exit Controls — SL/TP enable toggles apply on every profile;
+          turning either off lets a runner run its course (or hold into
+          close) instead of auto-exiting on that leg. */}
+      <View>
+        <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>EXIT CONTROLS</Text>
+        <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.exitToggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Stop Loss</Text>
+              <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Auto-close on hard stop</Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setSlEnabled(v => !v)}
+              style={[styles.togglePill, { backgroundColor: slEnabled ? colors.accent + '33' : colors.border + '55', borderColor: slEnabled ? colors.accent : colors.border }]}
+            >
+              <View style={[styles.toggleThumb, { backgroundColor: slEnabled ? colors.accent : colors.tabBarInactive, transform: [{ translateX: slEnabled ? 14 : 0 }] }]} />
+            </TouchableOpacity>
+          </View>
+          <View style={[styles.exitToggleRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Take Profit</Text>
+              <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Auto-close on TP1/TP2</Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setTpEnabled(v => !v)}
+              style={[styles.togglePill, { backgroundColor: tpEnabled ? colors.accent + '33' : colors.border + '55', borderColor: tpEnabled ? colors.accent : colors.border }]}
+            >
+              <View style={[styles.toggleThumb, { backgroundColor: tpEnabled ? colors.accent : colors.tabBarInactive, transform: [{ translateX: tpEnabled ? 14 : 0 }] }]} />
+            </TouchableOpacity>
+          </View>
           {!isManual && (
-            <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border, marginTop: 10 }]}>
-              <View style={styles.exitToggleRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Volume Exit</Text>
-                  <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Close half on low volume</Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => setVolumeExit(v => !v)}
-                  style={[styles.togglePill, { backgroundColor: volumeExit ? colors.accent + '33' : colors.border + '55', borderColor: volumeExit ? colors.accent : colors.border }]}
-                >
-                  <View style={[styles.toggleThumb, { backgroundColor: volumeExit ? colors.accent : colors.tabBarInactive, transform: [{ translateX: volumeExit ? 14 : 0 }] }]} />
-                </TouchableOpacity>
+            <View style={[styles.exitToggleRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Volume Exit</Text>
+                <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Close half on low volume</Text>
               </View>
+              <TouchableOpacity
+                onPress={() => setVolumeExit(v => !v)}
+                style={[styles.togglePill, { backgroundColor: volumeExit ? colors.accent + '33' : colors.border + '55', borderColor: volumeExit ? colors.accent : colors.border }]}
+              >
+                <View style={[styles.toggleThumb, { backgroundColor: volumeExit ? colors.accent : colors.tabBarInactive, transform: [{ translateX: volumeExit ? 14 : 0 }] }]} />
+              </TouchableOpacity>
             </View>
           )}
         </View>
-      )}
+        {slEnabled && (
+          <View style={{ marginTop: 10 }}>
+            <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
+          </View>
+        )}
+      </View>
 
       {/* Submit */}
       <TouchableOpacity
@@ -552,8 +589,8 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
             <Ionicons name="flash" size={18} color="#fff" />
             <Text style={[styles.submitText, { color: '#fff' }]}>
               {paperMode ? '' : 'LIVE '}Buy {qty} {selected.option_type} · {profile.emoji} {profile.name}
-              {isManual ? ` · SL −${manualSlPct}%` : ''}
-              {isNoStopLoss ? ' · no auto exit' : ''}
+              {isManual && slEnabled ? ` · SL −${manualSlPct}%` : ''}
+              {noSL && !tpEnabled ? ' · no auto exit' : noSL ? ' · no SL' : !tpEnabled ? ' · no TP' : ''}
             </Text>
           </>
         )}

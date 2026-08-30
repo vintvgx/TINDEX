@@ -216,6 +216,10 @@ export interface ImmediateTradeByTickerRequest {
    *  response to skip the backend's 8s websocket-tick wait and enter off the
    *  last REST-polled quote the user already confirmed. */
   bypass_stream_check?: boolean;
+  /** Enable/disable the hard stop-loss and TP1/TP2 exits for this trade.
+   *  Both default to enabled server-side when omitted. */
+  sl_enabled?: boolean;
+  tp_enabled?: boolean;
 }
 
 /** An open position from a ticker-based immediate trade engine. */
@@ -276,6 +280,10 @@ export interface StrategyPosition {
   /** Current stop-type configuration — see ExitManager.to_dict(). */
   sl_grace_enabled?: boolean;
   sl_grace_minutes?: number | null;
+  /** Whether the hard stop-loss / TP1+TP2 exits are active for this
+   *  position — see ExitManager.to_dict(). Defaults true when absent. */
+  sl_enabled?: boolean;
+  tp_enabled?: boolean;
 }
 
 export interface ExitStage {

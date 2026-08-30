@@ -757,8 +757,12 @@ TAGS: [comma-separated list of applicable tags from the list above, e.g., "Volat
             "- contracts: every specific options contract mentioned (strike + expiry), each as "
             "{\"option_type\": \"CALL\"|\"PUT\", \"strike\": <number>, "
             "\"expiration_date\": \"YYYY-MM-DD\", \"note\": \"<short context, e.g. "
-            "'250 contracts, ~$82.5K premium, unusual'>\"}. Leave empty if the image is a "
+            "'250 contracts, ~$82.5K premium, unusual'>\", \"entry_price\": <number or null>, "
+            "\"stop_loss\": <number or null>}. Leave empty if the image is a "
             "technical-levels alert with no specific contracts named.\n"
+            "  - entry_price/stop_loss are the CONTRACT PREMIUM (option price, e.g. \"bought "
+            "at $1.50\", \"SL $1.25\"), never the underlying stock price — null if the image "
+            "doesn't state one for that contract.\n"
             f"  - Resolve bare dates like \"8/28\" or \"9/21\" to the nearest UPCOMING date "
             f"from today ({today}), in YYYY-MM-DD format.\n"
             "  - Fold volume/OI/premium/\"highest volume\" callouts into that contract's note.\n"
@@ -790,7 +794,8 @@ TAGS: [comma-separated list of applicable tags from the list above, e.g., "Volat
             '  "sentiment": "bullish" | "bearish" | "either" | null,\n'
             '  "watch_zone": {"low": <number>, "high": <number>} | null,\n'
             '  "contracts": [{"option_type": "CALL" | "PUT", "strike": <number>, '
-            '"expiration_date": "YYYY-MM-DD", "note": <string>}],\n'
+            '"expiration_date": "YYYY-MM-DD", "note": <string>, '
+            '"entry_price": <number or null>, "stop_loss": <number or null>}],\n'
             '  "summary": <string>,\n'
             '  "reply": <string>\n'
             "}"
@@ -845,11 +850,26 @@ TAGS: [comma-separated list of applicable tags from the list above, e.g., "Volat
             expiry = str(c.get("expiration_date") or "")
             if not re.match(r"^\d{4}-\d{2}-\d{2}$", expiry):
                 continue
+
+            def _optional_price(raw):
+                if raw is None:
+                    return None
+                try:
+                    val = float(raw)
+                except (TypeError, ValueError):
+                    return None
+                return val if val > 0 else None
+
             contracts.append({
                 "option_type": option_type,
                 "strike": strike,
                 "expiration_date": expiry,
                 "note": str(c.get("note") or "").strip(),
+                # Contract PREMIUM, not underlying stock price — see the
+                # prompt instructions above. Used by the mobile trade-entry
+                # flow to set an alert-matched stop loss (2026-08-30).
+                "entry_price": _optional_price(c.get("entry_price")),
+                "stop_loss": _optional_price(c.get("stop_loss")),
             })
 
         watch_zone = data.get("watch_zone")

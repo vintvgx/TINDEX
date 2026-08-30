@@ -154,18 +154,6 @@ export const IMMEDIATE_PROFILES: ImmediateProfile[] = [
     description: 'You control the exit. Set your stop loss below — nothing else closes automatically.',
     isManual: true,
   },
-  {
-    key: 'NO_STOP_LOSS',
-    emoji: '🧗',
-    name: 'No Stop Loss',
-    qty: 1,
-    maxLoss: 0,
-    tp1: 0,
-    tp2: 0,
-    risk: 'Unbounded',
-    description: 'No stop loss, no take profit, no EOD close — holds the contract(s) until you manually sell. Defaults to 1 contract.',
-    isNoStopLoss: true,
-  },
 ];
 
 export const DEFAULT_PROFILE_INDEX = 2; // MOMENTUM

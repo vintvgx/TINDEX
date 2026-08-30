@@ -2710,6 +2710,10 @@ class ORBEngine:
             # routes/strategy_routes.py's _engine_position_response for the
             # same field on the REST side.
             "use_tp2":              em_state.get("use_tp2", False),
+            # Whether SL/TP are actually live for this trade — see
+            # ExitManager.to_dict()'s doc comment (2026-08-30 toggle feature).
+            "sl_enabled":           em_state.get("sl_enabled", True),
+            "tp_enabled":           em_state.get("tp_enabled", True),
             # Current stop-type CONFIGURATION (Hard Stop vs SL timer, and
             # which duration) — distinct from sl_grace_active above, which is
             # only true while a grace window is actively counting down. Lets

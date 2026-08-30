@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
-  View, Text, TouchableOpacity, FlatList, StyleSheet, ActivityIndicator, Animated,
+  View, Text, TouchableOpacity, SectionList, StyleSheet, ActivityIndicator, Animated, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -77,6 +77,7 @@ interface ContractCardProps {
 const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress, onUntrack, isUntracking, colors }) => {
   const { toTicker } = useBaseNavigation();
   const [alertsOpen, setAlertsOpen] = useState(false);
+  const [reasonExpanded, setReasonExpanded] = useState(false);
   const today = toDateStr(new Date());
   const farDate = (() => { const d = new Date(); d.setFullYear(d.getFullYear() + 1); return toDateStr(d); })();
 
@@ -113,8 +114,15 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
     : null;
 
   const entry = contract.entry_price;
-  const pnl = entry != null && livePrice != null ? livePrice - entry : null;
-  const pnlPct = entry != null && entry > 0 && pnl != null ? (pnl / entry) * 100 : null;
+  const livePnl = entry != null && livePrice != null ? livePrice - entry : null;
+  const livePnlPct = entry != null && entry > 0 && livePnl != null ? (livePnl / entry) * 100 : null;
+  // A closed contract (exited/expired/cancelled) has no more live price to
+  // diff against — fall back to the backend's own final pnl/pnl_percentage
+  // (set at exit) rather than showing nothing, which is what happened here
+  // before: the card only ever computed P&L from a still-live quote.
+  const isClosed = contract.status === 'exited' || contract.status === 'expired' || contract.status === 'cancelled';
+  const pnl = livePnl ?? (isClosed ? contract.pnl ?? null : null);
+  const pnlPct = livePnlPct ?? (isClosed ? contract.pnl_percentage ?? null : null);
 
   const isCall = contract.option_type === 'CALL';
   const typeColor = isCall ? colors.success : colors.error;
@@ -170,7 +178,10 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
           </View>
         </View>
 
-        {/* Right: price */}
+        {/* Right: price + P&L are the two numbers that actually matter for
+            a decision — both get their own visual weight. Everything else
+            (tracked-from, underlying, held duration) is one step down, a
+            single muted caption cluster instead of stacked same-weight lines. */}
         <View style={cc.rightCol}>
           {/* Current price */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
@@ -184,6 +195,18 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
             )}
           </View>
 
+          {/* Trade P&L — a tinted badge (live if entry_price is set and
+              a quote is live, else the backend's final pnl/pnl_percentage
+              once the contract is closed) so it reads as THE number to
+              scan for, not just another text line. */}
+          {pnl != null && pnlPct != null && (
+            <View style={[cc.pnlBadge, { backgroundColor: (pnl >= 0 ? colors.success : colors.error) + '18' }]}>
+              <Text style={[cc.pnlBadgeText, { color: pnl >= 0 ? colors.success : colors.error }]}>
+                {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} ({pnlPct.toFixed(1)}%)
+              </Text>
+            </View>
+          )}
+
           {/* Change from tracked price */}
           {trackedChange != null && trackedChangePct != null ? (
             <Text style={[cc.trackedChange, { color: trackedChange >= 0 ? colors.success : colors.error }]}>
@@ -191,32 +214,34 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
             </Text>
           ) : null}
 
-          {/* Initial tracked price */}
+          {/* Secondary caption cluster — tracked-from, underlying, held duration */}
           {trackedPrice != null && (
             <Text style={[cc.trackedFrom, { color: colors.textTertiary }]}>
               from ${trackedPrice.toFixed(2)}
             </Text>
           )}
-
-          {/* Trade P&L (only when user has set an explicit entry price) */}
-          {pnl != null && pnlPct != null && (
-            <Text style={[cc.pnl, { color: pnl >= 0 ? colors.success : colors.error }]}>
-              P&L {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} ({pnlPct.toFixed(1)}%)
-            </Text>
-          )}
-
-          {/* Underlying stock price */}
           {liveData?.success && currentPrice > 0 && (
             <Text style={[cc.underlying, { color: colors.textTertiary }]}>
               {contract.ticker} ${currentPrice.toFixed(2)}
             </Text>
           )}
+          {contract.held_duration_days != null && (
+            <Text style={[cc.underlying, { color: colors.textTertiary }]}>
+              Held {contract.held_duration_days}d
+            </Text>
+          )}
         </View>
       </View>
 
-      {/* AI score row (shown when score is available) */}
+      {/* AI score row (shown when score is available) — tap to expand the
+          reasoning past 1 line, previously always truncated with no way to
+          read the rest. */}
       {aiScore ? (
-        <View style={[cc.aiRow, { borderTopColor: colors.separator, backgroundColor: colors.background + 'CC' }]}>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={(e) => { e.stopPropagation(); setReasonExpanded(v => !v); }}
+          style={[cc.aiRow, { borderTopColor: colors.separator, backgroundColor: colors.background + 'CC' }]}
+        >
           <Ionicons name="sparkles" size={11} color={SIGNAL_COLORS[aiScore.signal] ?? colors.accent} />
           <View style={[cc.scoreBadge, { backgroundColor: (SIGNAL_COLORS[aiScore.signal] ?? colors.accent) + '20' }]}>
             <Text style={[cc.scoreNum, { color: SIGNAL_COLORS[aiScore.signal] ?? colors.accent }]}>
@@ -226,10 +251,27 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
           <Text style={[cc.signalText, { color: SIGNAL_COLORS[aiScore.signal] ?? colors.accent }]}>
             {SIGNAL_LABELS[aiScore.signal] ?? aiScore.signal}
           </Text>
-          <Text style={[cc.reasoningText, { color: colors.textTertiary }]} numberOfLines={1}>
+          <Text style={[cc.reasoningText, { color: colors.textTertiary }]} numberOfLines={reasonExpanded ? undefined : 1}>
             · {aiScore.reasoning}
           </Text>
-        </View>
+          <Ionicons name={reasonExpanded ? 'chevron-up' : 'chevron-down'} size={11} color={colors.textTertiary} />
+        </TouchableOpacity>
+      ) : null}
+
+      {/* Why this was tracked (contract.tracking_reason — distinct from the
+          AI score's own reasoning above) — previously fetched but never
+          shown anywhere on the card. Same tap-to-expand toggle. */}
+      {contract.tracking_reason ? (
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={(e) => { e.stopPropagation(); setReasonExpanded(v => !v); }}
+          style={[cc.reasonRow, { borderTopColor: colors.separator }]}
+        >
+          <Ionicons name="bookmark-outline" size={11} color={colors.textTertiary} />
+          <Text style={[cc.reasoningText, { color: colors.textSecondary, flex: 1 }]} numberOfLines={reasonExpanded ? undefined : 1}>
+            {contract.tracking_reason}
+          </Text>
+        </TouchableOpacity>
       ) : null}
 
       {/* Footer row */}
@@ -248,7 +290,17 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
             </TouchableOpacity>
           )}
           <TouchableOpacity
-            onPress={onUntrack}
+            onPress={(e) => {
+              e.stopPropagation();
+              Alert.alert(
+                'Remove from watchlist?',
+                `${contract.ticker} ${contract.option_type} ${strikeLabel} — this can't be undone.`,
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Remove', style: 'destructive', onPress: onUntrack },
+                ],
+              );
+            }}
             disabled={isUntracking}
             hitSlop={8}
             style={[cc.trashBtn, { borderColor: colors.error + '40' }]}
@@ -288,9 +340,15 @@ const cc = StyleSheet.create({
   price: { fontSize: 18, fontWeight: '700' },
   trackedChange: { fontSize: 12, fontWeight: '700', marginTop: 3 },
   trackedFrom: { fontSize: 11, fontWeight: '500', marginTop: 1 },
-  pnl: { fontSize: 11, fontWeight: '600', marginTop: 3 },
+  pnlBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, marginTop: 4 },
+  pnlBadgeText: { fontSize: 12, fontWeight: '800' },
   underlying: { fontSize: 11, marginTop: 2 },
   aiRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 7,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  reasonRow: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 14, paddingVertical: 7,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -330,6 +388,16 @@ export const TrackedContractsList: React.FC<Props> = ({ onContractPress, activeT
     });
   }, [untrack, toast]);
 
+  // Active (still being watched/held) vs. closed (nothing left to do with
+  // it) — a flat list mixed both together with no way to tell at a glance
+  // which contracts still need attention.
+  const active = (contracts ?? []).filter(c => c.status === 'tracking' || c.status === 'entered');
+  const closed = (contracts ?? []).filter(c => c.status === 'exited' || c.status === 'expired' || c.status === 'cancelled');
+  const sections = [
+    ...(active.length ? [{ title: `ACTIVE (${active.length})`, data: active }] : []),
+    ...(closed.length ? [{ title: `CLOSED (${closed.length})`, data: closed }] : []),
+  ];
+
   if (isLoading) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -341,10 +409,16 @@ export const TrackedContractsList: React.FC<Props> = ({ onContractPress, activeT
 
   return (
     <>
-      <FlatList
-        data={contracts ?? []}
+      <SectionList
+        sections={sections}
         keyExtractor={item => item.id}
+        stickySectionHeadersEnabled={false}
         contentContainerStyle={{ paddingTop: 12, paddingBottom: 200 }}
+        renderSectionHeader={({ section }) => (
+          <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '700', letterSpacing: 0.4, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6 }}>
+            {section.title}
+          </Text>
+        )}
         ListHeaderComponent={
           contracts && contracts.length > 0 ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 10 }}>

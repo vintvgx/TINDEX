@@ -64,6 +64,14 @@ export interface FlowChecklistContract {
    *  (status='tracking') for the user — set server-side at parse time so a
    *  re-parsed/resent alert doesn't offer to track a duplicate. */
   already_tracked?: boolean;
+  /** Contract PREMIUM (not underlying stock price) the alert stated for
+   *  entry/stop-loss, when present — used to set an alert-matched stop at
+   *  trade entry (see TradeContractSheet's alertEntryPrice/alertStopLoss
+   *  props): the differential (entry_price - stop_loss) is preserved and
+   *  reapplied against whatever price the contract is actually entered at,
+   *  since that's rarely the exact alert price by the time it's acted on. */
+  entry_price?: number | null;
+  stop_loss?: number | null;
 }
 
 export interface FlowWatchZone {

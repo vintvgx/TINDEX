@@ -63,6 +63,8 @@ function toPositionEntry(pos: ImmediatePosition): PositionEntry {
     use_tp2:             full.use_tp2,
     sl_grace_enabled:    full.sl_grace_enabled,
     sl_grace_minutes:    full.sl_grace_minutes,
+    sl_enabled:          full.sl_enabled,
+    tp_enabled:          full.tp_enabled,
   };
 }
 
@@ -207,6 +209,8 @@ export function PositionRow({
           use_tp2:       pos.use_tp2,
           sl_grace_enabled: pos.sl_grace_enabled,
           sl_grace_minutes: pos.sl_grace_minutes,
+          sl_enabled:    pos.sl_enabled,
+          tp_enabled:    pos.tp_enabled,
           runner_mode:   pos.runner_mode,
           runner_trail:  pos.runner_trail,
         }}

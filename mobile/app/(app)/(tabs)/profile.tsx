@@ -6,6 +6,7 @@ import { ORBAdminModal } from '@/common/components/admin/ORBAdminModal';
 import { ServiceStatusModal } from '@/common/components/admin/ServiceStatusModal';
 import { LogViewerModal } from '@/common/components/orb/LogViewerModal';
 import { AgentModal } from '@/common/components/agent/AgentModal';
+import { ChartLibraryPreviewModal } from '@/common/components/profile/ChartLibraryPreviewModal';
 import { ThemeToggle } from '@/common/components/ThemeToggle';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { Ionicons } from '@expo/vector-icons';
@@ -23,6 +24,7 @@ const ProfileScreen = () => {
   const [logViewerVisible, setLogViewerVisible] = useState(false);
   const [serviceStatusVisible, setServiceStatusVisible] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
+  const [chartPreviewOpen, setChartPreviewOpen] = useState(false);
   const toast = useToast();
   const { unreadCount } = useNotificationHistory();
   const { hidden: searchBarHidden, setHidden: setSearchBarHidden } = useSearchBarVisibility();
@@ -61,6 +63,10 @@ const ProfileScreen = () => {
     // "Hide Search Bar" setting is on (see CustomTabBar), so it needs
     // another way in.
     { icon: 'sparkles-outline' as const, label: 'Open AI Assistant', onPress: () => setAgentOpen(true) },
+    // 2026-08-18 TODO ("evaluate react-native-gifted-charts") — a
+    // side-by-side comparison against the current chart, not a real chart
+    // flow. See ChartLibraryPreviewModal's own doc comment.
+    { icon: 'bar-chart-outline' as const, label: 'Chart Library Preview', onPress: () => setChartPreviewOpen(true) },
   ];
 
   const menuItems = [
@@ -549,6 +555,10 @@ const ProfileScreen = () => {
         visible={agentOpen}
         onClose={() => setAgentOpen(false)}
         onError={(msg) => toast.error(msg)}
+      />
+      <ChartLibraryPreviewModal
+        visible={chartPreviewOpen}
+        onClose={() => setChartPreviewOpen(false)}
       />
     </SafeAreaView>
   );

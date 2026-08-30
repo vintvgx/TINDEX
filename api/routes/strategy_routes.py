@@ -1299,6 +1299,26 @@ def immediate_trade_by_ticker():
             except ValueError as e:
                 return jsonify({"status": "error", "message": str(e)}), 400
 
+    # SL/TP enable-disable toggle (2026-08-30) — deliberately OUTSIDE the
+    # is_no_stop_loss gate above: this is what NO_STOP_LOSS's behavior now
+    # folds into, applicable to ANY profile's sizing/qty/targets rather than
+    # only the fixed NO_STOP_LOSS shape. Explicit `False` only — omitted or
+    # `True` leaves the chosen profile's own default alone. Disabling SL
+    # mirrors NO_STOP_LOSS's own max_loss_pct=1.0 convention (unreachable,
+    # not literally "no stop" as a separate code path). Disabling TP mirrors
+    # disable_tp1_exit + turns off TP2 too, so no auto-TP fires at all — the
+    # runner then rides under whatever runner_mode/EOD-close is already in
+    # effect, letting it "run its course into close" without also disabling
+    # the EOD safety net (NO_STOP_LOSS used to also disable EOD close; this
+    # toggle intentionally does not, per the 2026-08-30 request).
+    if data.get("sl_enabled") is False:
+        exit_overrides["max_loss_pct"] = 1.0
+    if data.get("tp_enabled") is False:
+        exit_overrides["disable_tp1_exit"] = True
+        exit_overrides["use_tp2"] = False
+        exit_overrides["tp1_close_pct"] = 0.0
+        exit_overrides["tp2_close_pct"] = 0.0
+
     engine = _get_or_create_immediate_engine(ticker, paper_mode)
     result = _submit_manual_trade_bounded(
         engine,
@@ -2195,6 +2215,10 @@ def _engine_position_response(engine: ORBEngine):
             # Lets the client hide TP2 entirely instead of showing a number
             # that can never fire.
             "use_tp2":             em._use_tp2 if em else False,
+            # Whether SL/TP are actually live for this trade — see
+            # ExitManager.to_dict()'s doc comment (2026-08-30 toggle feature).
+            "sl_enabled":          em_state.get("sl_enabled", True),
+            "tp_enabled":          em_state.get("tp_enabled", True),
             # Current stop-type configuration (Hard Stop vs SL timer) — lets
             # the card/Edit modal know which to show as active.
             "sl_grace_enabled":    em_state.get("sl_grace_enabled", False),

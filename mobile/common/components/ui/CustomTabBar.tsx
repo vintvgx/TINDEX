@@ -210,7 +210,7 @@ export const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, navigation })
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() => setAgentOpen(true)}
+              onPress={() => setAgentOpen(v => !v)}
               activeOpacity={0.82}
               style={styles.agentBtn}
             >

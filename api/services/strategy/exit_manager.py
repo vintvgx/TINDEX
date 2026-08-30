@@ -665,6 +665,15 @@ class ExitManager:
             "use_tp2":             self._use_tp2,
             "qty":                 self.qty,
             "qty_remaining":       self.qty_remaining,
+            # Whether SL/TP are actually live for this trade — explicit
+            # booleans rather than making the client infer it from hard_stop
+            # being near 0 or tp1 being unset, which is ambiguous for a
+            # legitimately cheap contract. sl_enabled mirrors the
+            # NO_STOP_LOSS convention (max_loss_pct >= 1.0 == unreachable);
+            # tp_enabled mirrors disable_tp1_exit (2026-08-30 — the SL/TP
+            # enable toggle, see immediate-trade route).
+            "sl_enabled":          self.profile.get("max_loss_pct", 0) < 1.0,
+            "tp_enabled":          not self._disable_tp1_exit,
             # Current runner/cascade CONFIGURATION for this open trade — lets
             # a client (EditExitsModal) pre-select the toggle to what's
             # actually in effect right now, not just the profile default.

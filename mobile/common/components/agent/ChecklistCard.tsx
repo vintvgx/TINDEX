@@ -121,8 +121,13 @@ interface Props {
   onResolved: (status: 'submitted' | 'skipped') => void;
   /** Long-press on a contract row — opens the same trade-entry sheet used
    *  everywhere else in the app (profile, quantity, paper/live), rather than
-   *  requiring Submit first. */
-  onTradeContract: (ticker: string, liveContract: OptionsContract, currentPrice: number) => void;
+   *  requiring Submit first. alertEntryPrice/alertStopLoss (contract
+   *  premium, from the checklist contract's own entry_price/stop_loss) let
+   *  the trade sheet pre-set a stop matched to what the alert specified. */
+  onTradeContract: (
+    ticker: string, liveContract: OptionsContract, currentPrice: number,
+    alertEntryPrice?: number | null, alertStopLoss?: number | null,
+  ) => void;
   colors: ReturnType<typeof useThemeColors>;
 }
 
@@ -312,7 +317,7 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
               enabled={contractsEnabled[i]}
               interactive
               onToggle={() => toggleContract(i)}
-              onLongPressTrade={(liveContract, currentPrice) => onTradeContract(checklist.ticker ?? '', liveContract, currentPrice)}
+              onLongPressTrade={(liveContract, currentPrice) => onTradeContract(checklist.ticker ?? '', liveContract, currentPrice, c.entry_price, c.stop_loss)}
               colors={colors}
             />
           ))}

@@ -25,6 +25,15 @@ interface Props {
   /** Underlying price at the time the contract was looked up (unused by the
    *  cheap-contract auto-profile check itself, kept for signature stability). */
   currentPrice: number;
+  /** Contract PREMIUM (not underlying stock price) the source alert stated
+   *  for entry/stop, when known (see FlowChecklistContract.entry_price/
+   *  stop_loss). When both are present, the form pre-applies a stop that
+   *  preserves the alert's entry-to-stop DIFFERENCE against whatever price
+   *  the contract is actually entered at — rarely the exact alert price by
+   *  the time it's acted on. E.g. alert entry $1.50 / stop $1.25 (a $0.25
+   *  differential), entered here at $1.35 → stop set to $1.10, not $1.25. */
+  alertEntryPrice?: number | null;
+  alertStopLoss?: number | null;
 }
 
 /**
@@ -35,7 +44,7 @@ interface Props {
  * never has to close to enter a trade). Neither wrapper duplicates any of
  * this logic — only how it's presented differs.
  */
-function TradeContractForm({ visible, onClose, colors, ticker, contract, currentPrice }: Omit<Props, 'contract'> & { contract: OptionsContract }) {
+function TradeContractForm({ visible, onClose, colors, ticker, contract, currentPrice, alertEntryPrice, alertStopLoss }: Omit<Props, 'contract'> & { contract: OptionsContract }) {
   const toast = useToast();
   const [paperMode, setPaperMode]       = useState(true);
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
@@ -43,10 +52,34 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
   const [stopType, setStopType]         = useState<StopType>('HARD');
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
+  // Defaults ON whenever the checklist's parsed contract had both an alert
+  // entry and stop — user can still turn it off to fall back to the
+  // profile's own default stop (or the manual slider, if MANUAL).
+  const [useAlertStop, setUseAlertStop] = useState(true);
+  // SL/TP enable — on by default for every profile; turning either off lets
+  // a runner run its course (or hold into close) instead of auto-exiting.
+  const [slEnabled, setSlEnabled] = useState(true);
+  const [tpEnabled, setTpEnabled] = useState(true);
 
   const profile      = IMMEDIATE_PROFILES[profileIndex];
   const isManual     = profile.isManual === true;
   const isNoStopLoss = profile.isNoStopLoss === true;
+  // No stop loss in effect — either from a (legacy) NO_STOP_LOSS profile or
+  // the user unchecking Stop Loss directly.
+  const noSL = isNoStopLoss || !slEnabled;
+
+  // Preserve the alert's entry→stop DOLLAR differential against the live
+  // ask shown here, rather than reapplying its raw stop price verbatim —
+  // see the alertEntryPrice/alertStopLoss prop doc for the worked example.
+  const alertDiff = (alertEntryPrice != null && alertStopLoss != null)
+    ? alertEntryPrice - alertStopLoss
+    : null;
+  const impliedAlertStop = alertDiff != null && contract
+    ? Math.max(0, contract.ask - alertDiff)
+    : null;
+  const alertMaxLossPct = impliedAlertStop != null && contract && contract.ask > 0
+    ? Math.min(0.95, Math.max(0.05, (contract.ask - impliedAlertStop) / contract.ask))
+    : null;
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
 
@@ -69,6 +102,9 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     setManualSlPct(30);
     setPaperMode(true);
     setBlindEntry(null);
+    setUseAlertStop(true);
+    setSlEnabled(true);
+    setTpEnabled(true);
   // Only re-run when a different contract is opened, not on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, contract?.symbol]);
@@ -106,17 +142,25 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
       qty,
       profile:         profile.key,
       paper_mode:      paperMode,
-      volume_exit:     (isManual || isNoStopLoss) ? false : volumeExit,
-      sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
-      ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
+      volume_exit:     isManual ? false : volumeExit,
+      sl_grace_minutes: (noSL || stopType === 'HARD') ? null : stopType,
+      sl_enabled: slEnabled,
+      tp_enabled: tpEnabled,
+      // Alert-matched stop takes priority over both the profile default and
+      // the manual slider whenever it's on and available — matches the
+      // "should be set to that price" request regardless of which profile
+      // is selected. No point sending a stop at all once Stop Loss is off.
+      ...(slEnabled && useAlertStop && alertMaxLossPct != null
+        ? { max_loss_pct: alertMaxLossPct }
+        : (slEnabled && isManual) ? { max_loss_pct: manualSlPct / 100 } : {}),
     });
   };
 
   const handleSubmitPress = () => {
-    if (isNoStopLoss) {
+    if (noSL) {
       Alert.alert(
-        `${profile.emoji} No Stop Loss`,
-        `Enter ${contract?.option_type} ${contract?.symbol} × ${qty}?\n\n⚠️ This will NOT auto-close for any reason, including end of day — it expires today (0DTE) if you don't sell it.${!paperMode ? '\n\nThis is a LIVE order with REAL money.' : ''}`,
+        '⚠️ No Stop Loss',
+        `Enter ${contract?.option_type} ${contract?.symbol} × ${qty}?\n\nThis position will NOT have an automatic stop loss${!tpEnabled ? ' or take-profit exit' : ''}${isNoStopLoss ? ', including end of day — it expires today (0DTE) if you don\'t sell it' : ''}.${!paperMode ? '\n\nThis is a LIVE order with REAL money.' : ''}`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Trade', style: paperMode ? 'default' : 'destructive', onPress: doSubmit },
@@ -151,6 +195,36 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
         </View>
 
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
+          {/* Alert-matched stop — only when the checklist's parsed contract
+              had both an entry and stop price, and NO_STOP_LOSS (which
+              ignores max_loss_pct entirely server-side) isn't selected. */}
+          {alertMaxLossPct != null && slEnabled && (
+            <TouchableOpacity
+              onPress={() => setUseAlertStop(v => !v)}
+              activeOpacity={0.8}
+              style={[s.alertStopRow, {
+                backgroundColor: (useAlertStop ? colors.accent : colors.tabBarInactive) + '14',
+                borderColor: (useAlertStop ? colors.accent : colors.border) + '55',
+                marginBottom: 18,
+              }]}
+            >
+              <Ionicons
+                name={useAlertStop ? 'checkbox' : 'square-outline'}
+                size={19}
+                color={useAlertStop ? colors.accent : colors.tabBarInactive}
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={[s.alertStopTitle, { color: colors.text }]}>
+                  Use alert-matched stop — ${impliedAlertStop!.toFixed(2)}
+                </Text>
+                <Text style={[s.alertStopSub, { color: colors.tabBarInactive }]}>
+                  Alert: ${alertEntryPrice!.toFixed(2)} entry / ${alertStopLoss!.toFixed(2)} stop
+                  {' '}(${alertDiff!.toFixed(2)} differential) · applied against this ${contract.ask.toFixed(2)} ask
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
           {/* Account */}
           <Text style={[s.label, { color: colors.tabBarInactive }]}>ACCOUNT</Text>
           <View style={[s.accountToggle, { backgroundColor: colors.card, borderColor: colors.border, marginBottom: 18 }]}>
@@ -178,8 +252,8 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
             <ProfileDropdown selectedIndex={profileIndex} onSelect={handleProfileSelect} colors={colors} />
           </View>
 
-          {/* Manual SL — only for MANUAL profile */}
-          {isManual && (
+          {/* Manual SL — only for MANUAL profile, and only while SL is enabled */}
+          {isManual && slEnabled && (
             <View style={{ marginBottom: 18 }}>
               <ManualSLPicker slPct={manualSlPct} onChangePct={setManualSlPct} askPrice={contract.ask} colors={colors} />
             </View>
@@ -187,7 +261,7 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
 
           {/* Qty */}
           <Text style={[s.label, { color: colors.tabBarInactive }]}>
-            CONTRACTS{isNoStopLoss ? ' — no stop loss, size carefully' : ''}
+            CONTRACTS{noSL ? ' — no stop loss, size carefully' : ''}
           </Text>
           <View style={[s.qtyRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <TouchableOpacity
@@ -210,26 +284,48 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
             </Text>
           </View>
 
-          {/* Exit Controls — hidden for NO_STOP_LOSS (no automatic exit to configure) */}
-          {!isNoStopLoss && (
-            <>
-              <Text style={[s.label, { color: colors.tabBarInactive, marginTop: 18 }]}>EXIT CONTROLS</Text>
+          {/* Exit Controls — SL/TP enable checkboxes apply on every profile;
+              unchecking either lets a runner run its course (or hold into
+              close) instead of auto-exiting on that leg. */}
+          <Text style={[s.label, { color: colors.tabBarInactive, marginTop: 18 }]}>EXIT CONTROLS</Text>
+          <View style={[s.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={s.exitRow}>
+              <Text style={[s.exitLabel, { color: colors.text }]}>Stop Loss</Text>
+              <TouchableOpacity onPress={() => setSlEnabled(v => !v)} hitSlop={8}>
+                <Ionicons
+                  name={slEnabled ? 'checkbox' : 'square-outline'}
+                  size={22}
+                  color={slEnabled ? colors.accent : colors.tabBarInactive}
+                />
+              </TouchableOpacity>
+            </View>
+            <View style={[s.exitRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+              <Text style={[s.exitLabel, { color: colors.text }]}>Take Profit</Text>
+              <TouchableOpacity onPress={() => setTpEnabled(v => !v)} hitSlop={8}>
+                <Ionicons
+                  name={tpEnabled ? 'checkbox' : 'square-outline'}
+                  size={22}
+                  color={tpEnabled ? colors.accent : colors.tabBarInactive}
+                />
+              </TouchableOpacity>
+            </View>
+            {!isManual && (
+              <View style={[s.exitRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+                <Text style={[s.exitLabel, { color: colors.text }]}>Volume Exit</Text>
+                <TouchableOpacity onPress={() => setVolumeExit(v => !v)} hitSlop={8}>
+                  <Ionicons
+                    name={volumeExit ? 'checkbox' : 'square-outline'}
+                    size={22}
+                    color={volumeExit ? colors.accent : colors.tabBarInactive}
+                  />
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+          {slEnabled && (
+            <View style={{ marginTop: 10 }}>
               <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
-              {!isManual && (
-                <View style={[s.exitToggles, { backgroundColor: colors.card, borderColor: colors.border, marginTop: 10 }]}>
-                  <View style={s.exitRow}>
-                    <Text style={[s.exitLabel, { color: colors.text }]}>Volume Exit</Text>
-                    <TouchableOpacity onPress={() => setVolumeExit(v => !v)} hitSlop={8}>
-                      <Ionicons
-                        name={volumeExit ? 'checkbox' : 'square-outline'}
-                        size={22}
-                        color={volumeExit ? colors.accent : colors.tabBarInactive}
-                      />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              )}
-            </>
+            </View>
           )}
 
           <TouchableOpacity
@@ -279,13 +375,14 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
  * exact same profile/SL pickers and submission path as Home's Trade flow so
  * behavior is identical regardless of where the contract was found.
  */
-export function TradeContractSheet({ visible, onClose, colors, ticker, contract, currentPrice }: Props) {
+export function TradeContractSheet({ visible, onClose, colors, ticker, contract, currentPrice, alertEntryPrice, alertStopLoss }: Props) {
   if (!contract) return null;
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <TradeContractForm
         visible={visible} onClose={onClose} colors={colors}
         ticker={ticker} contract={contract} currentPrice={currentPrice}
+        alertEntryPrice={alertEntryPrice} alertStopLoss={alertStopLoss}
       />
     </Modal>
   );
@@ -306,7 +403,7 @@ const SCREEN_H = Dimensions.get('window').height;
  * instead: AgentModal never closes, so there's nothing to lose and nothing
  * to animate back open.
  */
-export function TradeContractQuickCard({ visible, onClose, colors, ticker, contract, currentPrice }: Props) {
+export function TradeContractQuickCard({ visible, onClose, colors, ticker, contract, currentPrice, alertEntryPrice, alertStopLoss }: Props) {
   const translateY = useRef(new Animated.Value(SCREEN_H)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
   // Kept mounted through the close animation (visible flips to false first,
@@ -350,6 +447,7 @@ export function TradeContractQuickCard({ visible, onClose, colors, ticker, contr
         <TradeContractForm
           visible={visible} onClose={onClose} colors={colors}
           ticker={ticker} contract={contract} currentPrice={currentPrice}
+          alertEntryPrice={alertEntryPrice} alertStopLoss={alertStopLoss}
         />
       </Animated.View>
     </View>
@@ -375,6 +473,10 @@ const s = StyleSheet.create({
   closeBtn:    { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
 
   label:       { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 },
+
+  alertStopRow:   { flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderRadius: 12, borderWidth: 1, padding: 12 },
+  alertStopTitle: { fontSize: 13.5, fontWeight: '700' },
+  alertStopSub:   { fontSize: 11, marginTop: 2, lineHeight: 15 },
 
   accountToggle: { flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3 },
   accountBtn:    { flex: 1, alignItems: 'center', paddingVertical: 9 },
