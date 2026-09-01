@@ -13,7 +13,7 @@ import type { ImmediateTradeByTickerRequest } from '@/common/types/strategy';
 import { blendHex } from '@/lib/colorBlend';
 import type { OptionsContract, OptionsOpportunity } from '@/common/types/blogPosts/ticker';
 import {
-  IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
+  IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX, defaultQtyFor,
   getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
 import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
@@ -145,7 +145,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   const [side, setSide]                 = useState<OptionSide>('CALL');
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [selected, setSelected]         = useState<OptionsContract | null>(null);
-  const [qty, setQty]                   = useState(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
+  const [qty, setQty]                   = useState(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], 0));
   const [stopType, setStopType]         = useState<StopType>('HARD');
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
@@ -164,7 +164,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
 
   const handleProfileSelect = (idx: number) => {
     setProfileIndex(idx);
-    setQty(IMMEDIATE_PROFILES[idx].qty);
+    setQty(defaultQtyFor(IMMEDIATE_PROFILES[idx], selected?.ask ?? 0));
   };
 
   // Auto-suggest the grace stop-type when a cheap contract is tapped — mirrors

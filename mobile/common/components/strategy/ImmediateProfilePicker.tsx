@@ -156,8 +156,41 @@ export const IMMEDIATE_PROFILES: ImmediateProfile[] = [
   },
 ];
 
-export const DEFAULT_PROFILE_INDEX = 2; // MOMENTUM
+export const DEFAULT_PROFILE_INDEX = 1; // SCALPER
 export const SL_PRESETS = [20, 30, 40, 50];
+
+// ── Scalper price-based quantity ──────────────────────────────────────────────
+// Plain SCALPER's flat qty=3 spends wildly different amounts depending on
+// contract price ($60 at $0.20/contract vs $900 at $3.00) — this targets a
+// consistent ~$300 spend instead, floored (not rounded) so it lands at-or-
+// under budget rather than occasionally overshooting, capped at 5 on the
+// cheap end (never below 1). Deliberately scoped to SCALPER only — every
+// other profile (including the SCALPER_SMALL/LARGE/XL size tiers) keeps its
+// flat profile.qty; those are an intentional manual capital-allocation lever
+// (see profiles.py's SCALPER size-tier comment), not something to auto-size.
+//
+// This changes more than position size — Scalper's tp1_close_pct=0.34/
+// tp2_close_pct=0.50 are applied against qty_remaining AT THE MOMENT each
+// target fires (see exit_manager.py), so the resulting split shape itself
+// shifts with quantity: qty=3 (today's default) gives the classic 1-TP1/
+// 1-TP2/1-runner split; qty=5 (the cheap-contract case here) gives 1-TP1/
+// 2-TP2/2-runner. Confirmed as the intended behavior, not a bug to correct.
+const SCALPER_SMART_QTY_TARGET = 300; // dollars
+const SCALPER_SMART_QTY_MAX = 5;
+
+export function scalperSmartQty(ask: number): number {
+  const fallback = IMMEDIATE_PROFILES.find(p => p.key === 'SCALPER')?.qty ?? 3;
+  if (!ask || ask <= 0) return fallback;
+  const raw = Math.floor(SCALPER_SMART_QTY_TARGET / (ask * 100));
+  return Math.min(SCALPER_SMART_QTY_MAX, Math.max(1, raw));
+}
+
+/** Default entry qty for a given profile + contract ask — SCALPER scales by
+ *  price (see scalperSmartQty above); every other profile uses its flat,
+ *  configured profile.qty unchanged. */
+export function defaultQtyFor(profile: ImmediateProfile, ask: number): number {
+  return profile.key === 'SCALPER' ? scalperSmartQty(ask) : profile.qty;
+}
 
 // ── Cheap-contract auto stop-type suggestion ──────────────────────────────────
 // Above this ask price, a contract is priced well enough that an instant Hard

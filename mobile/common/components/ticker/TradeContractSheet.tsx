@@ -8,7 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useToast } from '@/common/components/ui/Toast';
 import { useImmediateTradeByTicker, StreamUnavailableError } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
 import {
-  IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
+  IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX, defaultQtyFor,
   getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
 import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
@@ -48,7 +48,7 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
   const toast = useToast();
   const [paperMode, setPaperMode]       = useState(true);
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
-  const [qty, setQty]                   = useState(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
+  const [qty, setQty]                   = useState(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], contract.ask));
   const [stopType, setStopType]         = useState<StopType>('HARD');
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
@@ -96,7 +96,7 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
   useEffect(() => {
     if (!visible || !contract) return;
     setProfileIndex(DEFAULT_PROFILE_INDEX);
-    setQty(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
+    setQty(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], contract.ask));
     setStopType(getCheapContractAutoGraceMinutes(contract.ask) ?? 'HARD');
     setVolumeExit(false);
     setManualSlPct(30);
@@ -111,7 +111,7 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
 
   const handleProfileSelect = (idx: number) => {
     setProfileIndex(idx);
-    setQty(IMMEDIATE_PROFILES[idx].qty);
+    setQty(defaultQtyFor(IMMEDIATE_PROFILES[idx], contract.ask));
   };
 
   // Shared by the initial submit and the Blind Entry "Enter Anyway" retry.

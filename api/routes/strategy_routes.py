@@ -1885,6 +1885,17 @@ def get_stats_by_profile():
     return jsonify(logger_svc.get_stats_by_profile())
 
 
+@strategy_bp.route("/stats/by-hour", methods=["GET"])
+def get_stats_by_hour():
+    """
+    Win-rate/avg-P&L broken down by entry hour (ET) — optionally scoped to
+    one profile via ?profile=. Manual analytics only, not read by any live
+    entry decision — see TradeLogger.get_stats_by_hour's docstring.
+    """
+    profile = request.args.get("profile", None)
+    return jsonify(logger_svc.get_stats_by_hour(profile=profile))
+
+
 @strategy_bp.route("/performance", methods=["GET"])
 def get_performance():
     """

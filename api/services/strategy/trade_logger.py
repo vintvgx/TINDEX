@@ -7,12 +7,14 @@ import os
 import uuid
 import asyncio
 import logging
+import pytz
 from datetime import datetime, date
 from typing import Optional
 
 from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
+ET_TZ = pytz.timezone("America/New_York")
 
 
 def _run_async(coro):
@@ -770,6 +772,60 @@ class TradeLogger:
     def get_stats_by_profile(self) -> list:
         from services.strategy.profiles import PROFILES
         return [self.get_stats(profile=k) | {"profile": k} for k in PROFILES]
+
+    def get_stats_by_hour(self, profile: str = None) -> list:
+        """
+        Win-rate/avg-P&L broken down by ENTRY hour (ET, market time — not the
+        UTC storage timezone) — a manual analytics view for spotting whether
+        a profile's setups actually perform worse later in the session, e.g.
+        REVERSAL entries taken well after the opening range vs. right after
+        it. Deliberately NOT wired into any live entry/selection decision —
+        there isn't enough trade history yet to do that safely; this is for
+        you to look at and hand-tune profile parameters (breakout_time_limit_min,
+        strike_offset/target_delta, etc.) if a pattern is obvious.
+
+        Only returns hours that actually have ≥1 trade — a full 9-16 fixed
+        range would mostly be empty rows for a low-volume profile.
+        """
+        try:
+            q = self.client.table("orb_trades").select("pnl, pnl_pct, exit_reason, entry_time")
+            if profile:
+                q = q.eq("profile", profile)
+            rows = q.execute().data or []
+            if not rows:
+                return []
+
+            from collections import defaultdict
+            buckets: dict = defaultdict(list)
+            for r in rows:
+                raw = r.get("entry_time")
+                if not raw:
+                    continue
+                try:
+                    # Stored as UTC isoformat (see log_entry) — convert to ET
+                    # so the hour bucket matches market clock time, not UTC.
+                    dt_utc = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                    if dt_utc.tzinfo is None:
+                        dt_utc = pytz.utc.localize(dt_utc)
+                    hour = dt_utc.astimezone(ET_TZ).hour
+                except (ValueError, TypeError):
+                    continue
+                buckets[hour].append(r)
+
+            out = []
+            for hour in sorted(buckets.keys()):
+                stats = self._compute_stats_from_rows(buckets[hour])
+                period_end = (hour + 1) % 24
+                out.append({
+                    **stats,
+                    "hour": hour,
+                    "hour_label": f"{hour % 12 or 12}{'am' if hour < 12 else 'pm'}"
+                                  f"–{period_end % 12 or 12}{'am' if period_end < 12 else 'pm'}",
+                })
+            return out
+        except Exception as e:
+            logger.error("[TradeLogger] get_stats_by_hour failed: %s", e)
+            return []
 
     def get_performance(self) -> dict:
         """

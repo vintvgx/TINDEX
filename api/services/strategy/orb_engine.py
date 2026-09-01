@@ -574,6 +574,19 @@ class ORBEngine:
                 self.debug.emit("WARN", f"Ignoring confirmed breakout — session skipped "
                                         f"({self.skip_reason})")
                 return
+            # config.get("active") was previously only checked ONCE, in
+            # calculate_orb() at session start — an engine already armed for
+            # the day never re-checked it, so pausing (or pause-all) mid-
+            # session had no effect on an engine whose ORB had already been
+            # calculated: session_skipped stayed False from the morning
+            # check, and new entries kept firing all day regardless of the
+            # later pause. Re-checking the LIVE flag here (pause-all mutates
+            # engine.config in place — see POST /configs/pause-all) closes
+            # that gap without touching exit management, which must keep
+            # running for an already-open position regardless of pause state.
+            if not self.config.get("active", True):
+                self.debug.emit("WARN", "Ignoring confirmed breakout — strategy paused")
+                return
             if not self.orh or not self.orl:
                 self.debug.emit("WARN", "Ignoring confirmed breakout — engine ORB not set "
                                         "(calculate_orb did not run/produce a range)")
@@ -626,9 +639,21 @@ class ORBEngine:
         direction — opposite of the original breakout ("PUT" if breakout was CALL)
         price     — underlying price at the time the reversal was confirmed.
 
-        Unlike on_breakout_confirmed, we skip the time-limit guard (OrbService
-        already validated that the original breakout was within window) and skip
-        the RETEST entry mode (the score itself is the confirmation).
+        Unlike on_breakout_confirmed, we skip the RETEST entry mode (the score
+        itself is the confirmation).
+
+        We do NOT skip the time-limit guard, despite the original breakout
+        having already been validated as within-window — that only bounds
+        when the ORIGINAL breakout happened, not how long the multi-bar
+        reversal SCORE then takes to cross its fire threshold afterward,
+        which can run well past the deadline (2026-08-31: a REVERSAL fired
+        at 1:45pm ET, right at this profile's own 240-minute nominal limit,
+        on a 0DTE contract with ~2h15m left before worthless — every
+        contract selection in this codebase is same-day expiry regardless of
+        profile, see contract_selector.py, so "swing" here is intent, not a
+        structural multi-day position). Reusing the exact same deadline
+        on_breakout_confirmed already enforces keeps this consistent instead
+        of inventing a second, REVERSAL-specific number.
         """
         with self._tick_lock:
             self.debug.emit("INFO",
@@ -640,6 +665,24 @@ class ORBEngine:
             if self.session_skipped:
                 self.debug.emit("WARN",
                     f"Ignoring reversal — session skipped ({self.skip_reason})")
+                return
+            total_min = 9 * 60 + 30 + ORB_WINDOW_MINUTES
+            now_et    = datetime.now(ET)
+            orb_close = now_et.replace(hour=total_min // 60, minute=total_min % 60,
+                                       second=0, microsecond=0)
+            limit_min = self.profile.get("breakout_time_limit_min", 45)
+            deadline  = orb_close + timedelta(minutes=limit_min)
+            if not self.bypass_breakout_window and now_et > deadline:
+                self.debug.emit("WARN", "Ignoring reversal — past breakout time limit")
+                return
+            # See the matching check in on_breakout_confirmed — active is
+            # otherwise only checked once, at session start, so a mid-session
+            # pause/pause-all was silently ignored by an already-armed
+            # engine. Reversal entries are especially exposed to this: they
+            # already skip the time-limit guard (see this function's own
+            # docstring) and can fire hours after the original breakout.
+            if not self.config.get("active", True):
+                self.debug.emit("WARN", "Ignoring reversal — strategy paused")
                 return
             if not self.orh or not self.orl:
                 self.debug.emit("WARN",
@@ -812,6 +855,16 @@ class ORBEngine:
         NOTE: Called by on_price_tick when price closes above ORH (CALL) or
         below ORL (PUT) for the first time in the session.
         """
+        # Final choke point for every entry path (direct breakout, bar-close-
+        # confirm, RETEST completion, reversal) — a RETEST watch or bar-close-
+        # confirm armed BEFORE a pause can still complete afterward without
+        # going back through on_breakout_confirmed's own active check, so this
+        # is the one place that's guaranteed to catch all of them. See the
+        # matching comment in on_breakout_confirmed for why this check exists
+        # at all (previously active was only read once, at session start).
+        if not self.config.get("active", True):
+            self.debug.emit("WARN", "Ignoring entry signal — strategy paused")
+            return
         if self._pending_confirmation is not None:
             self.debug.emit("WARN", "Ignoring signal — a trade confirmation is "
                                     "already awaiting your response")
@@ -863,6 +916,15 @@ class ORBEngine:
                     self.ticker, direction, trigger_price, self.session_vwap,
                 )
 
+        # How far into the session this entry is landing — narrows OTM
+        # strike/delta targeting as the day runs down (an OTM contract
+        # entered late has much less time to work than one entered right
+        # after the open). See contract_selector.py's TOD-scaling doc.
+        _total_min  = 9 * 60 + 30 + ORB_WINDOW_MINUTES
+        _orb_close  = datetime.now(ET).replace(hour=_total_min // 60, minute=_total_min % 60,
+                                               second=0, microsecond=0)
+        minutes_since_orb_close = max(0.0, (datetime.now(ET) - _orb_close).total_seconds() / 60)
+
         contract = select_contract(
             ticker=self.ticker,
             direction=direction,
@@ -873,6 +935,7 @@ class ORBEngine:
             data_client=self.option_client,
             profile=self.profile,
             vwap=self.session_vwap,
+            minutes_since_orb_close=minutes_since_orb_close,
         )
 
         if not contract:

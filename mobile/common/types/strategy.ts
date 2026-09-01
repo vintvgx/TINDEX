@@ -355,6 +355,13 @@ export interface StrategyStats {
   profile?: ProfileKey;
 }
 
+/** One entry-hour bucket (ET) from GET /strategy/stats/by-hour — a manual
+ *  analytics breakdown, not read by any live entry decision. */
+export interface StrategyStatsByHour extends StrategyStats {
+  hour: number;
+  hour_label: string;
+}
+
 export interface RatingBreakdownItem {
   score: number;
   max: number;

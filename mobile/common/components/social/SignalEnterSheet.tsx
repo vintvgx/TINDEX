@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
 import { useImmediateTradeByTicker, StreamUnavailableError } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
 import {
-  IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX,
+  IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX, defaultQtyFor,
   getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
 import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
@@ -32,7 +32,7 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
   const toast = useToast();
   const [paperMode, setPaperMode] = useState(true);
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
-  const [qty, setQty] = useState(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX].qty);
+  const [qty, setQty] = useState(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], 0));
   const [stopType, setStopType] = useState<StopType>('HARD');
   const [volumeExit, setVolumeExit] = useState(false);
   const [manualSlPct, setManualSlPct] = useState(30);
@@ -68,7 +68,7 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
 
   const handleProfileSelect = (idx: number) => {
     setProfileIndex(idx);
-    setQty(IMMEDIATE_PROFILES[idx].qty);
+    setQty(defaultQtyFor(IMMEDIATE_PROFILES[idx], askPrice));
   };
 
   // Shared by the initial submit and the Blind Entry "Enter Anyway" retry.

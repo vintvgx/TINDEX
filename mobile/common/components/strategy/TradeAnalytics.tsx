@@ -503,6 +503,80 @@ export function ProfileLeaderboard({ trades, colors }: { trades: ORBTrade[]; col
   );
 }
 
+/**
+ * Win-rate/P&L broken down by ENTRY hour (ET, market time) — same
+ * leaderboard visual pattern as ProfileLeaderboard, just bucketed by hour
+ * instead of profile. Computed client-side from the same `trades` prop
+ * every other stats widget on this screen uses, so it automatically
+ * respects whatever time range / paper-vs-live mode is already selected —
+ * unlike GET /strategy/stats/by-hour (which exists for ad-hoc/all-time
+ * lookups but isn't filtered the same way). Manual analytics only — nothing
+ * here feeds back into any live entry decision; it's for spotting whether a
+ * profile's setups perform worse later in the session so you can hand-tune
+ * things like breakout_time_limit_min yourself.
+ */
+export function HourlyPerformance({ trades, colors }: { trades: ORBTrade[]; colors: any }) {
+  const rows = useMemo(() => {
+    const closed = trades.filter(t => t.exit_time != null && t.entry_time);
+    const map = new Map<number, { pnl: number; count: number; wins: number }>();
+    for (const t of closed) {
+      let hour: number;
+      try {
+        hour = parseInt(
+          new Date(t.entry_time).toLocaleString('en-US', {
+            timeZone: 'America/New_York', hour: '2-digit', hourCycle: 'h23',
+          }),
+          10,
+        );
+        if (isNaN(hour)) continue;
+        hour = hour % 24;
+      } catch { continue; }
+      const cur = map.get(hour) ?? { pnl: 0, count: 0, wins: 0 };
+      cur.pnl += t.pnl ?? 0;
+      cur.count++;
+      if ((t.pnl ?? 0) > 0) cur.wins++;
+      map.set(hour, cur);
+    }
+    return [...map.entries()]
+      .map(([hour, v]) => ({ hour, ...v }))
+      .sort((x, y) => x.hour - y.hour);
+  }, [trades]);
+
+  if (rows.length === 0) return null;
+  const maxAbs = Math.max(...rows.map(r => Math.abs(r.pnl)), 1);
+  const fmtHour = (h: number) => {
+    const label = h % 12 || 12;
+    return `${label}${h < 12 ? 'am' : 'pm'}`;
+  };
+
+  return (
+    <View style={[a.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <Text style={[a.sectionTitle, { color: colors.text }]}>Hourly Performance</Text>
+      <Text style={[a.sectionSub, { color: colors.tabBarInactive }]}>By entry time (ET)</Text>
+      {rows.map(r => {
+        const tintR = r.pnl >= 0 ? colors.success : colors.error;
+        return (
+          <View key={r.hour} style={a.lbRow}>
+            <Text style={[a.lbName, { color: colors.text }]} numberOfLines={1}>
+              {fmtHour(r.hour)}
+            </Text>
+            <Text style={[a.lbMeta, { color: colors.tabBarInactive }]}>
+              {r.count}t · {r.count ? Math.round((r.wins / r.count) * 100) : 0}%
+            </Text>
+            <View style={[a.lbTrack, { backgroundColor: colors.border }]}>
+              <View style={[a.lbFill, {
+                width: `${Math.max(4, Math.round((Math.abs(r.pnl) / maxAbs) * 100))}%`,
+                backgroundColor: tintR,
+              }]} />
+            </View>
+            <Text style={[a.lbPnl, { color: tintR }]}>{fmtMoney(r.pnl)}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const a = StyleSheet.create({
