@@ -550,17 +550,17 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
 
   const suggestedPrompts = ticker
     ? [
-        `What is the current market sentiment for ${ticker}?`,
-        `Analyze the IV environment for ${ticker} options`,
-        `What catalysts should I watch for ${ticker}?`,
-        `What are the key risks for ${ticker} right now?`,
-      ]
+      `What is the current market sentiment for ${ticker}?`,
+      `Analyze the IV environment for ${ticker} options`,
+      `What catalysts should I watch for ${ticker}?`,
+      `What are the key risks for ${ticker} right now?`,
+    ]
     : [
-        'Explain how to read options Greeks',
-        'What is IV crush and how do I avoid it?',
-        'How do I evaluate an options contract risk/reward?',
-        'What are the best strategies for volatile markets?',
-      ];
+      'Explain how to read options Greeks',
+      'What is IV crush and how do I avoid it?',
+      'How do I evaluate an options contract risk/reward?',
+      'What are the best strategies for volatile markets?',
+    ];
 
   const renderMessage = useCallback(
     ({ item }: { item: LocalMessage }) =>
@@ -658,7 +658,9 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
           )}
 
           <View style={s.headerCenter}>
-            <Text style={[s.headerTitle, { color: colors.text }]}>AI Agent</Text>
+            <TouchableOpacity onPress={onClose}>
+              <Text style={[s.headerTitle, { color: colors.text }]}>AI Agent</Text>
+            </TouchableOpacity>
             {ticker ? (
               <View style={[s.tickerBadge, { backgroundColor: colors.accent + '18', borderColor: colors.accent + '44' }]}>
                 <Text style={[s.tickerText, { color: colors.accent }]}>{ticker}</Text>
@@ -804,7 +806,7 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
               placeholder={
                 pendingImage ? 'Add a caption (optional)...'
                   : activeChecklistIdRef.current ? 'Describe the correction...'
-                  : ticker ? `Ask about ${ticker}...` : 'Ask anything...'
+                    : ticker ? `Ask about ${ticker}...` : 'Ask anything...'
               }
               placeholderTextColor={colors.textTertiary}
               style={[s.input, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
@@ -835,10 +837,10 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
               {isStreaming
                 ? <ActivityIndicator size="small" color={colors.accent} />
                 : <Ionicons
-                    name="arrow-up"
-                    size={18}
-                    color={(inputText.trim() || pendingImage) && !isStreaming ? colors.accentForeground : colors.textTertiary}
-                  />
+                  name="arrow-up"
+                  size={18}
+                  color={(inputText.trim() || pendingImage) && !isStreaming ? colors.accentForeground : colors.textTertiary}
+                />
               }
             </TouchableOpacity>
           </View>
