@@ -11,6 +11,8 @@ logger = get_logger(__name__)
 ET = pytz.timezone("America/New_York")
 
 # Maps a chart timeframe key to the (period, interval) args yfinance expects.
+# The interval here is each period's DEFAULT — see ALLOWED_INTERVALS below
+# for the full set a client may request instead via `interval_override`.
 PERIOD_MAP = {
     "1D": ("1d", "5m"),
     "1W": ("5d", "30m"),
@@ -19,6 +21,22 @@ PERIOD_MAP = {
     "YTD": ("ytd", "1d"),
     "1Y": ("1y", "1d"),
     "5Y": ("5y", "1wk"),
+}
+
+# Every interval a client may request per period, constrained by Yahoo's real
+# lookback limits for sub-daily bars — roughly 60 days for intervals <=60m,
+# and unreliable/often-empty well past that. Never expose a combination here
+# that Yahoo doesn't actually serve; an invalid `interval_override` silently
+# falls back to the period's PERIOD_MAP default rather than erroring, so a
+# stale/bad client value never breaks the chart, it just ignores the request.
+ALLOWED_INTERVALS = {
+    "1D":  ["5m", "15m"],
+    "1W":  ["15m", "30m", "1h"],
+    "1M":  ["1h", "1d"],
+    "3M":  ["1d", "1wk"],
+    "YTD": ["1d", "1wk"],
+    "1Y":  ["1d", "1wk"],
+    "5Y":  ["1wk", "1mo"],
 }
 
 
@@ -77,17 +95,62 @@ def _session_boundary_lines(hist: "pd.DataFrame") -> dict | None:
     return result or None
 
 
-def get_historical_prices(ticker: str, period_key: str) -> dict:
+def _regular_session_only(hist: "pd.DataFrame") -> "pd.DataFrame":
+    """
+    Trim to ONLY the most recent trading date's regular-session bars
+    (09:30-16:00 ET) — Robinhood's 1D chart never plots pre-market/after-
+    hours candles, just the regular session, and yfinance's period="1d"
+    interval="5m" + prepost=True can return more than one calendar day's
+    worth of bars (the extended-hours tail of the prior close bleeding into
+    the window, or a full extra day around a weekend/holiday) — that's what
+    produced the multi-day, gap-heavy chart reported 2026-08-31.
+
+    Deliberately called on the RAW prepost `hist`, separately from (and
+    after) _session_boundary_lines() — those dashed Pre-Market/Post-Market
+    reference lines are flat context values, not plotted candles, so they
+    still need the full extended-hours data even though the candle series
+    itself no longer does.
+    """
+    if hist.empty or getattr(hist.index, "tz", None) is None:
+        return hist
+    idx_et = hist.index.tz_convert(ET)
+    dates_et = idx_et.date
+    minutes = idx_et.hour * 60 + idx_et.minute
+    in_session = (minutes >= 9 * 60 + 30) & (minutes < 16 * 60)
+
+    # The most recent date that actually HAS a regular-session bar — not
+    # just the most recent date present. Before 09:30 ET, today's only bars
+    # so far may be pre-market ticks (today would have zero in-session
+    # bars) — falling back to whatever the latest date WITH a real session
+    # bar is (typically the prior trading day) avoids returning an empty
+    # chart during the pre-market window.
+    session_dates = sorted(set(dates_et[in_session]), reverse=True)
+    if not session_dates:
+        return hist.iloc[0:0]
+    target_date = session_dates[0]
+    mask = in_session & (dates_et == target_date)
+    return hist[mask]
+
+
+def get_historical_prices(ticker: str, period_key: str, interval_override: str | None = None) -> dict:
     """
     Fetch a single timeframe's historical price series for the chart.
 
     Args:
         ticker: The stock ticker
         period_key: One of PERIOD_MAP's keys (e.g. "1D", "1Y"); falls back to "1M"
+        interval_override: A client-requested bar granularity (e.g. "15m" on
+            1D instead of the default "5m") — validated against
+            ALLOWED_INTERVALS[period_key]; anything not in that list
+            (including None, or a value left over from a different period)
+            silently falls back to PERIOD_MAP's default rather than erroring.
 
     Returns:
         Dict with "dates", "prices" (closes), "volumes", plus "opens"/"highs"/"lows"
-        so the mobile chart can render candlesticks (empty lists on failure).
+        so the mobile chart can render candlesticks (empty lists on failure),
+        and "interval" (the ACTUAL interval used, post-validation — the
+        client's source of truth for what it got back, since a stale/invalid
+        override is silently ignored above).
         1D responses also include "session_lines" (pre/market/post-market
         boundary prices) — see _session_boundary_lines — but ONLY while the
         request itself lands outside regular trading hours (before 09:30 or
@@ -97,7 +160,9 @@ def get_historical_prices(ticker: str, period_key: str) -> dict:
         than computed and left for the mobile client to hide, so there's one
         source of truth for "is this relevant right now" (2026-08-27 fix).
     """
-    period, interval = PERIOD_MAP.get(period_key, PERIOD_MAP["1M"])
+    period, default_interval = PERIOD_MAP.get(period_key, PERIOD_MAP["1M"])
+    allowed = ALLOWED_INTERVALS.get(period_key, [default_interval])
+    interval = interval_override if interval_override in allowed else default_interval
     # Extended-hours bars only requested for 1D — that's the only period
     # where session boundaries (and the Pre-Market/Post-Market chart lines)
     # are meaningful; every other period is already daily/weekly closes.
@@ -113,6 +178,22 @@ def get_historical_prices(ticker: str, period_key: str) -> dict:
         logger.warning(f"Failed to get historical prices for {ticker} ({period_key}): {str(e)}")
         hist = pd.DataFrame()
 
+    # Computed from the full prepost `hist` BEFORE trimming below — these are
+    # flat reference lines, not plotted candles, so they still want the
+    # extended-hours bars even though the candle series itself no longer does.
+    session_lines = (
+        _session_boundary_lines(hist)
+        if prepost and not _is_regular_trading_hours()
+        else None
+    )
+
+    # 1D candles are regular-session-only (see _regular_session_only) —
+    # Robinhood never plots pre-market/after-hours candles on its 1D chart,
+    # just the 09:30-16:00 ET session, one trading day at a time (panning to
+    # an earlier day is a separate request — see /ticker/<ticker>/history-date).
+    if period_key == "1D":
+        hist = _regular_session_only(hist)
+
     def _col(name: str) -> list:
         return hist[name].tolist() if not hist.empty and name in hist.columns else []
 
@@ -127,12 +208,11 @@ def get_historical_prices(ticker: str, period_key: str) -> dict:
         "opens": _col("Open"),
         "highs": _col("High"),
         "lows": _col("Low"),
+        "interval": interval,
     }
 
-    if prepost and not _is_regular_trading_hours():
-        session_lines = _session_boundary_lines(hist)
-        if session_lines:
-            result["session_lines"] = session_lines
+    if session_lines:
+        result["session_lines"] = session_lines
 
     return result
 

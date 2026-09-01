@@ -6,6 +6,7 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
+import { useChartInterval } from '@/hooks/useChartInterval';
 import { useIsFollowingORB, useToggleORBFollow } from '@/hooks/mutations/ticker/tickerORB';
 import { useGenerateTickerUpdateMutation } from '@/hooks/mutations/ticker/useGenerateTickerUpdateMutation';
 import { PriceChart, ScrubPoint } from '@/common/components/ticker/PriceChart';
@@ -46,12 +47,17 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
   const { data: tickerResponse, isLoading, isError, isRefetching, refetchFresh, refetch } = useTickerQuery(ticker);
   const stockData = tickerResponse?.data;
 
+  // Shares its persisted value with AdvancedPriceChart's own interval picker
+  // via the same React-Query cache key (useChartInterval) — no prop
+  // threading needed for the two to stay in sync.
+  const { interval: chartInterval } = useChartInterval(period);
+
   // Poll on 1D so the chart's 5-min candles pick up the newest bar on their
   // own — see AdvancedPriceChart's countdown + PriceChartFullScreen's
   // header price, which previously only refreshed if you closed and
   // reopened the sheet. 30s matches this app's usual live-data poll cadence.
   const { data: historyResponse, isLoading: historyLoading, isError: historyIsError, refetch: refetchHistory } =
-    useTickerHistoryQuery(ticker, period, period === '1D' ? 30_000 : undefined);
+    useTickerHistoryQuery(ticker, period, period === '1D' ? 30_000 : undefined, chartInterval);
   const historyData = historyResponse?.data;
 
   const { data: isFollowingORB } = useIsFollowingORB(ticker);

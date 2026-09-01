@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { CandleStickChart } from 'react-native-gifted-charts';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
+import { useChartInterval } from '@/hooks/useChartInterval';
 import { AdvancedPriceChart } from '@/common/components/ticker/AdvancedPriceChart';
 
 interface Props {
@@ -26,7 +27,8 @@ export function ChartLibraryPreviewModal({ visible, onClose }: Props) {
   const [tickerInput, setTickerInput] = useState('SPY');
   const [ticker, setTicker] = useState('SPY');
 
-  const { data: historyResponse, isLoading } = useTickerHistoryQuery(ticker, '1D');
+  const { interval: chartInterval } = useChartInterval('1D');
+  const { data: historyResponse, isLoading } = useTickerHistoryQuery(ticker, '1D', undefined, chartInterval);
   const historyData = historyResponse?.success ? historyResponse.data : undefined;
 
   const positive = useMemo(() => {

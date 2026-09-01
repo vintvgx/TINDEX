@@ -23,6 +23,7 @@ import { useTickerTechnicals } from '@/hooks/queries/technicals/useTickerTechnic
 import { EMAZoneBadge } from '@/common/components/shared/EMAZoneBadge';
 import { AdvancedPriceChart } from '@/common/components/ticker/AdvancedPriceChart';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
+import { useChartInterval } from '@/hooks/useChartInterval';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
 
@@ -134,9 +135,16 @@ export const ORBDetailModal: React.FC<ORBDetailModalProps> = ({
   // Price history feeding the advanced chart. Only fetch while the modal is
   // actually open — an empty ticker disables the query.
   const [chartPeriod, setChartPeriod] = useState<PricePeriod>('1D');
+  // Shares its persisted value with AdvancedPriceChart's own interval picker
+  // via the same React-Query cache key (useChartInterval) — without this,
+  // the picker rendered inside the chart would visually update but the
+  // actual fetched data wouldn't follow it.
+  const { interval: chartInterval } = useChartInterval(chartPeriod);
   const { data: historyResponse, isLoading: historyLoading } = useTickerHistoryQuery(
     visible && data?.ticker ? data.ticker : '',
     chartPeriod,
+    undefined,
+    chartInterval,
   );
   const historyData = historyResponse?.data;
   const periodPositive =

@@ -15,7 +15,7 @@ from services.anthropic.anthropic_service import anthropic_service
 from services.supabase.supabase_service import get_supabase_service
 from services.utils.research_service import get_research_service
 from services.utils.blog_generation_service import get_blog_service
-from services.yfinance.yfinance_service import get_historical_prices, PERIOD_MAP, get_intraday_chart_for_date
+from services.yfinance.yfinance_service import get_historical_prices, PERIOD_MAP, ALLOWED_INTERVALS, get_intraday_chart_for_date
 from utils.cache import TrendingStocksCache
 
 import requests as _requests
@@ -139,7 +139,14 @@ def get_ticker_history(ticker: str):
         if period not in PERIOD_MAP:
             return jsonify({"success": False, "error": f"Invalid period. Must be one of: {', '.join(PERIOD_MAP.keys())}"}), 400
 
-        historical_data = get_historical_prices(ticker, period)
+        # Client-requested bar granularity (e.g. "15m" instead of 1D's
+        # default "5m") — invalid/mismatched-period values are silently
+        # ignored inside get_historical_prices, never a 400 here, so a stale
+        # interval left over from switching periods client-side can't break
+        # the request.
+        interval = data.get("interval")
+
+        historical_data = get_historical_prices(ticker, period, interval_override=interval)
 
         return jsonify({"success": True, "data": historical_data, "period": period, "timestamp": time.time(), "from_cache": False})
 
@@ -172,7 +179,17 @@ def get_ticker_history_for_date(ticker: str):
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
             return jsonify({"success": False, "error": "date must be YYYY-MM-DD"}), 400
 
-        chart = get_intraday_chart_for_date(ticker, date_str)
+        # Matches whatever interval the 1D chart is currently showing (see
+        # /ticker/<ticker>/history's own interval override) so a panned-in
+        # earlier day's bars are the same granularity as today's, instead of
+        # always defaulting to 5m regardless of what the user picked. Other
+        # callers (e.g. the Daily Review per-trade chart) simply don't send
+        # this and get the same "5m" default as before.
+        interval = data.get("interval")
+        if interval not in ALLOWED_INTERVALS["1D"]:
+            interval = "5m"
+
+        chart = get_intraday_chart_for_date(ticker, date_str, interval=interval)
         return jsonify({"success": True, "data": chart, "date": date_str})
 
     except Exception as e:

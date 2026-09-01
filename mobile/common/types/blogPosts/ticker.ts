@@ -238,6 +238,11 @@ export interface TickerHistoryData {
     post_market_close?: number;
     overnight_price?: number;
   } | null;
+  /** The bar granularity actually used (e.g. "5m", "15m", "1d") — echoes
+   *  back what the backend settled on after validating any requested
+   *  interval override, since an invalid/stale one is silently ignored
+   *  server-side rather than erroring. See yfinance_service.ALLOWED_INTERVALS. */
+  interval?: string;
 }
 
 export type TickerHistoryResponse =

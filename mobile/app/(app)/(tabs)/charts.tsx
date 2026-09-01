@@ -16,6 +16,7 @@ import { TickerPickerOverlay } from '@/common/components/ticker/TickerPickerOver
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
+import { useChartInterval } from '@/hooks/useChartInterval';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
 import { useMarketStream } from '@/hooks/useMarketStream';
@@ -124,10 +125,14 @@ export default function ChartsScreen() {
 
   // ── Price + chart data for the active ticker ────────────────────────────
   const [period, setPeriod] = useState<PricePeriod>('1D');
+  // Shares its persisted value with AdvancedPriceChart's own interval picker
+  // via the same React-Query cache key (useChartInterval) — no prop
+  // threading needed for the two to stay in sync.
+  const { interval: chartInterval } = useChartInterval(period);
   const { data: tickerResponse, isLoading: tickerLoading } = useTickerQuery(activeTicker);
   const stockData = tickerResponse?.success ? tickerResponse.data : undefined;
   const { data: historyResponse, isLoading: historyLoading, isPlaceholderData: historyIsStale } = useTickerHistoryQuery(
-    activeTicker, period, period === '1D' ? 30_000 : undefined,
+    activeTicker, period, period === '1D' ? 30_000 : undefined, chartInterval,
   );
   const historyData = historyResponse?.data;
   // useTickerHistoryQuery's placeholderData:keepPreviousData is meant for a

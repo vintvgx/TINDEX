@@ -9,6 +9,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
 import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
+import { useChartInterval } from '@/hooks/useChartInterval';
+import { ALLOWED_INTERVALS, INTERVAL_LABEL, INTERVAL_MINUTES } from '@/lib/chartIntervals';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import type { PricePeriod, TickerHistoryData } from '@/common/types/blogPosts/ticker';
 import type { OrbRangeLines } from '@/common/components/ticker/PriceChart';
@@ -252,6 +254,34 @@ const formatCrosshairLabel = (dateStr: string, period: PricePeriod, lastDateStr?
 };
 
 /**
+ * Catmull-Rom → cubic-Bezier smoothed path through a point series — the
+ * gentle curve Robinhood/most consumer trading apps use for their line
+ * chart instead of a jagged point-to-point polyline. `tension` (0-0.5)
+ * controls how far each control point reaches toward its neighbors; 0.2 is
+ * a soft curve that still tracks sharp real moves faithfully rather than
+ * overshooting/rounding them off.
+ */
+function smoothPath(points: { x: number; y: number }[], tension = 0.2): string {
+  if (points.length === 0) return '';
+  if (points.length < 3) {
+    return points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
+  }
+  let d = `M${points[0].x},${points[0].y}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i - 1] ?? points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2] ?? p2;
+    const cp1x = p1.x + (p2.x - p0.x) * tension;
+    const cp1y = p1.y + (p2.y - p0.y) * tension;
+    const cp2x = p2.x - (p3.x - p1.x) * tension;
+    const cp2y = p2.y - (p3.y - p1.y) * tension;
+    d += ` C${cp1x},${cp1y} ${cp2x},${cp2y} ${p2.x},${p2.y}`;
+  }
+  return d;
+}
+
+/**
  * Full-screen day-trading chart: candlesticks (line fallback), y-axis price
  * gridlines + labels, x-axis time labels, a volume pane, a live last-price
  * tag, a TradingView-style shaded ORB band, and a crosshair scrub that
@@ -337,6 +367,17 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     };
   }, [data, earlierDays, period]);
 
+  // Global, persisted bar-granularity choice for the CURRENT period (5m vs
+  // 15m on 1D, 1d vs 1wk on 3M, etc.) — shared via the same React-Query
+  // cache key as whatever called useChartInterval(period) up in the parent
+  // to drive the actual data fetch (charts.tsx/PriceChartFullScreen.tsx),
+  // so this stays in sync with the query without any prop threading, same
+  // as useWatchZonesVisibility/useCrosshairEnabled below. Declared here
+  // (rather than further down with those) so fetchEarlierDay, right below,
+  // can close over chartInterval too — an earlier loaded day should match
+  // whatever granularity today's own bars are currently showing.
+  const { interval: chartInterval, setInterval: setChartInterval, allowed: allowedIntervals } = useChartInterval(period);
+
   // Steps back one calendar day at a time (skipping weekends without a
   // network call) from whatever's currently the oldest loaded bar, fetching
   // the regular-session 5-minute bars for that date via the same endpoint
@@ -364,7 +405,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           const res = await fetch(`${RAILWAY_BASE_URL}/ticker/${ticker}/history-date`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ date: iso }),
+            body: JSON.stringify({ date: iso, interval: chartInterval }),
           });
           const json = await res.json();
           if (json?.success && json.data?.available && json.data.dates?.length) {
@@ -393,7 +434,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     } finally {
       loadingEarlierRef.current = false;
     }
-  }, [ticker, period, earlierDays, data]);
+  }, [ticker, period, earlierDays, data, chartInterval]);
 
   const prices = useMemo(() => chartData?.prices ?? [], [chartData]);
   const dates = useMemo(() => chartData?.dates ?? [], [chartData]);
@@ -487,6 +528,20 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const [yOverride, setYOverride] = useState<{ lo: number; hi: number } | null>(null);
   const count = ePrices.length;
 
+  // 1D only: how many bars a FULL regular session (09:30-16:00 ET, 390min)
+  // would contain at the current interval — used to reserve that many bar
+  // slots' worth of x-axis width even before all of them have real data yet
+  // (see layoutVisibleCount below), so the chart doesn't visually rescale
+  // every time a new candle prints throughout the day, matching
+  // Robinhood's own 1D layout (full-day width, live line trailing off at
+  // "now" with blank space for the rest of the session).
+  const fullSessionBarCount = useMemo(() => {
+    if (period !== '1D') return null;
+    const minutesPerBar = INTERVAL_MINUTES[chartInterval];
+    if (!minutesPerBar) return null;
+    return Math.ceil((16 * 60 - (9 * 60 + 30)) / minutesPerBar);
+  }, [period, chartInterval]);
+
   // A new timeframe should always start at the default auto-fit view, same
   // as TradingView's own behavior when you switch resolution. Deliberately
   // NOT reset on every `data` refetch (e.g. 1D's background poll bringing
@@ -508,11 +563,27 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
 
   // Clamped against the current data length so a stale window (e.g. if the
   // underlying series shrinks/changes shape without a period change) can
-  // never index out of bounds.
+  // never index out of bounds. visibleStart/visibleEnd/visibleIndices stay
+  // strictly within REAL data (never index past count-1) — every candle/
+  // line-point/volume-bar draw loop and the y-domain fit read these, so
+  // they must never point at a bar that doesn't exist.
   const visibleStart = xWindow ? Math.max(0, Math.min(xWindow.start, count - 1)) : 0;
   const visibleEnd = xWindow ? Math.max(visibleStart, Math.min(xWindow.end, count - 1)) : count - 1;
   const visibleCount = Math.max(1, visibleEnd - visibleStart + 1);
   const isZoomed = xWindow !== null || yOverride !== null;
+
+  // LAYOUT count — how many bar-slots worth of width scale.step actually
+  // divides plotW by. Equal to visibleCount in every case EXCEPT the
+  // pristine default (unzoomed) 1D view, where it's widened to
+  // fullSessionBarCount so the x-axis reserves the whole 09:30-16:00
+  // session's width up front; real candles still only draw for indices
+  // that exist (0..count-1), the rest of that width is simply blank. The
+  // instant the user pans/pinches (xWindow becomes non-null), this
+  // collapses back to plain visibleCount — reserving future space is a
+  // default-view nicety, not a constraint once the user is actively zoomed.
+  const layoutVisibleCount = (!xWindow && fullSessionBarCount && fullSessionBarCount > visibleCount)
+    ? fullSessionBarCount
+    : visibleCount;
 
   const visibleIndices = useMemo(
     () => Array.from({ length: visibleCount }, (_, k) => visibleStart + k),
@@ -522,18 +593,22 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // ORB band only means anything on the trading day it was computed for.
   const orbVisible = !!(showOrbRange && orbRange && period === '1D');
 
-  // Index of the first regular-session (09:30 ET) bar — the ORB band must
-  // start there, not at index 0. On 1D with extended-hours bars now mixed
-  // in (see yfinance_service._session_boundary_lines), index 0 is 04:00 ET
-  // pre-market, not the open; drawing the band from x=0 would visually
-  // stretch it across the entire pre-market session even though orbRange's
-  // own high/low are still correctly computed from only the 09:30-09:45
-  // window (2026-08-27 fix). Deliberately searches the ORIGINAL `data`
+  // Index of the first POST-opening-range (09:45 ET) bar — the ORB band
+  // must start there, not at 09:30. The opening range itself (09:30-09:45)
+  // is what PRODUCES orbRange's high/low; shading those same 15 minutes as
+  // if they were already "inside the range" misrepresents the band as
+  // covering its own formation period. Starting the band right after it
+  // closes — and letting it draw all the way to the right edge of the plot
+  // (see the render below, which goes to plotW regardless of how much real
+  // candle data exists) — means it automatically extends across the
+  // reserved blank space on a still-in-progress 1D session too, exactly
+  // like Robinhood/TradingView project a fixed reference range forward
+  // through the rest of the day. Deliberately searches the ORIGINAL `data`
   // (today only), never `chartData` — with earlier days now possibly
   // prepended, searching from index 0 forward in the merged series would
-  // find an EARLIER day's 9:30 bar instead of today's; earlierBarsCount
+  // find an EARLIER day's 9:45 bar instead of today's; earlierBarsCount
   // shifts the found index back into chartData's index space.
-  const regularSessionStartIndex = useMemo(() => {
+  const orbBandStartIndex = useMemo(() => {
     if (!orbVisible || !data?.dates?.length) return 0;
     for (let i = 0; i < data.dates.length; i++) {
       const d = new Date(data.dates[i]);
@@ -541,7 +616,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
       });
       const [hh, mm] = parts.split(':').map(Number);
-      if (hh * 60 + mm >= 9 * 60 + 30) return i + earlierBarsCount;
+      if (hh * 60 + mm >= 9 * 60 + 45) return i + earlierBarsCount;
     }
     return earlierBarsCount;
   }, [orbVisible, data?.dates, earlierBarsCount]);
@@ -630,7 +705,10 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
       hi = max + pad;
     }
 
-    const step = plotW / visibleCount;
+    // layoutVisibleCount, not visibleCount — see its own doc above. Equal to
+    // visibleCount except the pristine default 1D view, where it's widened
+    // to reserve the full session's width even past the last real bar.
+    const step = plotW / layoutVisibleCount;
     const xForIndex = (i: number) => (i - visibleStart + 0.5) * step;
     const yForPrice = (p: number) => priceH - ((p - lo) / (hi - lo)) * priceH;
     // Inverse of yForPrice — converts a pixel Y (within the price pane) back
@@ -659,7 +737,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     const maxVolume = visVolumes.length ? Math.max(...visVolumes) : 0;
 
     return { lo, hi, step, xForIndex, yForPrice, priceForY, yTicks, xTicks, maxVolume };
-  }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, effectiveReferenceLines, effectiveWatchZones, yOverride, visibleIndices, visibleStart, visibleCount]);
+  }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, effectiveReferenceLines, effectiveWatchZones, yOverride, visibleIndices, visibleStart, visibleCount, layoutVisibleCount]);
 
   // X-axis tick labels — plain evenly-spaced time labels everywhere EXCEPT
   // the 1D period, which can show multiple calendar days at once once
@@ -708,10 +786,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // Only the visible window is drawn.
   const { linePath, areaPath } = useMemo(() => {
     if (!scale || mode !== 'line') return { linePath: '', areaPath: '' };
-    let p = '';
-    visibleIndices.forEach((i, k) => {
-      p += `${k === 0 ? 'M' : ' L'}${scale.xForIndex(i)},${scale.yForPrice(ePrices[i])}`;
-    });
+    const points = visibleIndices.map(i => ({ x: scale.xForIndex(i), y: scale.yForPrice(ePrices[i]) }));
+    const p = smoothPath(points);
     const lastI = visibleIndices[visibleIndices.length - 1];
     const firstI = visibleIndices[0];
     const area = `${p} L${scale.xForIndex(lastI)},${priceH} L${scale.xForIndex(firstI)},${priceH} Z`;
@@ -943,7 +1019,11 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             return;
           }
           if (visibleCount < 2 || plotW === 0) return;
-          const step = plotW / visibleCount;
+          // layoutVisibleCount, not visibleCount — must match scale.step
+          // exactly (see its doc above) or a touch on the visually-last
+          // candle would map to the wrong index once the default 1D view
+          // reserves extra blank width past it.
+          const step = plotW / layoutVisibleCount;
           const idx = Math.max(visibleStart, Math.min(visibleEnd, visibleStart + Math.floor(e.x / step)));
           scrubIndexShared.value = idx;
           runOnJS(triggerHaptic)();
@@ -956,7 +1036,11 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             return;
           }
           if (visibleCount < 2 || plotW === 0) return;
-          const step = plotW / visibleCount;
+          // layoutVisibleCount, not visibleCount — must match scale.step
+          // exactly (see its doc above) or a touch on the visually-last
+          // candle would map to the wrong index once the default 1D view
+          // reserves extra blank width past it.
+          const step = plotW / layoutVisibleCount;
           const idx = Math.max(visibleStart, Math.min(visibleEnd, visibleStart + Math.floor(e.x / step)));
           if (idx !== scrubIndexShared.value) {
             scrubIndexShared.value = idx;
@@ -973,7 +1057,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           runOnJS(notifyScrub)(-1);
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [watchMode, visibleStart, visibleEnd, visibleCount, plotW, notifyScrub, triggerHaptic, beginWatchDraft, updateWatchDraft, commitWatchDraft],
+    [watchMode, visibleStart, visibleEnd, visibleCount, layoutVisibleCount, plotW, notifyScrub, triggerHaptic, beginWatchDraft, updateWatchDraft, commitWatchDraft],
   );
 
   // Double-tap anywhere resets both axes back to auto-fit. Defined before
@@ -1006,14 +1090,18 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         .onEnd((e) => {
           'worklet';
           if (visibleCount < 2 || plotW === 0) return;
-          const step = plotW / visibleCount;
+          // layoutVisibleCount, not visibleCount — must match scale.step
+          // exactly (see its doc above) or a touch on the visually-last
+          // candle would map to the wrong index once the default 1D view
+          // reserves extra blank width past it.
+          const step = plotW / layoutVisibleCount;
           const idx = Math.max(visibleStart, Math.min(visibleEnd, visibleStart + Math.floor(e.x / step)));
           scrubIndexShared.value = idx;
           runOnJS(triggerHaptic)();
           runOnJS(notifyScrub)(idx);
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doubleTapGesture, visibleStart, visibleEnd, visibleCount, plotW, notifyScrub, triggerHaptic],
+    [doubleTapGesture, visibleStart, visibleEnd, visibleCount, layoutVisibleCount, plotW, notifyScrub, triggerHaptic],
   );
 
   // ── Pan/zoom gestures ────────────────────────────────────────────────
@@ -1022,7 +1110,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // rescales X only, anywhere else on the chart body pans through time.
   // Having no activation delay is what lets it win the race against the
   // long-press-gated scrub gesture above on a quick drag.
-  type PanZoomStart = { start: number; end: number; lo: number; hi: number };
+  type PanZoomStart = { start: number; end: number; lo: number; hi: number; layoutCount: number };
   const panStartShared = useSharedValue<PanZoomStart | null>(null);
   const panModeShared = useSharedValue<'time-pan' | 'y-rescale' | 'x-rescale' | null>(null);
   // Last X window actually committed to React state, from whichever of
@@ -1058,7 +1146,14 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         .onBegin((e) => {
           'worklet';
           if (!scale) return;
-          panStartShared.value = { start: visibleStart, end: visibleEnd, lo: scale.lo, hi: scale.hi };
+          // layoutCount: the bar-slot count actually driving scale.step right
+          // now (see layoutVisibleCount's doc) — captured at gesture-start so
+          // this drag's pixel-to-bars conversion matches what's on screen
+          // even during the pristine reserved-width 1D view, where it's wider
+          // than the real data span (curCount below). Only matters for the
+          // very first drag from that state — once xWindow is set, the two
+          // converge again.
+          panStartShared.value = { start: visibleStart, end: visibleEnd, lo: scale.lo, hi: scale.hi, layoutCount: layoutVisibleCount };
           lastXWindowShared.value = { start: visibleStart, end: visibleEnd };
           if (e.x > plotW) panModeShared.value = 'y-rescale';
           else if (e.y > height - X_AXIS_H) panModeShared.value = 'x-rescale';
@@ -1081,8 +1176,12 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           const curCount = st.end - st.start + 1;
 
           if (mode === 'time-pan') {
-            // Drag right → reveal earlier bars (window shifts back).
-            const barsShift = (e.translationX / plotW) * curCount;
+            // Drag right → reveal earlier bars (window shifts back). Uses
+            // st.layoutCount (the on-screen bar-slot count), not curCount —
+            // they only differ during the pristine reserved-width 1D
+            // default view, where using curCount here would make the very
+            // first drag feel faster than 1:1 with the visible bar width.
+            const barsShift = (e.translationX / plotW) * st.layoutCount;
             let newStart = Math.round(st.start - barsShift);
             let newEnd = newStart + curCount - 1;
             // Hitting this means the drag is trying to reveal bars before
@@ -1143,7 +1242,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           }
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [scale, visibleStart, visibleEnd, plotW, priceH, height, count, notifyScrub, fetchEarlierDay],
+    [scale, visibleStart, visibleEnd, plotW, priceH, height, count, notifyScrub, fetchEarlierDay, layoutVisibleCount],
   );
 
   // Two-finger pinch — zooms both axes together, centered on the pinch focal
@@ -1155,7 +1254,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
       Gesture.Pinch()
         .onBegin(() => {
           'worklet';
-          pinchStartShared.value = scale ? { start: visibleStart, end: visibleEnd, lo: scale.lo, hi: scale.hi } : null;
+          pinchStartShared.value = scale ? { start: visibleStart, end: visibleEnd, lo: scale.lo, hi: scale.hi, layoutCount: layoutVisibleCount } : null;
           lastXWindowShared.value = scale ? { start: visibleStart, end: visibleEnd } : null;
         })
         .onUpdate((e) => {
@@ -1168,7 +1267,12 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
 
           const newCount = Math.max(MIN_VISIBLE_BARS, Math.min(count, Math.round(curCount * factor)));
           const focalXFrac = e.focalX / plotW;
-          const focalIdx = st.start + focalXFrac * curCount;
+          // st.layoutCount, not curCount — the focal point's fractional X
+          // position must map through the on-screen bar-slot count (see
+          // manipulateGesture's matching comment), or pinching during the
+          // reserved-width 1D default view would anchor the zoom on the
+          // wrong bar whenever real data doesn't yet fill the whole width.
+          const focalIdx = st.start + focalXFrac * st.layoutCount;
           let newStart = Math.round(focalIdx - focalXFrac * newCount);
           let newEnd = newStart + newCount - 1;
           if (newStart < 0) { newEnd -= newStart; newStart = 0; }
@@ -1190,7 +1294,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           }
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [scale, visibleStart, visibleEnd, plotW, priceH, count],
+    [scale, visibleStart, visibleEnd, plotW, priceH, count, layoutVisibleCount],
   );
 
   const composedGesture = useMemo(
@@ -1251,7 +1355,10 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     ? `${Math.floor(nextCandleSecs / 60)}:${String(nextCandleSecs % 60).padStart(2, '0')}`
     : null;
 
-  const candleW = scale ? Math.max(1, Math.min(scale.step * 0.65, 12)) : 0;
+  // Slightly narrower body ratio + more corner rounding than a bare rect —
+  // a softer, more pill-like candle shape (Robinhood-influenced) instead of
+  // sharp-cornered bars.
+  const candleW = scale ? Math.max(1, Math.min(scale.step * 0.6, 12)) : 0;
 
   return (
     <SafeAreaView>
@@ -1434,47 +1541,44 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           <GestureDetector gesture={composedGesture}>
             <Svg width={width} height={height}>
               <Defs>
+                {/* Richer 3-stop fade (Robinhood-style) — a real presence
+                    right under the line that tapers all the way to nothing
+                    by the baseline, instead of a flat linear falloff. */}
                 <LinearGradient id="advPriceFill" x1="0" y1="0" x2="0" y2="1">
-                  <Stop offset="0" stopColor={lineColor} stopOpacity={0.25} />
-                  <Stop offset="1" stopColor={lineColor} stopOpacity={0} />
+                  <Stop offset="0"    stopColor={lineColor} stopOpacity={0.32} />
+                  <Stop offset="0.5"  stopColor={lineColor} stopOpacity={0.10} />
+                  <Stop offset="1"    stopColor={lineColor} stopOpacity={0} />
                 </LinearGradient>
               </Defs>
 
-              {/* Horizontal gridlines + y-axis price labels (recessive) */}
+              {/* Horizontal gridlines + y-axis price labels — kept
+                  deliberately faint (Robinhood-style: the line/candles carry
+                  the chart, gridlines are just a quiet scale reference). */}
               {scale.yTicks.map((t) => {
                 const y = scale.yForPrice(t);
                 return (
                   <Fragment key={`ytick-${t}`}>
-                    <Line x1={0} x2={plotW} y1={y} y2={y} stroke={colors.textTertiary} strokeWidth={1} opacity={0.12} />
-                    <SvgText x={plotW + 6} y={y + 3.5} fill={colors.textTertiary} fontSize={10} fontWeight="500">
+                    <Line x1={0} x2={plotW} y1={y} y2={y} stroke={colors.textTertiary} strokeWidth={1} opacity={0.08} />
+                    <SvgText x={plotW + 6} y={y + 3.5} fill={colors.textTertiary} fontSize={9.5} fontWeight="500">
                       {formatAxisPrice(t)}
                     </SvgText>
                   </Fragment>
                 );
               })}
 
-              {/* Faint vertical gridlines — the actual x-axis time labels are
-                  drawn last (see below), on an opaque backing, so candle
-                  wicks/volume bars drawn after this point never bleed into
-                  the date text underneath them. */}
-              {scale.xTicks.map((i) => {
-                const x = scale.xForIndex(i);
-                return (
-                  <Line
-                    key={`xtick-${i}`}
-                    x1={x} x2={x} y1={0} y2={volTop + VOL_H}
-                    stroke={colors.textTertiary} strokeWidth={1} opacity={0.07}
-                  />
-                );
-              })}
+              {/* No vertical gridlines — Robinhood-style: the x-axis time
+                  labels below are the only time reference, the chart body
+                  itself stays clean. (Previously drew a faint vertical line
+                  per x-tick here; removed rather than just dimmed further.) */}
 
               {/* ORB band — shaded box between ORH/ORL like the TradingView overlay.
-                  Starts at the 09:30 ET bar (orbBandX), not the chart's left
-                  edge — see regularSessionStartIndex's doc comment. Clamped
-                  to 0 so zooming into a later part of the day (09:30 bar
-                  scrolled out of view to the left) doesn't push it negative. */}
+                  Starts at the 09:45 ET bar (orbBandX), right after the
+                  opening range that produced it closes — see
+                  orbBandStartIndex's doc comment. Clamped to 0 so zooming
+                  into a later part of the day (09:45 bar scrolled out of
+                  view to the left) doesn't push it negative. */}
               {orbVisible && orbRange && (() => {
-                const orbBandX = Math.max(0, scale.xForIndex(regularSessionStartIndex));
+                const orbBandX = Math.max(0, scale.xForIndex(orbBandStartIndex));
                 return (
                 <>
                   <Rect
@@ -1606,7 +1710,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               {mode === 'line' ? (
                 <>
                   <Path d={areaPath} fill="url(#advPriceFill)" />
-                  <Path d={linePath} stroke={lineColor} strokeWidth={2} fill="none" />
+                  <Path d={linePath} stroke={lineColor} strokeWidth={2} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                 </>
               ) : (
                 visibleIndices.map((i) => {
@@ -1624,7 +1728,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                         y1={scale.yForPrice(eHighs![i])} y2={scale.yForPrice(eLows![i])}
                         stroke={color} strokeWidth={1}
                       />
-                      <Rect x={x - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={color} rx={candleW > 3 ? 1 : 0} />
+                      <Rect x={x - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={color} rx={candleW > 3 ? Math.min(2, candleW / 3) : 0} />
                     </Fragment>
                   );
                 })
@@ -1993,6 +2097,41 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           );
         })}
       </View>
+
+      {/* Bar-granularity picker — only shown when the current period actually
+          has more than one valid interval (see ALLOWED_INTERVALS). Persisted
+          per-period via useChartInterval, shared with whatever fed
+          useTickerHistoryQuery up in the parent (charts.tsx/
+          PriceChartFullScreen.tsx) through the same React-Query cache key. */}
+      {allowedIntervals.length > 1 && (
+        <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 8, marginTop: 10 }}>
+          {allowedIntervals.map((iv) => {
+            const active = iv === chartInterval;
+            return (
+              <Pressable
+                key={iv}
+                onPress={() => setChartInterval(iv)}
+                style={{
+                  paddingHorizontal: 12,
+                  paddingVertical: 5,
+                  borderRadius: 8,
+                  backgroundColor: active ? colors.accent + '1F' : 'transparent',
+                }}
+              >
+                <Text
+                  style={{
+                    fontSize: 11.5,
+                    fontWeight: '700',
+                    color: active ? colors.accent : colors.textTertiary,
+                  }}
+                >
+                  {INTERVAL_LABEL[iv] ?? iv}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
     </SafeAreaView>
   );
 };

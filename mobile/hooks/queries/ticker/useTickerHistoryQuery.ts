@@ -13,12 +13,16 @@ import { RAILWAY_BASE_URL } from "@/lib/railway.config";
  * @param refetchIntervalMs - Optional background poll interval (e.g. so a 1D
  *   chart's 5-min candles pick up the newest bar on their own instead of
  *   requiring the screen to be closed and reopened). Omit for a one-shot fetch.
+ * @param interval - Optional bar-granularity override (e.g. "15m" instead of
+ *   1D's default "5m") — see yfinance_service.ALLOWED_INTERVALS for what's
+ *   valid per period. An invalid/mismatched value is silently ignored
+ *   server-side, never a failed request.
  */
-export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refetchIntervalMs?: number) {
+export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refetchIntervalMs?: number, interval?: string) {
   const { authState: { user, isLoading: authLoading } } = useAuth();
 
   return useQuery({
-    queryKey: ["ticker-history", ticker, period],
+    queryKey: ["ticker-history", ticker, period, interval],
     queryFn: async (): Promise<TickerHistoryResponse> => {
       try {
         // See useTickerQuery.ts for why this needs an explicit abort — same
@@ -29,7 +33,7 @@ export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refet
         const response = await fetch(`${RAILWAY_BASE_URL}/ticker/${ticker}/history`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ period }),
+          body: JSON.stringify({ period, ...(interval ? { interval } : {}) }),
           signal: controller.signal,
         }).finally(() => clearTimeout(timeoutId));
 
