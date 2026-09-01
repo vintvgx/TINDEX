@@ -3,6 +3,7 @@ import {
   View, Text, Modal, TouchableOpacity, ScrollView, TextInput, StyleSheet,
   SafeAreaView, Alert, Switch, ActivityIndicator, KeyboardAvoidingView, Platform,
 } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { formatContractSymbolShort } from '@/lib/formatContract';
 import { PROFILES } from '@/common/components/strategy/ProfileGuideModal';
@@ -11,6 +12,7 @@ import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 import { useUpdateStrategyExits } from '@/hooks/mutations/strategy/useUpdateStrategyExits';
 import { useHiddenPositions } from '@/hooks/useHiddenPositions';
 import { useToast } from '@/common/components/ui/Toast';
+import { SlGraceBadge, useSlGracePulse } from '@/common/components/strategy/SlGraceBadge';
 import type { ProfileKey } from '@/common/types/strategy';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 
@@ -35,6 +37,11 @@ export interface PositionInfoData {
   tpEnabled?: boolean;
   sl_grace_enabled?: boolean;
   sl_grace_minutes?: number | null;
+  /** Live SL-breach countdown state — see SlGraceBadge/useSlGracePulse in
+   *  common/components/strategy/SlGraceBadge.tsx (shared with the card). */
+  sl_grace_active?: boolean;
+  sl_grace_deadline?: string | null;
+  sl_recovery_deadline?: string | null;
   runner_mode?: 'trail' | 'be_hold' | 'none';
   runner_trail?: number;
   cascade_enabled?: boolean;
@@ -124,6 +131,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const marketValue = data.mid_price * data.qty_remaining * 100;
 
   const editable = !!strategyId;
+  const slPulseStyle = useSlGracePulse(!!data.sl_grace_active);
   const mutation = useUpdateStrategyExits();
   const { isHidden, setHidden } = useHiddenPositions();
   const hideKey = hideKeyProp ?? '';
@@ -323,7 +331,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
               )}
             />
             {editable ? (
-              <View style={{ opacity: slOn ? 1 : 0.45 }}>
+              <Animated.View style={[{ opacity: slOn ? 1 : 0.45 }, slPulseStyle]}>
                 <View style={s.editRow}>
                   <TextInput
                     value={stopVal}
@@ -342,17 +350,18 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
                     No stop loss — this runner rides its own course, including into close.
                   </Text>
                 )}
-              </View>
+              </Animated.View>
             ) : (
-              <Text style={[s.readonlyValue, { color: slOn ? colors.error : colors.textTertiary }]}>
+              <Animated.Text style={[s.readonlyValue, { color: slOn ? colors.error : colors.textTertiary }, slPulseStyle]}>
                 {slOn ? `$${data.hard_stop.toFixed(2)}` : 'Disabled'}
-              </Text>
+              </Animated.Text>
             )}
+            {slOn && <SlGraceBadge live={data} colors={colors} />}
 
             {/* ── Take Profit ── */}
             <View style={[s.divider, { backgroundColor: colors.separator }]} />
             <SectionHeader
-              label={`TAKE PROFIT${data.tp1_hit ? ' · TP1 HIT' : ''}`}
+              label={`TAKE PROFIT${data.tp1_hit ? ' · TP1 HIT' : ''}${data.tp2_hit ? ' · TP2 HIT' : ''}`}
               colors={colors}
               right={editable && !data.tp1_hit && (
                 <Switch

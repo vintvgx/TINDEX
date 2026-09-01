@@ -95,6 +95,26 @@ def _session_boundary_lines(hist: "pd.DataFrame") -> dict | None:
     return result or None
 
 
+def _latest_date_only(hist: "pd.DataFrame") -> "pd.DataFrame":
+    """
+    Restrict to bars from the single most recent calendar date (ET) present
+    in `hist`. `_session_boundary_lines()` assumes a day-scoped, chronologically
+    simple bar sequence (it breaks out of its scan at the first bar past a
+    cutoff) — that assumption held for free back when the 1D fetch itself was
+    always period="1d". Now that get_historical_prices() widens the 1D fetch
+    to period="5d" (see its docstring) so the pre-market fallback in
+    _regular_session_only() has a prior session to fall back onto, this slice
+    is what keeps _session_boundary_lines() fed only "today"'s bars instead of
+    silently picking up boundary prices from several days ago.
+    """
+    if hist.empty or getattr(hist.index, "tz", None) is None:
+        return hist
+    idx_et = hist.index.tz_convert(ET)
+    dates_et = idx_et.date
+    latest_date = max(dates_et)
+    return hist[dates_et == latest_date]
+
+
 def _regular_session_only(hist: "pd.DataFrame") -> "pd.DataFrame":
     """
     Trim to ONLY the most recent trading date's regular-session bars
@@ -167,8 +187,17 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
     # where session boundaries (and the Pre-Market/Post-Market chart lines)
     # are meaningful; every other period is already daily/weekly closes.
     prepost = period_key == "1D"
+    # 1D fetches "5d" (not "1d") so _regular_session_only()'s pre-market
+    # fallback actually has a prior trading day to fall back onto. yfinance's
+    # period="1d" only returns bars from the CURRENT calendar day — before
+    # 09:30 ET that's premarket ticks only (zero regular-session bars), so
+    # the fallback had nothing in the fetched window to find, and the chart
+    # came back "No Chart Data" every morning before the open (2026-09-01
+    # fix). _latest_date_only() below keeps _session_boundary_lines() scoped
+    # to just today's bars despite the wider fetch.
+    fetch_period = "5d" if period_key == "1D" else period
     try:
-        hist = yf.Ticker(ticker).history(period=period, interval=interval, prepost=prepost)
+        hist = yf.Ticker(ticker).history(period=fetch_period, interval=interval, prepost=prepost)
         # Intraday intervals can include rows with NaN prices (halts, thin
         # bars at the session edges). NaN isn't valid JSON and breaks the
         # mobile JSON.parse, so drop those rows before serializing.
@@ -182,7 +211,7 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
     # flat reference lines, not plotted candles, so they still want the
     # extended-hours bars even though the candle series itself no longer does.
     session_lines = (
-        _session_boundary_lines(hist)
+        _session_boundary_lines(_latest_date_only(hist))
         if prepost and not _is_regular_trading_hours()
         else None
     )

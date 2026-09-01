@@ -1,12 +1,19 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, Platform, UIManager } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { formatContractSymbolShort, getTradeHorizon } from '@/lib/formatContract';
 import { isMarketHours } from '@/lib/marketHours';
 import { useCardTintDarkMode } from '@/hooks/useCardTintDarkMode';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { PositionInfoModal } from '@/common/components/strategy/PositionInfoModal';
+import { SlGraceBadge, useSlGracePulse } from '@/common/components/strategy/SlGraceBadge';
 import type { ProfileKey } from '@/common/types/strategy';
+
+/** TP2's own accent — distinct from TP1's (colors.success) so a glance at
+ *  the SL → TP1 → TP2 row tells the two targets apart at a glance, not just
+ *  by position. */
+const TP2_COLOR = '#0A84FF';
 
 /** LivePriceData plus the market_value the header displays — computed via
  *  fallback (mid_price * qty_remaining * 100) since the live WS payload
@@ -130,6 +137,11 @@ export function LivePositionPanel({
   const tpEnabled = display?.tp_enabled !== false;
   const noSL = isNoStopLoss || !slEnabled;
 
+  const showSL  = !noSL && !!display && display.hard_stop > 0;
+  const showTp1 = tpEnabled && !!display && display.tp1 > 0;
+  const showTp2Chip = tpEnabled && showTp2 && !!display && display.tp2 > 0 && display.tp2 !== display.tp1;
+  const slPulseStyle = useSlGracePulse(!!display?.sl_grace_active);
+
   const pnlColor = display
     ? (display.pnl >= 0 ? colors.success : colors.error)
     : colors.tabBarInactive;
@@ -216,12 +228,55 @@ export function LivePositionPanel({
               </View>
             </View>
 
-            {/* ── Caption: entry → current · qty ── */}
-            <Text style={[styles.caption, { color: colors.textTertiary }]} numberOfLines={1}>
-              ${display.entry_premium.toFixed(2)} → ${display.mid_price.toFixed(2)}
-              {'  ·  Qty '}{display.qty_remaining}
-              {paperMode ? '  ·  Paper' : ''}
-            </Text>
+            {/* ── Caption row: entry → current · qty on the left, SL · TP1 ·
+                TP2 flexed to the right — the exit levels are the more
+                important read of the two, so they get the fixed (never
+                truncated) side; the caption itself truncates first if the
+                row runs out of room. ── */}
+            <View style={styles.captionRow}>
+              <Text style={[styles.caption, { color: colors.textTertiary }]} numberOfLines={1}>
+                ${display.entry_premium.toFixed(2)} → ${display.mid_price.toFixed(2)}
+                {'  ·  Qty '}{display.qty_remaining}
+                {paperMode ? '  ·  Paper' : ''}
+              </Text>
+
+              {(showSL || showTp1 || showTp2Chip) && (
+                <View style={styles.exitsRow}>
+                  {showSL && (
+                    <Animated.View style={[styles.exitChip, slPulseStyle]}>
+                      <Text style={[styles.exitLabel, { color: colors.error }]}>SL</Text>
+                      <Text style={[styles.exitPrice, { color: colors.error }]}>
+                        ${display.hard_stop.toFixed(2)}
+                      </Text>
+                    </Animated.View>
+                  )}
+                  {showTp1 && (
+                    <>
+                      {showSL && <Text style={[styles.exitArrow, { color: colors.textTertiary }]}>→</Text>}
+                      <View style={styles.exitChip}>
+                        <Text style={[styles.exitLabel, { color: colors.success }]}>TP1</Text>
+                        <Text style={[styles.exitPrice, { color: colors.success }]}>
+                          ${display.tp1.toFixed(2)}
+                        </Text>
+                        {display.tp1_hit && <Ionicons name="checkmark-circle" size={10} color={colors.success} />}
+                      </View>
+                    </>
+                  )}
+                  {showTp2Chip && (
+                    <>
+                      <Text style={[styles.exitArrow, { color: colors.textTertiary }]}>·</Text>
+                      <View style={styles.exitChip}>
+                        <Text style={[styles.exitLabel, { color: TP2_COLOR }]}>TP2</Text>
+                        <Text style={[styles.exitPrice, { color: TP2_COLOR }]}>
+                          ${display.tp2.toFixed(2)}
+                        </Text>
+                        {display.tp2_hit && <Ionicons name="checkmark-circle" size={10} color={TP2_COLOR} />}
+                      </View>
+                    </>
+                  )}
+                </View>
+              )}
+            </View>
 
             {/* SL grace-timer countdown — urgent, so it stays on the card
                 instead of behind a tap into the info sheet. */}
@@ -262,6 +317,9 @@ export function LivePositionPanel({
             tpEnabled,
             sl_grace_enabled: display.sl_grace_enabled,
             sl_grace_minutes: display.sl_grace_minutes,
+            sl_grace_active: display.sl_grace_active,
+            sl_grace_deadline: display.sl_grace_deadline,
+            sl_recovery_deadline: display.sl_recovery_deadline,
             runner_mode: display.runner_mode,
             runner_trail: display.runner_trail,
             cascade_enabled: display.cascade_enabled,
@@ -269,69 +327,6 @@ export function LivePositionPanel({
         />
       )}
     </>
-  );
-}
-
-/**
- * SL grace indicator — two states:
- *  - Idle: a persistent, low-key line showing this position's PRE-TP1 stop
- *    has a confirmation window at all (e.g. REVERSAL's default 5-min/3-bar
- *    grace — see profiles.py). Hidden once tp1_hit: grace only ever applies
- *    to the pre-TP1 hard stop (see ExitManager.evaluate() — "not self.
- *    be_stop_active"), so showing this after TP1 would claim protection the
- *    post-TP1 breakeven stop doesn't actually have.
- *  - Active: countdown for an in-progress grace window. Never runs its own
- *    independent clock — every render recomputes `deadline - Date.now()` off
- *    the backend's absolute timestamp (sl_grace_deadline), so this can't
- *    drift from the engine actually deciding when to force-sell. The
- *    setInterval here only forces a re-render each second; it holds no
- *    state of its own.
- */
-function SlGraceBadge({ live, colors }: { live: DisplayData; colors: any }) {
-  const [, forceTick] = useState(0);
-  const active = !!live.sl_grace_active && !!live.sl_grace_deadline;
-
-  useEffect(() => {
-    if (!active) return;
-    const id = setInterval(() => forceTick(t => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [active]);
-
-  if (!active) {
-    if (!live.sl_grace_enabled || live.sl_grace_minutes == null || live.tp1_hit) return null;
-    return (
-      <View style={styles.slGraceRow}>
-        <Ionicons name="shield-checkmark-outline" size={12} color={colors.textTertiary} />
-        <Text style={[styles.slGraceText, { color: colors.textTertiary }]}>
-          Stop has {live.sl_grace_minutes}m grace
-        </Text>
-      </View>
-    );
-  }
-
-  const remainingSec = Math.max(0, Math.round((new Date(live.sl_grace_deadline!).getTime() - Date.now()) / 1000));
-  const mm = Math.floor(remainingSec / 60);
-  const ss = remainingSec % 60;
-  const urgent = remainingSec <= 60;
-  const color  = urgent ? colors.error : '#FF9F0A';
-
-  const recovering  = !!live.sl_recovery_deadline;
-  const recoverSec  = recovering
-    ? Math.max(0, Math.round((new Date(live.sl_recovery_deadline!).getTime() - Date.now()) / 1000))
-    : 0;
-
-  return (
-    <View style={[styles.slGraceBanner, { backgroundColor: color + '16' }]}>
-      <Ionicons name="timer-outline" size={13} color={color} />
-      <Text style={[styles.slGraceBannerText, { color }]}>
-        SL breach — selling in {mm}:{String(ss).padStart(2, '0')}
-      </Text>
-      {recovering && (
-        <Text style={[styles.slGraceSubText, { color: colors.textSecondary }]}>
-          recovering, {recoverSec}s to cancel
-        </Text>
-      )}
-    </View>
   );
 }
 
@@ -355,15 +350,15 @@ const styles = StyleSheet.create({
   pnlPctPill:{ borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   pnlPctText:{ fontSize: 11, fontWeight: '700' },
 
-  caption: { fontSize: 12, marginTop: 8 },
-
-  slGraceRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 },
-  slGraceText: { fontSize: 11, fontWeight: '600' },
-
-  slGraceBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-    borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, marginTop: 10,
+  captionRow: {
+    flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between',
+    alignItems: 'center', marginTop: 8, rowGap: 4, columnGap: 8,
   },
-  slGraceBannerText: { fontSize: 12, fontWeight: '700' },
-  slGraceSubText:    { fontSize: 10 },
+  caption: { fontSize: 12, flexShrink: 1 },
+
+  exitsRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 0 },
+  exitChip:  { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  exitLabel: { fontSize: 9.5, fontWeight: '700', opacity: 0.8 },
+  exitPrice: { fontSize: 11, fontWeight: '700' },
+  exitArrow: { fontSize: 10 },
 });
