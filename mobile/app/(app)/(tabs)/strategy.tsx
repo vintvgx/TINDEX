@@ -23,18 +23,17 @@ import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/comp
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
 import { StrategyDetailModal } from '@/common/components/strategy/StrategyDetailModal';
-import { PROFILE_EMOJI } from '@/common/components/strategy/PositionCard';
 import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { OrbHubHealthBanner } from '@/common/components/strategy/OrbHubHealthBanner';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
-import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
+import { LivePositionPanel } from '@/common/components/strategy/LivePositionPanel';
 import { positionHideKey } from '@/lib/positionHideKey';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
 import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, LiveOptionPrice, ExitOverrides, ORBTrade } from '@/common/types/strategy';
-import { formatContractSymbolShort } from '@/lib/formatContract';
+import { formatContractSymbolShort, parseContractSymbol } from '@/lib/formatContract';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -583,23 +582,20 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
     onPositionClosed,
   );
   const [exitOpen, setExitOpen]   = useState(false);
-  const [expanded, setExpanded]   = useState(false);
-  const [infoVisible, setInfoVisible] = useState(false);
 
-  const toggleExpanded = useCallback(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpanded(v => !v);
-  }, []);
-
-  const pnlColor = live
-    ? (live.pnl >= 0 ? colors.success : colors.error)
-    : colors.tabBarInactive;
+  // Direction isn't a field on StrategyConfig/LiveOptionPrice — the OCC
+  // contract symbol already encodes it (see parseContractSymbol), so derive
+  // it from `live.contract` once a position is open rather than threading a
+  // new field through the backend for this.
+  const parsedContract = live ? parseContractSymbol(live.contract) : null;
+  const direction: 'CALL' | 'PUT' | undefined = parsedContract ? (parsedContract.type === 'C' ? 'CALL' : 'PUT') : undefined;
+  const accentColor = direction === 'PUT' ? colors.error : direction === 'CALL' ? colors.success : profileColor;
 
   return (
     <TouchableOpacity
       onPress={onPress}
       activeOpacity={0.85}
-      style={[styles.stratCard, { backgroundColor: colors.card, borderColor: hasPosition ? profileColor + '55' : colors.border }]}
+      style={[styles.stratCard, { backgroundColor: hasPosition ? profileColor + '0D' : colors.surface }]}
     >
       {/* Left accent bar — brighter when position is live */}
       <View style={[styles.stratAccent, { backgroundColor: profileColor, opacity: hasPosition ? 1 : 0.5 }]} />
@@ -653,132 +649,30 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
           </Text>
         )}
 
-        {/* ── Live position panel (PositionCard style) ── */}
+        {/* ── Live position — the same Robinhood-styled card/quick-edit
+            sheet used on Live Positions/Dashboard, not a third separate
+            implementation. Tapping it opens PositionInfoModal, which now
+            covers everything the old inline expand + EditExitsButton did. ── */}
         {hasPosition && (
-          <View style={[styles.livePnlCard, { backgroundColor: colors.background, borderColor: profileColor + '44' }]}>
-
-            {/* Header row: streaming dot + label + contract + P&L */}
-            <TouchableOpacity onPress={toggleExpanded} activeOpacity={0.7} style={styles.liveHeaderRow}>
-              <View style={styles.liveHeaderLeft}>
-                <View style={[styles.modeDot, {
-                  backgroundColor: streaming ? colors.success : colors.tabBarInactive,
-                }]} />
-                {/* Profile badge — tap opens the Profile Guide pre-jumped to
-                    this trade's profile (initialKey), same pattern as the
-                    shared LivePositionPanel used on Live Positions/Dashboard. */}
-                <TouchableOpacity
-                  onPress={(e) => { e.stopPropagation(); setInfoVisible(true); }}
-                  hitSlop={6}
-                  activeOpacity={0.7}
-                  style={styles.profileBadge}
-                >
-                  <Text style={styles.profileEmoji}>{PROFILE_EMOJI[config.profile] ?? '⚙️'}</Text>
-                  <Ionicons name="information-circle-outline" size={13} color={colors.tabBarInactive} />
-                </TouchableOpacity>
-                <Text style={[styles.liveLabel, { color: streaming ? colors.success : colors.tabBarInactive }]}>
-                  {streaming ? 'LIVE' : 'CONNECTING'}
-                </Text>
-                {live && (
-                  <Text style={[styles.liveContract, { color: colors.tabBarInactive }]}>
-                    {formatContractSymbolShort(live.contract)}
-                  </Text>
-                )}
-              </View>
-              {live && (
-                <View style={styles.liveHeaderRight}>
-                  <Text style={[styles.livePnlValue, { color: pnlColor }]}>
-                    {live.pnl >= 0 ? '+' : ''}${live.pnl.toFixed(2)}
-                  </Text>
-                  <View style={[styles.pnlPctPill, { backgroundColor: pnlColor + '1A' }]}>
-                    <Text style={[styles.pnlPctText, { color: pnlColor }]}>
-                      {live.pnl_pct >= 0 ? '+' : ''}{live.pnl_pct.toFixed(1)}%
-                    </Text>
-                  </View>
-                  <Text style={[styles.mktValText, { color: colors.tabBarInactive }]}>
-                    Mkt ${(live.market_value ?? live.mid_price * live.qty_remaining * 100).toFixed(2)}
-                  </Text>
-                </View>
-              )}
-              <Ionicons
-                name={expanded ? 'chevron-up' : 'chevron-down'}
-                size={14}
-                color={colors.tabBarInactive}
-                style={{ marginLeft: 8 }}
-              />
-            </TouchableOpacity>
-
-            {/* Stats row: Price | Qty | TP hits */}
-            {live ? (
-              <>
-                <View style={styles.liveStats}>
-                  <LiveStat label="Entry"  value={`$${live.entry_premium.toFixed(2)}`} colors={colors} />
-                  <LiveStat label="Price"  value={`$${live.mid_price.toFixed(2)}`}     colors={colors} highlight />
-                  <LiveStat label="Qty"    value={String(live.qty_remaining)}          colors={colors} />
-                  <LiveStat
-                    label="Stop"
-                    value={`$${live.hard_stop.toFixed(2)}`}
-                    colors={colors}
-                    valueColor={colors.error}
-                  />
-                </View>
-
-                {/* Stop/TP progression bar */}
-                <PositionStopBar live={live} colors={colors} />
-
-                {/* TP hit badges */}
-                {(live.tp1_hit || live.tp2_hit) && (
-                  <View style={styles.tpRow}>
-                    {live.tp1_hit && (
-                      <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}>
-                        <Text style={[styles.tpBadgeText, { color: colors.success }]}>TP1 ✓</Text>
-                      </View>
-                    )}
-                    {live.tp2_hit && (
-                      <View style={[styles.tpBadge, { backgroundColor: colors.success + '22' }]}>
-                        <Text style={[styles.tpBadgeText, { color: colors.success }]}>TP2 ✓</Text>
-                      </View>
-                    )}
-                  </View>
-                )}
-
-                {/* Expanded detail */}
-                {expanded && <LivePositionDetail live={live} colors={colors} />}
-              </>
-            ) : (
-              <ActivityIndicator size="small" color={colors.accent} style={{ marginTop: 8 }} />
-            )}
-
-            {/* Edit exits + manual exit */}
-            <View style={styles.liveActionsRow}>
-              {live && (
-                <EditExitsButton
-                  mode="orb"
-                  strategy_id={config.id}
-                  ticker={config.ticker}
-                  hard_stop={live.hard_stop}
-                  tp1={live.tp1}
-                  tp2={live.tp2}
-                  entry_premium={live.entry_premium}
-                  tp1_hit={live.tp1_hit}
-                  tp2_hit={live.tp2_hit}
-                  qty_remaining={live.qty_remaining}
-                  runner_mode={live.runner_mode}
-                  cascade_enabled={live.cascade_enabled}
-                  hideKey={positionHideKey({ strategy_id: config.id, contract: live.contract, entry_premium: live.entry_premium })}
-                  onUpdated={patchData}
-                  style={{ flex: 1 }}
-                />
-              )}
-              <TouchableOpacity
-                onPress={() => setExitOpen(true)}
-                activeOpacity={0.8}
-                style={[styles.exitBtn, { flex: 1, marginTop: 0, borderColor: colors.error + '55', backgroundColor: colors.error + '14' }]}
-              >
-                <Ionicons name="exit-outline" size={16} color={colors.error} />
-                <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit Position</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+          <LivePositionPanel
+            live={live}
+            streaming={streaming}
+            accentColor={accentColor}
+            strategyId={config.id}
+            ticker={config.ticker}
+            direction={direction}
+            paperMode={config.paper_mode}
+            onExitPress={() => setExitOpen(true)}
+            profile={config.profile}
+            colors={colors}
+            patchData={patchData}
+            // No client-side "hide" filter applies to this screen (every
+            // config here is one the user explicitly created/is managing),
+            // so there's nothing meaningful to hide into — suppress the
+            // action in the info sheet by passing an empty key rather than
+            // wiring up a hide feature with no visible effect here.
+            hideKey=""
+          />
         )}
       </View>
 
@@ -792,40 +686,18 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
         paperMode={config.paper_mode}
         onClose={() => setExitOpen(false)}
       />
-
-      <ProfileGuideModal
-        visible={infoVisible}
-        onClose={() => setInfoVisible(false)}
-        colors={colors}
-        initialKey={config.profile}
-      />
     </TouchableOpacity>
-  );
-}
-
-// ── PositionStopBar ─────────────────────────────────────────────────────────────
-
-function PositionStopBar({ live, colors }: { live: LiveOptionPrice; colors: any }) {
-  const stages = [
-    { label: 'Stop', value: live.hard_stop,     active: !live.tp1_hit,  color: colors.error },
-    { label: 'TP1',  value: live.tp1,           active: live.tp1_hit && !live.tp2_hit, color: '#4A9EFF' },
-    { label: 'TP2',  value: live.tp2,           active: live.tp2_hit,   color: colors.success },
-  ];
-  return (
-    <View style={styles.stopBar}>
-      {stages.map((s, i) => (
-        <View key={i} style={styles.stopStage}>
-          <View style={[styles.stopDot, { backgroundColor: s.active ? s.color : colors.border }]} />
-          <Text style={[styles.stopLabel, { color: s.active ? s.color : colors.tabBarInactive }]}>{s.label}</Text>
-          <Text style={[styles.stopValue, { color: colors.tabBarInactive }]}>${s.value.toFixed(2)}</Text>
-        </View>
-      ))}
-    </View>
   );
 }
 
 // ── CompletedTradeCard ────────────────────────────────────────────────────────
 
+/**
+ * Robinhood-styled closed-trade row — no boxed border/left accent bar, a
+ * soft tint of the P&L color instead, one hero P&L number, and a single
+ * muted caption line instead of a wall of colored tag chips. Same visual
+ * language as LivePositionPanel (the open-position card).
+ */
 function CompletedTradeCard({ trade, colors }: { trade: ORBTrade; colors: any }) {
   const pnl     = trade.pnl ?? 0;
   const pnlPct  = trade.pnl_pct ?? 0;
@@ -840,93 +712,49 @@ function CompletedTradeCard({ trade, colors }: { trade: ORBTrade; colors: any })
     : null;
 
   return (
-    <View style={[styles.stratCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={[styles.stratAccent, { backgroundColor: pnlColor, opacity: 0.7 }]} />
-      <View style={[styles.stratBody]}>
-        <View style={styles.stratRow}>
-          <View style={styles.stratTitleGroup}>
-            <Text style={[styles.stratTicker, { color: colors.text }]}>
-              {trade.ticker}{' '}
-              <Text style={{ color: dirColor, fontSize: 14 }}>{trade.direction}</Text>
-            </Text>
-            <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>
-              {formatContractSymbolShort(trade.contract_symbol)}
+    <View style={[rh.closedCard, { backgroundColor: pnlColor + '0D' }]}>
+      <View style={rh.closedTopRow}>
+        <View style={{ flex: 1 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={[rh.closedTicker, { color: colors.text }]}>{trade.ticker}</Text>
+            <Text style={{ color: dirColor, fontSize: 12, fontWeight: '700' }}>{trade.direction}</Text>
+          </View>
+          <Text style={[rh.closedCaption, { color: colors.textTertiary }]} numberOfLines={1}>
+            {formatContractSymbolShort(trade.contract_symbol)}
+          </Text>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={[rh.closedPnl, { color: pnlColor }]}>
+            {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+          </Text>
+          <View style={[rh.pnlPctPill, { backgroundColor: pnlColor + '1A' }]}>
+            <Text style={[rh.pnlPctText, { color: pnlColor }]}>
+              {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
             </Text>
           </View>
-          {/* P&L on right */}
-          <View style={{ alignItems: 'flex-end', gap: 4 }}>
-            <Text style={[styles.livePnlValue, { color: pnlColor }]}>
-              {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
-            </Text>
-            <View style={[styles.pnlPctPill, { backgroundColor: pnlColor + '1A' }]}>
-              <Text style={[styles.pnlPctText, { color: pnlColor }]}>
-                {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Meta */}
-        <View style={styles.stratMeta}>
-          <MetaChip label="CLOSED" color={pnlColor} />
-          <MetaChip label={isImmediate ? 'IMMED' : 'STRATEGY'} color={isImmediate ? '#F59E0B' : colors.tabBarInactive} />
-          {trade.paper_mode && <MetaChip label="PAPER" color="#FF9F0A" />}
-          {trade.exit_reason && (
-            <MetaChip label={trade.exit_reason.replace(/_/g, ' ')} color={colors.tabBarInactive} />
-          )}
-        </View>
-
-        {/* Entry → Exit */}
-        <View style={[styles.closedDetails, { borderTopColor: colors.border }]}>
-          <ClosedStat label="Entry" value={`$${(trade.entry_premium ?? 0).toFixed(2)}`} colors={colors} />
-          <Ionicons name="arrow-forward" size={12} color={colors.tabBarInactive} />
-          <ClosedStat label="Exit" value={trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—'} colors={colors} highlight={pnlColor} />
-          {exitTime && <ClosedStat label="Time" value={exitTime} colors={colors} />}
         </View>
       </View>
+      <Text style={[rh.closedMeta, { color: colors.textTertiary }]} numberOfLines={1}>
+        {`$${(trade.entry_premium ?? 0).toFixed(2)} → ${trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—'}`}
+        {exitTime ? `  ·  ${exitTime}` : ''}
+        {trade.exit_reason ? `  ·  ${trade.exit_reason.replace(/_/g, ' ')}` : ''}
+        {trade.paper_mode ? '  ·  Paper' : ''}
+        {isImmediate ? '  ·  Immediate' : ''}
+      </Text>
     </View>
   );
 }
 
-function ClosedStat({ label, value, colors, highlight }: { label: string; value: string; colors: any; highlight?: string }) {
-  return (
-    <View style={{ alignItems: 'center' }}>
-      <Text style={[styles.liveStatLabel, { color: colors.tabBarInactive }]}>{label}</Text>
-      <Text style={[styles.liveStatValue, { color: highlight ?? colors.text, fontSize: 12 }]}>{value}</Text>
-    </View>
-  );
-}
-
-// ── LivePositionDetail ─────────────────────────────────────────────────────────
-
-function LivePositionDetail({ live, colors }: { live: LiveOptionPrice; colors: any }) {
-  return (
-    <View style={[styles.liveDetail, { borderTopColor: colors.border }]}>
-      <LiveDetailRow label="Entry"     value={`$${live.entry_premium.toFixed(2)}`} colors={colors} />
-      <LiveDetailRow label="Hard Stop" value={`$${live.hard_stop.toFixed(2)}`}     valueColor={colors.error} colors={colors} />
-      <LiveDetailRow label="TP1"       value={`$${live.tp1.toFixed(2)}`}           badge={live.tp1_hit ? 'Hit' : undefined} badgeColor={colors.success} colors={colors} />
-      <LiveDetailRow label="TP2"       value={`$${live.tp2.toFixed(2)}`}           badge={live.tp2_hit ? 'Hit' : undefined} badgeColor={colors.success} colors={colors} />
-    </View>
-  );
-}
-
-function LiveDetailRow({ label, value, valueColor, badge, badgeColor, colors }: {
-  label: string; value: string; valueColor?: string; badge?: string; badgeColor?: string; colors: any;
-}) {
-  return (
-    <View style={styles.liveDetailRow}>
-      <Text style={[styles.liveDetailLabel, { color: colors.tabBarInactive }]}>{label}</Text>
-      <View style={styles.liveDetailRight}>
-        <Text style={[styles.liveDetailValue, { color: valueColor ?? colors.text }]}>{value}</Text>
-        {badge && (
-          <View style={[styles.liveDetailBadge, { backgroundColor: (badgeColor ?? colors.accent) + '22' }]}>
-            <Text style={[styles.liveDetailBadgeText, { color: badgeColor ?? colors.accent }]}>{badge}</Text>
-          </View>
-        )}
-      </View>
-    </View>
-  );
-}
+const rh = StyleSheet.create({
+  closedCard:    { borderRadius: 18, padding: 14, marginBottom: 10 },
+  closedTopRow:  { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  closedTicker:  { fontSize: 15, fontWeight: '700' },
+  closedCaption: { fontSize: 11.5, marginTop: 2 },
+  closedPnl:     { fontSize: 16, fontWeight: '800' },
+  closedMeta:    { fontSize: 11.5, marginTop: 8 },
+  pnlPctPill:    { borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1, marginTop: 3 },
+  pnlPctText:    { fontSize: 10, fontWeight: '700' },
+});
 
 // ── AccountBannerSide ──────────────────────────────────────────────────────────
 
@@ -1087,17 +915,8 @@ const KillSwitchPanel = ({ configs, colors, toast }: {
 // ── Small helpers ──────────────────────────────────────────────────────────────
 
 const MetaChip = ({ label, color }: { label: string; color: string }) => (
-  <View style={[styles.metaChip, { borderColor: color + '55', backgroundColor: color + '11' }]}>
+  <View style={[styles.metaChip, { backgroundColor: color + '16' }]}>
     <Text style={[styles.metaChipText, { color }]}>{label}</Text>
-  </View>
-);
-
-const LiveStat = ({ label, value, colors, highlight, valueColor }: {
-  label: string; value: string; colors: any; highlight?: boolean; valueColor?: string;
-}) => (
-  <View style={styles.liveStat}>
-    <Text style={[styles.liveStatLabel, { color: colors.tabBarInactive }]}>{label}</Text>
-    <Text style={[styles.liveStatValue, { color: valueColor ?? (highlight ? colors.accent : colors.text) }]}>{value}</Text>
   </View>
 );
 
@@ -1658,28 +1477,28 @@ const styles = StyleSheet.create({
   sectionAccentDot: { width: 7, height: 7, borderRadius: 4 },
   sectionHeader:    { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', color: '#888' },
 
-  // ── Strategy card ──
+  // ── Strategy card — Robinhood-influenced: no hard outline, a thin
+  //  color-coded rail instead of a heavy left accent block, softer chips. ──
   stratCard: {
     flexDirection: 'row',
-    borderRadius: 14,
-    borderWidth: 1,
+    borderRadius: 20,
     marginBottom: 10,
     overflow: 'hidden',
   },
-  stratAccent: { width: 4 },
-  stratBody:   { flex: 1, padding: 12 },
-  stratRow:    { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6 },
+  stratAccent: { width: 3 },
+  stratBody:   { flex: 1, padding: 16 },
+  stratRow:    { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 8 },
   stratTitleGroup: { flex: 1 },
-  stratTicker: { fontSize: 18, fontWeight: '700' },
+  stratTicker: { fontSize: 17, fontWeight: '800', letterSpacing: -0.3 },
   stratName:   { fontSize: 12, marginTop: 1 },
-  stratMeta:   { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 4 },
+  stratMeta:   { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 6 },
   stratCapital:{ fontSize: 12, marginTop: 4 },
 
   modeBadge:     { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
   modeBadgeText: { fontSize: 11, fontWeight: '600' },
   modeDot:       { width: 6, height: 6, borderRadius: 3 },
 
-  metaChip:     { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1 },
+  metaChip:     { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 7 },
   metaChipText: { fontSize: 11, fontWeight: '600' },
 
   // ── Live position panel ──

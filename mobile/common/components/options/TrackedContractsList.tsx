@@ -141,15 +141,15 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
   return (
     <TouchableOpacity
       onPress={() => onPress(contract, liveContract, currentPrice)}
-      activeOpacity={0.75}
-      style={[cc.card, { backgroundColor: colors.surface, borderColor: colors.border }]}
+      activeOpacity={0.85}
+      style={[cc.card, { backgroundColor: typeColor + '0D' }]}
     >
       {/* Main row */}
       <View style={cc.mainRow}>
         {/* Left */}
         <View style={cc.leftCol}>
           <View style={cc.typeRow}>
-            <View style={[cc.badge, { backgroundColor: typeColor + '20', borderColor: typeColor + '40' }]}>
+            <View style={[cc.badge, { backgroundColor: typeColor + '1F' }]}>
               <Text style={[cc.badgeText, { color: typeColor }]}>{contract.option_type}</Text>
             </View>
             <TouchableOpacity
@@ -276,7 +276,7 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
 
       {/* Footer row */}
       <View style={[cc.footer, { borderTopColor: colors.separator }]}>
-        <View style={[cc.statusPill, { backgroundColor: colors.background }]}>
+        <View style={[cc.statusPill, { backgroundColor: colors.text + '0A' }]}>
           <Text style={[cc.statusText, { color: colors.textTertiary }]}>{contract.status}</Text>
         </View>
         <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -284,7 +284,7 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
             <TouchableOpacity
               onPress={(e) => { e.stopPropagation(); setAlertsOpen(true); }}
               hitSlop={8}
-              style={[cc.trashBtn, { borderColor: colors.accent + '40' }]}
+              style={[cc.iconBtn, { backgroundColor: colors.accent + '16' }]}
             >
               <Ionicons name="notifications-outline" size={13} color={colors.accent} />
             </TouchableOpacity>
@@ -303,7 +303,7 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
             }}
             disabled={isUntracking}
             hitSlop={8}
-            style={[cc.trashBtn, { borderColor: colors.error + '40' }]}
+            style={[cc.iconBtn, { backgroundColor: colors.error + '16' }]}
           >
             {isUntracking
               ? <ActivityIndicator size="small" color={colors.error} />
@@ -324,11 +324,14 @@ const ContractCard: React.FC<ContractCardProps> = ({ contract, aiScore, onPress,
 };
 
 const cc = StyleSheet.create({
-  card: { borderRadius: 14, borderWidth: 1, marginHorizontal: 16, marginBottom: 10, overflow: 'hidden' },
-  mainRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', padding: 14 },
+  // Robinhood-influenced: no hard outline (a soft tint of the CALL/PUT
+  // color instead), generous radius, hairline dividers between the
+  // sub-sections instead of separate boxed cards.
+  card: { borderRadius: 20, marginHorizontal: 16, marginBottom: 10, overflow: 'hidden' },
+  mainRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', padding: 16 },
   leftCol: { flex: 1, paddingRight: 12 },
   typeRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  badge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, borderWidth: 1 },
+  badge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
   badgeText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.3 },
   ticker: { fontSize: 17, fontWeight: '800', letterSpacing: -0.3 },
   strike: { fontSize: 14, fontWeight: '600' },
@@ -363,7 +366,7 @@ const cc = StyleSheet.create({
   },
   statusPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   statusText: { fontSize: 11, fontWeight: '600', textTransform: 'capitalize' },
-  trashBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1 },
+  iconBtn: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
 });
 
 // ─── Main list component ───────────────────────────────────────────────────────
@@ -429,13 +432,13 @@ export const TrackedContractsList: React.FC<Props> = ({ onContractPress, activeT
                 <TouchableOpacity
                   onPress={() => refetch()}
                   hitSlop={8}
-                  style={[ls.headerBtn, { borderColor: colors.border, backgroundColor: colors.surface }]}
+                  style={[ls.headerBtn, { backgroundColor: colors.text + '0D' }]}
                 >
                   <Ionicons name="refresh-outline" size={14} color={colors.textSecondary} />
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={() => setAddOpen(true)}
-                  style={[ls.headerBtn, { backgroundColor: colors.accent + '18', borderColor: colors.accent + '44' }]}
+                  style={[ls.headerBtn, { backgroundColor: colors.accent + '18' }]}
                 >
                   <Ionicons name="add" size={14} color={colors.accent} />
                   <Text style={{ color: colors.accent, fontSize: 13, fontWeight: '700' }}>Add</Text>
@@ -446,7 +449,7 @@ export const TrackedContractsList: React.FC<Props> = ({ onContractPress, activeT
         }
         ListEmptyComponent={
           <View style={ls.empty}>
-            <View style={[ls.emptyIcon, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={[ls.emptyIcon, { backgroundColor: colors.text + '0A' }]}>
               <Ionicons name="bookmark-outline" size={32} color={colors.textSecondary} />
             </View>
             <Text style={[ls.emptyTitle, { color: colors.text }]}>No tracked contracts</Text>
@@ -456,7 +459,7 @@ export const TrackedContractsList: React.FC<Props> = ({ onContractPress, activeT
             <TouchableOpacity
               onPress={() => setAddOpen(true)}
               activeOpacity={0.8}
-              style={[ls.addCta, { backgroundColor: colors.accent + '18', borderColor: colors.accent + '44' }]}
+              style={[ls.addCta, { backgroundColor: colors.accent + '18' }]}
             >
               <Ionicons name="add-circle-outline" size={18} color={colors.accent} />
               <Text style={{ color: colors.accent, fontSize: 15, fontWeight: '700' }}>Add Contract Manually</Text>
@@ -487,11 +490,11 @@ export const TrackedContractsList: React.FC<Props> = ({ onContractPress, activeT
 const ls = StyleSheet.create({
   headerBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    borderRadius: 10, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1,
+    borderRadius: 10, paddingHorizontal: 12, paddingVertical: 7,
   },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80, paddingHorizontal: 32 },
-  emptyIcon: { width: 72, height: 72, borderRadius: 20, alignItems: 'center', justifyContent: 'center', borderWidth: 1, marginBottom: 16 },
+  emptyIcon: { width: 72, height: 72, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
   emptyTitle: { fontSize: 17, fontWeight: '700', marginBottom: 6 },
   emptySubtitle: { fontSize: 13, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
-  addCta: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1 },
+  addCta: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14, flexDirection: 'row', alignItems: 'center', gap: 8 },
 });

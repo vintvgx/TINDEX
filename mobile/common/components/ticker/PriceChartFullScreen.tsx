@@ -22,6 +22,7 @@ import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLev
 import { useCancelKeyLevel } from '@/hooks/mutations/priceLevels/useCancelKeyLevel';
 import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLevel';
 import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
+import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
 
 interface PriceChartFullScreenProps {
   visible: boolean;
@@ -384,41 +385,28 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
         </View>
 
         <View style={{ paddingHorizontal: 16 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginBottom: 6 }}>
-            {/* Crosshair on/off — a quick A/B toggle to test whether the tap/
-                press-and-hold crosshair's per-frame state updates are a
-                source of chart lag. Off = plain pan/pinch/zoom only, no
-                data-point inspection. */}
-            <Pressable
-              onPress={() => setCrosshairEnabled(!crosshairEnabled)}
-              hitSlop={8}
-              style={{
-                flexDirection: 'row', alignItems: 'center', gap: 4,
-                paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14,
-                borderWidth: 1, borderColor: crosshairEnabled ? colors.separator : colors.accent,
-                backgroundColor: crosshairEnabled ? 'transparent' : colors.accent + '18',
-              }}
-            >
-              <Ionicons name={crosshairEnabled ? 'locate-outline' : 'locate'} size={12} color={crosshairEnabled ? colors.textTertiary : colors.accent} />
-              <Text style={{ fontSize: 11, fontWeight: '700', color: crosshairEnabled ? colors.textTertiary : colors.accent }}>
-                {crosshairEnabled ? 'Data Points' : 'Data Points Off'}
-              </Text>
-            </Pressable>
-            <Pressable
-              onPress={() => setShowSR(v => !v)}
-              hitSlop={8}
-              style={{
-                flexDirection: 'row', alignItems: 'center', gap: 4,
-                paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14,
-                borderWidth: 1, borderColor: showSR ? colors.accent : colors.separator,
-                backgroundColor: showSR ? colors.accent + '18' : 'transparent',
-              }}
-            >
-              <Ionicons name="analytics-outline" size={12} color={showSR ? colors.accent : colors.textTertiary} />
-              <Text style={{ fontSize: 11, fontWeight: '700', color: showSR ? colors.accent : colors.textTertiary }}>
-                S/R
-              </Text>
-            </Pressable>
+          <View style={{ marginBottom: 6 }}>
+            <ChartControlToggles
+              colors={colors}
+              toggles={[
+                {
+                  key: 'crosshair',
+                  icon: 'locate-outline',
+                  active: crosshairEnabled,
+                  onPress: () => setCrosshairEnabled(!crosshairEnabled),
+                  label: 'Data Points',
+                  description: 'Tap-and-hold on the chart to inspect an exact price/time. Turn off to test whether it’s a source of lag while panning.',
+                },
+                {
+                  key: 'sr',
+                  icon: 'analytics-outline',
+                  active: showSR,
+                  onPress: () => setShowSR(v => !v),
+                  label: 'S/R',
+                  description: 'Overlays nearby support and resistance levels on the chart.',
+                },
+              ]}
+            />
           </View>
           <AdvancedPriceChart
             data={historyData}

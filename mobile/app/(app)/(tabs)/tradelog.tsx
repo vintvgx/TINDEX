@@ -592,12 +592,7 @@ const TradeRow = ({
     <TouchableOpacity
       onPress={handlePress}
       activeOpacity={0.85}
-      style={[styles.tradeRow, {
-        backgroundColor: colors.card,
-        borderColor: colors.border,
-        borderLeftColor: accentColor,
-        borderLeftWidth: 3,
-      }]}
+      style={[styles.tradeRow, { backgroundColor: accentColor + '0D' }]}
     >
       <View style={styles.tradeRowMain}>
         {/* Identity */}
@@ -912,7 +907,7 @@ const styles = StyleSheet.create({
   rangeChip:      { flex: 1, paddingVertical: 6, alignItems: 'center', borderRadius: 8 },
   rangeChipText:  { fontSize: 12, fontWeight: '600' },
   empty:     { textAlign: 'center', marginTop: 40, fontSize: 14 },
-  tradeRow:     { borderRadius: 12, borderWidth: 1, padding: 13, paddingLeft: 13 },
+  tradeRow:     { borderRadius: 18, padding: 15 },
   tradeRowMain: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   tradeLeft: { flex: 1, gap: 5 },
   tradeTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },

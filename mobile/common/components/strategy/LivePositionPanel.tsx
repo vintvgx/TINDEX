@@ -1,14 +1,12 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, LayoutAnimation, Platform, UIManager } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, Platform, UIManager } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { EditExitsButton } from '@/common/components/shared/EditExitsButton';
 import { formatContractSymbolShort, getTradeHorizon } from '@/lib/formatContract';
 import { isMarketHours } from '@/lib/marketHours';
 import { useCardTintDarkMode } from '@/hooks/useCardTintDarkMode';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { PositionInfoModal } from '@/common/components/strategy/PositionInfoModal';
 import type { ProfileKey } from '@/common/types/strategy';
-import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 
 /** LivePriceData plus the market_value the header displays — computed via
  *  fallback (mid_price * qty_remaining * 100) since the live WS payload
@@ -39,6 +37,7 @@ export interface LivePositionStaticFallback {
   tp_enabled?: boolean;
   runner_mode?: 'trail' | 'be_hold' | 'none';
   runner_trail?: number;
+  cascade_enabled?: boolean;
 }
 
 interface LivePositionPanelProps {
@@ -57,28 +56,28 @@ interface LivePositionPanelProps {
   /** Opens the add-to-position (average down/up) modal. Omit to hide the button
    *  entirely — used by surfaces that don't yet support adding to a position. */
   onAddPress?: () => void;
-  /** Drives the "No Stop Loss" display treatment (hides numeric Stop/TP1/TP2
-   *  — none of them can ever fire for that profile — in favor of a plain
-   *  "hold until you manually sell" badge) and, together with `use_tp2`,
-   *  whether TP2 is shown at all. */
+  /** Drives the NO_STOP_LOSS legacy display treatment — see noSL below. */
   profile?: string;
   colors: any;
   /** Merges a submitted stop/TP edit straight into the WS `live` snapshot so
    *  it's reflected immediately instead of waiting on the next price tick. */
   patchData?: (patch: Partial<LivePriceData>) => void;
   /** Stable per-trade key for the client-only hide feature — see
-   *  lib/positionHideKey.ts. Passed straight through to EditExitsButton. */
+   *  lib/positionHideKey.ts. Passed straight through to PositionInfoModal. */
   hideKey: string;
 }
 
 /**
- * The same live-position display used for an active trade within a saved
- * Strategy (originally built inline in strategy.tsx's StrategyCard/
- * ImmediatePositionCard) — extracted here so the Live Positions page
- * (position.tsx) can show positions identically instead of the older,
- * static PositionCard. strategy.tsx is untouched; this is a fresh copy of
- * that same visual pattern so porting it carries no risk to the working
- * Strategy screen.
+ * A single open position — Robinhood-inspired: one hero number (market
+ * value), one colored P&L line, a muted entry→current/qty caption, nothing
+ * else permanently on screen. Tapping the card opens PositionInfoModal,
+ * which is now the single surface for both viewing full detail AND making
+ * quick edits (stop/TP price, SL/TP on-off, qty split, runner) — this used
+ * to be split across an inline "expand" section plus a separate
+ * EditExitsModal; consolidating removes that duplication and the extra tap
+ * to get from "view" to "edit". Exit (and Add, if offered) stay as small
+ * icon buttons directly on the card since they're the two actions taken
+ * without needing any other context first.
  */
 export function LivePositionPanel({
   live, staticFallback, streaming, isMock, accentColor,
@@ -87,12 +86,7 @@ export function LivePositionPanel({
 }: LivePositionPanelProps) {
   const isNoStopLoss = profile === 'NO_STOP_LOSS';
   const { enabled: darkTintEnabled } = useCardTintDarkMode();
-  const [expanded, setExpanded] = useState(false);
   const [infoVisible, setInfoVisible] = useState(false);
-  const toggleExpanded = useCallback(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpanded(v => !v);
-  }, []);
 
   const hasFallback =
     staticFallback?.entry_premium != null &&
@@ -122,17 +116,13 @@ export function LivePositionPanel({
         tp_enabled:    staticFallback!.tp_enabled,
         runner_mode:   staticFallback!.runner_mode,
         runner_trail:  staticFallback!.runner_trail,
+        cascade_enabled: staticFallback!.cascade_enabled,
         market_value:  (staticFallback!.mid_price ?? staticFallback!.entry_premium!) * (staticFallback!.qty_remaining ?? 0) * 100,
       }
     : undefined);
 
   // Absent on older cached data → default to showing TP2 (matches the
   // pre-use_tp2 behavior) rather than hiding a value that might be real.
-  // NOT gated on isNoStopLoss — a NO_STOP_LOSS position's SL/TP1/TP2 are
-  // real, editable numbers the moment the user sets them via Edit (see
-  // EditExitsModal), so they're always shown like any other position;
-  // use_tp2 alone (profile flag or the qty<=1 hard override) still governs
-  // whether TP2 specifically is reachable for this trade.
   const showTp2 = display?.use_tp2 !== false;
   // sl_enabled/tp_enabled default true when absent (older cached data,
   // pre-toggle trades). See ExitManager.to_dict().
@@ -147,59 +137,76 @@ export function LivePositionPanel({
   // marketOpen must win over `streaming`: the WS is a socket to our own
   // backend, not to Alpaca's market feed directly, so it can — and does —
   // stay connected outside market hours with no real ticks flowing through
-  // it. Checking `streaming` first showed "LIVE" the moment that socket
-  // connected regardless of market hours, which is exactly backwards — a
-  // swing/LEAPS position held overnight or over a weekend still needs
-  // "CONNECTING" to resolve to something (hence the marketOpen fallback
-  // below), but never to "LIVE" while the market itself is closed.
+  // it. A swing/LEAPS position held overnight or over a weekend still needs
+  // a non-live status dot, but never a "live" one while the market's closed.
   const marketOpen  = isMarketHours();
-  const statusLabel = isMock ? 'PREVIEW' : !marketOpen ? 'MARKET CLOSED' : streaming ? 'LIVE' : 'CONNECTING';
-  const statusColor = isMock ? colors.accent : (marketOpen && streaming) ? colors.success : colors.tabBarInactive;
+  const isLive = isMock ? false : marketOpen && streaming;
+  const statusColor = isMock ? colors.accent : isLive ? colors.success : colors.tabBarInactive;
+  const marketValue = display ? (display.market_value ?? display.mid_price * display.qty_remaining * 100) : null;
 
   return (
-    <View
-      style={[
-        styles.livePnlCard,
-        {
-          // Light mode's card background matched the screen background
-          // exactly, so the card visually disappeared — wash it with the
-          // same green/red as the border instead. Dark mode defaults to
-          // plain colors.background (it already read fine there); the same
-          // tint is opt-in via the Profile "Tint Cards in Dark Mode" setting.
-          backgroundColor: !colors.isDark || darkTintEnabled ? accentColor + '0F' : colors.background,
-          borderColor: accentColor + '99',
-        },
-      ]}
-    >
-      {/* ── Header (tap anywhere to expand): status + contract | P&L · ⓘ · chevron ──
-          Kept deliberately minimal — profile info and the SWING/NO SL/NO TP
-          flags all moved into PositionInfoModal (via the ⓘ button) instead
-          of stacking badges here; only the status dot/label, contract, and
-          P&L stay always-visible. */}
-      <TouchableOpacity onPress={toggleExpanded} activeOpacity={0.7} style={styles.liveHeaderRow}>
-        <View style={styles.liveHeaderLeft}>
-          <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-          <Text style={[styles.liveLabel, { color: statusColor }]}>{statusLabel}</Text>
-          {display && (
-            <Text style={[styles.liveContract, { color: colors.text }]} numberOfLines={1}>
-              {formatContractSymbolShort(display.contract)}
-            </Text>
-          )}
-          {/* Compact icon-only flags — full "No Stop Loss"/"No Take Profit"
-              wording lives in the info modal; here it's just a glanceable
-              warning glyph so the header row doesn't turn back into a wall
-              of pill badges. */}
-          {display && !slEnabled && (
-            <Ionicons name="shield-outline" size={13} color={colors.error} />
-          )}
-          {display && !tpEnabled && (
-            <Ionicons name="flag-outline" size={13} color="#FF9F0A" />
+    <>
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={() => setInfoVisible(true)}
+        style={[
+          styles.card,
+          {
+            // Light mode's plain background matched the screen exactly, so
+            // the card visually disappeared — wash it with a soft tint of
+            // the direction color instead. Dark mode defaults to plain
+            // colors.background (already reads fine there); the same tint
+            // is opt-in via the Profile "Tint Cards in Dark Mode" setting.
+            // No hard border — Robinhood-style cards separate by tint +
+            // spacing, not a boxed outline.
+            backgroundColor: !colors.isDark || darkTintEnabled ? accentColor + '0D' : colors.surface,
+          },
+        ]}
+      >
+        {/* ── Top row: status dot · contract · flags  |  Add · Exit ── */}
+        <View style={styles.topRow}>
+          <View style={styles.topLeft}>
+            <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+            {display && (
+              <Text style={[styles.contract, { color: colors.textSecondary }]} numberOfLines={1}>
+                {formatContractSymbolShort(display.contract)}
+              </Text>
+            )}
+            {display && !slEnabled && <Ionicons name="shield-outline" size={12} color={colors.error} />}
+            {display && !tpEnabled && <Ionicons name="flag-outline" size={12} color="#FF9F0A" />}
+          </View>
+          {!isMock && (
+            <View style={styles.topRight}>
+              {onAddPress && (
+                <TouchableOpacity
+                  onPress={(e) => { e.stopPropagation(); onAddPress(); }}
+                  hitSlop={8}
+                  activeOpacity={0.7}
+                  style={[styles.iconBtn, { backgroundColor: colors.text + '0F' }]}
+                >
+                  <Ionicons name="add" size={16} color={colors.textSecondary} />
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                onPress={(e) => { e.stopPropagation(); onExitPress(); }}
+                hitSlop={8}
+                activeOpacity={0.7}
+                style={[styles.iconBtn, { backgroundColor: colors.error + '14' }]}
+              >
+                <Ionicons name="close" size={16} color={colors.error} />
+              </TouchableOpacity>
+            </View>
           )}
         </View>
-        <View style={styles.liveHeaderRight}>
-          {display && (
-            <>
-              <Text style={[styles.livePnlValue, { color: pnlColor }]}>
+
+        {display ? (
+          <>
+            {/* ── Hero: market value, then colored P&L ── */}
+            <Text style={[styles.heroValue, { color: colors.text }]}>
+              {marketValue != null ? `$${marketValue.toFixed(2)}` : '—'}
+            </Text>
+            <View style={styles.pnlRow}>
+              <Text style={[styles.pnlValue, { color: pnlColor }]}>
                 {display.pnl >= 0 ? '+' : ''}${display.pnl.toFixed(2)}
               </Text>
               <View style={[styles.pnlPctPill, { backgroundColor: pnlColor + '1A' }]}>
@@ -207,109 +214,23 @@ export function LivePositionPanel({
                   {display.pnl_pct >= 0 ? '+' : ''}{display.pnl_pct.toFixed(1)}%
                 </Text>
               </View>
-            </>
-          )}
-          <TouchableOpacity
-            onPress={(e) => { e.stopPropagation(); setInfoVisible(true); }}
-            hitSlop={8}
-            activeOpacity={0.7}
-            style={{ marginLeft: 8 }}
-          >
-            <Ionicons name="information-circle-outline" size={19} color={colors.tabBarInactive} />
-          </TouchableOpacity>
-          <Ionicons
-            name={expanded ? 'chevron-up' : 'chevron-down'}
-            size={14}
-            color={colors.tabBarInactive}
-            style={{ marginLeft: 8 }}
-          />
-        </View>
-      </TouchableOpacity>
+            </View>
 
-      {display ? (
-        <>
-          {/* ── Compact summary — the one always-visible line, so a screen of
-              several open trades stays scannable. Everything else (stop bar,
-              detail rows, action buttons) lives behind the expand. ── */}
-          <View style={styles.summaryRow}>
-            <Text style={[styles.summaryText, { color: colors.textSecondary }]} numberOfLines={1}>
-              ${display.entry_premium.toFixed(2)} → <Text style={{ color: colors.text, fontWeight: '700' }}>${display.mid_price.toFixed(2)}</Text>
+            {/* ── Caption: entry → current · qty ── */}
+            <Text style={[styles.caption, { color: colors.textTertiary }]} numberOfLines={1}>
+              ${display.entry_premium.toFixed(2)} → ${display.mid_price.toFixed(2)}
               {'  ·  Qty '}{display.qty_remaining}
-              {slEnabled ? `  ·  Stop $${display.hard_stop.toFixed(2)}` : '  ·  No Stop'}
-              {display.tp1_hit ? '  ·  ' : ''}
-              {display.tp1_hit && <Text style={{ color: colors.success, fontWeight: '700' }}>TP1 ✓</Text>}
-              {showTp2 && display.tp2_hit ? '  ' : ''}
-              {showTp2 && display.tp2_hit && <Text style={{ color: colors.success, fontWeight: '700' }}>TP2 ✓</Text>}
+              {paperMode ? '  ·  Paper' : ''}
             </Text>
-            <Text style={[styles.mktValText, { color: colors.textSecondary }]}>
-              Mkt ${(display.market_value ?? display.mid_price * display.qty_remaining * 100).toFixed(0)}
-            </Text>
-          </View>
 
-          {/* SL grace-timer countdown — urgent, so never hidden behind the
-              expand (SL_5/SL_10 — see exit_manager.py) */}
-          {!noSL && <SlGraceBadge live={display} colors={colors} />}
-
-          {expanded && (
-            <>
-              {/* SL/TP1/TP2 are always shown — even for NO_STOP_LOSS, whose
-                  defaults are unreachable placeholders (see profiles.py)
-                  until the user sets real ones via Edit, at which point
-                  they're genuine, live levels like any other position. */}
-              <PositionStopBar live={display} colors={colors} showTp2={showTp2} slEnabled={slEnabled} tpEnabled={tpEnabled} />
-              <LivePositionDetail live={display} colors={colors} showTp2={showTp2} slEnabled={slEnabled} tpEnabled={tpEnabled} />
-
-              {/* ── Actions: Edit | Add | Exit (chart lives in the header) ── */}
-              {!isMock && (
-                <View style={styles.liveActionsRow}>
-                  <EditExitsButton
-                    mode="orb"
-                    strategy_id={strategyId}
-                    ticker={ticker}
-                    hard_stop={display.hard_stop}
-                    tp1={display.tp1}
-                    tp2={display.tp2}
-                    entry_premium={display.entry_premium}
-                    tp1_hit={display.tp1_hit}
-                    tp2_hit={display.tp2_hit}
-                    qty_remaining={display.qty_remaining}
-                    use_tp2={showTp2}
-                    sl_grace_enabled={display.sl_grace_enabled}
-                    sl_grace_minutes={display.sl_grace_minutes}
-                    sl_enabled={slEnabled}
-                    tp_enabled={tpEnabled}
-                    runner_mode={display.runner_mode}
-                    cascade_enabled={display.cascade_enabled}
-                    hideKey={hideKey}
-                    onUpdated={patchData}
-                    style={{ flex: 1 }}
-                  />
-                  {onAddPress && (
-                    <TouchableOpacity
-                      onPress={onAddPress}
-                      activeOpacity={0.8}
-                      style={[styles.exitBtn, { flex: 1, marginTop: 0, borderColor: accentColor + '55', backgroundColor: accentColor + '14' }]}
-                    >
-                      <Ionicons name="add-circle-outline" size={16} color={accentColor} />
-                      <Text style={[styles.exitBtnText, { color: accentColor }]}>Add</Text>
-                    </TouchableOpacity>
-                  )}
-                  <TouchableOpacity
-                    onPress={onExitPress}
-                    activeOpacity={0.8}
-                    style={[styles.exitBtn, { flex: 1, marginTop: 0, borderColor: colors.error + '55', backgroundColor: colors.error + '14' }]}
-                  >
-                    <Ionicons name="exit-outline" size={16} color={colors.error} />
-                    <Text style={[styles.exitBtnText, { color: colors.error }]}>Exit</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </>
-          )}
-        </>
-      ) : (
-        <ActivityIndicator size="small" color={colors.accent} style={{ marginTop: 8 }} />
-      )}
+            {/* SL grace-timer countdown — urgent, so it stays on the card
+                instead of behind a tap into the info sheet. */}
+            {!noSL && <SlGraceBadge live={display} colors={colors} />}
+          </>
+        ) : (
+          <ActivityIndicator size="small" color={colors.accent} style={{ marginTop: 10 }} />
+        )}
+      </TouchableOpacity>
 
       {display && (
         <PositionInfoModal
@@ -317,6 +238,9 @@ export function LivePositionPanel({
           onClose={() => setInfoVisible(false)}
           colors={colors}
           profile={profile as ProfileKey | undefined}
+          strategyId={strategyId}
+          onUpdated={patchData}
+          hideKey={hideKey}
           data={{
             ticker,
             direction,
@@ -340,75 +264,22 @@ export function LivePositionPanel({
             sl_grace_minutes: display.sl_grace_minutes,
             runner_mode: display.runner_mode,
             runner_trail: display.runner_trail,
+            cascade_enabled: display.cascade_enabled,
           }}
         />
       )}
-    </View>
-  );
-}
-
-function PositionStopBar({ live, colors, showTp2, slEnabled = true, tpEnabled = true }: { live: DisplayData; colors: any; showTp2: boolean; slEnabled?: boolean; tpEnabled?: boolean }) {
-  // Once TP1 has fired and there's no live numeric target left to hit
-  // (no TP2 at all, or TP2 already hit too), whatever's left is a genuine
-  // runner — governed by runner_mode (trail/be_hold/none), not a fixed
-  // price. Showing a stale "TP1" readout there is misleading (that job is
-  // done); relabel the slot to what's actually happening instead. No longer
-  // gated on qty_remaining === 1 (2026-08-07): trail now sells one contract
-  // at a time on each confirmed dip (see ExitManager.evaluate()) rather than
-  // closing the whole runner at once, so 2+ contracts can be "the runner"
-  // simultaneously, not just the literal last one. A fresh 1-contract ENTRY
-  // (tp1_hit still false) is NOT a runner — TP1 still fully closes it the
-  // moment it hits, so it keeps showing real Stop/TP1 numbers exactly like
-  // any other position.
-  const isRunnerPhase = live.tp1_hit && (!showTp2 || live.tp2_hit);
-
-  // Trail mode shows its live ratcheting floor price (same "$X.XX" shape as
-  // Stop/TP1/TP2) instead of just the mode label — otherwise the only way to
-  // see where the trail actually sits was watching the position get sold.
-  const runnerValue = live.runner_mode === 'trail' && live.runner_trail != null
-    ? `Trail $${live.runner_trail.toFixed(2)}`
-    : RUNNER_MODE_LABEL[live.runner_mode ?? 'trail'];
-
-  const stopStage = slEnabled
-    ? { label: 'Stop', value: `$${live.hard_stop.toFixed(2)}`, active: !live.tp1_hit, color: colors.error }
-    : { label: 'Stop', value: 'Off', active: false, color: colors.textSecondary };
-
-  const stages = isRunnerPhase
-    ? [
-        slEnabled ? { ...stopStage, active: true } : stopStage,
-        { label: 'Runner', value: runnerValue, active: true, color: '#A855F7' },
-      ]
-    : [
-        stopStage,
-        tpEnabled
-          ? { label: 'TP1', value: `$${live.tp1.toFixed(2)}`, active: live.tp1_hit && !live.tp2_hit, color: '#4A9EFF' }
-          : { label: 'TP1', value: 'Off', active: false, color: colors.textSecondary },
-        ...(tpEnabled && showTp2 ? [{ label: 'TP2', value: `$${live.tp2.toFixed(2)}`, active: live.tp2_hit, color: colors.success }] : []),
-      ];
-  return (
-    <View style={styles.stopBar}>
-      {stages.map((s, i) => (
-        <View key={i} style={styles.stopStage}>
-          <View style={[styles.stopDot, { backgroundColor: s.active ? s.color : colors.border }]} />
-          <Text style={[styles.stopLabel, { color: s.active ? s.color : colors.textSecondary }]}>{s.label}</Text>
-          <Text style={[styles.stopValue, { color: colors.textSecondary }]}>{s.value}</Text>
-        </View>
-      ))}
-    </View>
+    </>
   );
 }
 
 /**
  * SL grace indicator — two states:
- *  - Idle: a persistent, low-key badge showing this position's PRE-TP1 stop
+ *  - Idle: a persistent, low-key line showing this position's PRE-TP1 stop
  *    has a confirmation window at all (e.g. REVERSAL's default 5-min/3-bar
- *    grace — see profiles.py). Without this there was no way to know a
- *    position had grace protection until it was already actively breaching
- *    (the countdown below), or by opening Edit Exits — easy to mistake for
- *    "no grace configured" (2026-08-07). Hidden once tp1_hit: grace only
- *    ever applies to the pre-TP1 hard stop (see ExitManager.evaluate() —
- *    "not self.be_stop_active"), so showing this after TP1 would claim
- *    protection the post-TP1 breakeven stop doesn't actually have.
+ *    grace — see profiles.py). Hidden once tp1_hit: grace only ever applies
+ *    to the pre-TP1 hard stop (see ExitManager.evaluate() — "not self.
+ *    be_stop_active"), so showing this after TP1 would claim protection the
+ *    post-TP1 breakeven stop doesn't actually have.
  *  - Active: countdown for an in-progress grace window. Never runs its own
  *    independent clock — every render recomputes `deadline - Date.now()` off
  *    the backend's absolute timestamp (sl_grace_deadline), so this can't
@@ -429,9 +300,9 @@ function SlGraceBadge({ live, colors }: { live: DisplayData; colors: any }) {
   if (!active) {
     if (!live.sl_grace_enabled || live.sl_grace_minutes == null || live.tp1_hit) return null;
     return (
-      <View style={[styles.slGraceBadge, { backgroundColor: colors.textTertiary + '14', borderColor: colors.textTertiary + '40' }]}>
-        <Ionicons name="shield-checkmark-outline" size={12} color={colors.textSecondary} />
-        <Text style={[styles.slGraceText, { color: colors.textSecondary }]}>
+      <View style={styles.slGraceRow}>
+        <Ionicons name="shield-checkmark-outline" size={12} color={colors.textTertiary} />
+        <Text style={[styles.slGraceText, { color: colors.textTertiary }]}>
           Stop has {live.sl_grace_minutes}m grace
         </Text>
       </View>
@@ -450,9 +321,9 @@ function SlGraceBadge({ live, colors }: { live: DisplayData; colors: any }) {
     : 0;
 
   return (
-    <View style={[styles.slGraceBadge, { backgroundColor: color + '1A', borderColor: color + '55' }]}>
+    <View style={[styles.slGraceBanner, { backgroundColor: color + '16' }]}>
       <Ionicons name="timer-outline" size={13} color={color} />
-      <Text style={[styles.slGraceText, { color }]}>
+      <Text style={[styles.slGraceBannerText, { color }]}>
         SL breach — selling in {mm}:{String(ss).padStart(2, '0')}
       </Text>
       {recovering && (
@@ -464,83 +335,35 @@ function SlGraceBadge({ live, colors }: { live: DisplayData; colors: any }) {
   );
 }
 
-function LivePositionDetail({ live, colors, showTp2, slEnabled = true, tpEnabled = true }: { live: DisplayData; colors: any; showTp2: boolean; slEnabled?: boolean; tpEnabled?: boolean }) {
-  return (
-    <View style={[styles.liveDetail, { borderTopColor: colors.border }]}>
-      <LiveDetailRow label="Entry"     value={`$${live.entry_premium.toFixed(2)}`} colors={colors} />
-      <LiveDetailRow label="Current"   value={`$${live.mid_price.toFixed(2)}`} valueColor={colors.text} colors={colors} />
-      <LiveDetailRow label="Qty Remaining" value={String(live.qty_remaining)} colors={colors} />
-      <LiveDetailRow label="Hard Stop" value={slEnabled ? `$${live.hard_stop.toFixed(2)}` : 'Disabled'} valueColor={slEnabled ? colors.error : colors.textSecondary} colors={colors} />
-      <LiveDetailRow label="TP1" value={tpEnabled ? `$${live.tp1.toFixed(2)}` : 'Disabled'} valueColor={tpEnabled ? undefined : colors.textSecondary} badge={tpEnabled && live.tp1_hit ? 'Hit' : undefined} badgeColor={colors.success} colors={colors} />
-      {showTp2 && (
-        <LiveDetailRow label="TP2" value={tpEnabled ? `$${live.tp2.toFixed(2)}` : 'Disabled'} valueColor={tpEnabled ? undefined : colors.textSecondary} badge={tpEnabled && live.tp2_hit ? 'Hit' : undefined} badgeColor={colors.success} colors={colors} />
-      )}
-    </View>
-  );
-}
-
-function LiveDetailRow({ label, value, valueColor, badge, badgeColor, colors }: {
-  label: string; value: string; valueColor?: string; badge?: string; badgeColor?: string; colors: any;
-}) {
-  return (
-    <View style={styles.liveDetailRow}>
-      <Text style={[styles.liveDetailLabel, { color: colors.textSecondary }]}>{label}</Text>
-      <View style={styles.liveDetailRight}>
-        <Text style={[styles.liveDetailValue, { color: valueColor ?? colors.text }]}>{value}</Text>
-        {badge && (
-          <View style={[styles.liveDetailBadge, { backgroundColor: (badgeColor ?? colors.accent) + '22' }]}>
-            <Text style={[styles.liveDetailBadgeText, { color: badgeColor ?? colors.accent }]}>{badge}</Text>
-          </View>
-        )}
-      </View>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  livePnlCard:     { borderRadius: 12, borderWidth: 1.5, padding: 12, marginTop: 10 },
-  liveHeaderRow:   { flexDirection: 'row', alignItems: 'center' },
-  liveHeaderLeft:  { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
-  liveHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  statusDot:       { width: 6, height: 6, borderRadius: 3 },
-  liveLabel:       { fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
-  liveContract:    { fontSize: 12, fontWeight: '700', flexShrink: 1 },
-  livePnlValue:    { fontSize: 15, fontWeight: '700' },
-  pnlPctPill:      { borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 },
-  pnlPctText:      { fontSize: 10, fontWeight: '700' },
-  mktValText:      { fontSize: 10 },
-
-  summaryRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    gap: 8, marginTop: 8,
+  card: {
+    borderRadius: 20,
+    padding: 16,
+    marginTop: 10,
+    gap: 2,
   },
-  summaryText: { fontSize: 11, flexShrink: 1 },
+  topRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  topLeft:  { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
+  topRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  statusDot: { width: 6, height: 6, borderRadius: 3 },
+  contract:  { fontSize: 12, fontWeight: '600', letterSpacing: 0.2, flexShrink: 1 },
+  iconBtn:   { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
 
-  stopBar:   { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10, gap: 6 },
-  stopStage: { flex: 1, alignItems: 'center', gap: 2 },
-  stopDot:   { width: 6, height: 6, borderRadius: 3 },
-  stopLabel: { fontSize: 9, fontWeight: '700' },
-  stopValue: { fontSize: 10 },
+  heroValue: { fontSize: 26, fontWeight: '800', letterSpacing: -0.5 },
+  pnlRow:    { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
+  pnlValue:  { fontSize: 15, fontWeight: '700' },
+  pnlPctPill:{ borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  pnlPctText:{ fontSize: 11, fontWeight: '700' },
 
-  slGraceBadge: {
+  caption: { fontSize: 12, marginTop: 8 },
+
+  slGraceRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 },
+  slGraceText: { fontSize: 11, fontWeight: '600' },
+
+  slGraceBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-    borderWidth: 1, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, marginTop: 8,
+    borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, marginTop: 10,
   },
-  slGraceText:    { fontSize: 11, fontWeight: '700' },
-  slGraceSubText: { fontSize: 10 },
-
-  liveDetail:      { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 10, paddingTop: 10, gap: 6 },
-  liveDetailRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  liveDetailLabel: { fontSize: 12 },
-  liveDetailRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  liveDetailValue: { fontSize: 12, fontWeight: '600' },
-  liveDetailBadge: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 },
-  liveDetailBadgeText: { fontSize: 10, fontWeight: '700' },
-
-  liveActionsRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
-  exitBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    borderWidth: 1, borderRadius: 8, paddingVertical: 9,
-  },
-  exitBtnText: { fontSize: 13, fontWeight: '700' },
+  slGraceBannerText: { fontSize: 12, fontWeight: '700' },
+  slGraceSubText:    { fontSize: 10 },
 });

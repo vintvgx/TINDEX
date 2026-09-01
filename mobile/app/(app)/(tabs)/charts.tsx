@@ -10,6 +10,8 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import { Skeleton } from '@/common/components/ui/Skeleton';
 import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
+import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
+import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
 import { TickerPickerOverlay } from '@/common/components/ticker/TickerPickerOverlay';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
@@ -37,9 +39,10 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
 // AdvancedPriceChart's own chrome OUTSIDE the `height` prop: the top row
 // (mode toggle + date label, 26 + 6 margin) plus the period-picker row below
-// the canvas (~12 margin + ~28 row). Subtracted from the measured flex area
-// so the whole component fits without clipping or an inner scroll.
-const CHART_CHROME_HEIGHT = 78;
+// the canvas (~12 margin + ~28 row), plus this screen's own ChartControlToggles
+// row (30 + 8 margin) sitting above it. Subtracted from the measured flex
+// area so the whole component fits without clipping or an inner scroll.
+const CHART_CHROME_HEIGHT = 78 + 38;
 
 /**
  * Charts tab — a TradingView-style full-screen chart, reached via its own
@@ -215,6 +218,7 @@ export default function ChartsScreen() {
   // ── Chart sizing — measured, not guessed, now that the tab bar is docked
   // and reserves its own space: this flex area IS exactly what's left. ────
   const [chartAreaHeight, setChartAreaHeight] = useState(0);
+  const { enabled: crosshairEnabled, setEnabled: setCrosshairEnabled } = useCrosshairEnabled();
   const onChartAreaLayout = useCallback((e: LayoutChangeEvent) => {
     setChartAreaHeight(e.nativeEvent.layout.height);
   }, []);
@@ -361,6 +365,19 @@ export default function ChartsScreen() {
           renders its accurate default (auto-fit) view once data lands, not
           whatever window happened to be set for a different symbol. */}
       <View style={{ flex: 1, paddingHorizontal: 12 }} onLayout={onChartAreaLayout}>
+        <View style={{ marginBottom: 8 }}>
+          <ChartControlToggles
+            colors={colors}
+            toggles={[{
+              key: 'crosshair',
+              icon: 'locate-outline',
+              active: crosshairEnabled,
+              onPress: () => setCrosshairEnabled(!crosshairEnabled),
+              label: 'Data Points',
+              description: 'Tap-and-hold on the chart to inspect an exact price/time. Turn off to test whether it’s a source of lag while panning.',
+            }]}
+          />
+        </View>
         {chartAreaHeight > 0 && (
           <AdvancedPriceChart
             key={activeTicker}
