@@ -556,10 +556,18 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     }
   }, [period]);
 
+  // On 1D, also drop any earlier days loaded in by panning past the left
+  // edge (fetchEarlierDay) — otherwise "Reset" only cleared the zoom/pan
+  // OFFSET while leaving those extra days merged into chartData, so the
+  // resulting "auto-fit" view still spanned multiple sessions instead of
+  // collapsing back to just today's 09:30-16:00 ET reserved-width view
+  // (see layoutVisibleCount). Every other period has no such accumulated
+  // state to clear — earlierDays only exists to serve 1D.
   const resetZoom = useCallback(() => {
     setXWindow(null);
     setYOverride(null);
-  }, []);
+    if (period === '1D') setEarlierDays([]);
+  }, [period]);
 
   // Clamped against the current data length so a stale window (e.g. if the
   // underlying series shrinks/changes shape without a period change) can
@@ -1125,6 +1133,19 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // laggy, can't navigate freely" feel this fixes. Only call setXWindow when
   // the rounded window is actually different from what's already committed.
   const lastXWindowShared = useSharedValue<{ start: number; end: number } | null>(null);
+  // True once fetchEarlierDay has already been triggered for the CURRENT
+  // touch — fetchEarlierDay's own loadingEarlierRef only blocks overlapping
+  // in-flight calls, not repeat calls once one finishes. st.start/e.translationX
+  // are anchored to gesture-start, not per-frame deltas, so as long as a
+  // finger stays anywhere past the left edge — even just resting there,
+  // not still actively dragging — newStart<0 keeps evaluating true on every
+  // single onUpdate frame; without this flag, a single continuous touch
+  // could fire fetchEarlierDay again the instant each fetch resolves,
+  // silently loading several earlier days from what should be one edge
+  // crossing (2026-09-01: reported as "a slight gesture left" loading a
+  // week of data). Reset only in onBegin — a new touch is what should earn
+  // another day, not the same one lingering past the edge.
+  const earlierFetchTriggeredShared = useSharedValue(false);
 
   const manipulateGesture = useMemo(
     () =>
@@ -1155,6 +1176,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           // converge again.
           panStartShared.value = { start: visibleStart, end: visibleEnd, lo: scale.lo, hi: scale.hi, layoutCount: layoutVisibleCount };
           lastXWindowShared.value = { start: visibleStart, end: visibleEnd };
+          earlierFetchTriggeredShared.value = false;
           if (e.x > plotW) panModeShared.value = 'y-rescale';
           else if (e.y > height - X_AXIS_H) panModeShared.value = 'x-rescale';
           else panModeShared.value = 'time-pan';
@@ -1176,43 +1198,68 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           const curCount = st.end - st.start + 1;
 
           if (mode === 'time-pan') {
-            // Drag right → reveal earlier bars (window shifts back). Uses
-            // st.layoutCount (the on-screen bar-slot count), not curCount —
-            // they only differ during the pristine reserved-width 1D
-            // default view, where using curCount here would make the very
-            // first drag feel faster than 1:1 with the visible bar width.
-            const barsShift = (e.translationX / plotW) * st.layoutCount;
-            let newStart = Math.round(st.start - barsShift);
-            let newEnd = newStart + curCount - 1;
-            // Hitting this means the drag is trying to reveal bars before
-            // index 0 — exactly the "pan past the left edge" moment to kick
-            // off loading an earlier day (see fetchEarlierDay). Guarded
-            // there against overlapping calls, so firing on every frame of
-            // a sustained past-the-edge drag is fine.
-            if (newStart < 0) {
-              newEnd -= newStart;
-              newStart = 0;
-              runOnJS(fetchEarlierDay)();
-            }
-            if (newEnd > count - 1) { newStart -= newEnd - (count - 1); newEnd = count - 1; }
-            newStart = Math.max(0, newStart);
-            const lastX = lastXWindowShared.value;
-            if (!lastX || lastX.start !== newStart || lastX.end !== newEnd) {
-              lastXWindowShared.value = { start: newStart, end: newEnd };
-              runOnJS(setXWindow)({ start: newStart, end: newEnd });
-            }
+            // Axis-locked on whichever direction actually dominates this
+            // drag (cumulative since gesture start), not blended every
+            // frame — a real touch is never perfectly vertical, and once
+            // the 1D default view started reserving a full session's worth
+            // of bar-slots (see layoutVisibleCount), bars pack much more
+            // tightly per pixel than before; that tiny incidental
+            // horizontal component, multiplied by the now-much-larger bar
+            // count below, was enough to cross the "pan past the left edge"
+            // threshold during an intended VERTICAL scroll — silently firing
+            // fetchEarlierDay and loading/showing an earlier day. Blending
+            // both axes unconditionally relied on that horizontal component
+            // rounding away to exactly zero, which stopped being reliably
+            // true once bars got this narrow. Locking to one axis per drag
+            // removes the whole failure mode instead of just dampening it.
+            const horizontalDominant = Math.abs(e.translationX) >= Math.abs(e.translationY);
 
-            // Free vertical pan alongside the horizontal one — drag down
-            // reveals higher prices that were scrolled above the fold, same
-            // "grab and pull" feel as the X shift above. A near-horizontal
-            // drag naturally produces a near-zero Y shift here (proportional
-            // to how much vertical movement actually happened), so this
-            // doesn't fight a deliberately axis-locked drag. Needed so a
-            // price level well outside the auto-fit range (the whole point
-            // of Watch mode) is reachable without first having to zoom out.
-            if (priceH > 0 && st.hi > st.lo) {
-              const priceShift = (e.translationY / priceH) * (st.hi - st.lo);
-              runOnJS(setYOverride)({ lo: st.lo + priceShift, hi: st.hi + priceShift });
+            if (horizontalDominant) {
+              // Drag right → reveal earlier bars (window shifts back). Uses
+              // st.layoutCount (the on-screen bar-slot count), not curCount —
+              // they only differ during the pristine reserved-width 1D
+              // default view, where using curCount here would make the very
+              // first drag feel faster than 1:1 with the visible bar width.
+              const barsShift = (e.translationX / plotW) * st.layoutCount;
+              let newStart = Math.round(st.start - barsShift);
+              let newEnd = newStart + curCount - 1;
+              // Hitting this means the drag is trying to reveal bars before
+              // index 0 — exactly the "pan past the left edge" moment to kick
+              // off loading an earlier day (see fetchEarlierDay). st.start/
+              // e.translationX are anchored to gesture-start, not per-frame
+              // deltas, so this stays true on every remaining frame of the
+              // SAME touch even if the finger just rests past the edge
+              // rather than continuing to drag — fetchEarlierDay's own
+              // loadingEarlierRef only blocks OVERLAPPING calls, not repeat
+              // ones once each finishes, so without earlierFetchTriggeredShared
+              // a single held touch could fire it several times in a row,
+              // loading multiple days from what should be one edge crossing.
+              // One trigger per touch; a new touch is what earns the next day.
+              if (newStart < 0) {
+                newEnd -= newStart;
+                newStart = 0;
+                if (!earlierFetchTriggeredShared.value) {
+                  earlierFetchTriggeredShared.value = true;
+                  runOnJS(fetchEarlierDay)();
+                }
+              }
+              if (newEnd > count - 1) { newStart -= newEnd - (count - 1); newEnd = count - 1; }
+              newStart = Math.max(0, newStart);
+              const lastX = lastXWindowShared.value;
+              if (!lastX || lastX.start !== newStart || lastX.end !== newEnd) {
+                lastXWindowShared.value = { start: newStart, end: newEnd };
+                runOnJS(setXWindow)({ start: newStart, end: newEnd });
+              }
+            } else {
+              // Vertical pan — drag down reveals higher prices that were
+              // scrolled above the fold, same "grab and pull" feel a
+              // horizontal drag has for time. Needed so a price level well
+              // outside the auto-fit range (the whole point of Watch mode)
+              // is reachable without first having to zoom out.
+              if (priceH > 0 && st.hi > st.lo) {
+                const priceShift = (e.translationY / priceH) * (st.hi - st.lo);
+                runOnJS(setYOverride)({ lo: st.lo + priceShift, hi: st.hi + priceShift });
+              }
             }
           } else if (mode === 'x-rescale') {
             // Drag right narrows the visible window (zoom in on time),
@@ -1362,7 +1409,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
 
   return (
     <SafeAreaView>
-      {/* Top row: chart-mode toggle (left) + date / scrub label (right).
+      {/* Top row: chart-mode + Watch/Sessions/Levels/Reset icon buttons
+          (left) + date/scrub label + bar-granularity cycler (right).
           Fixed height so scrubbing never reflows the chart below. */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', height: 26, marginBottom: 6 }}>
         <View style={{ flexDirection: 'row', gap: 4 }}>
@@ -1407,23 +1455,16 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               }}
               hitSlop={6}
               style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 3,
-                paddingHorizontal: 8,
-                height: 26,
-                borderRadius: 8,
+                width: 30, height: 26, borderRadius: 8,
+                alignItems: 'center', justifyContent: 'center',
                 backgroundColor: watchMode ? colors.accent + '22' : 'transparent',
               }}
             >
               <Ionicons
                 name={watchMode ? 'eye' : 'eye-outline'}
-                size={14}
+                size={15}
                 color={watchMode ? colors.accent : colors.textTertiary}
               />
-              <Text style={{ fontSize: 11, fontWeight: '700', color: watchMode ? colors.accent : colors.textTertiary }}>
-                Watch
-              </Text>
             </Pressable>
           )}
           {/* Only rendered when there's actually session-line data to show —
@@ -1434,23 +1475,16 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               onPress={() => setShowSessionLines(v => !v)}
               hitSlop={6}
               style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 3,
-                paddingHorizontal: 8,
-                height: 26,
-                borderRadius: 8,
+                width: 30, height: 26, borderRadius: 8,
+                alignItems: 'center', justifyContent: 'center',
                 backgroundColor: showSessionLines ? colors.accent + '22' : 'transparent',
               }}
             >
               <Ionicons
                 name={showSessionLines ? 'partly-sunny' : 'partly-sunny-outline'}
-                size={14}
+                size={15}
                 color={showSessionLines ? colors.accent : colors.textTertiary}
               />
-              <Text style={{ fontSize: 11, fontWeight: '700', color: showSessionLines ? colors.accent : colors.textTertiary }}>
-                Sessions
-              </Text>
             </Pressable>
           )}
           {/* Show/hide watched zones (key levels) — ON by default, so this
@@ -1462,23 +1496,16 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               onPress={() => setShowWatchZones(!showWatchZones)}
               hitSlop={6}
               style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 3,
-                paddingHorizontal: 8,
-                height: 26,
-                borderRadius: 8,
+                width: 30, height: 26, borderRadius: 8,
+                alignItems: 'center', justifyContent: 'center',
                 backgroundColor: showWatchZones ? colors.accent + '22' : 'transparent',
               }}
             >
               <Ionicons
                 name={showWatchZones ? 'layers' : 'layers-outline'}
-                size={14}
+                size={15}
                 color={showWatchZones ? colors.accent : colors.textTertiary}
               />
-              <Text style={{ fontSize: 11, fontWeight: '700', color: showWatchZones ? colors.accent : colors.textTertiary }}>
-                Levels
-              </Text>
             </Pressable>
           )}
           {isZoomed && (
@@ -1486,29 +1513,53 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               onPress={resetZoom}
               hitSlop={6}
               style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 3,
-                paddingHorizontal: 8,
-                height: 26,
-                borderRadius: 8,
+                width: 30, height: 26, borderRadius: 8,
+                alignItems: 'center', justifyContent: 'center',
                 backgroundColor: colors.surfaceSecondary,
               }}
             >
-              <Ionicons name="contract-outline" size={13} color={colors.textSecondary} />
-              <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>Reset</Text>
+              <Ionicons name="contract-outline" size={14} color={colors.textSecondary} />
             </Pressable>
           )}
         </View>
-        {watchMode && !watchDraftPx && !watchDraftCommitted ? (
-          <Text style={{ color: colors.accent, fontSize: 11.5, fontWeight: '600' }} numberOfLines={1}>
-            {onUpdateWatchZone
-              ? 'Long-press & drag to mark a level · tap an existing one to edit'
-              : 'Long-press & drag to mark a level'}
-          </Text>
-        ) : labelText && !watchMode ? (
-          <Text style={{ color: colors.textTertiary, fontSize: 12, fontWeight: '500' }}>{labelText}</Text>
-        ) : null}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 }}>
+          {watchMode && !watchDraftPx && !watchDraftCommitted ? (
+            <Text style={{ color: colors.accent, fontSize: 11.5, fontWeight: '600', flexShrink: 1 }} numberOfLines={1}>
+              {onUpdateWatchZone
+                ? 'Long-press & drag to mark a level · tap an existing one to edit'
+                : 'Long-press & drag to mark a level'}
+            </Text>
+          ) : labelText && !watchMode ? (
+            <Text style={{ color: colors.textTertiary, fontSize: 12, fontWeight: '500' }} numberOfLines={1}>{labelText}</Text>
+          ) : null}
+          {/* Bar-granularity cycler — one button showing the CURRENT
+              interval; tapping advances to the next option in
+              ALLOWED_INTERVALS (wrapping around), rather than a whole chip
+              row competing for space in an already-busy toolbar. Persisted
+              per-period via useChartInterval — see its own doc. */}
+          {allowedIntervals.length > 1 && (
+            <Pressable
+              onPress={() => {
+                const idx = allowedIntervals.indexOf(chartInterval);
+                const next = allowedIntervals[(idx + 1) % allowedIntervals.length];
+                setChartInterval(next);
+              }}
+              hitSlop={6}
+              style={{
+                paddingHorizontal: 9,
+                height: 22,
+                borderRadius: 7,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: colors.surfaceSecondary,
+              }}
+            >
+              <Text style={{ fontSize: 11, fontWeight: '700', color: colors.textSecondary }}>
+                {INTERVAL_LABEL[chartInterval] ?? chartInterval}
+              </Text>
+            </Pressable>
+          )}
+        </View>
       </View>
 
       <View onLayout={onLayout} style={{ height, width: '100%' }}>
@@ -2097,41 +2148,6 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           );
         })}
       </View>
-
-      {/* Bar-granularity picker — only shown when the current period actually
-          has more than one valid interval (see ALLOWED_INTERVALS). Persisted
-          per-period via useChartInterval, shared with whatever fed
-          useTickerHistoryQuery up in the parent (charts.tsx/
-          PriceChartFullScreen.tsx) through the same React-Query cache key. */}
-      {allowedIntervals.length > 1 && (
-        <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 8, marginTop: 10 }}>
-          {allowedIntervals.map((iv) => {
-            const active = iv === chartInterval;
-            return (
-              <Pressable
-                key={iv}
-                onPress={() => setChartInterval(iv)}
-                style={{
-                  paddingHorizontal: 12,
-                  paddingVertical: 5,
-                  borderRadius: 8,
-                  backgroundColor: active ? colors.accent + '1F' : 'transparent',
-                }}
-              >
-                <Text
-                  style={{
-                    fontSize: 11.5,
-                    fontWeight: '700',
-                    color: active ? colors.accent : colors.textTertiary,
-                  }}
-                >
-                  {INTERVAL_LABEL[iv] ?? iv}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      )}
     </SafeAreaView>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, SafeAreaView, LayoutAnimation, Platform, UIManager,
   StyleSheet, LayoutChangeEvent,
@@ -12,7 +12,6 @@ import { Skeleton } from '@/common/components/ui/Skeleton';
 import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
 import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
 import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
-import { TickerPickerOverlay } from '@/common/components/ticker/TickerPickerOverlay';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
@@ -24,7 +23,7 @@ import { useChartLiveStream } from '@/hooks/queries/ticker/useChartLiveStream';
 import { useChartPriceSource } from '@/hooks/useChartPriceSource';
 import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
-import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
+import type { AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useToast } from '@/common/components/ui/Toast';
@@ -114,13 +113,10 @@ export default function ChartsScreen() {
     [goToTicker],
   );
 
-  // Long-press the active ticker (in the position bar) to open the
-  // TradingView-style scroll-to-select picker.
-  const [pickerVisible, setPickerVisible] = useState(false);
-  // Open-ended ticker lookup — unlike the picker above, not limited to
-  // followed/open-position tickers (see the user's actual ask: a watched-
-  // but-not-followed ticker, or any arbitrary symbol, needs to be reachable
-  // here too).
+  // Open-ended ticker lookup — unlike the quick-switch strip below (scoped
+  // to followed/open-position tickers), not limited to that list — a
+  // watched-but-not-followed ticker, or any arbitrary symbol, needs to be
+  // reachable here too.
   const [searchOpen, setSearchOpen] = useState(false);
 
   // ── Price + chart data for the active ticker ────────────────────────────
@@ -304,12 +300,13 @@ export default function ChartsScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-      {/* Identity header — swipe left/right to cycle tickers; tap the ticker
-          title to look up any symbol (not limited to tickerList's followed +
-          open-position set — a ticker you only just watched a level on, or
-          any arbitrary symbol, needs to be reachable here too). Long-press
-          the ticker name in the position bar below opens the scroll-to-select
-          picker instead. */}
+      {/* Identity header — swipe left/right still cycles tickers as a bonus
+          gesture, but the TickerStrip right below this is the primary,
+          visible way to switch now. Tapping the ticker title opens open-
+          ended search (not limited to tickerList's followed + open-position
+          set — a ticker you only just watched a level on, or any arbitrary
+          symbol, needs to be reachable here too; the strip's own trailing
+          search chip does the same thing). */}
       <GestureDetector gesture={headerSwipeGesture}>
         <View style={s.headerRow}>
           {tickerLoading && !stockData ? (
@@ -362,6 +359,17 @@ export default function ChartsScreen() {
         </View>
       </GestureDetector>
 
+      <View style={{ marginBottom: 8 }}>
+        <TickerStrip
+          tickers={effectiveTickerList}
+          activeTicker={activeTicker}
+          openPositionTickers={openPositionTickers}
+          onSelect={setSelectedTicker}
+          onSearchPress={() => setSearchOpen(true)}
+          colors={colors}
+        />
+      </View>
+
       {/* Chart — fills whatever's left above the position bar. Keyed on the
           ticker so switching (swipe or picker) fully remounts it: a stale
           zoom/pan window from the PREVIOUS ticker's data would otherwise
@@ -406,20 +414,13 @@ export default function ChartsScreen() {
         )}
       </View>
 
-      {/* Position bar — right above the docked tab bar. Long-press the
-          ticker name to open the scroll-to-select picker (TradingView-
-          style); tapping anywhere else expands/collapses the position list. */}
+      {/* Position bar — right above the docked tab bar. Tapping it
+          expands/collapses the position list; ticker switching now lives
+          entirely in the strip above (see TickerStrip). */}
       <TouchableOpacity onPress={toggleExpanded} activeOpacity={0.8} style={[s.positionBar, { borderTopColor: colors.separator }]}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <View style={[s.tickerDot, { backgroundColor: totalPositionsForTicker > 0 ? colors.success : colors.tabBarInactive, width: 7, height: 7, borderRadius: 3.5 }]} />
-          <TouchableOpacity
-            onPress={toggleExpanded}
-            onLongPress={() => setPickerVisible(true)}
-            delayLongPress={350}
-            hitSlop={{ top: 10, bottom: 10, left: 4, right: 4 }}
-          >
-            <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>{activeTicker}</Text>
-          </TouchableOpacity>
+          <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>{activeTicker}</Text>
           <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
             {totalPositionsForTicker > 0
               ? `${totalPositionsForTicker} Position${totalPositionsForTicker === 1 ? '' : 's'} Open`
@@ -429,15 +430,6 @@ export default function ChartsScreen() {
         <Ionicons name={expanded ? 'chevron-down' : 'chevron-up'} size={16} color={colors.textTertiary} />
       </TouchableOpacity>
 
-      <TickerPickerOverlay
-        visible={pickerVisible}
-        onClose={() => setPickerVisible(false)}
-        tickers={effectiveTickerList}
-        activeTicker={activeTicker}
-        openPositionTickers={openPositionTickers}
-        onSelect={setSelectedTicker}
-      />
-
       <SearchBottomSheet
         visible={searchOpen}
         onClose={() => setSearchOpen(false)}
@@ -446,8 +438,8 @@ export default function ChartsScreen() {
 
       {expanded && (
         <View style={{ paddingHorizontal: 16, paddingBottom: 12, maxHeight: 320 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 8 }}>
-            <LiveModeToggle mode={positionsMode} onChange={setPositionsMode} counts={positionsCounts} colors={colors} />
+          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 6 }}>
+            <CompactModeToggle mode={positionsMode} onChange={setPositionsMode} colors={colors} />
           </View>
           <ScrollView showsVerticalScrollIndicator={false}>
             <LivePositionsBody
@@ -462,6 +454,128 @@ export default function ChartsScreen() {
         </View>
       )}
     </SafeAreaView>
+  );
+}
+
+/**
+ * Quick ticker switcher — a persistent, horizontally-scrollable strip of
+ * chips (logo + symbol) for every followed/open-position ticker, current one
+ * highlighted, tap any to jump straight there. Replaces relying on the
+ * header's tap-to-search (still there, but that's for an ARBITRARY symbol —
+ * see the search chip at the end of this strip) and the old long-press-on-
+ * the-position-bar picker (removed — this strip covers exactly the same
+ * list, always visible instead of hidden behind a gesture nobody discovers).
+ * A small green dot marks tickers with an open position, same signal the
+ * old picker's own list used. Auto-scrolls to keep the active chip in view
+ * when it changes (swipe-header gesture, position bar, or a chip tap).
+ */
+function TickerStrip({
+  tickers, activeTicker, openPositionTickers, onSelect, onSearchPress, colors,
+}: {
+  tickers: string[];
+  activeTicker: string;
+  openPositionTickers: string[];
+  onSelect: (t: string) => void;
+  onSearchPress: () => void;
+  colors: any;
+}) {
+  const scrollRef = useRef<ScrollView>(null);
+  const offsetsRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    const x = offsetsRef.current[activeTicker];
+    if (x != null) {
+      scrollRef.current?.scrollTo({ x: Math.max(0, x - 32), animated: true });
+    }
+  }, [activeTicker]);
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: 16 }}>
+      {/* Fixed, NOT part of the scrolling content — stays put (and first)
+          regardless of how far the chip strip is scrolled, per the ask that
+          this be reachable without having to scroll back to find it. */}
+      <TouchableOpacity
+        onPress={onSearchPress}
+        hitSlop={6}
+        activeOpacity={0.75}
+        style={{
+          width: 28, height: 28, borderRadius: 14,
+          alignItems: 'center', justifyContent: 'center',
+          backgroundColor: colors.surfaceSecondary,
+        }}
+      >
+        <Ionicons name="search" size={14} color={colors.textSecondary} />
+      </TouchableOpacity>
+
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingRight: 16 }}
+      >
+        {tickers.map(t => {
+          const active = t === activeTicker;
+          const hasPosition = openPositionTickers.includes(t);
+          return (
+            <TouchableOpacity
+              key={t}
+              onPress={() => onSelect(t)}
+              onLayout={(e) => { offsetsRef.current[t] = e.nativeEvent.layout.x; }}
+              activeOpacity={0.75}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 5,
+                paddingHorizontal: 10, paddingVertical: 6, borderRadius: 9,
+                backgroundColor: active ? colors.text + '14' : 'transparent',
+              }}
+            >
+              <TickerLogo ticker={t} size={16} />
+              <Text style={{ fontSize: 12.5, fontWeight: active ? '800' : '600', color: active ? colors.text : colors.textSecondary }}>
+                {t}
+              </Text>
+              {hasPosition && <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: colors.success }} />}
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+/**
+ * Live/Paper switch, sized for this screen specifically — the shared
+ * LiveModeToggle (position.tsx/strategy.tsx/tradelog.tsx) is a full-height
+ * bordered row with a dot + count badge per segment, which read as too much
+ * chrome squeezed above the position list here. This drops the border, the
+ * dot, and the count badge (the total's already shown in the collapsed
+ * position bar above), keeping just two small text segments in a flat
+ * tinted track — Robinhood-influenced: minimal, no border, color does the
+ * talking.
+ */
+function CompactModeToggle({ mode, onChange, colors }: { mode: AccountMode; onChange: (m: AccountMode) => void; colors: any }) {
+  return (
+    <View style={{ flexDirection: 'row', backgroundColor: colors.surfaceSecondary, borderRadius: 8, padding: 2 }}>
+      {(['live', 'paper'] as const).map(m => {
+        const active = mode === m;
+        const tint = m === 'live' ? '#30D158' : '#FF9F0A';
+        return (
+          <TouchableOpacity
+            key={m}
+            onPress={() => onChange(m)}
+            activeOpacity={0.75}
+            style={{
+              paddingHorizontal: 10,
+              paddingVertical: 4,
+              borderRadius: 6,
+              backgroundColor: active ? tint + '1F' : 'transparent',
+            }}
+          >
+            <Text style={{ fontSize: 11.5, fontWeight: '700', color: active ? tint : colors.textTertiary }}>
+              {m === 'live' ? 'Live' : 'Paper'}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
   );
 }
 
