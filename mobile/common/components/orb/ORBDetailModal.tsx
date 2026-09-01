@@ -735,7 +735,7 @@ const styles = StyleSheet.create({
   },
   ticker: { fontSize: 28, fontWeight: '800', letterSpacing: -0.5 },
   price: { fontSize: 22, fontWeight: '700' },
-  pricePosition: { fontSize: 13, fontWeight: '500' },
+  pricePosition: { fontSize: 13, fontWeight: '400' },
   closeBtn: {
     width: 32, height: 32, borderRadius: 16,
     alignItems: 'center', justifyContent: 'center',
@@ -766,7 +766,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   suggestionHeadline: { fontSize: 14, fontWeight: '700' },
-  suggestionContext: { fontSize: 12, fontWeight: '500', marginTop: 2 },
+  suggestionContext: { fontSize: 12, fontWeight: '400', marginTop: 2 },
   suggestionTarget: { fontSize: 12, fontWeight: '600', marginTop: 5 },
 
   typeBadge: {
@@ -782,7 +782,7 @@ const styles = StyleSheet.create({
     borderRadius: 12, borderWidth: 1,
   },
   breakoutLabel: { fontSize: 13, fontWeight: '600', flex: 1 },
-  breakoutPrice: { fontSize: 12, fontWeight: '500' },
+  breakoutPrice: { fontSize: 12, fontWeight: '400' },
 
   dot: { width: 8, height: 8, borderRadius: 4 },
 
@@ -796,7 +796,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   statValue: { fontSize: 15, fontWeight: '700', marginBottom: 2 },
-  statLabel: { fontSize: 11, fontWeight: '500' },
+  statLabel: { fontSize: 11, fontWeight: '400' },
   statDividerV: { width: StyleSheet.hairlineWidth, marginVertical: 10 },
   statDividerH: { width: '100%', height: StyleSheet.hairlineWidth },
 
@@ -814,7 +814,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6, marginBottom: 12,
   },
   cardNote: {
-    fontSize: 12, fontWeight: '500', marginBottom: 8,
+    fontSize: 12, fontWeight: '400', marginBottom: 8,
   },
   cardSectionDivider: {
     height: 1, marginVertical: 14,
@@ -824,8 +824,8 @@ const styles = StyleSheet.create({
 
   // Rows
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  rowLabel: { fontSize: 13, fontWeight: '500' },
-  rowValue: { fontSize: 15, fontWeight: '600' },
+  rowLabel: { fontSize: 13, fontWeight: '400' },
+  rowValue: { fontSize: 15, fontWeight: '700' },
 
   // Notification preferences card
   notifCardHeader: {

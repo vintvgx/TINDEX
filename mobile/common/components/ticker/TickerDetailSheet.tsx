@@ -343,7 +343,7 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
 
       {/* Market Cap */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <Text style={{ color: colors.textSecondary, fontSize: 15, fontWeight: '500' }}>Market Cap</Text>
+        <Text style={{ color: colors.textSecondary, fontSize: 15, fontWeight: '400' }}>Market Cap</Text>
         {!stockData ? (
           <Skeleton width={70} height={16} />
         ) : stockData.market_cap != null ? (

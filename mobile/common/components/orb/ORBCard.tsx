@@ -107,7 +107,7 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
 
       {/* Current Price */}
       <View style={{ marginBottom: 12 }}>
-        <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '500', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+        <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
           Current Price
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' }}>
@@ -167,7 +167,7 @@ export const ORBCard: React.FC<ORBCardProps> = ({ data, onPress, orbRange, fullW
           <AnimatedNumber
             value={data.percentage_change != null && data.breakout_type === 'none' ? data.previous_close : data.opening_price}
             format={(v) => `$${v.toFixed(2)}`}
-            style={{ fontSize: 14, fontWeight: '500' }}
+            style={{ fontSize: 14, fontWeight: '600' }}
             color={colors.textSecondary}
           />
         </View>
