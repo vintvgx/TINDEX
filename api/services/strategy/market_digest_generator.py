@@ -44,13 +44,17 @@ _MAX_WEB_SEARCHES = 8
 
 # Reputable finance/news outlets only — so a catalyst claim can't get
 # attributed to a thin aggregator or SEO-farm site. Tune this list if the
-# digest is missing real stories or citing something low-quality.
+# digest is missing real stories or citing something low-quality — but any
+# domain here MUST be crawlable by Anthropic's web_search agent, or the
+# ENTIRE call is rejected with a 400 (allowed_domains fails closed, not
+# per-domain). reuters.com and marketwatch.com block Anthropic's crawler in
+# their robots policy and were pulled after that broke every digest
+# (2026-09-02) — verify a candidate domain actually works before adding it
+# back.
 _ALLOWED_DOMAINS = [
     "finance.yahoo.com",
     "cnbc.com",
-    "reuters.com",
     "bloomberg.com",
-    "marketwatch.com",
     "tradingeconomics.com",
     "investing.com",
 ]
