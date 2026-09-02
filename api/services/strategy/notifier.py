@@ -543,8 +543,8 @@ class StrategyNotifier:
         full-screen digest modal on Home — see NotificationNavigationService.
         """
         self._dispatch(
-            title="☀️ Your Market Digest is ready",
-            body="Today's market news, your watchlist, and how your trading's been going — tap to view.",
+            title="☀️ Market Digest is ready!",
+            body="News, watchlist, and portfolio performance — your morning recap is ready.",
             data={"screen": "market_digest", "digest_date": digest_date},
             priority=P_INFO,
         )
