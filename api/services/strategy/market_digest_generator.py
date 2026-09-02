@@ -55,9 +55,8 @@ _ALLOWED_DOMAINS = [
     "investing.com",
 ]
 
-# label -> yfinance symbol. ^TNX (10Y) is quoted at yield×10 per Yahoo's
-# legacy CBOE index convention (a print of 47.90 means a 4.790% yield) —
-# corrected for in _fetch_macro_quotes below.
+# label -> yfinance symbol. ^TNX (10Y) reports the yield directly (e.g. 4.79
+# means 4.79%) — no unit conversion needed.
 _MACRO_SYMBOLS = [
     ("S&P 500 Fut", "ES=F", "index"),
     ("Nasdaq Fut",  "NQ=F", "index"),
@@ -162,8 +161,10 @@ class MarketDigestGenerator:
         trading    = self._fetch_trading_performance(digest_date)
 
         ai = self._call_claude(digest_date, macro, watchlist_quotes, movers)
+        if ai.get("_error"):
+            logger.error("[MarketDigestGenerator] Narrative layer failed for %s: %s", digest_date, ai["_error"])
 
-        return {
+        content = {
             "digest_date":   str(digest_date),
             "generated_at":  datetime.now(pytz.utc).isoformat(),
             "market_setup": {
@@ -184,6 +185,14 @@ class MarketDigestGenerator:
             "what_to_watch": ai.get("what_to_watch", []),
             "trading": trading,
         }
+        # Temporary diagnostic — surfaces a web-search/parse failure straight
+        # in the API response since there's no server-log access from this
+        # environment. Harmless to the mobile client either way (unknown
+        # JSON fields are ignored by the typed response shape); remove once
+        # the narrative layer has proven reliable.
+        if ai.get("_error"):
+            content["_ai_debug"] = ai["_error"]
+        return content
 
     def save_to_supabase(self, digest_date: date, content: dict) -> bool:
         try:
@@ -305,9 +314,6 @@ class MarketDigestGenerator:
                 if not q:
                     continue
                 value = q["price"]
-                if kind == "yield":
-                    # ^TNX legacy CBOE convention: reported value is yield × 10.
-                    value = round(value / 10, 3)
                 stats.append({
                     "label":          label,
                     "symbol":         symbol,
@@ -428,6 +434,15 @@ class MarketDigestGenerator:
             return ""
 
     def _call_claude(self, digest_date: date, macro: list[dict], watchlist_quotes: list[dict], movers: dict) -> dict:
+        """
+        Returns the parsed narrative dict, or on any failure a dict with only
+        an "_error" key (never raises — see class docstring). "_error" is a
+        deliberate diagnostic escape hatch surfaced all the way to the API
+        response (see generate()'s "_ai_debug") rather than {}, since a
+        silently-empty narrative is otherwise indistinguishable from "Claude
+        found nothing to report" with no way to tell which happened short of
+        a server log.
+        """
         try:
             prompt = self._build_prompt(digest_date, macro, watchlist_quotes, movers)
             tools = [{
@@ -438,10 +453,13 @@ class MarketDigestGenerator:
             }]
             working_messages = [{"role": "user", "content": prompt}]
             final_text = ""
+            last_stop_reason = None
 
             # Guard against runaway server-tool loops — same pattern as
-            # AnthropicService.stream_agent_chat.
-            for _ in range(5):
+            # AnthropicService.stream_agent_chat. Budget is higher than that
+            # method's (4) since this prompt can chain up to
+            # _MAX_WEB_SEARCHES searches across 6 sections in one turn.
+            for _ in range(10):
                 resp = self._claude.messages.create(
                     model=_CLAUDE_MODEL,
                     max_tokens=_MAX_TOKENS,
@@ -449,16 +467,24 @@ class MarketDigestGenerator:
                     messages=working_messages,
                     tools=tools,
                 )
+                last_stop_reason = resp.stop_reason
                 if resp.stop_reason == "pause_turn":
                     working_messages.append({"role": "assistant", "content": resp.content})
                     continue
                 final_text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
                 break
+            else:
+                logger.error("[MarketDigestGenerator] Exhausted pause_turn budget without finishing")
+                return {"_error": "Exhausted pause_turn retry budget (still pause_turn after 10 turns)"}
+
+            if not final_text.strip():
+                logger.error("[MarketDigestGenerator] Empty text from Claude — stop_reason=%s", last_stop_reason)
+                return {"_error": f"Empty response text (stop_reason={last_stop_reason})"}
 
             return self._parse_ai_json(final_text)
         except Exception as e:
             logger.error("[MarketDigestGenerator] Claude call failed: %s", e, exc_info=True)
-            return {}
+            return {"_error": f"{type(e).__name__}: {e}"}
 
     @staticmethod
     def _parse_ai_json(text: str) -> dict:
@@ -467,9 +493,19 @@ class MarketDigestGenerator:
         cleaned = re.sub(r"\s*```$", "", cleaned)
         try:
             return json.loads(cleaned)
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.error("[MarketDigestGenerator] Failed to parse AI JSON: %s — raw: %s", e, text[:500])
-            return {}
+        except (json.JSONDecodeError, TypeError):
+            pass
+        # Model added prose despite instructions — fall back to the first
+        # balanced {...} substring rather than giving up outright.
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end > start:
+            try:
+                return json.loads(cleaned[start:end + 1])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        logger.error("[MarketDigestGenerator] Failed to parse AI JSON — raw: %s", text[:800])
+        return {"_error": "AI response was not valid JSON", "_raw_preview": text[:400]}
 
     def _build_prompt(self, digest_date: date, macro: list[dict], watchlist_quotes: list[dict], movers: dict) -> str:
         now_et = datetime.now(ET)
