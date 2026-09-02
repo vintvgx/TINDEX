@@ -20,6 +20,10 @@ import { ReviewNoteActionModal } from '@/common/components/review/ReviewNoteActi
 import { useToast } from '@/common/components/ui/Toast';
 import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
+import { MarketDigestModal } from '@/common/components/digest/MarketDigestModal';
+import { DigestGeneratingOverlay } from '@/common/components/digest/DigestGeneratingOverlay';
+import { useMarketDigest } from '@/hooks/queries/digest/useMarketDigest';
+import { useGenerateMarketDigest } from '@/hooks/mutations/digest/useGenerateMarketDigest';
 import type { ReviewNote } from '@/common/types/reviewNotes';
 
 const NOTE_COLOR = '#F59E0B';
@@ -107,6 +111,23 @@ export default function DailyReviewScreen() {
   const notes = notesData?.data ?? [];
   const [addNoteDate, setAddNoteDate] = useState<string | null>(null);
   const [actionNote, setActionNote] = useState<ReviewNote | null>(null);
+
+  // Market Digest — view today's if it's already been generated (the
+  // 8:30 AM ET cron normally beats the user here), or build it on-demand
+  // otherwise. Kept separate from the review calendar above: the digest is
+  // always "today's", not a per-day historical thing to browse.
+  const todayKey = dateKey(today);
+  const { data: todayDigest } = useMarketDigest(todayKey);
+  const generateDigest = useGenerateMarketDigest();
+  const [digestModalDate, setDigestModalDate] = useState<string | null>(null);
+  const handleDigestPress = () => {
+    if (todayDigest?.data) { setDigestModalDate(todayKey); return; }
+    if (generateDigest.isPending) return;
+    generateDigest.mutate(todayKey, {
+      onSuccess: () => setDigestModalDate(todayKey),
+      onError: (e) => toast.error((e as Error).message),
+    });
+  };
 
   const noteIndicatorsByDay = useMemo(() => {
     const map = new Map<string, { hasNote: boolean; hasTodo: boolean }>();
@@ -203,6 +224,9 @@ export default function DailyReviewScreen() {
           </Text>
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+          <TouchableOpacity onPress={handleDigestPress} disabled={generateDigest.isPending} hitSlop={10} style={{ padding: 6 }}>
+            <Ionicons name="sunny-outline" size={22} color={colors.text} />
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => router.push('/backlog')} hitSlop={10} style={{ padding: 6 }}>
             <Ionicons name="list-outline" size={22} color={colors.text} />
           </TouchableOpacity>
@@ -542,6 +566,13 @@ export default function DailyReviewScreen() {
         onClose={() => setAddNoteDate(null)}
       />
       <ReviewNoteActionModal note={actionNote} onClose={() => setActionNote(null)} />
+
+      <MarketDigestModal
+        date={digestModalDate}
+        visible={!!digestModalDate}
+        onClose={() => setDigestModalDate(null)}
+      />
+      <DigestGeneratingOverlay visible={generateDigest.isPending} />
     </SafeAreaView>
   );
 }

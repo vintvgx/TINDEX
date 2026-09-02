@@ -100,6 +100,7 @@ from routes.social_routes import bp as social_bp
 from routes.robinhood_routes import bp as robinhood_bp
 from routes.review_notes_routes import bp as review_notes_bp
 from routes.price_level_routes import bp as price_levels_bp
+from routes.market_digest_routes import market_digest_bp
 
 app.register_blueprint(ticker_bp)
 app.register_blueprint(yahoo_bp)
@@ -112,6 +113,7 @@ app.register_blueprint(social_bp)
 app.register_blueprint(robinhood_bp)
 app.register_blueprint(review_notes_bp)
 app.register_blueprint(price_levels_bp)
+app.register_blueprint(market_digest_bp)
 
 
 # ── WebSocket: live price stream ───────────────────────────────────────────────

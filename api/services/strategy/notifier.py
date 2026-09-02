@@ -535,6 +535,20 @@ class StrategyNotifier:
             priority=P_INFO,
         )
 
+    def notify_market_digest_ready(self, digest_date: str):
+        """
+        Pre-market Market Digest finished generating and saving — fires
+        ~8:30 AM ET on trade days (see the pg_cron migration) so it's
+        already on-device by the 9 AM read-by target. Tapping it opens the
+        full-screen digest modal on Home — see NotificationNavigationService.
+        """
+        self._dispatch(
+            title="☀️ Market Digest ready",
+            body=f"Pre-market setup, headlines, and your levels for {digest_date} — tap to view.",
+            data={"screen": "market_digest", "digest_date": digest_date},
+            priority=P_INFO,
+        )
+
     def notify_test(self, title: str, body: str):
         """
         Free-form push with no domain fields — used only by the Profile >

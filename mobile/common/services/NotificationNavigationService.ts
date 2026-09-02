@@ -10,12 +10,15 @@ type NotificationData = Record<string, any>;
  * comment for the full rationale.
  */
 const ROUTE_BY_SCREEN: Record<string, string> = {
-  position:     '/(app)/(tabs)/position',
-  tradelog:     '/(app)/(tabs)/tradelog',
-  strategy:     '/(app)/(tabs)/strategy',
-  daily_review: '/(app)/(tabs)/daily_review',
-  options:      '/(app)/(tabs)/options',
-  dashboard:    '/(app)/(tabs)/dashboard',
+  position:      '/(app)/(tabs)/position',
+  tradelog:      '/(app)/(tabs)/tradelog',
+  strategy:      '/(app)/(tabs)/strategy',
+  daily_review:  '/(app)/(tabs)/daily_review',
+  options:       '/(app)/(tabs)/options',
+  dashboard:     '/(app)/(tabs)/dashboard',
+  // Home (feed.tsx) — the Market Digest modal presents on top of it, same
+  // pattern as `section` deep-links into the Home pager (see feed.tsx).
+  market_digest: '/(app)/(tabs)/feed',
 };
 
 /**
@@ -43,6 +46,7 @@ export function navigateFromNotification(data: NotificationData | undefined | nu
   if (data.symbol != null)          params.symbol = String(data.symbol);
   if (data.paper_mode != null)      params.paper_mode = String(data.paper_mode);
   if (data.review_date != null)     params.review_date = String(data.review_date);
+  if (data.digest_date != null)     params.digest_date = String(data.digest_date);
   if (data.ticker != null)          params.ticker = String(data.ticker);
   if (data.contract_symbol != null) params.contract_symbol = String(data.contract_symbol);
   if (data.pending_id != null)      params.pending_id = String(data.pending_id);
