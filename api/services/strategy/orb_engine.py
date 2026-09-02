@@ -2670,6 +2670,11 @@ class ORBEngine:
             em.hard_stop, em.tp1, em.tp2 = compute_exit_levels(blended_entry, em.profile)
             em.runner_trail  = blended_entry
             em._tp1_ticks    = 0
+            # A position that started at qty=1 has use_tp2 hard-forced False
+            # (see ExitManager.__init__) — now that qty_remaining just grew,
+            # re-derive it from the new count so TP2 becomes editable/shown
+            # again when there's actually enough quantity for a runner.
+            em.recompute_use_tp2()
 
             # Persist the blend to orb_trades too, not just the in-memory
             # ExitManager — otherwise log_exit() later recomputes realized P&L

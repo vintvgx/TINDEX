@@ -105,7 +105,7 @@ class ExitManager:
         # OTM_CONVICTION all explicitly set use_tp2=True, which would otherwise
         # win over the qty-based default below). 2026-07-29: manage your own
         # runner, or let the stop handle it, for a single-contract trade.
-        self._use_tp2 = False if qty <= 1 else profile.get("use_tp2", qty > 2)
+        self._use_tp2 = self._compute_use_tp2(qty)
 
         self.orh = fib_levels["orh"]
         self.orl = fib_levels["orl"]
@@ -539,6 +539,22 @@ class ExitManager:
     def update_qty(self, qty_closed: int) -> None:
         """Call after executing a partial close so remaining contract count stays accurate."""
         self.qty_remaining = max(0, self.qty_remaining - qty_closed)
+
+    def _compute_use_tp2(self, qty: int) -> bool:
+        """Shared with __init__ — see its comment above self._use_tp2 for why
+        a 1-contract count is a hard override rather than just a default."""
+        return False if qty <= 1 else self.profile.get("use_tp2", qty > 2)
+
+    def recompute_use_tp2(self) -> None:
+        """
+        Re-derive `_use_tp2` from the CURRENT qty_remaining — call this after
+        anything that changes the contract count post-entry (currently just
+        ORBEngine.add_to_position()). Without this, a position that started
+        at qty=1 (use_tp2 hard-forced False in __init__) stayed locked out of
+        TP2 forever even after contracts were added and a runner became
+        possible again (2026-09-02 fix).
+        """
+        self._use_tp2 = self._compute_use_tp2(self.qty_remaining)
 
     def apply_overrides(self, hard_stop: float | None = None, tp1: float | None = None,
                         tp2: float | None = None, sl_qty: int | None = None,

@@ -2,6 +2,7 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 
 export interface MarketSentiment {
@@ -36,6 +37,15 @@ function toWsUrl(httpUrl: string, path: string): string {
 const WS_URL = toWsUrl(RAILWAY_BASE_URL, '/ws/prices');
 const BASE_RECONNECT_DELAY_MS = 2000;
 const MAX_RECONNECT_DELAY_MS = 20000;
+// The backend broadcasts a price_update every 5s, 24/7, regardless of market
+// hours (see price_stream_service.py's PriceStreamService._loop — explicitly
+// NOT gated on is_market_hours()) — so a healthy socket should never go this
+// long without a frame. Used by the liveness watchdog below to catch a
+// zombie connection that still LOOKS open (readyState === OPEN) but stopped
+// actually receiving data, which iOS/Android backgrounding can cause without
+// ever firing a JS `close` event.
+const STALE_THRESHOLD_MS = 20000;
+const LIVENESS_CHECK_INTERVAL_MS = 15000;
 
 /**
  * Owns the single app-wide WebSocket to /ws/prices. Previously every
@@ -62,6 +72,11 @@ export function MarketStreamProvider({ children }: { children: ReactNode }) {
   const mountedRef = useRef(true);
   const consumersRef = useRef<Map<string, string[]>>(new Map());
   const lastSentKeyRef = useRef<string>('');
+  /** Updated on every received frame — the liveness watchdog and the
+   *  foreground-resume handler both use this to tell a truly-alive socket
+   *  apart from a zombie one. */
+  const lastMessageAtRef = useRef<number>(Date.now());
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
 
   const mergedTickers = useCallback((): string[] => {
     const set = new Set<string>();
@@ -98,11 +113,13 @@ export function MarketStreamProvider({ children }: { children: ReactNode }) {
       console.log('[MarketStream] connected');
       attemptsRef.current = 0;
       lastSentKeyRef.current = '';
+      lastMessageAtRef.current = Date.now();
       setState(prev => ({ ...prev, connected: true }));
       sendSubscription();
     };
 
     ws.onmessage = (event: WebSocketMessageEvent) => {
+      lastMessageAtRef.current = Date.now();
       try {
         const msg = JSON.parse(event.data as string) as {
           type: string;
@@ -140,6 +157,30 @@ export function MarketStreamProvider({ children }: { children: ReactNode }) {
     };
   }, [sendSubscription]);
 
+  // Closes whatever socket is currently held (even one that still looks
+  // OPEN) and reconnects immediately, bypassing the exponential backoff —
+  // used for the two "this connection is probably a zombie" cases below,
+  // where waiting on a natural onclose would leave the app silently stale
+  // for the rest of the session. Strips the old socket's listeners before
+  // closing it: otherwise its onclose still fires (close is always async),
+  // and since that handler unconditionally does `wsRef.current = null` and
+  // schedules its own reconnect, it would clobber the brand-new socket
+  // `connect()` is about to install into wsRef.
+  const forceReconnect = useCallback(() => {
+    if (reconnectRef.current) { clearTimeout(reconnectRef.current); reconnectRef.current = null; }
+    const old = wsRef.current;
+    if (old) {
+      old.onopen = null;
+      old.onmessage = null;
+      old.onerror = null;
+      old.onclose = null;
+      old.close();
+    }
+    wsRef.current = null;
+    attemptsRef.current = 0;
+    connect();
+  }, [connect]);
+
   useEffect(() => {
     mountedRef.current = true;
     connect();
@@ -149,6 +190,42 @@ export function MarketStreamProvider({ children }: { children: ReactNode }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Backgrounding can silently suspend the socket on iOS/Android without
+  // ever firing a JS close event — the app resumes with `connected: true`
+  // still showing (wsRef looks fine) but no more frames ever arrive. Force
+  // a clean reconnect on every background→active transition rather than
+  // trusting the existing connection.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      const prev = appStateRef.current;
+      appStateRef.current = next;
+      if (next === 'active' && prev !== 'active') {
+        console.log('[MarketStream] app foregrounded — forcing reconnect');
+        forceReconnect();
+      }
+    });
+    return () => sub.remove();
+  }, [forceReconnect]);
+
+  // Secondary safety net for the same zombie-socket case, but without
+  // requiring an explicit background/foreground transition (e.g. a network
+  // blip that never triggers onclose at all). The backend broadcasts every
+  // 5s unconditionally (see STALE_THRESHOLD_MS's comment), so a healthy,
+  // foregrounded connection should never go this long with zero frames.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (
+        appStateRef.current === 'active' &&
+        wsRef.current?.readyState === WebSocket.OPEN &&
+        Date.now() - lastMessageAtRef.current > STALE_THRESHOLD_MS
+      ) {
+        console.log('[MarketStream] stale connection detected — forcing reconnect');
+        forceReconnect();
+      }
+    }, LIVENESS_CHECK_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [forceReconnect]);
 
   const setConsumerTickers = useCallback((id: string, tickers: string[]) => {
     consumersRef.current.set(id, tickers);

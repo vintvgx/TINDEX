@@ -124,7 +124,15 @@ export function useORBMonitoringState(
       return (data || []) as ORBMonitoringState[];
     },
     staleTime: 0, // Always consider data stale so real-time updates trigger refetch
-    refetchInterval: false, // No polling needed with real-time subscription
+    // Was `false` ("no polling needed with real-time subscription") — but
+    // this hook has zero fallback if that Supabase Realtime channel ever
+    // silently dies (e.g. surviving a background/foreground cycle isn't
+    // guaranteed), which left ORB tiles/candidate breakouts frozen for the
+    // rest of the session with nothing to recover them (2026-09-01 report:
+    // "Dashboard data is not being updated"). A conservative 45s poll is a
+    // cheap safety net without turning this back into the primary update
+    // path — the realtime subscription still delivers the fast path.
+    refetchInterval: 45_000,
     retry: 2,
     retryDelay: 1000,
   });
