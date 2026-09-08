@@ -652,13 +652,13 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
               <Ionicons name="arrow-back" size={20} color={colors.text} />
             </TouchableOpacity>
           ) : (
-            <View style={[s.agentIcon, { backgroundColor: colors.accent + '20' }]}>
+            <TouchableOpacity onPress={onClose} style={[s.agentIcon, { backgroundColor: colors.accent + '20' }]}>
               <Ionicons name="sparkles" size={16} color={colors.accent} />
-            </View>
+            </TouchableOpacity>
           )}
 
           <View style={s.headerCenter}>
-            <TouchableOpacity onPress={onClose}>
+            <TouchableOpacity>
               <Text style={[s.headerTitle, { color: colors.text }]}>AI Agent</Text>
             </TouchableOpacity>
             {ticker ? (

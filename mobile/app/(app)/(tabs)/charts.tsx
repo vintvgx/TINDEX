@@ -7,6 +7,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
+import { TickerContractsModal } from '@/common/components/ticker/TickerContractsModal';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import { Skeleton } from '@/common/components/ui/Skeleton';
 import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
@@ -36,7 +37,11 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
+// Always surface the major index ETFs right after open-position tickers,
+// ahead of the rest of the followed list — they're the reference charts
+// checked every session regardless of what's actively being traded, and
+// the list's guaranteed floor when there are no positions/follows at all.
+const PINNED_TICKERS = ['SPY', 'QQQ', 'IWM'];
 // AdvancedPriceChart's own chrome OUTSIDE the `height` prop: the top row
 // (mode toggle + date label, 26 + 6 margin) plus the period-picker row below
 // the canvas (~12 margin + ~28 row), plus this screen's own ChartControlToggles
@@ -56,8 +61,9 @@ const CHART_CHROME_HEIGHT = 78 + 38;
  */
 export default function ChartsScreen() {
   const colors = useThemeColors();
+  const [contractsModalOpen, setContractsModalOpen] = useState(false);
 
-  // ── Ticker list: open-position tickers first, then followed (alphabetical) ──
+  // ── Ticker list: open-position tickers, then SPY/QQQ/IWM, then followed (alphabetical) ──
   const allLive = useLivePositionsData('live');
   const allPaper = useLivePositionsData('paper');
   const { data: follows } = useUserORBFollows();
@@ -70,11 +76,12 @@ export default function ChartsScreen() {
   }, [allLive.filteredPositions, allPaper.filteredPositions]);
 
   const tickerList = useMemo(() => {
-    const followedOnly = Array.from(new Set((follows ?? []).map(f => f.ticker.toUpperCase())))
-      .filter(t => !openPositionTickers.includes(t))
-      .sort();
-    const list = [...openPositionTickers, ...followedOnly];
-    return list.length ? list : FALLBACK_TICKERS;
+    const pinned = PINNED_TICKERS.filter(t => !openPositionTickers.includes(t));
+    const followed = new Set((follows ?? []).map(f => f.ticker.toUpperCase()));
+    for (const t of openPositionTickers) followed.delete(t);
+    for (const t of pinned) followed.delete(t);
+    const rest = Array.from(followed).sort();
+    return [...openPositionTickers, ...pinned, ...rest];
   }, [follows, openPositionTickers]);
 
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
@@ -238,6 +245,17 @@ export default function ChartsScreen() {
       status: l.status as 'watching' | 'confirmed',
     }));
 
+  // Every ticker with a live watch zone/price target — drives the orange dot
+  // in TickerStrip (see the comment there for why it's a lower-precedence
+  // signal than the green open-position dot).
+  const watchTickers = useMemo(() => {
+    const set = new Set<string>();
+    for (const l of allKeyLevels ?? []) {
+      if (l.status === 'watching' || l.status === 'confirmed') set.add(l.ticker.toUpperCase());
+    }
+    return set;
+  }, [allKeyLevels]);
+
   const { mutateAsync: createKeyLevel } = useCreateKeyLevel();
   const handleWatchConfirm = async (draft: ChartWatchDraft): Promise<boolean> => {
     if (!user?.id) {
@@ -364,6 +382,7 @@ export default function ChartsScreen() {
           tickers={effectiveTickerList}
           activeTicker={activeTicker}
           openPositionTickers={openPositionTickers}
+          watchTickers={watchTickers}
           onSelect={setSelectedTicker}
           onSearchPress={() => setSearchOpen(true)}
           colors={colors}
@@ -378,24 +397,37 @@ export default function ChartsScreen() {
           renders its accurate default (auto-fit) view once data lands, not
           whatever window happened to be set for a different symbol. */}
       <View style={{ flex: 1, paddingHorizontal: 12 }} onLayout={onChartAreaLayout}>
-        <View style={{ marginBottom: 8 }}>
-          <ChartControlToggles
-            colors={colors}
-            toggles={[{
-              key: 'crosshair',
-              icon: 'locate-outline',
-              active: crosshairEnabled,
-              onPress: () => setCrosshairEnabled(!crosshairEnabled),
-              label: 'Data Points',
-              description: 'Tap-and-hold on the chart to inspect an exact price/time. Turn off to test whether it’s a source of lag while panning.',
-            }]}
-          />
+        <View style={{ marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity
+            onPress={() => setContractsModalOpen(true)}
+            activeOpacity={0.8}
+            style={{
+              flexDirection: 'row', alignItems: 'center', gap: 5,
+              height: 30, paddingHorizontal: 12, borderRadius: 15,
+              borderWidth: 1, borderColor: colors.separator,
+            }}
+          >
+            <Ionicons name="layers-outline" size={14} color={colors.textSecondary} />
+            <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '700' }}>Contracts</Text>
+          </TouchableOpacity>
+          <View style={{ flex: 1 }}>
+            <ChartControlToggles
+              colors={colors}
+              toggles={[{
+                key: 'crosshair',
+                icon: 'locate-outline',
+                active: crosshairEnabled,
+                onPress: () => setCrosshairEnabled(!crosshairEnabled),
+                label: 'Data Points',
+                description: 'Tap-and-hold on the chart to inspect an exact price/time. Turn off to test whether it’s a source of lag while panning.',
+              }]}
+            />
+          </View>
         </View>
         {chartAreaHeight > 0 && (
           <AdvancedPriceChart
             key={activeTicker}
             data={historyData}
-            ticker={activeTicker}
             isLoading={historyLoading || historyIsStale}
             period={period}
             onPeriodChange={setPeriod}
@@ -436,6 +468,13 @@ export default function ChartsScreen() {
         onSelectTicker={setSelectedTicker}
       />
 
+      <TickerContractsModal
+        ticker={activeTicker}
+        visible={contractsModalOpen}
+        onClose={() => setContractsModalOpen(false)}
+        hasOptions={stockData?.has_options}
+      />
+
       {expanded && (
         <View style={{ paddingHorizontal: 16, paddingBottom: 12, maxHeight: 320 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 6 }}>
@@ -466,15 +505,19 @@ export default function ChartsScreen() {
  * the-position-bar picker (removed — this strip covers exactly the same
  * list, always visible instead of hidden behind a gesture nobody discovers).
  * A small green dot marks tickers with an open position, same signal the
- * old picker's own list used. Auto-scrolls to keep the active chip in view
- * when it changes (swipe-header gesture, position bar, or a chip tap).
+ * old picker's own list used. A ticker with a live watch zone/price target
+ * but no open position gets an orange dot instead — green always wins when
+ * both apply, since an active trade is the more urgent signal. Auto-scrolls
+ * to keep the active chip in view when it changes (swipe-header gesture,
+ * position bar, or a chip tap).
  */
 function TickerStrip({
-  tickers, activeTicker, openPositionTickers, onSelect, onSearchPress, colors,
+  tickers, activeTicker, openPositionTickers, watchTickers, onSelect, onSearchPress, colors,
 }: {
   tickers: string[];
   activeTicker: string;
   openPositionTickers: string[];
+  watchTickers: Set<string>;
   onSelect: (t: string) => void;
   onSearchPress: () => void;
   colors: any;
@@ -516,6 +559,7 @@ function TickerStrip({
         {tickers.map(t => {
           const active = t === activeTicker;
           const hasPosition = openPositionTickers.includes(t);
+          const hasWatch = !hasPosition && watchTickers.has(t);
           return (
             <TouchableOpacity
               key={t}
@@ -533,6 +577,7 @@ function TickerStrip({
                 {t}
               </Text>
               {hasPosition && <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: colors.success }} />}
+              {hasWatch && <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: '#FF9F0A' }} />}
             </TouchableOpacity>
           );
         })}

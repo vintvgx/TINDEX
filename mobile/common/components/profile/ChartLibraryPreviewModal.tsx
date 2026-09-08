@@ -94,7 +94,6 @@ export function ChartLibraryPreviewModal({ visible, onClose }: Props) {
               </Text>
               <AdvancedPriceChart
                 data={historyData}
-                ticker={ticker}
                 period="1D"
                 onPeriodChange={() => {}}
                 positive={positive}

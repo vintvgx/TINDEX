@@ -5,6 +5,7 @@ import { format } from 'date-fns';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketDigest } from '@/hooks/queries/digest/useMarketDigest';
 import { useGenerateMarketDigest } from '@/hooks/mutations/digest/useGenerateMarketDigest';
+import { useSeenMarketDigests } from '@/hooks/useSeenMarketDigests';
 import { useToast } from '@/common/components/ui/Toast';
 import { DigestGeneratingOverlay } from './DigestGeneratingOverlay';
 
@@ -27,7 +28,10 @@ export function MarketDigestCard({ onOpen }: { onOpen: (date: string) => void })
   const today = todayISO();
   const { data, isLoading } = useMarketDigest(today);
   const generate = useGenerateMarketDigest();
+  const { isSeen } = useSeenMarketDigests();
   const ready = !!data?.data;
+
+  if (ready && isSeen(today)) return null;
 
   const handlePress = () => {
     if (ready) { onOpen(today); return; }

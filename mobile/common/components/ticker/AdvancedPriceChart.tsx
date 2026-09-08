@@ -11,7 +11,6 @@ import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
 import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
 import { useChartInterval } from '@/hooks/useChartInterval';
 import { ALLOWED_INTERVALS, INTERVAL_LABEL, INTERVAL_MINUTES } from '@/lib/chartIntervals';
-import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import type { PricePeriod, TickerHistoryData } from '@/common/types/blogPosts/ticker';
 import type { OrbRangeLines } from '@/common/components/ticker/PriceChart';
 
@@ -73,11 +72,6 @@ export interface ChartWatchDraft {
 
 interface AdvancedPriceChartProps {
   data: TickerHistoryData | undefined;
-  /** Needed only to lazy-load earlier trading days as the user pans past
-   *  the left edge on 1D (see the "load earlier days" block below) — the
-   *  1D history-date endpoint is fetched directly from here, ticker-scoped.
-   *  Omit to leave 1D hard-clamped to whatever `data` already contains. */
-  ticker?: string;
   isLoading?: boolean;
   period: PricePeriod;
   onPeriodChange: (period: PricePeriod) => void;
@@ -208,9 +202,8 @@ const isSameDay = (a: string, b: string) => {
  *  changes — plain day number ("27") normally, month+day once the month
  *  also changed since the previous tick, plus year once the year changed
  *  too. Mirrors TradingView's own adaptive axis: mostly time labels, with
- *  the date stamped in exactly at day boundaries. Only relevant on the 1D
- *  period once panning has loaded earlier days into the same view — see
- *  fetchEarlierDay/MAX_EARLIER_DAYS. */
+ *  the date stamped in exactly at day boundaries. Relevant on multi-day
+ *  periods (1W and up) — 1D is always a single session. */
 const formatDayBoundaryLabel = (dateStr: string, prevDateStr: string | null) => {
   const d = new Date(dateStr);
   if (!prevDateStr) {
@@ -297,7 +290,6 @@ function smoothPath(points: { x: number; y: number }[], tension = 0.2): string {
  */
 export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   data,
-  ticker,
   isLoading,
   period,
   onPeriodChange,
@@ -319,122 +311,20 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const colors = useThemeColors();
   const [width, setWidth] = useState(0);
 
-  // ── Lazy-loaded earlier trading days (1D pan-past-the-left-edge) ────────
-  // `data` from the parent is always just the CURRENTLY SELECTED period's
-  // fetch (today's bars, for 1D) — panning used to hard-clamp at index 0
-  // because there was nothing before it in memory. This prepends whole
-  // prior trading days on demand as the user pans toward/past the start,
-  // capped at MAX_EARLIER_DAYS so the series can't grow unbounded. Oldest
-  // day first, so `[...earlierDays.flat, ...data]` is already in
-  // chronological order.
-  const MAX_EARLIER_DAYS = 8;
-  const [earlierDays, setEarlierDays] = useState<TickerHistoryData[]>([]);
-  const loadingEarlierRef = useRef(false);
-  const unavailableDatesRef = useRef<Set<string>>(new Set());
-
-  // A genuinely different instrument (or the caller's resetKey bump) means
-  // the earlier-days cache is for the wrong ticker entirely — never carry
-  // it across.
-  useEffect(() => {
-    setEarlierDays([]);
-    loadingEarlierRef.current = false;
-    unavailableDatesRef.current = new Set();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resetKey, ticker]);
-
-  const earlierBarsCount = useMemo(
-    () => earlierDays.reduce((n, d) => n + d.dates.length, 0),
-    [earlierDays],
-  );
-
-  // The merged series everything below actually renders — `data` itself is
-  // read directly only where "today specifically" is what's meant (the ORB
-  // band's regular-session-start search, and the fetch-trigger's own
-  // day-stepping below).
-  const chartData: TickerHistoryData | undefined = useMemo(() => {
-    if (period !== '1D' || earlierDays.length === 0 || !data) return data;
-    const opensOk = earlierDays.every(d => Array.isArray(d.opens)) && Array.isArray(data.opens);
-    const highsOk = earlierDays.every(d => Array.isArray(d.highs)) && Array.isArray(data.highs);
-    const lowsOk = earlierDays.every(d => Array.isArray(d.lows)) && Array.isArray(data.lows);
-    return {
-      dates: [...earlierDays.flatMap(d => d.dates), ...data.dates],
-      prices: [...earlierDays.flatMap(d => d.prices), ...data.prices],
-      volumes: [...earlierDays.flatMap(d => d.volumes), ...data.volumes],
-      opens: opensOk ? [...earlierDays.flatMap(d => d.opens!), ...data.opens!] : data.opens,
-      highs: highsOk ? [...earlierDays.flatMap(d => d.highs!), ...data.highs!] : data.highs,
-      lows: lowsOk ? [...earlierDays.flatMap(d => d.lows!), ...data.lows!] : data.lows,
-      session_lines: data.session_lines,
-    };
-  }, [data, earlierDays, period]);
+  // `chartData` used to be `data` merged with lazily-loaded earlier trading
+  // days (panning past the left edge on 1D used to fetch and prepend prior
+  // sessions). That's gone — 1D now hard-clamps at whatever `data` already
+  // contains, so this is just an alias; kept so the rest of this component
+  // doesn't need renaming.
+  const chartData = data;
 
   // Global, persisted bar-granularity choice for the CURRENT period (5m vs
   // 15m on 1D, 1d vs 1wk on 3M, etc.) — shared via the same React-Query
   // cache key as whatever called useChartInterval(period) up in the parent
   // to drive the actual data fetch (charts.tsx/PriceChartFullScreen.tsx),
   // so this stays in sync with the query without any prop threading, same
-  // as useWatchZonesVisibility/useCrosshairEnabled below. Declared here
-  // (rather than further down with those) so fetchEarlierDay, right below,
-  // can close over chartInterval too — an earlier loaded day should match
-  // whatever granularity today's own bars are currently showing.
+  // as useWatchZonesVisibility/useCrosshairEnabled below.
   const { interval: chartInterval, setInterval: setChartInterval, allowed: allowedIntervals } = useChartInterval(period);
-
-  // Steps back one calendar day at a time (skipping weekends without a
-  // network call) from whatever's currently the oldest loaded bar, fetching
-  // the regular-session 5-minute bars for that date via the same endpoint
-  // the Daily Review's per-trade chart uses. A date already known empty
-  // (holiday, or past yfinance's ~60-day intraday lookback) is skipped on
-  // sight next time rather than re-requested. Stops after finding ONE
-  // day worth of bars — the next edge-hit fetches the day before that.
-  const fetchEarlierDay = useCallback(async () => {
-    if (!ticker || period !== '1D' || loadingEarlierRef.current) return;
-    if (earlierDays.length >= MAX_EARLIER_DAYS) return;
-    const oldestDateStr = earlierDays[0]?.dates[0] ?? data?.dates?.[0];
-    if (!oldestDateStr) return;
-
-    loadingEarlierRef.current = true;
-    try {
-      const cursor = new Date(oldestDateStr);
-      for (let attempt = 0; attempt < 5; attempt++) {
-        cursor.setDate(cursor.getDate() - 1);
-        const dow = cursor.getDay();
-        if (dow === 0 || dow === 6) continue; // weekend — no network call
-        const iso = cursor.toISOString().split('T')[0];
-        if (unavailableDatesRef.current.has(iso)) continue;
-
-        try {
-          const res = await fetch(`${RAILWAY_BASE_URL}/ticker/${ticker}/history-date`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ date: iso, interval: chartInterval }),
-          });
-          const json = await res.json();
-          if (json?.success && json.data?.available && json.data.dates?.length) {
-            const day: TickerHistoryData = {
-              dates: json.data.dates,
-              prices: json.data.closes,
-              volumes: json.data.volumes,
-              opens: json.data.opens,
-              highs: json.data.highs,
-              lows: json.data.lows,
-            };
-            const shiftBy = day.dates.length;
-            setEarlierDays(prev => [day, ...prev]);
-            // Keep whatever was on screen still on screen — the new bars
-            // slide in to the LEFT of it, not underneath it. xWindow==null
-            // (never zoomed) needs no shift: it always tracks "show
-            // everything," which already includes the new day for free.
-            setXWindow(w => (w ? { start: w.start + shiftBy, end: w.end + shiftBy } : null));
-            return;
-          }
-          unavailableDatesRef.current.add(iso);
-        } catch {
-          return; // network hiccup — a later edge-hit tries again
-        }
-      }
-    } finally {
-      loadingEarlierRef.current = false;
-    }
-  }, [ticker, period, earlierDays, data, chartInterval]);
 
   const prices = useMemo(() => chartData?.prices ?? [], [chartData]);
   const dates = useMemo(() => chartData?.dates ?? [], [chartData]);
@@ -556,18 +446,10 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     }
   }, [period]);
 
-  // On 1D, also drop any earlier days loaded in by panning past the left
-  // edge (fetchEarlierDay) — otherwise "Reset" only cleared the zoom/pan
-  // OFFSET while leaving those extra days merged into chartData, so the
-  // resulting "auto-fit" view still spanned multiple sessions instead of
-  // collapsing back to just today's 09:30-16:00 ET reserved-width view
-  // (see layoutVisibleCount). Every other period has no such accumulated
-  // state to clear — earlierDays only exists to serve 1D.
   const resetZoom = useCallback(() => {
     setXWindow(null);
     setYOverride(null);
-    if (period === '1D') setEarlierDays([]);
-  }, [period]);
+  }, []);
 
   // Clamped against the current data length so a stale window (e.g. if the
   // underlying series shrinks/changes shape without a period change) can
@@ -611,11 +493,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // candle data exists) — means it automatically extends across the
   // reserved blank space on a still-in-progress 1D session too, exactly
   // like Robinhood/TradingView project a fixed reference range forward
-  // through the rest of the day. Deliberately searches the ORIGINAL `data`
-  // (today only), never `chartData` — with earlier days now possibly
-  // prepended, searching from index 0 forward in the merged series would
-  // find an EARLIER day's 9:45 bar instead of today's; earlierBarsCount
-  // shifts the found index back into chartData's index space.
+  // through the rest of the day.
   const orbBandStartIndex = useMemo(() => {
     if (!orbVisible || !data?.dates?.length) return 0;
     for (let i = 0; i < data.dates.length; i++) {
@@ -624,10 +502,10 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
       });
       const [hh, mm] = parts.split(':').map(Number);
-      if (hh * 60 + mm >= 9 * 60 + 45) return i + earlierBarsCount;
+      if (hh * 60 + mm >= 9 * 60 + 45) return i;
     }
-    return earlierBarsCount;
-  }, [orbVisible, data?.dates, earlierBarsCount]);
+    return 0;
+  }, [orbVisible, data?.dates]);
 
   // Pre-Market/Market-Close/Post-Market/Overnight lines — off by default;
   // toggled via the toolbar button below. Merged with the generic
@@ -748,11 +626,10 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, effectiveReferenceLines, effectiveWatchZones, yOverride, visibleIndices, visibleStart, visibleCount, layoutVisibleCount]);
 
   // X-axis tick labels — plain evenly-spaced time labels everywhere EXCEPT
-  // the 1D period, which can show multiple calendar days at once once
-  // fetchEarlierDay has loaded earlier days into view (see MAX_EARLIER_DAYS).
-  // There, insert a date label exactly at each day-boundary crossing —
-  // dropping any evenly-spaced time tick that would collide with one —
-  // mirroring TradingView's own adaptive axis (mostly times, date stamped
+  // the 1D period, where a day-boundary crossing (if the visible window
+  // ever spans one) gets a date label instead of a plain time — dropping
+  // any evenly-spaced time tick that would collide with one — mirroring
+  // TradingView's own adaptive axis (mostly times, date stamped
   // in only where the day actually changes).
   const xAxisTicks = useMemo(() => {
     if (!scale || visibleCount < 2) return [] as { index: number; label: string; isBoundary: boolean }[];
@@ -1133,19 +1010,6 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // laggy, can't navigate freely" feel this fixes. Only call setXWindow when
   // the rounded window is actually different from what's already committed.
   const lastXWindowShared = useSharedValue<{ start: number; end: number } | null>(null);
-  // True once fetchEarlierDay has already been triggered for the CURRENT
-  // touch — fetchEarlierDay's own loadingEarlierRef only blocks overlapping
-  // in-flight calls, not repeat calls once one finishes. st.start/e.translationX
-  // are anchored to gesture-start, not per-frame deltas, so as long as a
-  // finger stays anywhere past the left edge — even just resting there,
-  // not still actively dragging — newStart<0 keeps evaluating true on every
-  // single onUpdate frame; without this flag, a single continuous touch
-  // could fire fetchEarlierDay again the instant each fetch resolves,
-  // silently loading several earlier days from what should be one edge
-  // crossing (2026-09-01: reported as "a slight gesture left" loading a
-  // week of data). Reset only in onBegin — a new touch is what should earn
-  // another day, not the same one lingering past the edge.
-  const earlierFetchTriggeredShared = useSharedValue(false);
 
   const manipulateGesture = useMemo(
     () =>
@@ -1176,7 +1040,6 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           // converge again.
           panStartShared.value = { start: visibleStart, end: visibleEnd, lo: scale.lo, hi: scale.hi, layoutCount: layoutVisibleCount };
           lastXWindowShared.value = { start: visibleStart, end: visibleEnd };
-          earlierFetchTriggeredShared.value = false;
           if (e.x > plotW) panModeShared.value = 'y-rescale';
           else if (e.y > height - X_AXIS_H) panModeShared.value = 'x-rescale';
           else panModeShared.value = 'time-pan';
@@ -1205,13 +1068,12 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             // of bar-slots (see layoutVisibleCount), bars pack much more
             // tightly per pixel than before; that tiny incidental
             // horizontal component, multiplied by the now-much-larger bar
-            // count below, was enough to cross the "pan past the left edge"
-            // threshold during an intended VERTICAL scroll — silently firing
-            // fetchEarlierDay and loading/showing an earlier day. Blending
-            // both axes unconditionally relied on that horizontal component
-            // rounding away to exactly zero, which stopped being reliably
-            // true once bars got this narrow. Locking to one axis per drag
-            // removes the whole failure mode instead of just dampening it.
+            // count below, was enough to nudge the x-window during an
+            // intended VERTICAL scroll. Blending both axes unconditionally
+            // relied on that horizontal component rounding away to exactly
+            // zero, which stopped being reliably true once bars got this
+            // narrow. Locking to one axis per drag removes the whole
+            // failure mode instead of just dampening it.
             const horizontalDominant = Math.abs(e.translationX) >= Math.abs(e.translationY);
 
             if (horizontalDominant) {
@@ -1223,25 +1085,13 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               const barsShift = (e.translationX / plotW) * st.layoutCount;
               let newStart = Math.round(st.start - barsShift);
               let newEnd = newStart + curCount - 1;
-              // Hitting this means the drag is trying to reveal bars before
-              // index 0 — exactly the "pan past the left edge" moment to kick
-              // off loading an earlier day (see fetchEarlierDay). st.start/
-              // e.translationX are anchored to gesture-start, not per-frame
-              // deltas, so this stays true on every remaining frame of the
-              // SAME touch even if the finger just rests past the edge
-              // rather than continuing to drag — fetchEarlierDay's own
-              // loadingEarlierRef only blocks OVERLAPPING calls, not repeat
-              // ones once each finishes, so without earlierFetchTriggeredShared
-              // a single held touch could fire it several times in a row,
-              // loading multiple days from what should be one edge crossing.
-              // One trigger per touch; a new touch is what earns the next day.
+              // Hard-clamp at index 0 — there's nothing before the start of
+              // whatever range is loaded (on 1D, that's just today's
+              // session), so a drag past the left edge simply stops moving
+              // the window instead of reaching further back in time.
               if (newStart < 0) {
                 newEnd -= newStart;
                 newStart = 0;
-                if (!earlierFetchTriggeredShared.value) {
-                  earlierFetchTriggeredShared.value = true;
-                  runOnJS(fetchEarlierDay)();
-                }
               }
               if (newEnd > count - 1) { newStart -= newEnd - (count - 1); newEnd = count - 1; }
               newStart = Math.max(0, newStart);
@@ -1289,7 +1139,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           }
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [scale, visibleStart, visibleEnd, plotW, priceH, height, count, notifyScrub, fetchEarlierDay, layoutVisibleCount],
+    [scale, visibleStart, visibleEnd, plotW, priceH, height, count, notifyScrub, layoutVisibleCount],
   );
 
   // Two-finger pinch — zooms both axes together, centered on the pinch focal

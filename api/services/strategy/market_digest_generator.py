@@ -102,6 +102,9 @@ before or after — matching exactly this shape:
   "headlines": [
     {"text": "...", "source": "...", "url": "..."}
   ],
+  "headlines_summary": [
+    "..."
+  ],
   "watchlist_catalysts": {
     "<TICKER>": {"catalyst": "...", "level": "..." }
   },
@@ -121,6 +124,11 @@ before or after — matching exactly this shape:
 
 Rules:
 - "headlines": 4-6 items, top macro/market stories since yesterday's close, one line each.
+- "headlines_summary": 3-4 bullets synthesizing the headlines into the big
+  picture a trader needs before the open — one clear idea per bullet (e.g.
+  the dominant macro driver, the main risk, the standout single-stock
+  story). Write this AFTER "headlines" and base it only on what's in there —
+  don't introduce a fact that isn't backed by one of the headline items.
 - "watchlist_catalysts": exactly one entry per watchlist ticker given below.
   If you find no catalyst, set "catalyst" to "No news" and "level" to null
   — never invent one.
@@ -139,6 +147,32 @@ news). Be specific and reference an actual pattern in the numbers given —
 not generic encouragement. State facts and observed patterns; never tell
 the trader to buy, sell, or take a specific position. Return plain text
 only, no markdown, no preamble.
+""".strip()
+
+_KEY_LEVEL_SYSTEM_PROMPT = """
+You are a trading analyst reviewing a trader's own self-identified key price
+levels against recent price action, for a pre-market digest. For EACH ticker
+given, judge whether price action still supports the original thesis: is it
+moving toward the level, stalling, or failing; is recent buying or selling
+pressure dominant. Base this ONLY on the numeric data given (recent daily
+closes, current price, % change) — never invent a news catalyst, and never
+tell the trader to buy or sell.
+
+Return ONLY a single JSON object — no markdown fences, no commentary —
+shaped exactly like:
+{
+  "<TICKER>": {
+    "verdict": "on_track" | "stalling" | "failing",
+    "analysis": "1-2 tight sentences, specific to the numbers given"
+  }
+}
+
+Rules:
+- Exactly one entry per ticker given, keyed by its exact ticker symbol.
+- "on_track": recent closes are trending toward the level/direction.
+- "stalling": price is roughly flat relative to the level, no clear push either way.
+- "failing": price is trending away from the level/direction.
+- Reference the actual numbers (e.g. "down 3 of the last 5 closes") — never generic.
 """.strip()
 
 
@@ -163,6 +197,9 @@ class MarketDigestGenerator:
         watchlist_quotes = self._fetch_ticker_quotes(my_tickers)
         movers     = self._fetch_market_movers()
         trading    = self._fetch_trading_performance(digest_date)
+        key_levels = self._fetch_key_levels()
+        key_level_context  = self._fetch_key_level_context(key_levels)
+        key_level_analysis = self._analyze_key_levels(key_levels, key_level_context)
 
         ai = self._call_claude(digest_date, macro, watchlist_quotes, movers)
         if ai.get("_error"):
@@ -177,9 +214,11 @@ class MarketDigestGenerator:
                 "stats":  macro,
             },
             "headlines": ai.get("headlines", []),
+            "headlines_summary": ai.get("headlines_summary", []),
             "watchlist": {
-                "mine":     self._merge_catalysts(watchlist_quotes, ai.get("watchlist_catalysts", {})),
-                "trending": trending,
+                "mine":       self._merge_catalysts(watchlist_quotes, ai.get("watchlist_catalysts", {})),
+                "trending":   trending,
+                "key_levels": self._merge_key_levels(key_levels, key_level_context, key_level_analysis),
             },
             "movers": self._merge_mover_reasons(movers, ai.get("mover_reasons", {})),
             "events": {
@@ -256,6 +295,48 @@ class MarketDigestGenerator:
             logger.warning("[MarketDigestGenerator] fetch_trending failed: %s", e)
             return []
 
+    def _fetch_key_levels(self) -> list[dict]:
+        """User's active watched price levels — the same table the chart's
+        Watch mode reads/writes (see price_level_routes.py). Feeds the
+        Watchlist slide's per-ticker key-level review below."""
+        try:
+            rows = (
+                self._sb.table("watched_price_levels")
+                .select("id, ticker, level_low, level_high, direction, status")
+                .in_("status", ["watching", "confirmed"])
+                .order("created_at", desc=True)
+                .execute()
+                .data or []
+            )
+            return rows
+        except Exception as e:
+            logger.warning("[MarketDigestGenerator] fetch_key_levels failed: %s", e)
+            return []
+
+    def _fetch_key_level_context(self, key_levels: list[dict]) -> dict:
+        """Per-ticker current quote + a short recent-closes trend — momentum
+        context the key-level AI review reasons over instead of a single
+        static snapshot."""
+        context: dict = {}
+        for lvl in key_levels:
+            t = lvl["ticker"]
+            if t in context:
+                continue
+            try:
+                tk = yf.Ticker(t)
+                q = self._quote_from_info(tk.info)
+                hist = tk.history(period="5d")
+                closes = [round(c, 2) for c in hist["Close"].tolist()] if not hist.empty else []
+                context[t] = {
+                    "price":          q["price"] if q else None,
+                    "change_percent": q["change_percent"] if q else None,
+                    "recent_closes":  closes,
+                }
+            except Exception as e:
+                logger.warning("[MarketDigestGenerator] key_level_context failed for %s: %s", t, e)
+                context[t] = {"price": None, "change_percent": None, "recent_closes": []}
+        return context
+
     def _fetch_market_movers(self, limit: int = 3) -> dict:
         """Top market-wide gainers/losers, independent of any watchlist —
         reuses the same Yahoo watchlist service the Trending tab already
@@ -270,6 +351,7 @@ class MarketDigestGenerator:
                     "ticker":         s.get("ticker"),
                     "company":        s.get("company"),
                     "price":          s.get("price"),
+                    "change":         s.get("change"),
                     "change_percent": s.get("change_percent"),
                 }
                 for s in rows
@@ -437,6 +519,38 @@ class MarketDigestGenerator:
             logger.warning("[MarketDigestGenerator] generate_advice failed: %s", e)
             return ""
 
+    def _analyze_key_levels(self, key_levels: list[dict], context: dict) -> dict:
+        """One batched Haiku call reviewing every active key level against
+        its recent price context — cheap/fast like _generate_advice, and
+        deliberately separate from the main web-search call above (this is
+        pure numeric reasoning, no search needed)."""
+        if not key_levels:
+            return {}
+        try:
+            lines = []
+            for lvl in key_levels:
+                t = lvl["ticker"]
+                c = context.get(t, {})
+                lines.append(
+                    f"{t}: direction={lvl['direction']}, level=${lvl['level_low']}-${lvl['level_high']}, "
+                    f"status={lvl['status']}, current_price={c.get('price')}, "
+                    f"change_percent={c.get('change_percent')}, "
+                    f"recent_daily_closes={c.get('recent_closes')}"
+                )
+            prompt = "Key levels to review:\n" + "\n".join(lines) + "\n\nReturn the JSON object."
+            resp = self._claude.messages.create(
+                model=_ADVICE_MODEL,
+                max_tokens=1024,
+                system=_KEY_LEVEL_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+            result = self._parse_ai_json(text)
+            return result if not result.get("_error") else {}
+        except Exception as e:
+            logger.warning("[MarketDigestGenerator] analyze_key_levels failed: %s", e)
+            return {}
+
     def _call_claude(self, digest_date: date, macro: list[dict], watchlist_quotes: list[dict], movers: dict) -> dict:
         """
         Returns the parsed narrative dict, or on any failure a dict with only
@@ -563,3 +677,23 @@ class MarketDigestGenerator:
                 out.append({**m, "reason": (reasons or {}).get(m["ticker"], "")})
             return out
         return {"gainers": merge(movers.get("gainers", [])), "losers": merge(movers.get("losers", []))}
+
+    @staticmethod
+    def _merge_key_levels(key_levels: list[dict], context: dict, analysis: dict) -> list[dict]:
+        out = []
+        for lvl in key_levels:
+            t = lvl["ticker"]
+            c = context.get(t, {})
+            a = analysis.get(t, {}) if isinstance(analysis, dict) else {}
+            out.append({
+                "ticker":         t,
+                "level_low":      lvl["level_low"],
+                "level_high":     lvl["level_high"],
+                "direction":      lvl["direction"],
+                "status":         lvl["status"],
+                "price":          c.get("price"),
+                "change_percent": c.get("change_percent"),
+                "verdict":        a.get("verdict"),
+                "analysis":       a.get("analysis", ""),
+            })
+        return out

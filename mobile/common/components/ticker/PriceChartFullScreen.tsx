@@ -410,7 +410,6 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
           </View>
           <AdvancedPriceChart
             data={historyData}
-            ticker={ticker}
             isLoading={historyLoading}
             period={period}
             onPeriodChange={onPeriodChange}

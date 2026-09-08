@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Modal, View, TouchableOpacity, ActivityIndicator, Text, ScrollView, useWindowDimensions } from 'react-native';
+import { Modal, View, TouchableOpacity, ActivityIndicator, Text, ScrollView, useWindowDimensions, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Svg, { Defs, RadialGradient, Stop, Rect } from 'react-native-svg';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TabView, type NavigationState } from 'react-native-tab-view';
 import { format, parseISO } from 'date-fns';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketDigest } from '@/hooks/queries/digest/useMarketDigest';
+import { useSeenMarketDigests } from '@/hooks/useSeenMarketDigests';
 import {
   MarketSetupSlide, HeadlinesSlide, WatchlistSlide, MoversSlide, EventsSlide, WatchSlide, TradingSlide, ClosingSlide,
 } from './DigestSlides';
@@ -38,14 +41,29 @@ interface Props {
 export function MarketDigestModal({ date, visible, onClose }: Props) {
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
-      {/* react-native-safe-area-context can't see the outer SafeAreaProvider
-          from inside a core RN <Modal> (separate native view hierarchy — see
-          the library's own docs), so insets silently come back as 0 and the
-          progress bar / close button render under the notch. Nesting a
-          provider here re-measures insets for this Modal's own window. */}
-      <SafeAreaProvider>
-        <DigestModalContent date={date} visible={visible} onClose={onClose} />
-      </SafeAreaProvider>
+      {/* Two providers, both needed for the same underlying reason: a core
+          RN <Modal> renders in its own separate native view hierarchy, so
+          neither the outer SafeAreaProvider nor the outer
+          GestureHandlerRootView (both mounted once, in app/_layout.tsx) can
+          see into it.
+          - SafeAreaProvider: without a nested one, insets silently come back
+            as 0 and the progress bar/close button render under the notch.
+          - GestureHandlerRootView: this modal's own TabView (the slide
+            swipe) is gesture-handler-based, same as every other TabView in
+            the app (see SegmentedPager.tsx). Without a nested root, its
+            gesture handlers register against no real native root at all —
+            and when the modal unmounts, gesture-handler's bookkeeping for
+            that never-anchored handler set is left in a bad state, which
+            was observed breaking the ORB tab's own SegmentedPager swipe
+            (also TabView-based) after closing this modal from Daily
+            Review — the two share the same gesture-handler singleton, so a
+            root that never anchored correctly can wedge a sibling screen's
+            gestures too, not just this modal's own. */}
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <SafeAreaProvider>
+          <DigestModalContent date={date} visible={visible} onClose={onClose} />
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
@@ -58,11 +76,15 @@ function DigestModalContent({ date, visible, onClose }: Props) {
 
   const { data, isLoading, error } = useMarketDigest(visible ? date : null);
   const content = data?.data?.content_json;
+  const { markSeen } = useSeenMarketDigests();
 
-  // Reset to slide 0 every time the modal (re)opens for a date.
+  // Reset to slide 0 every time the modal (re)opens for a date, and record
+  // this date as viewed so MarketDigestCard stops showing it on Home.
   useEffect(() => {
-    if (visible) setIndex(0);
-  }, [visible, date]);
+    if (!visible) return;
+    setIndex(0);
+    if (date) markSeen(date);
+  }, [visible, date, markSeen]);
 
   const dateLabel = content ? format(parseISO(content.digest_date), 'EEE, MMM d') : '';
 
@@ -85,6 +107,7 @@ function DigestModalContent({ date, visible, onClose }: Props) {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <DigestBackdrop colors={colors} width={layout.width} height={layout.height} />
       <ProgressHeader
         count={ROUTES.length}
         index={index}
@@ -108,10 +131,57 @@ function DigestModalContent({ date, visible, onClose }: Props) {
           renderScene={renderScene}
           renderTabBar={() => null}
           swipeEnabled
-          style={{ backgroundColor: colors.background }}
+          style={{ backgroundColor: 'transparent' }}
         />
       )}
     </View>
+  );
+}
+
+/**
+ * Blurred-mesh backdrop, styled after Origin's own "weekly recap" story
+ * background — several soft overlapping radial blobs strung along a
+ * diagonal, not a flat top-to-bottom fade, so it reads as an organic blur
+ * behind the content instead of a gradient banner sitting on top of it. A
+ * plain LinearGradient read completely flat next to that reference; a
+ * handful of react-native-svg RadialGradients layered together is what
+ * actually produces the cloudy, edge-blurred look. Dark mode gets the full
+ * deep-green treatment; light mode gets a much quieter version of the same
+ * technique since a bold green-black wash doesn't belong over light content.
+ */
+function DigestBackdrop({ colors, width, height }: {
+  colors: ReturnType<typeof useThemeColors>; width: number; height: number;
+}) {
+  if (width === 0 || height === 0) return null;
+
+  const blobs = colors.isDark
+    ? [
+        { cx: 0.15, cy: 0.02, r: 0.62, color: '#3F8C5C', opacity: 0.55 },
+        { cx: 0.55, cy: 0.28, r: 0.55, color: '#2E6B47', opacity: 0.5 },
+        { cx: 0.88, cy: 0.55, r: 0.5,  color: '#173A28', opacity: 0.6 },
+        { cx: 0.28, cy: 0.42, r: 0.32, color: '#6FAE84', opacity: 0.22 },
+      ]
+    : [
+        { cx: 0.18, cy: 0.0,  r: 0.5, color: '#3F8C5C', opacity: 0.14 },
+        { cx: 0.75, cy: 0.15, r: 0.4, color: '#2E6B47', opacity: 0.1 },
+      ];
+  const baseFill = colors.isDark ? '#0A160E' : colors.background;
+
+  return (
+    <Svg width={width} height={height} style={StyleSheet.absoluteFillObject}>
+      <Defs>
+        {blobs.map((b, i) => (
+          <RadialGradient key={i} id={`digest-blob-${i}`} cx={`${b.cx * 100}%`} cy={`${b.cy * 100}%`} r={`${b.r * 100}%`}>
+            <Stop offset="0%" stopColor={b.color} stopOpacity={b.opacity} />
+            <Stop offset="100%" stopColor={b.color} stopOpacity={0} />
+          </RadialGradient>
+        ))}
+      </Defs>
+      <Rect x={0} y={0} width={width} height={height} fill={baseFill} />
+      {blobs.map((_, i) => (
+        <Rect key={i} x={0} y={0} width={width} height={height} fill={`url(#digest-blob-${i})`} />
+      ))}
+    </Svg>
   );
 }
 
