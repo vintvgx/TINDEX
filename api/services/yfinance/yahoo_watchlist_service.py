@@ -380,37 +380,45 @@ class YahooWatchlistService:
                                 if company_text:
                                     stock_data["company"] = company_text
                         
-                        # Extract price
+                        # Extract price — Yahoo now renders this as a plain
+                        # <span data-testid="change"> instead of wrapping it
+                        # in a <fin-streamer data-field="regularMarketPrice">;
+                        # try the current markup first, fall back to the old
+                        # fin-streamer shape in case Yahoo reverts.
                         elif cell_id == 'intradayprice':
-                            price_streamer = cell.find('fin-streamer', {'data-field': 'regularMarketPrice'})
-                            if price_streamer:
-                                price_text = price_streamer.get_text(strip=True)
-                                stock_data["price"] = self._parse_price(price_text) 
-                        
+                            price_el = cell.find('span', {'data-testid': 'change'}) \
+                                or cell.find('fin-streamer', {'data-field': 'regularMarketPrice'})
+                            if price_el:
+                                stock_data["price"] = self._parse_price(price_el.get_text(strip=True))
+
                         # Extract change
                         elif cell_id == 'intradaypricechange':
-                            change_streamer = cell.find('fin-streamer', {'data-field': 'regularMarketChange'})
-                            if change_streamer:
-                                change_span = change_streamer.find('span')
+                            change_el = cell.find('span', {'data-testid': 'colorChange'})
+                            if change_el:
+                                stock_data["change"] = self._parse_change(change_el.get_text(strip=True))
+                            else:
+                                change_streamer = cell.find('fin-streamer', {'data-field': 'regularMarketChange'})
+                                change_span = change_streamer.find('span') if change_streamer else None
                                 if change_span:
-                                    change_text = change_span.get_text(strip=True)
-                                    stock_data["change"] = self._parse_change(change_text)
-                        
+                                    stock_data["change"] = self._parse_change(change_span.get_text(strip=True))
+
                         # Extract percent change
                         elif cell_id == 'percentchange':
-                            pct_streamer = cell.find('fin-streamer', {'data-field': 'regularMarketChangePercent'})
-                            if pct_streamer:
-                                pct_span = pct_streamer.find('span')
+                            pct_el = cell.find('span', {'data-testid': 'colorChange'})
+                            if pct_el:
+                                stock_data["change_percent"] = self._parse_percent(pct_el.get_text(strip=True))
+                            else:
+                                pct_streamer = cell.find('fin-streamer', {'data-field': 'regularMarketChangePercent'})
+                                pct_span = pct_streamer.find('span') if pct_streamer else None
                                 if pct_span:
-                                    pct_text = pct_span.get_text(strip=True)
-                                    stock_data["change_percent"] = self._parse_percent(pct_text)
-                        
+                                    stock_data["change_percent"] = self._parse_percent(pct_span.get_text(strip=True))
+
                         # Extract volume
                         elif cell_id == 'dayvolume':
-                            volume_streamer = cell.find('fin-streamer', {'data-field': 'regularMarketVolume'})
-                            if volume_streamer:
-                                volume_text = volume_streamer.get_text(strip=True)
-                                stock_data["volume"] = self._parse_volume(volume_text)
+                            volume_el = cell.find('span', {'data-testid': 'change'}) \
+                                or cell.find('fin-streamer', {'data-field': 'regularMarketVolume'})
+                            if volume_el:
+                                stock_data["volume"] = self._parse_volume(volume_el.get_text(strip=True))
                         
                         # Extract average volume
                         elif cell_id == 'avgdailyvol3m':
@@ -419,10 +427,10 @@ class YahooWatchlistService:
                         
                         # Extract market cap
                         elif cell_id == 'intradaymarketcap':
-                            cap_streamer = cell.find('fin-streamer', {'data-field': 'marketCap'})
-                            if cap_streamer:
-                                cap_text = cap_streamer.get_text(strip=True)
-                                stock_data["market_cap"] = self._parse_market_cap(cap_text)
+                            cap_el = cell.find('span', {'data-testid': 'change'}) \
+                                or cell.find('fin-streamer', {'data-field': 'marketCap'})
+                            if cap_el:
+                                stock_data["market_cap"] = self._parse_market_cap(cap_el.get_text(strip=True))
                         
                         elif cell_id == 'peratio.lasttwelvemonths':
                             pe_text = cell.get_text(strip=True)
@@ -436,12 +444,14 @@ class YahooWatchlistService:
                         
                         # Extract 52-week change percent
                         elif cell_id == 'fiftytwowkpercentchange':
-                            week_change_streamer = cell.find('fin-streamer', {'data-field': 'fiftyTwoWeekChangePercent'})
-                            if week_change_streamer:
-                                week_span = week_change_streamer.find('span')
+                            week_change_el = cell.find('span', {'data-testid': 'colorChange'})
+                            if week_change_el:
+                                stock_data["week_change"] = self._parse_percent(week_change_el.get_text(strip=True))
+                            else:
+                                week_change_streamer = cell.find('fin-streamer', {'data-field': 'fiftyTwoWeekChangePercent'})
+                                week_span = week_change_streamer.find('span') if week_change_streamer else None
                                 if week_span:
-                                    week_text = week_span.get_text(strip=True)
-                                    stock_data["week_change"] = self._parse_percent(week_text)
+                                    stock_data["week_change"] = self._parse_percent(week_span.get_text(strip=True))
                         
                         # Extract 52-week range
                         elif cell_id == 'fiftyTwoWeekRange':

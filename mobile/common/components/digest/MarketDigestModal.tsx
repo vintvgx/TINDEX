@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Modal, View, TouchableOpacity, ActivityIndicator, Text, ScrollView, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TabView, type NavigationState } from 'react-native-tab-view';
 import { format, parseISO } from 'date-fns';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -36,6 +36,21 @@ interface Props {
  * and this only ever opens once a digest for `date` already exists.
  */
 export function MarketDigestModal({ date, visible, onClose }: Props) {
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
+      {/* react-native-safe-area-context can't see the outer SafeAreaProvider
+          from inside a core RN <Modal> (separate native view hierarchy — see
+          the library's own docs), so insets silently come back as 0 and the
+          progress bar / close button render under the notch. Nesting a
+          provider here re-measures insets for this Modal's own window. */}
+      <SafeAreaProvider>
+        <DigestModalContent date={date} visible={visible} onClose={onClose} />
+      </SafeAreaProvider>
+    </Modal>
+  );
+}
+
+function DigestModalContent({ date, visible, onClose }: Props) {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
   const layout = useWindowDimensions();
@@ -69,36 +84,34 @@ export function MarketDigestModal({ date, visible, onClose }: Props) {
   const navigationState: NavigationState<DigestRoute> = { index, routes: ROUTES };
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
-      <View style={{ flex: 1, backgroundColor: colors.background }}>
-        <ProgressHeader
-          count={ROUTES.length}
-          index={index}
-          onSelect={setIndex}
-          onClose={onClose}
-          insets={insets}
-          colors={colors}
-        />
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <ProgressHeader
+        count={ROUTES.length}
+        index={index}
+        onSelect={setIndex}
+        onClose={onClose}
+        insets={insets}
+        colors={colors}
+      />
 
-        {isLoading || !content ? (
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            {error
-              ? <Text style={{ color: colors.textTertiary, fontSize: 13 }}>Digest unavailable for this date.</Text>
-              : <ActivityIndicator size="large" color={colors.accent} />}
-          </View>
-        ) : (
-          <TabView
-            navigationState={navigationState}
-            onIndexChange={setIndex}
-            initialLayout={{ width: layout.width, height: 0 }}
-            renderScene={renderScene}
-            renderTabBar={() => null}
-            swipeEnabled
-            style={{ backgroundColor: colors.background }}
-          />
-        )}
-      </View>
-    </Modal>
+      {isLoading || !content ? (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          {error
+            ? <Text style={{ color: colors.textTertiary, fontSize: 13 }}>Digest unavailable for this date.</Text>
+            : <ActivityIndicator size="large" color={colors.accent} />}
+        </View>
+      ) : (
+        <TabView
+          navigationState={navigationState}
+          onIndexChange={setIndex}
+          initialLayout={{ width: layout.width, height: 0 }}
+          renderScene={renderScene}
+          renderTabBar={() => null}
+          swipeEnabled
+          style={{ backgroundColor: colors.background }}
+        />
+      )}
+    </View>
   );
 }
 
@@ -124,8 +137,15 @@ function ProgressHeader({ count, index, onSelect, onClose, insets, colors }: {
             </TouchableOpacity>
           ))}
         </View>
-        <TouchableOpacity onPress={onClose} hitSlop={10}>
-          <Ionicons name="close" size={22} color={colors.textSecondary} />
+        <TouchableOpacity
+          onPress={onClose}
+          hitSlop={10}
+          style={{
+            width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center',
+            backgroundColor: colors.surfaceSecondary,
+          }}
+        >
+          <Ionicons name="close" size={18} color={colors.textSecondary} />
         </TouchableOpacity>
       </View>
     </View>

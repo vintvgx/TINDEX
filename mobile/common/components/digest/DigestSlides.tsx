@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, Linking, Dimensions } from 'react-native';
+import { View, Text, TouchableOpacity, Linking, Dimensions, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { useThemeColors } from '@/lib/useColorScheme';
 import type {
@@ -11,6 +11,35 @@ type Colors = ReturnType<typeof useThemeColors>;
 
 const SCREEN_W = Dimensions.get('window').width;
 const SLIDE_PAD = 20;
+
+// Robinhood's signature gain/loss green & red — used for every price move in
+// this digest (independent of the app's own theme accent) per the "Robinhood
+// influenced" restyle.
+const RH_GREEN = '#00C805';
+const RH_RED = '#FF5000';
+
+/** Small source favicon via Google's public favicon endpoint — no backend
+ *  round-trip, degrades to nothing if the URL is missing/unparseable. */
+function faviconUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const { hostname } = new URL(url);
+    return `https://www.google.com/s2/favicons?sz=64&domain=${hostname}`;
+  } catch {
+    return null;
+  }
+}
+
+function Favicon({ url, size = 16 }: { url: string | null | undefined; size?: number }) {
+  const src = faviconUrl(url);
+  if (!src) return null;
+  return (
+    <Image
+      source={{ uri: src }}
+      style={{ width: size, height: size, borderRadius: size / 4 }}
+    />
+  );
+}
 
 // ── Shared atoms ─────────────────────────────────────────────────────────────
 
@@ -40,9 +69,11 @@ export function SourceTag({ source, colors }: { source: { label: string; url: st
       disabled={!source.url}
       onPress={() => source.url && Linking.openURL(source.url)}
       activeOpacity={0.7}
-      style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 14 }}
+      style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 14 }}
     >
-      <Ionicons name="link-outline" size={12} color={colors.textTertiary} />
+      {faviconUrl(source.url)
+        ? <Favicon url={source.url} size={13} />
+        : <Ionicons name="link-outline" size={12} color={colors.textTertiary} />}
       <Text style={{ color: colors.textTertiary, fontSize: 11 }}>{source.label}</Text>
     </TouchableOpacity>
   );
@@ -50,7 +81,7 @@ export function SourceTag({ source, colors }: { source: { label: string; url: st
 
 function pctColor(v: number | null | undefined, colors: Colors) {
   if (v == null) return colors.textSecondary;
-  return v >= 0 ? colors.success : colors.error;
+  return v >= 0 ? RH_GREEN : RH_RED;
 }
 
 function fmtPct(v: number | null | undefined) {
@@ -66,6 +97,21 @@ export function EmptyNote({ text, colors }: { text: string; colors: Colors }) {
   return <Text style={{ color: colors.textTertiary, fontSize: 13, fontStyle: 'italic' }}>{text}</Text>;
 }
 
+/** Robinhood-style tinted percent-change pill — used everywhere a move needs
+ *  to read at a glance instead of as plain colored text. */
+export function PctBadge({ v, size = 'md' }: { v: number | null | undefined; size?: 'sm' | 'md' }) {
+  const color = v == null ? '#8E8E93' : v >= 0 ? RH_GREEN : RH_RED;
+  const small = size === 'sm';
+  return (
+    <View style={{
+      backgroundColor: color + '1F', borderRadius: 999,
+      paddingHorizontal: small ? 8 : 10, paddingVertical: small ? 3 : 5,
+    }}>
+      <Text style={{ color, fontSize: small ? 11 : 13, fontWeight: '800' }}>{fmtPct(v)}</Text>
+    </View>
+  );
+}
+
 // ── 1. Market Setup ──────────────────────────────────────────────────────────
 
 function MacroStatTile({ stat, colors }: { stat: MarketDigestContent['market_setup']['stats'][number]; colors: Colors }) {
@@ -73,16 +119,16 @@ function MacroStatTile({ stat, colors }: { stat: MarketDigestContent['market_set
   const prefix = stat.kind === 'currency' ? '$' : '';
   return (
     <View style={{
-      width: '48%', backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: colors.border,
-      padding: 12, marginBottom: 10,
+      width: '48%', backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border,
+      padding: 14, marginBottom: 10,
     }}>
-      <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '600', marginBottom: 4 }}>{stat.label}</Text>
-      <Text style={{ color: colors.text, fontSize: 18, fontWeight: '800' }}>
+      <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '600', marginBottom: 6 }}>{stat.label}</Text>
+      <Text style={{ color: colors.text, fontSize: 19, fontWeight: '800', letterSpacing: -0.3 }}>
         {prefix}{stat.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}{unit}
       </Text>
-      <Text style={{ color: pctColor(stat.change_percent, colors), fontSize: 12, fontWeight: '700', marginTop: 2 }}>
-        {fmtPct(stat.change_percent)}
-      </Text>
+      <View style={{ marginTop: 6, alignSelf: 'flex-start' }}>
+        <PctBadge v={stat.change_percent} size="sm" />
+      </View>
     </View>
   );
 }
@@ -120,14 +166,20 @@ export function HeadlinesSlide({ data, dateLabel, colors }: { data: MarketDigest
           onPress={() => h.url && Linking.openURL(h.url)}
           activeOpacity={0.7}
           style={{
-            backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: colors.border,
-            padding: 14, marginBottom: 10,
+            backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border,
+            padding: 16, marginBottom: 12,
           }}
         >
-          <Text style={{ color: colors.text, fontSize: 14, lineHeight: 20 }}>{h.text}</Text>
-          <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '600', marginTop: 8 }}>
-            {h.source?.toUpperCase()}
-          </Text>
+          <Text style={{ color: colors.text, fontSize: 15, lineHeight: 21, fontWeight: '500' }}>{h.text}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 }}>
+            <Favicon url={h.url} size={14} />
+            <Text style={{ color: colors.textTertiary, fontSize: 11, fontWeight: '700', letterSpacing: 0.4 }}>
+              {h.source?.toUpperCase()}
+            </Text>
+            {!!h.url && (
+              <Ionicons name="chevron-forward" size={12} color={colors.textTertiary} style={{ marginLeft: 'auto' }} />
+            )}
+          </View>
         </TouchableOpacity>
       ))}
     </View>
@@ -139,18 +191,16 @@ export function HeadlinesSlide({ data, dateLabel, colors }: { data: MarketDigest
 function MyTickerRow({ t, colors }: { t: DigestWatchlistTicker; colors: Colors }) {
   return (
     <View style={{
-      backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: colors.border,
-      padding: 14, marginBottom: 10,
+      backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border,
+      padding: 16, marginBottom: 10,
     }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Text style={{ color: colors.text, fontSize: 16, fontWeight: '800' }}>{t.ticker}</Text>
-        <Text style={{ color: pctColor(t.change_percent, colors), fontSize: 15, fontWeight: '700' }}>
-          {fmtPct(t.change_percent)}
-        </Text>
+        <Text style={{ color: colors.text, fontSize: 17, fontWeight: '800', letterSpacing: -0.2 }}>{t.ticker}</Text>
+        <PctBadge v={t.change_percent} />
       </View>
-      <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 6 }}>{t.catalyst}</Text>
+      <Text style={{ color: colors.textSecondary, fontSize: 13, marginTop: 8, lineHeight: 18 }}>{t.catalyst}</Text>
       {t.level && (
-        <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 4 }}>Level: {t.level}</Text>
+        <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 6 }}>Level: {t.level}</Text>
       )}
     </View>
   );
@@ -160,20 +210,18 @@ function TrendingRow({ t, colors }: { t: DigestTrendingTicker; colors: Colors })
   return (
     <View style={{
       flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-      backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: colors.border,
-      padding: 14, marginBottom: 10,
+      backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border,
+      padding: 16, marginBottom: 10,
     }}>
       <View style={{ flex: 1, marginRight: 8 }}>
-        <Text style={{ color: colors.text, fontSize: 15, fontWeight: '800' }}>{t.ticker}</Text>
-        <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 2 }} numberOfLines={1}>{t.company}</Text>
+        <Text style={{ color: colors.text, fontSize: 16, fontWeight: '800', letterSpacing: -0.2 }}>{t.ticker}</Text>
+        <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 3 }} numberOfLines={1}>{t.company}</Text>
       </View>
-      <View style={{ alignItems: 'flex-end' }}>
-        <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>
+      <View style={{ alignItems: 'flex-end', gap: 6 }}>
+        <Text style={{ color: colors.text, fontSize: 16, fontWeight: '800' }}>
           {t.price != null ? `$${t.price.toFixed(2)}` : '—'}
         </Text>
-        <Text style={{ color: pctColor(t.change_percent, colors), fontSize: 12, fontWeight: '700' }}>
-          {fmtPct(t.change_percent)}
-        </Text>
+        <PctBadge v={t.change_percent} size="sm" />
       </View>
     </View>
   );
@@ -222,14 +270,12 @@ export function WatchlistSlide({ data, dateLabel, colors }: { data: MarketDigest
 
 function MoverRow({ m, colors }: { m: DigestMover; colors: Colors }) {
   return (
-    <View style={{ marginBottom: 12 }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+    <View style={{ marginBottom: 14 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
         <Text style={{ color: colors.text, fontSize: 14, fontWeight: '800' }}>{m.ticker}</Text>
-        <Text style={{ color: pctColor(m.change_percent, colors), fontSize: 13, fontWeight: '700' }}>
-          {fmtPct(m.change_percent)}
-        </Text>
+        <PctBadge v={m.change_percent} size="sm" />
       </View>
-      {!!m.reason && <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 3 }}>{m.reason}</Text>}
+      {!!m.reason && <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 5, lineHeight: 16 }}>{m.reason}</Text>}
     </View>
   );
 }
@@ -239,21 +285,27 @@ export function MoversSlide({ data, dateLabel, colors }: { data: MarketDigestCon
     <View style={{ paddingHorizontal: SLIDE_PAD }}>
       <SlideLabel label="Pre-Market Movers" right={dateLabel} colors={colors} />
       <SlideTitle colors={colors}>Biggest moves across the whole market</SlideTitle>
-      <View style={{ flexDirection: 'row', gap: 14 }}>
+      <View style={{ flexDirection: 'row', gap: 12 }}>
         <View style={{
-          flex: 1, backgroundColor: colors.card, borderRadius: 14, borderWidth: 1,
-          borderColor: colors.success + '33', padding: 14,
+          flex: 1, backgroundColor: colors.card, borderRadius: 16, borderWidth: 1,
+          borderColor: RH_GREEN + '33', padding: 14,
         }}>
-          <Text style={{ color: colors.success, fontSize: 12, fontWeight: '700', marginBottom: 10 }}>GAINERS</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 12 }}>
+            <Ionicons name="trending-up" size={13} color={RH_GREEN} />
+            <Text style={{ color: RH_GREEN, fontSize: 11, fontWeight: '800', letterSpacing: 0.6 }}>GAINERS</Text>
+          </View>
           {data.movers.gainers.length === 0
             ? <EmptyNote text="—" colors={colors} />
             : data.movers.gainers.map(m => <MoverRow key={m.ticker} m={m} colors={colors} />)}
         </View>
         <View style={{
-          flex: 1, backgroundColor: colors.card, borderRadius: 14, borderWidth: 1,
-          borderColor: colors.error + '33', padding: 14,
+          flex: 1, backgroundColor: colors.card, borderRadius: 16, borderWidth: 1,
+          borderColor: RH_RED + '33', padding: 14,
         }}>
-          <Text style={{ color: colors.error, fontSize: 12, fontWeight: '700', marginBottom: 10 }}>LOSERS</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 12 }}>
+            <Ionicons name="trending-down" size={13} color={RH_RED} />
+            <Text style={{ color: RH_RED, fontSize: 11, fontWeight: '800', letterSpacing: 0.6 }}>LOSERS</Text>
+          </View>
           {data.movers.losers.length === 0
             ? <EmptyNote text="—" colors={colors} />
             : data.movers.losers.map(m => <MoverRow key={m.ticker} m={m} colors={colors} />)}
