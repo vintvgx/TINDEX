@@ -261,7 +261,11 @@ interface LivePositionsBodyProps {
    *  hook instance/WS-tick state as what actually renders, instead of a
    *  second, independent copy that would never see the same live ticks. */
   data: UseLivePositionsDataResult;
-  mode: 'live' | 'paper';
+  /** Omit when `data` mixes both live and paper positions together (e.g. a
+   *  single ticker's full position list) — only used for the default empty
+   *  state text below, and a mixed list has no one mode to name there
+   *  anyway. Always pass `emptyTitle` explicitly in that case. */
+  mode?: 'live' | 'paper';
   colors: any;
   emptyTitle?: string;
   emptySubtitle?: string;
@@ -302,7 +306,7 @@ export function LivePositionsBody({
         <View style={styles.emptyState}>
           <Ionicons name="pulse-outline" size={40} color={colors.tabBarInactive} style={{ opacity: 0.4 }} />
           <Text style={[styles.emptyTitle, { color: colors.tabBarInactive }]}>
-            {emptyTitle ?? `No ${mode === 'live' ? 'Live' : 'Paper'} Positions`}
+            {emptyTitle ?? `No ${mode === 'paper' ? 'Paper' : mode === 'live' ? 'Live' : 'Open'} Positions`}
           </Text>
           {!!emptySubtitle && (
             <Text style={[styles.emptySubtitle, { color: colors.tabBarInactive }]}>{emptySubtitle}</Text>

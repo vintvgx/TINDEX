@@ -24,7 +24,10 @@ import { useChartLiveStream } from '@/hooks/queries/ticker/useChartLiveStream';
 import { useChartPriceSource } from '@/hooks/useChartPriceSource';
 import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
-import type { AccountMode } from '@/common/components/strategy/LiveModeToggle';
+import type { UseLivePositionsDataResult } from '@/common/components/strategy/LivePositionsSection';
+import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import { useHiddenPositions } from '@/hooks/useHiddenPositions';
+import { positionHideKey } from '@/lib/positionHideKey';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useToast } from '@/common/components/ui/Toast';
@@ -208,15 +211,56 @@ export default function ChartsScreen() {
   const displayPositive = (liveChange ?? 0) >= 0;
   const priceColor = displayPositive ? colors.success : colors.error;
 
-  // ── Positions panel — collapsed by default, expands on tap ──────────────
-  const [positionsMode, setPositionsMode] = useState<AccountMode>('live');
+  // ── Positions panel — collapsed by default, expands on tap. No more
+  // Paper/Live toggle: both are always shown together for this ticker, live
+  // trades first (they're the more urgent ones), followed by paper — each
+  // already sorted by trade horizon within its own group. Built directly
+  // from allLive/allPaper (already fetched, ticker-unfiltered, at the top
+  // of this component) rather than a second pair of useLivePositionsData
+  // calls, so this is just a re-filter of already-cached data, not a new
+  // fetch. ──────────────────────────────────────────────────────────────
   const [expanded, setExpanded] = useState(false);
-  const positionsData = useLivePositionsData(positionsMode, activeTicker);
   const positionsCounts = useMemo(() => ({
     live: allLive.filteredPositions.filter(p => p.ticker.toUpperCase() === activeTicker).length,
     paper: allPaper.filteredPositions.filter(p => p.ticker.toUpperCase() === activeTicker).length,
   }), [allLive.filteredPositions, allPaper.filteredPositions, activeTicker]);
   const totalPositionsForTicker = positionsCounts.live + positionsCounts.paper;
+
+  const { isHidden } = useHiddenPositions();
+  const [showHidden, setShowHidden] = useState(false);
+  const [liveByStrategy, setLiveByStrategy] = useState<Record<string, LivePriceData>>({});
+  const handlePositionLiveUpdate = useCallback((strategyId: string, data: LivePriceData | null) => {
+    setLiveByStrategy(prev => {
+      if (!data) {
+        if (!(strategyId in prev)) return prev;
+        const next = { ...prev };
+        delete next[strategyId];
+        return next;
+      }
+      return { ...prev, [strategyId]: data };
+    });
+  }, []);
+
+  const positionsData: UseLivePositionsDataResult = useMemo(() => {
+    const forTicker = (list: typeof allLive.filteredPositions) =>
+      list.filter(p => p.ticker.toUpperCase() === activeTicker);
+    const combined = [...forTicker(allLive.filteredPositions), ...forTicker(allPaper.filteredPositions)];
+    const hidden = combined.filter(p => isHidden(positionHideKey(p)));
+    const visible = combined.filter(p => !isHidden(positionHideKey(p)));
+    return {
+      isLoading: allLive.isLoading || allPaper.isLoading,
+      filteredPositions: combined,
+      displayedPositions: showHidden ? hidden : visible,
+      hiddenCount: hidden.length,
+      showHidden,
+      setShowHidden,
+      liveByStrategy,
+      handleLiveUpdate: handlePositionLiveUpdate,
+    };
+  }, [
+    allLive.filteredPositions, allPaper.filteredPositions, allLive.isLoading, allPaper.isLoading,
+    activeTicker, isHidden, showHidden, liveByStrategy, handlePositionLiveUpdate,
+  ]);
 
   const toggleExpanded = useCallback(() => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -477,15 +521,11 @@ export default function ChartsScreen() {
 
       {expanded && (
         <View style={{ paddingHorizontal: 16, paddingBottom: 12, maxHeight: 320 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 6 }}>
-            <CompactModeToggle mode={positionsMode} onChange={setPositionsMode} colors={colors} />
-          </View>
           <ScrollView showsVerticalScrollIndicator={false}>
             <LivePositionsBody
               data={positionsData}
-              mode={positionsMode}
               colors={colors}
-              emptyTitle={`No Open ${positionsMode === 'live' ? 'Live' : 'Paper'} Positions`}
+              emptyTitle="No Open Positions"
               emptySubtitle={`Open ${activeTicker} positions will appear here.`}
               hideChartButton
             />
@@ -582,44 +622,6 @@ function TickerStrip({
           );
         })}
       </ScrollView>
-    </View>
-  );
-}
-
-/**
- * Live/Paper switch, sized for this screen specifically — the shared
- * LiveModeToggle (position.tsx/strategy.tsx/tradelog.tsx) is a full-height
- * bordered row with a dot + count badge per segment, which read as too much
- * chrome squeezed above the position list here. This drops the border, the
- * dot, and the count badge (the total's already shown in the collapsed
- * position bar above), keeping just two small text segments in a flat
- * tinted track — Robinhood-influenced: minimal, no border, color does the
- * talking.
- */
-function CompactModeToggle({ mode, onChange, colors }: { mode: AccountMode; onChange: (m: AccountMode) => void; colors: any }) {
-  return (
-    <View style={{ flexDirection: 'row', backgroundColor: colors.surfaceSecondary, borderRadius: 8, padding: 2 }}>
-      {(['live', 'paper'] as const).map(m => {
-        const active = mode === m;
-        const tint = m === 'live' ? '#30D158' : '#FF9F0A';
-        return (
-          <TouchableOpacity
-            key={m}
-            onPress={() => onChange(m)}
-            activeOpacity={0.75}
-            style={{
-              paddingHorizontal: 10,
-              paddingVertical: 4,
-              borderRadius: 6,
-              backgroundColor: active ? tint + '1F' : 'transparent',
-            }}
-          >
-            <Text style={{ fontSize: 11.5, fontWeight: '700', color: active ? tint : colors.textTertiary }}>
-              {m === 'live' ? 'Live' : 'Paper'}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
     </View>
   );
 }

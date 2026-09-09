@@ -6,6 +6,7 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketDigest } from '@/hooks/queries/digest/useMarketDigest';
 import { useGenerateMarketDigest } from '@/hooks/mutations/digest/useGenerateMarketDigest';
 import { useSeenMarketDigests } from '@/hooks/useSeenMarketDigests';
+import { isPastMarketDigestTime } from '@/lib/marketHours';
 import { useToast } from '@/common/components/ui/Toast';
 import { DigestGeneratingOverlay } from './DigestGeneratingOverlay';
 
@@ -32,6 +33,12 @@ export function MarketDigestCard({ onOpen }: { onOpen: (date: string) => void })
   const ready = !!data?.data;
 
   if (ready && isSeen(today)) return null;
+  // Cron fires ~8:30 AM ET — before that, there's nothing meaningful for
+  // the digest to report yet, so don't offer the "not generated yet, tap
+  // to build" fallback (it would just build a digest before the market
+  // even has pre-market movers worth reporting on). Once a digest actually
+  // exists (ready), always show it regardless of clock time.
+  if (!ready && !isPastMarketDigestTime()) return null;
 
   const handlePress = () => {
     if (ready) { onOpen(today); return; }
