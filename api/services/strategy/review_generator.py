@@ -113,7 +113,7 @@ TP2                 Partial close at second target.
 CASCADE_EXIT        N consecutive 1-min bars of underlying against position
                     triggered a partial runner close. Profile-specific N.
 RUNNER_TRAIL_STOP   Trailing stop fired on final runner (trail-mode profiles).
-EOD_CLOSE           Orderly close before 3:30 PM ET hard deadline.
+EOD_CLOSE           Orderly close before 3:58 PM ET hard deadline.
 EOD_HARD_CLOSE      Position still open at hard deadline — force-closed.
 
 ─── Output Format ───────────────────────────────────────────────────────────
