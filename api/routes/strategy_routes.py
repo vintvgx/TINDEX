@@ -881,7 +881,17 @@ def update_strategy_exits(strategy_id: str):
     # runner_mode/cascade_enabled fields below were already fixed for.
     exit_overrides_patch: dict = {}
     if "sl_grace_minutes" in changed:
-        exit_overrides_patch.update(grace_fields_for_minutes(changed["sl_grace_minutes"]))
+        grace_fields = grace_fields_for_minutes(changed["sl_grace_minutes"])
+        exit_overrides_patch.update(grace_fields)
+        # grace_fields_for_minutes(None) (switching to Hard Stop) only sets
+        # sl_grace_enabled=False — it has no sl_outer_floor_pct key at all,
+        # so apply_overrides() above already cleared the in-memory floor to
+        # None via that same .get() miss. Mirror that here explicitly rather
+        # than leaving a stale (pre-switch) sl_outer_floor_pct sitting in the
+        # persisted JSON — recover_position() would otherwise resurrect a
+        # floor after a restart that the live in-memory trade doesn't have.
+        if "sl_outer_floor_pct" not in grace_fields:
+            exit_overrides_patch["sl_outer_floor_pct"] = None
     if "tp_enabled" in changed:
         exit_overrides_patch["disable_tp1_exit"] = not changed["tp_enabled"]
     if "sl_floor_enabled" in changed:
