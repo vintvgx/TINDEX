@@ -191,9 +191,9 @@ PROFILES = {
     # disable_tp1_exit=True makes ExitManager.evaluate() skip the TP1 branch
     # entirely (see exit_manager.py) rather than relying on an unreachable price,
     # and disable_eod_close=True skips BOTH the ExitManager.evaluate() EOD_CLOSE
-    # branch AND the separate scheduler._eod_reset() 15:30 ET hard-close cron (see
+    # branch AND the separate scheduler._eod_reset() 15:58 ET hard-close cron (see
     # scheduler.py) — the two are independent mechanisms and both must respect this
-    # flag for "hold until I sell" to actually mean never, not just "not before 3:30".
+    # flag for "hold until I sell" to actually mean never, not just "not before 15:58".
     # tp1_mult/tp2_mult are now a normal, relative-looking target (not the old
     # 999x-entry sentinel) purely for display — disable_tp1_exit (and use_tp2
     # =False for TP2) guarantees neither can ever actually fire regardless of

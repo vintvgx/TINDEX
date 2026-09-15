@@ -93,7 +93,7 @@ def reschedule_jobs(engine, strategy_id: str = None):
 
     sched.add_job(
         lambda: _eod_reset(engine),
-        CronTrigger(day_of_week=days_cron, hour=15, minute=30, timezone=ET),
+        CronTrigger(day_of_week=days_cron, hour=15, minute=58, timezone=ET),
         id=f"job_{sid}_eod_reset", replace_existing=True,
     )
 
@@ -103,7 +103,13 @@ def _eod_reset(engine):
     Hard-close any open position at end of day, log the forced exit, send
     a push notification, then reset session state for the next trading day.
 
-    NOTE: Fires at 15:30 ET on trade days (after all per-ticker EOD closes).
+    NOTE: Fires at 15:58 ET on trade days — same time as the tick-based
+    EOD_CLOSE in ExitManager.evaluate() (orb_engine.EOD_CLOSE_TIMES). This is
+    a redundant safety net, not a sequential step: it exists because the
+    tick-based close only runs when a price tick arrives, so a quiet/dropped
+    option stream near the close could otherwise skip it entirely. Previously
+    this fired at 15:30, 28 minutes early, force-closing manual/held-open
+    0DTE positions well before the intended close — moved to 15:58 to match.
     """
     if engine.trade_taken and engine.contract_symbol:
         # NO_STOP_LOSS positions opt out of every automatic exit, including this
@@ -119,7 +125,7 @@ def _eod_reset(engine):
         # This job only exists to flatten a 0DTE contract before it expires
         # worthless at market close — it must NOT force-close a swing/LEAPS
         # position that has weeks/months of runway left just because this
-        # cron fires every trading day at 15:30 ET. Saved-strategy (auto)
+        # cron fires every trading day at 15:58 ET. Saved-strategy (auto)
         # engines only ever enter same-day 0DTE contracts, so this check is a
         # no-op for them; it only changes behavior for immediate-trade
         # engines, which schedule_eod_close's docstring already assumed were
@@ -176,7 +182,7 @@ def _eod_reset(engine):
 
 def schedule_eod_close(engine):
     """
-    Schedule ONLY a 15:30 ET hard-close (mon–fri) for an engine that has no ORB
+    Schedule ONLY a 15:58 ET hard-close (mon–fri) for an engine that has no ORB
     trade-day schedule — e.g. an immediate-trade engine. Ensures any open 0DTE
     position is flattened at end of day even though the engine never auto-trades.
     """
@@ -190,7 +196,7 @@ def schedule_eod_close(engine):
     job_id = f"job_{sid}_eod_reset"
     sched.add_job(
         lambda: _eod_reset(engine),
-        CronTrigger(day_of_week="mon-fri", hour=15, minute=30, timezone=ET),
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=58, timezone=ET),
         id=job_id, replace_existing=True,
     )
     logger.info("[Scheduler] EOD-only hard-close scheduled for %s (%s)", sid, engine.ticker)
@@ -217,7 +223,7 @@ def init_scheduler(engine):
         orb_fire_min    = orb_fire_min % 60
         orb_calc_dt     = now_et.replace(hour=orb_fire_hour, minute=orb_fire_min,
                                          second=0, microsecond=0)
-        eod_dt          = now_et.replace(hour=15, minute=30, second=0, microsecond=0)
+        eod_dt          = now_et.replace(hour=15, minute=58, second=0, microsecond=0)
         if orb_calc_dt <= now_et <= eod_dt:
             logger.info("[Scheduler] Late start — triggering calculate_orb now for %s", engine.ticker)
             threading.Thread(target=engine.calculate_orb, daemon=True).start()

@@ -231,7 +231,7 @@ class ExitManager:
         # NO_STOP_LOSS: fully manual, hold until sold — even past EOD. The
         # separate scheduler._eod_reset() cron backstop also checks this flag
         # (see scheduler.py); both must agree or "hold until I sell" would
-        # still get silently force-closed at 15:30 ET.
+        # still get silently force-closed at 15:58 ET.
         self._disable_eod_close = profile.get("disable_eod_close", False)
 
         # NO_STOP_LOSS: skip the TP1 auto-close branch entirely (see evaluate()),
