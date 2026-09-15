@@ -31,6 +31,11 @@ interface UpdateStrategyExitsPayload {
    *  unless one's already set — see ExitManager.apply_overrides. */
   sl_enabled?: boolean;
   tp_enabled?: boolean;
+  /** On/off for the absolute worst-case floor under the SL grace timer —
+   *  off lets a position (e.g. a swing) hold through a drop past the floor
+   *  price instead of being force-closed there. No-op if this trade's
+   *  profile never defined a floor. See exit_manager.py's apply_overrides. */
+  sl_floor_enabled?: boolean;
 }
 
 export function useUpdateStrategyExits() {

@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
 import { useImmediateTradeByTicker, StreamUnavailableError } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
+import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsContractDetailModal';
 import { BlindEntryModal } from '@/common/components/strategy/BlindEntryModal';
 import type { ImmediateTradeByTickerRequest } from '@/common/types/strategy';
@@ -146,7 +147,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [selected, setSelected]         = useState<OptionsContract | null>(null);
   const [qty, setQty]                   = useState(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], 0));
-  const [stopType, setStopType]         = useState<StopType>('HARD');
+  const [stopType, setStopType]         = useState<StopType>(5);
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
   const [autoGraceMinutes, setAutoGraceMinutes] = useState<5 | 10 | null>(null);
@@ -252,6 +253,9 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
     isLoading || rangeLoading || (!!ticker && !targetExpiration);
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
+  // Overtrading guard — see TradeContractSheet's identical comment.
+  const { data: openPositions } = useImmediatePositions();
+  const openLiveCount = (openPositions ?? []).filter(p => p.paper_mode === false).length;
 
   // Blind Entry — set when the backend couldn't verify a live stream tick
   // within 8s (status: 'stream_unavailable'). Holds the exact request body
@@ -370,9 +374,12 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
       ? `\n\n⚠️ No Stop Loss${!tpEnabled ? ' or Take Profit' : ''} — this contract will NOT auto-close on that leg${isNoStopLoss ? ', including end of day. It expires today (0DTE) if you don\'t sell it' : ''}.`
       : isManual ? `\nStop Loss: −${manualSlPct}%` : '';
     if (!paperMode) {
+      const concurrentWarning = openLiveCount > 0
+        ? `\n\n⚠️ You already have ${openLiveCount} other live position${openLiveCount > 1 ? 's' : ''} open.`
+        : '';
       Alert.alert(
         'Submit LIVE Order',
-        `This will buy ${qty} × ${selected.symbol} with REAL money immediately.\n\nProfile: ${profile.emoji} ${profile.name}${profileNote}`,
+        `This will buy ${qty} × ${selected.symbol} with REAL money immediately.\n\nProfile: ${profile.emoji} ${profile.name}${profileNote}${concurrentWarning}`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Submit', style: 'destructive', onPress: doSubmit },

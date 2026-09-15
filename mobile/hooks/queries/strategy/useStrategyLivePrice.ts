@@ -50,6 +50,15 @@ export interface LivePriceData {
    *  position — see ExitManager.to_dict(). Defaults true when absent. */
   sl_enabled?: boolean;
   tp_enabled?: boolean;
+  /** Absolute worst-case floor price under the SL grace timer — null if
+   *  this trade's profile never defined one. Bypasses the grace window
+   *  entirely and force-sells if hit. See exit_manager.py's
+   *  _sl_outer_floor / HARD_STOP_FLOOR. */
+  sl_outer_floor?: number | null;
+  /** Per-trade on/off for the floor above — defaults true whenever
+   *  sl_outer_floor is set; a trader can turn it off (e.g. for a swing
+   *  meant to be held through a drop past it) via the Advanced sheet. */
+  sl_floor_enabled?: boolean;
   /** Current runner/cascade CONFIGURATION for this open trade (not just the
    *  profile default) — see exit_manager.py's to_dict(). Lets EditExitsModal
    *  pre-select the toggle to what's actually in effect right now. */

@@ -219,6 +219,14 @@ class ExitManager:
         self._sl_outer_floor = (
             entry_premium * (1 - outer_floor_pct) if outer_floor_pct is not None else None
         )
+        # Per-trade on/off for the floor above — defaults on whenever the
+        # profile defines one, but a trader can turn it off mid-trade (e.g. a
+        # swing they want held through a drop this deep no matter what) via
+        # PATCH /configs/<id>/exits' sl_floor_enabled. Persisted into this
+        # trade's exit_overrides row on change (see apply_overrides) so a
+        # restart can't silently re-arm a floor the trader deliberately
+        # disabled.
+        self._sl_floor_enabled = profile.get("sl_floor_enabled", True)
 
         # NO_STOP_LOSS: fully manual, hold until sold — even past EOD. The
         # separate scheduler._eod_reset() cron backstop also checks this flag
@@ -255,7 +263,8 @@ class ExitManager:
         # window entirely. A breach this deep is a real breakdown, not noise;
         # this exists so the grace window below can never turn into an
         # unbounded hold while "waiting for the move."
-        if self._sl_outer_floor is not None and current_option_price <= self._sl_outer_floor:
+        if (self._sl_floor_enabled and self._sl_outer_floor is not None
+                and current_option_price <= self._sl_outer_floor):
             return self._action("CLOSE_ALL", self.qty_remaining, "HARD_STOP_FLOOR",
                                 current_option_price)
 
@@ -563,7 +572,8 @@ class ExitManager:
                         runner_mode: str | None = None,
                         cascade_enabled: bool | None = None,
                         sl_enabled: bool | None = None,
-                        tp_enabled: bool | None = None) -> dict:
+                        tp_enabled: bool | None = None,
+                        sl_floor_enabled: bool | None = None) -> dict:
         """
         Validate and apply user-supplied SL/TP1/TP2 price and/or qty overrides
         to this (already open) position. Raises ValueError with a user-facing
@@ -607,6 +617,13 @@ class ExitManager:
         provided in this SAME call (hard_stop/tp1 above) unless one already
         exists — turning "on" a stop that's still 0 would silently stay
         unreachable despite claiming to be active.
+
+        sl_floor_enabled toggles the absolute worst-case floor (see
+        __init__'s _sl_outer_floor) on/off for this trade independently of
+        the grace-timer duration itself — off lets a position (typically a
+        swing) hold through a drop past the floor price instead of being
+        force-closed there. No-op if this trade's profile never defined a
+        floor in the first place (_sl_outer_floor is None either way).
 
         Shared by the mid-trade PATCH /configs/<id>/exits route and the
         confirm-entry approve path (edited fields from the confirmation modal,
@@ -697,6 +714,9 @@ class ExitManager:
                     raise ValueError("Set a TP1 price to re-enable Take Profit")
                 self._disable_tp1_exit = False
             changed["tp_enabled"] = tp_enabled
+        if sl_floor_enabled is not None:
+            self._sl_floor_enabled = sl_floor_enabled
+            changed["sl_floor_enabled"] = sl_floor_enabled
         return changed
 
     def to_dict(self) -> dict:
@@ -749,6 +769,12 @@ class ExitManager:
             # client (e.g. EditExitsModal) know which tab to pre-select.
             "sl_grace_enabled":      self._sl_grace_enabled,
             "sl_grace_minutes":      (self._sl_grace_seconds // 60) if self._sl_grace_enabled else None,
+            # Absolute worst-case floor price (None if this trade's profile
+            # never defined one) and whether it's currently armed — see
+            # __init__/apply_overrides. Lets the client show "floor $X.XX"
+            # on the SL-grace countdown and drive the Advanced on/off toggle.
+            "sl_outer_floor":        round(self._sl_outer_floor, 4) if self._sl_outer_floor is not None else None,
+            "sl_floor_enabled":      self._sl_floor_enabled,
             # "Advanced" per-level qty overrides — null means "profile default".
             "sl_qty":                self._sl_qty_override,
             "tp1_qty":               self._tp1_qty_override,

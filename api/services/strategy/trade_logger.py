@@ -426,7 +426,8 @@ class TradeLogger:
                             tp1_price: Optional[float] = None,
                             tp2_price: Optional[float] = None,
                             runner_mode: Optional[str] = None,
-                            cascade_enabled: Optional[bool] = None) -> bool:
+                            cascade_enabled: Optional[bool] = None,
+                            exit_overrides_patch: Optional[dict] = None) -> bool:
         """
         Persist a mid-trade exit-level edit (PATCH /configs/<id>/exits →
         ExitManager.apply_overrides()) to the open orb_trades row, so
@@ -442,6 +443,17 @@ class TradeLogger:
         2026-07-14-position-lost-on-restart.md for the original version of
         this same class of bug (that one was about state disappearing
         entirely; this is state silently reverting to a stale value).
+
+        exit_overrides_patch (2026-09-15) closes the SAME gap for
+        sl_grace_minutes/tp_enabled/sl_floor_enabled edits, which have no
+        dedicated column — recover_position() rebuilds this trade's
+        ExitManager from `exit_overrides` (a JSON snapshot of the profile
+        used at entry, read straight back as ExitManager's __init__ profile
+        dict), so those three fields only survive a restart if the CURRENT
+        value gets merged into that same JSON, not just held in-memory. A
+        plain column `.update()` would REPLACE the whole JSON value, wiping
+        out the sizing fields entry stored there — so this reads the
+        existing exit_overrides first and merges the patch into it.
 
         Sparse by design — only the fields actually passed get written, same
         convention as apply_overrides()'s own kwargs. Best-effort: a failed
@@ -460,6 +472,20 @@ class TradeLogger:
             update["runner_mode"] = runner_mode
         if cascade_enabled is not None:
             update["cascade_enabled"] = cascade_enabled
+        if exit_overrides_patch:
+            try:
+                row = (
+                    self.client.table("orb_trades").select("exit_overrides")
+                    .eq("id", trade_id).limit(1).execute()
+                )
+                current = (row.data[0].get("exit_overrides") or {}) if row.data else {}
+                update["exit_overrides"] = {**current, **exit_overrides_patch}
+            except Exception as e:
+                logger.error(
+                    "[TradeLogger] update_exit_levels: failed to read exit_overrides "
+                    "for merge (trade_id=%s): %s — skipping that part of the persist",
+                    trade_id, e,
+                )
         if not update:
             return True  # nothing to persist — not an error
 

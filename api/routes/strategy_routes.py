@@ -829,14 +829,16 @@ def update_strategy_exits(strategy_id: str):
     """
     Update the live ExitManager's stop-loss and/or TP levels mid-trade.
     Body: { hard_stop?, tp1?, tp2?, sl_qty?, tp1_qty?, tp2_qty?, sl_grace_minutes?,
-            runner_mode?, cascade_enabled?, sl_enabled?, tp_enabled? }
+            runner_mode?, cascade_enabled?, sl_enabled?, tp_enabled?, sl_floor_enabled? }
     — all optional, only provided fields are changed. sl_qty/tp1_qty/tp2_qty
     are per-level contract counts; sl_grace_minutes is the stop-type choice
     (null = Hard Stop, 5/10/15 = SL timer); runner_mode is "trail"/"be_hold"/
     "none"; cascade_enabled toggles cascade on/off for the rest of this trade;
     sl_enabled/tp_enabled let a runner run its course (or hold into close)
     mid-trade — re-enabling either requires a real price in this same call
-    unless one's already set (see ExitManager.apply_overrides).
+    unless one's already set (see ExitManager.apply_overrides). sl_floor_enabled
+    turns the absolute worst-case floor on/off for this trade (e.g. off for a
+    swing meant to be held through a drop past it).
     Returns the updated exit state so the client can confirm the new levels.
     """
     engine = _resolve_any_engine(strategy_id)
@@ -858,6 +860,7 @@ def update_strategy_exits(strategy_id: str):
         "cascade_enabled": data["cascade_enabled"] if "cascade_enabled" in data else None,
         "sl_enabled": data["sl_enabled"] if "sl_enabled" in data else None,
         "tp_enabled": data["tp_enabled"] if "tp_enabled" in data else None,
+        "sl_floor_enabled": data["sl_floor_enabled"] if "sl_floor_enabled" in data else None,
     }
     if "sl_grace_minutes" in data:
         raw = data["sl_grace_minutes"]
@@ -869,6 +872,20 @@ def update_strategy_exits(strategy_id: str):
 
     if not changed:
         return jsonify({"status": "noop", "message": "No fields provided"}), 400
+
+    # exit_overrides is the JSON snapshot recover_position() rebuilds this
+    # trade's ExitManager profile from after a restart (see log_entry) — a
+    # grace-timer/tp-enable/floor-toggle edit that only lives in-memory here
+    # would silently revert to whatever was set AT ENTRY on the next Railway
+    # redeploy, the exact 2026-08-04-class bug the hard_stop/tp1/tp2/
+    # runner_mode/cascade_enabled fields below were already fixed for.
+    exit_overrides_patch: dict = {}
+    if "sl_grace_minutes" in changed:
+        exit_overrides_patch.update(grace_fields_for_minutes(changed["sl_grace_minutes"]))
+    if "tp_enabled" in changed:
+        exit_overrides_patch["disable_tp1_exit"] = not changed["tp_enabled"]
+    if "sl_floor_enabled" in changed:
+        exit_overrides_patch["sl_floor_enabled"] = changed["sl_floor_enabled"]
 
     # Persist to the open orb_trades row too — apply_overrides() above only
     # mutated the in-memory ExitManager, which a Railway restart wipes.
@@ -887,6 +904,7 @@ def update_strategy_exits(strategy_id: str):
                 tp2_price=changed.get("tp2"),
                 runner_mode=changed.get("runner_mode"),
                 cascade_enabled=changed.get("cascade_enabled"),
+                exit_overrides_patch=exit_overrides_patch or None,
             )
             if not persisted:
                 logger.error(
@@ -2238,6 +2256,8 @@ def _engine_position_response(engine: ORBEngine):
             # the card/Edit modal know which to show as active.
             "sl_grace_enabled":    em_state.get("sl_grace_enabled", False),
             "sl_grace_minutes":    em_state.get("sl_grace_minutes"),
+            "sl_outer_floor":      em_state.get("sl_outer_floor"),
+            "sl_floor_enabled":    em_state.get("sl_floor_enabled", True),
             "runner_mode":         em_state.get("runner_mode", "trail"),
             "cascade_enabled":     em_state.get("cascade_enabled", True),
         })

@@ -2788,6 +2788,12 @@ class ORBEngine:
             # EditExitsModal know which tab to pre-select.
             "sl_grace_enabled":     em_state.get("sl_grace_enabled", False),
             "sl_grace_minutes":     em_state.get("sl_grace_minutes"),
+            # Absolute worst-case floor price + on/off state — see
+            # ExitManager.to_dict()'s doc comment (2026-09-15 floor-toggle
+            # feature). Lets the card show "floor $X.XX" during a grace
+            # countdown and the Advanced sheet pre-select the toggle.
+            "sl_outer_floor":       em_state.get("sl_outer_floor"),
+            "sl_floor_enabled":     em_state.get("sl_floor_enabled", True),
             # Current runner/cascade CONFIGURATION for this trade (see
             # ExitManager.to_dict()) — 2026-08-04 fix: this payload used to
             # omit these entirely even though to_dict() included them, so

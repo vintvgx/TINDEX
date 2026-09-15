@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useToast } from '@/common/components/ui/Toast';
 import { useImmediateTradeByTicker, StreamUnavailableError } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
+import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import {
   IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX, defaultQtyFor,
   getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
@@ -49,7 +50,7 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
   const [paperMode, setPaperMode]       = useState(true);
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [qty, setQty]                   = useState(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], contract.ask));
-  const [stopType, setStopType]         = useState<StopType>('HARD');
+  const [stopType, setStopType]         = useState<StopType>(5);
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
   // Defaults ON whenever the checklist's parsed contract had both an alert
@@ -82,6 +83,12 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     : null;
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
+  // Overtrading guard — surfaces how many OTHER live positions are already
+  // open so a chase-more-losses (or double-up-on-a-win) entry gets a real
+  // warning instead of sliding straight through. Purely a confirm-step
+  // nudge, not a block — see the 2026-09-11/09-14 trade-log review.
+  const { data: openPositions } = useImmediatePositions();
+  const openLiveCount = (openPositions ?? []).filter(p => p.paper_mode === false).length;
 
   // Blind Entry — set when the backend couldn't verify a live stream tick
   // within 8s (status: 'stream_unavailable'). See BlindEntryModal.
@@ -156,11 +163,17 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     });
   };
 
+  // Appended to a LIVE confirm dialog's message when other live positions
+  // are already open — a warning, not a block, per the trade-log review.
+  const concurrentWarning = (!paperMode && openLiveCount > 0)
+    ? `\n\n⚠️ You already have ${openLiveCount} other live position${openLiveCount > 1 ? 's' : ''} open.`
+    : '';
+
   const handleSubmitPress = () => {
     if (noSL) {
       Alert.alert(
         '⚠️ No Stop Loss',
-        `Enter ${contract?.option_type} ${contract?.symbol} × ${qty}?\n\nThis position will NOT have an automatic stop loss${!tpEnabled ? ' or take-profit exit' : ''}${isNoStopLoss ? ', including end of day — it expires today (0DTE) if you don\'t sell it' : ''}.${!paperMode ? '\n\nThis is a LIVE order with REAL money.' : ''}`,
+        `Enter ${contract?.option_type} ${contract?.symbol} × ${qty}?\n\nThis position will NOT have an automatic stop loss${!tpEnabled ? ' or take-profit exit' : ''}${isNoStopLoss ? ', including end of day — it expires today (0DTE) if you don\'t sell it' : ''}.${!paperMode ? '\n\nThis is a LIVE order with REAL money.' : ''}${concurrentWarning}`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Trade', style: paperMode ? 'default' : 'destructive', onPress: doSubmit },
@@ -171,7 +184,7 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     if (paperMode) { doSubmit(); return; }
     Alert.alert(
       'Trade LIVE',
-      `Enter ${contract?.option_type} ${contract?.symbol} × ${qty} with REAL money now?`,
+      `Enter ${contract?.option_type} ${contract?.symbol} × ${qty} with REAL money now?${concurrentWarning}`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Trade', style: 'destructive', onPress: doSubmit },

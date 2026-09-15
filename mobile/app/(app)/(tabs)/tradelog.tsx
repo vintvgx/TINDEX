@@ -10,7 +10,7 @@ import { useStrategyPerformance } from '@/hooks/queries/strategy/useStrategyStat
 import { useStrategyDebugLogs } from '@/hooks/queries/strategy/useStrategyDebugLogs';
 import {
   PnlSummaryCard, DayHeader, StatsHero, DailyPnlChart,
-  KeyMetricsGrid, ExitQualityCard, ProfileLeaderboard, HourlyPerformance, groupTradesByDay,
+  KeyMetricsGrid, ExitQualityCard, ExitReasonLeaderboard, ProfileLeaderboard, HourlyPerformance, groupTradesByDay,
   filterTradesByRange, TIME_RANGES, type TimeRange,
 } from '@/common/components/strategy/TradeAnalytics';
 import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
@@ -268,6 +268,7 @@ export default function TradeLogScreen({ embedded = false }: Props) {
               <DailyPnlChart trades={rangeTrades} colors={colors} />
               <KeyMetricsGrid trades={rangeTrades} colors={colors} />
               <ExitQualityCard trades={rangeTrades} colors={colors} />
+              <ExitReasonLeaderboard trades={rangeTrades} colors={colors} />
               <ProfileLeaderboard trades={rangeTrades} colors={colors} />
               <HourlyPerformance trades={rangeTrades} colors={colors} />
               {performance && <RatingCard performance={performance} colors={colors} />}

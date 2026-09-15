@@ -444,6 +444,78 @@ export function ExitQualityCard({ trades, colors }: { trades: ORBTrade[]; colors
   );
 }
 
+// ── ExitReasonLeaderboard (Stats tab) ─────────────────────────────────────────
+
+const EXIT_REASON_LABEL: Record<string, string> = {
+  MANUAL_EXIT: 'Manual Exit', HARD_STOP: 'Hard Stop', HARD_STOP_FLOOR: 'Hard Stop (Floor)',
+  BREAKEVEN_STOP: 'Breakeven Stop', SL_CONFIRMING: 'SL Confirming', TP1: 'TP1', TP2: 'TP2',
+  TP2_FULL_CLOSE: 'TP2 Full Close', RUNNER_TRAIL_STOP: 'Runner Trail Stop',
+  EOD_CLOSE: 'EOD Close', EOD_HARD_CLOSE: 'EOD Hard Close',
+};
+
+/**
+ * Win-rate/P&L broken down by literal exit_reason, worst-total-P&L first —
+ * a finer-grained sibling of ExitQualityCard's coarse target/breakeven/
+ * stopped/other buckets (that one lumps every non-automated close into
+ * "Manual / Other," which is exactly the number that turned out to matter
+ * most). Added 2026-09-15 after a trade-log review found MANUAL_EXIT alone
+ * was the single largest loss driver in the account — bigger than HARD_STOP
+ * — with no way to see that split in the app itself, only by pulling raw
+ * trade rows. Computed client-side from the same already paper/live- and
+ * range-filtered `trades` prop as every other card here (see this file's
+ * top comment) rather than a backend /strategy/stats endpoint, so it
+ * respects whichever account/range is currently selected on this screen.
+ */
+export function ExitReasonLeaderboard({ trades, colors }: { trades: ORBTrade[]; colors: any }) {
+  const rows = useMemo(() => {
+    const closed = trades.filter(t => t.exit_time != null);
+    const map = new Map<string, { pnl: number; count: number; wins: number }>();
+    for (const t of closed) {
+      const key = t.exit_reason ?? 'UNKNOWN';
+      const cur = map.get(key) ?? { pnl: 0, count: 0, wins: 0 };
+      cur.pnl += t.pnl ?? 0;
+      cur.count++;
+      if ((t.pnl ?? 0) > 0) cur.wins++;
+      map.set(key, cur);
+    }
+    return [...map.entries()]
+      .map(([reason, v]) => ({ reason, ...v }))
+      .sort((x, y) => x.pnl - y.pnl);
+  }, [trades]);
+
+  if (rows.length === 0) return null;
+  const maxAbs = Math.max(...rows.map(r => Math.abs(r.pnl)), 1);
+
+  return (
+    <View style={[a.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <Text style={[a.sectionTitle, { color: colors.text }]}>Manual vs. Automated Exits</Text>
+      <Text style={[a.sectionSub, { color: colors.tabBarInactive }]}>
+        Worst total P&L first — where the leaks actually are
+      </Text>
+      {rows.map(r => {
+        const tintR = r.pnl >= 0 ? colors.success : colors.error;
+        return (
+          <View key={r.reason} style={a.lbRow}>
+            <Text style={[a.lbName, { color: colors.text }]} numberOfLines={1}>
+              {EXIT_REASON_LABEL[r.reason] ?? r.reason.replace(/_/g, ' ')}
+            </Text>
+            <Text style={[a.lbMeta, { color: colors.tabBarInactive }]}>
+              {r.count}t · {r.count ? Math.round((r.wins / r.count) * 100) : 0}%
+            </Text>
+            <View style={[a.lbTrack, { backgroundColor: colors.border }]}>
+              <View style={[a.lbFill, {
+                width: `${Math.max(4, Math.round((Math.abs(r.pnl) / maxAbs) * 100))}%`,
+                backgroundColor: tintR,
+              }]} />
+            </View>
+            <Text style={[a.lbPnl, { color: tintR }]}>{fmtMoney(r.pnl)}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 // ── ProfileLeaderboard (Stats tab) ────────────────────────────────────────────
 
 const PROFILE_EMOJI: Record<string, string> = {

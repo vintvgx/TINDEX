@@ -3,6 +3,7 @@ import { Modal, View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Ale
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
 import { useImmediateTradeByTicker, StreamUnavailableError } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
+import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import {
   IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX, defaultQtyFor,
   getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
@@ -33,11 +34,14 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
   const [paperMode, setPaperMode] = useState(true);
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [qty, setQty] = useState(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], 0));
-  const [stopType, setStopType] = useState<StopType>('HARD');
+  const [stopType, setStopType] = useState<StopType>(5);
   const [volumeExit, setVolumeExit] = useState(false);
   const [manualSlPct, setManualSlPct] = useState(30);
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
+  // Overtrading guard — see TradeContractSheet's identical comment.
+  const { data: openPositions } = useImmediatePositions();
+  const openLiveCount = (openPositions ?? []).filter(p => p.paper_mode === false).length;
 
   // Blind Entry — set when the backend couldn't verify a live stream tick
   // within 8s (status: 'stream_unavailable'). See BlindEntryModal.
@@ -106,9 +110,12 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
 
   const confirmSubmit = () => {
     if (!paperMode) {
+      const concurrentWarning = openLiveCount > 0
+        ? `\n\n⚠️ You already have ${openLiveCount} other live position${openLiveCount > 1 ? 's' : ''} open.`
+        : '';
       Alert.alert(
         'Submit LIVE Order',
-        `This will buy ${qty} × ${contract.contract_symbol} with REAL money immediately.\n\nProfile: ${profile.emoji} ${profile.name}${isManual ? `\nStop Loss: −${manualSlPct}%` : ''}`,
+        `This will buy ${qty} × ${contract.contract_symbol} with REAL money immediately.\n\nProfile: ${profile.emoji} ${profile.name}${isManual ? `\nStop Loss: −${manualSlPct}%` : ''}${concurrentWarning}`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Submit', style: 'destructive', onPress: doSubmit },

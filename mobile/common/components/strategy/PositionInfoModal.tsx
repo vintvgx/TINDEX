@@ -10,6 +10,8 @@ import { PROFILES } from '@/common/components/strategy/ProfileGuideModal';
 import { IMMEDIATE_PROFILES } from '@/common/components/strategy/ImmediateProfilePicker';
 import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 import { useUpdateStrategyExits } from '@/hooks/mutations/strategy/useUpdateStrategyExits';
+import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
+import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useHiddenPositions } from '@/hooks/useHiddenPositions';
 import { useToast } from '@/common/components/ui/Toast';
 import { SlGraceBadge, useSlGracePulse } from '@/common/components/strategy/SlGraceBadge';
@@ -42,6 +44,10 @@ export interface PositionInfoData {
   sl_grace_active?: boolean;
   sl_grace_deadline?: string | null;
   sl_recovery_deadline?: string | null;
+  /** Absolute worst-case floor price under the SL timer, and whether it's
+   *  currently armed — see ExitManager.to_dict()/apply_overrides. */
+  sl_outer_floor?: number | null;
+  sl_floor_enabled?: boolean;
   runner_mode?: 'trail' | 'be_hold' | 'none';
   runner_trail?: number;
   cascade_enabled?: boolean;
@@ -133,6 +139,9 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const editable = !!strategyId;
   const slPulseStyle = useSlGracePulse(!!data.sl_grace_active);
   const mutation = useUpdateStrategyExits();
+  const { authState: { user } } = useAuth();
+  const alertMutation = useCreateKeyLevel();
+  const [alertPriceVal, setAlertPriceVal] = useState('');
   const { isHidden, setHidden } = useHiddenPositions();
   const hideKey = hideKeyProp ?? '';
   const hidden = !!hideKeyProp && isHidden(hideKey);
@@ -147,12 +156,13 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const [tpOn, setTpOn] = useState(true);
   const [stopMode, setStopMode] = useState<'HARD' | 'TIMER'>('HARD');
   const [graceMinutes, setGraceMinutes] = useState<GraceMinutes>(5);
+  const [floorEnabled, setFloorEnabled] = useState(true);
   const [runnerMode, setRunnerMode] = useState<'trail' | 'be_hold' | 'none'>('trail');
   const [cascadeOn, setCascadeOn] = useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const initial = useRef({
-    sl: true, tp: true, stopMode: 'HARD' as 'HARD' | 'TIMER', minutes: 5 as GraceMinutes,
+    sl: true, tp: true, stopMode: 'HARD' as 'HARD' | 'TIMER', minutes: 5 as GraceMinutes, floor: true,
     runnerMode: 'trail' as 'trail' | 'be_hold' | 'none', cascade: true,
   });
 
@@ -162,6 +172,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
       setStopVal('');
       setTp1Val('');
       setTp2Val('');
+      setAlertPriceVal('');
       const sl = data.slEnabled !== false;
       const tp = data.tpEnabled !== false;
       setSlOn(sl);
@@ -173,10 +184,12 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
       setGraceMinutes(sMinutes);
       const rMode = data.runner_mode ?? 'trail';
       const rCascade = data.cascade_enabled ?? true;
+      const rFloor = data.sl_floor_enabled ?? true;
       setRunnerMode(rMode);
       setCascadeOn(rCascade);
+      setFloorEnabled(rFloor);
       setAdvancedOpen(false);
-      initial.current = { sl, tp, stopMode: sMode, minutes: sMinutes, runnerMode: rMode, cascade: rCascade };
+      initial.current = { sl, tp, stopMode: sMode, minutes: sMinutes, floor: rFloor, runnerMode: rMode, cascade: rCascade };
     }
     wasVisibleRef.current = visible;
   }, [visible, data]);
@@ -188,7 +201,9 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const dirty =
     !!stopVal || !!tp1Val || !!tp2Val ||
     slOn !== initial.current.sl || tpOn !== initial.current.tp ||
-    (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && graceMinutes !== initial.current.minutes))) ||
+    (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && (
+      graceMinutes !== initial.current.minutes || floorEnabled !== initial.current.floor
+    )))) ||
     (canSplit && (runnerMode !== initial.current.runnerMode || cascadeOn !== initial.current.cascade));
 
   const pctLabel = (abs: number | undefined) => {
@@ -239,6 +254,9 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
     if (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && graceMinutes !== initial.current.minutes))) {
       payload.sl_grace_minutes = stopMode === 'TIMER' ? graceMinutes : null;
     }
+    if (slOn && stopMode === 'TIMER' && floorEnabled !== initial.current.floor) {
+      payload.sl_floor_enabled = floorEnabled;
+    }
     if (canSplit && runnerMode !== initial.current.runnerMode) payload.runner_mode = runnerMode;
     if (canSplit && cascadeOn !== initial.current.cascade) payload.cascade_enabled = cascadeOn;
 
@@ -254,6 +272,31 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Update failed');
     }
+  };
+
+  const handleSetAlert = () => {
+    const target = parseFloat(alertPriceVal);
+    if (isNaN(target) || target <= 0) {
+      Alert.alert('Invalid', 'Enter a positive price to alert on.');
+      return;
+    }
+    if (!user?.id) {
+      toast.error('Not authenticated');
+      return;
+    }
+    alertMutation.mutate(
+      {
+        userId: user.id,
+        ticker: data.ticker,
+        direction: target >= data.mid_price ? 'bullish' : 'bearish',
+        levelLow: target,
+        source: 'self',
+      },
+      {
+        onSuccess: () => { toast.success(`Watching ${data.ticker} for $${target.toFixed(2)}`); setAlertPriceVal(''); },
+        onError: (e: Error) => toast.error(e.message),
+      },
+    );
   };
 
   const handleToggleHidden = () => {
@@ -414,6 +457,36 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
               </Text>
             )}
 
+            {/* ── Price Alert — reuses the watched_price_levels / Charts-tab
+                Watch-mode infrastructure, so a level set here also shows up
+                there and pushes via key_level_watcher.py once hit. ── */}
+            <View style={[s.divider, { backgroundColor: colors.separator }]} />
+            <SectionHeader label="PRICE ALERT" colors={colors} />
+            <View style={s.editRow}>
+              <Ionicons name="notifications-outline" size={18} color={colors.textSecondary} />
+              <TextInput
+                value={alertPriceVal}
+                onChangeText={setAlertPriceVal}
+                keyboardType="decimal-pad"
+                placeholder={`e.g. ${data.mid_price.toFixed(2)}`}
+                placeholderTextColor={colors.textTertiary}
+                style={[s.editInput, { color: colors.text }]}
+              />
+              <TouchableOpacity
+                onPress={handleSetAlert}
+                disabled={alertMutation.isPending || !alertPriceVal}
+                activeOpacity={0.8}
+                style={[s.alertBtn, { backgroundColor: colors.accent, opacity: alertMutation.isPending || !alertPriceVal ? 0.45 : 1 }]}
+              >
+                {alertMutation.isPending
+                  ? <ActivityIndicator size="small" color={colors.accentForeground} />
+                  : <Text style={[s.alertBtnText, { color: colors.accentForeground }]}>Set Alert</Text>}
+              </TouchableOpacity>
+            </View>
+            <Text style={[s.hintText, { color: colors.textTertiary }]}>
+              Notifies you when {data.ticker} closes through this price.
+            </Text>
+
             {/* ── Runner (only when there's something to manage) ── */}
             {canSplit && (
               <>
@@ -489,21 +562,46 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
                       </View>
                     </View>
                     {stopMode === 'TIMER' && (
-                      <View style={{ flexDirection: 'row', gap: 8 }}>
-                        {GRACE_OPTIONS.map(m => {
-                          const active = graceMinutes === m;
-                          return (
-                            <TouchableOpacity
-                              key={m}
-                              onPress={() => setGraceMinutes(m)}
-                              activeOpacity={0.75}
-                              style={[s.chip, { borderColor: active ? colors.text : colors.separator, backgroundColor: active ? colors.text + '12' : 'transparent' }]}
-                            >
-                              <Text style={{ fontSize: 13, fontWeight: '700', color: active ? colors.text : colors.textSecondary }}>{m} min</Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
+                      <>
+                        <View style={{ flexDirection: 'row', gap: 8 }}>
+                          {GRACE_OPTIONS.map(m => {
+                            const active = graceMinutes === m;
+                            return (
+                              <TouchableOpacity
+                                key={m}
+                                onPress={() => setGraceMinutes(m)}
+                                activeOpacity={0.75}
+                                style={[s.chip, { borderColor: active ? colors.text : colors.separator, backgroundColor: active ? colors.text + '12' : 'transparent' }]}
+                              >
+                                <Text style={{ fontSize: 13, fontWeight: '700', color: active ? colors.text : colors.textSecondary }}>{m} min</Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                        {/* Worst-case floor — bypasses the grace window entirely
+                            and force-sells if hit. Off by default only for a
+                            swing meant to hold through a drop this deep. */}
+                        {data.sl_outer_floor != null && (
+                          <View style={[s.inlineSwitchRow, { marginTop: 12 }]}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
+                                Worst-case floor
+                              </Text>
+                              <Text style={[s.hintText, { color: colors.textTertiary, marginTop: 2 }]}>
+                                {floorEnabled
+                                  ? `Sells no matter what at $${data.sl_outer_floor.toFixed(2)}`
+                                  : 'Off — this trade can hold through any drop'}
+                              </Text>
+                            </View>
+                            <Switch
+                              value={floorEnabled}
+                              onValueChange={setFloorEnabled}
+                              trackColor={{ false: colors.border, true: colors.error + '66' }}
+                              thumbColor={floorEnabled ? colors.error : undefined}
+                            />
+                          </View>
+                        )}
+                      </>
                     )}
                   </View>
                 )}
@@ -612,6 +710,9 @@ const s = StyleSheet.create({
   tp2Label:  { fontSize: 12, fontWeight: '700', width: 32 },
   readonlyValue: { fontSize: 22, fontWeight: '800', letterSpacing: -0.4 },
   hintText:  { fontSize: 12, lineHeight: 16, marginTop: 8 },
+
+  alertBtn:  { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10 },
+  alertBtnText: { fontSize: 13, fontWeight: '700' },
 
   segmented: { flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3, gap: 3 },
   segmentBtn:{ flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 8 },

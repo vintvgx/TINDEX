@@ -15,6 +15,13 @@ export interface SlGraceInfo {
   sl_grace_enabled?: boolean;
   sl_grace_minutes?: number | null;
   tp1_hit?: boolean;
+  /** Absolute worst-case floor price — shown alongside the countdown while
+   *  the grace window is active, so "this sells no matter what at $X.XX"
+   *  is visible in the moment, not just after the fact in the trade log.
+   *  Null/undefined when this trade's profile has no floor, or omitted
+   *  entirely when sl_floor_enabled is false. */
+  sl_outer_floor?: number | null;
+  sl_floor_enabled?: boolean;
 }
 
 /**
@@ -67,6 +74,7 @@ export function SlGraceBadge({ live, colors }: { live: SlGraceInfo; colors: any 
   const recoverSec  = recovering
     ? Math.max(0, Math.round((new Date(live.sl_recovery_deadline!).getTime() - Date.now()) / 1000))
     : 0;
+  const showFloor = live.sl_floor_enabled !== false && live.sl_outer_floor != null;
 
   return (
     <View style={[styles.slGraceBanner, { backgroundColor: color + '16' }]}>
@@ -77,6 +85,11 @@ export function SlGraceBadge({ live, colors }: { live: SlGraceInfo; colors: any 
       {recovering && (
         <Text style={[styles.slGraceSubText, { color: colors.textSecondary }]}>
           recovering, {recoverSec}s to cancel
+        </Text>
+      )}
+      {showFloor && (
+        <Text style={[styles.slGraceSubText, { color: colors.textSecondary }]}>
+          floor ${live.sl_outer_floor!.toFixed(2)} — sells no matter what
         </Text>
       )}
     </View>

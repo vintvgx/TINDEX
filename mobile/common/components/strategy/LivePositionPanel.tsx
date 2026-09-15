@@ -42,6 +42,8 @@ export interface LivePositionStaticFallback {
   sl_grace_minutes?: number | null;
   sl_enabled?: boolean;
   tp_enabled?: boolean;
+  sl_outer_floor?: number | null;
+  sl_floor_enabled?: boolean;
   runner_mode?: 'trail' | 'be_hold' | 'none';
   runner_trail?: number;
   cascade_enabled?: boolean;
@@ -121,6 +123,8 @@ export function LivePositionPanel({
         sl_grace_minutes: staticFallback!.sl_grace_minutes,
         sl_enabled:    staticFallback!.sl_enabled,
         tp_enabled:    staticFallback!.tp_enabled,
+        sl_outer_floor: staticFallback!.sl_outer_floor,
+        sl_floor_enabled: staticFallback!.sl_floor_enabled,
         runner_mode:   staticFallback!.runner_mode,
         runner_trail:  staticFallback!.runner_trail,
         cascade_enabled: staticFallback!.cascade_enabled,
@@ -254,8 +258,8 @@ export function LivePositionPanel({
                     <>
                       {showSL && <Text style={[styles.exitArrow, { color: colors.textTertiary }]}>→</Text>}
                       <View style={styles.exitChip}>
-                        <Text style={[styles.exitLabel, { color: colors.success }]}>TP1</Text>
-                        <Text style={[styles.exitPrice, { color: colors.success }]}>
+                        <Text style={[styles.exitLabel, { color: display.tp1_hit ? colors.textTertiary : colors.success }]}>TP1</Text>
+                        <Text style={[styles.exitPrice, { color: display.tp1_hit ? colors.textTertiary : colors.success }]}>
                           ${display.tp1.toFixed(2)}
                         </Text>
                         {display.tp1_hit && <Ionicons name="checkmark-circle" size={10} color={colors.success} />}
@@ -266,8 +270,8 @@ export function LivePositionPanel({
                     <>
                       <Text style={[styles.exitArrow, { color: colors.textTertiary }]}>·</Text>
                       <View style={styles.exitChip}>
-                        <Text style={[styles.exitLabel, { color: TP2_COLOR }]}>TP2</Text>
-                        <Text style={[styles.exitPrice, { color: TP2_COLOR }]}>
+                        <Text style={[styles.exitLabel, { color: display.tp2_hit ? colors.textTertiary : TP2_COLOR }]}>TP2</Text>
+                        <Text style={[styles.exitPrice, { color: display.tp2_hit ? colors.textTertiary : TP2_COLOR }]}>
                           ${display.tp2.toFixed(2)}
                         </Text>
                         {display.tp2_hit && <Ionicons name="checkmark-circle" size={10} color={TP2_COLOR} />}
@@ -320,6 +324,8 @@ export function LivePositionPanel({
             sl_grace_active: display.sl_grace_active,
             sl_grace_deadline: display.sl_grace_deadline,
             sl_recovery_deadline: display.sl_recovery_deadline,
+            sl_outer_floor: display.sl_outer_floor,
+            sl_floor_enabled: display.sl_floor_enabled,
             runner_mode: display.runner_mode,
             runner_trail: display.runner_trail,
             cascade_enabled: display.cascade_enabled,

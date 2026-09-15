@@ -170,7 +170,7 @@ PROFILES = {
         "sl_grace_enabled":       True,
         "sl_grace_bars":          3,     # ~3 consecutive 1-min bars against = genuine move, don't wait
         "sl_grace_seconds":       300,   # 5 minutes max before forcing the exit regardless
-        "sl_outer_floor_pct":     0.40,  # hard floor at -40% (vs. -25% normal SL) — bypasses grace/confirm
+        "sl_outer_floor_pct":     0.50,  # hard floor at -50% of entry — bypasses grace/confirm (2026-09-15: flattened to a single 50%-of-entry floor across every grace-enabled profile, see grace_fields_for_minutes)
         "volume_exit":            False,
         "volume_exit_threshold":  0.20,
         "strike_offset_min":      0.50,
@@ -250,7 +250,7 @@ PROFILES = {
         "sl_grace_enabled":         True,
         "sl_grace_seconds":         300,
         "sl_grace_recovery_seconds": 60,
-        "sl_outer_floor_pct":       0.80,
+        "sl_outer_floor_pct":       0.50,  # 2026-09-15: flattened from 0.80 to a flat 50%-of-entry floor
         "volume_exit":              False,
         "volume_exit_threshold":    0.12,
         "strike_offset_min":        1.00,
@@ -278,7 +278,7 @@ PROFILES = {
         "sl_grace_enabled":         True,
         "sl_grace_seconds":         600,
         "sl_grace_recovery_seconds": 60,
-        "sl_outer_floor_pct":       0.85,
+        "sl_outer_floor_pct":       0.50,  # 2026-09-15: flattened from 0.85 to a flat 50%-of-entry floor
         "volume_exit":              False,
         "volume_exit_threshold":    0.10,
         "strike_offset_min":        1.00,
@@ -706,27 +706,31 @@ def grace_fields_for_minutes(minutes: int | None) -> dict:
     Translate a user-facing stop-timer choice into ExitManager's grace
     fields. `None` means Hard Stop (grace off). Shared by the entry route
     and the mid-trade PATCH /configs/<id>/exits route so the two surfaces
-    can never drift apart. sl_outer_floor_pct rises with the timer length —
-    a longer grace window needs a deeper absolute worst-case floor so it can
-    never turn into an unbounded hold (see ExitManager.evaluate()'s outer-
-    floor check).
+    can never drift apart. sl_outer_floor_pct is a flat 50%-of-entry floor
+    regardless of timer length (2026-09-15 — previously rose with the timer
+    length to 0.80/0.85/0.90, which read as "ride it to near-zero" rather
+    than a real worst-case cap; see the floor-toggle feature in
+    ExitManager). It bypasses grace/tick-confirm entirely, and independently
+    of this value, `sl_floor_enabled` (ExitManager, defaults True) lets a
+    trader turn the whole floor off per-trade — e.g. a swing meant to be
+    held through a drop this deep — via PATCH /configs/<id>/exits.
     """
     if minutes is None:
         return {"sl_grace_enabled": False}
     if minutes == 5:
         return {
             "sl_grace_enabled": True, "sl_grace_seconds": 300,
-            "sl_grace_recovery_seconds": 60, "sl_outer_floor_pct": 0.80,
+            "sl_grace_recovery_seconds": 60, "sl_outer_floor_pct": 0.50,
         }
     if minutes == 10:
         return {
             "sl_grace_enabled": True, "sl_grace_seconds": 600,
-            "sl_grace_recovery_seconds": 60, "sl_outer_floor_pct": 0.85,
+            "sl_grace_recovery_seconds": 60, "sl_outer_floor_pct": 0.50,
         }
     if minutes == 15:
         return {
             "sl_grace_enabled": True, "sl_grace_seconds": 900,
-            "sl_grace_recovery_seconds": 60, "sl_outer_floor_pct": 0.90,
+            "sl_grace_recovery_seconds": 60, "sl_outer_floor_pct": 0.50,
         }
     raise ValueError(f"sl_grace_minutes must be 5, 10, 15, or null (Hard Stop) — got {minutes!r}")
 
