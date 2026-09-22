@@ -506,6 +506,31 @@ class StrategyNotifier:
             pref_key="flow_signals",
         )
 
+    def notify_contract_price_alert(self, ticker: str, contract_symbol: str,
+                                     target_price: float, current_price: float,
+                                     direction: str):
+        """
+        A user-set "notify me when THIS CONTRACT hits $X" alert (see
+        PositionInfoModal's PRICE ALERT section / contract_alert_routes.py)
+        just crossed its target — checked against the option's own live
+        price, not the underlying ticker (that's watched_price_levels /
+        KeyLevelWatcher's job instead).
+        """
+        emoji = "📈" if direction == "above" else "📉"
+        label = _fmt_contract(contract_symbol)
+        side = "above" if direction == "above" else "below"
+        self._dispatch(
+            title=f"{emoji} {label} — Price Alert",
+            body=f"{ticker} contract now ${current_price:.2f}, {side} your ${target_price:.2f} alert.",
+            data={
+                "screen": "position",
+                "type": "contract_price_alert",
+                "symbol": contract_symbol,
+                "ticker": ticker,
+            },
+            priority=P_MARKET,
+        )
+
     def notify_review_ready(self, review_date: str, trade_count: int, net_pnl: float,
                              paper_mode: bool = True):
         """Daily performance review finished generating and saving for ONE account.

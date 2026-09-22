@@ -10,7 +10,9 @@ import { PROFILES } from '@/common/components/strategy/ProfileGuideModal';
 import { IMMEDIATE_PROFILES } from '@/common/components/strategy/ImmediateProfilePicker';
 import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 import { useUpdateStrategyExits } from '@/hooks/mutations/strategy/useUpdateStrategyExits';
-import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
+import { useCreateContractAlert } from '@/hooks/mutations/contractAlerts/useCreateContractAlert';
+import { useContractAlerts } from '@/hooks/queries/contractAlerts/useContractAlerts';
+import { useDeleteContractAlert } from '@/hooks/mutations/contractAlerts/useDeleteContractAlert';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useHiddenPositions } from '@/hooks/useHiddenPositions';
 import { useToast } from '@/common/components/ui/Toast';
@@ -140,7 +142,9 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const slPulseStyle = useSlGracePulse(!!data.sl_grace_active);
   const mutation = useUpdateStrategyExits();
   const { authState: { user } } = useAuth();
-  const alertMutation = useCreateKeyLevel();
+  const alertMutation = useCreateContractAlert(strategyId ?? '');
+  const { data: contractAlerts } = useContractAlerts(strategyId, editable);
+  const deleteAlertMutation = useDeleteContractAlert(strategyId ?? '');
   const [alertPriceVal, setAlertPriceVal] = useState('');
   const { isHidden, setHidden } = useHiddenPositions();
   const hideKey = hideKeyProp ?? '';
@@ -157,6 +161,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const [stopMode, setStopMode] = useState<'HARD' | 'TIMER'>('HARD');
   const [graceMinutes, setGraceMinutes] = useState<GraceMinutes>(5);
   const [floorEnabled, setFloorEnabled] = useState(true);
+  const [floorPriceVal, setFloorPriceVal] = useState('');
   const [runnerMode, setRunnerMode] = useState<'trail' | 'be_hold' | 'none'>('trail');
   const [cascadeOn, setCascadeOn] = useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -173,6 +178,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
       setTp1Val('');
       setTp2Val('');
       setAlertPriceVal('');
+      setFloorPriceVal('');
       const sl = data.slEnabled !== false;
       const tp = data.tpEnabled !== false;
       setSlOn(sl);
@@ -199,7 +205,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const entry = data.entry_premium;
 
   const dirty =
-    !!stopVal || !!tp1Val || !!tp2Val ||
+    !!stopVal || !!tp1Val || !!tp2Val || !!floorPriceVal ||
     slOn !== initial.current.sl || tpOn !== initial.current.tp ||
     (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && (
       graceMinutes !== initial.current.minutes || floorEnabled !== initial.current.floor
@@ -213,12 +219,21 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   };
 
   const handleSave = async () => {
-    const stop = stopVal ? parseFloat(stopVal) : undefined;
-    const tp1  = tp1Val ? parseFloat(tp1Val) : undefined;
-    const tp2  = tp2Val ? parseFloat(tp2Val) : undefined;
+    const stop  = stopVal ? parseFloat(stopVal) : undefined;
+    const tp1   = tp1Val ? parseFloat(tp1Val) : undefined;
+    const tp2   = tp2Val ? parseFloat(tp2Val) : undefined;
+    const floor = floorPriceVal ? parseFloat(floorPriceVal) : undefined;
 
     if (stop !== undefined && (isNaN(stop) || stop <= 0)) {
       Alert.alert('Invalid', 'Stop loss must be a positive price.');
+      return;
+    }
+    if (floor !== undefined && (isNaN(floor) || floor <= 0)) {
+      Alert.alert('Invalid', 'Floor must be a positive price.');
+      return;
+    }
+    if (floor !== undefined && !isNaN(floor) && floor >= (stop ?? data.hard_stop)) {
+      Alert.alert('Invalid', 'Floor must be below the stop-loss price.');
       return;
     }
     if (!data.tp1_hit && tp1 !== undefined && !isNaN(tp1) && tp1 <= (stop ?? data.hard_stop)) {
@@ -257,6 +272,9 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
     if (slOn && stopMode === 'TIMER' && floorEnabled !== initial.current.floor) {
       payload.sl_floor_enabled = floorEnabled;
     }
+    if (slOn && stopMode === 'TIMER' && floor !== undefined && !isNaN(floor)) {
+      payload.sl_outer_floor = floor;
+    }
     if (canSplit && runnerMode !== initial.current.runnerMode) payload.runner_mode = runnerMode;
     if (canSplit && cascadeOn !== initial.current.cascade) payload.cascade_enabled = cascadeOn;
 
@@ -285,18 +303,18 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
       return;
     }
     alertMutation.mutate(
+      { userId: user.id, targetPrice: target },
       {
-        userId: user.id,
-        ticker: data.ticker,
-        direction: target >= data.mid_price ? 'bullish' : 'bearish',
-        levelLow: target,
-        source: 'self',
-      },
-      {
-        onSuccess: () => { toast.success(`Watching ${data.ticker} for $${target.toFixed(2)}`); setAlertPriceVal(''); },
+        onSuccess: () => { toast.success(`Watching contract for $${target.toFixed(2)}`); setAlertPriceVal(''); },
         onError: (e: Error) => toast.error(e.message),
       },
     );
+  };
+
+  const handleDeleteAlert = (alertId: string) => {
+    deleteAlertMutation.mutate(alertId, {
+      onError: (e: Error) => toast.error(e.message),
+    });
   };
 
   const handleToggleHidden = () => {
@@ -457,35 +475,70 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
               </Text>
             )}
 
-            {/* ── Price Alert — reuses the watched_price_levels / Charts-tab
-                Watch-mode infrastructure, so a level set here also shows up
-                there and pushes via key_level_watcher.py once hit. ── */}
-            <View style={[s.divider, { backgroundColor: colors.separator }]} />
-            <SectionHeader label="PRICE ALERT" colors={colors} />
-            <View style={s.editRow}>
-              <Ionicons name="notifications-outline" size={18} color={colors.textSecondary} />
-              <TextInput
-                value={alertPriceVal}
-                onChangeText={setAlertPriceVal}
-                keyboardType="decimal-pad"
-                placeholder={`e.g. ${data.mid_price.toFixed(2)}`}
-                placeholderTextColor={colors.textTertiary}
-                style={[s.editInput, { color: colors.text }]}
-              />
-              <TouchableOpacity
-                onPress={handleSetAlert}
-                disabled={alertMutation.isPending || !alertPriceVal}
-                activeOpacity={0.8}
-                style={[s.alertBtn, { backgroundColor: colors.accent, opacity: alertMutation.isPending || !alertPriceVal ? 0.45 : 1 }]}
-              >
-                {alertMutation.isPending
-                  ? <ActivityIndicator size="small" color={colors.accentForeground} />
-                  : <Text style={[s.alertBtnText, { color: colors.accentForeground }]}>Set Alert</Text>}
-              </TouchableOpacity>
-            </View>
-            <Text style={[s.hintText, { color: colors.textTertiary }]}>
-              Notifies you when {data.ticker} closes through this price.
-            </Text>
+            {/* ── Price Alert — watches THIS CONTRACT's own live price (the
+                same tick feed ExitManager evaluates SL/TP against), not the
+                underlying ticker — see ExitManager.check_price_alerts /
+                contract_alert_routes.py. Only available on a live, engine-
+                backed position (editable), since there's nothing to attach
+                the watch to otherwise. ── */}
+            {editable && (
+              <>
+                <View style={[s.divider, { backgroundColor: colors.separator }]} />
+                <SectionHeader label="PRICE ALERT" colors={colors} />
+                <View style={s.editRow}>
+                  <Ionicons name="notifications-outline" size={18} color={colors.textSecondary} />
+                  <TextInput
+                    value={alertPriceVal}
+                    onChangeText={setAlertPriceVal}
+                    keyboardType="decimal-pad"
+                    placeholder={`e.g. ${data.mid_price.toFixed(2)}`}
+                    placeholderTextColor={colors.textTertiary}
+                    style={[s.editInput, { color: colors.text }]}
+                  />
+                  <TouchableOpacity
+                    onPress={handleSetAlert}
+                    disabled={alertMutation.isPending || !alertPriceVal}
+                    activeOpacity={0.8}
+                    style={[s.alertBtn, { backgroundColor: colors.accent, opacity: alertMutation.isPending || !alertPriceVal ? 0.45 : 1 }]}
+                  >
+                    {alertMutation.isPending
+                      ? <ActivityIndicator size="small" color={colors.accentForeground} />
+                      : <Text style={[s.alertBtnText, { color: colors.accentForeground }]}>Set Alert</Text>}
+                  </TouchableOpacity>
+                </View>
+                <Text style={[s.hintText, { color: colors.textTertiary }]}>
+                  Notifies you when this contract's own price hits your target — not {data.ticker}'s stock price.
+                </Text>
+
+                {(contractAlerts ?? []).length > 0 && (
+                  <View style={{ marginTop: 10, gap: 6 }}>
+                    {contractAlerts!.map(a => (
+                      <View
+                        key={a.id}
+                        style={[s.alertRow, { borderColor: colors.border, backgroundColor: colors.background }]}
+                      >
+                        <Ionicons
+                          name={a.status === 'triggered' ? 'checkmark-circle' : 'time-outline'}
+                          size={14}
+                          color={a.status === 'triggered' ? colors.success : colors.textTertiary}
+                        />
+                        <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600', flex: 1 }}>
+                          ${a.target_price.toFixed(2)}
+                          {a.status === 'triggered' ? ` · Hit @ $${(a.triggered_price ?? a.target_price).toFixed(2)}` : ''}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => handleDeleteAlert(a.id)}
+                          disabled={deleteAlertMutation.isPending}
+                          hitSlop={8}
+                        >
+                          <Ionicons name="trash-outline" size={14} color={colors.error} />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </>
+            )}
 
             {/* ── Runner (only when there's something to manage) ── */}
             {canSplit && (
@@ -601,6 +654,18 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
                             />
                           </View>
                         )}
+                        {data.sl_outer_floor != null && floorEnabled && (
+                          <View style={[s.editRow, { marginTop: 8 }]}>
+                            <TextInput
+                              value={floorPriceVal}
+                              onChangeText={setFloorPriceVal}
+                              keyboardType="decimal-pad"
+                              placeholder={data.sl_outer_floor.toFixed(2)}
+                              placeholderTextColor={colors.textTertiary}
+                              style={[s.editInput, { color: colors.error }]}
+                            />
+                          </View>
+                        )}
                       </>
                     )}
                   </View>
@@ -713,6 +778,10 @@ const s = StyleSheet.create({
 
   alertBtn:  { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10 },
   alertBtnText: { fontSize: 13, fontWeight: '700' },
+  alertRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, borderWidth: 1,
+  },
 
   segmented: { flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3, gap: 3 },
   segmentBtn:{ flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 8 },

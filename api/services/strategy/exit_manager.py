@@ -251,6 +251,65 @@ class ExitManager:
         # gate for its own daily-cron backstop — both must agree.
         self._is_zero_dte = is_zero_dte
 
+        # User-defined "notify me when THIS CONTRACT's price hits $X" alerts
+        # (contract_price_alerts table — see contract_alert_routes.py). Keyed
+        # by alert id so add/remove are idempotent. Deliberately separate from
+        # watched_price_levels/KeyLevelWatcher, which watches the UNDERLYING
+        # ticker's bars, not the option's own price — checked against the
+        # same live current_option_price this class already evaluates exits
+        # against every tick, so it's no less fresh than the SL/TP checks.
+        self._price_alerts: dict[str, dict] = {}
+
+    def add_price_alert(self, alert: dict) -> None:
+        """Register a contract-price alert row (from contract_alert_routes.py)
+        for live checking on every tick. Idempotent — keyed by alert['id']."""
+        self._price_alerts[alert["id"]] = alert
+
+    def remove_price_alert(self, alert_id: str) -> None:
+        """Stop watching an alert (user deleted it, or it already fired)."""
+        self._price_alerts.pop(alert_id, None)
+
+    def check_price_alerts(self, current_option_price: float) -> list[dict]:
+        """
+        Returns the alerts that just crossed their target price this tick,
+        removing them from the watch set (one-shot, same as KeyLevelWatcher's
+        "pop before doing anything slow" pattern — so a rapid run of ticks
+        can't fire the same alert twice while the caller is still off
+        notifying/writing to Supabase). Pure/no I/O — the caller (ORBEngine)
+        owns notifying and persisting the trigger, same division of
+        responsibility as evaluate()'s return action vs ORBEngine actually
+        executing it.
+        """
+        triggered = []
+        for alert_id, alert in list(self._price_alerts.items()):
+            target = float(alert["target_price"])
+            hit = (current_option_price >= target if alert["direction"] == "above"
+                   else current_option_price <= target)
+            if hit:
+                del self._price_alerts[alert_id]
+                triggered.append(alert)
+        return triggered
+
+    def mark_breakeven(self) -> None:
+        """
+        Move the stop to breakeven (entry premium) and force hard-stop-only
+        treatment for whatever's left of this position — same event whether
+        it's triggered by TP1 auto-firing (see the TP1 branch in evaluate())
+        or a manual partial sell (see ORBEngine.submit_manual_exit()): once
+        some of the position has been banked, the remainder is protected at
+        breakeven with no grace/timer, not given fresh room to develop.
+        Clears any grace window already in progress rather than letting it
+        run out against a stop that no longer applies — evaluate()'s grace
+        branch is gated on `not self.be_stop_active` regardless, but this
+        also stops SlGraceBadge-style stale countdowns from lingering.
+        """
+        self.be_stop_active = True
+        self.hard_stop      = self.entry_premium
+        self._sl_grace_active    = False
+        self._sl_grace_start     = None
+        self._sl_grace_down_bars = 0
+        self._sl_recovery_start  = None
+
     def evaluate(self, current_option_price: float,
                  current_underlying_price: float = None,
                  current_volume: float = None) -> dict:
@@ -360,8 +419,7 @@ class ExitManager:
                 # "none" leaves the runner on its original pre-TP1 hard stop —
                 # no BE floor, no trail. It only exits via TP2/cascade/EOD/manual.
                 if self._runner_mode != "none":
-                    self.be_stop_active = True
-                    self.hard_stop      = self.entry_premium  # SL moves to breakeven
+                    self.mark_breakeven()
                 if self._runner_mode == "trail":
                     self.runner_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
                 # tp1_qty override (see apply_overrides) replaces the
@@ -573,7 +631,8 @@ class ExitManager:
                         cascade_enabled: bool | None = None,
                         sl_enabled: bool | None = None,
                         tp_enabled: bool | None = None,
-                        sl_floor_enabled: bool | None = None) -> dict:
+                        sl_floor_enabled: bool | None = None,
+                        sl_outer_floor: float | None = None) -> dict:
         """
         Validate and apply user-supplied SL/TP1/TP2 price and/or qty overrides
         to this (already open) position. Raises ValueError with a user-facing
@@ -625,6 +684,13 @@ class ExitManager:
         force-closed there. No-op if this trade's profile never defined a
         floor in the first place (_sl_outer_floor is None either way).
 
+        sl_outer_floor directly overrides the floor PRICE itself (as opposed
+        to sl_floor_enabled, which only toggles it on/off) — lets the user
+        pick their own worst-case sell price instead of the profile's
+        %-derived default. Applied after sl_grace_minutes below so that if a
+        caller ever passes both in the same call, the explicit price wins
+        over the grace-timer's own %-derived floor recompute.
+
         Shared by the mid-trade PATCH /configs/<id>/exits route and the
         confirm-entry approve path (edited fields from the confirmation modal,
         applied right after the real fill so levels are relative to the actual
@@ -632,6 +698,8 @@ class ExitManager:
         """
         if hard_stop is not None and hard_stop <= 0:
             raise ValueError("hard_stop must be > 0")
+        if sl_outer_floor is not None and sl_outer_floor <= 0:
+            raise ValueError("sl_outer_floor must be > 0")
         if runner_mode is not None and runner_mode not in ("trail", "be_hold", "none"):
             raise ValueError("runner_mode must be 'trail', 'be_hold', or 'none'")
         if tp1 is not None and tp1 <= self.entry_premium:
@@ -717,6 +785,9 @@ class ExitManager:
         if sl_floor_enabled is not None:
             self._sl_floor_enabled = sl_floor_enabled
             changed["sl_floor_enabled"] = sl_floor_enabled
+        if sl_outer_floor is not None:
+            self._sl_outer_floor = sl_outer_floor
+            changed["sl_outer_floor"] = round(sl_outer_floor, 4)
         return changed
 
     def to_dict(self) -> dict:

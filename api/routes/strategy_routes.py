@@ -829,7 +829,8 @@ def update_strategy_exits(strategy_id: str):
     """
     Update the live ExitManager's stop-loss and/or TP levels mid-trade.
     Body: { hard_stop?, tp1?, tp2?, sl_qty?, tp1_qty?, tp2_qty?, sl_grace_minutes?,
-            runner_mode?, cascade_enabled?, sl_enabled?, tp_enabled?, sl_floor_enabled? }
+            runner_mode?, cascade_enabled?, sl_enabled?, tp_enabled?, sl_floor_enabled?,
+            sl_outer_floor? }
     — all optional, only provided fields are changed. sl_qty/tp1_qty/tp2_qty
     are per-level contract counts; sl_grace_minutes is the stop-type choice
     (null = Hard Stop, 5/10/15 = SL timer); runner_mode is "trail"/"be_hold"/
@@ -838,7 +839,9 @@ def update_strategy_exits(strategy_id: str):
     mid-trade — re-enabling either requires a real price in this same call
     unless one's already set (see ExitManager.apply_overrides). sl_floor_enabled
     turns the absolute worst-case floor on/off for this trade (e.g. off for a
-    swing meant to be held through a drop past it).
+    swing meant to be held through a drop past it). sl_outer_floor sets the
+    floor's actual PRICE (as opposed to sl_floor_enabled, which only toggles
+    it) — lets the user pick their own worst-case sell price.
     Returns the updated exit state so the client can confirm the new levels.
     """
     engine = _resolve_any_engine(strategy_id)
@@ -861,6 +864,7 @@ def update_strategy_exits(strategy_id: str):
         "sl_enabled": data["sl_enabled"] if "sl_enabled" in data else None,
         "tp_enabled": data["tp_enabled"] if "tp_enabled" in data else None,
         "sl_floor_enabled": data["sl_floor_enabled"] if "sl_floor_enabled" in data else None,
+        "sl_outer_floor": float(data["sl_outer_floor"]) if "sl_outer_floor" in data else None,
     }
     if "sl_grace_minutes" in data:
         raw = data["sl_grace_minutes"]
@@ -896,6 +900,15 @@ def update_strategy_exits(strategy_id: str):
         exit_overrides_patch["disable_tp1_exit"] = not changed["tp_enabled"]
     if "sl_floor_enabled" in changed:
         exit_overrides_patch["sl_floor_enabled"] = changed["sl_floor_enabled"]
+    if "sl_outer_floor" in changed:
+        # No raw-price column for the floor (unlike hard_stop/tp1/tp2) — persist
+        # the equivalent sl_outer_floor_pct instead, the same key __init__/
+        # recover_position() already know how to turn back into a price
+        # (entry_premium * (1 - pct)), so a manually-set floor price survives
+        # a restart just like the profile-derived default does.
+        exit_overrides_patch["sl_outer_floor_pct"] = (
+            1 - (changed["sl_outer_floor"] / em.entry_premium) if em.entry_premium else None
+        )
 
     # Persist to the open orb_trades row too — apply_overrides() above only
     # mutated the in-memory ExitManager, which a Railway restart wipes.

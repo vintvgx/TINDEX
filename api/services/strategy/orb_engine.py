@@ -502,6 +502,31 @@ class ORBEngine:
 
             self._handle_exit_action(action, current_price, current_option_price)
 
+            # Contract price alerts — user-defined "notify me when THIS
+            # CONTRACT hits $X" (contract_alert_routes.py / PositionInfoModal's
+            # PRICE ALERT section), checked against the same live option price
+            # driving the exit logic above. self.exit_manager may be None here
+            # if the action just fully closed the position — nothing left to
+            # watch in that case, same guard the SL_GRACE block below uses.
+            if self.exit_manager:
+                for alert in self.exit_manager.check_price_alerts(current_option_price):
+                    self.notifier.notify_contract_price_alert(
+                        ticker=self.ticker,
+                        contract_symbol=self.contract_symbol,
+                        target_price=float(alert["target_price"]),
+                        current_price=current_option_price,
+                        direction=alert["direction"],
+                    )
+                    try:
+                        self.logger.client.table("contract_price_alerts").update({
+                            "status": "triggered",
+                            "triggered_at": datetime.now(ET).isoformat(),
+                            "triggered_price": current_option_price,
+                        }).eq("id", alert["id"]).execute()
+                    except Exception as e:
+                        logger.error("[ORBEngine] Failed to mark contract_price_alert %s triggered: %s",
+                                     alert.get("id"), e)
+
             # SL grace-timer notification — fires once the instant the grace
             # window opens (this is the user's window to intervene manually
             # if they disagree with the pending auto-exit), not on every tick
@@ -1515,6 +1540,26 @@ class ORBEngine:
             self.exit_manager._runner_mode = row["runner_mode"]
         if row.get("cascade_enabled") is not None:
             self.exit_manager._cascade_enabled = bool(row["cascade_enabled"])
+
+        # Re-arm any still-watching contract price alerts (PositionInfoModal's
+        # PRICE ALERT section) — these live only on the in-memory ExitManager
+        # (see ExitManager.add_price_alert), so without this a restart would
+        # silently drop a pending alert the same way a lost stop/TP override
+        # would, if the reasoning above weren't already handling that case.
+        try:
+            alert_rows = (
+                self.logger.client.table("contract_price_alerts")
+                .select("*")
+                .eq("strategy_id", self.strategy_id)
+                .eq("status", "watching")
+                .execute()
+                .data or []
+            )
+            for alert_row in alert_rows:
+                self.exit_manager.add_price_alert(alert_row)
+        except Exception:
+            logger.error("[ORBEngine] Failed to reload contract price alerts for %s",
+                         self.strategy_id, exc_info=True)
 
         if self.stream_manager:
             self.stream_manager.subscribe(self.contract_symbol, self._on_stream_quote)
@@ -2589,6 +2634,11 @@ class ORBEngine:
 
         if fully_closed:
             self.reset_session()
+        else:
+            # A manual partial sell banks profit (or cuts size) same as TP1
+            # does — the remainder should be protected at breakeven with no
+            # grace/timer, not left sitting on the original pre-sale stop.
+            self.exit_manager.mark_breakeven()
 
         # Same (exit - entry) * qty * 100 convention as TradeLogger.log_exit's
         # stage_pnl — options premium is quoted per-share, contracts are

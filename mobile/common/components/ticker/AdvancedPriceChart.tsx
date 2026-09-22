@@ -314,9 +314,42 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // `chartData` used to be `data` merged with lazily-loaded earlier trading
   // days (panning past the left edge on 1D used to fetch and prepend prior
   // sessions). That's gone — 1D now hard-clamps at whatever `data` already
-  // contains, so this is just an alias; kept so the rest of this component
-  // doesn't need renaming.
-  const chartData = data;
+  // contains, so this is normally just an alias — EXCEPT for the one gap
+  // below, kept so the rest of this component doesn't need renaming.
+  //
+  // 2026-09-22: yfinance's 5m intraday bars for "today" don't exist until the
+  // first 5-minute interval actually finishes (~9:35 ET) — `data.prices` is
+  // legitimately empty for the first few minutes after the open, and the
+  // live-bar blend below (`isLiveBar`) requires at least one real bar to
+  // rewrite, so the chart sat blank the whole time despite `livePrice`
+  // already ticking. While that gap exists on 1D, synthesize a 2-point line
+  // (session open -> live) purely client-side so the chart shows real,
+  // moving data immediately — the moment `data.prices` actually has a bar
+  // for today, this stops firing and the real (cached, OHLC-capable) series
+  // takes back over on its own.
+  const chartData = useMemo(() => {
+    if (period !== '1D' || (data?.prices?.length ?? 0) > 0 || livePrice == null || livePrice <= 0) {
+      return data;
+    }
+    // Yesterday's regular close, carried over into today's pre-market
+    // session boundary — already concluded by the open, so present exactly
+    // when this synthetic gap can occur. Falls back to livePrice itself
+    // (a flat starting point) if that field isn't populated for some
+    // reason, rather than blocking the whole chart on one optional field.
+    const anchor = data?.session_lines?.pre_market_close ?? livePrice;
+    const now = new Date();
+    const marketOpen = new Date(now);
+    marketOpen.setHours(9, 30, 0, 0);
+    return {
+      ...data,
+      dates: [marketOpen.toISOString(), now.toISOString()],
+      prices: [anchor, livePrice],
+      volumes: [0, 0],
+      opens: undefined,
+      highs: undefined,
+      lows: undefined,
+    };
+  }, [data, period, livePrice]);
 
   // Global, persisted bar-granularity choice for the CURRENT period (5m vs
   // 15m on 1D, 1d vs 1wk on 3M, etc.) — shared via the same React-Query

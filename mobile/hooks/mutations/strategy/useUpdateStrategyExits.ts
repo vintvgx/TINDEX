@@ -36,6 +36,10 @@ interface UpdateStrategyExitsPayload {
    *  price instead of being force-closed there. No-op if this trade's
    *  profile never defined a floor. See exit_manager.py's apply_overrides. */
   sl_floor_enabled?: boolean;
+  /** Overrides the floor's actual PRICE (as opposed to sl_floor_enabled,
+   *  which only toggles it on/off) — lets the user pick their own
+   *  worst-case sell price instead of the profile's %-derived default. */
+  sl_outer_floor?: number;
 }
 
 export function useUpdateStrategyExits() {

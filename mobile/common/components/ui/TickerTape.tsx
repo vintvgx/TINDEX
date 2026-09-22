@@ -28,6 +28,7 @@ import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState
 import { useOrbHubHealth } from '@/hooks/queries/orb/useOrbHubHealth';
 import { usePendingConfirmations } from '@/hooks/queries/strategy/usePendingConfirmations';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import { useAccountValueDisplay } from '@/hooks/queries/strategy/useAccountValueDisplay';
 import { useSellStatus, type SellStatus } from '@/hooks/useSellStatus';
 import { Skeleton } from '@/common/components/ui/Skeleton';
 import type { WatchlistStock } from '@/common/types/watchlist';
@@ -55,6 +56,9 @@ const fmtPct = (c: number | null | undefined): string => {
   if (c == null) return '';
   return c >= 0 ? `+${c.toFixed(2)}%` : `${c.toFixed(2)}%`;
 };
+
+const fmtMoney = (v: number): string =>
+  `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 function TapeRow({
   items,
@@ -174,6 +178,19 @@ export function TickerTape() {
   // flashing blank first.
   const lastSellStatusesRef = useRef(sellStatuses);
   if (hasSellStatus) lastSellStatusesRef.current = sellStatuses;
+
+  // ── Long-press peek: Live Equity / Day PnL / Options BP — LIVE account
+  // only (no paper), see docs/todos/2026-09-17.md. Shown only while held
+  // (onPressOut hides it) and only when neither takeover above is active —
+  // those already occlude the base Pressable's touch, but this guard keeps
+  // it explicit rather than relying solely on z-order.
+  const { live: liveAccount } = useAccountValueDisplay();
+  const [showAccountOverlay, setShowAccountOverlay] = useState(false);
+  const handleTapeLongPress = () => {
+    if (pendingCount > 0 || sellOverlayMounted) return;
+    setShowAccountOverlay(true);
+  };
+  const handleTapePressOut = () => setShowAccountOverlay(false);
 
   // ── Data sources ──────────────────────────────────────────────────────────
   const { livePrices, spy, vix, sentiment } = useMarketStream(STREAM_TICKERS);
@@ -345,7 +362,15 @@ export function TickerTape() {
   // ON TOP of it instead of replacing it, so there's nothing to reconnect.
   return (
     <View style={{ backgroundColor: colors.tape, paddingTop: insets.top }}>
-      <Pressable style={styles.tape} onPress={cycle} accessibilityRole="button" accessibilityLabel={`Ticker tape: ${mode.label}. Tap to change.`}>
+      <Pressable
+        style={styles.tape}
+        onPress={cycle}
+        onLongPress={handleTapeLongPress}
+        onPressOut={handleTapePressOut}
+        delayLongPress={350}
+        accessibilityRole="button"
+        accessibilityLabel={`Ticker tape: ${mode.label}. Tap to change, hold for live account summary.`}
+      >
         <View style={[styles.liveDot, { backgroundColor: orbDotColor }]} />
 
         {/* Marquee — hidden (opacity 0) under the skeleton until the first
@@ -404,6 +429,40 @@ export function TickerTape() {
             {lastSellStatusesRef.current.map(s => <SellStatusLine key={s.id} status={s} colors={colors} />)}
           </View>
         </Animated.View>
+      )}
+
+      {pendingCount === 0 && !sellOverlayMounted && showAccountOverlay && (
+        <View
+          style={[styles.tape, styles.confirmTape, styles.overlay, { top: insets.top, backgroundColor: colors.tape }]}
+          pointerEvents="none"
+        >
+          <View style={[styles.row, { paddingLeft: 12 }]}>
+            {liveAccount ? (
+              <>
+                <View style={styles.item}>
+                  <Text style={[styles.symbol, { color: colors.tapeText }]}>Equity</Text>
+                  <Text style={[styles.value, { color: colors.tapeText }]}>{fmtMoney(liveAccount.equity)}</Text>
+                  <Text style={[styles.dot, { color: colors.tapeMuted }]}>•</Text>
+                </View>
+                <View style={styles.item}>
+                  <Text style={[styles.symbol, { color: colors.tapeText }]}>PnL Today</Text>
+                  <Text style={[styles.value, { color: liveAccount.pnl_today >= 0 ? colors.tapeUp : colors.tapeDown }]}>
+                    {liveAccount.pnl_today >= 0 ? '+' : '-'}{fmtMoney(Math.abs(liveAccount.pnl_today))} ({fmtPct(liveAccount.pnl_today_pct)})
+                  </Text>
+                  <Text style={[styles.dot, { color: colors.tapeMuted }]}>•</Text>
+                </View>
+                <View style={styles.item}>
+                  <Text style={[styles.symbol, { color: colors.tapeText }]}>Options BP</Text>
+                  <Text style={[styles.value, { color: colors.tapeText }]}>{fmtMoney(liveAccount.options_buying_power)}</Text>
+                </View>
+              </>
+            ) : (
+              <Text style={[styles.confirmText, { color: colors.tapeMuted }]} numberOfLines={1}>
+                Live account unavailable
+              </Text>
+            )}
+          </View>
+        </View>
       )}
     </View>
   );
