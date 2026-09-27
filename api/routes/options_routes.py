@@ -81,6 +81,52 @@ def get_options(ticker: str):
         return jsonify({"success": False, "error": f"Options retrieval failed: {str(e)}", "ticker": ticker}), 500
 
 
+def build_tracking_snapshot(contract_symbol: str, data: dict) -> dict:
+    """
+    Auto-fetch an Alpaca snapshot for a contract being tracked without one
+    (shared by /track-option and routes/muse.py's watchlist route). Returns
+    {} when Alpaca has nothing, same as the caller passing no snapshot.
+    """
+    tracking_snapshot: dict = {}
+    logger.info("[track-option] No snapshot provided for %s — attempting Alpaca auto-fetch", contract_symbol)
+    try:
+        from services.alpaca.alpaca_option_service import get_alpaca_option_service
+        raw = _run_async(get_alpaca_option_service().get_contract_snapshot(contract_symbol))
+        if raw:
+            bid = raw.get("bid") or 0.0
+            ask = raw.get("ask") or 0.0
+            tracking_snapshot = {
+                "ask": ask,
+                "bid": bid,
+                "contractSymbol": contract_symbol,
+                "delta": raw.get("delta"),
+                "dte": 0,
+                "expirationDate": raw.get("expiration", data.get("expirationDate", "")),
+                "extrinsicValue": 0,
+                "gamma": raw.get("gamma"),
+                "impliedVolatility": raw.get("implied_volatility") or 0,
+                "intrinsicValue": 0,
+                "lastPrice": raw.get("last_price"),
+                "mark": (bid + ask) / 2 if (bid > 0 or ask > 0) else 0,
+                "moneyness": 0,
+                "openInterest": raw.get("open_interest") or 0,
+                "optionType": raw.get("option_type", data.get("optionType", "").upper()),
+                "reasons": "",
+                "signal": "CONSIDER",
+                "spreadPct": ((ask - bid) / ask * 100) if ask > 0 else 0,
+                "theta": raw.get("theta"),
+                "total_score": 0,
+                "vega": raw.get("vega"),
+                "volume": raw.get("volume") or 0,
+            }
+            logger.info("[track-option] Alpaca snapshot OK for %s", contract_symbol)
+        else:
+            logger.warning("[track-option] Alpaca returned no snapshot for %s", contract_symbol)
+    except Exception as snap_err:
+        logger.warning("[track-option] Auto-fetch failed for %s: %s", contract_symbol, snap_err, exc_info=True)
+    return tracking_snapshot
+
+
 @bp.route("/track-option", methods=["POST"])
 def track_option():
     try:
@@ -103,42 +149,7 @@ def track_option():
         tracking_snapshot = data.get("trackingSnapshot", {})
 
         if not tracking_snapshot and contract_symbol:
-            logger.info("[track-option] No snapshot provided for %s — attempting Alpaca auto-fetch", contract_symbol)
-            try:
-                from services.alpaca.alpaca_option_service import get_alpaca_option_service
-                raw = _run_async(get_alpaca_option_service().get_contract_snapshot(contract_symbol))
-                if raw:
-                    bid = raw.get("bid") or 0.0
-                    ask = raw.get("ask") or 0.0
-                    tracking_snapshot = {
-                        "ask": ask,
-                        "bid": bid,
-                        "contractSymbol": contract_symbol,
-                        "delta": raw.get("delta"),
-                        "dte": 0,
-                        "expirationDate": raw.get("expiration", data.get("expirationDate", "")),
-                        "extrinsicValue": 0,
-                        "gamma": raw.get("gamma"),
-                        "impliedVolatility": raw.get("implied_volatility") or 0,
-                        "intrinsicValue": 0,
-                        "lastPrice": raw.get("last_price"),
-                        "mark": (bid + ask) / 2 if (bid > 0 or ask > 0) else 0,
-                        "moneyness": 0,
-                        "openInterest": raw.get("open_interest") or 0,
-                        "optionType": raw.get("option_type", data.get("optionType", "").upper()),
-                        "reasons": "",
-                        "signal": "CONSIDER",
-                        "spreadPct": ((ask - bid) / ask * 100) if ask > 0 else 0,
-                        "theta": raw.get("theta"),
-                        "total_score": 0,
-                        "vega": raw.get("vega"),
-                        "volume": raw.get("volume") or 0,
-                    }
-                    logger.info("[track-option] Alpaca snapshot OK for %s", contract_symbol)
-                else:
-                    logger.warning("[track-option] Alpaca returned no snapshot for %s", contract_symbol)
-            except Exception as snap_err:
-                logger.warning("[track-option] Auto-fetch failed for %s: %s", contract_symbol, snap_err, exc_info=True)
+            tracking_snapshot = build_tracking_snapshot(contract_symbol, data)
 
         contract_data = {
             "ticker": ticker,
