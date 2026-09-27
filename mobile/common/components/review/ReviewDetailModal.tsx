@@ -1,12 +1,17 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Modal, View, Text, ScrollView, TouchableOpacity,
-  ActivityIndicator, SafeAreaView,
+  ActivityIndicator, SafeAreaView, LayoutAnimation, Platform, UIManager,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { usePerformanceReview } from '@/hooks/queries/review/usePerformanceReviews';
+import { ReviewTradeChart } from '@/common/components/review/ReviewTradeChart';
 import type { ReviewTrade } from '@/common/types/review';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 interface Props {
   date: string | null;
@@ -68,11 +73,48 @@ function parseMarkdown(md: string): Array<{ type: 'h1' | 'h2' | 'text' | 'divide
   return sections.map(s => ({ ...s, content: s.content.trim() })).filter(s => s.type !== 'text' || s.content.length > 0);
 }
 
+/**
+ * Pulls a handful of scannable bullets out of the "What Worked" / "What
+ * Didn't Work" / "Next Session Recommendations" sections so the trader gets
+ * the actionable gist without reading the full report — the report itself
+ * stays available below, collapsed by default (see `analysisOpen` in the
+ * main modal). Caps at 2 bullets per section to keep this genuinely a
+ * summary, not a second copy of the report.
+ */
+function extractKeyTakeaways(parsed: ReturnType<typeof parseMarkdown>): { label: string; icon: string; color: string; lines: string[] }[] {
+  const sectionsWanted: { heading: string; label: string; icon: string; color: string }[] = [
+    { heading: 'what worked',                 label: 'Worked',  icon: 'checkmark-circle', color: '#10B981' },
+    { heading: "what didn't work",            label: 'Didn’t Work', icon: 'close-circle', color: '#EF4444' },
+    { heading: 'next session recommendations', label: 'Do Next', icon: 'arrow-forward-circle', color: '#3B82F6' },
+  ];
+  const out: { label: string; icon: string; color: string; lines: string[] }[] = [];
+
+  for (const want of sectionsWanted) {
+    const idx = parsed.findIndex(b => b.type === 'h2' && b.content.trim().toLowerCase() === want.heading);
+    if (idx === -1) continue;
+    const body = parsed[idx + 1];
+    if (!body || body.type !== 'text') continue;
+    const bullets = body.content
+      .split('\n')
+      .map(l => l.trim().replace(/^[-*•]\s*/, '').replace(/^\d+\.\s*/, '').replace(/\*\*/g, ''))
+      .filter(l => l.length > 0)
+      .slice(0, 2);
+    if (bullets.length > 0) out.push({ ...want, lines: bullets });
+  }
+  return out;
+}
+
 // ── Trade card ────────────────────────────────────────────────────────────────
 function TradeCard({ trade, colors }: { trade: ReviewTrade; colors: ReturnType<typeof useThemeColors> }) {
   const dirColor = trade.direction === 'CALL' ? '#10B981' : '#EF4444';
   const exitColor = EXIT_COLORS[trade.exit_reason] ?? colors.textSecondary;
   const profit = (trade.pnl ?? 0) >= 0;
+  const [chartOpen, setChartOpen] = useState(false);
+
+  const toggleChart = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setChartOpen(v => !v);
+  };
 
   return (
     <View style={{
@@ -141,6 +183,20 @@ function TradeCard({ trade, colors }: { trade: ReviewTrade; colors: ReturnType<t
           </Text>
         )}
       </View>
+
+      {/* Chart toggle — lazily fetches Price/VWAP/Volume/RSI for this trade's
+          session day only when opened (see ReviewTradeChart.tsx) */}
+      <TouchableOpacity
+        onPress={toggleChart}
+        activeOpacity={0.7}
+        style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 10 }}
+      >
+        <Ionicons name={chartOpen ? 'chevron-up' : 'stats-chart-outline'} size={13} color={colors.accent} />
+        <Text style={{ color: colors.accent, fontSize: 11, fontWeight: '600' }}>
+          {chartOpen ? 'Hide Chart' : 'Show Chart — Volume, RSI, VWAP'}
+        </Text>
+      </TouchableOpacity>
+      {chartOpen && <ReviewTradeChart trade={trade} colors={colors} />}
     </View>
   );
 }
@@ -224,11 +280,19 @@ export function ReviewDetailModal({ date, paperMode, visible, onClose }: Props) 
   const colors = useThemeColors();
   const { data, isLoading, error } = usePerformanceReview(date, paperMode);
   const review = data?.data;
+  const [analysisOpen, setAnalysisOpen] = useState(false);
 
   const parsedMd = useMemo(
     () => review?.markdown ? parseMarkdown(review.markdown) : [],
     [review?.markdown],
   );
+
+  const takeaways = useMemo(() => extractKeyTakeaways(parsedMd), [parsedMd]);
+
+  const toggleAnalysis = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setAnalysisOpen(v => !v);
+  };
 
   const trades: ReviewTrade[] = useMemo(() => {
     if (!review?.trades_json) return [];
@@ -293,6 +357,33 @@ export function ReviewDetailModal({ date, paperMode, visible, onClose }: Props) 
               <StatBox label="Win %" value={`${review.win_rate.toFixed(0)}%`} colors={colors} color={colors.accent} />
             </View>
 
+            {/* Key Takeaways — the scannable gist, pulled from the full AI
+                report below (which stays collapsed by default) so the
+                trader isn't required to read the whole document to get the
+                actionable point of it. */}
+            {takeaways.length > 0 && (
+              <View style={{ marginBottom: 20 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                  <Ionicons name="bulb" size={14} color={colors.accent} />
+                  <Text style={{ color: colors.accent, fontSize: 11, fontWeight: '700', letterSpacing: 0.8 }}>KEY TAKEAWAYS</Text>
+                </View>
+                {takeaways.map(t => (
+                  <View key={t.label} style={{
+                    flexDirection: 'row', gap: 8, backgroundColor: colors.surface,
+                    borderRadius: 10, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: colors.border,
+                  }}>
+                    <Ionicons name={t.icon as any} size={16} color={t.color} style={{ marginTop: 1 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: t.color, fontSize: 11, fontWeight: '700', marginBottom: 2 }}>{t.label}</Text>
+                      {t.lines.map((line, i) => (
+                        <Text key={i} style={{ color: colors.textSecondary, fontSize: 12, lineHeight: 17 }}>{line}</Text>
+                      ))}
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+
             {/* Paper trades */}
             {paperTrades.length > 0 && (
               <>
@@ -329,15 +420,26 @@ export function ReviewDetailModal({ date, paperMode, visible, onClose }: Props) 
               </>
             )}
 
-            {/* AI analysis */}
+            {/* Full AI analysis — collapsed by default. Everything actionable
+                is already surfaced in Key Takeaways above; this is the
+                complete report for whenever the trader wants the full
+                trade-by-trade reasoning, not something they're required to
+                scroll through every time. */}
             {parsedMd.length > 0 && (
               <>
                 <View style={{ height: 1, backgroundColor: colors.separator, marginVertical: 20 }} />
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <TouchableOpacity
+                  onPress={toggleAnalysis}
+                  activeOpacity={0.7}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: analysisOpen ? 12 : 0 }}
+                >
                   <Ionicons name="sparkles" size={14} color={colors.accent} />
-                  <Text style={{ color: colors.accent, fontSize: 11, fontWeight: '700', letterSpacing: 0.8 }}>AI ANALYSIS</Text>
-                </View>
-                <MarkdownSection parsed={parsedMd} colors={colors} />
+                  <Text style={{ color: colors.accent, fontSize: 11, fontWeight: '700', letterSpacing: 0.8, flex: 1 }}>
+                    FULL AI ANALYSIS
+                  </Text>
+                  <Ionicons name={analysisOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textTertiary} />
+                </TouchableOpacity>
+                {analysisOpen && <MarkdownSection parsed={parsedMd} colors={colors} />}
               </>
             )}
           </ScrollView>

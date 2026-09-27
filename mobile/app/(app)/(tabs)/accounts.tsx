@@ -2,18 +2,19 @@ import React, { useState, useCallback } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { SegmentedPager } from '@/common/components/ui/SegmentedPager';
-import AccountsOverviewScreen from './accounts_overview';
-import PositionScreen from './position';
+import AlpacaScreen from './alpaca_overview';
+import RobinhoodScreen from './robinhood_overview';
 
 const ROUTES = [
-  { key: 'accounts', label: 'Accounts' },
-  { key: 'positions', label: 'Live Positions' },
+  { key: 'alpaca', label: 'Alpaca' },
+  { key: 'robinhood', label: 'Robin Hood' },
 ];
 
 /**
- * Accounts tab — swipeable pager: Accounts | Live Positions. Live Positions
- * reuses the exact same PositionScreen component as Home's pager (it's a
- * self-contained "all open positions" view, not tied to how you got there).
+ * Accounts tab — swipeable pager by broker: Alpaca | Robin Hood. Alpaca
+ * itself folds the account Summary and Live Positions views together (see
+ * alpaca_overview.tsx) since both were Alpaca-only content previously
+ * surfaced as separate top-level segments here.
  */
 export default function AccountsTabScreen() {
   const { section } = useLocalSearchParams<{ section?: string }>();
@@ -36,8 +37,8 @@ export default function AccountsTabScreen() {
       activeKey={activeKey}
       renderScene={key => {
         switch (key) {
-          case 'accounts': return <AccountsOverviewScreen embedded />;
-          case 'positions': return <PositionScreen embedded />;
+          case 'alpaca': return <AlpacaScreen embedded />;
+          case 'robinhood': return <RobinhoodScreen embedded />;
           default: return null;
         }
       }}

@@ -38,6 +38,11 @@ export interface ORBMonitoringState {
   current_price: number | null;
   breakout_type: 'none' | 'invalidated' | 'Bullish' | 'Bearish' | 'Retesting Bullish' | 'Retesting Bearish' | 'Confirmed Bullish' | 'Confirmed Bearish' | 'reversal' | 'Offline';
   breakout_price: number | null;
+  /** ISO deadline for the 3-minute confirmation hold — non-null only while
+   *  breakout_type is exactly 'Bullish'/'Bearish' (see monitoring_state_cache.py).
+   *  Optional: rows written before the confirm_deadline migration/backend
+   *  deploy, or offline mock data, simply won't have it. */
+  confirm_deadline?: string | null;
   volume: number | null;
   tracking: string | null;
   high_broken: boolean;
@@ -90,12 +95,22 @@ export function useORBMonitoringState(
       }
 
       const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-      
-      
+
+      // This table keeps one row per (ticker, trade_date) — without this
+      // filter a ticker with history from a prior day could return more
+      // than one row, and nothing here disambiguates which one wins once
+      // callers key a map off `ticker` alone (dashboard.tsx's orbMap,
+      // useCandidateBreakouts' monitoringByTicker). The realtime
+      // subscription below already assumed this filter existed (it
+      // separately drops any incoming event whose trade_date !== today);
+      // this brings the initial/refetch query in line with that same
+      // assumption. 2026-08-04: suspected root cause of candidate breakout
+      // cards silently not appearing for SPY/IWM despite a real live
+      // breakout — a stale prior-day row could win over today's live one.
       const { data, error } = await supabase
         .from('orb_monitoring_state')
         .select('*')
-
+        .eq('trade_date', today)
         .order('ticker', { ascending: true });
 
       if (error) {
@@ -109,7 +124,15 @@ export function useORBMonitoringState(
       return (data || []) as ORBMonitoringState[];
     },
     staleTime: 0, // Always consider data stale so real-time updates trigger refetch
-    refetchInterval: false, // No polling needed with real-time subscription
+    // Was `false` ("no polling needed with real-time subscription") — but
+    // this hook has zero fallback if that Supabase Realtime channel ever
+    // silently dies (e.g. surviving a background/foreground cycle isn't
+    // guaranteed), which left ORB tiles/candidate breakouts frozen for the
+    // rest of the session with nothing to recover them (2026-09-01 report:
+    // "Dashboard data is not being updated"). A conservative 45s poll is a
+    // cheap safety net without turning this back into the primary update
+    // path — the realtime subscription still delivers the fast path.
+    refetchInterval: 45_000,
     retry: 2,
     retryDelay: 1000,
   });

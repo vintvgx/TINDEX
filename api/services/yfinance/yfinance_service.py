@@ -1,13 +1,323 @@
 from services.utils.options_analyzer import OptionsAnalyzer
 import yfinance as yf
 import pandas as pd
+import pytz
 from log.logging_config import get_logger
 
 from datetime import datetime, timedelta, timezone
 
-from urllib.parse import urlparse
-
 logger = get_logger(__name__)
+
+ET = pytz.timezone("America/New_York")
+
+# Maps a chart timeframe key to the (period, interval) args yfinance expects.
+# The interval here is each period's DEFAULT — see ALLOWED_INTERVALS below
+# for the full set a client may request instead via `interval_override`.
+PERIOD_MAP = {
+    "1D": ("1d", "5m"),
+    "1W": ("5d", "30m"),
+    "1M": ("1mo", "1d"),
+    "3M": ("3mo", "1d"),
+    "YTD": ("ytd", "1d"),
+    "1Y": ("1y", "1d"),
+    "5Y": ("5y", "1wk"),
+}
+
+# Every interval a client may request per period, constrained by Yahoo's real
+# lookback limits for sub-daily bars — roughly 60 days for intervals <=60m,
+# and unreliable/often-empty well past that. Never expose a combination here
+# that Yahoo doesn't actually serve; an invalid `interval_override` silently
+# falls back to the period's PERIOD_MAP default rather than erroring, so a
+# stale/bad client value never breaks the chart, it just ignores the request.
+ALLOWED_INTERVALS = {
+    "1D":  ["5m", "15m"],
+    "1W":  ["15m", "30m", "1h"],
+    "1M":  ["1h", "1d"],
+    "3M":  ["1d", "1wk"],
+    "YTD": ["1d", "1wk"],
+    "1Y":  ["1d", "1wk"],
+    "5Y":  ["1wk", "1mo"],
+}
+
+
+def _session_boundary_lines(hist: "pd.DataFrame") -> dict | None:
+    """
+    1D-chart-only: fixed reference prices at each extended-hours session
+    boundary (Pre-Market/Market-Hours-close/Post-Market/Overnight), mirroring
+    TradingView's own guide lines. Derived entirely from the fetched bars'
+    own timestamps — NOT from wall-clock "now" — so this is correct whenever
+    the request happens to land (including hours after the session in
+    question, e.g. checking at 3 AM against yesterday's already-closed day).
+
+    A boundary's line is only included once the LATEST bar in `hist` has
+    already progressed past it — i.e. the session actually ended — never a
+    running/live value for a session still in progress. "overnight_price" is
+    the flip side: only present once post-market itself has concluded, using
+    the most recent known close as the standing price until pre-market data
+    resumes (there is no real overnight tick source here).
+    """
+    if hist.empty or "Close" not in hist.columns:
+        return None
+    idx = hist.index
+    if getattr(idx, "tz", None) is None:
+        return None
+    idx_et = idx.tz_convert(ET)
+    minutes_of_day = [t.hour * 60 + t.minute for t in idx_et]
+    closes = hist["Close"].tolist()
+
+    PRE_END, REG_END, POST_END = 9 * 60 + 30, 16 * 60, 20 * 60
+    latest_minute = minutes_of_day[-1]
+
+    def _last_close_before(cutoff: int) -> float | None:
+        best = None
+        for m, c in zip(minutes_of_day, closes):
+            if m < cutoff:
+                best = c
+            else:
+                break
+        return float(best) if best is not None else None
+
+    result: dict = {}
+    if latest_minute >= PRE_END:
+        v = _last_close_before(PRE_END)
+        if v is not None:
+            result["pre_market_close"] = v
+    if latest_minute >= REG_END:
+        v = _last_close_before(REG_END)
+        if v is not None:
+            result["market_close"] = v
+    if latest_minute >= POST_END:
+        v = _last_close_before(POST_END)
+        if v is not None:
+            result["post_market_close"] = v
+        result["overnight_price"] = float(closes[-1])
+
+    return result or None
+
+
+def _latest_date_only(hist: "pd.DataFrame") -> "pd.DataFrame":
+    """
+    Restrict to bars from the single most recent calendar date (ET) present
+    in `hist`. `_session_boundary_lines()` assumes a day-scoped, chronologically
+    simple bar sequence (it breaks out of its scan at the first bar past a
+    cutoff) — that assumption held for free back when the 1D fetch itself was
+    always period="1d". Now that get_historical_prices() widens the 1D fetch
+    to period="5d" (see its docstring) so the pre-market fallback in
+    _regular_session_only() has a prior session to fall back onto, this slice
+    is what keeps _session_boundary_lines() fed only "today"'s bars instead of
+    silently picking up boundary prices from several days ago.
+    """
+    if hist.empty or getattr(hist.index, "tz", None) is None:
+        return hist
+    idx_et = hist.index.tz_convert(ET)
+    dates_et = idx_et.date
+    latest_date = max(dates_et)
+    return hist[dates_et == latest_date]
+
+
+def _regular_session_only(hist: "pd.DataFrame") -> "pd.DataFrame":
+    """
+    Trim to ONLY the most recent trading date's regular-session bars
+    (09:30-16:00 ET) — Robinhood's 1D chart never plots pre-market/after-
+    hours candles, just the regular session, and yfinance's period="1d"
+    interval="5m" + prepost=True can return more than one calendar day's
+    worth of bars (the extended-hours tail of the prior close bleeding into
+    the window, or a full extra day around a weekend/holiday) — that's what
+    produced the multi-day, gap-heavy chart reported 2026-08-31.
+
+    Deliberately called on the RAW prepost `hist`, separately from (and
+    after) _session_boundary_lines() — those dashed Pre-Market/Post-Market
+    reference lines are flat context values, not plotted candles, so they
+    still need the full extended-hours data even though the candle series
+    itself no longer does.
+    """
+    if hist.empty or getattr(hist.index, "tz", None) is None:
+        return hist
+    idx_et = hist.index.tz_convert(ET)
+    dates_et = idx_et.date
+    minutes = idx_et.hour * 60 + idx_et.minute
+    in_session = (minutes >= 9 * 60 + 30) & (minutes < 16 * 60)
+
+    # The most recent date that actually HAS a regular-session bar — not
+    # just the most recent date present. Before 09:30 ET, today's only bars
+    # so far may be pre-market ticks (today would have zero in-session
+    # bars) — falling back to whatever the latest date WITH a real session
+    # bar is (typically the prior trading day) avoids returning an empty
+    # chart during the pre-market window.
+    session_dates = sorted(set(dates_et[in_session]), reverse=True)
+    if not session_dates:
+        return hist.iloc[0:0]
+    target_date = session_dates[0]
+    mask = in_session & (dates_et == target_date)
+    return hist[mask]
+
+
+def get_historical_prices(ticker: str, period_key: str, interval_override: str | None = None) -> dict:
+    """
+    Fetch a single timeframe's historical price series for the chart.
+
+    Args:
+        ticker: The stock ticker
+        period_key: One of PERIOD_MAP's keys (e.g. "1D", "1Y"); falls back to "1M"
+        interval_override: A client-requested bar granularity (e.g. "15m" on
+            1D instead of the default "5m") — validated against
+            ALLOWED_INTERVALS[period_key]; anything not in that list
+            (including None, or a value left over from a different period)
+            silently falls back to PERIOD_MAP's default rather than erroring.
+
+    Returns:
+        Dict with "dates", "prices" (closes), "volumes", plus "opens"/"highs"/"lows"
+        so the mobile chart can render candlesticks (empty lists on failure),
+        and "interval" (the ACTUAL interval used, post-validation — the
+        client's source of truth for what it got back, since a stale/invalid
+        override is silently ignored above).
+        1D responses also include "session_lines" (pre/market/post-market
+        boundary prices) — see _session_boundary_lines — but ONLY while the
+        request itself lands outside regular trading hours (before 09:30 or
+        at/after 16:00 ET). TradingView doesn't show pre-market/overnight
+        context while the regular session is live (the live price already
+        covers "now" then) — omitted entirely during regular hours rather
+        than computed and left for the mobile client to hide, so there's one
+        source of truth for "is this relevant right now" (2026-08-27 fix).
+    """
+    period, default_interval = PERIOD_MAP.get(period_key, PERIOD_MAP["1M"])
+    allowed = ALLOWED_INTERVALS.get(period_key, [default_interval])
+    interval = interval_override if interval_override in allowed else default_interval
+    # Extended-hours bars only requested for 1D — that's the only period
+    # where session boundaries (and the Pre-Market/Post-Market chart lines)
+    # are meaningful; every other period is already daily/weekly closes.
+    prepost = period_key == "1D"
+    # 1D fetches "5d" (not "1d") so _regular_session_only()'s pre-market
+    # fallback actually has a prior trading day to fall back onto. yfinance's
+    # period="1d" only returns bars from the CURRENT calendar day — before
+    # 09:30 ET that's premarket ticks only (zero regular-session bars), so
+    # the fallback had nothing in the fetched window to find, and the chart
+    # came back "No Chart Data" every morning before the open (2026-09-01
+    # fix). _latest_date_only() below keeps _session_boundary_lines() scoped
+    # to just today's bars despite the wider fetch.
+    fetch_period = "5d" if period_key == "1D" else period
+    try:
+        hist = yf.Ticker(ticker).history(period=fetch_period, interval=interval, prepost=prepost)
+        # Intraday intervals can include rows with NaN prices (halts, thin
+        # bars at the session edges). NaN isn't valid JSON and breaks the
+        # mobile JSON.parse, so drop those rows before serializing.
+        if not hist.empty and "Close" in hist.columns:
+            hist = hist.dropna(subset=["Close"])
+    except Exception as e:
+        logger.warning(f"Failed to get historical prices for {ticker} ({period_key}): {str(e)}")
+        hist = pd.DataFrame()
+
+    # Computed from the full prepost `hist` BEFORE trimming below — these are
+    # flat reference lines, not plotted candles, so they still want the
+    # extended-hours bars even though the candle series itself no longer does.
+    session_lines = (
+        _session_boundary_lines(_latest_date_only(hist))
+        if prepost and not _is_regular_trading_hours()
+        else None
+    )
+
+    # 1D candles are regular-session-only (see _regular_session_only) —
+    # Robinhood never plots pre-market/after-hours candles on its 1D chart,
+    # just the 09:30-16:00 ET session, one trading day at a time (panning to
+    # an earlier day is a separate request — see /ticker/<ticker>/history-date).
+    if period_key == "1D":
+        hist = _regular_session_only(hist)
+
+    def _col(name: str) -> list:
+        return hist[name].tolist() if not hist.empty and name in hist.columns else []
+
+    result = {
+        "dates": (
+            hist.index.strftime("%Y-%m-%dT%H:%M:%S%z").tolist()
+            if not hist.empty and hasattr(hist.index, "strftime")
+            else []
+        ),
+        "prices": _col("Close"),
+        "volumes": _col("Volume"),
+        "opens": _col("Open"),
+        "highs": _col("High"),
+        "lows": _col("Low"),
+        "interval": interval,
+    }
+
+    if session_lines:
+        result["session_lines"] = session_lines
+
+    return result
+
+
+def _is_regular_trading_hours(now_et: "datetime | None" = None) -> bool:
+    """True Mon-Fri 09:30-16:00 ET. Weekday-only is good enough here — the
+    only cost of missing a holiday is session_lines staying suppressed on a
+    day the market was never open anyway, which is harmless."""
+    now_et = now_et or datetime.now(ET)
+    if now_et.weekday() >= 5:
+        return False
+    minutes = now_et.hour * 60 + now_et.minute
+    return 9 * 60 + 30 <= minutes < 16 * 60
+
+
+def get_intraday_chart_for_date(ticker: str, date_str: str, interval: str = "5m") -> dict:
+    """
+    Intraday OHLCV + VWAP + RSI(14) for ONE specific past calendar day —
+    used by the Daily Review's per-trade chart (see routes/ticker_routes.py's
+    /ticker/<ticker>/history-date) so a trade card can show what actually
+    happened around its entry/exit, not just the numbers.
+
+    yfinance only serves intraday intervals for a limited lookback window
+    (roughly 60 days for 5m/15m bars, far less for 1m) — a request for an
+    older session_date simply comes back empty. That's expected, not an
+    error: callers must check "available" and show a graceful fallback
+    rather than treating an empty result as a fetch failure.
+
+    RSI-14 uses the same simple-rolling-mean convention as
+    technical_service.get_technicals (not true Wilder smoothing) — kept
+    consistent with the rest of this codebase rather than mixing conventions.
+    VWAP resets each session (cumulative from the first bar of THIS date only),
+    matching how VWAP is meant to be read on an intraday chart.
+    """
+    import pandas as pd
+
+    try:
+        start = datetime.strptime(date_str, "%Y-%m-%d")
+        end = start + timedelta(days=1)
+        hist = yf.Ticker(ticker).history(start=start, end=end, interval=interval)
+        if not hist.empty and "Close" in hist.columns:
+            hist = hist.dropna(subset=["Close"])
+    except Exception as e:
+        logger.warning(f"Failed to get intraday chart for {ticker} on {date_str}: {str(e)}")
+        hist = pd.DataFrame()
+
+    if hist.empty:
+        return {"available": False, "dates": [], "opens": [], "highs": [], "lows": [],
+                "closes": [], "volumes": [], "vwap": [], "rsi": []}
+
+    typical = (hist["High"] + hist["Low"] + hist["Close"]) / 3
+    cum_pv  = (typical * hist["Volume"]).cumsum()
+    cum_vol = hist["Volume"].cumsum().replace(0, float("nan"))
+    vwap    = (cum_pv / cum_vol).bfill().fillna(hist["Close"]).tolist()
+
+    close = hist["Close"]
+    delta = close.diff()
+    gain  = delta.clip(lower=0).rolling(14).mean()
+    loss  = (-delta.clip(upper=0)).rolling(14).mean()
+    rs    = gain / loss.replace(0, float("nan"))
+    rsi_series = (100 - 100 / (1 + rs))
+    # First 14 bars have no RSI yet (insufficient window) — null, not 0/NaN,
+    # so the frontend can skip plotting them instead of drawing a false floor.
+    rsi = [None if pd.isna(v) else float(v) for v in rsi_series.tolist()]
+
+    return {
+        "available": True,
+        "dates":   hist.index.strftime("%Y-%m-%dT%H:%M:%S%z").tolist(),
+        "opens":   hist["Open"].tolist(),
+        "highs":   hist["High"].tolist(),
+        "lows":    hist["Low"].tolist(),
+        "closes":  hist["Close"].tolist(),
+        "volumes": hist["Volume"].tolist(),
+        "vwap":    [round(float(v), 4) for v in vwap],
+        "rsi":     rsi,
+    }
 
 
 def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_options_analysis: bool | None = True) -> dict:
@@ -56,8 +366,14 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_opt
             logger.warning(f"Failed to get recommendations for {topic}: {str(e)}")
             recommendations_list = []
 
-        # Get current price and change
-        current_price = info.get("currentPrice", 0)
+        # Get current price and change.
+        # ETFs (and some other non-equity tickers) don't populate "currentPrice" —
+        # that field is equity-specific — so it comes back 0/missing. Fall back to
+        # "regularMarketPrice", then to the most recent trading day's close from
+        # the historical data already fetched above, before giving up at 0.
+        current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
+        if not current_price and not hist.empty and "Close" in hist.columns:
+            current_price = float(hist["Close"].iloc[-1])
         previous_close = info.get("previousClose", current_price)
         price_change = current_price - previous_close
         price_change_percent = (
@@ -199,15 +515,16 @@ def perform_yfinance_search(ticker: str) -> dict:
             logger.warning(f"Failed to get basic info for {ticker}: {str(e)}")
             info = {}
 
-        # Get current price and change
-        current_price = info.get("currentPrice", 0)
+        # Get current price and change. See perform_yfinance_research for why
+        # ETFs need the "regularMarketPrice" fallback.
+        current_price = info.get("currentPrice") or info.get("regularMarketPrice") or 0
         previous_close = info.get("previousClose", current_price)
         price_change = current_price - previous_close
         price_change_percent = (
             (price_change / previous_close * 100) if previous_close else 0
         )
 
-        
+
         search_data = {
             "ticker": ticker,
             "company_name": info.get("longName", info.get("shortName", ticker)),
@@ -339,18 +656,21 @@ def analyze_sentiment(research_data: dict) -> dict:
 
 
 def get_company_logo(info: dict, ticker: str) -> str:
-    """Get company logo URL with fallbacks."""
-    
+    """Get company logo URL with fallbacks.
+
+    Clearbit's free logo API (the previous primary source here) is no longer
+    reliably reachable, so Financial Modeling Prep's ticker-keyed logo CDN —
+    confirmed working and doesn't depend on yfinance having a `website` field —
+    is used instead. The frontend falls back to a text placeholder if a given
+    ticker has no logo there (FMP 404s rather than erroring).
+    """
+
     # Try yFinance logo_url first
     logo_url = info.get("logo_url")
     if logo_url:
         return logo_url
-    
-    # Try Clearbit with company website
-    website = info.get("website")
-    if website:
-        domain = urlparse(website).netloc or website
-        return f"https://logo.clearbit.com/{domain}"
-    
-    # Fallback to a default or placeholder
-    return "https://craftsnippets.com/articles_images/placeholder/placeholder.jpg" 
+
+    if ticker:
+        return f"https://financialmodelingprep.com/image-stock/{ticker.upper()}.png"
+
+    return "https://craftsnippets.com/articles_images/placeholder/placeholder.jpg"

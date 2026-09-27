@@ -52,6 +52,40 @@ export function useAlpacaBothAccounts(enabled: boolean = true) {
   });
 }
 
+export interface AccountTransfer {
+  id: string;
+  date: string;
+  amount: number;
+  direction: 'deposit' | 'withdrawal';
+  status: string | null;
+  description: string;
+}
+
+export interface AccountTransfersResponse {
+  success: boolean;
+  transfers: AccountTransfer[];
+  error?: string;
+}
+
+/**
+ * Live-account ACH transfer history — paper accounts start with a fixed
+ * virtual balance and don't take real transfers, so there's nothing to show
+ * for that side (see api/routes/strategy_routes.py's get_account_transfers).
+ * Changes rarely, so a longer staleTime than the balance/history polls.
+ */
+export function useAlpacaTransfers() {
+  return useQuery<AccountTransfersResponse>({
+    queryKey: ['alpaca-transfers'],
+    queryFn: async () => {
+      const res = await fetch(`${RAILWAY_BASE_URL}/strategy/accounts/transfers`);
+      const json = await res.json();
+      return json as AccountTransfersResponse;
+    },
+    staleTime: 5 * 60_000,
+    retry: 1,
+  });
+}
+
 export function useAlpacaAccountsHistory() {
   return useQuery<AccountsHistoryResponse>({
     queryKey: ['alpaca-accounts-history'],

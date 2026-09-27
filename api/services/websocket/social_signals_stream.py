@@ -38,6 +38,7 @@ import time
 from typing import Optional
 
 from log.logging_config import get_logger
+from services.utils.market_hours import is_market_hours
 
 logger = get_logger(__name__)
 
@@ -93,6 +94,9 @@ class SocialSignalsStreamService:
 
     def _loop(self):
         while self._running:
+            if not is_market_hours():
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
             t0 = time.time()
             try:
                 self._resync()

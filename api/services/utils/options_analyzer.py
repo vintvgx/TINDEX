@@ -109,11 +109,18 @@ class OptionsAnalyzer:
                 options['extrinsicValue'] = options['mark']
                 options['momentum_factor'] = 0
 
-            # Adjust spreadPct calculation to handle invalid quotes
+            # Adjust spreadPct calculation to handle invalid quotes. Uses 100
+            # (worst-case spread, matching the fillna(100) fallback already
+            # used when scoring this column) instead of NaN — NaN survives
+            # into the final API response as the bare JSON token `NaN`,
+            # which is invalid per RFC 8259: JS's JSON.parse throws on it,
+            # so the whole /ticker/<ticker> response silently failed to
+            # parse client-side for any ticker whose top-10 scored
+            # opportunities included one illiquid (zero bid or ask) contract.
             options['spreadPct'] = np.where(
                 (options['bid'] > 0) & (options['ask'] > 0) & (options['mark'] > 0),
                 (options['spread'] / options['mark']) * 100,
-                np.nan  # or use a very large value like 1e6 to represent worst liquidity
+                100.0
             )
             
             self.options_df = options
@@ -473,7 +480,11 @@ class OptionsAnalyzer:
                 'gamma': float(row.get('gamma', 0)) if pd.notna(row.get('gamma')) else None,
                 'theta': float(row.get('theta', 0)) if pd.notna(row.get('theta')) else None,
                 'vega': float(row.get('vega', 0)) if pd.notna(row.get('vega')) else None,
-                'spreadPct': float(row.get('spreadPct', 0)),
+                # Defense in depth: same NaN->safe-value guard already applied
+                # to delta/gamma/theta/vega above — spreadPct is typed
+                # non-nullable on the frontend (unlike the Greeks), so this
+                # falls back to 0 rather than None if a NaN ever reaches here.
+                'spreadPct': float(row.get('spreadPct', 0)) if pd.notna(row.get('spreadPct')) else 0.0,
                 'moneyness': float(row.get('moneyness', 1)),
                 'intrinsicValue': float(row.get('intrinsicValue', 0)),
                 'extrinsicValue': float(row.get('extrinsicValue', 0)),

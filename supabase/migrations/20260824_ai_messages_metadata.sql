@@ -1,0 +1,11 @@
+-- Adds a metadata column to ai_messages so a checklist message (ticker,
+-- watch zone, contracts, submit/skip status) can be persisted and
+-- reconstructed on reload, instead of living only in client state and
+-- being lost the moment the AI Assistant modal closes/reopens.
+--
+-- Shape written by the backend (api/routes/agent_routes.py) and read by the
+-- mobile client (AgentModal.tsx):
+--   { "checklist": <FlowChecklist JSON>, "checklist_status": "pending" | "submitted" | "skipped" }
+--
+-- NULL for every ordinary chat message (unchanged).
+ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS metadata JSONB;

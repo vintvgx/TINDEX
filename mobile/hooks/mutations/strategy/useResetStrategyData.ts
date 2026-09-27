@@ -9,6 +9,10 @@ interface ResetResult {
   status: 'ok' | 'error';
   message: string;
   cleared: string[];
+  engines_reset: number;
+  /** "TICKER CONTRACT_SYMBOL" for each engine skipped because it currently
+   *  holds an open position — see routes/strategy_routes.py's data/reset. */
+  open_position_skips: string[];
 }
 
 export function useResetStrategyData() {
@@ -28,12 +32,17 @@ export function useResetStrategyData() {
       return json;
     },
     onSuccess: () => {
-      // Invalidate every query that shows trade/session data
+      // Invalidate every query that shows trade/session/review data
       queryClient.invalidateQueries({ queryKey: ['strategy-trades'] });
       queryClient.invalidateQueries({ queryKey: ['strategy-stats'] });
       queryClient.invalidateQueries({ queryKey: ['strategy-performance'] });
       queryClient.invalidateQueries({ queryKey: ['orb-session'] });
       queryClient.invalidateQueries({ queryKey: ['skipped-sessions'] });
+      queryClient.invalidateQueries({ queryKey: ['performance-reviews'] });
+      queryClient.invalidateQueries({ queryKey: ['performance-review'] });
+      queryClient.invalidateQueries({ queryKey: ['pending-confirmations'] });
+      queryClient.invalidateQueries({ queryKey: ['strategy-session-state'] });
+      queryClient.invalidateQueries({ queryKey: ['strategy-configs'] });
     },
   });
 }

@@ -4,6 +4,13 @@ export interface AgentMessage {
   role: 'user' | 'assistant';
   content: string;
   created_at: string;
+  /** Set only on a checklist message — see supabase/migrations/20260824_ai_messages_metadata.sql.
+   *  Lets AgentModal reconstruct the same interactive ChecklistCard (not just
+   *  its text summary) after the conversation reloads. */
+  metadata?: {
+    checklist?: FlowChecklist;
+    checklist_status?: 'pending' | 'submitted' | 'skipped';
+  } | null;
 }
 
 export interface AgentConversation {
@@ -45,6 +52,65 @@ export type AgentStreamChunk = {
   title?: string;
   error?: string;
 };
+
+// ─── Flow-screenshot checklist ─────────────────────────────────────────────
+
+export interface FlowChecklistContract {
+  option_type: 'CALL' | 'PUT';
+  strike: number;
+  expiration_date: string;
+  note: string;
+  /** True when this exact contract is already in tracked_options_contracts
+   *  (status='tracking') for the user — set server-side at parse time so a
+   *  re-parsed/resent alert doesn't offer to track a duplicate. */
+  already_tracked?: boolean;
+  /** Contract PREMIUM (not underlying stock price) the alert stated for
+   *  entry/stop-loss, when present — used to set an alert-matched stop at
+   *  trade entry (see TradeContractSheet's alertEntryPrice/alertStopLoss
+   *  props): the differential (entry_price - stop_loss) is preserved and
+   *  reapplied against whatever price the contract is actually entered at,
+   *  since that's rarely the exact alert price by the time it's acted on. */
+  entry_price?: number | null;
+  stop_loss?: number | null;
+}
+
+export interface FlowWatchZone {
+  low: number;
+  high: number;
+  /** True when an active watched_price_levels row already overlaps this
+   *  zone for the user — set server-side at parse time, same rationale as
+   *  FlowChecklistContract.already_tracked. */
+  already_tracked?: boolean;
+}
+
+export interface FlowChecklist {
+  ticker: string | null;
+  sentiment: 'bullish' | 'bearish' | 'either' | null;
+  watch_zone: FlowWatchZone | null;
+  contracts: FlowChecklistContract[];
+  summary: string;
+  reply: string;
+}
+
+export interface ParseScreenshotRequest {
+  userId: string;
+  conversationId?: string;
+  message?: string;
+  imageBase64?: string;
+  mediaType?: string;
+  previousChecklist?: FlowChecklist;
+}
+
+export interface ParseScreenshotResponse {
+  conversationId: string;
+  messageId: string;
+  /** Id of the SEPARATE ai_messages row carrying the checklist itself
+   *  (metadata.checklist) — pass this to useUpdateChecklistStatus on
+   *  Submit/Skip so the resolution persists and survives a reload. */
+  checklistMessageId: string;
+  checklist: FlowChecklist;
+  title?: string;
+}
 
 export interface ContractScoreRequest {
   userId: string;

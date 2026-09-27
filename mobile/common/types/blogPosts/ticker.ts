@@ -210,6 +210,46 @@ export interface TickerViewProps {
 }
 
 /**
+ * Chart timeframe selector — mirrors the backend's PERIOD_MAP keys
+ * in api/services/yfinance/yfinance_service.py.
+ */
+export type PricePeriod = "1D" | "1W" | "1M" | "3M" | "YTD" | "1Y" | "5Y";
+
+export interface TickerHistoryData {
+  dates: string[];
+  /** Close prices — the series the compact line chart draws. */
+  prices: number[];
+  volumes: number[];
+  /**
+   * Full OHLC bars for candlestick rendering in the full-screen chart.
+   * Optional because older cached responses (and the offline mock fallback
+   * before it was updated) only carried closes — the chart falls back to
+   * line mode when these are missing.
+   */
+  opens?: number[];
+  highs?: number[];
+  lows?: number[];
+  /** 1D-only: fixed extended-hours session boundary prices (see
+   *  yfinance_service._session_boundary_lines). Each field is only present
+   *  once that session has actually concluded. */
+  session_lines?: {
+    pre_market_close?: number;
+    market_close?: number;
+    post_market_close?: number;
+    overnight_price?: number;
+  } | null;
+  /** The bar granularity actually used (e.g. "5m", "15m", "1d") — echoes
+   *  back what the backend settled on after validating any requested
+   *  interval override, since an invalid/stale one is silently ignored
+   *  server-side rather than erroring. See yfinance_service.ALLOWED_INTERVALS. */
+  interval?: string;
+}
+
+export type TickerHistoryResponse =
+  | { success: true; data: TickerHistoryData; period: PricePeriod; timestamp: number }
+  | { success: false; error: string; timestamp: number; data?: undefined };
+
+/**
  * Options contract from the /options/<ticker> endpoint
  */
 export interface OptionsContract {

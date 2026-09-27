@@ -74,3 +74,68 @@ export function useStopServices() {
       queryClient.invalidateQueries({ queryKey: ['services-status'] }),
   });
 }
+
+export interface UnsubscribeSymbolResult {
+  success: boolean;
+  symbol: string;
+  was_in_use: boolean;
+  message?: string;
+}
+
+/**
+ * Force-unsubscribe one symbol from the option quote stream — the Service
+ * Status screen's per-row action. If the symbol is currently backing an
+ * open position, this blinds that position's TP/SL monitoring until
+ * something re-subscribes it (nothing does automatically) — the caller
+ * confirms with the user first for any row flagged in_use.
+ */
+export function useUnsubscribeOptionStreamSymbol() {
+  const queryClient = useQueryClient();
+  return useMutation<UnsubscribeSymbolResult, Error, string>({
+    mutationFn: async (symbol) => {
+      const res = await fetch(`${RAILWAY_BASE_URL}/services/option-stream/unsubscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol }),
+      });
+      const data = (await res.json().catch(() => ({ success: false }))) as UnsubscribeSymbolResult;
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || `Failed to unsubscribe ${symbol}`);
+      }
+      return data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['services-status'] }),
+  });
+}
+
+export interface ClearUnusedSubscriptionsResult {
+  success: boolean;
+  cleared_count: number;
+  cleared_symbols: string[];
+  message?: string;
+}
+
+/**
+ * Bulk-unsubscribe every option-stream symbol that isn't backing an open
+ * position right now — the Service Status screen's "Clear Unused" button.
+ * Subscriptions are additive on Alpaca's side with no automatic expiry, so
+ * this is the manual remediation for a connection that's slowly accumulated
+ * dead symbols across weeks of uptime.
+ */
+export function useClearUnusedOptionSubscriptions() {
+  const queryClient = useQueryClient();
+  return useMutation<ClearUnusedSubscriptionsResult, Error, void>({
+    mutationFn: async () => {
+      const res = await fetch(`${RAILWAY_BASE_URL}/services/option-stream/clear-unused`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = (await res.json().catch(() => ({ success: false }))) as ClearUnusedSubscriptionsResult;
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to clear unused subscriptions');
+      }
+      return data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['services-status'] }),
+  });
+}

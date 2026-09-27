@@ -88,6 +88,10 @@ class PriceStreamService:
     # ── background loop ───────────────────────────────────────────────
 
     def _loop(self):
+        # Deliberately NOT gated on is_market_hours() — unlike ORB / options
+        # contract monitor / social signals, this feeds the ticker tape,
+        # which needs to show data (last close, off-hours quotes) any time
+        # the app is open, not just during the NYSE session.
         while self._running:
             try:
                 self._broadcast()

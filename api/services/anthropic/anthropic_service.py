@@ -722,6 +722,203 @@ TAGS: [comma-separated list of applicable tags from the list above, e.g., "Volat
             "factors": data.get("factors") if isinstance(data.get("factors"), dict) else None,
         }
 
+    def parse_flow_screenshot(
+        self,
+        image_base64: Optional[str],
+        media_type: Optional[str],
+        message: Optional[str],
+        previous_checklist: Optional[Dict[str, Any]],
+        today: str,
+        system_prompt: str,
+    ) -> Dict[str, Any]:
+        """
+        Extract a watch checklist (ticker, watch zone, target contracts) from
+        an options-flow alert screenshot (e.g. a Discord bot post), or revise
+        a previously-extracted checklist from a text-only follow-up
+        correction. Exactly one of `image_base64` (initial parse) or
+        `previous_checklist` (revision) is expected — the image itself is
+        never persisted; a revision works purely off the JSON already
+        extracted plus the user's correction text.
+        """
+        instructions = (
+            "You are TINDEX, parsing an options order-flow or technical-levels alert "
+            "screenshot (e.g. from a Discord bot) into a structured watch checklist.\n\n"
+            "Extract, if present:\n"
+            "- ticker: the stock symbol (e.g. \"PLTR\"), without the $ sign\n"
+            "- sentiment: \"bullish\" if only an upside scenario is highlighted, \"bearish\" if "
+            "only a downside scenario is highlighted, \"either\" if the alert describes BOTH an "
+            "upside continuation scenario AND a downside breakdown scenario off the same "
+            "zone/level (e.g. \"holds = bullish toward X, breaks = bearish toward Y\") — a "
+            "two-sided setup like that must be \"either\", never forced into just one side.\n"
+            "- watch_zone: the single most important price zone or level to watch — the one "
+            "whose break/hold decides which scenario plays out — as "
+            "{\"low\": <number>, \"high\": <number>}. If only a single price is called out, "
+            "set low and high to that same value.\n"
+            "- contracts: every specific options contract mentioned (strike + expiry), each as "
+            "{\"option_type\": \"CALL\"|\"PUT\", \"strike\": <number>, "
+            "\"expiration_date\": \"YYYY-MM-DD\", \"note\": \"<short context, e.g. "
+            "'250 contracts, ~$82.5K premium, unusual'>\", \"entry_price\": <number or null>, "
+            "\"stop_loss\": <number or null>}. Leave empty if the image is a "
+            "technical-levels alert with no specific contracts named.\n"
+            "  - entry_price/stop_loss are the CONTRACT PREMIUM (option price, e.g. \"bought "
+            "at $1.50\", \"SL $1.25\"), never the underlying stock price — null if the image "
+            "doesn't state one for that contract.\n"
+            f"  - Resolve bare dates like \"8/28\" or \"9/21\" to the nearest UPCOMING date "
+            f"from today ({today}), in YYYY-MM-DD format.\n"
+            "  - Fold volume/OI/premium/\"highest volume\" callouts into that contract's note.\n"
+            "- summary: one short plain-language sentence naming the setup — used as a card "
+            "subtitle, not read as a message.\n"
+            "- reply: a TERSE, BULLETED summary of exactly what was found, formatted as real "
+            "Markdown (rendered client-side) — no greeting, no meta-commentary, no closing "
+            "questions or invitations to ask more, no restating the JSON. Structure:\n"
+            "  1. First line: a level-2 heading, \"## $TICKER — <2-4 word setup label>\" (e.g. "
+            "\"## $AVGO — Support/Resistance Zone\"), or \"## Unrecognized Screenshot\" if no "
+            "ticker was found.\n"
+            "  2. Then 3-6 Markdown list items, each starting with \"- \", covering only what's "
+            "actually in the image: the kind of alert if it's not a standard options-flow alert "
+            "(one bullet, only when relevant), the key zone/level(s), upside target(s) if any, "
+            "downside target(s) if any, and notable volume/premium figures. Bold (**like "
+            "this**) the key price level(s) in each bullet (the ticker's already in the "
+            "heading — don't repeat it bolded in every line).\n"
+            "  Skip any bullet whose data isn't in the image — never pad with filler.\n"
+            "  3. Leave ONE FULLY BLANK LINE after the last bullet, then end with exactly one "
+            "short line on its own: \"Not financial advice.\" — the blank line is required so it "
+            "renders as its own paragraph instead of getting swallowed into the last bullet's "
+            "text (Markdown treats a line placed directly under a list item, with no blank line "
+            "before it, as part of that same list item).\n\n"
+            "If the image isn't a flow/options screenshot, or a field genuinely isn't present, "
+            "use null (or an empty array for contracts) rather than guessing.\n\n"
+            "Respond with ONLY a JSON object (no markdown, no prose) of exactly this shape:\n"
+            "{\n"
+            '  "ticker": <string or null>,\n'
+            '  "sentiment": "bullish" | "bearish" | "either" | null,\n'
+            '  "watch_zone": {"low": <number>, "high": <number>} | null,\n'
+            '  "contracts": [{"option_type": "CALL" | "PUT", "strike": <number>, '
+            '"expiration_date": "YYYY-MM-DD", "note": <string>, '
+            '"entry_price": <number or null>, "stop_loss": <number or null>}],\n'
+            '  "summary": <string>,\n'
+            '  "reply": <string>\n'
+            "}"
+        )
+
+        if image_base64:
+            text_block = instructions
+            if message:
+                text_block += f"\n\nThe user also said: \"{message}\""
+            content: Any = [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type or "image/jpeg",
+                        "data": image_base64,
+                    },
+                },
+                {"type": "text", "text": text_block},
+            ]
+        else:
+            content = (
+                instructions
+                + f"\n\nHere is the checklist you previously extracted:\n"
+                + json.dumps(previous_checklist or {}, indent=2, default=str)
+                + f"\n\nThe user's correction/follow-up: \"{message or ''}\"\n"
+                + "Update the checklist to reflect this, keeping any fields the user didn't "
+                + "mention unchanged. Respond with the same JSON shape as before."
+            )
+
+        response = self.sync_client.messages.create(
+            model=AGENT_MODEL,
+            max_tokens=1536,
+            system=system_prompt,
+            messages=[{"role": "user", "content": content}],
+        )
+
+        raw = next((b.text for b in response.content if b.type == "text"), "{}")
+        data = self._parse_json_object(raw)
+
+        contracts: List[Dict[str, Any]] = []
+        for c in (data.get("contracts") or []):
+            if not isinstance(c, dict):
+                continue
+            option_type = str(c.get("option_type", "")).upper()
+            if option_type not in ("CALL", "PUT"):
+                continue
+            try:
+                strike = float(c.get("strike"))
+            except (TypeError, ValueError):
+                continue
+            expiry = str(c.get("expiration_date") or "")
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", expiry):
+                continue
+
+            def _optional_price(raw):
+                if raw is None:
+                    return None
+                try:
+                    val = float(raw)
+                except (TypeError, ValueError):
+                    return None
+                return val if val > 0 else None
+
+            contracts.append({
+                "option_type": option_type,
+                "strike": strike,
+                "expiration_date": expiry,
+                "note": str(c.get("note") or "").strip(),
+                # Contract PREMIUM, not underlying stock price — see the
+                # prompt instructions above. Used by the mobile trade-entry
+                # flow to set an alert-matched stop loss (2026-08-30).
+                "entry_price": _optional_price(c.get("entry_price")),
+                "stop_loss": _optional_price(c.get("stop_loss")),
+            })
+
+        watch_zone = data.get("watch_zone")
+        if isinstance(watch_zone, dict) and "low" in watch_zone and "high" in watch_zone:
+            try:
+                watch_zone = {"low": float(watch_zone["low"]), "high": float(watch_zone["high"])}
+            except (TypeError, ValueError):
+                watch_zone = None
+        else:
+            watch_zone = None
+
+        sentiment = data.get("sentiment")
+        sentiment = sentiment if sentiment in ("bullish", "bearish", "either") else None
+
+        ticker = data.get("ticker")
+        ticker = str(ticker).upper().strip() if ticker else None
+
+        reply = str(data.get("reply") or data.get("summary") or
+                    "Here's what I found — take a look at the checklist below.").strip()
+
+        return {
+            "ticker": ticker,
+            "sentiment": sentiment,
+            "watch_zone": watch_zone,
+            "contracts": contracts,
+            "summary": str(data.get("summary") or "").strip(),
+            "reply": self._ensure_disclaimer_paragraph(reply),
+        }
+
+    @staticmethod
+    def _ensure_disclaimer_paragraph(reply: str) -> str:
+        """
+        The model is instructed to blank-line-separate a trailing "Not
+        financial advice." from the bullet list above it, but occasionally
+        glues it directly onto the last line instead — which Markdown then
+        renders as part of that bullet's own text (CommonMark's "lazy
+        continuation" rule swallows a line with no blank line before it into
+        the preceding list item) rather than as its own paragraph. Split it
+        onto its own line with a blank line before it whenever found stuck
+        to the end of the preceding text.
+        """
+        marker = "Not financial advice."
+        idx = reply.rfind(marker)
+        if idx <= 0:
+            return reply
+        before = reply[:idx].rstrip()
+        after = reply[idx + len(marker):]
+        return f"{before}\n\n{marker}{after}"
+
     @staticmethod
     def _parse_json_object(raw: str) -> Dict[str, Any]:
         """Extract the first JSON object from a model response (handles ```json fences)."""

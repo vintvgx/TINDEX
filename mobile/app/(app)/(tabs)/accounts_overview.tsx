@@ -6,9 +6,13 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useAlpacaAccountsHistory } from '@/hooks/queries/strategy/useAlpacaAccounts';
-import type { AccountHistoryEntry } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { useAlpacaAccountsHistory, useAlpacaTransfers } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import type { AccountHistoryEntry, AccountTransfer } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useAccountValueDisplay } from '@/hooks/queries/strategy/useAccountValueDisplay';
+import { StatPill } from '@/common/components/ui/StatPill';
+import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
+import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
+import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 
 type Period = 'today' | 'week' | 'month' | 'ytd' | 'all';
 
@@ -40,9 +44,18 @@ export default function AccountsScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
   const [period, setPeriod] = useState<Period>('today');
   const [manualRefreshing, setManualRefreshing] = useState(false);
+  // Live Positions section (bottom of this screen) — decoupled from `period`
+  // above, same as position.tsx/strategy.tsx's own account-mode toggle.
+  const [positionsMode, setPositionsMode] = useState<AccountMode>('live');
+  const positionsData = useLivePositionsData(positionsMode);
+  const positionsCounts = {
+    live:  useLivePositionsData('live').filteredPositions.length,
+    paper: useLivePositionsData('paper').filteredPositions.length,
+  };
 
   const { paper: paperDisplay, live: liveDisplay, has_open_positions } = useAccountValueDisplay();
   const { data: history, isLoading: histLoading, refetch: refetchHistory } = useAlpacaAccountsHistory();
+  const tabBarHeight = useFloatingTabBarHeight();
 
   const isLoading = histLoading && !paperDisplay && !liveDisplay;
 
@@ -98,7 +111,7 @@ export default function AccountsScreen({ embedded = false }: Props) {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight }]}
         refreshControl={
           <RefreshControl
             refreshing={manualRefreshing}
@@ -133,6 +146,22 @@ export default function AccountsScreen({ embedded = false }: Props) {
               colors={colors}
             />
 
+            {/* Overall P&L — equity vs. actual money deposited, live account
+                only. Distinct from the period P&L pills above (Alpaca's
+                trade-only figures, cashflow excluded): this answers "is the
+                system making me money" in the plainest sense — what the
+                account is worth vs. what was actually put into it. Sits
+                right above Transfer History since it's derived directly
+                from summing that same list, not a separately-computed
+                backend aggregate that could silently drift from it. */}
+            <OverallPnlCard liveEquity={liveDisplay?.available ? liveDisplay.equity : null} colors={colors} />
+
+            {/* Transfer History — live-account only. Paper accounts start
+                with a fixed virtual balance and don't take real ACH
+                transfers, so there's nothing meaningful to show for that
+                side. */}
+            <TransferHistoryCard colors={colors} />
+
             {/* Live indicator when positions are open */}
             {has_open_positions && (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4 }}>
@@ -162,6 +191,24 @@ export default function AccountsScreen({ embedded = false }: Props) {
               Paper and Live account data shown above. Trading mode (paper vs live) is
               configured per-strategy in the ORB Strategy screen.
             </Text>
+
+            {/* Live Positions — its own section at the bottom of this screen
+                (previously a separate sub-page under Alpaca; see
+                alpaca_overview.tsx, which now just renders this screen). */}
+            <View style={{ marginTop: 24, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 16 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <Text style={[styles.sectionTitle, { color: colors.text }]}>Live Positions</Text>
+                <LiveModeToggle mode={positionsMode} onChange={setPositionsMode} counts={positionsCounts} colors={colors} />
+              </View>
+              <LivePositionsBody
+                data={positionsData}
+                mode={positionsMode}
+                colors={colors}
+                emptySubtitle={positionsMode === 'live'
+                  ? 'Active live positions will appear here in real time'
+                  : 'Active paper positions will appear here'}
+              />
+            </View>
           </>
         )}
 
@@ -185,6 +232,10 @@ interface AccountCardProps {
     day_trade_count?: number;
     live_derived?: boolean;
     total_unrealized_pl?: number;
+    available_balance?: number;
+    options_buying_power?: number;
+    long_market_value?: number;
+    short_market_value?: number;
     error?: string;
   } | null;
   history?: AccountHistoryEntry;
@@ -272,12 +323,23 @@ const AccountCard: React.FC<AccountCardProps> = ({
             </Text>
           )}
 
-          {/* Stats row */}
-          <View style={[styles.statsRow, { borderTopColor: colors.border }]}>
-            <Stat label="Cash" value={`$${(account?.cash ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} colors={colors} />
-            <Stat label="Buying Power" value={`$${(account?.buying_power ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} colors={colors} />
-            <Stat label="Day Trades" value={String(account?.day_trade_count ?? 0)} colors={colors} />
-          </View>
+          {/* Stats — horizontally scrollable so more data points fit than a
+              fixed 3-column row could hold intuitively. Day Trades stays
+              last regardless of how many pills precede it. */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={[styles.statsScroll, { borderTopColor: colors.border }]}
+            contentContainerStyle={styles.statsScrollContent}
+          >
+            <StatPill label="Cash" value={`$${(account?.cash ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
+            <StatPill label="Buying Power" value={`$${(account?.buying_power ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
+            <StatPill label="Available Balance" value={`$${(account?.available_balance ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
+            <StatPill label="Options BP" value={`$${(account?.options_buying_power ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
+            <StatPill label="Long Value" value={`$${(account?.long_market_value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
+            <StatPill label="Short Value" value={`$${(account?.short_market_value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 0 })}`} accentColor={colors.accent} colors={colors} />
+            <StatPill label="Day Trades" value={String(account?.day_trade_count ?? 0)} accentColor={colors.accent} colors={colors} />
+          </ScrollView>
 
           {/* Lifetime capital summary — deposits vs. actual trading P&L, always
               visible regardless of the selected period since this is "since
@@ -300,6 +362,104 @@ const AccountCard: React.FC<AccountCardProps> = ({
           )}
         </>
       )}
+    </View>
+  );
+};
+
+function formatTransferDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  } catch { return iso; }
+}
+
+/**
+ * Overall P&L: current live equity vs. the net of every transfer in
+ * Transfer History (sum of each transfer's signed amount — deposits
+ * positive, withdrawals negative). Deliberately summed from the same list
+ * rendered right below, not a separately-computed backend total, so the
+ * number on screen can never silently disagree with the rows the user can
+ * actually see and count themselves.
+ */
+const OverallPnlCard = ({ liveEquity, colors }: { liveEquity: number | null; colors: any }) => {
+  const { data, isLoading } = useAlpacaTransfers();
+  const transfers = data?.transfers ?? [];
+
+  if (isLoading || liveEquity == null || transfers.length === 0) return null;
+
+  const netTransferred = transfers.reduce((sum, t) => sum + t.amount, 0);
+  const overallPnl = liveEquity - netTransferred;
+  const pnlColor = overallPnl >= 0 ? colors.success : colors.error;
+
+  return (
+    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.cardLabel, { color: colors.text, marginBottom: 2 }]}>Overall P&L</Text>
+          <Text style={[styles.cardSubtitle, { color: colors.tabBarInactive }]}>
+            Equity vs. ${netTransferred.toLocaleString('en-US', { minimumFractionDigits: 0 })} net transferred
+          </Text>
+        </View>
+        <Text style={{ color: pnlColor, fontSize: 22, fontWeight: '800', marginLeft: 12 }}>
+          {overallPnl >= 0 ? '+' : ''}${overallPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        </Text>
+      </View>
+    </View>
+  );
+};
+
+/**
+ * Status wording here reflects Alpaca's Activities endpoint (settled cash
+ * movements only — CSD/CSW) via NonTradeActivityStatus ("executed"/
+ * "correct"/"canceled"), NOT the richer pending/queued/rejected states
+ * Alpaca's own dashboard shows for in-flight ACH transfers — those live on
+ * a separate Broker-API-only Transfers object this app's retail API keys
+ * can't reach, so a transfer that hasn't settled yet simply won't have an
+ * Activity row here until it does.
+ */
+function transferStatusLabel(status: string | null): { label: string; color: 'success' | 'muted' } {
+  if (status === 'canceled') return { label: 'Canceled', color: 'muted' };
+  return { label: 'Complete', color: 'success' };
+}
+
+const TransferHistoryCard = ({ colors }: { colors: any }) => {
+  const { data, isLoading } = useAlpacaTransfers();
+  const transfers = data?.transfers ?? [];
+
+  if (isLoading || transfers.length === 0) return null;
+
+  return (
+    <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <Text style={[styles.cardLabel, { color: colors.text, marginBottom: 2 }]}>Transfer History</Text>
+      <Text style={[styles.cardSubtitle, { color: colors.tabBarInactive, marginBottom: 10 }]}>
+        Live account deposits &amp; withdrawals
+      </Text>
+      {transfers.slice(0, 10).map((t: AccountTransfer, i: number) => {
+        const status = transferStatusLabel(t.status);
+        const statusColor = status.color === 'success' ? colors.success : colors.tabBarInactive;
+        const amountColor = t.direction === 'deposit' ? colors.success : colors.error;
+        return (
+          <View
+            key={t.id}
+            style={[
+              styles.transferRow,
+              i < Math.min(transfers.length, 10) - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.separator },
+            ]}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.transferDate, { color: colors.text }]}>{formatTransferDate(t.date)}</Text>
+              <Text style={[styles.transferDesc, { color: colors.tabBarInactive }]} numberOfLines={1}>
+                {t.description || (t.direction === 'deposit' ? 'Deposit' : 'Withdrawal')}
+              </Text>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={[styles.transferAmount, { color: amountColor }]}>
+                {t.direction === 'deposit' ? '+' : '-'}${Math.abs(t.amount).toFixed(2)}
+              </Text>
+              <Text style={[styles.transferStatus, { color: statusColor }]}>{status.label}</Text>
+            </View>
+          </View>
+        );
+      })}
     </View>
   );
 };
@@ -335,13 +495,6 @@ const CompStat = ({ label, value, colors }: { label: string; value: number; colo
   </View>
 );
 
-const Stat = ({ label, value, colors }: { label: string; value: string; colors: any }) => (
-  <View style={styles.stat}>
-    <Text style={[styles.statLabel, { color: colors.tabBarInactive }]}>{label}</Text>
-    <Text style={[styles.statValue, { color: colors.text }]}>{value}</Text>
-  </View>
-);
-
 const CapitalStat = ({ label, value, valueColor, colors }: { label: string; value: string; valueColor?: string; colors: any }) => (
   <View style={styles.stat}>
     <Text style={[styles.statLabel, { color: colors.tabBarInactive }]}>{label}</Text>
@@ -356,6 +509,7 @@ const styles = StyleSheet.create({
   title:     { fontSize: 20, fontWeight: '700' },
 
   periodBar: {
+    paddingTop: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   periodBarContent: {
@@ -391,7 +545,8 @@ const styles = StyleSheet.create({
   pnlPct:  { fontSize: 13, fontWeight: '600' },
   noData:  { fontSize: 13, fontStyle: 'italic' },
 
-  statsRow: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 12, gap: 0 },
+  statsScroll: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 2, height: 84 },
+  statsScrollContent: { paddingTop: 12, paddingRight: 4 },
   stat:     { flex: 1, alignItems: 'center' },
   statLabel: { fontSize: 10, marginBottom: 3 },
   statValue: { fontSize: 13, fontWeight: '600' },
@@ -407,4 +562,11 @@ const styles = StyleSheet.create({
   compValue: { fontSize: 16, fontWeight: '700' },
 
   disclaimer: { fontSize: 11, lineHeight: 17, marginTop: 4 },
+  sectionTitle: { fontSize: 17, fontWeight: '700' },
+
+  transferRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10 },
+  transferDate: { fontSize: 13, fontWeight: '600', marginBottom: 2 },
+  transferDesc: { fontSize: 11 },
+  transferAmount: { fontSize: 14, fontWeight: '700', marginBottom: 2 },
+  transferStatus: { fontSize: 10, fontWeight: '600' },
 });

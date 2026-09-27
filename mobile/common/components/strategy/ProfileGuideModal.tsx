@@ -1,14 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, Modal, TouchableOpacity, ScrollView,
   StyleSheet, SafeAreaView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import type { ProfileKey } from '@/common/types/strategy';
 
 interface ProfileGuideModalProps {
   visible: boolean;
   onClose: () => void;
   colors: any;
+  /** Jump straight to this profile on open (e.g. tapping an info button on a
+   *  live trade's header) instead of the default Trend Rider / whatever was
+   *  last selected. Re-applied every time the modal opens with a key set. */
+  initialKey?: ProfileKey;
 }
 
 export const PROFILES: ProfileGuide[] = [
@@ -270,8 +275,14 @@ export interface ProfileGuide {
   isNew?: boolean;
 }
 
-export function ProfileGuideModal({ visible, onClose, colors }: ProfileGuideModalProps) {
+export function ProfileGuideModal({ visible, onClose, colors, initialKey }: ProfileGuideModalProps) {
   const [selected, setSelected] = useState<ProfileGuide>(PROFILES[3]); // Trend Rider default
+
+  useEffect(() => {
+    if (!visible || !initialKey) return;
+    const p = PROFILES.find(pr => pr.key === initialKey);
+    if (p) setSelected(p);
+  }, [visible, initialKey]);
 
   return (
     <Modal

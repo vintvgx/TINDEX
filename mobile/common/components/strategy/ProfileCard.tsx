@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import type { StrategyProfile, ProfileKey } from '@/common/types/strategy';
+import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 
 interface Props {
   profile: StrategyProfile;
@@ -19,6 +20,9 @@ const BORDER_COLORS: Record<ProfileKey, string> = {
   REVERSAL:    '#FF453A',
   CUSTOM:      '#A855F7',
   SCALPER:     '#22C55E',
+  SCALPER_SMALL: '#22C55E',
+  SCALPER_LARGE:  '#22C55E',
+  SCALPER_XL:     '#22C55E',
   PRECISION:   '#84CC16',
   MOMENTUM:    '#F59E0B',
   CONVICTION:    '#F97316',
@@ -26,6 +30,9 @@ const BORDER_COLORS: Record<ProfileKey, string> = {
   OTM_RUNNER:    '#8B5CF6',
   OTM_CONVICTION:'#EC4899',
   MANUAL:        '#94A3B8',
+  NO_STOP_LOSS:  '#64748B',
+  SL_5:          '#FF9F0A',
+  SL_10:         '#FF7A00',
 };
 
 export const ProfileCard: React.FC<Props> = ({ profile, selected, onSelect }) => {
@@ -63,6 +70,12 @@ export const ProfileCard: React.FC<Props> = ({ profile, selected, onSelect }) =>
         />
         <Stat label="VIX Max" value={String(profile.vix_max)} colors={colors} />
         <Stat label="Runner" value={profile.runner ? 'Yes' : 'No'} colors={colors} />
+        <Stat label="Exit Style" value={RUNNER_MODE_LABEL[profile.runner_mode ?? 'trail']} colors={colors} />
+        <Stat
+          label="Cascade"
+          value={profile.contracts > 1 && (profile.thresholds.cascade_close_pct ?? 0) > 0 ? 'Yes' : 'No'}
+          colors={colors}
+        />
       </View>
     </TouchableOpacity>
   );

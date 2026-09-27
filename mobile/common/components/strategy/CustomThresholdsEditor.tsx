@@ -13,10 +13,10 @@ export const DEFAULT_CUSTOM_THRESHOLDS: CustomThresholds = {
   tp1_close_pct:           0.50,
   tp2_close_pct:           0.50,
   runner_trail_pct:        0.20,
-  consol_exit:             false,
+  runner_mode:             'trail',
+  cascade_ticks:           3,
+  cascade_close_pct:       0.50,
   volume_exit:             false,
-  consol_range_pct:        0.0008,
-  consol_bars:             4,
   volume_exit_threshold:   0.20,
   strike_offset_min:       0.50,
   strike_offset_max:       2.00,
@@ -179,6 +179,61 @@ function StepperRow({ label, value, min, max, step, format, onChange, accent, la
   );
 }
 
+// ── SegmentedRow ──────────────────────────────────────────────────────────────
+
+interface SegmentOption<T extends string> {
+  value: T;
+  label: string;
+}
+
+interface SegmentedRowProps<T extends string> {
+  label:       string;
+  sub?:        string;
+  value:       T;
+  options:     SegmentOption<T>[];
+  onChange:    (v: T) => void;
+  accent:      string;
+  trackBg:     string;
+  labelColor:  string;
+  textColor:   string;
+  borderColor: string;
+}
+
+function SegmentedRow<T extends string>({
+  label, sub, value, options, onChange,
+  accent, trackBg, labelColor, textColor, borderColor,
+}: SegmentedRowProps<T>) {
+  return (
+    <View style={s.segmentedRow}>
+      <Text style={[s.sliderLabel, { color: labelColor }]}>{label}</Text>
+      {sub ? <Text style={[s.toggleSub, { color: labelColor, marginBottom: 8 }]}>{sub}</Text> : null}
+      <View style={[s.segmentedTrack, { backgroundColor: trackBg, borderColor }]}>
+        {options.map(opt => {
+          const active = opt.value === value;
+          return (
+            <TouchableOpacity
+              key={opt.value}
+              onPress={() => onChange(opt.value)}
+              style={[
+                s.segmentedOption,
+                active && { backgroundColor: accent },
+              ]}
+              activeOpacity={0.7}
+            >
+              <Text style={[
+                s.segmentedOptionText,
+                { color: active ? '#fff' : textColor },
+              ]}>
+                {opt.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 // ── Main editor ───────────────────────────────────────────────────────────────
 
 interface Props {
@@ -193,7 +248,7 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragSta
   const [showAdvanced, setShowAdvanced] = useState(false);
   const t = thresholds;
 
-  const patch = (key: keyof CustomThresholds, val: number | boolean) =>
+  const patch = (key: keyof CustomThresholds, val: number | boolean | string) =>
     onChange({ ...t, [key]: val });
 
   const accent      = colors.accent;
@@ -258,13 +313,28 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragSta
           onChange={v => patch('tp2_close_pct', v)}
           {...sliderProps}
         />
-        <SliderRow
-          label="Runner Trail"
-          value={t.runner_trail_pct} min={0.05} max={0.30} step={0.05}
-          format={v => `${Math.round(v * 100)}% below peak`}
-          onChange={v => patch('runner_trail_pct', v)}
-          {...sliderProps}
+        <SegmentedRow
+          label="Runner Mode"
+          sub="What happens to the remaining runner contract(s) after TP1"
+          value={t.runner_mode ?? 'trail'}
+          options={[
+            { value: 'trail',   label: 'Trail' },
+            { value: 'be_hold', label: 'BE Hold' },
+            { value: 'none',    label: 'None' },
+          ]}
+          onChange={v => patch('runner_mode', v)}
+          accent={accent} trackBg={trackBg} labelColor={labelColor}
+          textColor={textColor} borderColor={borderColor}
         />
+        {(t.runner_mode ?? 'trail') === 'trail' && (
+          <SliderRow
+            label="Runner Trail"
+            value={t.runner_trail_pct} min={0.05} max={0.30} step={0.05}
+            format={v => `${Math.round(v * 100)}% below peak`}
+            onChange={v => patch('runner_trail_pct', v)}
+            {...sliderProps}
+          />
+        )}
       </View>
 
       {/* ── Timing ── */}
@@ -296,18 +366,6 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragSta
           onChange={v => patch('vix_max_override', Math.round(v))}
           {...sliderProps}
         />
-        <View style={[s.toggleRow, { borderBottomColor: borderColor }]}>
-          <View>
-            <Text style={[s.sliderLabel, { color: labelColor }]}>Consolidation Exit</Text>
-            <Text style={[s.toggleSub, { color: labelColor }]}>Exit when price stalls in range</Text>
-          </View>
-          <Switch
-            value={t.consol_exit}
-            onValueChange={v => patch('consol_exit', v)}
-            thumbColor={t.consol_exit ? accent : '#ccc'}
-            trackColor={{ true: accent + '55', false: borderColor }}
-          />
-        </View>
         <View style={[s.toggleRow, { borderBottomColor: borderColor }]}>
           <View>
             <Text style={[s.sliderLabel, { color: labelColor }]}>Volume Exit</Text>
@@ -359,12 +417,6 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragSta
             onChange={v => patch('target_delta_max', v)}
             accent={accent} labelColor={labelColor} textColor={textColor} borderColor={borderColor}
           />
-          <StepperRow
-            label="Consol. Bars" value={t.consol_bars} min={2} max={10} step={1}
-            format={v => `${Math.round(v)} bars`}
-            onChange={v => patch('consol_bars', Math.round(v))}
-            accent={accent} labelColor={labelColor} textColor={textColor} borderColor={borderColor}
-          />
         </View>
       )}
     </View>
@@ -402,6 +454,12 @@ const s = StyleSheet.create({
   // Toggle
   toggleRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth },
   toggleSub:     { fontSize: 11, marginTop: 2 },
+
+  // Segmented control
+  segmentedRow:      { paddingHorizontal: 14, paddingTop: 14, paddingBottom: 10 },
+  segmentedTrack:     { flexDirection: 'row', borderRadius: 10, borderWidth: 1, overflow: 'hidden' },
+  segmentedOption:    { flex: 1, paddingVertical: 8, alignItems: 'center', justifyContent: 'center' },
+  segmentedOptionText:{ fontSize: 12, fontWeight: '600' },
 
   // Advanced
   advancedToggle:     { paddingVertical: 8, paddingHorizontal: 2, marginBottom: 4 },

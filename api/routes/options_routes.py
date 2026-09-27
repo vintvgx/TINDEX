@@ -12,6 +12,11 @@ from flask import Blueprint, jsonify, request
 from log.logging_config import get_logger
 from services.supabase.supabase_service import get_supabase_service
 from services.utils.research_service import get_research_service
+from services.utils.black_scholes import (
+    build_simulated_returns_grid,
+    DEFAULT_SPOT_RANGE_PCT,
+    DEFAULT_RISK_FREE_RATE,
+)
 
 logger = get_logger(__name__)
 
@@ -76,6 +81,52 @@ def get_options(ticker: str):
         return jsonify({"success": False, "error": f"Options retrieval failed: {str(e)}", "ticker": ticker}), 500
 
 
+def build_tracking_snapshot(contract_symbol: str, data: dict) -> dict:
+    """
+    Auto-fetch an Alpaca snapshot for a contract being tracked without one
+    (shared by /track-option and routes/muse.py's watchlist route). Returns
+    {} when Alpaca has nothing, same as the caller passing no snapshot.
+    """
+    tracking_snapshot: dict = {}
+    logger.info("[track-option] No snapshot provided for %s — attempting Alpaca auto-fetch", contract_symbol)
+    try:
+        from services.alpaca.alpaca_option_service import get_alpaca_option_service
+        raw = _run_async(get_alpaca_option_service().get_contract_snapshot(contract_symbol))
+        if raw:
+            bid = raw.get("bid") or 0.0
+            ask = raw.get("ask") or 0.0
+            tracking_snapshot = {
+                "ask": ask,
+                "bid": bid,
+                "contractSymbol": contract_symbol,
+                "delta": raw.get("delta"),
+                "dte": 0,
+                "expirationDate": raw.get("expiration", data.get("expirationDate", "")),
+                "extrinsicValue": 0,
+                "gamma": raw.get("gamma"),
+                "impliedVolatility": raw.get("implied_volatility") or 0,
+                "intrinsicValue": 0,
+                "lastPrice": raw.get("last_price"),
+                "mark": (bid + ask) / 2 if (bid > 0 or ask > 0) else 0,
+                "moneyness": 0,
+                "openInterest": raw.get("open_interest") or 0,
+                "optionType": raw.get("option_type", data.get("optionType", "").upper()),
+                "reasons": "",
+                "signal": "CONSIDER",
+                "spreadPct": ((ask - bid) / ask * 100) if ask > 0 else 0,
+                "theta": raw.get("theta"),
+                "total_score": 0,
+                "vega": raw.get("vega"),
+                "volume": raw.get("volume") or 0,
+            }
+            logger.info("[track-option] Alpaca snapshot OK for %s", contract_symbol)
+        else:
+            logger.warning("[track-option] Alpaca returned no snapshot for %s", contract_symbol)
+    except Exception as snap_err:
+        logger.warning("[track-option] Auto-fetch failed for %s: %s", contract_symbol, snap_err, exc_info=True)
+    return tracking_snapshot
+
+
 @bp.route("/track-option", methods=["POST"])
 def track_option():
     try:
@@ -98,42 +149,7 @@ def track_option():
         tracking_snapshot = data.get("trackingSnapshot", {})
 
         if not tracking_snapshot and contract_symbol:
-            logger.info("[track-option] No snapshot provided for %s — attempting Alpaca auto-fetch", contract_symbol)
-            try:
-                from services.alpaca.alpaca_option_service import get_alpaca_option_service
-                raw = _run_async(get_alpaca_option_service().get_contract_snapshot(contract_symbol))
-                if raw:
-                    bid = raw.get("bid") or 0.0
-                    ask = raw.get("ask") or 0.0
-                    tracking_snapshot = {
-                        "ask": ask,
-                        "bid": bid,
-                        "contractSymbol": contract_symbol,
-                        "delta": raw.get("delta"),
-                        "dte": 0,
-                        "expirationDate": raw.get("expiration", data.get("expirationDate", "")),
-                        "extrinsicValue": 0,
-                        "gamma": raw.get("gamma"),
-                        "impliedVolatility": raw.get("implied_volatility") or 0,
-                        "intrinsicValue": 0,
-                        "lastPrice": raw.get("last_price"),
-                        "mark": (bid + ask) / 2 if (bid > 0 or ask > 0) else 0,
-                        "moneyness": 0,
-                        "openInterest": raw.get("open_interest") or 0,
-                        "optionType": raw.get("option_type", data.get("optionType", "").upper()),
-                        "reasons": "",
-                        "signal": "CONSIDER",
-                        "spreadPct": ((ask - bid) / ask * 100) if ask > 0 else 0,
-                        "theta": raw.get("theta"),
-                        "total_score": 0,
-                        "vega": raw.get("vega"),
-                        "volume": raw.get("volume") or 0,
-                    }
-                    logger.info("[track-option] Alpaca snapshot OK for %s", contract_symbol)
-                else:
-                    logger.warning("[track-option] Alpaca returned no snapshot for %s", contract_symbol)
-            except Exception as snap_err:
-                logger.warning("[track-option] Auto-fetch failed for %s: %s", contract_symbol, snap_err, exc_info=True)
+            tracking_snapshot = build_tracking_snapshot(contract_symbol, data)
 
         contract_data = {
             "ticker": ticker,
@@ -203,6 +219,45 @@ def update_tracked_option(contract_id: str):
         return jsonify({"success": False, "error": f"Failed to update contract: {str(e)}"}), 500
 
 
+@bp.route("/track-option/<contract_id>/alerts", methods=["PATCH"])
+def update_tracked_option_alerts(contract_id: str):
+    """
+    Set per-contract entered-position alert threshold overrides. Independent
+    of the status PUT above — can be called any time; only takes effect once
+    the contract is 'entered' (see OptionsContractMonitorService). Body keys
+    map 1:1 to the alert_* columns; a null value resets that tier to the
+    25/50/100 default.
+    Body: { userId, gain25?, gain50?, gain100?, loss25?, loss50?, loss100? }
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "Request body is required"}), 400
+
+        user_id = data.get("userId")
+        if not user_id:
+            return jsonify({"success": False, "error": "userId is required"}), 400
+
+        field_map = {
+            "gain25": "alert_gain_25", "gain50": "alert_gain_50", "gain100": "alert_gain_100",
+            "loss25": "alert_loss_25", "loss50": "alert_loss_50", "loss100": "alert_loss_100",
+        }
+        thresholds = {
+            col: data[key] for key, col in field_map.items() if key in data
+        }
+        if not thresholds:
+            return jsonify({"success": False, "error": "No threshold fields provided"}), 400
+
+        service = get_supabase_service()
+        service.verify_user(user_id=user_id)
+        result = service.update_contract_alert_thresholds(user_id, contract_id, thresholds)
+        return jsonify(result), 200 if result.get("success") else 400
+
+    except Exception as e:
+        logger.error("Failed to update alert thresholds: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": f"Failed to update alert thresholds: {str(e)}"}), 500
+
+
 @bp.route("/track-option/<contract_id>", methods=["DELETE"])
 def delete_tracked_option(contract_id: str):
     try:
@@ -242,3 +297,69 @@ def get_suggested_contracts(ticker: str):
     except Exception as e:
         logger.error("Failed to get suggested contracts for %s: %s", ticker, e, exc_info=True)
         return jsonify({"success": False, "error": f"Failed to get suggested contracts: {str(e)}", "ticker": ticker}), 500
+
+
+@bp.route("/options/simulate-returns", methods=["POST"])
+def simulate_returns():
+    """
+    Black-Scholes P&L grid for the Simulated Returns view — see
+    docs/SIMULATED_RETURNS_PLAN.md. Pure compute: no DB writes, no Alpaca
+    calls (every input is already sitting in the client's own React Query
+    cache from data it fetched to render the contract card/detail sheet).
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "Request body is required"}), 400
+
+        option_type = (data.get("optionType") or "").strip().upper()
+        if option_type not in ("CALL", "PUT"):
+            return jsonify({"success": False, "error": "optionType must be 'CALL' or 'PUT'"}), 400
+
+        required = ["strike", "expirationDate", "currentSpot", "impliedVolatility", "currentContractPrice", "costBasis"]
+        missing = [f for f in required if data.get(f) is None]
+        if missing:
+            return jsonify({"success": False, "error": f"Missing required field(s): {', '.join(missing)}"}), 400
+
+        try:
+            strike = float(data["strike"])
+            current_spot = float(data["currentSpot"])
+            implied_volatility = float(data["impliedVolatility"])
+            current_contract_price = float(data["currentContractPrice"])
+            cost_basis = float(data["costBasis"])
+            quantity = int(data.get("quantity", 1))
+            spot_range_pct = float(data.get("spotRangePct", DEFAULT_SPOT_RANGE_PCT))
+            risk_free_rate = float(data.get("riskFreeRate", DEFAULT_RISK_FREE_RATE))
+            expiration_date = datetime.strptime(data["expirationDate"], "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "One or more fields had an invalid type/format (expirationDate must be YYYY-MM-DD)"}), 400
+
+        if strike <= 0 or current_spot <= 0 or implied_volatility <= 0 or quantity <= 0 or spot_range_pct <= 0:
+            return jsonify({"success": False, "error": "strike, currentSpot, impliedVolatility, quantity, and spotRangePct must all be positive"}), 400
+
+        grid = build_simulated_returns_grid(
+            current_spot=current_spot,
+            strike=strike,
+            expiration_date=expiration_date,
+            volatility=implied_volatility,
+            current_contract_price=current_contract_price,
+            cost_basis=cost_basis,
+            quantity=quantity,
+            option_type=option_type,
+            spot_range_pct=spot_range_pct,
+            risk_free_rate=risk_free_rate,
+        )
+        return jsonify({
+            "success": True,
+            "data": {
+                "dates": grid["dates"],
+                "spotPrices": grid["spot_prices"],
+                "pnl": grid["pnl"],
+                "maxLoss": grid["max_loss"],
+                "riskFreeRateUsed": grid["risk_free_rate_used"],
+            },
+        }), 200
+
+    except Exception as e:
+        logger.error("Failed to simulate returns: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": f"Failed to simulate returns: {str(e)}"}), 500

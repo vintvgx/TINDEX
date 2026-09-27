@@ -1,0 +1,699 @@
+"""
+Pre-market "Market Digest" generator.
+
+Runs ~8:30 AM ET Mon-Fri (see the pg_cron migration), before the open, and
+produces one structured JSON digest for the mobile app's full-screen story
+modal. Unlike ReviewGenerator (markdown, parsed at display time), this
+returns typed JSON so the client can render distinct slides — stat tiles,
+charts, headline cards — without re-parsing prose.
+
+Two data paths, kept deliberately separate:
+
+  - Every NUMBER (futures, VIX, yields, DXY, oil, gold, crypto, watchlist
+    quotes, market-wide movers) comes from yfinance / the existing Yahoo
+    watchlist service — deterministic, no hallucination risk on the figures
+    a trader actually acts on.
+  - Headlines, catalysts, and the earnings/economic calendar come from
+    Claude with the server-side web_search tool, restricted to a curated
+    allowlist of finance outlets — real live search with a citation on every
+    claim, not the model's training-data memory.
+
+A Claude narrative failure (bad JSON, search hiccup) degrades the digest
+rather than killing it — the numeric slides are still useful on their own,
+so generate() never raises; it just leaves the narrative fields empty and
+logs the failure.
+"""
+
+import os
+import re
+import json
+import logging
+from datetime import date, datetime, timedelta
+
+import pytz
+import yfinance as yf
+import anthropic
+
+logger = logging.getLogger(__name__)
+ET = pytz.timezone("America/New_York")
+
+_CLAUDE_MODEL   = "claude-sonnet-4-6"
+_ADVICE_MODEL   = "claude-haiku-4-5"
+_MAX_TOKENS     = 4096
+_MAX_WEB_SEARCHES = 8
+
+# Reputable finance/news outlets only — so a catalyst claim can't get
+# attributed to a thin aggregator or SEO-farm site. Tune this list if the
+# digest is missing real stories or citing something low-quality — but any
+# domain here MUST be crawlable by Anthropic's web_search agent, or the
+# ENTIRE call is rejected with a 400 (allowed_domains fails closed, not
+# per-domain). reuters.com and marketwatch.com block Anthropic's crawler in
+# their robots policy and were pulled after that broke every digest
+# (2026-09-02) — verify a candidate domain actually works before adding it
+# back.
+_ALLOWED_DOMAINS = [
+    "finance.yahoo.com",
+    "cnbc.com",
+    "bloomberg.com",
+    "tradingeconomics.com",
+    "investing.com",
+]
+
+# label -> yfinance symbol. ^TNX (10Y) reports the yield directly (e.g. 4.79
+# means 4.79%) — no unit conversion needed.
+_MACRO_SYMBOLS = [
+    ("S&P 500 Fut", "ES=F", "index"),
+    ("Nasdaq Fut",  "NQ=F", "index"),
+    ("Dow Fut",     "YM=F", "index"),
+    ("VIX",         "^VIX", "index"),
+    ("US 10Y",      "^TNX", "yield"),
+    ("DXY",         "DX-Y.NYB", "index"),
+    ("WTI Crude",   "CL=F", "currency"),
+    ("Gold",        "GC=F", "currency"),
+    ("BTC",         "BTC-USD", "currency"),
+    ("ETH",         "ETH-USD", "currency"),
+]
+
+_DEFAULT_WATCHLIST = ["SPY", "QQQ", "NVDA", "AAPL", "TSLA", "AMD"]
+
+# market_pulse_config entries that are display-only pseudo-tickers, not real
+# yfinance symbols — see FeedMarketPulseStrip.tsx's DEFAULT_CONFIG.
+_NON_TICKER_CONFIG_KEYS = {"VIX", "FLOW"}
+
+_SYSTEM_PROMPT = """
+You are a pre-market analyst producing the news/catalyst portion of a daily
+market digest for a US equities day trader. You are given today's date, a
+resolved list of macro price levels (already fetched live moments ago — DO
+NOT re-derive, restate with different values, or contradict these numbers),
+the trader's watchlist tickers, and today's top market-wide movers with
+their price change, also already fetched live.
+
+Your job is ONLY to explain the "why" behind the tape using live web search
+— headlines, catalysts, earnings, and the economic calendar — NOT to
+re-report numbers you already have. Every claim must come from a search
+result you actually retrieved just now, not memory.
+
+Return ONLY a single JSON object — no markdown code fences, no commentary
+before or after — matching exactly this shape:
+
+{
+  "market_setup_note": "one tight sentence on overnight direction and the main driver, ET-anchored",
+  "market_setup_source": {"label": "...", "url": "..."},
+  "headlines": [
+    {"text": "...", "source": "...", "url": "..."}
+  ],
+  "headlines_summary": [
+    "..."
+  ],
+  "watchlist_catalysts": {
+    "<TICKER>": {"catalyst": "...", "level": "..." }
+  },
+  "mover_reasons": {
+    "<TICKER>": "reason (earnings, guidance, upgrade, etc.)"
+  },
+  "earnings_today": [
+    {"ticker": "...", "when": "before_open", "note": "..."}
+  ],
+  "economic_calendar": [
+    {"time_et": "8:15 AM", "label": "...", "consensus": "...", "prior": "..."}
+  ],
+  "what_to_watch": [
+    "..."
+  ]
+}
+
+Rules:
+- "headlines": 4-6 items, top macro/market stories since yesterday's close, one line each.
+- "headlines_summary": 3-4 bullets synthesizing the headlines into the big
+  picture a trader needs before the open — one clear idea per bullet (e.g.
+  the dominant macro driver, the main risk, the standout single-stock
+  story). Write this AFTER "headlines" and base it only on what's in there —
+  don't introduce a fact that isn't backed by one of the headline items.
+- "watchlist_catalysts": exactly one entry per watchlist ticker given below.
+  If you find no catalyst, set "catalyst" to "No news" and "level" to null
+  — never invent one.
+- "mover_reasons": exactly one entry per mover ticker given below.
+- "earnings_today": "when" is either "before_open" or "after_close".
+- All times in ET. State facts, catalysts, and levels only — never tell the
+  trader to buy or sell.
+- Keep every string tight and scannable — this renders on a phone screen,
+  one slide per section.
+""".strip()
+
+_ADVICE_SYSTEM_PROMPT = """
+You are a trading coach writing a 1-2 sentence note for a pre-market digest,
+based on the trader's own recent performance-review summaries (not market
+news). Be specific and reference an actual pattern in the numbers given —
+not generic encouragement. State facts and observed patterns; never tell
+the trader to buy, sell, or take a specific position. Return plain text
+only, no markdown, no preamble.
+""".strip()
+
+_KEY_LEVEL_SYSTEM_PROMPT = """
+You are a trading analyst reviewing a trader's own self-identified key price
+levels against recent price action, for a pre-market digest. For EACH ticker
+given, judge whether price action still supports the original thesis: is it
+moving toward the level, stalling, or failing; is recent buying or selling
+pressure dominant. Base this ONLY on the numeric data given (recent daily
+closes, current price, % change) — never invent a news catalyst, and never
+tell the trader to buy or sell.
+
+Return ONLY a single JSON object — no markdown fences, no commentary —
+shaped exactly like:
+{
+  "<TICKER>": {
+    "verdict": "on_track" | "stalling" | "failing",
+    "analysis": "1-2 tight sentences, specific to the numbers given"
+  }
+}
+
+Rules:
+- Exactly one entry per ticker given, keyed by its exact ticker symbol.
+- "on_track": recent closes are trending toward the level/direction.
+- "stalling": price is roughly flat relative to the level, no clear push either way.
+- "failing": price is trending away from the level/direction.
+- Reference the actual numbers (e.g. "down 3 of the last 5 closes") — never generic.
+""".strip()
+
+
+class MarketDigestGenerator:
+    def __init__(self, supabase_client):
+        self._sb     = supabase_client
+        self._claude = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def generate(self, digest_date: date | None = None) -> dict:
+        """
+        Build and return the full digest JSON for one day. Never raises —
+        a failure in any one section is logged and that section degrades to
+        an empty/default value so the rest of the digest still ships.
+        """
+        digest_date = digest_date or date.today()
+
+        my_tickers = self._fetch_my_watchlist_tickers()
+        trending   = self._fetch_trending()
+        macro      = self._fetch_macro_quotes()
+        watchlist_quotes = self._fetch_ticker_quotes(my_tickers)
+        movers     = self._fetch_market_movers()
+        trading    = self._fetch_trading_performance(digest_date)
+        key_levels = self._fetch_key_levels()
+        key_level_context  = self._fetch_key_level_context(key_levels)
+        key_level_analysis = self._analyze_key_levels(key_levels, key_level_context)
+
+        ai = self._call_claude(digest_date, macro, watchlist_quotes, movers)
+        if ai.get("_error"):
+            logger.error("[MarketDigestGenerator] Narrative layer failed for %s: %s", digest_date, ai["_error"])
+
+        content = {
+            "digest_date":   str(digest_date),
+            "generated_at":  datetime.now(pytz.utc).isoformat(),
+            "market_setup": {
+                "note":   ai.get("market_setup_note", ""),
+                "source": ai.get("market_setup_source"),
+                "stats":  macro,
+            },
+            "headlines": ai.get("headlines", []),
+            "headlines_summary": ai.get("headlines_summary", []),
+            "watchlist": {
+                "mine":       self._merge_catalysts(watchlist_quotes, ai.get("watchlist_catalysts", {})),
+                "trending":   trending,
+                "key_levels": self._merge_key_levels(key_levels, key_level_context, key_level_analysis),
+            },
+            "movers": self._merge_mover_reasons(movers, ai.get("mover_reasons", {})),
+            "events": {
+                "earnings": ai.get("earnings_today", []),
+                "economic": ai.get("economic_calendar", []),
+            },
+            "what_to_watch": ai.get("what_to_watch", []),
+            "trading": trading,
+        }
+        # Temporary diagnostic — surfaces a web-search/parse failure straight
+        # in the API response since there's no server-log access from this
+        # environment. Harmless to the mobile client either way (unknown
+        # JSON fields are ignored by the typed response shape); remove once
+        # the narrative layer has proven reliable.
+        if ai.get("_error"):
+            content["_ai_debug"] = ai["_error"]
+        return content
+
+    def save_to_supabase(self, digest_date: date, content: dict) -> bool:
+        try:
+            self._sb.table("market_digests").upsert({
+                "digest_date":   str(digest_date),
+                "content_json":  content,
+                "created_at":    datetime.utcnow().isoformat(),
+            }, on_conflict="digest_date").execute()
+            logger.info("[MarketDigestGenerator] Saved digest for %s", digest_date)
+            return True
+        except Exception as e:
+            logger.error("[MarketDigestGenerator] Supabase save failed: %s", e)
+            return False
+
+    # ── Deterministic data (yfinance / Yahoo watchlist service) ────────────────
+
+    def _fetch_my_watchlist_tickers(self) -> list[str]:
+        """User's own watchlist — persisted server-side in
+        user_profiles.market_pulse_config (see FeedMarketPulseStrip.tsx),
+        with VIX/FLOW filtered out since those are strip pseudo-entries, not
+        real tickers. Falls back to a sane default if unset."""
+        try:
+            rows = (
+                self._sb.table("user_profiles")
+                .select("market_pulse_config")
+                .limit(1)
+                .execute()
+                .data or []
+            )
+            config = (rows[0].get("market_pulse_config") if rows else None) or []
+            tickers = [t for t in config if isinstance(t, str) and t not in _NON_TICKER_CONFIG_KEYS]
+            return tickers or list(_DEFAULT_WATCHLIST)
+        except Exception as e:
+            logger.warning("[MarketDigestGenerator] fetch_my_watchlist_tickers failed: %s", e)
+            return list(_DEFAULT_WATCHLIST)
+
+    def _fetch_trending(self, limit: int = 8) -> list[dict]:
+        """Broader-market coverage beyond the user's own watchlist — Yahoo
+        Finance's trending list, already integrated (yahoo_watchlist_service),
+        so a story the user isn't personally tracking still surfaces."""
+        try:
+            from services.yfinance.yahoo_watchlist_service import get_yahoo_watchlist_service
+            result = get_yahoo_watchlist_service().get_trending(limit=limit)
+            if not result.get("success"):
+                return []
+            return [
+                {
+                    "ticker":         s.get("ticker"),
+                    "company":        s.get("company"),
+                    "price":          s.get("price"),
+                    "change_percent": s.get("change_percent"),
+                    "volume":         s.get("volume"),
+                }
+                for s in result.get("data", [])
+            ]
+        except Exception as e:
+            logger.warning("[MarketDigestGenerator] fetch_trending failed: %s", e)
+            return []
+
+    def _fetch_key_levels(self) -> list[dict]:
+        """User's active watched price levels — the same table the chart's
+        Watch mode reads/writes (see price_level_routes.py). Feeds the
+        Watchlist slide's per-ticker key-level review below."""
+        try:
+            rows = (
+                self._sb.table("watched_price_levels")
+                .select("id, ticker, level_low, level_high, direction, status")
+                .in_("status", ["watching", "confirmed"])
+                .order("created_at", desc=True)
+                .execute()
+                .data or []
+            )
+            return rows
+        except Exception as e:
+            logger.warning("[MarketDigestGenerator] fetch_key_levels failed: %s", e)
+            return []
+
+    def _fetch_key_level_context(self, key_levels: list[dict]) -> dict:
+        """Per-ticker current quote + a short recent-closes trend — momentum
+        context the key-level AI review reasons over instead of a single
+        static snapshot."""
+        context: dict = {}
+        for lvl in key_levels:
+            t = lvl["ticker"]
+            if t in context:
+                continue
+            try:
+                tk = yf.Ticker(t)
+                q = self._quote_from_info(tk.info)
+                hist = tk.history(period="5d")
+                closes = [round(c, 2) for c in hist["Close"].tolist()] if not hist.empty else []
+                context[t] = {
+                    "price":          q["price"] if q else None,
+                    "change_percent": q["change_percent"] if q else None,
+                    "recent_closes":  closes,
+                }
+            except Exception as e:
+                logger.warning("[MarketDigestGenerator] key_level_context failed for %s: %s", t, e)
+                context[t] = {"price": None, "change_percent": None, "recent_closes": []}
+        return context
+
+    def _fetch_market_movers(self, limit: int = 3) -> dict:
+        """Top market-wide gainers/losers, independent of any watchlist —
+        reuses the same Yahoo watchlist service the Trending tab already
+        uses in the mobile app."""
+        try:
+            from services.yfinance.yahoo_watchlist_service import get_yahoo_watchlist_service
+            svc = get_yahoo_watchlist_service()
+            gainers = svc.get_gainers(limit=limit)
+            losers  = svc.get_losers(limit=limit)
+            fmt = lambda rows: [
+                {
+                    "ticker":         s.get("ticker"),
+                    "company":        s.get("company"),
+                    "price":          s.get("price"),
+                    "change":         s.get("change"),
+                    "change_percent": s.get("change_percent"),
+                }
+                for s in rows
+            ]
+            return {
+                "gainers": fmt(gainers.get("data", []) if gainers.get("success") else []),
+                "losers":  fmt(losers.get("data", []) if losers.get("success") else []),
+            }
+        except Exception as e:
+            logger.warning("[MarketDigestGenerator] fetch_market_movers failed: %s", e)
+            return {"gainers": [], "losers": []}
+
+    def _quote_from_info(self, info: dict) -> dict | None:
+        """
+        Pull a best-effort live price + % change out of yfinance's `.info`
+        dict, preferring genuine pre-market fields (present only while
+        pre-market is actually live) and falling back to the regular-session
+        fields — so this works whether the digest fires at 8:30 AM
+        pre-market or is regenerated on-demand later in the day from Daily
+        Review.
+        """
+        price = info.get("preMarketPrice")
+        change_pct = info.get("preMarketChangePercent")
+        session = "pre_market"
+
+        if price is None:
+            price = info.get("regularMarketPrice") or info.get("currentPrice")
+            change_pct = info.get("regularMarketChangePercent")
+            session = "regular"
+
+        prev_close = info.get("regularMarketPreviousClose")
+        if change_pct is None and price is not None and prev_close:
+            change_pct = (price - prev_close) / prev_close * 100
+            session = session or "computed"
+
+        if price is None:
+            return None
+        return {"price": round(price, 2), "change_percent": round(change_pct, 2) if change_pct is not None else None, "session": session}
+
+    def _fetch_macro_quotes(self) -> list[dict]:
+        stats = []
+        for label, symbol, kind in _MACRO_SYMBOLS:
+            try:
+                info = yf.Ticker(symbol).info
+                q = self._quote_from_info(info)
+                if not q:
+                    continue
+                value = q["price"]
+                stats.append({
+                    "label":          label,
+                    "symbol":         symbol,
+                    "value":          value,
+                    "change_percent": q["change_percent"],
+                    "kind":           kind,
+                })
+            except Exception as e:
+                logger.warning("[MarketDigestGenerator] macro quote failed for %s: %s", symbol, e)
+        return stats
+
+    def _fetch_ticker_quotes(self, tickers: list[str]) -> list[dict]:
+        quotes = []
+        for t in tickers:
+            try:
+                info = yf.Ticker(t).info
+                q = self._quote_from_info(info)
+                quotes.append({
+                    "ticker":         t,
+                    "price":          q["price"] if q else None,
+                    "change_percent": q["change_percent"] if q else None,
+                    "session":        q["session"] if q else None,
+                })
+            except Exception as e:
+                logger.warning("[MarketDigestGenerator] ticker quote failed for %s: %s", t, e)
+                quotes.append({"ticker": t, "price": None, "change_percent": None, "session": None})
+        return quotes
+
+    def _fetch_trading_performance(self, digest_date: date) -> dict:
+        """
+        Day/week/all-time trade performance for the LIVE account only (paper
+        stays in Daily Review's own toggle — see the digest's design
+        discussion). "Day" here means the most recently completed session's
+        review (yesterday's, from the trader's point of view at 8:30 AM
+        pre-market before today has traded), not today's — there are no
+        trades yet when this runs.
+        """
+        try:
+            recent = (
+                self._sb.table("performance_reviews")
+                .select("review_date, net_pnl, trade_count, win_rate, winners, losers, markdown")
+                .eq("paper_mode", False)
+                .lt("review_date", str(digest_date))
+                .order("review_date", desc=True)
+                .limit(10)
+                .execute()
+                .data or []
+            )
+            all_time = (
+                self._sb.table("performance_reviews")
+                .select("net_pnl, trade_count, winners")
+                .eq("paper_mode", False)
+                .lt("review_date", str(digest_date))
+                .execute()
+                .data or []
+            )
+        except Exception as e:
+            logger.warning("[MarketDigestGenerator] fetch_trading_performance failed: %s", e)
+            return {"last_session": None, "week": None, "all_time": None, "advice": ""}
+
+        last_session = None
+        if recent:
+            r = recent[0]
+            last_session = {
+                "date": r["review_date"], "net_pnl": r.get("net_pnl") or 0,
+                "trade_count": r.get("trade_count") or 0, "win_rate": r.get("win_rate") or 0,
+            }
+
+        week_rows = recent[:5]
+        week_trades = sum(r.get("trade_count") or 0 for r in week_rows)
+        week_winners = sum(r.get("winners") or 0 for r in week_rows)
+        week = {
+            "net_pnl":     round(sum(r.get("net_pnl") or 0 for r in week_rows), 2),
+            "trade_count": week_trades,
+            "win_rate":    round(week_winners / week_trades * 100, 1) if week_trades else 0.0,
+            "daily":       [{"date": r["review_date"], "net_pnl": r.get("net_pnl") or 0} for r in reversed(week_rows)],
+        }
+
+        all_trades = sum(r.get("trade_count") or 0 for r in all_time)
+        all_winners = sum(r.get("winners") or 0 for r in all_time)
+        all_time_stats = {
+            "net_pnl":     round(sum(r.get("net_pnl") or 0 for r in all_time), 2),
+            "trade_count": all_trades,
+            "win_rate":    round(all_winners / all_trades * 100, 1) if all_trades else 0.0,
+        }
+
+        advice = self._generate_advice(last_session, week, all_time_stats, recent)
+
+        return {"last_session": last_session, "week": week, "all_time": all_time_stats, "advice": advice}
+
+    # ── AI narrative (Claude + web search) ──────────────────────────────────────
+
+    def _generate_advice(self, last_session, week, all_time, recent_reviews) -> str:
+        if not recent_reviews:
+            return ""
+        try:
+            summary_lines = [
+                f"{r['review_date']}: net ${r.get('net_pnl') or 0:+.2f}, "
+                f"{r.get('trade_count') or 0} trades, {r.get('win_rate') or 0:.0f}% win rate"
+                for r in recent_reviews
+            ]
+            prompt = (
+                "Recent live-account daily reviews (most recent first):\n"
+                + "\n".join(summary_lines)
+                + f"\n\nRolling week: net ${week['net_pnl']:+.2f} over {week['trade_count']} trades. "
+                + f"All-time: net ${all_time['net_pnl']:+.2f} over {all_time['trade_count']} trades.\n\n"
+                + "Write the coaching note."
+            )
+            resp = self._claude.messages.create(
+                model=_ADVICE_MODEL,
+                max_tokens=200,
+                system=_ADVICE_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
+        except Exception as e:
+            logger.warning("[MarketDigestGenerator] generate_advice failed: %s", e)
+            return ""
+
+    def _analyze_key_levels(self, key_levels: list[dict], context: dict) -> dict:
+        """One batched Haiku call reviewing every active key level against
+        its recent price context — cheap/fast like _generate_advice, and
+        deliberately separate from the main web-search call above (this is
+        pure numeric reasoning, no search needed)."""
+        if not key_levels:
+            return {}
+        try:
+            lines = []
+            for lvl in key_levels:
+                t = lvl["ticker"]
+                c = context.get(t, {})
+                lines.append(
+                    f"{t}: direction={lvl['direction']}, level=${lvl['level_low']}-${lvl['level_high']}, "
+                    f"status={lvl['status']}, current_price={c.get('price')}, "
+                    f"change_percent={c.get('change_percent')}, "
+                    f"recent_daily_closes={c.get('recent_closes')}"
+                )
+            prompt = "Key levels to review:\n" + "\n".join(lines) + "\n\nReturn the JSON object."
+            resp = self._claude.messages.create(
+                model=_ADVICE_MODEL,
+                max_tokens=1024,
+                system=_KEY_LEVEL_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+            result = self._parse_ai_json(text)
+            return result if not result.get("_error") else {}
+        except Exception as e:
+            logger.warning("[MarketDigestGenerator] analyze_key_levels failed: %s", e)
+            return {}
+
+    def _call_claude(self, digest_date: date, macro: list[dict], watchlist_quotes: list[dict], movers: dict) -> dict:
+        """
+        Returns the parsed narrative dict, or on any failure a dict with only
+        an "_error" key (never raises — see class docstring). "_error" is a
+        deliberate diagnostic escape hatch surfaced all the way to the API
+        response (see generate()'s "_ai_debug") rather than {}, since a
+        silently-empty narrative is otherwise indistinguishable from "Claude
+        found nothing to report" with no way to tell which happened short of
+        a server log.
+        """
+        try:
+            prompt = self._build_prompt(digest_date, macro, watchlist_quotes, movers)
+            tools = [{
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": _MAX_WEB_SEARCHES,
+                "allowed_domains": _ALLOWED_DOMAINS,
+            }]
+            working_messages = [{"role": "user", "content": prompt}]
+            final_text = ""
+            last_stop_reason = None
+
+            # Guard against runaway server-tool loops — same pattern as
+            # AnthropicService.stream_agent_chat. Budget is higher than that
+            # method's (4) since this prompt can chain up to
+            # _MAX_WEB_SEARCHES searches across 6 sections in one turn.
+            for _ in range(10):
+                resp = self._claude.messages.create(
+                    model=_CLAUDE_MODEL,
+                    max_tokens=_MAX_TOKENS,
+                    system=_SYSTEM_PROMPT,
+                    messages=working_messages,
+                    tools=tools,
+                )
+                last_stop_reason = resp.stop_reason
+                if resp.stop_reason == "pause_turn":
+                    working_messages.append({"role": "assistant", "content": resp.content})
+                    continue
+                final_text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+                break
+            else:
+                logger.error("[MarketDigestGenerator] Exhausted pause_turn budget without finishing")
+                return {"_error": "Exhausted pause_turn retry budget (still pause_turn after 10 turns)"}
+
+            if not final_text.strip():
+                logger.error("[MarketDigestGenerator] Empty text from Claude — stop_reason=%s", last_stop_reason)
+                return {"_error": f"Empty response text (stop_reason={last_stop_reason})"}
+
+            return self._parse_ai_json(final_text)
+        except Exception as e:
+            logger.error("[MarketDigestGenerator] Claude call failed: %s", e, exc_info=True)
+            return {"_error": f"{type(e).__name__}: {e}"}
+
+    @staticmethod
+    def _parse_ai_json(text: str) -> dict:
+        cleaned = text.strip()
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        try:
+            return json.loads(cleaned)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        # Model added prose despite instructions — fall back to the first
+        # balanced {...} substring rather than giving up outright.
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end > start:
+            try:
+                return json.loads(cleaned[start:end + 1])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        logger.error("[MarketDigestGenerator] Failed to parse AI JSON — raw: %s", text[:800])
+        return {"_error": "AI response was not valid JSON", "_raw_preview": text[:400]}
+
+    def _build_prompt(self, digest_date: date, macro: list[dict], watchlist_quotes: list[dict], movers: dict) -> str:
+        now_et = datetime.now(ET)
+        lines = [
+            f"Today's date: {digest_date.strftime('%A, %B %d, %Y')}. Current time: {now_et.strftime('%-I:%M %p ET')}.",
+            "",
+            "### Live macro levels (already fetched — do not re-derive)",
+        ]
+        for s in macro:
+            unit = "%" if s["kind"] == "yield" else ""
+            chg = f" ({s['change_percent']:+.2f}%)" if s["change_percent"] is not None else ""
+            lines.append(f"  {s['label']}: {s['value']}{unit}{chg}")
+
+        lines.append("")
+        lines.append("### Watchlist tickers (need one catalyst entry each)")
+        for q in watchlist_quotes:
+            chg = f" {q['change_percent']:+.2f}%" if q["change_percent"] is not None else " (no quote)"
+            lines.append(f"  {q['ticker']}{chg}")
+
+        lines.append("")
+        lines.append("### Market-wide movers (need one reason entry each)")
+        for m in movers.get("gainers", []):
+            lines.append(f"  GAINER {m['ticker']} {m.get('change_percent')}%")
+        for m in movers.get("losers", []):
+            lines.append(f"  LOSER {m['ticker']} {m.get('change_percent')}%")
+
+        lines.append("")
+        lines.append("Search live for headlines, catalysts, earnings, and the economic "
+                      "calendar, then return the JSON object described in your system prompt.")
+        return "\n".join(lines)
+
+    # ── Merge helpers ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _merge_catalysts(watchlist_quotes: list[dict], catalysts: dict) -> list[dict]:
+        out = []
+        for q in watchlist_quotes:
+            c = catalysts.get(q["ticker"], {}) if isinstance(catalysts, dict) else {}
+            out.append({
+                **q,
+                "catalyst": c.get("catalyst", "No news"),
+                "level":    c.get("level"),
+            })
+        return out
+
+    @staticmethod
+    def _merge_mover_reasons(movers: dict, reasons: dict) -> dict:
+        def merge(rows):
+            out = []
+            for m in rows:
+                out.append({**m, "reason": (reasons or {}).get(m["ticker"], "")})
+            return out
+        return {"gainers": merge(movers.get("gainers", [])), "losers": merge(movers.get("losers", []))}
+
+    @staticmethod
+    def _merge_key_levels(key_levels: list[dict], context: dict, analysis: dict) -> list[dict]:
+        out = []
+        for lvl in key_levels:
+            t = lvl["ticker"]
+            c = context.get(t, {})
+            a = analysis.get(t, {}) if isinstance(analysis, dict) else {}
+            out.append({
+                "ticker":         t,
+                "level_low":      lvl["level_low"],
+                "level_high":     lvl["level_high"],
+                "direction":      lvl["direction"],
+                "status":         lvl["status"],
+                "price":          c.get("price"),
+                "change_percent": c.get("change_percent"),
+                "verdict":        a.get("verdict"),
+                "analysis":       a.get("analysis", ""),
+            })
+        return out

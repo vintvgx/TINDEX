@@ -42,6 +42,13 @@ Note on fib_levels:
   In budget mode, the fib extension matching budget_fib_level is used as the
   strike anchor — targeting a strike that becomes near-ATM exactly when the
   underlying reaches the TP1 / TP2 / extension zone.
+
+Note on minutes_since_orb_close (standard mode only, ignored in budget mode):
+  When provided, narrows offset_max down and raises delta_min up as the
+  session runs down — see _ORB_TO_CLOSE_MINUTES/_TOD_MAX_SHRINK below. An
+  OTM strike needs time to work; the same window that's reasonable right
+  after the open is a worse bet minted mid-afternoon on a same-day (every
+  selection here is 0DTE) contract.
 """
 
 import logging
@@ -60,6 +67,22 @@ _BUDGET_DELTA_RANGES = {
     "2.618": (0.03, 0.09),
 }
 _BUDGET_STRIKE_TOLERANCE = 0.75  # |strike - fib_anchor| ≤ this to pass filter
+
+# ── Time-of-day strike/delta scaling (standard mode only) ────────────────────
+# An OTM strike needs time to work — the same offset/delta window that's
+# reasonable at 9:46am (a full session of runway) is a much worse bet minted
+# at 1:45pm (under 2.5 hours before every contract in this codebase expires —
+# selection is always same-day, see select_contract's expiration_date below,
+# regardless of a profile's "swing" framing). This narrows the OTM allowance
+# (lower offset_max) and raises the delta floor (more ATM-leaning) as the
+# session runs down, rather than using the exact same static window all day.
+# ETF options stop trading ~4:00pm ET regardless of ticker (see orb_engine.py
+# EOD_CLOSE_TIMES) — 375 = minutes from ORB close (9:45am) to 4:00pm.
+_ORB_TO_CLOSE_MINUTES = 375
+# Caps how aggressively the window narrows — at time_frac=1.0 (session close)
+# the window is still at least 40% of its original span, not fully collapsed
+# to a single point, so a legitimate late-day entry can still find a match.
+_TOD_MAX_SHRINK = 0.6
 
 
 def _parse_occ_strike(symbol: str) -> Optional[float]:
@@ -87,6 +110,7 @@ def select_contract(
     budget_mode: bool = False,
     budget_max_ask: Optional[float] = None,
     budget_fib_level: str = "1.0",
+    minutes_since_orb_close: Optional[float] = None,
 ) -> dict | None:
     today          = date.today()
     option_type    = "call" if direction == "CALL" else "put"
@@ -107,10 +131,27 @@ def select_contract(
         budget_delta_range  = _BUDGET_DELTA_RANGES.get(budget_fib_level, (0.08, 0.22))
         effective_delta_min = budget_delta_range[0]
         effective_delta_max = budget_delta_range[1]
+        effective_offset_min = offset_min
+        effective_offset_max = offset_max
     else:
         fib_anchor          = None
         effective_delta_min = delta_min
         effective_delta_max = delta_max
+        effective_offset_min = offset_min
+        effective_offset_max = offset_max
+        # ── Time-of-day narrowing — see _ORB_TO_CLOSE_MINUTES doc above ──
+        if minutes_since_orb_close is not None:
+            time_frac = max(0.0, min(1.0, minutes_since_orb_close / _ORB_TO_CLOSE_MINUTES))
+            shrink    = time_frac * _TOD_MAX_SHRINK
+            effective_offset_max = offset_max - (offset_max - offset_min) * shrink
+            effective_delta_min  = delta_min + (delta_max - delta_min) * shrink
+            if shrink > 0:
+                logger.info(
+                    "[ContractSelector] TOD narrowing (%.0f min since ORB close, "
+                    "frac=%.2f): offset_max %.2f→%.2f, delta_min %.2f→%.2f",
+                    minutes_since_orb_close, time_frac, offset_max, effective_offset_max,
+                    delta_min, effective_delta_min,
+                )
 
     # ── VWAP soft confirmation ─────────────────────────────────────────────────
     # Logs misalignment; applies a small scoring penalty — does NOT block entry.
@@ -193,7 +234,9 @@ def select_contract(
         else:
             # offset is signed: negative = ITM. offset_min is always positive,
             # so ITM strikes (offset < 0) are automatically rejected here.
-            if offset < offset_min or offset > offset_max:
+            # effective_offset_max narrows later in the session — see the
+            # time-of-day scaling above.
+            if offset < effective_offset_min or offset > effective_offset_max:
                 continue
         # 2. Delta range — enforced only when greeks are present (indicative feed omits them)
         if delta is not None and not (effective_delta_min <= delta <= effective_delta_max):
@@ -252,9 +295,10 @@ def select_contract(
             return fib_dist + ask_score * 0.5 + c["spread_pct"] * 0.3
 
     else:
-        # Standard mode: profile-targeted — each profile scores toward its sweet spot
-        target_delta  = (delta_min + delta_max) / 2
-        target_offset = (offset_min + offset_max) / 2
+        # Standard mode: profile-targeted — each profile scores toward its sweet
+        # spot, narrowed by TOD scaling above when minutes_since_orb_close was given.
+        target_delta  = (effective_delta_min + effective_delta_max) / 2
+        target_offset = (effective_offset_min + effective_offset_max) / 2
         vwap_penalty  = 0.05 if vwap_aligned is False else 0.0
 
         def _score(c: dict) -> float:

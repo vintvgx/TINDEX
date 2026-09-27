@@ -5,9 +5,13 @@ self-tracked X API spend estimate (§ "X balance display" in
 docs/features/social-signal-contracts.md — X has no public endpoint for the
 actual $ credit balance, only the Developer Console shows that).
 
-Deliberately NOT wired into monitoring_routes.py's SERVICE_REGISTRY or app.py's
-boot sequence — start explicitly, not swept in by a generic "start everything"
-call, until this has a track record (same reasoning as the removed v1 scraper).
+Not wired into monitoring_routes.py's SERVICE_REGISTRY, but IS wired into
+app.py's boot sequence as of 2026-07-17 — same market-hours-gated self-heal
+backstop as the ORB hub and options contract monitor (see app.py and
+start_signal_ingest_core's own docstring below). This comment previously said
+the opposite (deliberately excluded from boot); that stopped being true once
+the 2026-07-17 incident (~15 same-day deploys leaving ingest dead for hours)
+made the same self-heal case for it as for the other two services.
 """
 
 import asyncio
@@ -236,7 +240,9 @@ def follow_account():
     social_signal_accounts is upserted globally (one row per distinct handle,
     shared across every user who follows it, so the poll loop only queries X
     once per handle) — the per-user relationship is the
-    user_social_signal_follows row created below.
+    user_social_signal_follows row created below. parse_keywords is only
+    written when the shared account row is first created; following an
+    existing handle never overwrites another follower's keyword config.
     """
     user_id, auth_error = _require_authenticated_user_id()
     if auth_error:
@@ -255,12 +261,24 @@ def follow_account():
         if x_user_id is None:
             return jsonify({"success": False, "error": f"@{handle} not found on X"}), 404
 
-        res = sb.table("social_signal_accounts").upsert({
+        existing = (
+            sb.table("social_signal_accounts")
+            .select("id")
+            .eq("handle", handle)
+            .limit(1)
+            .execute()
+        )
+        account_payload = {
             "handle": handle,
             "x_user_id": x_user_id,
             "active": True,
-            "parse_keywords": parse_keywords,
-        }, on_conflict="handle").execute()
+        }
+        if not existing.data:
+            account_payload["parse_keywords"] = parse_keywords
+
+        res = sb.table("social_signal_accounts").upsert(
+            account_payload, on_conflict="handle"
+        ).execute()
         account = res.data[0] if res.data else None
         if not account:
             return jsonify({"success": False, "error": "Failed to upsert account"}), 500

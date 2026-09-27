@@ -410,16 +410,124 @@ def _svc_status_contracts() -> dict:
 # stream) depend on these running continuously. A toggle here would be an
 # easy way to accidentally blind a live trade — status-only, on purpose.
 
+# Option quotes are subscribe-on-demand (a symbol only streams while a
+# position is open or a verify_stream probe is in flight) — unlike the ORB
+# bar feed, which flows continuously for every actively-monitored ticker
+# regardless of position state. So "stale" only means anything when there's
+# actually something subscribed; zero subscriptions with no recent quote is
+# the normal idle state, not an outage. 60s (vs. the bar feed's 180s) — an
+# open position's stop-loss/TP monitoring wants a much tighter bound than a
+# once-a-minute bar cadence.
+OPTION_STREAM_STALE_THRESHOLD_SEC = 60
+
+
+def _in_use_option_symbols() -> set:
+    """
+    Contract symbols currently backing an OPEN position across every live
+    engine (saved strategies + ad-hoc immediate-trade engines). Anything
+    subscribed on the option stream that ISN'T in this set has no position
+    depending on it — safe to unsubscribe (see clear_unused_option_subscriptions
+    below). A verify_stream probe or a pending-order wait can also hold a
+    subscription momentarily, but those self-unsubscribe on their own
+    (see option_stream.py), so they're not a factor here.
+    """
+    try:
+        from routes.strategy_routes import _all_engines
+    except Exception:
+        return set()
+    return {
+        eng.contract_symbol
+        for _, eng in _all_engines()
+        if getattr(eng, "trade_taken", False) and getattr(eng, "contract_symbol", None)
+    }
+
+
 def _get_option_stream_status() -> dict:
     try:
         from routes.strategy_routes import _stream_manager
         if _stream_manager is None:
             return {"running": False, "toggle": False}
-        thread = getattr(_stream_manager, "_thread", None)
-        running = bool(getattr(_stream_manager, "_started", False) and thread and thread.is_alive())
-        return {"running": running, "toggle": False}
+        health = _stream_manager.get_health()
+        age = health["last_quote_age_seconds"]
+        stale = (
+            health["running"] and health["subscribed_count"] > 0
+            and (age is None or age > OPTION_STREAM_STALE_THRESHOLD_SEC)
+        )
+        in_use = _in_use_option_symbols()
+        expired_set = set(health["expired_symbols"])
+        per_symbol = health["symbols"]
+        subscriptions = [
+            {
+                "symbol":                 sym,
+                "in_use":                 sym in in_use,
+                "expired":                sym in expired_set,
+                "last_quote_age_seconds": per_symbol.get(sym, {}).get("last_quote_age_seconds"),
+                "quote_count":            per_symbol.get(sym, {}).get("quote_count", 0),
+            }
+            for sym in health["subscribed_symbols"]
+        ]
+        return {
+            "running":            health["running"],
+            "toggle":             False,
+            "subscribed_count":   health["subscribed_count"],
+            "subscribed_symbols": health["subscribed_symbols"],
+            "expired_count":      health["expired_count"],
+            "expired_symbols":    health["expired_symbols"],
+            "unused_count":       sum(1 for s in subscriptions if not s["in_use"]),
+            "subscriptions":      subscriptions,
+            "last_quote_age_seconds": age,
+            "stale":              stale,
+        }
     except Exception as exc:
         return {"running": False, "toggle": False, "error": str(exc)}
+
+
+@bp.route("/services/option-stream/unsubscribe", methods=["POST"])
+def unsubscribe_option_stream_symbol():
+    """
+    Force-unsubscribe one symbol from the option stream — the Service Status
+    screen's per-row action. Removes ALL callbacks for the symbol (not just
+    one), so if it's currently backing an open position's TP/SL monitoring
+    this will blind that monitoring until something re-subscribes it (nothing
+    does automatically). The frontend confirms before calling this for any
+    symbol flagged in_use; this endpoint itself doesn't block it, since an
+    admin may legitimately need to force-clear a wedged subscription even
+    for an open position (e.g. about to manually flatten it anyway).
+    """
+    from routes.strategy_routes import _stream_manager
+    if _stream_manager is None:
+        return jsonify({"success": False, "message": "Option stream not running"}), 409
+    data = request.get_json(silent=True) or {}
+    symbol = (data.get("symbol") or "").strip()
+    if not symbol:
+        return jsonify({"success": False, "message": "symbol is required"}), 400
+    was_in_use = symbol in _in_use_option_symbols()
+    _stream_manager.unsubscribe(symbol)
+    logger.info("[services/option-stream] admin unsubscribe symbol=%s was_in_use=%s", symbol, was_in_use)
+    return jsonify({"success": True, "symbol": symbol, "was_in_use": was_in_use})
+
+
+@bp.route("/services/option-stream/clear-unused", methods=["POST"])
+def clear_unused_option_subscriptions():
+    """
+    Bulk-unsubscribe every symbol on the option stream that isn't backing an
+    open position right now — the Service Status screen's "Clear Unused"
+    button. Subscriptions are additive on Alpaca's side with no automatic
+    expiry (see option_stream.py's HEALTH_LOG_INTERVAL_SEC comment), so this
+    is the manual remediation for a connection that's slowly accumulated
+    dead symbols (expired 0DTE contracts, closed swing positions) across
+    weeks of uptime without a restart.
+    """
+    from routes.strategy_routes import _stream_manager
+    if _stream_manager is None:
+        return jsonify({"success": False, "message": "Option stream not running"}), 409
+    health = _stream_manager.get_health()
+    in_use = _in_use_option_symbols()
+    unused = [sym for sym in health["subscribed_symbols"] if sym not in in_use]
+    for sym in unused:
+        _stream_manager.unsubscribe(sym)
+    logger.info("[services/option-stream] admin clear-unused cleared=%d symbols=%s", len(unused), unused)
+    return jsonify({"success": True, "cleared_count": len(unused), "cleared_symbols": unused})
 
 
 def _get_price_stream_status() -> dict:

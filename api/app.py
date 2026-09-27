@@ -4,6 +4,7 @@ from flask import Flask, request
 from flask_sock import Sock  # pylint: disable=import-error
 
 from log.logging_config import get_logger
+from services.utils.market_hours import is_market_hours
 
 logger = get_logger(__name__)
 
@@ -29,6 +30,18 @@ def log_response_info(response):
 
 from services.websocket.price_stream_service import price_stream
 price_stream.start()
+
+# Per-chart real-time equity stream (ws_chart_live below) — see
+# stock_chart_stream.py's docstring for why this uses a dedicated Alpaca key
+# pair, now credentialed against a genuinely separate Alpaca account (as of
+# 2026-08-24) rather than a paper sub-account under the same user as
+# OrbService's own live-key stock stream. Previously disabled after
+# "connection limit exceeded" errors on Railway — see
+# docs/incidents/2026-07-13-orb-stream-connection-limit.md: Alpaca's
+# market-data connection cap is per-USER, not per paper/live sub-account, so
+# the original paper key silently shared (and lost the race for) the same
+# account-wide slot OrbService's stream already held.
+from services.websocket.stock_chart_stream import chart_stream
 
 # Single shared Alpaca option-data-stream connection for the whole process.
 # Constructed here (module scope, before the ORB engine's try/except below)
@@ -84,6 +97,12 @@ from routes.portfolio_routes import bp as portfolio_bp
 from routes.agent_routes import bp as agent_bp
 from routes.swing_routes import bp as swing_bp
 from routes.social_routes import bp as social_bp
+from routes.robinhood_routes import bp as robinhood_bp
+from routes.review_notes_routes import bp as review_notes_bp
+from routes.price_level_routes import bp as price_levels_bp
+from routes.contract_alert_routes import bp as contract_alerts_bp
+from routes.market_digest_routes import market_digest_bp
+from routes.muse import bp as muse_bp
 
 app.register_blueprint(ticker_bp)
 app.register_blueprint(yahoo_bp)
@@ -93,6 +112,12 @@ app.register_blueprint(portfolio_bp)
 app.register_blueprint(agent_bp)
 app.register_blueprint(swing_bp)
 app.register_blueprint(social_bp)
+app.register_blueprint(robinhood_bp)
+app.register_blueprint(review_notes_bp)
+app.register_blueprint(price_levels_bp)
+app.register_blueprint(contract_alerts_bp)
+app.register_blueprint(market_digest_bp)
+app.register_blueprint(muse_bp)
 
 
 # ── WebSocket: live price stream ───────────────────────────────────────────────
@@ -145,6 +170,44 @@ def ws_prices(ws):
         with tickers_lock:
             for ticker in client_tickers:
                 price_stream.unsubscribe(ticker)
+
+
+# ── WebSocket: per-chart real-time equity stream (Alpaca-backed) ───────────────
+
+@sock.route("/ws/chart/<ticker>/live")
+def ws_chart_live(ws, ticker: str):
+    """
+    Real-time last-trade price for exactly one ticker, for whichever chart is
+    currently open — see stock_chart_stream.py. Independent of /ws/prices
+    (that stays on its existing yfinance poll for TickerTape/watchlists/etc.)
+    and independent of the ORB engines' own live-account stock stream — this
+    connection now runs under a separate Alpaca account's key pair
+    specifically so it can never contend with that one for the account-wide
+    market-data connection slot (see the import comment above).
+    """
+    import queue as _queue
+
+    symbol = ticker.upper()
+    client_q: _queue.Queue = _queue.Queue(maxsize=20)
+
+    def _on_price(price: float):
+        try:
+            client_q.put_nowait(json.dumps({"type": "price_update", "price": price}))
+        except _queue.Full:
+            pass
+
+    chart_stream.subscribe(symbol, _on_price)
+    try:
+        while True:
+            try:
+                payload = client_q.get(timeout=30)
+                ws.send(payload)
+            except _queue.Empty:
+                ws.send(json.dumps({"type": "ping"}))
+    except Exception as exc:
+        logger.debug("[WS/chart] client disconnected: %s", exc)
+    finally:
+        chart_stream.unsubscribe(symbol, _on_price)
         logger.info("[WS] client cleanup done")
 
 
@@ -215,45 +278,61 @@ try:
     # other Unusual Whales integration, following cancellation of the
     # Unusual Whales subscription.
 
-    # Auto-start the ORB data hub on every process boot — not a replacement for
-    # the 9:20 AM daily cron that hits /tindex/orb/start, but a self-healing
-    # backstop for it. ORB_SERVICE is a plain in-process global (monitoring_routes.py);
-    # any mid-session Railway restart (redeploy, platform restart, crash) wipes it
-    # to None with nothing to bring it back until the NEXT day's cron fires — the
-    # strategy engines above rebuild themselves automatically on every boot and look
-    # "armed" in the UI regardless, so a restart like this silently blinded every
-    # strategy for the rest of the session with no visible symptom (2026-07-09 incident).
-    # Calling this unconditionally is safe outside market hours too — OrbService.start()
-    # already just enters a lightweight 60s-poll wait loop until the market opens.
-    try:
-        from routes.monitoring_routes import start_orb_service as _start_orb
-        _start_orb_result = _start_orb(notify=False)
-        logger.info("[App] ORB hub auto-start at boot: %s", _start_orb_result.get("message"))
-    except Exception as _orb_boot_err:
-        logger.warning("[App] ORB hub auto-start at boot failed: %s", _orb_boot_err)
+    # Auto-start the ORB data hub, social-signal ingest, and options contract
+    # monitor on process boot — a self-healing backstop for a MID-SESSION
+    # Railway restart (redeploy, platform restart, crash) that would otherwise
+    # wipe these plain in-process globals to None with nothing to bring them
+    # back (2026-07-09 / 2026-07-17 incidents — see each start function's own
+    # docstring in monitoring_routes.py / social_routes.py).
+    #
+    # Gated on is_market_hours() (2026-08-04): this used to fire unconditionally
+    # on every boot, including deploys pushed well outside trading hours — e.g.
+    # a routine evening/pre-market push would still arm live monitoring, which
+    # then ran for the ENTIRE next session until OrbService's own market_close
+    # check stopped it around 4 PM, regardless of whether that was ever
+    # intended. A boot outside market hours now skips the self-heal entirely
+    # and leaves these off until the normal 9:20 AM cron (or a manual Admin
+    # start) — a boot DURING market hours still self-heals exactly as before,
+    # since recovering a live session mid-day is the actual point of this.
+    if is_market_hours():
+        try:
+            from routes.monitoring_routes import start_orb_service as _start_orb
+            _start_orb_result = _start_orb(notify=False)
+            logger.info("[App] ORB hub auto-start at boot: %s", _start_orb_result.get("message"))
+        except Exception as _orb_boot_err:
+            logger.warning("[App] ORB hub auto-start at boot failed: %s", _orb_boot_err)
 
-    # Same self-heal, same reason, for the social-signal ingest loop — it had
-    # no boot-time backstop at all until now, so it silently stopped polling
-    # on every redeploy and stayed off until someone noticed and manually hit
-    # /social-signals/start (2026-07-17 incident: ~15 same-day deploys left
-    # it dead for hours with zero visible symptom in the app).
-    try:
-        from routes.social_routes import start_signal_ingest_core as _start_social_ingest
-        _start_social_result, _ = _start_social_ingest()
-        logger.info("[App] Social signal ingest auto-start at boot: %s", _start_social_result.get("message"))
-    except Exception as _social_boot_err:
-        logger.warning("[App] Social signal ingest auto-start at boot failed: %s", _social_boot_err)
+        try:
+            from routes.social_routes import start_signal_ingest_core as _start_social_ingest
+            _start_social_result, _ = _start_social_ingest()
+            logger.info("[App] Social signal ingest auto-start at boot: %s", _start_social_result.get("message"))
+        except Exception as _social_boot_err:
+            logger.warning("[App] Social signal ingest auto-start at boot failed: %s", _social_boot_err)
 
-    # Same self-heal, same reason, for the options contract monitor — it also
-    # had no boot-time backstop, so a mid-session redeploy silently stopped
-    # monitoring every tracked contract until someone noticed and manually hit
-    # /contracts/monitor/start.
+        try:
+            from routes.monitoring_routes import start_contracts_monitor_core as _start_contracts_monitor
+            _start_contracts_result = _start_contracts_monitor()
+            logger.info("[App] Options contract monitor auto-start at boot: %s", _start_contracts_result.get("message"))
+        except Exception as _contracts_boot_err:
+            logger.warning("[App] Options contract monitor auto-start at boot failed: %s", _contracts_boot_err)
+    else:
+        logger.info(
+            "[App] Boot auto-start skipped for ORB hub / social ingest / options "
+            "monitor — outside market hours (9:30 AM-4 PM ET, Mon-Fri). The 9:20 "
+            "AM cron (or a manual Admin start) will bring them up normally."
+        )
+
+    # Key-level watcher: reload any levels still in 'watching' status and
+    # re-subscribe to their tickers' bars. Cheap (one DB read + in-memory
+    # callback registration, no network/streaming of its own) so this runs
+    # unconditionally, not gated on is_market_hours() like the blocks above —
+    # it just needs to be ready to receive bars whenever OrbService is
+    # running, and outside market hours it simply sees none yet.
     try:
-        from routes.monitoring_routes import start_contracts_monitor_core as _start_contracts_monitor
-        _start_contracts_result = _start_contracts_monitor()
-        logger.info("[App] Options contract monitor auto-start at boot: %s", _start_contracts_result.get("message"))
-    except Exception as _contracts_boot_err:
-        logger.warning("[App] Options contract monitor auto-start at boot failed: %s", _contracts_boot_err)
+        from services.strategy.key_level_watcher import get_key_level_watcher
+        get_key_level_watcher().start()
+    except Exception as _key_level_boot_err:
+        logger.warning("[App] Key level watcher start failed: %s", _key_level_boot_err)
 
     # Daily 9 AM ET heads-up (1 day / 2 days / this week) for any open position
     # approaching its own expiration — the replacement for the blanket EOD

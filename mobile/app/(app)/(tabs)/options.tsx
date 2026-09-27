@@ -10,6 +10,7 @@ import {
   Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams } from 'expo-router';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
 import { useTrackedContracts } from '@/hooks/queries/track/useTrackedContracts';
 import { useTrackContract } from '@/hooks/mutations/track/useTrackContract';
@@ -18,8 +19,11 @@ import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 import type { TrackedOptionContract } from '@/common/types/options';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsContractDetailModal';
+import { SimulatedReturnsModal } from '@/common/components/options/SimulatedReturnsModal';
 import { TradeContractSheet } from '@/common/components/ticker/TradeContractSheet';
 import { TrackedContractsList } from '@/common/components/options/TrackedContractsList';
+import { KeyLevelsList } from '@/common/components/options/KeyLevelsList';
+import { useKeyLevels } from '@/hooks/queries/priceLevels/useKeyLevels';
 import { useOptionsTicker } from '@/lib/optionsTickerContext';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useServicesStatus } from '@/hooks/queries/services/useServicesStatus';
@@ -30,7 +34,7 @@ import { useToast } from '@/common/components/ui/Toast';
 
 type OptionSide = 'CALL' | 'PUT';
 type DatePreset = '1W' | '2W' | '1M' | '3M';
-type ScreenView = 'chain' | 'watchlist';
+type ScreenView = 'chain' | 'watchlist' | 'levels';
 
 type TableRow =
   | { type: 'contract'; data: OptionsContract; isITM: boolean }
@@ -254,9 +258,14 @@ const OptionsScreen = () => {
   const colors = useThemeColors();
   const { authState: { user } } = useAuth();
   const { optionsTicker: activeTicker, setOptionsTicker } = useOptionsTicker();
+  const { level_id } = useLocalSearchParams<{ level_id?: string }>();
 
-  // View toggle
-  const [view, setView] = useState<ScreenView>('watchlist');
+  // View toggle — a tapped "Key Level Confirmed" push (data.level_id) lands
+  // here and should open straight to the Levels tab, not whatever was last active.
+  const [view, setView] = useState<ScreenView>(level_id ? 'levels' : 'watchlist');
+  useEffect(() => {
+    if (level_id) setView('levels');
+  }, [level_id]);
 
   // Chain state
   const [side, setSide] = useState<OptionSide>('CALL');
@@ -281,6 +290,14 @@ const OptionsScreen = () => {
   const [tradeSheetContract, setTradeSheetContract] = useState<OptionsContract | null>(null);
   const [tradeSheetCurrentPrice, setTradeSheetCurrentPrice] = useState(0);
 
+  // Simulated Returns — same snapshot-before-close pattern as the trade
+  // sheet above (RN can't reliably present a second native Modal while the
+  // first is still mid-dismiss-animation).
+  const [simulateVisible, setSimulateVisible] = useState(false);
+  const [simulateContract, setSimulateContract] = useState<TrackedOptionContract | null>(null);
+  const [simulateSpot, setSimulateSpot] = useState(0);
+  const [simulateContractPrice, setSimulateContractPrice] = useState(0);
+
   // Service status (shared React Query cache — no extra network call if ORB screen is mounted)
   const { data: servicesStatus } = useServicesStatus();
   const isContractsRunning = servicesStatus?.contracts?.running ?? false;
@@ -290,6 +307,7 @@ const OptionsScreen = () => {
   const untrackContract = useUntrackContract();
   const scoreContract = useScoreContract();
   const { data: trackedContracts } = useTrackedContracts();
+  const { data: keyLevels } = useKeyLevels();
   const toast = useToast();
 
   // Live countdown
@@ -523,6 +541,17 @@ const OptionsScreen = () => {
     setTimeout(() => setTradeSheetVisible(true), 350);
   }, [detailContract, detailCurrentPrice, closeDetail]);
 
+  const handleSimulatePress = useCallback(() => {
+    if (!detailTrackedId) return;
+    const tracked = trackedContracts?.find(t => t.id === detailTrackedId);
+    if (!tracked) return;
+    setSimulateContract(tracked);
+    setSimulateSpot(detailCurrentPrice);
+    setSimulateContractPrice(detailLiveContractPrice ?? detailTrackedPrice ?? 0);
+    closeDetail();
+    setTimeout(() => setSimulateVisible(true), 350);
+  }, [detailTrackedId, trackedContracts, detailCurrentPrice, detailLiveContractPrice, detailTrackedPrice, closeDetail]);
+
   // ── Chain render helpers ─────────────────────────────────────────────────────
 
   const handleSideSwitch = useCallback((s: OptionSide) => {
@@ -604,6 +633,7 @@ const OptionsScreen = () => {
 
   // Watchlist badge count
   const watchlistCount = trackedContracts?.length ?? 0;
+  const activeLevelsCount = (keyLevels ?? []).filter(l => l.status === 'watching' || l.status === 'confirmed').length;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
@@ -627,6 +657,8 @@ const OptionsScreen = () => {
               ? `${activeTicker} · $${currentPrice.toFixed(2)}`
               : view === 'watchlist'
               ? `${watchlistCount} contract${watchlistCount !== 1 ? 's' : ''} tracked`
+              : view === 'levels'
+              ? `${activeLevelsCount} key level${activeLevelsCount !== 1 ? 's' : ''} watched`
               : 'Enter a ticker in the search bar'}
           </Text>
         </View>
@@ -683,8 +715,9 @@ const OptionsScreen = () => {
       {/* ── View toggle: Chain / Watchlist ── */}
       <View style={[viewToggle.container, { borderBottomColor: colors.separator }]}>
         {([
-          { id: 'watchlist', icon: 'bookmark-outline', label: 'Watchlist' },
-          { id: 'chain',     icon: 'layers-outline',   label: 'Chain' },
+          { id: 'watchlist', icon: 'bookmark-outline',  label: 'Watchlist' },
+          { id: 'chain',     icon: 'layers-outline',    label: 'Chain' },
+          { id: 'levels',    icon: 'analytics-outline', label: 'Levels' },
         ] as { id: ScreenView; icon: string; label: string }[]).map(v => {
           const active = view === v.id;
           return (
@@ -708,7 +741,12 @@ const OptionsScreen = () => {
                 </Text>
                 {v.id === 'watchlist' && watchlistCount > 0 && (
                   <View style={[viewToggle.badge, { backgroundColor: colors.accent }]}>
-                    <Text style={viewToggle.badgeText}>{watchlistCount > 99 ? '99+' : watchlistCount}</Text>
+                    <Text style={[viewToggle.badgeText, { color: colors.accentForeground }]}>{watchlistCount > 99 ? '99+' : watchlistCount}</Text>
+                  </View>
+                )}
+                {v.id === 'levels' && activeLevelsCount > 0 && (
+                  <View style={[viewToggle.badge, { backgroundColor: colors.accent }]}>
+                    <Text style={[viewToggle.badgeText, { color: colors.accentForeground }]}>{activeLevelsCount > 99 ? '99+' : activeLevelsCount}</Text>
                   </View>
                 )}
               </View>
@@ -723,6 +761,8 @@ const OptionsScreen = () => {
           onContractPress={openWatchlistDetail}
           activeTicker={activeTicker || undefined}
         />
+      ) : view === 'levels' ? (
+        <KeyLevelsList activeTicker={activeTicker || undefined} />
       ) : (
         <>
           {/* ── Mock data banner ── */}
@@ -967,6 +1007,17 @@ const OptionsScreen = () => {
           trackedPrice={detailTrackedId ? detailTrackedPrice : null}
           liveContractPrice={detailTrackedId ? detailLiveContractPrice : null}
           onTrade={handleTradePress}
+          onSimulate={detailTrackedId ? handleSimulatePress : undefined}
+        />
+      )}
+
+      {simulateContract && (
+        <SimulatedReturnsModal
+          visible={simulateVisible}
+          onClose={() => setSimulateVisible(false)}
+          contract={simulateContract}
+          currentSpot={simulateSpot}
+          currentContractPrice={simulateContractPrice}
         />
       )}
 
@@ -999,7 +1050,7 @@ const viewToggle = StyleSheet.create({
   badge: {
     minWidth: 18, height: 18, borderRadius: 9, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4,
   },
-  badgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+  badgeText: { fontSize: 10, fontWeight: '700' },
 });
 
 const styles = StyleSheet.create({

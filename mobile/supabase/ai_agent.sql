@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS ai_messages (
   conversation_id UUID REFERENCES ai_conversations(id) ON DELETE CASCADE NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
   content TEXT NOT NULL,
+  -- Set only on a checklist message: { checklist: <FlowChecklist JSON>,
+  -- checklist_status: "pending" | "submitted" | "skipped" } — lets a
+  -- checklist card (ticker, watch zone, contracts, submit/skip state) be
+  -- reconstructed on reload instead of only existing in client state.
+  metadata JSONB,
   created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 

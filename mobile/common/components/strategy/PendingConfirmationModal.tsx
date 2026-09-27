@@ -3,6 +3,7 @@ import {
   Modal, View, Text, TextInput, TouchableOpacity, ScrollView,
   SafeAreaView, ActivityIndicator, Alert,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useToast } from '@/common/components/ui/Toast';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
@@ -120,26 +121,57 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
     <Modal
       visible={visible}
       animationType="slide"
-      // fullScreen (not pageSheet) — pageSheet allows an iOS swipe-down-to-dismiss
-      // gesture that RN's Modal exposes no prop to disable. fullScreen has no such
-      // gesture, so Enter/Skip really are the only way out. onRequestClose is a
-      // no-op for the same reason on Android (hardware/gesture back button).
-      presentationStyle="fullScreen"
-      onRequestClose={() => {}}
+      // pageSheet — this is now opened via "Edit" from a Dashboard card that
+      // already offers Skip/Enter directly (see PendingConfirmationCard), so
+      // it no longer needs to be the only way out. Swipe-down-to-dismiss and
+      // the header close button both just cancel back to the card, which
+      // still shows Skip/Enter for whenever the user does want to act.
+      presentationStyle="pageSheet"
+      onRequestClose={onResolved}
     >
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-        <View style={{ padding: 16, borderBottomWidth: 1, borderColor: colors.border }}>
-          <Text style={{ color: colors.text, fontSize: 19, fontWeight: '700' }}>
-            Confirm {pending.ticker} Trade
-          </Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
-            <Badge label={pending.direction} color={pending.direction === 'CALL' ? '#10B981' : '#FF453A'} colors={colors} />
-            <Badge label={pending.profile.replace('_', ' ')} color={colors.accent} colors={colors} />
-            <Badge label={`Confidence ${pending.confidence.toFixed(0)}/100`} color={confColor} colors={colors} />
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderColor: colors.border }}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.text, fontSize: 19, fontWeight: '700' }}>
+              {pending.conflict_context ? `${pending.ticker} Already Open` : `Confirm ${pending.ticker} Trade`}
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+              <Badge label={pending.direction} color={pending.direction === 'CALL' ? '#10B981' : '#FF453A'} colors={colors} />
+              <Badge label={pending.profile.replace('_', ' ')} color={colors.accent} colors={colors} />
+              <Badge label={pending.paper_mode ? 'PAPER' : 'LIVE'} color={pending.paper_mode ? '#FF9F0A' : '#FF453A'} colors={colors} />
+              <Badge label={`Confidence ${pending.confidence.toFixed(0)}/100`} color={confColor} colors={colors} />
+            </View>
           </View>
+          <TouchableOpacity onPress={onResolved} hitSlop={10} style={{ padding: 4 }}>
+            <Ionicons name="close" size={22} color={colors.textSecondary} />
+          </TouchableOpacity>
         </View>
 
         <ScrollView contentContainerStyle={{ padding: 16 }}>
+          {/* Ticker conflict — another engine already holds this exact
+              ticker+direction open (see ORBEngine._find_ticker_conflict) */}
+          {pending.conflict_context && (
+            <View style={{
+              backgroundColor: '#F59E0B18', borderRadius: 14, padding: 14, marginBottom: 20,
+              borderWidth: 1, borderColor: '#F59E0B55',
+            }}>
+              <Text style={{ color: '#F59E0B', fontSize: 13, fontWeight: '700', marginBottom: 4 }}>
+                ⚠️ Already have a matching open position
+              </Text>
+              <Text style={{ color: colors.text, fontSize: 13, lineHeight: 18 }}>
+                {(pending.conflict_context.strategy_name || pending.conflict_context.profile.replace('_', ' '))}
+                {' '}already has an open {pending.conflict_context.direction} on{' '}
+                {pending.conflict_context.ticker}
+                {' '}({pending.conflict_context.paper_mode ? 'Paper' : 'Live'}
+                {pending.conflict_context.entry_premium != null
+                  ? `, entered at $${pending.conflict_context.entry_premium.toFixed(2)}`
+                  : ''}
+                ). Entering this {pending.profile.replace('_', ' ')} {pending.direction} would stack a
+                second position in the same direction on the same ticker.
+              </Text>
+            </View>
+          )}
+
           {/* Live premium */}
           <View style={{
             backgroundColor: colors.surface, borderRadius: 14, padding: 16, marginBottom: 20,
