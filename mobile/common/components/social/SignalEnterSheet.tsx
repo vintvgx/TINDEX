@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, SafeAreaView, ScrollView } from 'react-native';
+import { Modal, View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
 import { useImmediateTradeByTicker, StreamUnavailableError } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
@@ -11,6 +11,11 @@ import {
 import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
 import { BlindEntryModal } from '@/common/components/strategy/BlindEntryModal';
 import { formatContractSymbol } from '@/lib/formatContract';
+import { useEntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
+import { EntryTechnicalsPanel } from '@/common/components/trade/EntryTechnicalsPanel';
+import { GatedBuyButton } from '@/common/components/trade/GatedBuyButton';
+import { AccountModeBanner, AccountModeTint } from '@/common/components/trade/AccountModeBanner';
+import { OrderReviewSheet, type ReviewOrder } from '@/common/components/trade/OrderReviewSheet';
 import type { SocialSignalContract } from '@/common/types/social';
 import type { ImmediateTradeByTickerRequest } from '@/common/types/strategy';
 
@@ -38,6 +43,11 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
   const [volumeExit, setVolumeExit] = useState(false);
   const [manualSlPct, setManualSlPct] = useState(30);
 
+  // Technicals gate + Review step — same as TradeContractSheet.
+  const entryCheck = useEntryCheck(contract?.ticker, contract?.option_type ?? 'CALL', visible && !!contract);
+  const [overridden, setOverridden] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
   // Overtrading guard — see TradeContractSheet's identical comment.
   const { data: openPositions } = useImmediatePositions();
@@ -60,6 +70,8 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
     if (!contract) return;
     setStopType(getCheapContractAutoGraceMinutes(askPrice) ?? 'HARD');
     setBlindEntry(null);
+    setOverridden(false);
+    setReviewOpen(false);
   // Only re-run when a different contract is opened, not on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contract?.contract_symbol]);
@@ -81,10 +93,12 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
       onSuccess: (r) => {
         toast.success(r.message || 'Trade submitted');
         setBlindEntry(null);
+        setReviewOpen(false);
         onClose();
       },
       onError: (e) => {
         if (e instanceof StreamUnavailableError) {
+          setReviewOpen(false);
           setBlindEntry({ body, lastPrice: e.payload.last_price ?? 0 });
           return;
         }
@@ -108,27 +122,31 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
     });
   };
 
-  const confirmSubmit = () => {
-    if (!paperMode) {
-      const concurrentWarning = openLiveCount > 0
-        ? `\n\n⚠️ You already have ${openLiveCount} other live position${openLiveCount > 1 ? 's' : ''} open.`
-        : '';
-      Alert.alert(
-        'Submit LIVE Order',
-        `This will buy ${qty} × ${contract.contract_symbol} with REAL money immediately.\n\nProfile: ${profile.emoji} ${profile.name}${isManual ? `\nStop Loss: −${manualSlPct}%` : ''}${concurrentWarning}`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Submit', style: 'destructive', onPress: doSubmit },
-        ],
-      );
-    } else {
-      doSubmit();
-    }
+  // Review sheet warnings — replace the old LIVE Alert confirm.
+  const reviewWarnings = [
+    ...(isNoStopLoss ? ['No automatic stop loss, including end of day.'] : []),
+    ...(!paperMode && openLiveCount > 0 ? [`You already have ${openLiveCount} other live position${openLiveCount > 1 ? 's' : ''} open.`] : []),
+  ];
+  const stopPct = isNoStopLoss ? null : isManual ? manualSlPct / 100 : profile.maxLoss / 100;
+  const reviewOrder: ReviewOrder = {
+    ticker: contract.ticker,
+    optionType: contract.option_type,
+    strike: contract.strike,
+    expiration: contract.expiration_date,
+    premium: askPrice,
+    qty,
+    profileLabel: `${profile.emoji} ${profile.name}`,
+    stopPrice: stopPct == null ? null : askPrice * (1 - stopPct),
+    stopLabel: stopPct == null ? 'Off' : stopType === 'HARD' ? 'Hard stop' : `${stopType}-min SL timer`,
+    tp1Price: !isManual && !isNoStopLoss && profile.tp1 > 0 ? askPrice * (1 + profile.tp1 / 100) : null,
+    tp2Price: !isManual && !isNoStopLoss && profile.tp2 > 0 ? askPrice * (1 + profile.tp2 / 100) : null,
   };
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <AccountModeTint paperMode={paperMode} colors={colors} />
+      <SafeAreaView style={{ flex: 1 }}>
         <View style={[styles.header, { borderBottomColor: colors.border }]}>
           <TouchableOpacity onPress={onClose} hitSlop={10}>
             <Ionicons name="close" size={24} color={colors.text} />
@@ -143,8 +161,32 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
             <Text style={[styles.headerPrice, { color: colors.text }]}>${askPrice.toFixed(2)}</Text>
           )}
         </View>
+        <AccountModeBanner paperMode={paperMode} colors={colors} />
 
         <ScrollView contentContainerStyle={styles.body}>
+          {/* Pricing */}
+          <View style={[styles.priceRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.priceLabel, { color: colors.tabBarInactive }]}>Strike · Exp</Text>
+              <Text style={[styles.priceValue, { color: colors.text }]}>${contract.strike} · {contract.expiration_date}</Text>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={[styles.priceLabel, { color: colors.tabBarInactive }]}>Cost × {qty}</Text>
+              <Text style={[styles.priceValue, { color: colors.text }]}>{askPrice > 0 ? `$${(qty * askPrice * 100).toFixed(0)}` : '—'}</Text>
+            </View>
+          </View>
+
+          {/* Technicals gate — above the account/profile controls */}
+          <View style={{ marginTop: 12, marginBottom: 16 }}>
+            <EntryTechnicalsPanel
+              data={entryCheck.data}
+              isLoading={entryCheck.isLoading}
+              error={entryCheck.error}
+              direction={contract.option_type}
+              colors={colors}
+            />
+          </View>
+
           {/* Paper / Live */}
           <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>ACCOUNT</Text>
           <View style={[styles.accountToggle, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -215,27 +257,36 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
             </View>
           )}
 
-          {/* Submit */}
-          <TouchableOpacity
-            onPress={confirmSubmit}
-            disabled={isPending}
-            activeOpacity={0.85}
-            style={[styles.submitBtn, { backgroundColor: isPending ? colors.border : (paperMode ? colors.accent : colors.error) }]}
-          >
-            {isPending ? (
-              <ActivityIndicator color={paperMode ? (colors.accentForeground ?? '#fff') : '#fff'} />
-            ) : (
-              <>
-                <Ionicons name="flash" size={18} color={paperMode ? (colors.accentForeground ?? '#fff') : '#fff'} />
-                <Text style={[styles.submitText, { color: paperMode ? (colors.accentForeground ?? '#fff') : '#fff' }]}>
-                  {paperMode ? '' : 'LIVE '}Buy {qty} {contract.option_type} · {profile.emoji} {profile.name}
-                  {isManual ? ` · SL −${manualSlPct}%` : ''}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
         </ScrollView>
+
+        {/* Sticky footer — see TradeContractSheet */}
+        <View style={[styles.footer, { borderTopColor: colors.border, backgroundColor: colors.background }]}>
+          <GatedBuyButton
+            check={entryCheck.data}
+            checkLoading={entryCheck.isLoading}
+            paperMode={paperMode}
+            label={`Buy ${qty} ${contract.option_type} · ${profile.emoji} ${profile.name}${isManual ? ` · SL −${manualSlPct}%` : ''}`}
+            onReview={() => setReviewOpen(true)}
+            overridden={overridden}
+            onOverride={setOverridden}
+            colors={colors}
+          />
+        </View>
       </SafeAreaView>
+
+      <OrderReviewSheet
+        visible={reviewOpen}
+        order={reviewOrder}
+        paperMode={paperMode}
+        check={entryCheck.data}
+        overridden={overridden}
+        warnings={reviewWarnings}
+        isSubmitting={isPending}
+        onSubmit={doSubmit}
+        onCancel={() => setReviewOpen(false)}
+        colors={colors}
+      />
+      </View>
 
       {blindEntry && (
         <BlindEntryModal
@@ -260,7 +311,7 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 17, fontWeight: '800' },
   headerSub: { fontSize: 12, marginTop: 1 },
   headerPrice: { fontSize: 16, fontWeight: '700' },
-  body: { padding: 20, paddingBottom: 60 },
+  body: { padding: 20, paddingBottom: 24 },
 
   footerLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 },
   accountToggle: { flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3 },
@@ -280,6 +331,9 @@ const styles = StyleSheet.create({
   togglePill: { width: 38, height: 24, borderRadius: 12, borderWidth: 1, justifyContent: 'center', paddingHorizontal: 3 },
   toggleThumb: { width: 18, height: 18, borderRadius: 9 },
 
-  submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 15, borderRadius: 12, marginTop: 24 },
-  submitText: { fontSize: 15, fontWeight: '700' },
+  priceRow: { flexDirection: 'row', alignItems: 'center', borderRadius: 12, borderWidth: 1, padding: 14 },
+  priceLabel: { fontSize: 11 },
+  priceValue: { fontSize: 15, fontWeight: '700', marginTop: 2 },
+
+  footer: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 20, borderTopWidth: StyleSheet.hairlineWidth },
 });

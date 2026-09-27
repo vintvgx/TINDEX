@@ -2208,6 +2208,26 @@ def get_batch_technicals():
     return jsonify({"success": True, "data": results})
 
 
+@strategy_bp.route("/entry-check/<ticker>", methods=["GET"])
+def get_entry_check(ticker: str):
+    """
+    Trade entry sheet's technicals gate — Trend / RSI / VWAP / ORB / Sector
+    rows plus an ENTER / WAIT / DONT_ENTER verdict. ?direction=CALL|PUT.
+    See services/entry_check_service.py for the rules.
+    """
+    from services.entry_check_service import get_entry_check as _entry_check
+    direction = (request.args.get("direction") or "CALL").upper()
+    if direction not in ("CALL", "PUT"):
+        return jsonify({"success": False, "error": "direction must be CALL or PUT"}), 400
+    try:
+        return jsonify({"success": True, "data": _entry_check(ticker, direction)})
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 422
+    except Exception as e:
+        logger.error("[strategy] entry-check %s failed: %s", ticker, e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @strategy_bp.route("/support-resistance/<ticker>", methods=["GET"])
 def get_ticker_support_resistance(ticker: str):
     from services.technical_service import get_support_resistance
