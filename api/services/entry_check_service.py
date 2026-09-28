@@ -10,9 +10,10 @@ The verdict is deliberately opinionated and the mobile sheet gates the buy
 button on it — see the rules in compute_verdict().
 
 Data:
-  - Daily bars (2y) for EMA-20/50/200 + RSI-14 — same formulas as
-    technical_service.get_technicals(), but the latest close is REPLACED with
-    the live price so RSI moves intraday. technical_service caches for 8h,
+  - Daily bars (2y) for EMA-20/50/200 + RSI-14 — EMAs match
+    technical_service.get_technicals(); RSI uses Wilder's smoothing (what
+    TradingView/Robinhood show), unlike technical_service's simple-mean RSI.
+    The latest close is REPLACED with the live price so RSI moves intraday. technical_service caches for 8h,
     which is fine for its chart-overlay callers but would leave a 15s-refresh
     gate showing a morning RSI all afternoon.
   - Today's 1-minute bars for session VWAP and the 09:30–09:45 opening range
@@ -138,7 +139,9 @@ def _sector_of(ticker: str) -> Optional[str]:
 def _trend_and_rsi(closes, live_price: float) -> tuple[dict, dict]:
     import pandas as pd
 
-    closes = closes.copy()
+    # Yahoo occasionally has a missing daily close (IWM 2024-09-25) — drop it
+    # so a gap can never land in the latest bar the RSI/EMAs read.
+    closes = closes.dropna().copy()
     today = datetime.now(ET).date()
     last_idx = closes.index[-1]
     last_date = last_idx.date() if hasattr(last_idx, "date") else None
@@ -151,10 +154,14 @@ def _trend_and_rsi(closes, live_price: float) -> tuple[dict, dict]:
     ema50 = float(closes.ewm(span=50, adjust=False).mean().iloc[-1]) if len(closes) >= 50 else None
     ema200 = float(closes.ewm(span=200, adjust=False).mean().iloc[-1]) if len(closes) >= 200 else None
 
-    # Same RSI formula as technical_service.get_technicals (simple rolling mean).
+    # Wilder's RSI-14 — the smoothing TradingView/Robinhood use, so the gate's
+    # number matches the chart. (technical_service keeps its simple-mean RSI:
+    # the swing pipeline's scores are calibrated against it.) An EMA with
+    # alpha=1/14 IS Wilder's smoothing; over 2y of bars the seed difference
+    # vs. the textbook SMA-seeded start has fully decayed.
     delta = closes.diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+    loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
     rs = gain / loss.replace(0, float("nan"))
     rs_val = float(rs.iloc[-1])
     if pd.isna(rs_val):
@@ -285,8 +292,13 @@ def compute_verdict(direction: str, rows: dict) -> dict:
     missing: list[str] = []
     agree_notes: list[str] = []
 
-    def add(key: str, ok: bool, points: int, agree_note: str, miss_note: Optional[str]):
-        factors.append({"key": key, "ok": ok, "points": points if ok else 0})
+    def add(key: str, ok: bool, points: int, agree_note: str, miss_note: Optional[str],
+            fail_note: Optional[str] = None):
+        # `note` is the per-factor explanation evaluate_gate() surfaces when a
+        # strategy requires this factor — the agree note when it passes, the
+        # blocker/"waiting for…" text when it doesn't.
+        factors.append({"key": key, "ok": ok, "points": points if ok else 0,
+                        "note": agree_note if ok else (fail_note or miss_note)})
         if ok:
             agree_notes.append(agree_note)
         elif miss_note:
@@ -302,10 +314,10 @@ def compute_verdict(direction: str, rows: dict) -> dict:
         v = rsi["value"]
         if is_call and v > RSI_OVERBOUGHT:
             blockers.append(f"RSI {v:.0f} (overbought). Buying this call is chasing; wait for a pullback toward VWAP.")
-            add("rsi", False, 1, "", None)
+            add("rsi", False, 1, "", None, fail_note=f"RSI {v:.0f} overbought (>70)")
         elif not is_call and v < RSI_OVERSOLD:
             blockers.append(f"RSI {v:.0f} (oversold). Buying this put is chasing the drop; wait for a bounce toward VWAP.")
-            add("rsi", False, 1, "", None)
+            add("rsi", False, 1, "", None, fail_note=f"RSI {v:.0f} oversold (<30)")
         elif is_call:
             add("rsi", 50 <= v <= RSI_OVERBOUGHT, 1, f"RSI {v:.0f}",
                 f"waiting for RSI to push above 50 (now {v:.0f})")
@@ -334,7 +346,7 @@ def compute_verdict(direction: str, rows: dict) -> dict:
         if against >= SECTOR_STRONG_PCT:
             verb = "lagging" if is_call else "leading"
             blockers.append(f"{etf} {verb} SPY by {abs(rel):.1f}% today — the sector is moving against this {side}.")
-            add("sector", False, 1, "", None)
+            add("sector", False, 1, "", None, fail_note=f"{etf} {verb} SPY by {abs(rel):.1f}%")
         else:
             want = "Leading" if is_call else "Lagging"
             add("sector", sector["label"] == want, 1, f"sector ({etf}) {want.lower()}",
@@ -427,5 +439,183 @@ def get_entry_check(ticker: str, direction: str) -> dict:
         "session_date": session_date,
         "rows": rows,
         "verdict": compute_verdict(direction, rows),
+        "errors": errors or None,
+    }
+
+
+# ── Strategy technicals gate (automated ORB engines) ───────────────────────────
+
+GATE_FACTORS = ("trend", "trend_intraday", "rsi", "vwap", "orb", "sector")
+
+INTRADAY_FAST, INTRADAY_SLOW, INTRADAY_BAR_MIN = 9, 21, 5
+
+
+def intraday_trend(closes_1m: list[tuple], price: float) -> Optional[dict]:
+    """
+    5-minute EMA-9 vs EMA-21 from today's regular-session 1-minute closes
+    [(ts_et, close), ...]. Bullish = EMA-9 above EMA-21 and price above
+    EMA-9; Bearish mirrors it; anything else is Chop. None until there are
+    INTRADAY_SLOW 5-min bars (≈10:15 ET) — too early to call a trend.
+    """
+    import pandas as pd
+
+    today = datetime.now(ET).date()
+    buckets: dict = {}
+    for ts, close in closes_1m:
+        if close is None:
+            continue
+        t = ts.astimezone(ET) if ts.tzinfo else ET.localize(ts)
+        if t.date() != today or t.time() < ORB_START:
+            continue
+        key = t.replace(minute=t.minute - t.minute % INTRADAY_BAR_MIN, second=0, microsecond=0)
+        buckets[key] = float(close)          # last 1-min close in the bucket
+    if len(buckets) < INTRADAY_SLOW:
+        return {"label": None, "bars": len(buckets), "needed": INTRADAY_SLOW}
+
+    series = pd.Series([buckets[k] for k in sorted(buckets)])
+    series.iloc[-1] = price
+    fast = float(series.ewm(span=INTRADAY_FAST, adjust=False).mean().iloc[-1])
+    slow = float(series.ewm(span=INTRADAY_SLOW, adjust=False).mean().iloc[-1])
+    if fast > slow and price > fast:
+        label = "Bullish"
+    elif fast < slow and price < fast:
+        label = "Bearish"
+    else:
+        label = "Chop"
+    return {"label": label, "ema9": round(fast, 2), "ema21": round(slow, 2), "bars": len(buckets)}
+
+
+def prewarm(ticker: str) -> None:
+    """Load the daily-bar cache ahead of the first entry signal (called at ORB calc)."""
+    try:
+        _daily_closes(ticker.upper().strip())
+    except Exception as e:
+        logger.warning("[entry_check] prewarm failed for %s: %s", ticker, e)
+
+
+def evaluate_gate(ticker: str, direction: str, required: list[str], price: float,
+                  vwap: Optional[float] = None, orh: Optional[float] = None,
+                  orl: Optional[float] = None,
+                  intraday_closes: Optional[list[tuple]] = None) -> dict:
+    """
+    Per-strategy entry gate: EVERY factor in `required` must pass (same
+    per-factor rules as compute_verdict — e.g. RSI passes at 50–70 for a
+    call, trend passes when aligned with the trade). Unlike the entry
+    sheet's scored verdict, factors not in `required` are ignored entirely,
+    hard blocks included — a REVERSAL strategy that only requires
+    trend+VWAP is not stopped by an overbought RSI.
+
+    The engine passes its own live inputs (trigger price, the hub's running
+    VWAP, its ORB high/low) so the gate judges the exact signal being
+    traded (intraday_closes = the hub's 1-min bars for trend_intraday); only
+    missing inputs fall back to fetched bars. A required factor
+    with no data FAILS the gate (fail closed — this gates real orders), except
+    sector on an ETF, which has no sector and is skipped.
+    """
+    ticker = ticker.upper().strip()
+    required = [k for k in GATE_FACTORS if k in (required or [])]
+    rows: dict = {}
+    errors: list[str] = []
+
+    if "trend" in required or "rsi" in required:
+        try:
+            closes = _daily_closes(ticker)
+            if closes is not None and len(closes) >= 22:
+                trend, rsi = _trend_and_rsi(closes, price)
+                if "trend" in required:
+                    rows["trend"] = trend
+                if "rsi" in required:
+                    rows["rsi"] = rsi
+        except Exception as e:
+            errors.append(f"daily bars: {e}")
+
+    need_session = ("vwap" in required and vwap is None) or ("orb" in required and (orh is None or orl is None))
+    session_vwap_row = session_orb_row = None
+    if need_session:
+        try:
+            session_vwap_row, session_orb_row, _, _ = _session_rows(ticker, _intraday_bars(ticker))
+        except Exception as e:
+            errors.append(f"intraday bars: {e}")
+
+    if "vwap" in required:
+        if vwap:
+            rows["vwap"] = {"value": round(vwap, 2), "position": "Above" if price >= vwap else "Below",
+                            "distance_pct": round((price - vwap) / vwap * 100, 2)}
+        else:
+            rows["vwap"] = session_vwap_row
+
+    if "orb" in required:
+        if orh is not None and orl is not None:
+            if price > orh:
+                pos = "Above high"
+            elif price < orl:
+                pos = "Below low"
+            else:
+                pos = "Inside"
+            rows["orb"] = {"position": pos, "high": round(orh, 2), "low": round(orl, 2),
+                           "distance_pct": None, "source": "engine"}
+        else:
+            rows["orb"] = session_orb_row
+
+    if "sector" in required:
+        try:
+            rows["sector"] = _sector_row(ticker)
+        except Exception as e:
+            errors.append(f"sector: {e}")
+
+    intraday_row = None
+    if "trend_intraday" in required:
+        try:
+            closes_1m = intraday_closes
+            if not closes_1m:
+                bars = _intraday_bars(ticker)
+                closes_1m = [(ts.to_pydatetime(), c) for ts, c in bars["Close"].items()] if bars is not None else []
+            intraday_row = intraday_trend(closes_1m, price)
+            rows["trend_intraday"] = intraday_row
+        except Exception as e:
+            errors.append(f"intraday trend: {e}")
+
+    verdict = compute_verdict(direction, {k: rows.get(k) for k in ("trend", "rsi", "vwap", "orb", "sector")})
+    by_key = {f["key"]: f for f in verdict["factors"]}
+
+    results = []
+    for key in required:
+        f = by_key.get(key)
+        if key == "trend_intraday":
+            want = "Bullish" if direction.upper() == "CALL" else "Bearish"
+            if intraday_row is None:
+                results.append({"key": key, "ok": False, "skipped": False, "note": "no data"})
+            elif intraday_row["label"] is None:
+                results.append({"key": key, "ok": False, "skipped": False,
+                                "note": f"not enough 5-min bars yet ({intraday_row['bars']}/{intraday_row['needed']})"})
+            elif intraday_row["label"] == want:
+                results.append({"key": key, "ok": True, "skipped": False, "note": f"5-min trend {want.lower()}"})
+            else:
+                results.append({"key": key, "ok": False, "skipped": False,
+                                "note": f"5-min trend {intraday_row['label'].lower()} "
+                                        f"(EMA-9 ${intraday_row['ema9']:.2f} vs EMA-21 ${intraday_row['ema21']:.2f})"})
+            continue
+        if key == "sector" and rows.get("sector") and rows["sector"].get("label") == "n/a":
+            results.append({"key": key, "ok": True, "skipped": True, "note": "no sector (ETF) — skipped"})
+        elif key == "orb" and rows.get("orb") and rows["orb"]["position"] == "Forming":
+            results.append({"key": key, "ok": False, "skipped": False, "note": "opening range still forming"})
+        elif f is None:
+            results.append({"key": key, "ok": False, "skipped": False, "note": "no data"})
+        else:
+            results.append({"key": key, "ok": f["ok"], "skipped": False, "note": f.get("note")})
+
+    passed = all(r["ok"] for r in results)
+    failing = [f"{r['key'].upper()}: {r['note']}" for r in results if not r["ok"]]
+    matched = sum(1 for r in results if r["ok"] and not r["skipped"])
+    counted = sum(1 for r in results if not r["skipped"])
+    return {
+        "passed": passed,
+        "required": required,
+        "matched": matched,
+        "total": counted,
+        "results": results,
+        "summary": (f"{matched}/{counted} technicals matched"
+                    + ("" if passed else " — " + "; ".join(failing))),
+        "rows": rows,
         "errors": errors or None,
     }

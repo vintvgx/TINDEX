@@ -1057,7 +1057,7 @@ def create_note():
 # ── Strategies / reviews ────────────────────────────────────────────────────────
 
 _STRATEGY_FIELDS = ("id", "strategy_name", "ticker", "profile", "active", "trade_days",
-                    "capital_limit", "confirm_entry", "paused_by_kill_switch")
+                    "capital_limit", "confirm_entry", "paused_by_kill_switch", "technicals_gate")
 
 
 @bp.route("/strategies", methods=["GET"])

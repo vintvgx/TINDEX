@@ -68,6 +68,10 @@ STRATEGY_DEFAULTS = {
     "debug_mode":              False,
     "smart_contracts":         False,
     "confirm_entry":           False,  # True = pause for user approval before every auto entry
+    # Per-strategy technicals gate — {"enabled": bool, "required": [factor, ...]}
+    # with factors from entry_check_service.GATE_FACTORS. Every required
+    # factor must match or the signal is blocked. None = no gate.
+    "technicals_gate":         None,
     "paused_by_kill_switch":   False,  # True = this config was auto-paused by the bulk
                                         # pause-all switch (not a manual per-strategy pause) —
                                         # see POST /strategy/configs/pause-all. Lets "resume"
@@ -387,6 +391,13 @@ class ORBEngine:
             return False
 
         self.fib_levels = self._calculate_fib_levels()
+
+        # Load daily bars for the technicals gate now, off-thread, so the
+        # first entry signal doesn't wait on a yfinance fetch.
+        if (self.config.get("technicals_gate") or {}).get("enabled"):
+            import threading
+            from services.entry_check_service import prewarm
+            threading.Thread(target=prewarm, args=(self.ticker,), daemon=True).start()
 
         result = self.sentiment.check_all(
             ticker=self.ticker,
@@ -872,6 +883,57 @@ class ORBEngine:
             return True
         return False
 
+    def _check_technicals_gate(self, direction: str, trigger_price: float, required: list) -> bool:
+        """
+        True when every technical in `required` matches this signal — see
+        entry_check_service.evaluate_gate for the per-factor rules. Uses the
+        engine's own live inputs: the trigger price, OrbService's running
+        session VWAP (hub status — self.session_vwap is only the opening
+        bar's), and this engine's ORB high/low. Fails closed: if the gate
+        can't be evaluated, the entry is blocked, not waved through.
+        """
+        from services.entry_check_service import evaluate_gate
+
+        vwap = None
+        try:
+            status = self._hub.get_status(self.ticker)
+            if status and status.session_date == datetime.now(ET).date() and status.vwap:
+                vwap = float(status.vwap)
+        except Exception:
+            pass
+
+        intraday_closes = None
+        if "trend_intraday" in required:
+            try:
+                intraday_closes = [(b.ts, b.close) for b in self._hub.get_recent_bars(self.ticker)]
+            except Exception:
+                intraday_closes = None  # evaluate_gate falls back to fetched bars
+
+        try:
+            gate = evaluate_gate(self.ticker, direction, required, trigger_price,
+                                 vwap=vwap, orh=self.orh, orl=self.orl,
+                                 intraday_closes=intraday_closes)
+        except Exception as e:
+            logger.error("[ORBEngine] technicals gate failed for %s: %s", self.ticker, e, exc_info=True)
+            self.debug.emit("ERROR", f"Entry blocked — technicals gate could not be evaluated ({e})")
+            self.notifier.notify_entry_blocked_technicals(
+                self.ticker, self.strategy_name or self.profile_key, direction,
+                "technicals unavailable — entry blocked for safety")
+            return False
+
+        detail = ", ".join(
+            f"{r['key'].upper()} {'skip' if r['skipped'] else 'ok' if r['ok'] else 'no'}"
+            for r in gate["results"]
+        )
+        if gate["passed"]:
+            self.debug.emit("INFO", f"Technicals gate passed — {gate['summary']} ({detail})")
+            return True
+
+        self.debug.emit("WARN", f"Entry blocked — technicals gate: {gate['summary']} ({detail})")
+        self.notifier.notify_entry_blocked_technicals(
+            self.ticker, self.strategy_name or self.profile_key, direction, gate["summary"])
+        return False
+
     def _enter_trade(self, direction: str, trigger_price: float):
         """
         Select a contract, validate buying power, and submit a market order
@@ -927,6 +989,13 @@ class ORBEngine:
                 f"{cooldown_min - elapsed}m remaining)",
             )
             return
+
+        # Technicals gate — opt-in per strategy (strategy_configs.technicals_gate).
+        # Blocks this signal only; the session stays armed for a later one.
+        gate_cfg = self.config.get("technicals_gate") or {}
+        if gate_cfg.get("enabled") and gate_cfg.get("required"):
+            if not self._check_technicals_gate(direction, trigger_price, gate_cfg["required"]):
+                return
 
         # VWAP soft confirmation (log only — does not block entry)
         if self.session_vwap is not None:

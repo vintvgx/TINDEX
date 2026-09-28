@@ -95,6 +95,9 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
   // Explicit two-tap override of a DON'T ENTER verdict (see GatedBuyButton).
   const [overridden, setOverridden] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  // Set on a successful order placed from the Review sheet — it plays the
+  // confirmation animation, then finishSuccess closes everything.
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
   // Overtrading guard — surfaces how many OTHER live positions are already
@@ -128,6 +131,7 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     setTpEnabled(true);
     setOverridden(false);
     setReviewOpen(false);
+    setSuccessMessage(null);
   // Only re-run when a different contract is opened, not on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, contract?.symbol]);
@@ -141,9 +145,14 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
   const runSubmit = (body: ImmediateTradeByTickerRequest) => {
     submit(body, {
       onSuccess: (r) => {
-        toast.success(r.message || `${ticker} entered`);
         setBlindEntry(null);
-        setReviewOpen(false);
+        // From the Review sheet: let its success animation play first.
+        // A Blind Entry retry has no Review sheet open — toast and close.
+        if (reviewOpen) {
+          setSuccessMessage(r.message || `${ticker} entered`);
+          return;
+        }
+        toast.success(r.message || `${ticker} entered`);
         onClose();
       },
       onError: (e) => {
@@ -430,6 +439,8 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
         isSubmitting={isPending}
         onSubmit={doSubmit}
         onCancel={() => setReviewOpen(false)}
+        successMessage={successMessage}
+        onSuccessDone={() => { setSuccessMessage(null); setReviewOpen(false); onClose(); }}
         colors={colors}
       />
 

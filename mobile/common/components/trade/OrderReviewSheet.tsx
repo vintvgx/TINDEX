@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, Animated, PanResponder, Pressable, ActivityIndicator, Easing, ScrollView,
+  View, Text, StyleSheet, Animated, Pressable, ActivityIndicator, Easing, ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -58,22 +58,34 @@ interface Props {
   isSubmitting: boolean;
   onSubmit: () => void;
   onCancel: () => void;
+  /** Set by the parent once the order succeeds — plays the confirmation
+   *  animation with this message, then calls onSuccessDone. */
+  successMessage: string | null;
+  /** Called after the success animation finishes; the parent closes here. */
+  onSuccessDone: () => void;
   colors: any;
 }
 
-const TRACK = 150;       // how far the handle travels
-const THRESHOLD = 0.8;   // fraction of TRACK that counts as a submit
+const HOLD_MS = 1200;        // how long the button must be held to submit
+const SUCCESS_HOLD_MS = 1500; // how long the success state shows before closing
 
 export function OrderReviewSheet({
-  visible, order, paperMode, check, overridden, warnings, isSubmitting, onSubmit, onCancel, colors,
+  visible, order, paperMode, check, overridden, warnings, isSubmitting, onSubmit, onCancel,
+  successMessage, onSuccessDone, colors,
 }: Props) {
   const slide = useRef(new Animated.Value(1)).current;  // 1 = off-screen, 0 = shown
-  const drag = useRef(new Animated.Value(0)).current;   // 0 → -TRACK
+  const hold = useRef(new Animated.Value(0)).current;   // 0 → 1 while held
+  const holdAnim = useRef<Animated.CompositeAnimation | null>(null);
+  // Current fill level, so a re-press mid-rewind only takes the remaining time.
+  const holdLevel = useRef(0);
+  useEffect(() => {
+    const id = hold.addListener(({ value }) => { holdLevel.current = value; });
+    return () => hold.removeListener(id);
+  }, []);
   const fired = useRef(false);
-  // Read through a ref so the PanResponder is built once — a parent
-  // re-render mid-swipe must not swap handlers out from under the gesture.
-  const onSubmitRef = useRef(onSubmit);
-  onSubmitRef.current = onSubmit;
+  const [holding, setHolding] = useState(false);
+  const successScale = useRef(new Animated.Value(0)).current;
+  const successOpacity = useRef(new Animated.Value(0)).current;
   const muted = colors.textSecondary ?? colors.tabBarInactive;
   const modeColor = accountModeColor(paperMode, colors);
   const { summary, maxLoss, breakeven, maxProfit } = useMemo(() => buildOrderSummary(order), [order]);
@@ -83,35 +95,58 @@ export function OrderReviewSheet({
       toValue: visible ? 0 : 1, duration: visible ? 260 : 200,
       easing: visible ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic), useNativeDriver: true,
     }).start();
-    if (visible) { drag.setValue(0); fired.current = false; }
+    if (visible) {
+      hold.setValue(0);
+      successScale.setValue(0);
+      successOpacity.setValue(0);
+      fired.current = false;
+    }
   }, [visible]);
 
-  // An order that failed (or went to Blind Entry) drops back to a fresh swipe.
+  // An order that failed (or went to Blind Entry) resets for a fresh hold.
   useEffect(() => {
-    if (!isSubmitting && fired.current) {
+    if (!isSubmitting && fired.current && !successMessage) {
       fired.current = false;
-      Animated.spring(drag, { toValue: 0, useNativeDriver: true }).start();
+      Animated.timing(hold, { toValue: 0, duration: 200, useNativeDriver: false }).start();
     }
   }, [isSubmitting]);
 
-  const pan = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => !fired.current,
-    onMoveShouldSetPanResponder: (_, g) => !fired.current && Math.abs(g.dy) > 4,
-    onPanResponderMove: (_, g) => drag.setValue(Math.max(-TRACK, Math.min(0, g.dy))),
-    onPanResponderRelease: (_, g) => {
-      if (-g.dy >= TRACK * THRESHOLD) {
-        fired.current = true;
-        Animated.timing(drag, { toValue: -TRACK, duration: 120, useNativeDriver: true }).start();
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-        onSubmitRef.current();
-      } else {
-        Animated.spring(drag, { toValue: 0, useNativeDriver: true }).start();
-      }
-    },
-    onPanResponderTerminate: () => Animated.spring(drag, { toValue: 0, useNativeDriver: true }).start(),
-  }), []);
+  // Success: pop a check mark in, pause so it registers, then hand back to
+  // the parent to close the sheet(s).
+  useEffect(() => {
+    if (!successMessage) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    Animated.parallel([
+      Animated.timing(successOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+      Animated.spring(successScale, { toValue: 1, friction: 5, tension: 90, useNativeDriver: true }),
+    ]).start();
+    const id = setTimeout(onSuccessDone, SUCCESS_HOLD_MS);
+    return () => clearTimeout(id);
+  }, [successMessage]);
 
-  const progress = drag.interpolate({ inputRange: [-TRACK, 0], outputRange: [1, 0], extrapolate: 'clamp' });
+  const startHold = () => {
+    if (fired.current || isSubmitting || successMessage) return;
+    setHolding(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    holdAnim.current = Animated.timing(hold, {
+      toValue: 1, duration: HOLD_MS * (1 - holdLevel.current), easing: Easing.linear, useNativeDriver: false,
+    });
+    holdAnim.current.start(({ finished }) => {
+      if (!finished) return;
+      fired.current = true;
+      setHolding(false);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+      onSubmit();
+    });
+  };
+
+  const cancelHold = () => {
+    setHolding(false);
+    if (fired.current) return;
+    holdAnim.current?.stop();
+    Animated.timing(hold, { toValue: 0, duration: 180, useNativeDriver: false }).start();
+  };
+
   const vDecision = check?.verdict.decision;
   const vColor = verdictColor(vDecision, colors);
 
@@ -179,21 +214,52 @@ export function OrderReviewSheet({
           ))}
         </ScrollView>
 
-        {/* Swipe-up-to-submit */}
-        <View style={[s.track, { height: TRACK + 64, borderTopColor: colors.border }]}>
-          <Animated.View style={[s.trackFill, { backgroundColor: modeColor, opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [0.06, 0.35] }) }]} />
-          <Animated.Text style={[s.trackHint, { color: muted, opacity: progress.interpolate({ inputRange: [0, 0.4], outputRange: [1, 0], extrapolate: 'clamp' }) }]}>
-            Swipe up to {paperMode ? 'submit paper order' : 'submit LIVE order'}
-          </Animated.Text>
-          <Animated.View
-            {...pan.panHandlers}
-            style={[s.handle, { backgroundColor: modeColor, transform: [{ translateY: drag }] }]}
+        {/* Press-and-hold to submit */}
+        <View style={[s.holdWrap, { borderTopColor: colors.border }]}>
+          <Pressable
+            onPressIn={startHold}
+            onPressOut={cancelHold}
+            disabled={isSubmitting || !!successMessage}
+            style={[s.holdBtn, { borderColor: modeColor, backgroundColor: modeColor + '22' }]}
           >
-            {isSubmitting
-              ? <ActivityIndicator color="#fff" />
-              : <Ionicons name="chevron-up" size={26} color="#fff" />}
-          </Animated.View>
+            <Animated.View
+              style={[s.holdFill, {
+                backgroundColor: modeColor,
+                width: hold.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),
+              }]}
+            />
+            {isSubmitting ? (
+              <View style={s.holdLabelRow}>
+                <ActivityIndicator color="#fff" />
+                <Text style={[s.holdText, { color: '#fff' }]}>Submitting…</Text>
+              </View>
+            ) : (
+              <View style={s.holdLabelRow}>
+                <Ionicons name="finger-print" size={20} color={holding ? '#fff' : modeColor} />
+                <Text style={[s.holdText, { color: holding ? '#fff' : modeColor }]}>
+                  {holding ? 'Keep holding…' : `Hold to ${paperMode ? 'submit paper order' : 'submit LIVE order'}`}
+                </Text>
+              </View>
+            )}
+          </Pressable>
+          <Text style={[s.holdHint, { color: muted }]}>Release early to cancel</Text>
         </View>
+
+        {/* Success confirmation */}
+        {successMessage && (
+          <Animated.View style={[StyleSheet.absoluteFill, s.successWrap, { backgroundColor: colors.background, opacity: successOpacity }]}>
+            <Animated.View style={[s.successCircle, { backgroundColor: colors.success, transform: [{ scale: successScale }] }]}>
+              <Ionicons name="checkmark" size={56} color="#fff" />
+            </Animated.View>
+            <Text style={[s.successTitle, { color: colors.text }]}>
+              {paperMode ? 'Paper order placed' : 'Order placed'}
+            </Text>
+            <Text style={[s.successSub, { color: muted }]}>
+              {order.qty} × {order.ticker} ${order.strike} {order.optionType}
+            </Text>
+            <Text style={[s.successSub, { color: muted }]} numberOfLines={2}>{successMessage}</Text>
+          </Animated.View>
+        )}
       </Animated.View>
     </View>
   );
@@ -246,8 +312,15 @@ const s = StyleSheet.create({
   warningRow:   { flexDirection: 'row', gap: 6, alignItems: 'flex-start', marginTop: 8 },
   warningText:  { fontSize: 12.5, flex: 1, lineHeight: 17, fontWeight: '600' },
 
-  track:        { borderTopWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 26 },
-  trackFill:    { ...StyleSheet.absoluteFillObject },
-  trackHint:    { position: 'absolute', top: 22, fontSize: 13, fontWeight: '600' },
-  handle:       { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center' },
+  holdWrap:     { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 18, paddingTop: 14, paddingBottom: 30 },
+  holdBtn:      { height: 58, borderRadius: 14, borderWidth: 1.5, overflow: 'hidden', justifyContent: 'center' },
+  holdFill:     { position: 'absolute', left: 0, top: 0, bottom: 0 },
+  holdLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  holdText:     { fontSize: 15.5, fontWeight: '800' },
+  holdHint:     { fontSize: 11.5, textAlign: 'center', marginTop: 8 },
+
+  successWrap:  { alignItems: 'center', justifyContent: 'center', padding: 24 },
+  successCircle:{ width: 104, height: 104, borderRadius: 52, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
+  successTitle: { fontSize: 22, fontWeight: '800' },
+  successSub:   { fontSize: 14, marginTop: 6, textAlign: 'center' },
 });

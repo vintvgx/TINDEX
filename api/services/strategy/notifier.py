@@ -160,6 +160,17 @@ class StrategyNotifier:
             priority=P_OPERATIONAL,
         )
 
+    def notify_entry_blocked_technicals(self, ticker: str, strategy_label: str,
+                                        direction: str, summary: str):
+        """A strategy signal fired but its technicals gate didn't match (see
+        ORBEngine._check_technicals_gate). The session stays armed."""
+        self._dispatch(
+            title=f"{ticker} {direction} blocked — technicals",
+            body=f"{strategy_label}: {summary}",
+            data={"screen": "strategy"},
+            priority=P_OPERATIONAL,
+        )
+
     def notify_insufficient_capital(self, ticker: str, required: float, available: float):
         """Buying power too low to enter even one contract."""
         self._dispatch(

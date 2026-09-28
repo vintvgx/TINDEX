@@ -47,6 +47,7 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
   const entryCheck = useEntryCheck(contract?.ticker, contract?.option_type ?? 'CALL', visible && !!contract);
   const [overridden, setOverridden] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
   // Overtrading guard — see TradeContractSheet's identical comment.
@@ -72,6 +73,7 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
     setBlindEntry(null);
     setOverridden(false);
     setReviewOpen(false);
+    setSuccessMessage(null);
   // Only re-run when a different contract is opened, not on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contract?.contract_symbol]);
@@ -91,9 +93,13 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
   const runSubmit = (body: ImmediateTradeByTickerRequest) => {
     submit(body, {
       onSuccess: (r) => {
-        toast.success(r.message || 'Trade submitted');
         setBlindEntry(null);
-        setReviewOpen(false);
+        // See TradeContractSheet — animate on the Review sheet when it's open.
+        if (reviewOpen) {
+          setSuccessMessage(r.message || 'Trade submitted');
+          return;
+        }
+        toast.success(r.message || 'Trade submitted');
         onClose();
       },
       onError: (e) => {
@@ -284,6 +290,8 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
         isSubmitting={isPending}
         onSubmit={doSubmit}
         onCancel={() => setReviewOpen(false)}
+        successMessage={successMessage}
+        onSuccessDone={() => { setSuccessMessage(null); setReviewOpen(false); onClose(); }}
         colors={colors}
       />
       </View>
