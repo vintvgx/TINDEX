@@ -47,3 +47,6 @@ SUPABASE.md
 .github/
 
 /docs
+# Python bytecode
+__pycache__/
+*.py[cod]

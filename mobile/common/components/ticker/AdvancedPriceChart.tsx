@@ -27,7 +27,22 @@ export interface AdvancedScrubPoint {
   volume?: number;
 }
 
-type ChartMode = 'line' | 'candle';
+export type ChartMode = 'line' | 'candle';
+
+/**
+ * Display settings owned by the SCREEN instead of this chart's toolbar —
+ * the Charts tab and PriceChartFullScreen put them all in their chart settings
+ * modal (ChartControlToggles). When passed, the matching toolbar buttons
+ * are hidden; callers that don't pass it keep the toolbar as-is.
+ */
+export interface ChartDisplaySettings {
+  /** null = the timeframe's default (candles on 1D/1W, line otherwise). */
+  mode: ChartMode | null;
+  showSessionLines: boolean;
+  /** Watch (draw-a-level) mode, entered from the settings modal. */
+  watchMode: boolean;
+  onWatchModeChange: (on: boolean) => void;
+}
 
 /** A labeled horizontal level — e.g. entry/TP1/TP2/stop for a simulation or
  *  a live position. Visually distinct from the ORB band's solid lines
@@ -130,6 +145,9 @@ interface AdvancedPriceChartProps {
    *  in-progress/pending draft so a stale drawing never survives a ticker
    *  swap. Left undefined, Watch state simply persists across re-renders. */
   resetKey?: string | number;
+  /** See ChartDisplaySettings — moves style/session/watch controls out of
+   *  this toolbar and under the caller's control. */
+  settings?: ChartDisplaySettings;
 }
 
 // ── Layout constants ─────────────────────────────────────────────────────
@@ -298,6 +316,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   height = 340,
   orbRange,
   showOrbRange,
+  settings,
   livePrice,
   referenceLines,
   sessionReferenceLines,
@@ -380,7 +399,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // overrides either way for the rest of the session.
   const [modeOverride, setModeOverride] = useState<ChartMode | null>(null);
   const defaultMode: ChartMode = period === '1D' || period === '1W' ? 'candle' : 'line';
-  const mode: ChartMode = hasOhlc ? modeOverride ?? defaultMode : 'line';
+  const mode: ChartMode = hasOhlc ? (settings ? settings.mode : modeOverride) ?? defaultMode : 'line';
 
   // ── Live tick blended into the last (still-forming) bar ────────────────
   // Only meaningful on 1D — a 30m/1d/1wk bar isn't "in progress" the way a
@@ -548,9 +567,9 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const effectiveReferenceLines = useMemo(
     () => [
       ...(referenceLines ?? []),
-      ...(showSessionLines ? (sessionReferenceLines ?? []) : []),
+      ...((settings ? settings.showSessionLines : showSessionLines) ? (sessionReferenceLines ?? []) : []),
     ],
-    [referenceLines, sessionReferenceLines, showSessionLines],
+    [referenceLines, sessionReferenceLines, showSessionLines, settings?.showSessionLines],
   );
 
   // Watched zones (key levels) — ON by default, toggled off via the
@@ -769,13 +788,31 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // onUpdateWatchZone instead of onWatchConfirm.
   const [editingZoneId, setEditingZoneId] = useState<string | null>(null);
 
+  // With screen-owned settings, Watch mode is entered from the settings
+  // modal — mirror it in, and report every exit (toolbar eye, ticker swap)
+  // back out so the modal's state never drifts from what's on screen.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const changeWatchMode = useCallback((on: boolean) => {
+    setWatchMode(on);
+    settingsRef.current?.onWatchModeChange(on);
+  }, []);
+  useEffect(() => {
+    if (!settings) return;
+    setWatchMode(settings.watchMode);
+    setWatchDraftPx(null);
+    setWatchDraftCommitted(null);
+    setWatchSaveError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.watchMode]);
+
   // Clears any in-progress/pending draft (and turns Watch mode back off)
   // whenever the caller signals this is now a genuinely different chart —
   // see the `resetKey` prop doc. Deliberately NOT keyed off `data` itself,
   // which changes on every routine live-price poll and would otherwise wipe
   // an awaiting-confirmation draft out from under the user mid-decision.
   useEffect(() => {
-    setWatchMode(false);
+    changeWatchMode(false);
     setWatchDraftPx(null);
     setWatchDraftCommitted(null);
     setWatchSaveError(null);
@@ -1297,7 +1334,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           Fixed height so scrubbing never reflows the chart below. */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', height: 26, marginBottom: 6 }}>
         <View style={{ flexDirection: 'row', gap: 4 }}>
-          {hasOhlc &&
+          {hasOhlc && !settings &&
             (['line', 'candle'] as ChartMode[]).map((m) => {
               const active = mode === m;
               return (
@@ -1328,10 +1365,13 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               nothing to await and nothing saved (no spinner, no error,
               band just clears). See PriceChartFullScreen/charts.tsx for the
               wired-up callers. */}
-          {onWatchConfirm && (
+          {/* With screen-owned settings the eye only shows while Watch mode
+              is on — it's entered from the settings modal, and this is the
+              one-tap way back out. */}
+          {onWatchConfirm && (!settings || watchMode) && (
             <Pressable
               onPress={() => {
-                setWatchMode(v => !v);
+                changeWatchMode(!watchMode);
                 setWatchDraftPx(null);
                 setWatchDraftCommitted(null);
                 setWatchSaveError(null);
@@ -1353,7 +1393,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           {/* Only rendered when there's actually session-line data to show —
               same "don't render a button with nothing to do" rule as Watch
               above. Off by default (showSessionLines starts false). */}
-          {sessionReferenceLines && sessionReferenceLines.length > 0 && (
+          {!settings && sessionReferenceLines && sessionReferenceLines.length > 0 && (
             <Pressable
               onPress={() => setShowSessionLines(v => !v)}
               hitSlop={6}
@@ -1374,7 +1414,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               only appears once there's actually a zone to hide. Lets a
               ticker's raw price action be viewed without the level overlay,
               without having to delete the level to get there. */}
-          {watchZones && watchZones.length > 0 && (
+          {!settings && watchZones && watchZones.length > 0 && (
             <Pressable
               onPress={() => setShowWatchZones(!showWatchZones)}
               hitSlop={6}

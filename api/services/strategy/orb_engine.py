@@ -10,6 +10,7 @@ import time
 import uuid as _uuid
 import logging
 import threading
+import concurrent.futures
 import pytz
 from datetime import datetime, timedelta
 from typing import Optional
@@ -32,6 +33,11 @@ from services.utils.orb_data_hub import get_orb_data_hub, OrbBar
 
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
+
+# Technicals gate runs on its own small pool so ORBEngine._check_technicals_gate
+# can cap how long an entry (evaluated under _tick_lock) waits on market data.
+TECHNICALS_GATE_TIMEOUT_S = 4.0
+_GATE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="tech-gate")
 
 # Every constructed ORBEngine self-registers here (see _apply_config), keyed
 # by strategy_id — lets any engine cheaply check what every OTHER engine
@@ -392,12 +398,14 @@ class ORBEngine:
 
         self.fib_levels = self._calculate_fib_levels()
 
-        # Load daily bars for the technicals gate now, off-thread, so the
-        # first entry signal doesn't wait on a yfinance fetch.
-        if (self.config.get("technicals_gate") or {}).get("enabled"):
+        # Load the technicals gate's slow inputs now, off-thread, so the
+        # first entry signal (evaluated under _tick_lock) hits warm caches.
+        gate_cfg = self.config.get("technicals_gate") or {}
+        if gate_cfg.get("enabled"):
             import threading
             from services.entry_check_service import prewarm
-            threading.Thread(target=prewarm, args=(self.ticker,), daemon=True).start()
+            threading.Thread(target=prewarm, args=(self.ticker, gate_cfg.get("required")),
+                             daemon=True).start()
 
         result = self.sentiment.check_all(
             ticker=self.ticker,
@@ -909,10 +917,25 @@ class ORBEngine:
             except Exception:
                 intraday_closes = None  # evaluate_gate falls back to fetched bars
 
+        # Bounded: this runs under _tick_lock (via _enter_trade), so a cold
+        # cache must never turn into an unbounded yfinance call that freezes
+        # this engine's ticks — exits included. On timeout the worker keeps
+        # running (and warms the cache for the next signal) but THIS entry
+        # is blocked: fail closed, same as any other gate error.
+        future = _GATE_EXECUTOR.submit(
+            evaluate_gate, self.ticker, direction, required, trigger_price,
+            vwap=vwap, orh=self.orh, orl=self.orl, intraday_closes=intraday_closes,
+        )
         try:
-            gate = evaluate_gate(self.ticker, direction, required, trigger_price,
-                                 vwap=vwap, orh=self.orh, orl=self.orl,
-                                 intraday_closes=intraday_closes)
+            gate = future.result(timeout=TECHNICALS_GATE_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            msg = f"technicals gate timed out after {TECHNICALS_GATE_TIMEOUT_S:.0f}s"
+            logger.error("[ORBEngine] %s for %s", msg, self.ticker)
+            self.debug.emit("ERROR", f"Entry blocked — {msg} (market data slow)")
+            self.notifier.notify_entry_blocked_technicals(
+                self.ticker, self.strategy_name or self.profile_key, direction,
+                f"{msg} — entry blocked for safety")
+            return False
         except Exception as e:
             logger.error("[ORBEngine] technicals gate failed for %s: %s", self.ticker, e, exc_info=True)
             self.debug.emit("ERROR", f"Entry blocked — technicals gate could not be evaluated ({e})")

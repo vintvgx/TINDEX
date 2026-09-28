@@ -1,92 +1,161 @@
 import React, { useState } from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { View, Text, Pressable, StyleSheet, ScrollView, Switch, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-export interface ChartToggleConfig {
-  key: string;
-  /** Icon shown always — color communicates on/off, not a different glyph. */
-  icon: keyof typeof Ionicons.glyphMap;
-  active: boolean;
-  onPress: () => void;
-  /** Shown only in the ⓘ explainer, never on the button itself — icon-only
-   *  buttons are the whole point (see the "taking up too much space" ask). */
-  label: string;
-  description: string;
+type IconName = keyof typeof Ionicons.glyphMap;
+
+export type ChartSettingRow =
+  | { kind: 'toggle'; key: string; icon: IconName; label: string; description?: string; value: boolean; onChange: (v: boolean) => void }
+  | { kind: 'segment'; key: string; label: string; value: string; options: { value: string; label: string; icon?: IconName }[]; onChange: (v: string) => void }
+  | { kind: 'action'; key: string; icon: IconName; label: string; description?: string; onPress: () => void };
+
+export interface ChartSettingsSection {
+  title: string;
+  rows: ChartSettingRow[];
 }
 
 interface Props {
-  toggles: ChartToggleConfig[];
+  sections: ChartSettingsSection[];
   colors: any;
+  /** Body of the Technicals modal (the signal/Trend/RSI/VWAP/ORB readout). */
+  technicals: React.ReactNode;
+  /** Lets the caller fetch technicals only while that modal is open. */
+  onTechnicalsOpenChange?: (open: boolean) => void;
 }
 
+type OpenSheet = 'technicals' | 'settings' | null;
+
 /**
- * Icon-only chart toggle row + a single ⓘ button that explains what each
- * one does. Used above both the Charts tab and the full-screen chart, so the
- * meaning of "Data Points"/"S/R" etc. lives in exactly one place. The
- * explainer renders as a plain absolutely-positioned overlay, NOT a native
- * Modal — this component gets used from inside PriceChartFullScreen, which
- * is already a Modal itself, and RN only reliably presents one Modal at a
- * time (see TradeContractQuickCard for the same pattern/reasoning).
+ * The chart's two header buttons: one opens the Technicals readout, the
+ * other the chart-settings modal holding every display option (style,
+ * technicals overlays, session lines, watch levels, data points…) instead
+ * of a row of icon buttons above the chart. Each renders in a transparent
+ * native Modal so it's centered on the whole screen — an absoluteFill
+ * overlay would be clipped to the small header row these buttons sit in.
+ * Inside PriceChartFullScreen it's a Modal nested in that Modal's content
+ * (presented on top of it), which RN supports; only sibling Modals are
+ * unreliable.
  */
-export function ChartControlToggles({ toggles, colors }: Props) {
-  const [infoOpen, setInfoOpen] = useState(false);
+export function ChartControlToggles({ sections, colors, technicals, onTechnicalsOpenChange }: Props) {
+  const [openSheet, setOpenSheetState] = useState<OpenSheet>(null);
+  const setOpenSheet = (v: OpenSheet) => {
+    setOpenSheetState(v);
+    onTechnicalsOpenChange?.(v === 'technicals');
+  };
+  const close = () => setOpenSheet(null);
 
   return (
     <>
       <View style={s.row}>
-        {toggles.map((t) => (
-          <Pressable
-            key={t.key}
-            onPress={t.onPress}
-            hitSlop={8}
-            style={[
-              s.iconBtn,
-              {
-                borderColor: t.active ? colors.accent : colors.separator,
-                backgroundColor: t.active ? colors.accent + '18' : 'transparent',
-              },
-            ]}
-          >
-            <Ionicons name={t.icon} size={15} color={t.active ? colors.accent : colors.textTertiary} />
-          </Pressable>
-        ))}
-        <Pressable onPress={() => setInfoOpen(true)} hitSlop={8} style={[s.iconBtn, { borderColor: colors.separator }]}>
-          <Ionicons name="information-circle-outline" size={16} color={colors.textTertiary} />
+        <Pressable onPress={() => setOpenSheet('technicals')} hitSlop={8} style={[s.iconBtn, { borderColor: colors.separator }]}>
+          <Ionicons name="pulse-outline" size={16} color={colors.textTertiary} />
+        </Pressable>
+        <Pressable onPress={() => setOpenSheet('settings')} hitSlop={8} style={[s.iconBtn, { borderColor: colors.separator }]}>
+          <Ionicons name="options-outline" size={16} color={colors.textTertiary} />
         </Pressable>
       </View>
 
-      {infoOpen && (
-        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-          <Pressable style={[StyleSheet.absoluteFill, s.backdrop]} onPress={() => setInfoOpen(false)} />
-          <View style={s.centerWrap} pointerEvents="box-none">
-            <View style={[s.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <View style={s.cardHeader}>
-                <Text style={[s.cardTitle, { color: colors.text }]}>Chart Controls</Text>
-                <Pressable onPress={() => setInfoOpen(false)} hitSlop={8}>
-                  <Ionicons name="close" size={20} color={colors.textSecondary} />
-                </Pressable>
-              </View>
-              {toggles.map((t) => (
-                <View key={t.key} style={s.explainerRow}>
-                  <View style={[s.explainerIcon, { backgroundColor: colors.accent + '14' }]}>
-                    <Ionicons name={t.icon} size={15} color={colors.accent} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Text style={[s.explainerLabel, { color: colors.text }]}>{t.label}</Text>
-                      <Text style={{ color: t.active ? colors.success : colors.textTertiary, fontSize: 10, fontWeight: '700' }}>
-                        {t.active ? 'ON' : 'OFF'}
-                      </Text>
-                    </View>
-                    <Text style={[s.explainerDesc, { color: colors.textSecondary }]}>{t.description}</Text>
-                  </View>
-                </View>
-              ))}
+      <CenteredSheet visible={openSheet === 'technicals'} title="Technicals" onClose={close} colors={colors}>
+        {technicals}
+      </CenteredSheet>
+
+      <CenteredSheet visible={openSheet === 'settings'} title="Chart settings" onClose={close} colors={colors}>
+        {sections.map(section => (
+          <View key={section.title} style={{ gap: 10 }}>
+            <Text style={[s.sectionTitle, { color: colors.textTertiary }]}>{section.title.toUpperCase()}</Text>
+            {section.rows.map(row => (
+              <SettingRow key={row.key} row={row} colors={colors} onAction={close} />
+            ))}
+          </View>
+        ))}
+      </CenteredSheet>
+    </>
+  );
+}
+
+function CenteredSheet({ visible, title, onClose, colors, children }: {
+  visible: boolean; title: string; onClose: () => void; colors: any; children: React.ReactNode;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onClose}>
+      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+        <Pressable style={[StyleSheet.absoluteFill, s.backdrop]} onPress={onClose} />
+        <View style={s.centerWrap} pointerEvents="box-none">
+          <View style={[s.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={s.cardHeader}>
+              <Text style={[s.cardTitle, { color: colors.text }]}>{title}</Text>
+              <Pressable onPress={onClose} hitSlop={8}>
+                <Ionicons name="close" size={20} color={colors.textSecondary} />
+              </Pressable>
             </View>
+            <ScrollView contentContainerStyle={{ gap: 16, paddingBottom: 4 }} showsVerticalScrollIndicator={false} bounces={false}>
+              {children}
+            </ScrollView>
           </View>
         </View>
-      )}
-    </>
+      </View>
+    </Modal>
+  );
+}
+
+function SettingRow({ row, colors, onAction }: { row: ChartSettingRow; colors: any; onAction: () => void }) {
+  const muted = colors.textSecondary;
+
+  if (row.kind === 'segment') {
+    return (
+      <View style={s.rowLine}>
+        <Text style={[s.rowLabel, { color: colors.text, flex: 1 }]}>{row.label}</Text>
+        <View style={[s.segment, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+          {row.options.map(o => {
+            const active = o.value === row.value;
+            return (
+              <Pressable
+                key={o.value}
+                onPress={() => row.onChange(o.value)}
+                style={[s.segmentBtn, active && { backgroundColor: colors.accent + '22' }]}
+              >
+                {o.icon ? <Ionicons name={o.icon} size={13} color={active ? colors.accent : colors.textTertiary} /> : null}
+                <Text style={{ fontSize: 12, fontWeight: '700', color: active ? colors.accent : colors.textTertiary }}>{o.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    );
+  }
+
+  if (row.kind === 'action') {
+    return (
+      <Pressable
+        onPress={() => { onAction(); row.onPress(); }}
+        style={[s.actionBtn, { borderColor: colors.accent + '55', backgroundColor: colors.accent + '12' }]}
+      >
+        <Ionicons name={row.icon} size={16} color={colors.accent} />
+        <View style={{ flex: 1 }}>
+          <Text style={[s.rowLabel, { color: colors.accent }]}>{row.label}</Text>
+          {row.description ? <Text style={[s.rowDesc, { color: muted }]}>{row.description}</Text> : null}
+        </View>
+        <Ionicons name="chevron-forward" size={15} color={colors.accent} />
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={s.rowLine}>
+      <View style={[s.rowIcon, { backgroundColor: colors.accent + '14' }]}>
+        <Ionicons name={row.icon} size={14} color={colors.accent} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[s.rowLabel, { color: colors.text }]}>{row.label}</Text>
+        {row.description ? <Text style={[s.rowDesc, { color: muted }]}>{row.description}</Text> : null}
+      </View>
+      <Switch
+        value={row.value}
+        onValueChange={row.onChange}
+        thumbColor={row.value ? '#30D158' : '#ccc'}
+        trackColor={{ true: '#30D15855', false: colors.border }}
+      />
+    </View>
   );
 }
 
@@ -97,12 +166,19 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   backdrop: { backgroundColor: '#000', opacity: 0.5 },
-  centerWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28 },
-  card: { width: '100%', maxWidth: 360, borderRadius: 16, borderWidth: 1, padding: 18, gap: 14 },
-  cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },
-  cardTitle: { fontSize: 16, fontWeight: '700' },
-  explainerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  explainerIcon: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginTop: 1 },
-  explainerLabel: { fontSize: 13.5, fontWeight: '700' },
-  explainerDesc: { fontSize: 12, lineHeight: 16, marginTop: 2 },
+  centerWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 },
+  card: { width: '100%', maxWidth: 400, maxHeight: '86%', borderRadius: 16, borderWidth: 1, padding: 18, gap: 12 },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  cardTitle: { fontSize: 17, fontWeight: '800' },
+  sectionTitle: { fontSize: 11, fontWeight: '700', letterSpacing: 0.6 },
+
+  rowLine: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  rowIcon: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  rowLabel: { fontSize: 13.5, fontWeight: '600' },
+  rowDesc: { fontSize: 11.5, lineHeight: 15, marginTop: 1 },
+
+  segment: { flexDirection: 'row', borderRadius: 9, borderWidth: 1, padding: 2 },
+  segmentBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 7 },
+
+  actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 10, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 10 },
 });

@@ -22,8 +22,8 @@ Data:
     gate works for any ticker.
   - Daily change of the ticker's sector SPDR ETF vs SPY.
 
-Market data is cached per ticker (daily: 1h, intraday: 15s, sector lookup:
-process lifetime) — the verdict itself is recomputed per request since it
+Market data is cached per ticker (daily: per trading date, intraday: 15s,
+sector lookup: process lifetime) — the verdict itself is recomputed per request since it
 depends on direction.
 """
 
@@ -42,7 +42,9 @@ ET = pytz.timezone("America/New_York")
 ORB_START = dtime(9, 30)
 ORB_END = dtime(9, 45)
 
-_DAILY_TTL_S = 3600
+# Daily bars are keyed by ET date, so one fetch (prewarmed at ORB calc)
+# covers the whole session — the live price replaces today's close anyway.
+_DAILY_TTL_S = 12 * 3600
 _INTRADAY_TTL_S = 15
 
 # Sector-vs-SPY thresholds, in percentage points of relative daily change.
@@ -91,7 +93,8 @@ def _cached(cache: dict, key: str, ttl: float, fetch):
 
 def _daily_closes(ticker: str):
     import yfinance as yf
-    return _cached(_daily_cache, ticker, _DAILY_TTL_S,
+    key = f"{ticker}:{datetime.now(ET).date().isoformat()}"
+    return _cached(_daily_cache, key, _DAILY_TTL_S,
                    lambda: yf.Ticker(ticker).history(period="2y", interval="1d")["Close"])
 
 
@@ -382,6 +385,23 @@ def compute_verdict(direction: str, rows: dict) -> dict:
     }
 
 
+def chart_signal(verdicts: dict) -> str:
+    """
+    One signal for a chart that has no trade direction yet:
+    CALL / PUT when that side's verdict is ENTER (higher score wins if both),
+    WAIT when either side is one or two factors away, NA when both sides
+    are DON'T ENTER.
+    """
+    call, put = verdicts["CALL"], verdicts["PUT"]
+    if call["decision"] == "ENTER" and (put["decision"] != "ENTER" or call["score"] >= put["score"]):
+        return "CALL"
+    if put["decision"] == "ENTER":
+        return "PUT"
+    if "WAIT" in (call["decision"], put["decision"]):
+        return "WAIT"
+    return "NA"
+
+
 def _join(parts: list[str]) -> str:
     if not parts:
         return ""
@@ -429,6 +449,7 @@ def get_entry_check(ticker: str, direction: str) -> dict:
         trend, rsi = _trend_and_rsi(closes, last)
 
     rows = {"trend": trend, "rsi": rsi, "vwap": vwap_row, "orb": orb_row, "sector": sector}
+    verdicts = {d: compute_verdict(d, rows) for d in ("CALL", "PUT")}
     from services.utils.market_hours import is_market_hours
     return {
         "ticker": ticker,
@@ -438,7 +459,11 @@ def get_entry_check(ticker: str, direction: str) -> dict:
         "market_open": is_market_hours(),
         "session_date": session_date,
         "rows": rows,
-        "verdict": compute_verdict(direction, rows),
+        "verdict": verdicts[direction],
+        # Both directions + a single chart signal, so the Charts tab can show
+        # "BUY CALL / BUY PUT / WAIT / N/A" from one request.
+        "verdicts": verdicts,
+        "signal": chart_signal(verdicts),
         "errors": errors or None,
     }
 
@@ -485,10 +510,20 @@ def intraday_trend(closes_1m: list[tuple], price: float) -> Optional[dict]:
     return {"label": label, "ema9": round(fast, 2), "ema21": round(slow, 2), "bars": len(buckets)}
 
 
-def prewarm(ticker: str) -> None:
-    """Load the daily-bar cache ahead of the first entry signal (called at ORB calc)."""
+def prewarm(ticker: str, required: Optional[list[str]] = None) -> None:
+    """
+    Load the slow, session-stable inputs ahead of the first entry signal
+    (called off-thread at ORB calc): daily bars (per-date cache) and the
+    one-time sector lookup. VWAP/ORB/intraday trend come from the engine's
+    live bars at signal time, so there's nothing useful to warm for them.
+    """
+    ticker = ticker.upper().strip()
+    required = required or list(GATE_FACTORS)
     try:
-        _daily_closes(ticker.upper().strip())
+        if "trend" in required or "rsi" in required:
+            _daily_closes(ticker)
+        if "sector" in required:
+            _sector_of(ticker)
     except Exception as e:
         logger.warning("[entry_check] prewarm failed for %s: %s", ticker, e)
 

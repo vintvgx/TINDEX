@@ -21,8 +21,9 @@ import { useKeyLevels } from '@/hooks/queries/priceLevels/useKeyLevels';
 import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
 import { useCancelKeyLevel } from '@/hooks/mutations/priceLevels/useCancelKeyLevel';
 import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLevel';
-import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
 import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
+import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals';
+import { useChartSettings } from '@/common/components/ticker/useChartSettings';
 
 interface PriceChartFullScreenProps {
   visible: boolean;
@@ -96,7 +97,18 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   // red, dashed to stay visually distinct from the ORB band's solid lines
   // and from any position SL/TP lines this chart might show elsewhere.
   const [showSR, setShowSR] = useState(false);
-  const { enabled: crosshairEnabled, setEnabled: setCrosshairEnabled } = useCrosshairEnabled();
+  // Every chart display option lives in the chart settings modal — see
+  // useChartSettings. S/R is this screen's extra overlay row.
+  const chart = useChartSettings({
+    ticker: visible ? ticker : null,
+    period,
+    colors,
+    canMarkWatchLevel: true,
+    extraOverlayRows: [{
+      kind: 'toggle', key: 'sr', icon: 'analytics-outline', label: 'Support / resistance',
+      description: 'Nearby support and resistance levels', value: showSR, onChange: setShowSR,
+    }],
+  });
   const { data: srData } = useTickerSupportResistance(visible && showSR ? ticker : null);
   // AdvancedPriceChart folds EVERY referenceLine price into the y-axis
   // min/max unconditionally (it has to — that's exactly right for an entry/
@@ -154,6 +166,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   const combinedReferenceLines: ChartReferenceLine[] | null = (() => {
     const lines = [
       ...(showSR && srReferenceLines ? srReferenceLines : []),
+      ...chart.referenceLines,
     ];
     return lines.length ? lines : null;
   })();
@@ -388,26 +401,14 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
           <View style={{ marginBottom: 6 }}>
             <ChartControlToggles
               colors={colors}
-              toggles={[
-                {
-                  key: 'crosshair',
-                  icon: 'locate-outline',
-                  active: crosshairEnabled,
-                  onPress: () => setCrosshairEnabled(!crosshairEnabled),
-                  label: 'Data Points',
-                  description: 'Tap-and-hold on the chart to inspect an exact price/time. Turn off to test whether it’s a source of lag while panning.',
-                },
-                {
-                  key: 'sr',
-                  icon: 'analytics-outline',
-                  active: showSR,
-                  onPress: () => setShowSR(v => !v),
-                  label: 'S/R',
-                  description: 'Overlays nearby support and resistance levels on the chart.',
-                },
-              ]}
+              sections={chart.sections}
+              technicals={chart.technicalsContent}
+              onTechnicalsOpenChange={chart.onTechnicalsOpenChange}
             />
           </View>
+          {chart.showStrip && (
+            <ChartTechnicalsStrip check={chart.technicals.data} isLoading={chart.technicals.isLoading} colors={colors} />
+          )}
           <AdvancedPriceChart
             data={historyData}
             isLoading={historyLoading}
@@ -417,7 +418,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             onScrub={setScrubPoint}
             height={Math.min(340, Math.max(260, windowHeight * 0.38))}
             orbRange={effectiveOrb}
-            showOrbRange
+            showOrbRange={chart.showOrb}
             livePrice={visible ? resolvedLivePrice ?? null : null}
             referenceLines={combinedReferenceLines}
             sessionReferenceLines={sessionReferenceLines}
@@ -426,6 +427,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             onDeleteWatchZone={handleDeleteWatchZone}
             onUpdateWatchZone={handleUpdateWatchZone}
             resetKey={ticker}
+            settings={chart.chartSettings}
           />
 
           {/* Open contracts for this ticker — full data + editable SL/TP via
