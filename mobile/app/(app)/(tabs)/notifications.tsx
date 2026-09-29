@@ -38,11 +38,15 @@ const NotificationsScreen = () => {
   // defaults to on until the user's own preference row says otherwise.
   const [flowSignalsEnabled, setFlowSignalsEnabled] = useState(true);
   const [flowPrefLoading, setFlowPrefLoading] = useState(false);
+  // Muse activity (levels/watchlist/alerts/notes Muse creates or removes).
+  const [museActivityEnabled, setMuseActivityEnabled] = useState(true);
+  const [musePrefLoading, setMusePrefLoading] = useState(false);
 
   useEffect(() => {
     if (!user?.id) return;
     NotificationService.getNotificationPreferences(user.id).then(prefs => {
       if (prefs && prefs.flow_signals === false) setFlowSignalsEnabled(false);
+      if (prefs && prefs.muse_activity === false) setMuseActivityEnabled(false);
     });
   }, [user?.id]);
 
@@ -56,6 +60,19 @@ const NotificationsScreen = () => {
       setFlowSignalsEnabled(!next); // revert on failure
     } finally {
       setFlowPrefLoading(false);
+    }
+  };
+
+  const handleToggleMuseActivity = async (next: boolean) => {
+    setMuseActivityEnabled(next); // optimistic
+    if (!user?.id) return;
+    setMusePrefLoading(true);
+    try {
+      await NotificationService.updateNotificationPreferences(user.id, { muse_activity: next });
+    } catch {
+      setMuseActivityEnabled(!next); // revert on failure
+    } finally {
+      setMusePrefLoading(false);
     }
   };
 
@@ -326,6 +343,31 @@ const NotificationsScreen = () => {
           onValueChange={handleToggleFlowSignals}
           disabled={flowPrefLoading}
           thumbColor={flowSignalsEnabled ? '#FF9500' : '#ccc'}
+          trackColor={{ true: '#FF950055', false: colors.border }}
+        />
+      </View>
+
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingHorizontal: 24,
+          paddingVertical: 14,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.separator,
+        }}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: colors.text, fontSize: 15, fontWeight: '600' }}>Muse Activity</Text>
+          <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+            Levels, watchlist contracts, alerts and notes Muse adds or removes
+          </Text>
+        </View>
+        <Switch
+          value={museActivityEnabled}
+          onValueChange={handleToggleMuseActivity}
+          disabled={musePrefLoading}
+          thumbColor={museActivityEnabled ? '#FF9500' : '#ccc'}
           trackColor={{ true: '#FF950055', false: colors.border }}
         />
       </View>

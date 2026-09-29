@@ -542,6 +542,22 @@ class StrategyNotifier:
             priority=P_MARKET,
         )
 
+    def notify_muse_change(self, title: str, body: str, data: dict | None = None):
+        """
+        Muse (the user's external AI assistant — see routes/muse.py) just
+        created or removed something in the app: a level, a watchlist
+        contract, a contract alert, or a note. Every Muse write sends one of
+        these so nothing it does happens silently. Gated on the
+        `muse_activity` preference (Notifications screen toggle).
+        """
+        self._dispatch(
+            title=f"✨ Muse · {title}",
+            body=body,
+            data={"type": "muse_change", **(data or {})},
+            priority=P_INFO,
+            pref_key="muse_activity",
+        )
+
     def notify_review_ready(self, review_date: str, trade_count: int, net_pnl: float,
                              paper_mode: bool = True):
         """Daily performance review finished generating and saving for ONE account.
