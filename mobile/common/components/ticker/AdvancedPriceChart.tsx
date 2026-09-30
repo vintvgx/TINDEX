@@ -8,6 +8,7 @@ import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
+import { useAutoZonesVisibility } from '@/hooks/useAutoZonesVisibility';
 import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
 import { useChartInterval } from '@/hooks/useChartInterval';
 import { ALLOWED_INTERVALS, INTERVAL_LABEL, INTERVAL_MINUTES } from '@/lib/chartIntervals';
@@ -94,6 +95,32 @@ export type ZoneType = 'trade' | 'investment';
 /** Investment zones get their own color so they never read as a trade setup. */
 export const INVESTMENT_ZONE_COLOR = '#D4A537';
 
+/**
+ * ZoneEngine's auto-detected support/resistance zones (see
+ * api/services/strategy/zone_engine.py `zones()`) — a fundamentally
+ * different concept from ChartWatchZone above: these are computed, not
+ * user-marked, refresh on their own, and carry a 0-100 confluence score
+ * instead of a watching/confirmed status. Drawn in their own color family
+ * (AUTO_ZONE_RESISTANCE_COLOR/AUTO_ZONE_SUPPORT_COLOR below) so they never
+ * visually collide with a user's own watched levels — this layer NEVER
+ * restyles or overwrites `watchZones`; it's a fully separate prop, toggle,
+ * and render pass (see effectiveAutoZones).
+ */
+export interface ChartAutoZone {
+  /** Stable only within one fetch — see structure_tracker.py's per-
+   *  snapshot zone ids; used here purely as a React key + Alert lookup. */
+  id: string;
+  low: number;
+  high: number;
+  score: number;      // 0-100
+  touches: number;
+  sources: string[];
+  type: 'support' | 'resistance';
+}
+
+export const AUTO_ZONE_RESISTANCE_COLOR = '#6366F1'; // indigo — distinct from watch-zone red/green/gold and VWAP purple/EMA blue
+export const AUTO_ZONE_SUPPORT_COLOR = '#14B8A6';     // teal
+
 interface AdvancedPriceChartProps {
   data: TickerHistoryData | undefined;
   isLoading?: boolean;
@@ -130,6 +157,20 @@ interface AdvancedPriceChartProps {
   /** Existing watched levels/zones for this ticker, drawn as shaded bands.
    *  Folded into the y-axis domain like referenceLines. */
   watchZones?: ChartWatchZone[] | null;
+  /** ZoneEngine's auto-detected zones — a separate overlay, toggle and
+   *  render pass from `watchZones` (see ChartAutoZone's doc comment); this
+   *  NEVER touches or restyles the user's own watched zones. Folded into
+   *  the y-axis domain the same way. The caller (e.g. PriceChartFullScreen)
+   *  is responsible for bounding these to a sane distance from price
+   *  before passing them down — same reasoning as historical S/R lines,
+   *  which can legitimately sit far from spot; this component folds in
+   *  whatever it's given unconditionally. */
+  autoZones?: ChartAutoZone[] | null;
+  /** Fired when the user taps an auto zone's label — score/sources/touch
+   *  count for that zone. Left undefined, the chart shows a plain
+   *  Alert.alert with the same information (see handleAutoZoneTap) —
+   *  intended as a stopgap until an anchored popover replaces it. */
+  onAutoZoneTap?: (zone: ChartAutoZone) => void;
   /** Fired when the user taps Confirm on a drawn zone. Return (or resolve
    *  to) `false` to signal the save failed — the chart then keeps the band
    *  and confirm bar up with an inline error instead of clearing it, so a
@@ -338,6 +379,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   onWatchConfirm,
   onUpdateWatchZone,
   onDeleteWatchZone,
+  autoZones,
+  onAutoZoneTap,
   resetKey,
 }) => {
   const colors = useThemeColors();
@@ -598,6 +641,12 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const { visible: showWatchZones, setVisible: setShowWatchZones } = useWatchZonesVisibility();
   const effectiveWatchZones = showWatchZones ? watchZones : null;
 
+  // Same global-persisted-toggle pattern as watchZones above, but its own
+  // hook/storage key — hiding auto zones must never touch a user's own
+  // watched levels, and vice versa.
+  const { visible: showAutoZones, setVisible: setShowAutoZones } = useAutoZonesVisibility();
+  const effectiveAutoZones = showAutoZones ? autoZones : null;
+
   // Global, persisted toggle for the tap/press-and-hold crosshair — lets the
   // user switch it off entirely to test whether its per-frame React state
   // updates are a source of chart lag/snappiness. See useCrosshairEnabled.
@@ -645,6 +694,16 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         max = Math.max(max, z.high);
       }
     }
+    // Auto zones — same reasoning, same toggle-respecting guard. The
+    // caller is expected to have already bounded these to a sane distance
+    // from price (see the `autoZones` prop doc) — this just folds in
+    // whatever it's actually given, same as every overlay above.
+    if (effectiveAutoZones?.length) {
+      for (const z of effectiveAutoZones) {
+        min = Math.min(min, z.low);
+        max = Math.max(max, z.high);
+      }
+    }
 
     let lo: number, hi: number;
     if (yOverride) {
@@ -688,7 +747,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     const maxVolume = visVolumes.length ? Math.max(...visVolumes) : 0;
 
     return { lo, hi, step, xForIndex, yForPrice, priceForY, yTicks, xTicks, maxVolume };
-  }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, effectiveReferenceLines, effectiveWatchZones, yOverride, visibleIndices, visibleStart, visibleCount, layoutVisibleCount]);
+  }, [hasData, hasOhlc, ePrices, eHighs, eLows, volumes, plotW, priceH, orbVisible, orbRange, effectiveReferenceLines, effectiveWatchZones, effectiveAutoZones, yOverride, visibleIndices, visibleStart, visibleCount, layoutVisibleCount]);
 
   // X-axis tick labels — plain evenly-spaced time labels everywhere EXCEPT
   // the 1D period, where a day-boundary crossing (if the visible window
@@ -942,6 +1001,24 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
       ],
     );
   }, [onDeleteWatchZone]);
+
+  const handleAutoZoneTap = useCallback((zone: ChartAutoZone) => {
+    if (onAutoZoneTap) {
+      onAutoZoneTap(zone);
+      return;
+    }
+    // Stopgap until an anchored popover (see OUTSTANDING.md #4) replaces
+    // this — same score/sources/touch-count info the TODO's chart-layer
+    // spec asks a tap to reveal, just in a plain Alert for now.
+    const priceLabel = zone.high === zone.low
+      ? `$${zone.high.toFixed(2)}`
+      : `$${zone.low.toFixed(2)}–$${zone.high.toFixed(2)}`;
+    Alert.alert(
+      `${zone.type === 'resistance' ? 'Resistance' : 'Support'} · ${priceLabel}`,
+      `Score ${Math.round(zone.score)}/100 · ${zone.touches} touch${zone.touches === 1 ? '' : 'es'}\n` +
+      `Sources: ${zone.sources.join(', ')}`,
+    );
+  }, [onAutoZoneTap]);
 
   // Chart-body gestures — four distinct interactions, deliberately kept
   // from stepping on one another:
@@ -1470,6 +1547,27 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               />
             </Pressable>
           )}
+          {/* Show/hide ZoneEngine's auto-detected zones — same on-by-
+              default, appears-only-once-there-is-something pattern as the
+              watch-zones toggle above, its own icon so the two are never
+              ambiguous about which layer they're hiding. */}
+          {!settings && autoZones && autoZones.length > 0 && (
+            <Pressable
+              onPress={() => setShowAutoZones(!showAutoZones)}
+              hitSlop={6}
+              style={{
+                width: 30, height: 26, borderRadius: 8,
+                alignItems: 'center', justifyContent: 'center',
+                backgroundColor: showAutoZones ? colors.accent + '22' : 'transparent',
+              }}
+            >
+              <Ionicons
+                name={showAutoZones ? 'grid' : 'grid-outline'}
+                size={15}
+                color={showAutoZones ? colors.accent : colors.textTertiary}
+              />
+            </Pressable>
+          )}
           {isZoomed && (
             <Pressable
               onPress={resetZoom}
@@ -1661,6 +1759,30 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                     <SvgText x={8} y={y - 3} fill={color} fontSize={10.5} fontWeight="700">
                       {`${line.label} ${formatAxisPrice(line.price)}`}
                     </SvgText>
+                  </Fragment>
+                );
+              })}
+
+              {/* Auto-detected zones (ZoneEngine) — drawn BEFORE (so
+                  underneath) the user's own watched zones below, on
+                  purpose: this layer never competes with or restyles a
+                  level the user actually marked. Opacity scales with the
+                  zone's own 0-100 score, so a strong-confluence zone reads
+                  visibly darker than a marginal one. Hidden entirely when
+                  showAutoZones is off. */}
+              {effectiveAutoZones?.map((z) => {
+                const color = z.type === 'resistance' ? AUTO_ZONE_RESISTANCE_COLOR : AUTO_ZONE_SUPPORT_COLOR;
+                const yHigh = scale.yForPrice(z.high);
+                const yLow = scale.yForPrice(z.low);
+                // Score 0-100 -> band opacity 0.05-0.22 — even a weak zone
+                // stays faintly visible (the point of drawing 3+3 of them
+                // is to compare), a strong one reads clearly darker.
+                const bandOpacity = 0.05 + (Math.max(0, Math.min(100, z.score)) / 100) * 0.17;
+                return (
+                  <Fragment key={`auto-${z.id}`}>
+                    <Rect x={0} y={yHigh} width={plotW} height={Math.max(1, yLow - yHigh)} fill={color} opacity={bandOpacity} />
+                    <Line x1={0} x2={plotW} y1={yHigh} y2={yHigh} stroke={color} strokeWidth={1} opacity={0.5} />
+                    <Line x1={0} x2={plotW} y1={yLow} y2={yLow} stroke={color} strokeWidth={1} opacity={0.5} />
                   </Fragment>
                 );
               })}
@@ -2038,6 +2160,36 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             )}
           </View>
         )}
+
+        {/* Auto-zone tap target — same "real RN view, not raw SVG" reason
+            as the watch-zone label below. Right-aligned (vs. watch zones'
+            left-aligned label) so the two layers' tap targets don't stack
+            on top of each other when a watched level and an auto zone
+            happen to sit at nearly the same price. */}
+        {showAutoZones && scale && effectiveAutoZones?.map((z) => {
+          const color = z.type === 'resistance' ? AUTO_ZONE_RESISTANCE_COLOR : AUTO_ZONE_SUPPORT_COLOR;
+          const yHigh = scale!.yForPrice(z.high);
+          return (
+            <View
+              key={`auto-zone-label-${z.id}`}
+              pointerEvents="box-none"
+              style={{ position: 'absolute', top: Math.max(0, yHigh - 18), left: 6, right: Y_AXIS_W + 4, alignItems: 'flex-end' }}
+            >
+              <Pressable
+                onPress={() => handleAutoZoneTap(z)}
+                style={{
+                  flexDirection: 'row', alignItems: 'center', gap: 4,
+                  backgroundColor: colors.background + 'D9', borderRadius: 5,
+                  paddingHorizontal: 5, paddingVertical: 2,
+                  borderWidth: 1, borderColor: color + '55',
+                }}
+              >
+                <Ionicons name={z.type === 'resistance' ? 'trending-down' : 'trending-up'} size={10} color={color} />
+                <Text style={{ fontSize: 10, fontWeight: '700', color }}>{Math.round(z.score)}</Text>
+              </Pressable>
+            </View>
+          );
+        })}
 
         {/* Per-zone label (+ edit/delete once in Watch mode) — a real RN
             touch target layered over the SVG canvas (raw SVG shapes aren't

@@ -3,6 +3,7 @@ import type { ChartDisplaySettings, ChartMode, ChartReferenceLine } from '@/comm
 import type { ChartSettingRow, ChartSettingsSection } from '@/common/components/ticker/ChartControlToggles';
 import { useChartTechnicals, technicalsReferenceLines, ChartTechnicalsInfo } from '@/common/components/ticker/ChartTechnicals';
 import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
+import { useAutoZonesVisibility } from '@/hooks/useAutoZonesVisibility';
 import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 
@@ -34,6 +35,12 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
   const [showOrb, setShowOrb] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const { visible: showWatchZones, setVisible: setShowWatchZones } = useWatchZonesVisibility();
+  // Unlike showWatchZones, the caller (PriceChartFullScreen) needs this
+  // value itself — fetching ZoneEngine's zones is a real (if 90s-cached)
+  // yfinance call, and should be gated on the toggle the same way S/R's
+  // own fetch is gated on showSR, so it's returned below rather than left
+  // purely internal to the hook/AdvancedPriceChart pair.
+  const { visible: showAutoZones, setVisible: setShowAutoZones } = useAutoZonesVisibility();
   const { enabled: crosshairEnabled, setEnabled: setCrosshairEnabled } = useCrosshairEnabled();
 
   // Only poll while something actually uses the data.
@@ -90,6 +97,9 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
           value: showSessionLines, onChange: setShowSessionLines },
         { kind: 'toggle', key: 'zones', icon: 'layers-outline', label: 'Show watch levels',
           description: 'Show or hide your saved levels on the chart (use Mark a watch level above to add one)', value: showWatchZones, onChange: setShowWatchZones },
+        { kind: 'toggle', key: 'autoZones', icon: 'grid-outline', label: 'Auto-detected zones',
+          description: 'Support/resistance ZoneEngine finds automatically, scored by confluence (separate from your own watch levels)',
+          value: showAutoZones, onChange: setShowAutoZones },
         ...extraOverlayRows,
         { kind: 'toggle', key: 'crosshair', icon: 'locate-outline', label: 'Data points',
           description: 'Tap-and-hold the chart to inspect an exact price/time',
@@ -106,6 +116,7 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
     technicals,
     showStrip,
     showOrb,
+    showAutoZones,
     referenceLines,
     chartSettings,
     sections,

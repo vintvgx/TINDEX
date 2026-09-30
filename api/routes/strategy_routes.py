@@ -2240,6 +2240,38 @@ def get_ticker_support_resistance(ticker: str):
     return jsonify({"success": True, "data": data})
 
 
+@strategy_bp.route("/zones/<ticker>", methods=["GET"])
+def get_ticker_zones(ticker: str):
+    """
+    ZoneEngine's zones (bands + score + sources) plus, when the ticker is
+    ORB-followed and StructureTracker has therefore actually been watching
+    its live bars, the current trend state and any zones flipped so far
+    this session. `trend`/`flips` are `None`/`[]` (not an error) for a
+    ticker nothing is tracking live yet — the zones themselves still come
+    back from a plain on-demand yfinance fetch either way.
+    Query params: `timeframe` (5m/15m/30m, default 30m), `force` (bool).
+    """
+    from services.strategy.zone_engine import zones as _zones
+    timeframe = request.args.get("timeframe", "30m")
+    force = request.args.get("force", "false").lower() == "true"
+    data = _zones(ticker.upper(), timeframe=timeframe, force_refresh=force)
+    if data.get("error"):
+        return jsonify({"success": False, "error": data["error"]}), 422
+
+    trend, flips = None, []
+    try:
+        from services.strategy.structure_tracker import get_structure_tracker
+        tracker = get_structure_tracker()
+        trend = tracker.get_trend(ticker.upper())
+        flips = tracker.get_flipped_zones(ticker.upper())
+    except Exception as e:
+        logger.warning("[strategy] zones: structure lookup failed for %s: %s", ticker, e)
+
+    data["trend"] = trend
+    data["flips"] = flips
+    return jsonify({"success": True, "data": data})
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _engine_position_response(engine: ORBEngine):
