@@ -12,7 +12,8 @@ import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import { Skeleton } from '@/common/components/ui/Skeleton';
 import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
 import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
-import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
+import { ChartTechnicalsStrip, CHART_TECHNICALS_STRIP_HEIGHT } from '@/common/components/ticker/ChartTechnicals';
+import { useChartSettings } from '@/common/components/ticker/useChartSettings';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
@@ -270,7 +271,9 @@ export default function ChartsScreen() {
   // ── Chart sizing — measured, not guessed, now that the tab bar is docked
   // and reserves its own space: this flex area IS exactly what's left. ────
   const [chartAreaHeight, setChartAreaHeight] = useState(0);
-  const { enabled: crosshairEnabled, setEnabled: setCrosshairEnabled } = useCrosshairEnabled();
+  // Every chart display option (style, technicals, session lines, watch
+  // levels, data points) lives in the chart settings modal — see useChartSettings.
+  const chart = useChartSettings({ ticker: activeTicker, period, colors, canMarkWatchLevel: true });
   const onChartAreaLayout = useCallback((e: LayoutChangeEvent) => {
     setChartAreaHeight(e.nativeEvent.layout.height);
   }, []);
@@ -286,7 +289,7 @@ export default function ChartsScreen() {
     .filter(l => l.ticker === activeTicker && (l.status === 'watching' || l.status === 'confirmed'))
     .map(l => ({
       id: l.id, low: l.level_low, high: l.level_high, direction: l.direction,
-      status: l.status as 'watching' | 'confirmed',
+      status: l.status as 'watching' | 'confirmed', zoneType: l.zone_type ?? 'trade',
     }));
 
   // Every ticker with a live watch zone/price target — drives the orange dot
@@ -314,11 +317,12 @@ export default function ChartsScreen() {
         levelLow: draft.low,
         levelHigh: draft.high,
         source: 'self',
+        zoneType: draft.zoneType,
       });
       toast.success(
         draft.high - draft.low < 0.005
-          ? `Watching ${activeTicker} $${draft.high.toFixed(2)}`
-          : `Watching ${activeTicker} $${draft.low.toFixed(2)}–$${draft.high.toFixed(2)}`,
+          ? `${draft.zoneType === 'investment' ? 'Investment zone' : 'Watching'} ${activeTicker} $${draft.high.toFixed(2)}`
+          : `${draft.zoneType === 'investment' ? 'Investment zone' : 'Watching'} ${activeTicker} $${draft.low.toFixed(2)}–$${draft.high.toFixed(2)}`,
       );
       return true;
     } catch (e) {
@@ -351,6 +355,7 @@ export default function ChartsScreen() {
         direction: draft.direction,
         levelLow: draft.low,
         levelHigh: draft.high,
+        zoneType: draft.zoneType,
       });
       toast.success('Watch zone updated');
       return true;
@@ -457,17 +462,15 @@ export default function ChartsScreen() {
           <View style={{ flex: 1 }}>
             <ChartControlToggles
               colors={colors}
-              toggles={[{
-                key: 'crosshair',
-                icon: 'locate-outline',
-                active: crosshairEnabled,
-                onPress: () => setCrosshairEnabled(!crosshairEnabled),
-                label: 'Data Points',
-                description: 'Tap-and-hold on the chart to inspect an exact price/time. Turn off to test whether it’s a source of lag while panning.',
-              }]}
+              sections={chart.sections}
+              technicals={chart.technicalsContent}
+              onTechnicalsOpenChange={chart.onTechnicalsOpenChange}
             />
           </View>
         </View>
+        {chart.showStrip && (
+          <ChartTechnicalsStrip check={chart.technicals.data} isLoading={chart.technicals.isLoading} colors={colors} />
+        )}
         {chartAreaHeight > 0 && (
           <AdvancedPriceChart
             key={activeTicker}
@@ -476,9 +479,9 @@ export default function ChartsScreen() {
             period={period}
             onPeriodChange={setPeriod}
             positive={displayPositive}
-            height={Math.max(220, chartAreaHeight - CHART_CHROME_HEIGHT)}
+            height={Math.max(220, chartAreaHeight - CHART_CHROME_HEIGHT - (chart.showStrip ? CHART_TECHNICALS_STRIP_HEIGHT : 0))}
             orbRange={effectiveOrb}
-            showOrbRange
+            showOrbRange={chart.showOrb}
             livePrice={resolvedLivePrice ?? null}
             watchZones={chartWatchZones}
             onWatchConfirm={handleWatchConfirm}
@@ -486,6 +489,8 @@ export default function ChartsScreen() {
             onUpdateWatchZone={handleUpdateWatchZone}
             resetKey={activeTicker}
             sessionReferenceLines={sessionReferenceLines}
+            referenceLines={chart.referenceLines}
+            settings={chart.chartSettings}
           />
         )}
       </View>

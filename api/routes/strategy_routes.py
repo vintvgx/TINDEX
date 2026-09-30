@@ -522,6 +522,7 @@ def create_config():
             "bypass_breakout_window", "custom_thresholds", "exit_overrides",
             "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
             "confirm_entry", "paired_strategy_id", "paused_by_kill_switch",
+            "technicals_gate",
         ) if k in data
     }}
     config.pop("id", None)   # force new UUID
@@ -563,7 +564,8 @@ def update_config(strategy_id: str):
                "profile", "trade_days", "strategy_name", "capital_limit",
                "bypass_breakout_window", "custom_thresholds", "exit_overrides",
                "budget_otm_mode", "otm_fib_level", "debug_mode", "smart_contracts",
-               "confirm_entry", "paired_strategy_id", "paused_by_kill_switch"}
+               "confirm_entry", "paired_strategy_id", "paused_by_kill_switch",
+               "technicals_gate"}
     for key in allowed:
         if key in data:
             engine.config[key] = data[key]
@@ -2206,6 +2208,26 @@ def get_batch_technicals():
         return jsonify({"success": False, "error": "tickers required"}), 400
     results = {t: get_technicals(t) for t in tickers}
     return jsonify({"success": True, "data": results})
+
+
+@strategy_bp.route("/entry-check/<ticker>", methods=["GET"])
+def get_entry_check(ticker: str):
+    """
+    Trade entry sheet's technicals gate — Trend / RSI / VWAP / ORB / Sector
+    rows plus an ENTER / WAIT / DONT_ENTER verdict. ?direction=CALL|PUT.
+    See services/entry_check_service.py for the rules.
+    """
+    from services.entry_check_service import get_entry_check as _entry_check
+    direction = (request.args.get("direction") or "CALL").upper()
+    if direction not in ("CALL", "PUT"):
+        return jsonify({"success": False, "error": "direction must be CALL or PUT"}), 400
+    try:
+        return jsonify({"success": True, "data": _entry_check(ticker, direction)})
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 422
+    except Exception as e:
+        logger.error("[strategy] entry-check %s failed: %s", ticker, e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @strategy_bp.route("/support-resistance/<ticker>", methods=["GET"])

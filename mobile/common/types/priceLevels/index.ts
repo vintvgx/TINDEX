@@ -6,6 +6,9 @@ import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 // triggered ('bullish' or 'bearish'), so a confirmed row is never 'either'.
 export type LevelDirection = 'bullish' | 'bearish' | 'either';
 export type LevelSource = 'self' | 'discord_admin';
+/** 'trade' = short-term setup (short-dated suggestions); 'investment' =
+ *  long-term buy zone (LEAPS-style call suggestions, its own push). */
+export type LevelZoneType = 'trade' | 'investment';
 export type LevelStatus = 'watching' | 'confirmed' | 'expired' | 'cancelled';
 
 export interface NamedContract {
@@ -30,6 +33,8 @@ export interface WatchedPriceLevel {
   level_high: number;
   direction: LevelDirection;
   source: LevelSource;
+  /** Missing on rows from before the zone_type migration — treat as 'trade'. */
+  zone_type?: LevelZoneType;
   notes: string | null;
   named_contracts: NamedContract[];
   status: LevelStatus;
@@ -47,6 +52,7 @@ export interface CreatePriceLevelRequest {
   levelLow: number;
   levelHigh?: number;
   source?: LevelSource;
+  zoneType?: LevelZoneType;
   notes?: string;
   namedContracts?: NamedContract[];
 }
@@ -58,4 +64,5 @@ export interface UpdatePriceLevelRequest {
   levelLow?: number;
   levelHigh?: number;
   direction?: LevelDirection;
+  zoneType?: LevelZoneType;
 }

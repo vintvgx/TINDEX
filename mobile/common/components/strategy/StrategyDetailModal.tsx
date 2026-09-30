@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { StrategyConfig, StrategyProfile } from '@/common/types/strategy';
 import { PROFILES as PROFILE_GUIDES } from '@/common/components/strategy/ProfileGuideModal';
 import { useUpdateStrategyConfig } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
+import { TECHNICALS_FACTORS } from '@/common/components/strategy/TechnicalsGateEditor';
 import { useToast } from '@/common/components/ui/Toast';
 import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 
@@ -135,7 +136,15 @@ export function StrategyDetailModal({ visible, config, profiles, colors, onClose
             <SettingRow label="Trade Days" value={(config.trade_days ?? []).map(d => DAY_LABELS[d]).join('/') || '—'} colors={colors} />
             <SettingRow label="Capital Limit" value={config.capital_limit != null ? `$${config.capital_limit.toLocaleString()}` : 'Full buying power'} colors={colors} />
             <SettingRow label="Bypass Breakout Window" value={config.bypass_breakout_window ? 'Yes' : 'No'} colors={colors} />
-            <SettingRow label="Smart Contracts" value={config.smart_contracts ? 'Enabled' : 'Disabled'} colors={colors} last />
+            <SettingRow label="Smart Contracts" value={config.smart_contracts ? 'Enabled' : 'Disabled'} colors={colors} />
+            <SettingRow
+              label="Technicals Gate"
+              value={config.technicals_gate?.enabled && config.technicals_gate.required.length
+                ? `${config.technicals_gate.required.length}/${config.technicals_gate.required.length} · ${config.technicals_gate.required.map(k => TECHNICALS_FACTORS.find(f => f.key === k)?.label ?? k).join(' + ')}`
+                : 'Off'}
+              colors={colors}
+              last
+            />
           </View>
 
           {/* Key Parameters — same MetricCell grid layout as the Profile Guide,

@@ -27,7 +27,22 @@ export interface AdvancedScrubPoint {
   volume?: number;
 }
 
-type ChartMode = 'line' | 'candle';
+export type ChartMode = 'line' | 'candle';
+
+/**
+ * Display settings owned by the SCREEN instead of this chart's toolbar —
+ * the Charts tab and PriceChartFullScreen put them all in their chart settings
+ * modal (ChartControlToggles). When passed, the matching toolbar buttons
+ * are hidden; callers that don't pass it keep the toolbar as-is.
+ */
+export interface ChartDisplaySettings {
+  /** null = the timeframe's default (candles on 1D/1W, line otherwise). */
+  mode: ChartMode | null;
+  showSessionLines: boolean;
+  /** Watch (draw-a-level) mode, entered from the settings modal. */
+  watchMode: boolean;
+  onWatchModeChange: (on: boolean) => void;
+}
 
 /** A labeled horizontal level — e.g. entry/TP1/TP2/stop for a simulation or
  *  a live position. Visually distinct from the ORB band's solid lines
@@ -59,6 +74,9 @@ export interface ChartWatchZone {
   // the backend overwrites this with whichever side actually triggered.
   direction: 'bullish' | 'bearish' | 'either';
   status: 'watching' | 'confirmed';
+  /** 'investment' = long-term buy zone, drawn in INVESTMENT_ZONE_COLOR with
+   *  a briefcase instead of the direction's green/red. Default 'trade'. */
+  zoneType?: ZoneType;
 }
 
 /** A newly-drawn-but-not-yet-saved watch zone, reported once the user lifts
@@ -68,7 +86,13 @@ export interface ChartWatchDraft {
   low: number;
   high: number;
   direction: 'bullish' | 'bearish' | 'either';
+  zoneType: ZoneType;
 }
+
+export type ZoneType = 'trade' | 'investment';
+
+/** Investment zones get their own color so they never read as a trade setup. */
+export const INVESTMENT_ZONE_COLOR = '#D4A537';
 
 interface AdvancedPriceChartProps {
   data: TickerHistoryData | undefined;
@@ -130,6 +154,9 @@ interface AdvancedPriceChartProps {
    *  in-progress/pending draft so a stale drawing never survives a ticker
    *  swap. Left undefined, Watch state simply persists across re-renders. */
   resetKey?: string | number;
+  /** See ChartDisplaySettings — moves style/session/watch controls out of
+   *  this toolbar and under the caller's control. */
+  settings?: ChartDisplaySettings;
 }
 
 // ── Layout constants ─────────────────────────────────────────────────────
@@ -165,6 +192,10 @@ const niceStep = (range: number, targetTicks: number) => {
   const factor = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
   return factor * mag;
 };
+
+const watchZoneColor = (z: Pick<ChartWatchZone, 'direction' | 'zoneType'>, colors: any): string =>
+  z.zoneType === 'investment' ? INVESTMENT_ZONE_COLOR
+    : z.direction === 'either' ? colors.accent : z.direction === 'bullish' ? colors.success : colors.error;
 
 const formatAxisPrice = (p: number) => (p >= 1000 ? p.toFixed(0) : p.toFixed(2));
 
@@ -298,6 +329,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   height = 340,
   orbRange,
   showOrbRange,
+  settings,
   livePrice,
   referenceLines,
   sessionReferenceLines,
@@ -380,7 +412,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // overrides either way for the rest of the session.
   const [modeOverride, setModeOverride] = useState<ChartMode | null>(null);
   const defaultMode: ChartMode = period === '1D' || period === '1W' ? 'candle' : 'line';
-  const mode: ChartMode = hasOhlc ? modeOverride ?? defaultMode : 'line';
+  const mode: ChartMode = hasOhlc ? (settings ? settings.mode : modeOverride) ?? defaultMode : 'line';
 
   // ── Live tick blended into the last (still-forming) bar ────────────────
   // Only meaningful on 1D — a 30m/1d/1wk bar isn't "in progress" the way a
@@ -548,9 +580,9 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const effectiveReferenceLines = useMemo(
     () => [
       ...(referenceLines ?? []),
-      ...(showSessionLines ? (sessionReferenceLines ?? []) : []),
+      ...((settings ? settings.showSessionLines : showSessionLines) ? (sessionReferenceLines ?? []) : []),
     ],
-    [referenceLines, sessionReferenceLines, showSessionLines],
+    [referenceLines, sessionReferenceLines, showSessionLines, settings?.showSessionLines],
   );
 
   // Watched zones (key levels) — ON by default, toggled off via the
@@ -760,6 +792,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // Finalized price range, set on release, awaiting Confirm/Cancel.
   const [watchDraftCommitted, setWatchDraftCommitted] = useState<{ low: number; high: number } | null>(null);
   const [watchDirection, setWatchDirection] = useState<'bullish' | 'bearish' | 'either'>('bullish');
+  const [watchZoneType, setWatchZoneType] = useState<ZoneType>('trade');
   const [isSavingWatch, setIsSavingWatch] = useState(false);
   const [watchSaveError, setWatchSaveError] = useState<string | null>(null);
   // Id of the existing zone currently being modified — set by tapping a
@@ -769,13 +802,31 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // onUpdateWatchZone instead of onWatchConfirm.
   const [editingZoneId, setEditingZoneId] = useState<string | null>(null);
 
+  // With screen-owned settings, Watch mode is entered from the settings
+  // modal — mirror it in, and report every exit (toolbar eye, ticker swap)
+  // back out so the modal's state never drifts from what's on screen.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const changeWatchMode = useCallback((on: boolean) => {
+    setWatchMode(on);
+    settingsRef.current?.onWatchModeChange(on);
+  }, []);
+  useEffect(() => {
+    if (!settings) return;
+    setWatchMode(settings.watchMode);
+    setWatchDraftPx(null);
+    setWatchDraftCommitted(null);
+    setWatchSaveError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.watchMode]);
+
   // Clears any in-progress/pending draft (and turns Watch mode back off)
   // whenever the caller signals this is now a genuinely different chart —
   // see the `resetKey` prop doc. Deliberately NOT keyed off `data` itself,
   // which changes on every routine live-price poll and would otherwise wipe
   // an awaiting-confirmation draft out from under the user mid-decision.
   useEffect(() => {
-    setWatchMode(false);
+    changeWatchMode(false);
     setWatchDraftPx(null);
     setWatchDraftCommitted(null);
     setWatchSaveError(null);
@@ -793,6 +844,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   const handleEditZonePress = useCallback((zone: ChartWatchZone) => {
     setWatchDraftCommitted({ low: zone.low, high: zone.high });
     setWatchDirection(zone.direction);
+    setWatchZoneType(zone.zoneType ?? 'trade');
     setEditingZoneId(zone.id);
     setWatchSaveError(null);
   }, []);
@@ -826,6 +878,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           setWatchDraftCommitted({ low, high });
           const mid = (low + high) / 2;
           setWatchDirection(watchCurrentPrice != null && mid < watchCurrentPrice ? 'bearish' : 'bullish');
+          setWatchZoneType('trade');
         }
       }
       return null;
@@ -857,8 +910,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     setIsSavingWatch(true);
     try {
       const result = isEditing
-        ? await onUpdateWatchZone!(editingZoneId!, { ...watchDraftCommitted, direction: watchDirection })
-        : await onWatchConfirm!({ ...watchDraftCommitted, direction: watchDirection });
+        ? await onUpdateWatchZone!(editingZoneId!, { ...watchDraftCommitted, direction: watchDirection, zoneType: watchZoneType })
+        : await onWatchConfirm!({ ...watchDraftCommitted, direction: watchDirection, zoneType: watchZoneType });
       if (result === false) {
         setWatchSaveError('Failed to save — try again');
       } else {
@@ -870,7 +923,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     } finally {
       setIsSavingWatch(false);
     }
-  }, [watchDraftCommitted, watchDirection, onWatchConfirm, onUpdateWatchZone, editingZoneId, isSavingWatch]);
+  }, [watchDraftCommitted, watchDirection, watchZoneType, onWatchConfirm, onUpdateWatchZone, editingZoneId, isSavingWatch]);
 
   // Delete affordance on each drawn watch zone (the small trash button in
   // its label overlay below) — confirms here since it's a generic "are you
@@ -894,8 +947,9 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // from stepping on one another:
   //   1. Quick tap        → reveal X/Y values at that point (singleTapGesture)
   //   2. Press-and-hold,
-  //      then drag         → crosshair inspection, live-updating (scrubGesture) —
-  //                          or, in Watch mode, draw a price level/zone instead
+  //      then drag         → crosshair inspection, live-updating (scrubGesture)
+  //   (Watch mode swaps 2 and 3 for drawGesture: any one-finger drag draws a
+  //    price level/zone — see composedGesture.)
   //   3. Any drag          → pan the visible time window, freely in X and Y
   //                          (manipulateGesture) — this must ALWAYS win over
   //                          scrubGesture the instant real movement starts,
@@ -930,12 +984,6 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         .activateAfterLongPress(SCRUB_LONG_PRESS_MS)
         .onBegin((e) => {
           'worklet';
-          if (watchMode) {
-            watchStartYShared.value = e.y;
-            runOnJS(triggerHaptic)();
-            runOnJS(beginWatchDraft)(e.y);
-            return;
-          }
           if (visibleCount < 2 || plotW === 0) return;
           // layoutVisibleCount, not visibleCount — must match scale.step
           // exactly (see its doc above) or a touch on the visually-last
@@ -949,10 +997,6 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         })
         .onUpdate((e) => {
           'worklet';
-          if (watchMode) {
-            runOnJS(updateWatchDraft)(watchStartYShared.value, e.y);
-            return;
-          }
           if (visibleCount < 2 || plotW === 0) return;
           // layoutVisibleCount, not visibleCount — must match scale.step
           // exactly (see its doc above) or a touch on the visually-last
@@ -967,15 +1011,43 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         })
         .onFinalize(() => {
           'worklet';
-          if (watchMode) {
-            runOnJS(commitWatchDraft)();
-            return;
-          }
           scrubIndexShared.value = -1;
           runOnJS(notifyScrub)(-1);
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [watchMode, visibleStart, visibleEnd, visibleCount, layoutVisibleCount, plotW, notifyScrub, triggerHaptic, beginWatchDraft, updateWatchDraft, commitWatchDraft],
+    [visibleStart, visibleEnd, visibleCount, layoutVisibleCount, plotW, notifyScrub, triggerHaptic],
+  );
+
+  // Watch mode's drawing gesture — a plain one-finger drag that draws a
+  // level/zone immediately, no long-press. While Watch mode is on it
+  // REPLACES scrub + pan in the race (see composedGesture), so drawing works
+  // regardless of the Data Points (crosshair) setting and a tiny wobble
+  // can't turn a draw into a pan. Only begins a draft once the finger has
+  // actually moved (onStart), so a stray tap never wipes a pending draft.
+  const drawGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .maxPointers(1)
+        .minDistance(3)
+        .onBegin((e) => {
+          'worklet';
+          watchStartYShared.value = e.y;
+        })
+        .onStart(() => {
+          'worklet';
+          runOnJS(triggerHaptic)();
+          runOnJS(beginWatchDraft)(watchStartYShared.value);
+        })
+        .onUpdate((e) => {
+          'worklet';
+          runOnJS(updateWatchDraft)(watchStartYShared.value, e.y);
+        })
+        .onEnd(() => {
+          'worklet';
+          runOnJS(commitWatchDraft)();
+        }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [triggerHaptic, beginWatchDraft, updateWatchDraft, commitWatchDraft],
   );
 
   // Double-tap anywhere resets both axes back to auto-fit. Defined before
@@ -1231,14 +1303,18 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     () =>
       Gesture.Simultaneous(
         pinchGesture,
-        // crosshairEnabled === false drops scrubGesture/singleTapGesture out
-        // of the race entirely (see useCrosshairEnabled) — pan and reset-zoom
-        // still work exactly the same either way.
-        crosshairEnabled
-          ? Gesture.Race(doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture)
-          : Gesture.Race(doubleTapGesture, manipulateGesture),
+        // Watch mode: one-finger drag draws (drawGesture) instead of
+        // panning/scrubbing; pinch-zoom and double-tap reset still work.
+        // Otherwise crosshairEnabled === false drops scrubGesture/
+        // singleTapGesture out of the race entirely (see useCrosshairEnabled)
+        // — pan and reset-zoom still work exactly the same either way.
+        watchMode
+          ? Gesture.Race(doubleTapGesture, drawGesture)
+          : crosshairEnabled
+            ? Gesture.Race(doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture)
+            : Gesture.Race(doubleTapGesture, manipulateGesture),
       ),
-    [pinchGesture, doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture, crosshairEnabled],
+    [pinchGesture, doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture, drawGesture, watchMode, crosshairEnabled],
   );
 
   const onLayout = (e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width);
@@ -1297,7 +1373,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           Fixed height so scrubbing never reflows the chart below. */}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', height: 26, marginBottom: 6 }}>
         <View style={{ flexDirection: 'row', gap: 4 }}>
-          {hasOhlc &&
+          {hasOhlc && !settings &&
             (['line', 'candle'] as ChartMode[]).map((m) => {
               const active = mode === m;
               return (
@@ -1328,10 +1404,13 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               nothing to await and nothing saved (no spinner, no error,
               band just clears). See PriceChartFullScreen/charts.tsx for the
               wired-up callers. */}
-          {onWatchConfirm && (
+          {/* With screen-owned settings the eye only shows while Watch mode
+              is on — it's entered from the settings modal, and this is the
+              one-tap way back out. */}
+          {onWatchConfirm && (!settings || watchMode) && (
             <Pressable
               onPress={() => {
-                setWatchMode(v => !v);
+                changeWatchMode(!watchMode);
                 setWatchDraftPx(null);
                 setWatchDraftCommitted(null);
                 setWatchSaveError(null);
@@ -1353,7 +1432,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           {/* Only rendered when there's actually session-line data to show —
               same "don't render a button with nothing to do" rule as Watch
               above. Off by default (showSessionLines starts false). */}
-          {sessionReferenceLines && sessionReferenceLines.length > 0 && (
+          {!settings && sessionReferenceLines && sessionReferenceLines.length > 0 && (
             <Pressable
               onPress={() => setShowSessionLines(v => !v)}
               hitSlop={6}
@@ -1374,7 +1453,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               only appears once there's actually a zone to hide. Lets a
               ticker's raw price action be viewed without the level overlay,
               without having to delete the level to get there. */}
-          {watchZones && watchZones.length > 0 && (
+          {!settings && watchZones && watchZones.length > 0 && (
             <Pressable
               onPress={() => setShowWatchZones(!showWatchZones)}
               hitSlop={6}
@@ -1409,8 +1488,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           {watchMode && !watchDraftPx && !watchDraftCommitted ? (
             <Text style={{ color: colors.accent, fontSize: 11.5, fontWeight: '600', flexShrink: 1 }} numberOfLines={1}>
               {onUpdateWatchZone
-                ? 'Long-press & drag to mark a level · tap an existing one to edit'
-                : 'Long-press & drag to mark a level'}
+                ? 'Drag up/down to mark a level · tap an existing one to edit'
+                : 'Drag up/down on the chart to mark a level'}
             </Text>
           ) : labelText && !watchMode ? (
             <Text style={{ color: colors.textTertiary, fontSize: 12, fontWeight: '500' }} numberOfLines={1}>{labelText}</Text>
@@ -1590,7 +1669,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                   'watching', solid once 'confirmed'. Hidden entirely when
                   showWatchZones is off (toolbar toggle, default on). */}
               {effectiveWatchZones?.map((z) => {
-                const color = z.direction === 'either' ? colors.accent : z.direction === 'bullish' ? colors.success : colors.error;
+                const color = watchZoneColor(z, colors);
                 const yHigh = scale.yForPrice(z.high);
                 const yLow = scale.yForPrice(z.low);
                 const isPoint = z.high === z.low;
@@ -1896,8 +1975,25 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                   );
                 })}
               </View>
+              {/* Trade (default) vs long-term investment buy zone. */}
+              <Pressable
+                onPress={() => setWatchZoneType(t => (t === 'investment' ? 'trade' : 'investment'))}
+                disabled={isSavingWatch}
+                hitSlop={4}
+                style={{
+                  paddingHorizontal: 7, paddingVertical: 6, borderRadius: 8, borderWidth: 1,
+                  borderColor: watchZoneType === 'investment' ? INVESTMENT_ZONE_COLOR : colors.border,
+                  backgroundColor: watchZoneType === 'investment' ? INVESTMENT_ZONE_COLOR + '22' : 'transparent',
+                }}
+              >
+                <Ionicons
+                  name={watchZoneType === 'investment' ? 'briefcase' : 'briefcase-outline'}
+                  size={14}
+                  color={watchZoneType === 'investment' ? INVESTMENT_ZONE_COLOR : colors.textTertiary}
+                />
+              </Pressable>
               <Text style={{ flex: 1, fontSize: 12.5, fontWeight: '700', color: colors.text }} numberOfLines={1}>
-                {editingZoneId ? 'Edit ' : 'Watch '}
+                {editingZoneId ? 'Edit ' : watchZoneType === 'investment' ? 'Invest ' : 'Watch '}
                 {watchDraftCommitted.high - watchDraftCommitted.low < 0.005
                   ? `$${formatAxisPrice(watchDraftCommitted.high)}`
                   : `$${formatAxisPrice(watchDraftCommitted.low)}–$${formatAxisPrice(watchDraftCommitted.high)}`}
@@ -1951,7 +2047,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             Edit/delete only appear while watchMode is on — Levels stays a
             pure viewing toggle; Watch is what turns this chart editable. */}
         {showWatchZones && scale && effectiveWatchZones?.map((z) => {
-          const color = z.direction === 'either' ? colors.accent : z.direction === 'bullish' ? colors.success : colors.error;
+          const color = watchZoneColor(z, colors);
           const yHigh = scale!.yForPrice(z.high);
           const label = z.high === z.low
             ? `$${formatAxisPrice(z.high)}`
@@ -1979,7 +2075,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                 }}
               >
                 <Ionicons
-                  name={z.direction === 'either' ? 'swap-vertical' : z.direction === 'bullish' ? 'trending-up' : 'trending-down'}
+                  name={z.zoneType === 'investment' ? 'briefcase' : z.direction === 'either' ? 'swap-vertical' : z.direction === 'bullish' ? 'trending-up' : 'trending-down'}
                   size={10} color={color}
                 />
                 <Text style={{ fontSize: 10, fontWeight: '700', color }}>{label}</Text>

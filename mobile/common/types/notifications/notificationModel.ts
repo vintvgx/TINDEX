@@ -60,6 +60,8 @@ export interface NotificationPreferences {
   orb_alerts: boolean;
   /** Contract call-outs scraped from watched X/Twitter accounts (@OptionsBuffett, @FL0WG0D). */
   flow_signals: boolean;
+  /** A push every time Muse (the external AI assistant) creates or removes something in the app. */
+  muse_activity: boolean;
 //   market_news: boolean;
 //   price_alerts: boolean;
 //   daily_summary: boolean;

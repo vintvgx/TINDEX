@@ -1,6 +1,6 @@
 import { useEffect, useRef, useMemo, useState } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert,
+  View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
   FlatList, ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,6 +18,11 @@ import {
   getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
 import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
+import { useEntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
+import { EntryTechnicalsPanel } from '@/common/components/trade/EntryTechnicalsPanel';
+import { GatedBuyButton } from '@/common/components/trade/GatedBuyButton';
+import { AccountModeBanner, accountModeColor } from '@/common/components/trade/AccountModeBanner';
+import { OrderReviewSheet, type ReviewOrder } from '@/common/components/trade/OrderReviewSheet';
 
 /**
  * Chain browser + order-entry UI: expiration-range/date chips, a calls/puts
@@ -252,6 +257,18 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   const contractsLoading =
     isLoading || rangeLoading || (!!ticker && !targetExpiration);
 
+  // Technicals gate + Review step for the selected contract — same flow as
+  // TradeContractSheet (see entry_check_service.py for the verdict rules).
+  const entryCheck = useEntryCheck(ticker, selected?.option_type ?? side, visible && !!selected);
+  const [overridden, setOverridden] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  useEffect(() => {
+    setOverridden(false);
+    setReviewOpen(false);
+    setSuccessMessage(null);
+  }, [selected?.symbol]);
+
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
   // Overtrading guard — see TradeContractSheet's identical comment.
   const { data: openPositions } = useImmediatePositions();
@@ -332,23 +349,37 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   const runSubmit = (body: ImmediateTradeByTickerRequest) => {
     submit(body, {
       onSuccess: (r) => {
-        toast.success(r.message || 'Immediate trade submitted');
         setBlindEntry(null);
-        setSelected(null);
-        setQty(profile.qty);
-        onSubmitted?.();
+        // See TradeContractSheet — animate on the Review sheet when it's open;
+        // finishSuccess does the reset/close afterwards.
+        if (reviewOpen) {
+          setSuccessMessage(r.message || 'Immediate trade submitted');
+          return;
+        }
+        toast.success(r.message || 'Immediate trade submitted');
+        finishSuccess();
       },
       onError: (e) => {
         if (e instanceof StreamUnavailableError) {
+          setReviewOpen(false);
           setBlindEntry({ body, lastPrice: e.payload.last_price ?? 0 });
           return;
         }
         toast.error(e.message || 'Trade failed');
         setBlindEntry(null);
+        setReviewOpen(false);
         setSelected(null);
         onSubmitted?.();
       },
     });
+  };
+
+  const finishSuccess = () => {
+    setSuccessMessage(null);
+    setReviewOpen(false);
+    setSelected(null);
+    setQty(profile.qty);
+    onSubmitted?.();
   };
 
   const doSubmit = () => {
@@ -368,36 +399,11 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
     });
   };
 
-  const confirmSubmit = () => {
-    if (!ticker || !selected) return;
-    const profileNote = noSL
-      ? `\n\n⚠️ No Stop Loss${!tpEnabled ? ' or Take Profit' : ''} — this contract will NOT auto-close on that leg${isNoStopLoss ? ', including end of day. It expires today (0DTE) if you don\'t sell it' : ''}.`
-      : isManual ? `\nStop Loss: −${manualSlPct}%` : '';
-    if (!paperMode) {
-      const concurrentWarning = openLiveCount > 0
-        ? `\n\n⚠️ You already have ${openLiveCount} other live position${openLiveCount > 1 ? 's' : ''} open.`
-        : '';
-      Alert.alert(
-        'Submit LIVE Order',
-        `This will buy ${qty} × ${selected.symbol} with REAL money immediately.\n\nProfile: ${profile.emoji} ${profile.name}${profileNote}${concurrentWarning}`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Submit', style: 'destructive', onPress: doSubmit },
-        ],
-      );
-    } else if (noSL) {
-      Alert.alert(
-        '⚠️ No Stop Loss',
-        `This will buy ${qty} × ${selected.symbol}.${profileNote}`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Submit', onPress: doSubmit },
-        ],
-      );
-    } else {
-      doSubmit();
-    }
-  };
+  // Review sheet warnings — replace the old Submit LIVE / No Stop Loss Alerts.
+  const reviewWarnings = [
+    ...(noSL ? [`No automatic stop loss${!tpEnabled ? ' or take-profit exit' : ''}${isNoStopLoss ? ', including end of day — it expires if you don\'t sell it' : ''}.`] : []),
+    ...(!paperMode && openLiveCount > 0 ? [`You already have ${openLiveCount} other live position${openLiveCount > 1 ? 's' : ''} open.`] : []),
+  ];
 
   const renderRow = ({ item }: { item: ChainRow }) => {
     if (item.type === 'separator') {
@@ -447,16 +453,44 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
 
   const showError = !!error || (data && !data.success);
 
-  // Matches the app-wide paper/live convention used on Dashboard/Live
-  // Positions/Trade Log — amber for paper, green for live. Applied as a
+  // Amber for paper, red for live — the same treatment as every other trade
+  // entry sheet (AccountModeBanner), so a live-money order reads as a
+  // warning rather than a go signal. Applied as a
   // persistent, subtle background wash rather than just the small toggle
   // pill, so which mode is selected stays visible in peripheral vision
   // through the whole chain-browsing screen and the confirm modal — the
   // toggle alone was easy to glance past and buy into the wrong account.
-  const modeTint = paperMode ? '#FF9F0A' : '#30D158';
+  const modeTint = accountModeColor(paperMode, colors);
 
-  const detailFooter = selected ? (
-    <View style={{ gap: 12 }}>
+  const reviewContract = liveSelected ?? selected;
+  const stopPct = noSL ? null : isManual ? manualSlPct / 100 : profile.maxLoss / 100;
+  const reviewOrder: ReviewOrder | null = reviewContract ? {
+    ticker,
+    optionType: reviewContract.option_type,
+    strike: reviewContract.strike,
+    expiration: reviewContract.expiration,
+    premium: reviewContract.ask,
+    qty,
+    profileLabel: `${profile.emoji} ${profile.name}`,
+    stopPrice: stopPct == null ? null : reviewContract.ask * (1 - stopPct),
+    stopLabel: stopPct == null ? 'Off' : stopType === 'HARD' ? 'Hard stop' : `${stopType}-min SL timer`,
+    tp1Price: tpEnabled && !isManual && profile.tp1 > 0 ? reviewContract.ask * (1 + profile.tp1 / 100) : null,
+    tp2Price: tpEnabled && !isManual && profile.tp2 > 0 ? reviewContract.ask * (1 + profile.tp2 / 100) : null,
+  } : null;
+
+  // Technicals verdict first, then the order form — both inside the detail
+  // modal's scroll content (right under the hero/pricing card) rather than
+  // its pinned bottom bar, which used to hold all of this and covered half
+  // the screen. Only the gated buy button stays pinned.
+  const detailForm = selected ? (
+    <View style={{ gap: 12, marginBottom: 20 }}>
+      <EntryTechnicalsPanel
+        data={entryCheck.data}
+        isLoading={entryCheck.isLoading}
+        error={entryCheck.error}
+        direction={selected.option_type}
+        colors={colors}
+      />
       {/* Profile dropdown — also where paper/live can be switched, right
           before submitting, without backing out to the ticker picker.
           Background tinted more strongly than the rest of the screen so
@@ -468,7 +502,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
           <View style={[styles.exitAccountToggle, { backgroundColor: colors.card, borderColor: colors.border }]}>
             {([['Paper', true], ['Live', false]] as const).map(([label, isPaper]) => {
               const active = paperMode === isPaper;
-              const tint = isPaper ? '#FF9F0A' : '#30D158';
+              const tint = accountModeColor(isPaper, colors);
               return (
                 <TouchableOpacity
                   key={label}
@@ -580,29 +614,20 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         )}
       </View>
 
-      {/* Submit */}
-      <TouchableOpacity
-        onPress={confirmSubmit}
-        disabled={isPending}
-        activeOpacity={0.85}
-        style={[styles.submitBtn, {
-          backgroundColor: isPending ? colors.border : modeTint,
-        }]}
-      >
-        {isPending ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <>
-            <Ionicons name="flash" size={18} color="#fff" />
-            <Text style={[styles.submitText, { color: '#fff' }]}>
-              {paperMode ? '' : 'LIVE '}Buy {qty} {selected.option_type} · {profile.emoji} {profile.name}
-              {isManual && slEnabled ? ` · SL −${manualSlPct}%` : ''}
-              {noSL && !tpEnabled ? ' · no auto exit' : noSL ? ' · no SL' : !tpEnabled ? ' · no TP' : ''}
-            </Text>
-          </>
-        )}
-      </TouchableOpacity>
     </View>
+  ) : null;
+
+  const detailFooter = selected ? (
+    <GatedBuyButton
+      check={entryCheck.data}
+      checkLoading={entryCheck.isLoading}
+      paperMode={paperMode}
+      label={`Buy ${qty} ${selected.option_type} · ${profile.emoji} ${profile.name}`}
+      onReview={() => setReviewOpen(true)}
+      overridden={overridden}
+      onOverride={setOverridden}
+      colors={colors}
+    />
   ) : null;
 
   return (
@@ -762,6 +787,25 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
           footer={detailFooter}
           tintColor={modeTint}
           qty={qty}
+          headerBanner={<AccountModeBanner paperMode={paperMode} colors={colors} />}
+          aboveDetails={detailForm}
+          collapseGreeks
+          overlay={reviewOrder && (
+            <OrderReviewSheet
+              visible={reviewOpen}
+              order={reviewOrder}
+              paperMode={paperMode}
+              check={entryCheck.data}
+              overridden={overridden}
+              warnings={reviewWarnings}
+              isSubmitting={isPending}
+              onSubmit={doSubmit}
+              onCancel={() => setReviewOpen(false)}
+              successMessage={successMessage}
+              onSuccessDone={finishSuccess}
+              colors={colors}
+            />
+          )}
         />
       )}
 
@@ -842,6 +886,4 @@ const styles = StyleSheet.create({
   togglePill:      { width: 38, height: 24, borderRadius: 12, borderWidth: 1, justifyContent: 'center', paddingHorizontal: 3 },
   toggleThumb:     { width: 18, height: 18, borderRadius: 9 },
 
-  submitBtn:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 15, borderRadius: 12 },
-  submitText: { fontSize: 15, fontWeight: '700' },
 });

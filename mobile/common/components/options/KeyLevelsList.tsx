@@ -13,6 +13,7 @@ import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import { AddKeyLevelSheet } from './AddKeyLevelSheet';
 import type { WatchedPriceLevel, LevelSuggestedContract } from '@/common/types/priceLevels';
+import { INVESTMENT_ZONE_COLOR } from '@/common/components/ticker/AdvancedPriceChart';
 
 const fmtLevel = (low: number, high: number) =>
   low === high ? `$${low.toFixed(2)}` : `$${low.toFixed(2)} – $${high.toFixed(2)}`;
@@ -145,6 +146,8 @@ const LevelCard: React.FC<{
   const isEither = level.direction === 'either';
   const dirColor = isEither ? colors.accent : isBullish ? colors.success : colors.error;
   const statusColor = STATUS_COLOR[level.status](colors);
+  const isInvestment = level.zone_type === 'investment';
+  const zoneColor = isInvestment ? INVESTMENT_ZONE_COLOR : colors.textSecondary;
 
   return (
     <View style={[lc.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -158,10 +161,16 @@ const LevelCard: React.FC<{
           <Text style={{ color: colors.text, fontSize: 16, fontWeight: '800' }}>{level.ticker}</Text>
           <Ionicons name={isEither ? 'swap-vertical' : isBullish ? 'trending-up' : 'trending-down'} size={14} color={dirColor} />
         </TouchableOpacity>
-        <View style={[lc.statusPill, { backgroundColor: statusColor + '18', borderColor: statusColor + '40' }]}>
-          <Text style={{ color: statusColor, fontSize: 11, fontWeight: '700', textTransform: 'capitalize' }}>
-            {level.status}
-          </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <View style={[lc.statusPill, { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: zoneColor + '18', borderColor: zoneColor + '40' }]}>
+            <Ionicons name={isInvestment ? 'briefcase' : 'flash-outline'} size={10} color={zoneColor} />
+            <Text style={{ color: zoneColor, fontSize: 11, fontWeight: '700' }}>{isInvestment ? 'Investment' : 'Trade'}</Text>
+          </View>
+          <View style={[lc.statusPill, { backgroundColor: statusColor + '18', borderColor: statusColor + '40' }]}>
+            <Text style={{ color: statusColor, fontSize: 11, fontWeight: '700', textTransform: 'capitalize' }}>
+              {level.status}
+            </Text>
+          </View>
         </View>
       </View>
 
@@ -169,6 +178,7 @@ const LevelCard: React.FC<{
         {fmtLevel(level.level_low, level.level_high)}
       </Text>
       <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 2 }}>
+        {isInvestment ? 'Long-term buy zone · ' : ''}
         {isEither ? 'Confirms on close outside this zone, either way' : isBullish ? 'Confirms on close above' : 'Confirms on close below'} · {level.source === 'discord_admin' ? 'Discord admin' : 'Self-found'}
         {level.status === 'confirmed' && level.confirmed_price != null
           ? ` · Confirmed @ $${level.confirmed_price.toFixed(2)}${level.confirmed_at ? ` (${fmtDate(level.confirmed_at)})` : ''}`

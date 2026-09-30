@@ -93,6 +93,16 @@ export interface ExitOverrides {
   volume_exit: boolean;
 }
 
+/** Pre-entry technicals an automated strategy requires — see
+ *  api/services/entry_check_service.py evaluate_gate. */
+export type TechnicalsFactor = 'trend' | 'trend_intraday' | 'rsi' | 'vwap' | 'orb' | 'sector';
+
+export interface TechnicalsGate {
+  enabled: boolean;
+  /** Every factor listed must match or the entry signal is blocked. */
+  required: TechnicalsFactor[];
+}
+
 export interface StrategyConfig {
   id: string;
   strategy_name: string;
@@ -121,6 +131,7 @@ export interface StrategyConfig {
   // toggle) is the reason this config is inactive — lets "resume" bring
   // back only what the switch itself paused. See POST /strategy/configs/pause-all.
   paused_by_kill_switch?: boolean;
+  technicals_gate?: TechnicalsGate | null;
 }
 
 export type PendingConfirmationStatus = 'PENDING' | 'APPROVED' | 'SKIPPED' | 'EXPIRED';

@@ -20,6 +20,7 @@ import { ProfileCard } from '@/common/components/strategy/ProfileCard';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { CustomThresholdsEditor, DEFAULT_CUSTOM_THRESHOLDS } from '@/common/components/strategy/CustomThresholdsEditor';
+import { TechnicalsGateEditor } from '@/common/components/strategy/TechnicalsGateEditor';
 import { SimulationModal } from '@/common/components/strategy/SimulationModal';
 import { ProfileGuideModal } from '@/common/components/strategy/ProfileGuideModal';
 import { StrategyDetailModal } from '@/common/components/strategy/StrategyDetailModal';
@@ -32,7 +33,7 @@ import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { LivePositionPanel } from '@/common/components/strategy/LivePositionPanel';
 import { positionHideKey } from '@/lib/positionHideKey';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
-import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, LiveOptionPrice, ExitOverrides, ORBTrade } from '@/common/types/strategy';
+import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, LiveOptionPrice, ExitOverrides, ORBTrade, TechnicalsGate } from '@/common/types/strategy';
 import { formatContractSymbolShort, parseContractSymbol } from '@/lib/formatContract';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -116,6 +117,7 @@ type FormState = {
   confirm_entry:          boolean;
   volume_exit:            boolean;
   paired_strategy_id:     string | null;
+  technicals_gate:        TechnicalsGate | null;
 };
 
 const DEFAULT_FORM: FormState = {
@@ -134,6 +136,7 @@ const DEFAULT_FORM: FormState = {
   confirm_entry:          false,
   volume_exit:            false,
   paired_strategy_id:     null,
+  technicals_gate:        null,
 };
 
 function configToForm(cfg: StrategyConfig): FormState {
@@ -153,6 +156,7 @@ function configToForm(cfg: StrategyConfig): FormState {
     confirm_entry:          cfg.confirm_entry ?? false,
     volume_exit:            cfg.exit_overrides?.volume_exit ?? false,
     paired_strategy_id:     cfg.paired_strategy_id ?? null,
+    technicals_gate:        cfg.technicals_gate ?? null,
   };
 }
 
@@ -336,6 +340,7 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
       smart_contracts:        form.smart_contracts,
       confirm_entry:          form.confirm_entry,
       paired_strategy_id:     form.paired_strategy_id,
+      technicals_gate:        form.technicals_gate,
       ...modeToConfig(form.mode),
     };
     setSaving(true);
@@ -1354,6 +1359,15 @@ function StrategyFormModal({
                 </TouchableOpacity>
               </>
             )}
+
+            <SectionHeader title="Technicals Gate" colors={colors} />
+            <TechnicalsGateEditor
+              gate={form.technicals_gate}
+              profile={form.profile}
+              profileName={profiles.find(p => p.key === form.profile)?.display_name ?? form.profile}
+              onChange={g => onPatch('technicals_gate', g)}
+              colors={colors}
+            />
 
             {form.profile !== 'CUSTOM' && (
               <>

@@ -120,13 +120,25 @@ class TradeLogger:
                 "confirm_entry":          config.get("confirm_entry", False),
                 "paired_strategy_id":     config.get("paired_strategy_id"),
                 "paused_by_kill_switch":  config.get("paused_by_kill_switch", False),
+                "technicals_gate":        config.get("technicals_gate"),
                 "updated_at":             datetime.utcnow().isoformat(),
             }
             if "id" in config and config["id"]:
                 row["id"] = config["id"]
             else:
                 row["id"] = str(uuid.uuid4())
-            res = self.client.table("strategy_configs").upsert(row, on_conflict="id").execute()
+            try:
+                res = self.client.table("strategy_configs").upsert(row, on_conflict="id").execute()
+            except Exception as e:
+                # technicals_gate column not migrated yet — save everything
+                # else rather than failing every strategy save. Run
+                # 20260927_strategy_configs_technicals_gate.sql to persist it.
+                if "technicals_gate" not in str(e):
+                    raise
+                logger.error("[TradeLogger] strategy_configs.technicals_gate column missing — "
+                             "saved without it (run the migration)")
+                row.pop("technicals_gate", None)
+                res = self.client.table("strategy_configs").upsert(row, on_conflict="id").execute()
             return res.data[0] if res.data else row
         except Exception as e:
             logger.error("[TradeLogger] save_strategy_config failed: %s", e)

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, ScrollView, Modal,
+  View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal,
   Animated, Easing, Pressable, Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +14,12 @@ import {
 } from '@/common/components/strategy/ImmediateProfilePicker';
 import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
 import { BlindEntryModal } from '@/common/components/strategy/BlindEntryModal';
+import { useEntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
+import { EntryTechnicalsPanel } from '@/common/components/trade/EntryTechnicalsPanel';
+import { GreeksExpander } from '@/common/components/trade/GreeksExpander';
+import { GatedBuyButton } from '@/common/components/trade/GatedBuyButton';
+import { AccountModeBanner, AccountModeTint } from '@/common/components/trade/AccountModeBanner';
+import { OrderReviewSheet, type ReviewOrder } from '@/common/components/trade/OrderReviewSheet';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 import type { ImmediateTradeByTickerRequest } from '@/common/types/strategy';
 
@@ -38,7 +44,8 @@ interface Props {
 }
 
 /**
- * The actual form — account toggle, profile, qty, exit controls, submit —
+ * The actual form — pricing, technicals gate, account toggle, profile, qty,
+ * exit controls, Review → swipe-to-submit —
  * shared by both TradeContractSheet (a full native Modal, used from the
  * Contracts tab / contract detail modal) and TradeContractQuickCard (an
  * inline animated overlay, used from AgentModal so the AI Assistant chat
@@ -82,6 +89,16 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     ? Math.min(0.95, Math.max(0.05, (contract.ask - impliedAlertStop) / contract.ask))
     : null;
 
+  // Technicals gate — refreshed every 15s while the sheet is open. See
+  // entry_check_service.py for the ENTER / WAIT / DON'T ENTER rules.
+  const entryCheck = useEntryCheck(ticker, contract.option_type, visible);
+  // Explicit two-tap override of a DON'T ENTER verdict (see GatedBuyButton).
+  const [overridden, setOverridden] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  // Set on a successful order placed from the Review sheet — it plays the
+  // confirmation animation, then finishSuccess closes everything.
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
   // Overtrading guard — surfaces how many OTHER live positions are already
   // open so a chase-more-losses (or double-up-on-a-win) entry gets a real
@@ -112,6 +129,9 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     setUseAlertStop(true);
     setSlEnabled(true);
     setTpEnabled(true);
+    setOverridden(false);
+    setReviewOpen(false);
+    setSuccessMessage(null);
   // Only re-run when a different contract is opened, not on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, contract?.symbol]);
@@ -125,15 +145,23 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
   const runSubmit = (body: ImmediateTradeByTickerRequest) => {
     submit(body, {
       onSuccess: (r) => {
-        toast.success(r.message || `${ticker} entered`);
         setBlindEntry(null);
+        // From the Review sheet: let its success animation play first.
+        // A Blind Entry retry has no Review sheet open — toast and close.
+        if (reviewOpen) {
+          setSuccessMessage(r.message || `${ticker} entered`);
+          return;
+        }
+        toast.success(r.message || `${ticker} entered`);
         onClose();
       },
       onError: (e) => {
         if (e instanceof StreamUnavailableError) {
+          setReviewOpen(false);
           setBlindEntry({ body, lastPrice: e.payload.last_price ?? 0 });
           return;
         }
+        // Review stays open with a fresh swipe so the order can be retried.
         toast.error(e.message || 'Trade failed');
         setBlindEntry(null);
       },
@@ -163,38 +191,40 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     });
   };
 
-  // Appended to a LIVE confirm dialog's message when other live positions
-  // are already open — a warning, not a block, per the trade-log review.
-  const concurrentWarning = (!paperMode && openLiveCount > 0)
-    ? `\n\n⚠️ You already have ${openLiveCount} other live position${openLiveCount > 1 ? 's' : ''} open.`
-    : '';
+  // Shown on the Review sheet in place of the old Alert confirms — the
+  // concurrent-position count is still a warning, not a block, per the
+  // 2026-09-11/09-14 trade-log review.
+  const reviewWarnings = [
+    ...(noSL ? [`No automatic stop loss${!tpEnabled ? ' or take-profit exit' : ''}${isNoStopLoss ? ', including end of day — it expires if you don\'t sell it' : ''}.`] : []),
+    ...(!paperMode && openLiveCount > 0 ? [`You already have ${openLiveCount} other live position${openLiveCount > 1 ? 's' : ''} open.`] : []),
+  ];
 
-  const handleSubmitPress = () => {
-    if (noSL) {
-      Alert.alert(
-        '⚠️ No Stop Loss',
-        `Enter ${contract?.option_type} ${contract?.symbol} × ${qty}?\n\nThis position will NOT have an automatic stop loss${!tpEnabled ? ' or take-profit exit' : ''}${isNoStopLoss ? ', including end of day — it expires today (0DTE) if you don\'t sell it' : ''}.${!paperMode ? '\n\nThis is a LIVE order with REAL money.' : ''}${concurrentWarning}`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Trade', style: paperMode ? 'default' : 'destructive', onPress: doSubmit },
-        ],
-      );
-      return;
-    }
-    if (paperMode) { doSubmit(); return; }
-    Alert.alert(
-      'Trade LIVE',
-      `Enter ${contract?.option_type} ${contract?.symbol} × ${qty} with REAL money now?${concurrentWarning}`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Trade', style: 'destructive', onPress: doSubmit },
-      ],
-    );
+  // Exit profile translated to dollars for the Review sheet, using the same
+  // stop precedence doSubmit sends (alert-matched → manual → profile).
+  const stopPct = noSL ? null
+    : (useAlertStop && alertMaxLossPct != null) ? alertMaxLossPct
+    : isManual ? manualSlPct / 100
+    : profile.maxLoss / 100;
+  const reviewOrder: ReviewOrder = {
+    ticker,
+    optionType: contract.option_type,
+    strike: contract.strike,
+    expiration: contract.expiration,
+    premium: contract.ask,
+    qty,
+    profileLabel: `${profile.emoji} ${profile.name}`,
+    stopPrice: stopPct == null ? null : contract.ask * (1 - stopPct),
+    stopLabel: stopPct == null ? 'Off' : stopType === 'HARD' ? 'Hard stop' : `${stopType}-min SL timer`,
+    tp1Price: tpEnabled && !isManual && profile.tp1 > 0 ? contract.ask * (1 + profile.tp1 / 100) : null,
+    tp2Price: tpEnabled && !isManual && profile.tp2 > 0 ? contract.ask * (1 + profile.tp2 / 100) : null,
   };
+  const mid = contract.bid > 0 && contract.ask > 0 ? (contract.bid + contract.ask) / 2 : null;
+  const muted = colors.textSecondary ?? colors.tabBarInactive;
 
   return (
-    <>
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <AccountModeTint paperMode={paperMode} colors={colors} />
+      <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
         <View style={[s.header, { borderBottomColor: colors.separator ?? colors.border }]}>
           <View style={{ flex: 1 }}>
             <Text style={[s.title, { color: colors.text }]}>Trade {ticker}</Text>
@@ -206,8 +236,45 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
             <Ionicons name="close" size={18} color={colors.textSecondary ?? colors.tabBarInactive} />
           </TouchableOpacity>
         </View>
+        <AccountModeBanner paperMode={paperMode} colors={colors} />
 
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
+          {/* Contract + pricing — stays first and prominent */}
+          <View style={[s.priceCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <View style={s.priceTop}>
+              <View style={{ flex: 1 }}>
+                <Text style={[s.priceContract, { color: colors.text }]}>
+                  {ticker} ${contract.strike} {contract.option_type === 'CALL' ? 'Call' : 'Put'}
+                </Text>
+                <Text style={[s.priceExp, { color: muted }]}>
+                  Exp {contract.expiration}{entryCheck.data ? ` · ${ticker} $${entryCheck.data.price.toFixed(2)}` : ''}
+                </Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={[s.priceAsk, { color: colors.text }]}>${contract.ask.toFixed(2)}</Text>
+                <Text style={[s.priceExp, { color: muted }]}>ask / share</Text>
+              </View>
+            </View>
+            <View style={[s.priceRow, { borderTopColor: colors.border }]}>
+              <PriceCell label="Bid" value={`$${contract.bid.toFixed(2)}`} colors={colors} />
+              <PriceCell label="Mid" value={mid != null ? `$${mid.toFixed(2)}` : '—'} colors={colors} />
+              <PriceCell label="Per contract" value={`$${(contract.ask * 100).toFixed(0)}`} colors={colors} />
+              <PriceCell label={`Cost × ${qty}`} value={`$${(qty * contract.ask * 100).toFixed(0)}`} colors={colors} strong />
+            </View>
+          </View>
+
+          {/* Technicals gate — above the account/profile controls so the
+              verdict is on screen without scrolling */}
+          <View style={{ marginTop: 12, marginBottom: 18 }}>
+            <EntryTechnicalsPanel
+              data={entryCheck.data}
+              isLoading={entryCheck.isLoading}
+              error={entryCheck.error}
+              direction={contract.option_type}
+              colors={colors}
+            />
+          </View>
+
           {/* Alert-matched stop — only when the checklist's parsed contract
               had both an entry and stop price, and NO_STOP_LOSS (which
               ignores max_loss_pct entirely server-side) isn't selected. */}
@@ -341,28 +408,41 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
             </View>
           )}
 
-          <TouchableOpacity
-            onPress={handleSubmitPress}
-            disabled={isPending}
-            activeOpacity={0.85}
-            style={[s.submitBtn, { backgroundColor: isPending ? colors.border : (paperMode ? colors.accent : colors.error), marginTop: 22 }]}
-          >
-            {isPending ? (
-              <ActivityIndicator color={colors.textSecondary} />
-            ) : (
-              <>
-                {/* colors.accent flips light/dark between themes — the fixed
-                    white here only stayed contrast-safe on the live (colors.error)
-                    branch, which is why paperMode gets accentForeground instead. */}
-                <Ionicons name="flash" size={18} color={paperMode ? colors.accentForeground : '#fff'} />
-                <Text style={[s.submitText, { color: paperMode ? colors.accentForeground : '#fff' }]}>
-                  {paperMode ? '' : 'LIVE '}Enter {contract.option_type} × {qty}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
+          <View style={{ marginTop: 18 }}>
+            <GreeksExpander greeks={contract} colors={colors} />
+          </View>
         </ScrollView>
+
+        {/* Sticky footer — the buy button (and any DON'T ENTER blocker)
+            never scrolls out of view */}
+        <View style={[s.footer, { borderTopColor: colors.border, backgroundColor: colors.background }]}>
+          <GatedBuyButton
+            check={entryCheck.data}
+            checkLoading={entryCheck.isLoading}
+            paperMode={paperMode}
+            label={`Buy ${contract.option_type} × ${qty}`}
+            onReview={() => setReviewOpen(true)}
+            overridden={overridden}
+            onOverride={setOverridden}
+            colors={colors}
+          />
+        </View>
       </SafeAreaView>
+
+      <OrderReviewSheet
+        visible={reviewOpen}
+        order={reviewOrder}
+        paperMode={paperMode}
+        check={entryCheck.data}
+        overridden={overridden}
+        warnings={reviewWarnings}
+        isSubmitting={isPending}
+        onSubmit={doSubmit}
+        onCancel={() => setReviewOpen(false)}
+        successMessage={successMessage}
+        onSuccessDone={() => { setSuccessMessage(null); setReviewOpen(false); onClose(); }}
+        colors={colors}
+      />
 
       {blindEntry && (
         <BlindEntryModal
@@ -378,7 +458,16 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
           onSkip={() => setBlindEntry(null)}
         />
       )}
-    </>
+    </View>
+  );
+}
+
+function PriceCell({ label, value, colors, strong }: { label: string; value: string; colors: any; strong?: boolean }) {
+  return (
+    <View style={{ flex: 1 }}>
+      <Text style={[s.priceCellLabel, { color: colors.textSecondary ?? colors.tabBarInactive }]}>{label}</Text>
+      <Text style={[s.priceCellValue, { color: colors.text, fontWeight: strong ? '800' : '600' }]}>{value}</Text>
+    </View>
   );
 }
 
@@ -471,7 +560,7 @@ const qs = StyleSheet.create({
   backdrop: { backgroundColor: '#000' },
   sheet: {
     position: 'absolute', left: 0, right: 0, bottom: 0,
-    maxHeight: '88%', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    height: '88%', borderTopLeftRadius: 20, borderTopRightRadius: 20,
     borderWidth: 1, borderBottomWidth: 0, overflow: 'hidden',
   },
   grabber: {
@@ -504,6 +593,14 @@ const s = StyleSheet.create({
   exitRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12 },
   exitLabel:   { fontSize: 14, fontWeight: '500' },
 
-  submitBtn:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 15, borderRadius: 12 },
-  submitText:  { fontSize: 15, fontWeight: '700' },
+  priceCard:      { borderRadius: 12, borderWidth: 1, overflow: 'hidden' },
+  priceTop:       { flexDirection: 'row', alignItems: 'center', padding: 14 },
+  priceContract:  { fontSize: 17, fontWeight: '800' },
+  priceExp:       { fontSize: 12, marginTop: 2 },
+  priceAsk:       { fontSize: 26, fontWeight: '800' },
+  priceRow:       { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 14, paddingVertical: 10 },
+  priceCellLabel: { fontSize: 11 },
+  priceCellValue: { fontSize: 14, marginTop: 2 },
+
+  footer:      { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 20, borderTopWidth: StyleSheet.hairlineWidth },
 });

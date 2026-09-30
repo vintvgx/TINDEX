@@ -62,6 +62,18 @@ interface Props {
    * with nothing tracked yet).
    */
   onSimulate?: () => void;
+  /** Trade-entry slots (OptionsChainPicker) — all optional, so read-only
+   *  callers (watchlist tracking) render exactly as before. */
+  /** Rendered full-width directly under the header (e.g. the Paper/Live banner). */
+  headerBanner?: React.ReactNode;
+  /** Rendered right after the hero card, above Pricing — the technicals gate
+   *  and the order form, so they're on screen without scrolling. */
+  aboveDetails?: React.ReactNode;
+  /** Hide the Greeks behind a "The Greeks" expander (collapsed by default). */
+  collapseGreeks?: boolean;
+  /** Rendered last, over everything inside this Modal (e.g. the Review sheet) —
+   *  a second native Modal can't be stacked on top of this one reliably. */
+  overlay?: React.ReactNode;
 }
 
 const fc = (v: number) =>
@@ -97,9 +109,14 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
   tintColor,
   qty,
   onSimulate,
+  headerBanner,
+  aboveDetails,
+  collapseGreeks = false,
+  overlay,
 }) => {
   const colors = useThemeColors();
   const [greeksInfoOpen, setGreeksInfoOpen] = useState(false);
+  const [greeksOpen, setGreeksOpen] = useState(!collapseGreeks);
   if (!contract) return null;
 
   // A fully opaque blend, not a semi-transparent overlay — this modal is its
@@ -162,6 +179,7 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
             <Ionicons name="close" size={18} color={colors.textSecondary} />
           </TouchableOpacity>
         </View>
+        {headerBanner}
 
         <ScrollView
           contentContainerStyle={{ padding: 16, paddingBottom: footer ? 230 : 130 }}
@@ -214,6 +232,8 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
             )}
           </View>
 
+          {aboveDetails}
+
           {/* ── Pricing ── */}
           <Text style={[s.sectionTitle, { color: colors.text }]}>Pricing</Text>
           <View style={[s.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -259,8 +279,15 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
           {hasGreeks && (
             <>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, marginTop: 4 }}>
-                <Text style={[s.sectionTitle, { color: colors.text, marginBottom: 0, marginTop: 0 }]}>Greeks</Text>
-                <TouchableOpacity
+                {collapseGreeks ? (
+                  <TouchableOpacity onPress={() => setGreeksOpen(o => !o)} activeOpacity={0.7} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={[s.sectionTitle, { color: colors.text, marginBottom: 0, marginTop: 0 }]}>The Greeks</Text>
+                    <Ionicons name={greeksOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textSecondary} />
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={[s.sectionTitle, { color: colors.text, marginBottom: 0, marginTop: 0 }]}>Greeks</Text>
+                )}
+                {greeksOpen && <TouchableOpacity
                   onPress={() => setGreeksInfoOpen(o => !o)}
                   hitSlop={8}
                   style={[s.infoBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
@@ -273,11 +300,11 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
                   <Text style={[s.infoBtnText, { color: colors.textSecondary }]}>
                     {greeksInfoOpen ? 'Hide' : 'What are Greeks?'}
                   </Text>
-                </TouchableOpacity>
+                </TouchableOpacity>}
               </View>
 
               {/* Greeks definitions panel */}
-              {greeksInfoOpen && (
+              {greeksOpen && greeksInfoOpen && (
                 <View style={[s.greeksInfo, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                   {[
                     {
@@ -316,7 +343,7 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
                 </View>
               )}
 
-              <View style={[s.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              {greeksOpen && <View style={[s.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                 {contract.delta != null && <Row label="Delta (Δ)" value={contract.delta.toFixed(4)} colors={colors} />}
                 {contract.gamma != null && <Row label="Gamma (Γ)" value={contract.gamma.toFixed(4)} colors={colors} />}
                 {contract.theta != null && <Row label="Theta (Θ)" value={contract.theta.toFixed(4)} colors={colors} />}
@@ -326,7 +353,8 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
                     <Text style={[r.value, { color: colors.text }]}>{contract.vega.toFixed(4)}</Text>
                   </View>
                 )}
-              </View>
+              </View>}
+              {!greeksOpen && <View style={{ marginBottom: 14 }} />}
             </>
           )}
 
@@ -439,6 +467,7 @@ export const OptionsContractDetailModal: React.FC<Props> = ({
           )}
         </View>
       </SafeAreaView>
+      {overlay}
     </Modal>
   );
 };

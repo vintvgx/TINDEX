@@ -10,6 +10,7 @@ import time
 import uuid as _uuid
 import logging
 import threading
+import concurrent.futures
 import pytz
 from datetime import datetime, timedelta
 from typing import Optional
@@ -32,6 +33,11 @@ from services.utils.orb_data_hub import get_orb_data_hub, OrbBar
 
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
+
+# Technicals gate runs on its own small pool so ORBEngine._check_technicals_gate
+# can cap how long an entry (evaluated under _tick_lock) waits on market data.
+TECHNICALS_GATE_TIMEOUT_S = 4.0
+_GATE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="tech-gate")
 
 # Every constructed ORBEngine self-registers here (see _apply_config), keyed
 # by strategy_id — lets any engine cheaply check what every OTHER engine
@@ -68,6 +74,10 @@ STRATEGY_DEFAULTS = {
     "debug_mode":              False,
     "smart_contracts":         False,
     "confirm_entry":           False,  # True = pause for user approval before every auto entry
+    # Per-strategy technicals gate — {"enabled": bool, "required": [factor, ...]}
+    # with factors from entry_check_service.GATE_FACTORS. Every required
+    # factor must match or the signal is blocked. None = no gate.
+    "technicals_gate":         None,
     "paused_by_kill_switch":   False,  # True = this config was auto-paused by the bulk
                                         # pause-all switch (not a manual per-strategy pause) —
                                         # see POST /strategy/configs/pause-all. Lets "resume"
@@ -387,6 +397,15 @@ class ORBEngine:
             return False
 
         self.fib_levels = self._calculate_fib_levels()
+
+        # Load the technicals gate's slow inputs now, off-thread, so the
+        # first entry signal (evaluated under _tick_lock) hits warm caches.
+        gate_cfg = self.config.get("technicals_gate") or {}
+        if gate_cfg.get("enabled"):
+            import threading
+            from services.entry_check_service import prewarm
+            threading.Thread(target=prewarm, args=(self.ticker, gate_cfg.get("required")),
+                             daemon=True).start()
 
         result = self.sentiment.check_all(
             ticker=self.ticker,
@@ -872,6 +891,72 @@ class ORBEngine:
             return True
         return False
 
+    def _check_technicals_gate(self, direction: str, trigger_price: float, required: list) -> bool:
+        """
+        True when every technical in `required` matches this signal — see
+        entry_check_service.evaluate_gate for the per-factor rules. Uses the
+        engine's own live inputs: the trigger price, OrbService's running
+        session VWAP (hub status — self.session_vwap is only the opening
+        bar's), and this engine's ORB high/low. Fails closed: if the gate
+        can't be evaluated, the entry is blocked, not waved through.
+        """
+        from services.entry_check_service import evaluate_gate
+
+        vwap = None
+        try:
+            status = self._hub.get_status(self.ticker)
+            if status and status.session_date == datetime.now(ET).date() and status.vwap:
+                vwap = float(status.vwap)
+        except Exception:
+            pass
+
+        intraday_closes = None
+        if "trend_intraday" in required:
+            try:
+                intraday_closes = [(b.ts, b.close) for b in self._hub.get_recent_bars(self.ticker)]
+            except Exception:
+                intraday_closes = None  # evaluate_gate falls back to fetched bars
+
+        # Bounded: this runs under _tick_lock (via _enter_trade), so a cold
+        # cache must never turn into an unbounded yfinance call that freezes
+        # this engine's ticks — exits included. On timeout the worker keeps
+        # running (and warms the cache for the next signal) but THIS entry
+        # is blocked: fail closed, same as any other gate error.
+        future = _GATE_EXECUTOR.submit(
+            evaluate_gate, self.ticker, direction, required, trigger_price,
+            vwap=vwap, orh=self.orh, orl=self.orl, intraday_closes=intraday_closes,
+        )
+        try:
+            gate = future.result(timeout=TECHNICALS_GATE_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            msg = f"technicals gate timed out after {TECHNICALS_GATE_TIMEOUT_S:.0f}s"
+            logger.error("[ORBEngine] %s for %s", msg, self.ticker)
+            self.debug.emit("ERROR", f"Entry blocked — {msg} (market data slow)")
+            self.notifier.notify_entry_blocked_technicals(
+                self.ticker, self.strategy_name or self.profile_key, direction,
+                f"{msg} — entry blocked for safety")
+            return False
+        except Exception as e:
+            logger.error("[ORBEngine] technicals gate failed for %s: %s", self.ticker, e, exc_info=True)
+            self.debug.emit("ERROR", f"Entry blocked — technicals gate could not be evaluated ({e})")
+            self.notifier.notify_entry_blocked_technicals(
+                self.ticker, self.strategy_name or self.profile_key, direction,
+                "technicals unavailable — entry blocked for safety")
+            return False
+
+        detail = ", ".join(
+            f"{r['key'].upper()} {'skip' if r['skipped'] else 'ok' if r['ok'] else 'no'}"
+            for r in gate["results"]
+        )
+        if gate["passed"]:
+            self.debug.emit("INFO", f"Technicals gate passed — {gate['summary']} ({detail})")
+            return True
+
+        self.debug.emit("WARN", f"Entry blocked — technicals gate: {gate['summary']} ({detail})")
+        self.notifier.notify_entry_blocked_technicals(
+            self.ticker, self.strategy_name or self.profile_key, direction, gate["summary"])
+        return False
+
     def _enter_trade(self, direction: str, trigger_price: float):
         """
         Select a contract, validate buying power, and submit a market order
@@ -927,6 +1012,13 @@ class ORBEngine:
                 f"{cooldown_min - elapsed}m remaining)",
             )
             return
+
+        # Technicals gate — opt-in per strategy (strategy_configs.technicals_gate).
+        # Blocks this signal only; the session stays armed for a later one.
+        gate_cfg = self.config.get("technicals_gate") or {}
+        if gate_cfg.get("enabled") and gate_cfg.get("required"):
+            if not self._check_technicals_gate(direction, trigger_price, gate_cfg["required"]):
+                return
 
         # VWAP soft confirmation (log only — does not block entry)
         if self.session_vwap is not None:

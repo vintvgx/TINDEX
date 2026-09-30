@@ -160,6 +160,17 @@ class StrategyNotifier:
             priority=P_OPERATIONAL,
         )
 
+    def notify_entry_blocked_technicals(self, ticker: str, strategy_label: str,
+                                        direction: str, summary: str):
+        """A strategy signal fired but its technicals gate didn't match (see
+        ORBEngine._check_technicals_gate). The session stays armed."""
+        self._dispatch(
+            title=f"{ticker} {direction} blocked — technicals",
+            body=f"{strategy_label}: {summary}",
+            data={"screen": "strategy"},
+            priority=P_OPERATIONAL,
+        )
+
     def notify_insufficient_capital(self, ticker: str, required: float, available: float):
         """Buying power too low to enter even one contract."""
         self._dispatch(
@@ -479,28 +490,36 @@ class StrategyNotifier:
 
     def notify_level_confirmed(self, ticker: str, direction: str, level_low: float,
                                 level_high: float, price: float, level_id: str,
-                                contract_count: int = 0):
+                                contract_count: int = 0, zone_type: str = "trade"):
         """
         A user-watched key level (self-identified or from a Discord flow
         call — see watched_price_levels / KeyLevelWatcher) just had a
         1-minute bar close through it. Suggested contracts have already
         been scored and attached to the row by the time this fires.
+        An investment zone reads as a long-term buy zone, not a trade setup.
         """
-        emoji = "📈" if direction == "bullish" else "📉"
         side = "above" if direction == "bullish" else "below"
         level_label = (
             f"${level_low:.2f}" if level_low == level_high
             else f"${level_low:.2f}-${level_high:.2f}"
         )
-        suggestion_note = f" · {contract_count} suggestion(s) ready" if contract_count else ""
+        if zone_type == "investment":
+            emoji, title = "💼", f"{ticker} in Investment Buy Zone"
+            noun = "long-dated suggestion(s)"
+        else:
+            emoji = "📈" if direction == "bullish" else "📉"
+            title = f"{ticker} Key Level Confirmed"
+            noun = "suggestion(s)"
+        suggestion_note = f" · {contract_count} {noun} ready" if contract_count else ""
         self._dispatch(
-            title=f"{emoji} {ticker} Key Level Confirmed",
+            title=f"{emoji} {title}",
             body=f"Closed {side} {level_label} @ ${price:.2f}{suggestion_note}",
             data={
                 "screen": "options",
                 "type": "level_confirmed",
                 "ticker": ticker,
                 "level_id": level_id,
+                "zone_type": zone_type,
             },
             priority=P_MARKET,
             pref_key="flow_signals",
@@ -529,6 +548,22 @@ class StrategyNotifier:
                 "ticker": ticker,
             },
             priority=P_MARKET,
+        )
+
+    def notify_muse_change(self, title: str, body: str, data: dict | None = None):
+        """
+        Muse (the user's external AI assistant — see routes/muse.py) just
+        created or removed something in the app: a level, a watchlist
+        contract, a contract alert, or a note. Every Muse write sends one of
+        these so nothing it does happens silently. Gated on the
+        `muse_activity` preference (Notifications screen toggle).
+        """
+        self._dispatch(
+            title=f"✨ Muse · {title}",
+            body=body,
+            data={"type": "muse_change", **(data or {})},
+            priority=P_INFO,
+            pref_key="muse_activity",
         )
 
     def notify_review_ready(self, review_date: str, trade_count: int, net_pnl: float,

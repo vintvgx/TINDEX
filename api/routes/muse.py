@@ -95,6 +95,30 @@ def _muse_user_id() -> str:
     return user_id
 
 
+_notifier = None
+
+
+def _notify_change(title: str, body: str, data: dict | None = None) -> None:
+    """Push "Muse did X" to the user's devices. Never fails the request —
+    the write already happened; a missed push is only logged."""
+    global _notifier
+    try:
+        if _notifier is None:
+            # One shared instance: each StrategyNotifier starts its own drain thread.
+            from services.strategy.notifier import StrategyNotifier
+            _notifier = StrategyNotifier(get_supabase_service().client)
+        _notifier.notify_muse_change(title, body, data)
+    except Exception as e:
+        logger.warning("[muse] change notification failed: %s", e)
+
+
+def _level_label(row: dict) -> str:
+    low, high = float(row["level_low"]), float(row["level_high"])
+    price = f"${low:g}" if low == high else f"${low:g}–${high:g}"
+    side = {"bullish": "above", "bearish": "below"}.get(row.get("direction"), "either way through")
+    return f"{row['ticker']} {side} {price}"
+
+
 def _ticker_arg(raw: str | None) -> str | None:
     ticker = (raw or "").strip().upper().lstrip("$")
     return ticker if _TICKER_RE.match(ticker) else None
@@ -410,6 +434,42 @@ def summary():
     if out.get("trades_today") is not None:
         out["trades_today_totals"] = _trade_totals(out["trades_today"])
     out["partial_errors"] = errors or None
+    return _ok(out)
+
+
+# ── Identity (debugging "Muse wrote it but the app doesn't show it") ─────────
+
+@bp.route("/whoami", methods=["GET"])
+def whoami():
+    """
+    Which Supabase user Muse's rows are owned by. The app only lists rows
+    whose user_id is the LOGGED-IN user, so MUSE_USER_ID must be the app
+    owner's own id — not a separate "Muse" account — or everything Muse
+    creates is invisible in the app.
+    """
+    try:
+        user_id = _muse_user_id()
+    except RuntimeError as e:
+        return _err(str(e), 500)
+    out: dict = {"muse_user_id": user_id, "email": None, "has_push_token": None}
+    try:
+        res = get_supabase_service().client.auth.admin.get_user_by_id(user_id)
+        user = getattr(res, "user", None)
+        out["email"] = getattr(user, "email", None)
+        out["user_exists"] = user is not None
+    except Exception as e:
+        out["user_exists"] = False
+        out["user_lookup_error"] = str(e)
+    try:
+        prof = (get_supabase_service().client.table("user_profiles")
+                .select("expo_push_token").eq("id", user_id).limit(1).execute().data or [])
+        out["has_push_token"] = bool(prof and prof[0].get("expo_push_token"))
+    except Exception as e:
+        logger.warning("[muse/whoami] profile lookup failed: %s", e)
+    try:
+        out["watching_levels"] = len(_list_levels("watching"))
+    except Exception as e:
+        logger.warning("[muse/whoami] level count failed: %s", e)
     return _ok(out)
 
 
@@ -780,7 +840,8 @@ def list_levels():
 @bp.route("/levels", methods=["POST"])
 def create_level():
     """
-    Body: { ticker, price, direction: above|below|either, price_high?, target?, note? }
+    Body: { ticker, price, direction: above|below|either, price_high?, target?, note?,
+            zone_type?: trade|investment (default trade) }
     `above` fires when a 1-minute bar CLOSES above price; `below` when one closes below it.
     """
     data = request.get_json(silent=True) or {}
@@ -800,6 +861,9 @@ def create_level():
         return _err("price must be positive")
     if high < low:
         low, high = high, low
+    zone_type = (data.get("zone_type") or "trade").lower()
+    if zone_type not in ("trade", "investment"):
+        return _err("zone_type must be 'trade' or 'investment'")
 
     # watched_price_levels has no target column — keep it human-readable in notes.
     note_parts = [_MUSE_NOTE_PREFIX.strip()]
@@ -818,6 +882,7 @@ def create_level():
             "level_high": high,
             "direction": direction,
             "source": "self",
+            "zone_type": zone_type,
             "notes": " ".join(note_parts),
             "named_contracts": [],
             "status": "watching",
@@ -835,6 +900,9 @@ def create_level():
 
         from services.strategy.key_level_watcher import get_key_level_watcher
         get_key_level_watcher().watch_level(created)
+        zone = "investment zone" if zone_type == "investment" else "trade zone"
+        _notify_change("Level watch set", f"Watching {_level_label(created)} ({zone})",
+                       {"screen": "options", "ticker": ticker, "level_id": created["id"]})
         return _ok(created, 201)
     except Exception as e:
         logger.error("[muse/levels POST] %s", e, exc_info=True)
@@ -851,6 +919,8 @@ def delete_level(level_id: str):
                   .eq("id", level_id).eq("user_id", _muse_user_id()).execute())
         if not result.data:
             return _err("Level not found", 404)
+        _notify_change("Level watch removed", f"Stopped watching {_level_label(result.data[0])}",
+                       {"screen": "options", "ticker": result.data[0]["ticker"]})
         return _ok(result.data[0])
     except Exception as e:
         logger.error("[muse/levels DELETE] %s", e, exc_info=True)
@@ -899,6 +969,8 @@ def add_watchlist_contract():
         })
         if not result.get("success"):
             return _err(result.get("error") or "Failed to add contract", 400)
+        _notify_change("Contract added to watchlist", reason or symbol,
+                       {"screen": "options", "ticker": parsed["ticker"], "contract_symbol": symbol})
         return _ok(result.get("data"), 201)
     except Exception as e:
         logger.error("[muse/watchlist POST] %s", e, exc_info=True)
@@ -911,6 +983,10 @@ def delete_watchlist_contract(contract_id: str):
         result = get_supabase_service().delete_tracked_contract(_muse_user_id(), contract_id)
         if not result.get("success"):
             return _err(result.get("error") or "Contract not found", 404)
+        removed = result.get("data") or {}
+        _notify_change("Contract removed from watchlist",
+                       removed.get("contract_symbol") or "A watched contract was removed",
+                       {"screen": "options"})
         return _ok(result.get("data"))
     except Exception as e:
         logger.error("[muse/watchlist DELETE] %s", e, exc_info=True)
@@ -980,6 +1056,9 @@ def create_contract_alert():
         if not created:
             return _err("Failed to create alert", 500)
         engine.exit_manager.add_price_alert(created)
+        _notify_change("Contract alert set",
+                       f"{symbol}: notify {created['direction']} ${target:.2f} (now ${float(current):.2f})",
+                       {"screen": "position", "symbol": symbol, "ticker": engine.ticker})
         return _ok({**created, "current_price": float(current)}, 201)
     except Exception as e:
         logger.error("[muse/contract-alerts POST] %s", e, exc_info=True)
@@ -998,6 +1077,10 @@ def delete_contract_alert(alert_id: str):
         engine = _resolve_any_engine(result.data[0]["strategy_id"])
         if engine and engine.exit_manager:
             engine.exit_manager.remove_price_alert(alert_id)
+        row = result.data[0]
+        _notify_change("Contract alert removed",
+                       f"{row.get('contract_symbol')} ${float(row.get('target_price') or 0):.2f} alert cancelled",
+                       {"screen": "position", "symbol": row.get("contract_symbol"), "ticker": row.get("ticker")})
         return _ok(result.data[0])
     except Exception as e:
         logger.error("[muse/contract-alerts DELETE] %s", e, exc_info=True)
@@ -1048,6 +1131,9 @@ def create_note():
         }).execute()
         if not res.data:
             return _err("Failed to create note", 500)
+        _notify_change("Todo added" if kind == "todo" else "Note added",
+                       content if len(content) <= 140 else content[:137] + "…",
+                       {"screen": "daily_review", "review_date": note_date.isoformat()})
         return _ok(res.data[0], 201)
     except Exception as e:
         logger.error("[muse/notes POST] %s", e, exc_info=True)
@@ -1057,7 +1143,7 @@ def create_note():
 # ── Strategies / reviews ────────────────────────────────────────────────────────
 
 _STRATEGY_FIELDS = ("id", "strategy_name", "ticker", "profile", "active", "trade_days",
-                    "capital_limit", "confirm_entry", "paused_by_kill_switch")
+                    "capital_limit", "confirm_entry", "paused_by_kill_switch", "technicals_gate")
 
 
 @bp.route("/strategies", methods=["GET"])
@@ -1264,6 +1350,10 @@ _OPENAPI = {
                     "price_high": {"type": "number", "description": "Optional upper bound for a zone"},
                     "target": {"type": "number", "description": "Optional price target, stored in the note"},
                     "note": {"type": "string", "description": "Why this level matters"},
+                    "zone_type": {"type": "string", "enum": ["trade", "investment"],
+                                  "description": "trade (default): short-term setup, short-dated contract suggestions. "
+                                                 "investment: long-term buy zone, LEAPS-style call suggestions and an "
+                                                 "'Investment Buy Zone' push. Always set this to match the user's intent."},
                 }, ["ticker", "price", "direction"])),
         },
         "/muse/levels/{level_id}": {"delete": _op(
@@ -1310,6 +1400,10 @@ _OPENAPI = {
                             "date": {"type": "string", "format": "date", "description": "Default today"}},
                            ["content"])),
         },
+        "/muse/whoami": {"get": _op(
+            "whoAmI", "Which app user Muse acts as",
+            "The Supabase user (id + email) that owns everything Muse creates. If the user can't see a level or "
+            "watchlist item Muse created, check this matches the account they're logged into.")},
         "/muse/strategies": {"get": _op(
             "getStrategies", "Automated strategies",
             "The app's automated ORB strategies (ticker, profile, active, account, whether one holds a position) and any "
