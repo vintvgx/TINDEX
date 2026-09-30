@@ -50,6 +50,15 @@ MAX_SCORED_CANDIDATES = 3
 # couple weeks out) — a level can always be re-added with different bounds
 # if a longer-dated play is wanted.
 SUGGESTION_EXPIRY_WINDOW_DAYS = 14
+# Investment zones (zone_type='investment') are long-term share-entry levels,
+# so their suggestions are LEAPS-style calls instead: ~6 to ~18 months out.
+INVESTMENT_EXPIRY_MIN_DAYS = 180
+INVESTMENT_EXPIRY_MAX_DAYS = 540
+INVESTMENT_SCORE_NOTE = (
+    " This is a long-term INVESTMENT buy zone, not a short-term trade: judge the contract "
+    "as a LEAPS-style stock replacement held for months (time decay, liquidity, strike vs "
+    "the long-term thesis), not as a quick momentum play."
+)
 
 
 def _run_async(coro):
@@ -208,6 +217,7 @@ class KeyLevelWatcher:
                 price=confirmed_price,
                 level_id=level["id"],
                 contract_count=len(suggestions),
+                zone_type=level.get("zone_type") or "trade",
             )
         except Exception as e:
             logger.error("[KeyLevelWatcher] confirmation save/notify failed for %s: %s",
@@ -220,15 +230,26 @@ class KeyLevelWatcher:
         from services.alpaca.alpaca_option_service import get_alpaca_option_service
         option_service = get_alpaca_option_service()
 
+        # An investment zone is a BUY zone whichever side it confirmed on
+        # (typically a dip closing below the level), so it always gets
+        # long-dated calls; a trade zone gets short-dated contracts on the
+        # side that broke.
+        investment = level.get("zone_type") == "investment"
         today = datetime.now().date()
+        if investment:
+            exp_gte = today + timedelta(days=INVESTMENT_EXPIRY_MIN_DAYS)
+            exp_lte = today + timedelta(days=INVESTMENT_EXPIRY_MAX_DAYS)
+        else:
+            exp_gte, exp_lte = today, today + timedelta(days=SUGGESTION_EXPIRY_WINDOW_DAYS)
         chain = _run_async(option_service.get_options(
             ticker=ticker,
             limit=200,
-            expiration_date_gte=today.isoformat(),
-            expiration_date_lte=(today + timedelta(days=SUGGESTION_EXPIRY_WINDOW_DAYS)).isoformat(),
+            expiration_date_gte=exp_gte.isoformat(),
+            expiration_date_lte=exp_lte.isoformat(),
             current_price=confirmed_price,
         ))
-        side_key = "calls" if direction == "bullish" else "puts"
+        side_key = "calls" if investment or direction == "bullish" else "puts"
+        system_prompt = LEVEL_SCORE_SYSTEM_PROMPT + (INVESTMENT_SCORE_NOTE if investment else "")
         candidates = chain.get(side_key) or []
         if not candidates:
             return []
@@ -264,7 +285,7 @@ class KeyLevelWatcher:
         for i, contract in enumerate(ranked):
             is_pinned = i < len(pinned)
             try:
-                result = anthropic_service.score_contract(ticker, contract, LEVEL_SCORE_SYSTEM_PROMPT)
+                result = anthropic_service.score_contract(ticker, contract, system_prompt)
             except Exception as e:
                 logger.warning("[KeyLevelWatcher] scoring failed for %s: %s",
                                contract.get("symbol"), e)

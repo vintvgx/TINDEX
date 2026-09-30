@@ -196,7 +196,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
     .filter(l => l.ticker === ticker && (l.status === 'watching' || l.status === 'confirmed'))
     .map(l => ({
       id: l.id, low: l.level_low, high: l.level_high, direction: l.direction,
-      status: l.status as 'watching' | 'confirmed',
+      status: l.status as 'watching' | 'confirmed', zoneType: l.zone_type ?? 'trade',
     }));
 
   const { mutateAsync: createKeyLevel } = useCreateKeyLevel();
@@ -216,11 +216,12 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
         levelLow: draft.low,
         levelHigh: draft.high,
         source: 'self',
+        zoneType: draft.zoneType,
       });
       toast.success(
         draft.high - draft.low < 0.005
-          ? `Watching ${ticker} $${draft.high.toFixed(2)}`
-          : `Watching ${ticker} $${draft.low.toFixed(2)}–$${draft.high.toFixed(2)}`,
+          ? `${draft.zoneType === 'investment' ? 'Investment zone' : 'Watching'} ${ticker} $${draft.high.toFixed(2)}`
+          : `${draft.zoneType === 'investment' ? 'Investment zone' : 'Watching'} ${ticker} $${draft.low.toFixed(2)}–$${draft.high.toFixed(2)}`,
       );
       return true;
     } catch (e) {
@@ -253,6 +254,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
         direction: draft.direction,
         levelLow: draft.low,
         levelHigh: draft.high,
+        zoneType: draft.zoneType,
       });
       toast.success('Watch zone updated');
       return true;

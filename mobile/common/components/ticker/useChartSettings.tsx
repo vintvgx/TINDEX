@@ -48,6 +48,14 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
 
   const defaultMode: ChartMode = period === '1D' || period === '1W' ? 'candle' : 'line';
   const sections: ChartSettingsSection[] = [
+    ...(canMarkWatchLevel ? [{
+      title: 'Watch',
+      rows: [{
+        kind: 'action' as const, key: 'mark', icon: 'eye-outline' as const, label: 'Mark a watch level',
+        description: 'Drag up/down on the chart · tap the eye in the chart toolbar when done',
+        onPress: () => { setShowWatchZones(true); setWatchMode(true); },
+      }],
+    }] : []),
     {
       title: 'Chart style',
       rows: [{
@@ -80,22 +88,14 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
         { kind: 'toggle', key: 'session', icon: 'partly-sunny-outline', label: 'Pre / post-market lines',
           description: 'Pre-market, close, post-market and overnight prices (1D only)',
           value: showSessionLines, onChange: setShowSessionLines },
-        { kind: 'toggle', key: 'zones', icon: 'layers-outline', label: 'Watch levels',
-          description: 'Show your watched price levels', value: showWatchZones, onChange: setShowWatchZones },
+        { kind: 'toggle', key: 'zones', icon: 'layers-outline', label: 'Show watch levels',
+          description: 'Show or hide your saved levels on the chart (use Mark a watch level above to add one)', value: showWatchZones, onChange: setShowWatchZones },
         ...extraOverlayRows,
         { kind: 'toggle', key: 'crosshair', icon: 'locate-outline', label: 'Data points',
           description: 'Tap-and-hold the chart to inspect an exact price/time',
           value: crosshairEnabled, onChange: setCrosshairEnabled },
       ],
     },
-    ...(canMarkWatchLevel ? [{
-      title: 'Watch',
-      rows: [{
-        kind: 'action' as const, key: 'mark', icon: 'eye-outline' as const, label: 'Mark a watch level',
-        description: 'Long-press & drag on the chart · tap the eye in the chart toolbar when done',
-        onPress: () => { setShowWatchZones(true); setWatchMode(true); },
-      }],
-    }] : []),
   ];
 
   const technicalsContent = (

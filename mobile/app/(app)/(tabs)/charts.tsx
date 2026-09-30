@@ -289,7 +289,7 @@ export default function ChartsScreen() {
     .filter(l => l.ticker === activeTicker && (l.status === 'watching' || l.status === 'confirmed'))
     .map(l => ({
       id: l.id, low: l.level_low, high: l.level_high, direction: l.direction,
-      status: l.status as 'watching' | 'confirmed',
+      status: l.status as 'watching' | 'confirmed', zoneType: l.zone_type ?? 'trade',
     }));
 
   // Every ticker with a live watch zone/price target — drives the orange dot
@@ -317,11 +317,12 @@ export default function ChartsScreen() {
         levelLow: draft.low,
         levelHigh: draft.high,
         source: 'self',
+        zoneType: draft.zoneType,
       });
       toast.success(
         draft.high - draft.low < 0.005
-          ? `Watching ${activeTicker} $${draft.high.toFixed(2)}`
-          : `Watching ${activeTicker} $${draft.low.toFixed(2)}–$${draft.high.toFixed(2)}`,
+          ? `${draft.zoneType === 'investment' ? 'Investment zone' : 'Watching'} ${activeTicker} $${draft.high.toFixed(2)}`
+          : `${draft.zoneType === 'investment' ? 'Investment zone' : 'Watching'} ${activeTicker} $${draft.low.toFixed(2)}–$${draft.high.toFixed(2)}`,
       );
       return true;
     } catch (e) {
@@ -354,6 +355,7 @@ export default function ChartsScreen() {
         direction: draft.direction,
         levelLow: draft.low,
         levelHigh: draft.high,
+        zoneType: draft.zoneType,
       });
       toast.success('Watch zone updated');
       return true;

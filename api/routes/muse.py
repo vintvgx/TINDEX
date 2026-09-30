@@ -840,7 +840,8 @@ def list_levels():
 @bp.route("/levels", methods=["POST"])
 def create_level():
     """
-    Body: { ticker, price, direction: above|below|either, price_high?, target?, note? }
+    Body: { ticker, price, direction: above|below|either, price_high?, target?, note?,
+            zone_type?: trade|investment (default trade) }
     `above` fires when a 1-minute bar CLOSES above price; `below` when one closes below it.
     """
     data = request.get_json(silent=True) or {}
@@ -860,6 +861,9 @@ def create_level():
         return _err("price must be positive")
     if high < low:
         low, high = high, low
+    zone_type = (data.get("zone_type") or "trade").lower()
+    if zone_type not in ("trade", "investment"):
+        return _err("zone_type must be 'trade' or 'investment'")
 
     # watched_price_levels has no target column — keep it human-readable in notes.
     note_parts = [_MUSE_NOTE_PREFIX.strip()]
@@ -878,6 +882,7 @@ def create_level():
             "level_high": high,
             "direction": direction,
             "source": "self",
+            "zone_type": zone_type,
             "notes": " ".join(note_parts),
             "named_contracts": [],
             "status": "watching",
@@ -895,7 +900,8 @@ def create_level():
 
         from services.strategy.key_level_watcher import get_key_level_watcher
         get_key_level_watcher().watch_level(created)
-        _notify_change("Level watch set", f"Watching {_level_label(created)}",
+        zone = "investment zone" if zone_type == "investment" else "trade zone"
+        _notify_change("Level watch set", f"Watching {_level_label(created)} ({zone})",
                        {"screen": "options", "ticker": ticker, "level_id": created["id"]})
         return _ok(created, 201)
     except Exception as e:
@@ -1344,6 +1350,10 @@ _OPENAPI = {
                     "price_high": {"type": "number", "description": "Optional upper bound for a zone"},
                     "target": {"type": "number", "description": "Optional price target, stored in the note"},
                     "note": {"type": "string", "description": "Why this level matters"},
+                    "zone_type": {"type": "string", "enum": ["trade", "investment"],
+                                  "description": "trade (default): short-term setup, short-dated contract suggestions. "
+                                                 "investment: long-term buy zone, LEAPS-style call suggestions and an "
+                                                 "'Investment Buy Zone' push. Always set this to match the user's intent."},
                 }, ["ticker", "price", "direction"])),
         },
         "/muse/levels/{level_id}": {"delete": _op(

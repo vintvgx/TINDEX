@@ -9,7 +9,7 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useToast } from '@/common/components/ui/Toast';
-import type { LevelDirection, LevelSource, NamedContract } from '@/common/types/priceLevels';
+import type { LevelDirection, LevelSource, LevelZoneType, NamedContract } from '@/common/types/priceLevels';
 
 // Auto-format YYYYMMDD digits → YYYY-MM-DD (same as AddContractSheet)
 const fmtExpiry = (raw: string) => {
@@ -50,6 +50,7 @@ export const AddKeyLevelSheet: React.FC<Props> = ({ visible, onClose, initialTic
   const [levelLow, setLevelLow] = useState('');
   const [levelHigh, setLevelHigh] = useState('');
   const [source, setSource] = useState<LevelSource>('self');
+  const [zoneType, setZoneType] = useState<LevelZoneType>('trade');
   const [notes, setNotes] = useState('');
   const [namedContracts, setNamedContracts] = useState<DraftContract[]>([]);
   const [error, setError] = useState('');
@@ -60,6 +61,7 @@ export const AddKeyLevelSheet: React.FC<Props> = ({ visible, onClose, initialTic
     setLevelLow('');
     setLevelHigh('');
     setSource('self');
+    setZoneType('trade');
     setNotes('');
     setNamedContracts([]);
     setError('');
@@ -109,11 +111,15 @@ export const AddKeyLevelSheet: React.FC<Props> = ({ visible, onClose, initialTic
         levelLow: Math.min(lowNum, highNum),
         levelHigh: Math.max(lowNum, highNum),
         source,
+        zoneType,
         notes: notes.trim() || undefined,
         namedContracts: finishedContracts,
       },
       {
-        onSuccess: () => { toast.success(`Watching ${t} for a ${direction} confirm`); handleClose(); },
+        onSuccess: () => {
+          toast.success(zoneType === 'investment' ? `Investment zone set for ${t}` : `Watching ${t} for a ${direction} confirm`);
+          handleClose();
+        },
         onError: (e: Error) => { setError(e.message); toast.error(e.message); },
       },
     );
@@ -204,6 +210,29 @@ export const AddKeyLevelSheet: React.FC<Props> = ({ visible, onClose, initialTic
               onChangeText={setLevelHigh}
               keyboardType="decimal-pad"
             />
+
+            {/* Zone type */}
+            <Text style={[s.label, { color: colors.textSecondary }]}>Zone type</Text>
+            <View style={[s.toggle, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              {([
+                { id: 'trade' as const, label: 'Trade setup' },
+                { id: 'investment' as const, label: 'Investment buy zone' },
+              ]).map(opt => {
+                const active = zoneType === opt.id;
+                return (
+                  <TouchableOpacity
+                    key={opt.id}
+                    onPress={() => setZoneType(opt.id)}
+                    activeOpacity={0.8}
+                    style={[s.toggleBtn, active && { backgroundColor: colors.accent + '22' }]}
+                  >
+                    <Text style={[s.toggleText, { color: active ? colors.accent : colors.textSecondary, fontWeight: active ? '700' : '500' }]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
             {/* Source */}
             <Text style={[s.label, { color: colors.textSecondary }]}>Source</Text>

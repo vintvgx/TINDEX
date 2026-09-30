@@ -16,6 +16,8 @@ logger = get_logger(__name__)
 
 bp = Blueprint("price_levels", __name__)
 
+ZONE_TYPES = ("trade", "investment")
+
 
 @bp.route("/price-levels", methods=["POST"])
 def create_price_level():
@@ -24,6 +26,7 @@ def create_price_level():
       userId, ticker, direction ('bullish'|'bearish'|'either'),
       levelLow, levelHigh?,             // levelHigh defaults to levelLow (a point)
       source? ('self'|'discord_admin'), notes?,
+      zoneType? ('trade'|'investment'),  // default 'trade'
       namedContracts?: [{option_type, strike, expiration_date}]
     }
     """
@@ -58,6 +61,10 @@ def create_price_level():
         if source not in ("self", "discord_admin"):
             return jsonify({"success": False, "error": "source must be 'self' or 'discord_admin'"}), 400
 
+        zone_type = data.get("zoneType", "trade")
+        if zone_type not in ZONE_TYPES:
+            return jsonify({"success": False, "error": "zoneType must be 'trade' or 'investment'"}), 400
+
         service = get_supabase_service()
         service.verify_user(user_id=user_id)
 
@@ -68,6 +75,7 @@ def create_price_level():
             "level_high": level_high,
             "direction": direction,
             "source": source,
+            "zone_type": zone_type,
             "notes": (data.get("notes") or "").strip() or None,
             "named_contracts": data.get("namedContracts") or [],
             "status": "watching",
@@ -127,8 +135,8 @@ def update_price_level(level_id: str):
     DELETE, which retires it entirely. Ticker/source/status aren't editable
     here; a level that's moved to a different ticker is really a new level.
 
-    Body: { userId, levelLow?, levelHigh?, direction? } — at least one of
-    levelLow/levelHigh/direction must be present.
+    Body: { userId, levelLow?, levelHigh?, direction?, zoneType? } — at
+    least one of levelLow/levelHigh/direction/zoneType must be present.
     """
     try:
         data = request.get_json(silent=True) or {}
@@ -146,6 +154,11 @@ def update_price_level(level_id: str):
             if direction not in ("bullish", "bearish", "either"):
                 return jsonify({"success": False, "error": "direction must be 'bullish', 'bearish', or 'either'"}), 400
             update["direction"] = direction
+
+        if "zoneType" in data:
+            if data.get("zoneType") not in ZONE_TYPES:
+                return jsonify({"success": False, "error": "zoneType must be 'trade' or 'investment'"}), 400
+            update["zone_type"] = data["zoneType"]
 
         if "levelLow" in data or "levelHigh" in data:
             existing = (
@@ -171,7 +184,7 @@ def update_price_level(level_id: str):
             update["level_high"] = level_high
 
         if not update:
-            return jsonify({"success": False, "error": "Nothing to update — pass levelLow, levelHigh, and/or direction"}), 400
+            return jsonify({"success": False, "error": "Nothing to update — pass levelLow, levelHigh, direction, and/or zoneType"}), 400
 
         result = (
             service.client.table("watched_price_levels")
