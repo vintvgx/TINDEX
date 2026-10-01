@@ -6,6 +6,7 @@ import {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { TickerContractsModal } from '@/common/components/ticker/TickerContractsModal';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
@@ -89,6 +90,12 @@ export default function ChartsScreen() {
   }, [follows, openPositionTickers]);
 
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+  // A tapped zone-alert push lands here with ?ticker= (see
+  // NotificationNavigationService) — open that ticker's chart.
+  const { ticker: tickerParam } = useLocalSearchParams<{ ticker?: string }>();
+  useEffect(() => {
+    if (tickerParam) setSelectedTicker(tickerParam.toUpperCase());
+  }, [tickerParam]);
 
   // A ticker reached via search (see handleSearchSelect below) might not be
   // followed or have an open position yet — prepend it so it's immediately

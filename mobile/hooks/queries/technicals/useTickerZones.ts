@@ -30,10 +30,15 @@ export interface TickerZones {
   timeframe: string;
   resistance: TickerZone[];
   support: TickerZone[];
-  /** null when the ticker isn't currently ORB-followed/tracked live —
-   *  structure tracking (trend/flips) only runs for tickers StructureTracker
-   *  is actually watching bars for; the zones themselves still come back
-   *  either way (see api/routes/strategy_routes.py's /strategy/zones). */
+  /** Whether StructureTracker watches this ticker's live bars. Only
+   *  ORB-followed tickers are tracked; for anything else there are no live
+   *  BOS/approach/break events and `trend` is null / `flips` is empty, while
+   *  the zones themselves still come back (see /strategy/zones). */
+  tracked: boolean;
+  /** True when the market-data fetch timed out and these are the last
+   *  cached zones rather than a fresh computation. */
+  stale: boolean;
+  /** null when untracked (see `tracked`). */
   trend: 'uptrend' | 'downtrend' | 'range' | null;
   flips: TickerFlippedZone[];
   last_fetched_utc: string;

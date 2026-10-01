@@ -16,6 +16,8 @@ const ROUTE_BY_SCREEN: Record<string, string> = {
   daily_review:  '/(app)/(tabs)/daily_review',
   options:       '/(app)/(tabs)/options',
   dashboard:     '/(app)/(tabs)/dashboard',
+  // Zone approach/break alerts (StructureTracker) — opens that ticker's chart.
+  charts:        '/(app)/(tabs)/charts',
   // Home (feed.tsx) — the Market Digest modal presents on top of it, same
   // pattern as `section` deep-links into the Home pager (see feed.tsx).
   market_digest: '/(app)/(tabs)/feed',

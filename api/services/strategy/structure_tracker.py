@@ -61,6 +61,15 @@ _APPROACH_PCT = 0.0015
 # what the TODO calls a real break vs. noise.
 _BREAK_VOLUME_MULT = 1.2
 _VOLUME_LOOKBACK_BARS = 20
+# Fewer prior bars than this and the trailing average is too thin to judge
+# against — the volume requirement is skipped (close-through alone counts)
+# rather than compared against e.g. a single opening bar.
+_VOLUME_MIN_PRIOR_BARS = 5
+
+# Push anti-spam: at most this many zone pushes (approach + break) per
+# ticker per session. Approach re-arms only after price moves away; a break
+# re-arms only after a failed break undoes the flip (see _on_closed_bar).
+_MAX_PUSHES_PER_TICKER_PER_DAY = 3
 
 # A break that reverses back inside the zone within this many CLOSED bars is
 # a failed break (bull/bear trap) — the flip it caused gets undone.
@@ -184,8 +193,9 @@ def detect_zone_break(zone: dict, bar: dict, avg_volume: float) -> dict:
     None, or a `zone_break` event, from ONE closed bar against ONE zone —
     a close through the zone's far boundary (up through a resistance zone,
     down through a support zone) with volume at least `_BREAK_VOLUME_MULT`
-    times `avg_volume` (the trailing `_VOLUME_LOOKBACK_BARS`-bar average,
-    supplied by the caller). Approach checks are separate (`detect_approach`)
+    times `avg_volume` (the trailing average of the bars BEFORE this one —
+    see trailing_avg_volume). `avg_volume=None` (too few prior bars) skips
+    the volume requirement. Approach checks are separate (`detect_approach`)
     since those read the live, not-yet-closed price.
     """
     close, volume = bar["close"], bar["volume"]
@@ -193,10 +203,59 @@ def detect_zone_break(zone: dict, bar: dict, avg_volume: float) -> dict:
     broke_down = close < zone["low"] and zone["type"] == "support"
     if not (broke_up or broke_down):
         return None
-    if not avg_volume or volume <= _BREAK_VOLUME_MULT * avg_volume:
+    if avg_volume is not None and (avg_volume <= 0 or volume <= _BREAK_VOLUME_MULT * avg_volume):
         return None
     return {"type": "zone_break", "direction": "bullish" if broke_up else "bearish",
-            "close": close, "volume": volume, "bar_ts": bar["ts"]}
+            "close": close, "volume": volume, "bar_ts": bar["ts"],
+            "volume_mult": round(volume / avg_volume, 2) if avg_volume else None}
+
+
+def trailing_avg_volume(bars: list, end_idx: int) -> "float | None":
+    """Average volume of the up-to-`_VOLUME_LOOKBACK_BARS` closed bars
+    strictly BEFORE `bars[end_idx]` — the bar under evaluation never counts
+    toward its own baseline (a 3x breaking bar would otherwise inflate the
+    average it's compared against). None when fewer than
+    `_VOLUME_MIN_PRIOR_BARS` prior bars exist."""
+    window = bars[max(0, end_idx - _VOLUME_LOOKBACK_BARS):end_idx]
+    if len(window) < _VOLUME_MIN_PRIOR_BARS:
+        return None
+    return sum(b["volume"] for b in window) / len(window)
+
+
+def _fmt_band(zone: dict) -> str:
+    return f"${zone['low']:.2f}–${zone['high']:.2f}"
+
+
+def format_zone_push(ticker: str, event: dict, zone: dict, timeframe: str) -> "tuple | None":
+    """
+    (title, body) for a zone push, or None for event types that aren't
+    pushed (bos, failed_break — those stay in zone_events/log only).
+    `zone` is the zone as the check saw it (current, possibly flipped,
+    type). Every push carries its invalidation. Invalidation is phrased on
+    `timeframe` closes because that's what this tracker actually confirms
+    breaks on.
+    """
+    kind = zone["type"]
+    if event["type"] == "zone_approach":
+        if kind == "support":
+            invalidation = f"{timeframe} close below ${zone['low'] - 0.01:.2f}"
+        else:
+            invalidation = f"{timeframe} close above ${zone['high'] + 0.01:.2f}"
+        return (
+            f"🎯 {ticker} approaching {kind}",
+            f"{ticker} within {_APPROACH_PCT * 100:.2f}% of {_fmt_band(zone)} {kind} "
+            f"(score {zone['score']:.0f}, {zone['touches']} touches). Invalidation: {invalidation}.",
+        )
+    if event["type"] == "zone_break":
+        new_kind = "resistance" if kind == "support" else "support"
+        side = "below" if kind == "support" else "above"
+        vol = f" on {event['volume_mult']:.1f}x average volume" if event.get("volume_mult") else ""
+        return (
+            f"⚡ {ticker} broke {kind}",
+            f"{ticker} closed {side} {_fmt_band(zone)} at ${event['close']:.2f}{vol}. "
+            f"Zone flips to {new_kind}. Invalidation: {timeframe} close back inside.",
+        )
+    return None
 
 
 def detect_approach(zone: dict, price: float) -> bool:
@@ -238,6 +297,7 @@ class _TickerState:
         self.flips: dict = {}             # zone_id -> flip record (see StructureTracker._apply_flip)
         self.pending_breaks: dict = {}    # zone_id -> {"broken_at_idx": int, "direction": str}
         self.approached: set = set()      # zone_ids already fired a zone_approach since last moving away
+        self.pushes_sent: int = 0         # zone pushes this session — capped at _MAX_PUSHES_PER_TICKER_PER_DAY
         self._swing_high_idx: list = []
         self._swing_low_idx: list = []
 
@@ -250,6 +310,7 @@ class StructureTracker:
         self._lock = threading.RLock()
         self._states: dict[str, _TickerState] = {}
         self._subscribed: set = set()
+        self._notifier = None
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -270,7 +331,12 @@ class StructureTracker:
                 resolved = [r["ticker"] for r in rows]
             for ticker in resolved:
                 self.track(ticker)
-            logger.info("[StructureTracker] started — tracking %d ticker(s)", len(resolved))
+            # Deliberately ORB-gated (OrbDataHub only publishes bars for
+            # orb_enabled follows) — logged so it's visible which tickers get
+            # live BOS/approach/break events; /strategy/zones reports
+            # `tracked: false` for everything else.
+            logger.info("[StructureTracker] started — tracking %d ORB-followed ticker(s): %s",
+                        len(resolved), ", ".join(sorted({t.upper() for t in resolved})) or "none")
         except Exception as e:
             logger.error("[StructureTracker] start failed: %s", e, exc_info=True)
 
@@ -339,6 +405,7 @@ class StructureTracker:
                 st.flips = {}
                 st.pending_breaks = {}
                 st.approached = set()
+                st.pushes_sent = 0
             st.raw_1m.append(bar)
             prev_closed_count = len(st.closed_bars)
             self._recompute(st)
@@ -369,7 +436,8 @@ class StructureTracker:
         if not st.zone_snapshot:
             return
 
-        avg_volume = _trailing_avg_volume(st.closed_bars)
+        bar_idx = next((i for i, b in enumerate(st.closed_bars) if b["ts"] == bar["ts"]), len(st.closed_bars) - 1)
+        avg_volume = trailing_avg_volume(st.closed_bars, bar_idx)
         for zone_id, zone in _all_zones(st.zone_snapshot):
             pending = st.pending_breaks.get(zone_id)
             if pending is not None:
@@ -390,7 +458,7 @@ class StructureTracker:
                 brk["zone_id"] = zone_id
                 self._apply_flip(st, zone_id, zone, brk["direction"])
                 st.pending_breaks[zone_id] = {"broken_at_ts": bar["ts"], "direction": brk["direction"]}
-                self._emit(st.ticker, brk, session_date=st.session_date)
+                self._emit(st.ticker, brk, session_date=st.session_date, st=st, zone=effective)
 
     def _check_approach(self, st: _TickerState, price: float) -> None:
         if not st.zone_snapshot:
@@ -401,7 +469,7 @@ class StructureTracker:
             if near and zone_id not in st.approached:
                 st.approached.add(zone_id)
                 self._emit(st.ticker, {"type": "zone_approach", "zone_id": zone_id, "close": price},
-                          session_date=st.session_date)
+                          session_date=st.session_date, st=st, zone=effective)
             elif not near:
                 st.approached.discard(zone_id)
 
@@ -433,9 +501,12 @@ class StructureTracker:
 
     # ── Persistence + notification ──────────────────────────────────────────
 
-    def _emit(self, ticker: str, event: dict, session_date) -> None:
+    def _emit(self, ticker: str, event: dict, session_date, st: "_TickerState" = None,
+              zone: dict = None) -> None:
         bar_ts = event.get("bar_ts")
         logger.info("[StructureTracker] %s %s: %s", ticker, event["type"], event)
+        if st is not None and zone is not None:
+            self._push(st, event, zone)
         try:
             from services.supabase.supabase_service import get_supabase_service
             sb = get_supabase_service().client
@@ -458,7 +529,54 @@ class StructureTracker:
             logger.warning("[StructureTracker] zone_events insert failed for %s %s: %s",
                            ticker, event.get("type"), e)
 
+    def _push(self, st: "_TickerState", event: dict, zone: dict) -> None:
+        """Zone approach/break → push to the users following this ticker,
+        within the per-ticker daily cap. Never raises."""
+        try:
+            msg = format_zone_push(st.ticker, event, zone, st.timeframe)
+            if msg is None:
+                return
+            if st.pushes_sent >= _MAX_PUSHES_PER_TICKER_PER_DAY:
+                logger.info("[StructureTracker] %s %s push skipped — daily cap (%d) reached",
+                            st.ticker, event["type"], _MAX_PUSHES_PER_TICKER_PER_DAY)
+                return
+            user_ids = self._followers(st.ticker)
+            if not user_ids:
+                return
+            st.pushes_sent += 1
+            self._get_notifier().notify_zone_alert(
+                msg[0], msg[1], user_ids,
+                {"type": event["type"], "ticker": st.ticker, "zone_low": zone["low"], "zone_high": zone["high"]},
+            )
+        except Exception as e:
+            logger.warning("[StructureTracker] %s %s push failed: %s", st.ticker, event.get("type"), e)
+
+    def _followers(self, ticker: str) -> list:
+        """User ids with this ticker ORB-followed — the same set whose follow
+        put it on the live bar feed. Read fresh each push (≤ a few per ticker
+        per day), so a new or removed follow is picked up immediately."""
+        from services.supabase.supabase_service import get_supabase_service
+        rows = (get_supabase_service().client.table("user_stock_follows").select("user_id")
+                .eq("ticker", ticker).eq("orb_enabled", True).execute().data or [])
+        return sorted({r["user_id"] for r in rows if r.get("user_id")})
+
+    def _get_notifier(self):
+        # One shared notifier: each StrategyNotifier starts its own drain thread.
+        if self._notifier is None:
+            from services.strategy.notifier import StrategyNotifier
+            from services.supabase.supabase_service import get_supabase_service
+            self._notifier = StrategyNotifier(get_supabase_service().client)
+        return self._notifier
+
     # ── Read API (chart layer / gate) ────────────────────────────────────────
+
+    def is_tracked(self, ticker: str) -> bool:
+        with self._lock:
+            return ticker.upper().strip() in self._states
+
+    def tracked_tickers(self) -> list:
+        with self._lock:
+            return sorted(self._states)
 
     def get_trend(self, ticker: str) -> str:
         with self._lock:
@@ -493,13 +611,6 @@ _TF_MINUTES = {"5m": 5, "15m": 15, "30m": 30}
 
 def _tf_minutes(timeframe: str) -> int:
     return _TF_MINUTES.get(timeframe, 30)
-
-
-def _trailing_avg_volume(bars: list) -> float:
-    window = bars[-_VOLUME_LOOKBACK_BARS:]
-    if not window:
-        return 0.0
-    return sum(b["volume"] for b in window) / len(window)
 
 
 def _all_zones(snapshot: dict):

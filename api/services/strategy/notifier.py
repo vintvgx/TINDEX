@@ -550,13 +550,14 @@ class StrategyNotifier:
             priority=P_MARKET,
         )
 
-    def notify_muse_change(self, title: str, body: str, data: dict | None = None):
+    def notify_muse_change(self, title: str, body: str, user_id: str, data: dict | None = None):
         """
         Muse (the user's external AI assistant — see routes/muse.py) just
         created or removed something in the app: a level, a watchlist
         contract, a contract alert, or a note. Every Muse write sends one of
-        these so nothing it does happens silently. Gated on the
-        `muse_activity` preference (Notifications screen toggle).
+        these so nothing it does happens silently. Sent ONLY to `user_id`
+        (MUSE_USER_ID — the owner of what Muse changed), never broadcast.
+        Gated on the `muse_activity` preference (Notifications screen toggle).
         """
         self._dispatch(
             title=f"✨ Muse · {title}",
@@ -564,6 +565,23 @@ class StrategyNotifier:
             data={"type": "muse_change", **(data or {})},
             priority=P_INFO,
             pref_key="muse_activity",
+            user_ids=[user_id],
+        )
+
+    def notify_zone_alert(self, title: str, body: str, user_ids: list[str], data: dict | None = None):
+        """
+        StructureTracker zone alert (approach / volume-confirmed break) for
+        a ticker — sent only to `user_ids` (the users who follow that
+        ticker), never broadcast. Gated on the `zone_alerts` preference.
+        The tracker enforces its own per-ticker daily cap before calling this.
+        """
+        self._dispatch(
+            title=title,
+            body=body,
+            data={"screen": "charts", **(data or {})},
+            priority=P_MARKET,
+            pref_key="zone_alerts",
+            user_ids=user_ids,
         )
 
     def notify_review_ready(self, review_date: str, trade_count: int, net_pnl: float,
@@ -621,7 +639,8 @@ class StrategyNotifier:
     # ── Internal helpers ────────────────────────────────────────────────────────
 
     def _dispatch(self, title: str, body: str, data: dict | None = None,
-                  priority: int = P_INFO, pref_key: str | None = None):
+                  priority: int = P_INFO, pref_key: str | None = None,
+                  user_ids: list[str] | None = None):
         """
         Enqueue a notification. The worker thread drains in (priority, seq) order,
         so lower priority values always arrive on-device first. Items at the same
@@ -630,11 +649,18 @@ class StrategyNotifier:
         `pref_key`, if given, additionally gates delivery on
         `notification_preferences[pref_key]` (defaults to True for users who
         haven't set it) — on top of the always-checked global `enabled` flag.
+
+        `user_ids`, if given, restricts delivery to those users' tokens —
+        required for anything user-specific (Muse changes, per-ticker zone
+        alerts). An empty list sends to nobody; None keeps the legacy
+        broadcast to every enabled token (single-owner trading events).
         """
+        if user_ids is not None and not user_ids:
+            return
         with self._seq_lock:
             seq = self._seq
             self._seq += 1
-        self._queue.put((priority, seq, (title, body, data or {}, pref_key)))
+        self._queue.put((priority, seq, (title, body, data or {}, pref_key, user_ids)))
 
     # Seconds to wait between consecutive notifications. Gives iOS enough time to
     # deliver each banner individually so none are silently collapsed by the system.
@@ -654,19 +680,20 @@ class StrategyNotifier:
         last_sent_priority = None
         while True:
             try:
-                priority, seq, (title, body, data, pref_key) = self._queue.get()
+                priority, seq, (title, body, data, pref_key, user_ids) = self._queue.get()
                 # Skip the inter-notification delay for trade exits — stops and TPs
                 # are time-critical and should arrive as fast as possible.
                 if last_sent_priority is not None and priority != P_TRADE_EXIT:
                     time.sleep(self.INTER_NOTIFICATION_DELAY)
-                self._send_all(title, body, data, pref_key)
+                self._send_all(title, body, data, pref_key, user_ids)
                 last_sent_priority = priority
                 self._queue.task_done()
             except Exception as e:
                 logger.error("[StrategyNotifier] drain error: %s", e)
 
-    def _send_all(self, title: str, body: str, data: dict, pref_key: str | None = None):
-        tokens = self._fetch_tokens(pref_key)
+    def _send_all(self, title: str, body: str, data: dict, pref_key: str | None = None,
+                  user_ids: list[str] | None = None):
+        tokens = self._fetch_tokens(pref_key, user_ids)
         if not tokens:
             return
         for token in tokens:
@@ -692,18 +719,24 @@ class StrategyNotifier:
             except Exception as e:
                 logger.warning("[StrategyNotifier] send failed: %s", e)
 
-    def _fetch_tokens(self, pref_key: str | None = None) -> list[str]:
-        """Return all enabled Expo push tokens from user_profiles. `pref_key`,
-        if given, additionally requires notification_preferences[pref_key] to
-        be truthy (defaults to True — an unset key doesn't opt a user out)."""
+    def _fetch_tokens(self, pref_key: str | None = None,
+                      user_ids: list[str] | None = None) -> list[str]:
+        """Return enabled Expo push tokens from user_profiles — every user's,
+        or only `user_ids`' when given. `pref_key`, if given, additionally
+        requires notification_preferences[pref_key] to be truthy (defaults to
+        True — an unset key doesn't opt a user out)."""
+        if user_ids is not None and not user_ids:
+            return []
         try:
-            res = (
+            q = (
                 self._sb.table("user_profiles")
                 .select("expo_push_token, notification_preferences")
                 .neq("expo_push_token", "null")
                 .neq("expo_push_token", "")
-                .execute()
             )
+            if user_ids is not None:
+                q = q.in_("id", list(user_ids))
+            res = q.execute()
             tokens = []
             for row in (res.data or []):
                 prefs = row.get("notification_preferences") or {}

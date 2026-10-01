@@ -30,19 +30,22 @@ Design, mapped straight from the TODO:
     session the ATR term alone is wide enough to swallow genuinely distinct
     multi-dollar levels (verified against AMZN 9/30 below); ATR only widens
     tolerance on a tight/low-ATR name where 0.2% of price would be sub-cent.
-  - SCORING (0-100, clipped): touch count (capped at 4 touches' worth of
-    benefit) + recency (exponential decay, today's ORB/premarket/VWAP score
-    near-full, a 55-day-old daily swing barely registers but is never
-    dropped) + volume traded through the band + a confluence bonus for each
-    DISTINCT extra source category beyond the first (repeated swing touches
-    are one category — "swing" — not one per touch; each of PDH/PDL/PDC/
-    ORH/ORL/premarket/round/VWAP is its own category).
+  - SCORING v2 (0-100; see `score_terms`): diminishing-returns touch
+    count (30 * sqrt(touches/10), capped at 10) + recency (20, exponential
+    decay, 5-day half-life) + volume traded through the band (15) + a
+    diminishing confluence bonus for each DISTINCT extra source category
+    beyond the first (+12, +8, then +5 each, up to 5 extra = +35; repeated
+    swing touches are one category — "swing" — and both round tiers are one
+    "round"). The terms sum to exactly 100 at their caps, so 100 means "10
+    touches, tested today, heavy volume, 5 independent methods agreeing" —
+    rare by design, unlike v1 where real zones all tied at 100.
 
 Refreshed far more often than the old 8h S/R cache (`_CACHE_TTL_SECONDS`
 below) — several of the sources above (ORB, premarket, session VWAP) are
 only meaningful "as of a moment ago" during a live session.
 """
 
+import concurrent.futures
 import logging
 import threading
 import time
@@ -57,6 +60,17 @@ _cache: dict = {}
 _cache_lock = threading.Lock()
 _CACHE_TTL_SECONDS = 90
 
+# Hard cap on the three yfinance fetches zones() makes. yfinance has no
+# per-call timeout and a slow Yahoo cookie/crumb exchange can hang for 10s+;
+# StructureTracker refreshes zones on its bar-handling thread, so one hung
+# fetch would stall live structure updates. On timeout zones() serves the
+# last cached result (marked `stale`) instead of raising.
+_FETCH_TIMEOUT_SECONDS = 10
+# Shared pool so a timed-out fetch (its thread keeps running until yfinance
+# gives up) doesn't spawn a new pool per call; sized for a few concurrent
+# tickers plus a couple of hung stragglers.
+_fetch_pool = concurrent.futures.ThreadPoolExecutor(max_workers=6, thread_name_prefix="zone-fetch")
+
 _SWING_WINDOW = 3  # fractal confirmation bars each side — same as the old technical_service constant
 
 # Clustering tolerance: the larger of a flat % of price or a fraction of
@@ -65,22 +79,19 @@ _SWING_WINDOW = 3  # fractal confirmation bars each side — same as the old tec
 _TOL_PCT = 0.002
 _TOL_ATR_MULT = 0.25
 
-# Scoring weights — all out of 100 before the confluence bonus, which is
-# genuinely additive on top (a single-source zone can still reach 100 via
-# touches+recency+volume; confluence pushes an already-strong zone higher
-# still, matching "conviction = confluence count" from the TODO).
-_TOUCH_MAX = 4
-_TOUCH_WEIGHT = 40.0
-_RECENCY_WEIGHT = 25.0
+# Scoring v2 weights (decided 2026-09-30 — see docs zone-engine-fix-specs,
+# Fix 1). Every term has diminishing returns and the caps sum to exactly 100,
+# so nothing needs normalizing and real zones stop tying at the ceiling.
+_TOUCH_MAX = 10
+_TOUCH_WEIGHT = 30.0               # 30 * sqrt(min(touches, 10) / 10): 1 ≈ 9.5, 5 ≈ 21.2, 10 = 30
+_RECENCY_WEIGHT = 20.0
 _RECENCY_HALF_LIFE_DAYS = 5.0     # a touch 5 days old scores half of "just now"; 55 days old ~= 1/1024
 _VOLUME_WEIGHT = 15.0
 _VOLUME_HEADROOM_MULT = 3.0        # zone volume at 3x the naive per-touch expectation maxes this term
-_CONFLUENCE_BONUS = 25.0
-_CONFLUENCE_MAX_EXTRA = 2          # cap: 2 extra independent source categories => +50 max
-# Every term's own max, summed — the denominator _score_cluster normalizes
-# against, so hitting 100 requires touches, recency, volume AND confluence
-# all near their individual caps at once (see _score_cluster's comment).
-_SCORE_RAW_MAX = _TOUCH_WEIGHT + _RECENCY_WEIGHT + _VOLUME_WEIGHT + (_CONFLUENCE_MAX_EXTRA * _CONFLUENCE_BONUS)
+# Bonus per extra distinct source category beyond the first: +12, +8, then
+# +5 each, capped at 5 extra (+35 max). Each extra method agreeing still
+# adds conviction, just less than the one before it.
+_CONFLUENCE_STEPS = (12.0, 8.0, 5.0, 5.0, 5.0)
 
 # Round numbers only count as a source near price — far enough away and
 # "round" stops being a level anyone is actually watching.
@@ -323,6 +334,33 @@ def _cluster_points(points: list, tolerance_abs: float) -> list:
     return clusters
 
 
+def confluence_bonus(extra_categories: int) -> float:
+    """Diminishing bonus for `extra_categories` distinct source categories
+    beyond the first — see _CONFLUENCE_STEPS."""
+    n = max(0, min(extra_categories, len(_CONFLUENCE_STEPS)))
+    return sum(_CONFLUENCE_STEPS[:n])
+
+
+def score_terms(touches: int, freshest_age_days: float, volume_ratio: float,
+                category_count: int) -> dict:
+    """
+    Pure scoring v2 — no I/O, unit-testable directly. `volume_ratio` is zone
+    volume over its expected volume (avg bar volume * touches * headroom);
+    `category_count` is the number of distinct source categories.
+    Returns each term plus `score` = min(100, sum). Proximity to price is
+    deliberately NOT a term: that's the gate/alerts' job (ZONE_NEAR_PCT,
+    _APPROACH_PCT), and zones() uses it only as a display tiebreak.
+    """
+    touch = _TOUCH_WEIGHT * (min(max(touches, 0), _TOUCH_MAX) / _TOUCH_MAX) ** 0.5
+    recency = _RECENCY_WEIGHT * 0.5 ** (max(freshest_age_days, 0.0) / _RECENCY_HALF_LIFE_DAYS)
+    volume = _VOLUME_WEIGHT * min(1.0, max(volume_ratio, 0.0))
+    confluence = confluence_bonus(category_count - 1)
+    return {
+        "touch": touch, "recency": recency, "volume": volume, "confluence": confluence,
+        "score": min(100.0, touch + recency + volume + confluence),
+    }
+
+
 def _score_cluster(cluster: list, intraday_5d, tolerance_abs: float) -> dict:
     center = sum(p["price"] for p in cluster) / len(cluster)
     low = min(p["price"] for p in cluster)
@@ -331,57 +369,49 @@ def _score_cluster(cluster: list, intraday_5d, tolerance_abs: float) -> dict:
     low, high = center - half_width, center + half_width
 
     touches = len(cluster)
-    touch_score = min(touches, _TOUCH_MAX) / _TOUCH_MAX * _TOUCH_WEIGHT
-
     # Recency: the single freshest touch represents the zone — a level
     # tested both 2 days ago and 50 days ago reads as "tested 2 days ago"
     # for recency purposes; touch count already rewards the repeat separately.
     freshest_age = min(p["age_days"] for p in cluster)
-    recency_score = (0.5 ** (freshest_age / _RECENCY_HALF_LIFE_DAYS)) * _RECENCY_WEIGHT
 
-    volume_score = 0.0
+    volume_ratio = 0.0
     if intraday_5d is not None and not intraday_5d.empty:
         overlap = intraday_5d[(intraday_5d["High"] >= low) & (intraday_5d["Low"] <= high)]
         avg_bar_vol = float(intraday_5d["Volume"].mean() or 0.0)
-        if avg_bar_vol > 0:
-            zone_vol = float(overlap["Volume"].sum())
-            expected = avg_bar_vol * max(touches, 1) * _VOLUME_HEADROOM_MULT
-            volume_score = min(1.0, zone_vol / expected) * _VOLUME_WEIGHT if expected > 0 else 0.0
+        expected = avg_bar_vol * max(touches, 1) * _VOLUME_HEADROOM_MULT
+        if expected > 0:
+            volume_ratio = float(overlap["Volume"].sum()) / expected
 
     categories = {_category(p["source"]) for p in cluster}
-    confluence_extra = min(len(categories) - 1, _CONFLUENCE_MAX_EXTRA)
-    confluence_bonus = confluence_extra * _CONFLUENCE_BONUS
-
-    # Normalized against the sum of every term's OWN cap (130), not clipped
-    # directly. touch_score (cap 40) and recency_score (cap 25) each
-    # saturate trivially on their own — 4+ touches, or one same-day source
-    # (orb/premarket/vwap have age_days=0, and most real intraday zones
-    # carry one) — so summing-then-clipping-at-100 let unrelated zones tie
-    # at the ceiling (verified against AMZN 9/30: 5 of 9 support zones tied
-    # at exactly 100.0, and "top 3 by score" arbitrarily dropped the ORH
-    # zone — the exact trigger the TODO's acceptance case names — in favor
-    # of less specific ones via sort-stability alone). Dividing by the true
-    # combined max means hitting 100 needs every term near its cap at once,
-    # which is rare enough to actually rank zones instead of tying them.
-    raw = touch_score + recency_score + volume_score + confluence_bonus
-    score = min(100.0, raw / _SCORE_RAW_MAX * 100.0)
+    terms = score_terms(touches, freshest_age, volume_ratio, len(categories))
 
     return {
         "center": round(center, 4),
         "low": round(low, 4),
         "high": round(high, 4),
-        "score": round(score, 1),
+        "score": round(terms["score"], 1),
         "touches": touches,
         "sources": sorted({p["source"] for p in cluster}),
     }
+
+
+def rank_zones(zone_list: list, current_price: float, limit: int = 3) -> list:
+    """Top `limit` zones by score desc, ties broken by distance from
+    `current_price` (nearest first) — also the order they're returned in."""
+    def _distance(z):
+        if z["low"] <= current_price <= z["high"]:
+            return 0.0
+        return min(abs(current_price - z["low"]), abs(current_price - z["high"]))
+    return sorted(zone_list, key=lambda z: (-z["score"], _distance(z)))[:limit]
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def zones(ticker: str, timeframe: str = "30m", force_refresh: bool = False) -> dict:
     """
-    Top-3 resistance zones above price + top-3 support zones below, nearest-
-    to-price first, each `{center, low, high, score, touches, sources[]}`.
+    Top-3 resistance zones above price + top-3 support zones below, each
+    side ordered by score desc (ties: nearest to price first — see
+    rank_zones), each `{center, low, high, score, touches, sources[]}`.
     `timeframe` selects the intraday granularity fed into the swing-point
     and volume sources (5m/15m/30m) — the clustering/scoring method itself
     is identical regardless of which one is chosen.
@@ -394,22 +424,26 @@ def zones(ticker: str, timeframe: str = "30m", force_refresh: bool = False) -> d
     now = time.time()
     cache_key = f"{ticker}:{timeframe}"
 
-    if not force_refresh:
-        with _cache_lock:
-            entry = _cache.get(cache_key)
-        if entry and now - entry["fetched_at"] < _CACHE_TTL_SECONDS:
-            return entry["data"]
+    with _cache_lock:
+        entry = _cache.get(cache_key)
+    if not force_refresh and entry and now - entry["fetched_at"] < _CACHE_TTL_SECONDS:
+        return entry["data"]
 
     try:
-        import yfinance as yf
+        future = _fetch_pool.submit(_fetch_history, ticker, timeframe)
+        try:
+            daily, intraday_5d, today_session = future.result(timeout=_FETCH_TIMEOUT_SECONDS)
+        except concurrent.futures.TimeoutError:
+            if entry:
+                logger.warning("[zone_engine] %s (%s) fetch timed out after %ss — serving cached zones from %.0fs ago",
+                               ticker, timeframe, _FETCH_TIMEOUT_SECONDS, now - entry["fetched_at"])
+                return {**entry["data"], "stale": True}
+            logger.warning("[zone_engine] %s (%s) fetch timed out after %ss with no cache",
+                           ticker, timeframe, _FETCH_TIMEOUT_SECONDS)
+            return {"error": "market_data_timeout", "ticker": ticker}
 
-        tk = yf.Ticker(ticker)
-        daily = tk.history(period="60d", interval="1d")
         if daily.empty or len(daily) < 30:
             return {"error": "insufficient_history", "ticker": ticker}
-
-        intraday_5d = tk.history(period="5d", interval=timeframe, prepost=True)
-        today_session = tk.history(period="1d", interval="5m", prepost=True)
 
         points, current_price, atr, prior_day = _gather_points(
             ticker, daily, intraday_5d, today_session, timeframe,
@@ -434,10 +468,8 @@ def zones(ticker: str, timeframe: str = "30m", force_refresh: bool = False) -> d
         for z in scored:
             z["type"] = "resistance" if z["center"] > current_price else "support"
 
-        resistance = sorted([z for z in scored if z["type"] == "resistance"], key=lambda z: -z["score"])[:3]
-        support = sorted([z for z in scored if z["type"] == "support"], key=lambda z: -z["score"])[:3]
-        resistance.sort(key=lambda z: z["center"])
-        support.sort(key=lambda z: -z["center"])
+        resistance = rank_zones([z for z in scored if z["type"] == "resistance"], current_price)
+        support = rank_zones([z for z in scored if z["type"] == "support"], current_price)
 
         result = {
             "ticker": ticker,
@@ -459,6 +491,20 @@ def zones(ticker: str, timeframe: str = "30m", force_refresh: bool = False) -> d
     except Exception as e:
         logger.warning("[zone_engine] zones failed for %s (%s): %s", ticker, timeframe, e)
         return {"error": str(e), "ticker": ticker}
+
+
+def _fetch_history(ticker: str, timeframe: str) -> tuple:
+    """The three live yfinance fetches zones() needs: (daily 60d, intraday
+    5d at `timeframe`, today's 5m session incl. pre/post). Run on
+    _fetch_pool so zones() can bound the wait."""
+    import yfinance as yf
+    tk = yf.Ticker(ticker)
+    daily = tk.history(period="60d", interval="1d")
+    if daily.empty or len(daily) < 30:
+        return daily, None, None
+    intraday_5d = tk.history(period="5d", interval=timeframe, prepost=True)
+    today_session = tk.history(period="1d", interval="5m", prepost=True)
+    return daily, intraday_5d, today_session
 
 
 def get_support_resistance(ticker: str, force_refresh: bool = False) -> dict:

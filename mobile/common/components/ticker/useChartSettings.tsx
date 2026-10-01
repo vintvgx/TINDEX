@@ -5,15 +5,17 @@ import { useChartTechnicals, technicalsReferenceLines, ChartTechnicalsInfo } fro
 import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
 import { useAutoZonesVisibility } from '@/hooks/useAutoZonesVisibility';
 import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
+import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 
 /**
  * Everything behind the chart's Technicals and settings modals, shared by the Charts tab
  * and PriceChartFullScreen: chart style, the technicals overlays (signal
  * strip, VWAP, daily EMAs, ORB band), session lines, watch levels, data
- * points, plus the "mark a watch level" action. Watch-zone visibility and
- * Data Points are the app's existing global, persisted preferences; the
- * rest is per-screen state.
+ * points, plus the "mark a watch level" action. Every display option
+ * persists across launches: style/technicals/session lines via
+ * useChartDisplayPrefs (SecureStore), watch levels / auto zones / Data
+ * Points via their own hooks. Only Watch mode itself is transient.
  */
 interface Options {
   ticker: string | null | undefined;
@@ -26,13 +28,15 @@ interface Options {
 }
 
 export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, extraOverlayRows = [] }: Options) {
-  const [mode, setMode] = useState<ChartMode | null>(null);
-  const [showSessionLines, setShowSessionLines] = useState(false);
+  const { prefs, setPref } = useChartDisplayPrefs();
+  const { mode, showSessionLines, showStrip, showVwap, showEma, showOrb } = prefs;
+  const setMode = (v: ChartMode | null) => setPref('mode', v);
+  const setShowSessionLines = (v: boolean) => setPref('showSessionLines', v);
+  const setShowStrip = (v: boolean) => setPref('showStrip', v);
+  const setShowVwap = (v: boolean) => setPref('showVwap', v);
+  const setShowEma = (v: boolean) => setPref('showEma', v);
+  const setShowOrb = (v: boolean) => setPref('showOrb', v);
   const [watchMode, setWatchMode] = useState(false);
-  const [showStrip, setShowStrip] = useState(false);
-  const [showVwap, setShowVwap] = useState(false);
-  const [showEma, setShowEma] = useState(false);
-  const [showOrb, setShowOrb] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const { visible: showWatchZones, setVisible: setShowWatchZones } = useWatchZonesVisibility();
   // Unlike showWatchZones, the caller (PriceChartFullScreen) needs this

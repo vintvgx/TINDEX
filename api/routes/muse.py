@@ -107,7 +107,8 @@ def _notify_change(title: str, body: str, data: dict | None = None) -> None:
             # One shared instance: each StrategyNotifier starts its own drain thread.
             from services.strategy.notifier import StrategyNotifier
             _notifier = StrategyNotifier(get_supabase_service().client)
-        _notifier.notify_muse_change(title, body, data)
+        # Only the owner of what Muse changed — never every user's devices.
+        _notifier.notify_muse_change(title, body, _muse_user_id(), data)
     except Exception as e:
         logger.warning("[muse] change notification failed: %s", e)
 

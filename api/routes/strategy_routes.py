@@ -2246,9 +2246,12 @@ def get_ticker_zones(ticker: str):
     ZoneEngine's zones (bands + score + sources) plus, when the ticker is
     ORB-followed and StructureTracker has therefore actually been watching
     its live bars, the current trend state and any zones flipped so far
-    this session. `trend`/`flips` are `None`/`[]` (not an error) for a
-    ticker nothing is tracking live yet — the zones themselves still come
-    back from a plain on-demand yfinance fetch either way.
+    this session. `tracked` says which: live structure (BOS, approach and
+    break events, trend, flips) only runs for ORB-followed tickers, so an
+    untracked ticker gets `tracked: false`, `trend: None`, `flips: []` —
+    the zones themselves still come back from an on-demand fetch either way.
+    `stale: true` means the market-data fetch timed out and these are the
+    last cached zones.
     Query params: `timeframe` (5m/15m/30m, default 30m), `force` (bool).
     """
     from services.strategy.zone_engine import zones as _zones
@@ -2258,17 +2261,19 @@ def get_ticker_zones(ticker: str):
     if data.get("error"):
         return jsonify({"success": False, "error": data["error"]}), 422
 
-    trend, flips = None, []
+    tracked, trend, flips = False, None, []
     try:
         from services.strategy.structure_tracker import get_structure_tracker
         tracker = get_structure_tracker()
-        trend = tracker.get_trend(ticker.upper())
-        flips = tracker.get_flipped_zones(ticker.upper())
+        tracked = tracker.is_tracked(ticker.upper())
+        if tracked:
+            trend = tracker.get_trend(ticker.upper())
+            flips = tracker.get_flipped_zones(ticker.upper())
     except Exception as e:
         logger.warning("[strategy] zones: structure lookup failed for %s: %s", ticker, e)
 
-    data["trend"] = trend
-    data["flips"] = flips
+    data = {**data, "tracked": tracked, "trend": trend, "flips": flips}
+    data.setdefault("stale", False)
     return jsonify({"success": True, "data": data})
 
 

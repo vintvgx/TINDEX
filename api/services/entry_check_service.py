@@ -290,6 +290,30 @@ def _zone_snapshot(ticker: str) -> dict:
     return _zones(ticker)
 
 
+def apply_flips(zone_list: list, flips: list, tolerance: float) -> list:
+    """
+    Copies of `zone_list` with StructureTracker's flipped `current_type`
+    applied. Matched by NEAREST CENTER, not exact bounds: zone_engine
+    recomputes zones from live data, so a refresh can shift a boundary by a
+    cent between the tracker's snapshot and this one. Each flip goes to the
+    zone whose center is closest, accepted only within max(that zone's
+    half-width, the clustering `tolerance`); a flip with no zone that close
+    has expired (the zone moved or dropped out) and is ignored. Pure — no
+    I/O.
+    """
+    out = [dict(z) for z in zone_list]
+    for f in flips:
+        f_center = (f["low"] + f["high"]) / 2
+        best, best_d = None, None
+        for z in out:
+            d = abs(z["center"] - f_center) if "center" in z else abs((z["low"] + z["high"]) / 2 - f_center)
+            if best_d is None or d < best_d:
+                best, best_d = z, d
+        if best is not None and best_d <= max((best["high"] - best["low"]) / 2, tolerance):
+            best["type"] = f["current_type"]
+    return out
+
+
 def _zone_row(ticker: str, price: float, snap: Optional[dict] = None) -> Optional[dict]:
     """
     Nearest ZoneEngine zone to `price` — purely geometric (which side of
@@ -314,18 +338,15 @@ def _zone_row(ticker: str, price: float, snap: Optional[dict] = None) -> Optiona
     if snap.get("error"):
         return None
 
-    flip_by_bounds: dict = {}
+    flips: list = []
     try:
         from services.strategy.structure_tracker import get_structure_tracker
-        for f in get_structure_tracker().get_flipped_zones(ticker):
-            flip_by_bounds[(f["low"], f["high"])] = f["current_type"]
+        flips = get_structure_tracker().get_flipped_zones(ticker)
     except Exception:
         pass
 
-    candidates = [
-        {**z, "type": flip_by_bounds.get((z["low"], z["high"]), z["type"])}
-        for z in (snap.get("support", []) + snap.get("resistance", []))
-    ]
+    candidates = apply_flips(snap.get("support", []) + snap.get("resistance", []),
+                             flips, snap.get("tolerance") or 0.0)
     if not candidates:
         return {"position": "clear", "high": None, "low": None, "score": None,
                 "distance_pct": None, "sources": []}

@@ -25,6 +25,7 @@ import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLev
 import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
 import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
+import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 
 interface PriceChartFullScreenProps {
   visible: boolean;
@@ -97,7 +98,9 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   // useTickerSupportResistance's docstring. Support = green, resistance =
   // red, dashed to stay visually distinct from the ORB band's solid lines
   // and from any position SL/TP lines this chart might show elsewhere.
-  const [showSR, setShowSR] = useState(false);
+  // Persisted with the rest of the chart display prefs (SecureStore).
+  const { prefs: { showSR }, setPref: setChartPref } = useChartDisplayPrefs();
+  const setShowSR = (v: boolean) => setChartPref('showSR', v);
   // Every chart display option lives in the chart settings modal — see
   // useChartSettings. S/R is this screen's extra overlay row.
   const chart = useChartSettings({
