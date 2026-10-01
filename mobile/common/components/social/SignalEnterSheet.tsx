@@ -114,19 +114,25 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
     });
   };
 
-  const doSubmit = () => {
-    runSubmit({
-      ticker: contract.ticker,
-      direction: contract.option_type,
-      contract_symbol: contract.contract_symbol,
-      qty,
-      profile: profile.key,
-      paper_mode: paperMode,
-      volume_exit: (isManual || isNoStopLoss) ? false : volumeExit,
-      sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
-      ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
-    });
-  };
+  // Shared by doSubmit and the opt-in enterBlind below — see
+  // TradeContractSheet's buildTradeBody for the same split and why.
+  const buildTradeBody = (): ImmediateTradeByTickerRequest => ({
+    ticker: contract.ticker,
+    direction: contract.option_type,
+    contract_symbol: contract.contract_symbol,
+    qty,
+    profile: profile.key,
+    paper_mode: paperMode,
+    volume_exit: (isManual || isNoStopLoss) ? false : volumeExit,
+    sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
+    ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
+  });
+
+  const doSubmit = () => runSubmit(buildTradeBody());
+
+  // Opted into upfront from the Review sheet's "Skip live price check" —
+  // see OrderReviewSheet's onEnterBlind doc comment.
+  const enterBlind = () => runSubmit({ ...buildTradeBody(), bypass_stream_check: true });
 
   // Review sheet warnings — replace the old LIVE Alert confirm.
   const reviewWarnings = [
@@ -134,6 +140,9 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
     ...(!paperMode && openLiveCount > 0 ? [`You already have ${openLiveCount} other live position${openLiveCount > 1 ? 's' : ''} open.`] : []),
   ];
   const stopPct = isNoStopLoss ? null : isManual ? manualSlPct / 100 : profile.maxLoss / 100;
+  // See TradeContractSheet's isZeroDteContract — same rough client-side
+  // check, purely to decide whether to show the option.
+  const isZeroDteContract = contract.expiration_date?.slice(0, 10) === new Date().toISOString().slice(0, 10);
   const reviewOrder: ReviewOrder = {
     ticker: contract.ticker,
     optionType: contract.option_type,
@@ -289,6 +298,7 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
         warnings={reviewWarnings}
         isSubmitting={isPending}
         onSubmit={doSubmit}
+        onEnterBlind={isZeroDteContract ? enterBlind : undefined}
         onCancel={() => setReviewOpen(false)}
         successMessage={successMessage}
         onSuccessDone={() => { setSuccessMessage(null); setReviewOpen(false); onClose(); }}

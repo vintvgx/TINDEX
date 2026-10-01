@@ -2240,6 +2240,43 @@ def get_ticker_support_resistance(ticker: str):
     return jsonify({"success": True, "data": data})
 
 
+@strategy_bp.route("/zones/<ticker>", methods=["GET"])
+def get_ticker_zones(ticker: str):
+    """
+    ZoneEngine's zones (bands + score + sources) plus, when the ticker is
+    ORB-followed and StructureTracker has therefore actually been watching
+    its live bars, the current trend state and any zones flipped so far
+    this session. `tracked` says which: live structure (BOS, approach and
+    break events, trend, flips) only runs for ORB-followed tickers, so an
+    untracked ticker gets `tracked: false`, `trend: None`, `flips: []` —
+    the zones themselves still come back from an on-demand fetch either way.
+    `stale: true` means the market-data fetch timed out and these are the
+    last cached zones.
+    Query params: `timeframe` (5m/15m/30m, default 30m), `force` (bool).
+    """
+    from services.strategy.zone_engine import zones as _zones
+    timeframe = request.args.get("timeframe", "30m")
+    force = request.args.get("force", "false").lower() == "true"
+    data = _zones(ticker.upper(), timeframe=timeframe, force_refresh=force)
+    if data.get("error"):
+        return jsonify({"success": False, "error": data["error"]}), 422
+
+    tracked, trend, flips = False, None, []
+    try:
+        from services.strategy.structure_tracker import get_structure_tracker
+        tracker = get_structure_tracker()
+        tracked = tracker.is_tracked(ticker.upper())
+        if tracked:
+            trend = tracker.get_trend(ticker.upper())
+            flips = tracker.get_flipped_zones(ticker.upper())
+    except Exception as e:
+        logger.warning("[strategy] zones: structure lookup failed for %s: %s", ticker, e)
+
+    data = {**data, "tracked": tracked, "trend": trend, "flips": flips}
+    data.setdefault("stale", False)
+    return jsonify({"success": True, "data": data})
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _engine_position_response(engine: ORBEngine):

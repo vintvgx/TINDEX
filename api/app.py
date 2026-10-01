@@ -334,6 +334,32 @@ try:
     except Exception as _key_level_boot_err:
         logger.warning("[App] Key level watcher start failed: %s", _key_level_boot_err)
 
+    # Structure tracker: same "ready whenever OrbService is running" logic
+    # as the key-level watcher above, but for every ORB-followed ticker
+    # (not just ones with a watched level) — it backfills today's 1-minute
+    # bars per ticker (a yfinance call each) before subscribing, so unlike
+    # the key-level watcher this does real I/O at boot; still cheap enough
+    # to run unconditionally rather than gating it on market hours.
+    try:
+        from services.strategy.structure_tracker import get_structure_tracker
+        get_structure_tracker().start()
+
+        # Prewarm zones for every tracked ticker off-thread, so the first
+        # /zones call, entry-gate check, or closed-bar refresh after a deploy
+        # hits zone_engine's cache instead of a cold (bounded, but slow)
+        # yfinance fetch.
+        def _prewarm_zones(tickers):
+            from services.entry_check_service import prewarm
+            for t in tickers:
+                prewarm(t, ["zone"])
+        import threading as _threading
+        _threading.Thread(
+            target=_prewarm_zones, args=(get_structure_tracker().tracked_tickers(),),
+            daemon=True, name="zone-prewarm",
+        ).start()
+    except Exception as _structure_boot_err:
+        logger.warning("[App] Structure tracker start failed: %s", _structure_boot_err)
+
     # Daily 9 AM ET heads-up (1 day / 2 days / this week) for any open position
     # approaching its own expiration — the replacement for the blanket EOD
     # auto-close now that it's scoped to 0DTE only (2026-07-17). A single

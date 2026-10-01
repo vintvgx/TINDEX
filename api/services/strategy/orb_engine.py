@@ -255,6 +255,11 @@ class ORBEngine:
         self.timer_notified          = False  # ensures the 30-min update fires only once
         self.macro_today             = False  # True when a high-impact macro event is scheduled today
         self._current_option_price   = None   # latest mid-price from WebSocket stream
+        # Set once _get_option_price() genuinely has nothing (stream, REST
+        # quote, AND position-mark fallback all empty) — lets _process_tick
+        # log that ONCE per occurrence instead of once per tick for as long
+        # as it persists (bar cadence would otherwise flood the debug log).
+        self._option_price_unavailable_logged = False
         self._last_underlying_price  = None   # latest underlying price from periodic poll
         self.session_vwap            = None   # intraday VWAP computed at ORB calc time
         self.vix                     = None   # VIX at session open, set in calculate_orb
@@ -486,11 +491,27 @@ class ORBEngine:
         # pre-entry time-limit skip (above).
         if self.trade_taken and self.exit_manager:
             if current_option_price is None:
+                # Previously only logger.warning — invisible outside raw
+                # Railway logs, which is how a SPY position's stop-loss went
+                # unevaluated for its entire life undetected (2026-10-01
+                # incident: the stream never ticked, and _get_option_price's
+                # REST fallback silently failed too). debug.emit surfaces
+                # this on the mobile Debug tab like every other decision log;
+                # throttled to once per occurrence (not once per tick) since
+                # it can otherwise repeat every bar for as long as it lasts.
+                if not self._option_price_unavailable_logged:
+                    self.debug.emit("WARN",
+                        f"Skipping exit evaluation for {self.ticker} — option price "
+                        f"unavailable from stream, REST quote, AND position mark "
+                        f"(contract={self.contract_symbol}). Stop-loss/take-profit "
+                        f"are NOT being checked until this clears.")
+                    self._option_price_unavailable_logged = True
                 logger.warning(
                     "[ORBEngine] Skipping exit evaluation for %s — option price unavailable",
                     self.ticker,
                 )
                 return
+            self._option_price_unavailable_logged = False
             action = self.exit_manager.evaluate(
                 current_option_price=current_option_price,
                 current_underlying_price=current_price,
@@ -3160,8 +3181,31 @@ class ORBEngine:
 
     def _get_option_price(self) -> float | None:
         """
-        Return the current option mid-price: prefer the live stream value, else a
-        REST quote fallback when a position is open and the stream is unavailable.
+        Return the current option mid-price, three rungs deep:
+          1. The live stream's last tick (_current_option_price) — fastest
+             and most accurate whenever the stream is actually delivering.
+          2. A REST NBBO quote (OptionLatestQuoteRequest) — the same call
+             _resolve_contract uses at entry.
+          3. Alpaca's own broker position mark (get_open_position) — the
+             SAME call _engine_position_response already uses for the
+             mobile position card's "Current" price, so it's a known-good,
+             independently-verified source whenever both of the above come
+             up empty. Last resort: it's the broker's own rendered mark,
+             not a raw NBBO, so rungs 1-2 are preferred when available.
+
+        Rung 2's ask/bid check is `is not None`, NOT truthiness — a real
+        $0.00 bid is completely routine on a cheap, deep-OTM 0DTE contract
+        and is a valid quote, not a missing one. This used to be a plain
+        `and quote.bid_price` truthy check, which silently treated that
+        $0.00 as "no quote at all" and returned None — and because the
+        stream was ALSO dead for the same symbol (0 ticks for its entire
+        life), that made this function return None on every single tick
+        once the bid hit zero, which in turn made _process_tick skip exit
+        evaluation entirely (see its own comment) for the rest of the
+        trade. That's the 2026-10-01 incident this three-rung version
+        fixes: a SPY put's stop-loss never fired because of exactly this.
+
+        None only once all three have genuinely failed.
         """
         if self._current_option_price is not None:
             return self._current_option_price
@@ -3172,10 +3216,16 @@ class ORBEngine:
             oreq   = OptionLatestQuoteRequest(symbol_or_symbols=self.contract_symbol)
             quotes = self.option_client.get_option_latest_quote(oreq)
             quote  = quotes.get(self.contract_symbol)
-            if quote and quote.ask_price and quote.bid_price:
+            if quote and quote.ask_price is not None and quote.bid_price is not None:
                 return (quote.ask_price + quote.bid_price) / 2
         except Exception as oe:
             logger.debug("[ORBEngine] option quote REST fallback failed: %s", oe)
+        try:
+            pos = self.trading_client.get_open_position(self.contract_symbol)
+            if pos is not None and pos.current_price is not None:
+                return float(pos.current_price)
+        except Exception as oe:
+            logger.debug("[ORBEngine] option position-mark fallback failed: %s", oe)
         return None
 
     def unsubscribe_data(self):

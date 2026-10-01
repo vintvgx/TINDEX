@@ -6,6 +6,7 @@ import {
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { TickerContractsModal } from '@/common/components/ticker/TickerContractsModal';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
@@ -14,6 +15,7 @@ import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft
 import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
 import { ChartTechnicalsStrip, CHART_TECHNICALS_STRIP_HEIGHT } from '@/common/components/ticker/ChartTechnicals';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
+import { useChartAutoZones } from '@/hooks/queries/technicals/useTickerZones';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
@@ -89,6 +91,12 @@ export default function ChartsScreen() {
   }, [follows, openPositionTickers]);
 
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+  // A tapped zone-alert push lands here with ?ticker= (see
+  // NotificationNavigationService) — open that ticker's chart.
+  const { ticker: tickerParam } = useLocalSearchParams<{ ticker?: string }>();
+  useEffect(() => {
+    if (tickerParam) setSelectedTicker(tickerParam.toUpperCase());
+  }, [tickerParam]);
 
   // A ticker reached via search (see handleSearchSelect below) might not be
   // followed or have an open position yet — prepend it so it's immediately
@@ -274,6 +282,9 @@ export default function ChartsScreen() {
   // Every chart display option (style, technicals, session lines, watch
   // levels, data points) lives in the chart settings modal — see useChartSettings.
   const chart = useChartSettings({ ticker: activeTicker, period, colors, canMarkWatchLevel: true });
+  // ZoneEngine's auto-detected support/resistance bands, same as the
+  // full-screen chart — fetched only while "Auto-detected zones" is on.
+  const { zones: autoZones, context: zoneContext } = useChartAutoZones(activeTicker, chart.showAutoZones);
   const onChartAreaLayout = useCallback((e: LayoutChangeEvent) => {
     setChartAreaHeight(e.nativeEvent.layout.height);
   }, []);
@@ -484,6 +495,8 @@ export default function ChartsScreen() {
             showOrbRange={chart.showOrb}
             livePrice={resolvedLivePrice ?? null}
             watchZones={chartWatchZones}
+            autoZones={autoZones}
+            zoneContext={zoneContext}
             onWatchConfirm={handleWatchConfirm}
             onDeleteWatchZone={handleDeleteWatchZone}
             onUpdateWatchZone={handleUpdateWatchZone}

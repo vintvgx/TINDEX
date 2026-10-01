@@ -477,9 +477,30 @@ def _get_option_stream_status() -> dict:
             "subscriptions":      subscriptions,
             "last_quote_age_seconds": age,
             "stale":              stale,
+            # How close to a forced reconnect (see OptionStreamManager.
+            # _force_reconnect) — resets to 0 the moment either a real
+            # quote arrives or the reconnect itself fires.
+            "consecutive_verify_failures": health["consecutive_verify_failures"],
+            "last_reconnect_at":  health["last_reconnect_at"],
+            "reconnect_count":    health["reconnect_count"],
         }
     except Exception as exc:
         return {"running": False, "toggle": False, "error": str(exc)}
+
+
+@bp.route("/option-stream/status", methods=["GET"])
+def get_option_stream_status():
+    """
+    Lightweight, focused option-stream health check — same role as
+    /tindex/orb/status for the ORB hub, and deliberately separate from the
+    big combined /services/status payload so the mobile app doesn't have
+    to pull orb/contracts/price_stream/social state just to poll this.
+    `last_reconnect_at`/`reconnect_count` are what let the ticker tape
+    actually NOTICE a reconnect as a one-time event rather than only ever
+    seeing a point-in-time snapshot of `consecutive_verify_failures` that
+    may have already reset by the time a poll catches it.
+    """
+    return jsonify(_get_option_stream_status())
 
 
 @bp.route("/services/option-stream/unsubscribe", methods=["POST"])

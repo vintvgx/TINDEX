@@ -11,6 +11,7 @@ import { useToast } from '@/common/components/ui/Toast';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
 import { useTickerSupportResistance } from '@/hooks/queries/technicals/useTickerSupportResistance';
+import { useChartAutoZones } from '@/hooks/queries/technicals/useTickerZones';
 import { AdvancedPriceChart, AdvancedScrubPoint, ChartReferenceLine, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
 import type { PricePeriod, TickerHistoryData } from '@/common/types/blogPosts/ticker';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
@@ -24,6 +25,7 @@ import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLev
 import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
 import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
+import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 
 interface PriceChartFullScreenProps {
   visible: boolean;
@@ -96,7 +98,9 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   // useTickerSupportResistance's docstring. Support = green, resistance =
   // red, dashed to stay visually distinct from the ORB band's solid lines
   // and from any position SL/TP lines this chart might show elsewhere.
-  const [showSR, setShowSR] = useState(false);
+  // Persisted with the rest of the chart display prefs (SecureStore).
+  const { prefs: { showSR }, setPref: setChartPref } = useChartDisplayPrefs();
+  const setShowSR = (v: boolean) => setChartPref('showSR', v);
   // Every chart display option lives in the chart settings modal — see
   // useChartSettings. S/R is this screen's extra overlay row.
   const chart = useChartSettings({
@@ -137,6 +141,10 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
           })),
       ]
     : null;
+
+  // ZoneEngine's auto-detected zones — fetched only while the
+  // "Auto-detected zones" setting is on and this screen is visible.
+  const { zones: autoZones, context: zoneContext } = useChartAutoZones(ticker, visible && chart.showAutoZones);
 
   // Extended-hours session boundary lines (Pre-Market/Market Close/
   // Post-Market/Overnight) — 1D only, only outside regular trading hours
@@ -428,6 +436,8 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             onWatchConfirm={handleWatchConfirm}
             onDeleteWatchZone={handleDeleteWatchZone}
             onUpdateWatchZone={handleUpdateWatchZone}
+            autoZones={autoZones}
+            zoneContext={zoneContext}
             resetKey={ticker}
             settings={chart.chartSettings}
           />

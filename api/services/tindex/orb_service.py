@@ -203,6 +203,25 @@ class OrbService:
         current_time = now.time()
         return self.market_open <= current_time <= self.orb_end
     
+    def _drop_unfollowed_tickers(self, removed: Set[str]) -> None:
+        """
+        Forget tickers nobody follows anymore: evict them from the monitoring
+        cache and in-memory ORB state, then delete their orb_monitoring_state
+        rows. Without the eviction, the cache keeps re-upserting the row the
+        app just deleted on unfollow, so the ticker came straight back into
+        the ORB grid. The strategy core tickers are never in `removed`
+        (load_followed_stocks always includes them).
+        """
+        for ticker in removed:
+            dropped = self._state_cache.remove_ticker(ticker)
+            self.orb_ranges.pop(ticker, None)
+            self.monitoring_state.pop(ticker, None)
+            try:
+                self.supabase.table("orb_monitoring_state").delete().eq("ticker", ticker).execute()
+            except Exception as e:
+                logger.warning("Failed to delete orb_monitoring_state rows for unfollowed %s: %s", ticker, e)
+            logger.info("Unfollowed %s: dropped %d cached state entr(ies) and its monitoring rows", ticker, dropped)
+
     async def load_followed_stocks(self) -> Set[str]:
         """Load all ORB-enabled stocks from database"""
         try:
@@ -2280,6 +2299,7 @@ class OrbService:
                                 sorted(self.active_tickers),
                                 sorted(tickers),
                             )
+                            self._drop_unfollowed_tickers(self.active_tickers - tickers)
                             await self.ensure_orb_ranges()
                             if self.streaming_service.is_running:
                                 await self.streaming_service.stop_stream()

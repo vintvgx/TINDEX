@@ -2,8 +2,8 @@ import { useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { loadSecureBoolPref, saveSecureBoolPref } from '@/lib/secureBoolPref';
 
-const STORAGE_KEY = 'chart_show_watch_zones_v1';
-const QUERY_KEY = ['chart-show-watch-zones'];
+const STORAGE_KEY = 'chart_show_auto_zones_v1';
+const QUERY_KEY = ['chart-show-auto-zones'];
 const DEFAULT_VISIBLE = true;
 
 function loadVisible(): Promise<boolean> {
@@ -11,15 +11,16 @@ function loadVisible(): Promise<boolean> {
 }
 
 /**
- * Whether watch zones (key levels) are drawn on AdvancedPriceChart — a
- * global, persisted preference rather than per-instance component state.
- * The chart remounts on every ticker switch (`key={activeTicker}` in
- * charts.tsx) and again on every app restart, so a plain useState would
- * silently reset to the default each time; this survives both, the same
- * SecureStore + React-Query-cache-mirror pattern as useChartPriceSource/
- * useSearchBarVisibility.
+ * Whether ZoneEngine's auto-detected zones are drawn on AdvancedPriceChart —
+ * a global, persisted preference, same SecureStore + React-Query-cache-
+ * mirror pattern as useWatchZonesVisibility, and deliberately the SAME
+ * pattern rather than a prop threaded down from settings: AdvancedPriceChart
+ * reads this hook directly (same as it reads useWatchZonesVisibility), and
+ * useChartSettings' modal row writes through the same cache key, so toggling
+ * from either the inline toolbar button or the settings modal stays in sync
+ * with no plumbing between them.
  */
-export function useWatchZonesVisibility() {
+export function useAutoZonesVisibility() {
   const qc = useQueryClient();
   const { data: visible = DEFAULT_VISIBLE } = useQuery<boolean>({
     queryKey: QUERY_KEY,

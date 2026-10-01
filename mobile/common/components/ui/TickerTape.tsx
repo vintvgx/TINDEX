@@ -30,6 +30,7 @@ import { usePendingConfirmations } from '@/hooks/queries/strategy/usePendingConf
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { useAccountValueDisplay } from '@/hooks/queries/strategy/useAccountValueDisplay';
 import { useSellStatus, type SellStatus } from '@/hooks/useSellStatus';
+import { useOptionStreamReconnectEvent } from '@/hooks/queries/strategy/useOptionStreamReconnectEvent';
 import { Skeleton } from '@/common/components/ui/Skeleton';
 import type { WatchlistStock } from '@/common/types/watchlist';
 
@@ -179,6 +180,30 @@ export function TickerTape() {
   const lastSellStatusesRef = useRef(sellStatuses);
   if (hasSellStatus) lastSellStatusesRef.current = sellStatuses;
 
+  // ── Option price-stream reconnect notice — see
+  // useOptionStreamReconnectEvent's doc comment for what this actually is
+  // (a polled, up-to-15s-late event, not a push) and why. Same
+  // mounted/opacity crossfade pattern as the sell-status overlay above,
+  // ranked just below it: action-in-progress still wins, but this is more
+  // worth seeing than a long-press account peek.
+  const { visible: showReconnectNotice } = useOptionStreamReconnectEvent();
+  const hasReconnectNotice = pendingCount === 0 && !hasSellStatus && showReconnectNotice;
+  const [reconnectOverlayMounted, setReconnectOverlayMounted] = useState(false);
+  const reconnectOverlayOpacity = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (hasReconnectNotice) {
+      setReconnectOverlayMounted(true);
+      Animated.timing(reconnectOverlayOpacity, {
+        toValue: 1, duration: 500, easing: Easing.out(Easing.quad), useNativeDriver: true,
+      }).start();
+    } else if (reconnectOverlayMounted) {
+      Animated.timing(reconnectOverlayOpacity, {
+        toValue: 0, duration: 500, easing: Easing.in(Easing.quad), useNativeDriver: true,
+      }).start(() => setReconnectOverlayMounted(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasReconnectNotice]);
+
   // ── Long-press peek: Live Equity / Day PnL / Options BP — LIVE account
   // only (no paper), see docs/todos/2026-09-17.md. Shown only while held
   // (onPressOut hides it) and only when neither takeover above is active —
@@ -187,7 +212,7 @@ export function TickerTape() {
   const { live: liveAccount } = useAccountValueDisplay();
   const [showAccountOverlay, setShowAccountOverlay] = useState(false);
   const handleTapeLongPress = () => {
-    if (pendingCount > 0 || sellOverlayMounted) return;
+    if (pendingCount > 0 || sellOverlayMounted || reconnectOverlayMounted) return;
     setShowAccountOverlay(true);
   };
   const handleTapePressOut = () => setShowAccountOverlay(false);
@@ -431,7 +456,23 @@ export function TickerTape() {
         </Animated.View>
       )}
 
-      {pendingCount === 0 && !sellOverlayMounted && showAccountOverlay && (
+      {/* Option price-stream just reconnected — see
+          useOptionStreamReconnectEvent. Auto-hides itself after 15s
+          (that hook's own timer), so no dismiss affordance needed here. */}
+      {pendingCount === 0 && !sellOverlayMounted && reconnectOverlayMounted && (
+        <Animated.View
+          style={[styles.tape, styles.confirmTape, styles.overlay, { top: insets.top, backgroundColor: colors.tape, opacity: reconnectOverlayOpacity }]}
+        >
+          <View style={[styles.row, { paddingLeft: 12 }]}>
+            <Ionicons name="sync" size={13} color={colors.tapeUp} style={{ marginRight: 6 }} />
+            <Text style={[styles.confirmText, { color: colors.tapeUp }]} numberOfLines={1}>
+              Live option price feed reconnected
+            </Text>
+          </View>
+        </Animated.View>
+      )}
+
+      {pendingCount === 0 && !sellOverlayMounted && !reconnectOverlayMounted && showAccountOverlay && (
         <View
           style={[styles.tape, styles.confirmTape, styles.overlay, { top: insets.top, backgroundColor: colors.tape }]}
           pointerEvents="none"

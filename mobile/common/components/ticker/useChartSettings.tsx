@@ -3,16 +3,19 @@ import type { ChartDisplaySettings, ChartMode, ChartReferenceLine } from '@/comm
 import type { ChartSettingRow, ChartSettingsSection } from '@/common/components/ticker/ChartControlToggles';
 import { useChartTechnicals, technicalsReferenceLines, ChartTechnicalsInfo } from '@/common/components/ticker/ChartTechnicals';
 import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
+import { useAutoZonesVisibility } from '@/hooks/useAutoZonesVisibility';
 import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
+import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 
 /**
  * Everything behind the chart's Technicals and settings modals, shared by the Charts tab
  * and PriceChartFullScreen: chart style, the technicals overlays (signal
  * strip, VWAP, daily EMAs, ORB band), session lines, watch levels, data
- * points, plus the "mark a watch level" action. Watch-zone visibility and
- * Data Points are the app's existing global, persisted preferences; the
- * rest is per-screen state.
+ * points, plus the "mark a watch level" action. Every display option
+ * persists across launches: style/technicals/session lines via
+ * useChartDisplayPrefs (SecureStore), watch levels / auto zones / Data
+ * Points via their own hooks. Only Watch mode itself is transient.
  */
 interface Options {
   ticker: string | null | undefined;
@@ -25,15 +28,23 @@ interface Options {
 }
 
 export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, extraOverlayRows = [] }: Options) {
-  const [mode, setMode] = useState<ChartMode | null>(null);
-  const [showSessionLines, setShowSessionLines] = useState(false);
+  const { prefs, setPref } = useChartDisplayPrefs();
+  const { mode, showSessionLines, showStrip, showVwap, showEma, showOrb } = prefs;
+  const setMode = (v: ChartMode | null) => setPref('mode', v);
+  const setShowSessionLines = (v: boolean) => setPref('showSessionLines', v);
+  const setShowStrip = (v: boolean) => setPref('showStrip', v);
+  const setShowVwap = (v: boolean) => setPref('showVwap', v);
+  const setShowEma = (v: boolean) => setPref('showEma', v);
+  const setShowOrb = (v: boolean) => setPref('showOrb', v);
   const [watchMode, setWatchMode] = useState(false);
-  const [showStrip, setShowStrip] = useState(false);
-  const [showVwap, setShowVwap] = useState(false);
-  const [showEma, setShowEma] = useState(false);
-  const [showOrb, setShowOrb] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const { visible: showWatchZones, setVisible: setShowWatchZones } = useWatchZonesVisibility();
+  // Unlike showWatchZones, the caller (PriceChartFullScreen) needs this
+  // value itself — fetching ZoneEngine's zones is a real (if 90s-cached)
+  // yfinance call, and should be gated on the toggle the same way S/R's
+  // own fetch is gated on showSR, so it's returned below rather than left
+  // purely internal to the hook/AdvancedPriceChart pair.
+  const { visible: showAutoZones, setVisible: setShowAutoZones } = useAutoZonesVisibility();
   const { enabled: crosshairEnabled, setEnabled: setCrosshairEnabled } = useCrosshairEnabled();
 
   // Only poll while something actually uses the data.
@@ -90,6 +101,9 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
           value: showSessionLines, onChange: setShowSessionLines },
         { kind: 'toggle', key: 'zones', icon: 'layers-outline', label: 'Show watch levels',
           description: 'Show or hide your saved levels on the chart (use Mark a watch level above to add one)', value: showWatchZones, onChange: setShowWatchZones },
+        { kind: 'toggle', key: 'autoZones', icon: 'grid-outline', label: 'Auto-detected zones',
+          description: 'Support/resistance ZoneEngine finds automatically, scored by confluence (separate from your own watch levels)',
+          value: showAutoZones, onChange: setShowAutoZones },
         ...extraOverlayRows,
         { kind: 'toggle', key: 'crosshair', icon: 'locate-outline', label: 'Data points',
           description: 'Tap-and-hold the chart to inspect an exact price/time',
@@ -106,6 +120,7 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
     technicals,
     showStrip,
     showOrb,
+    showAutoZones,
     referenceLines,
     chartSettings,
     sections,

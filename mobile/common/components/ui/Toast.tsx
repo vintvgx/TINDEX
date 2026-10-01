@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useMemo } from 'react';
-import { Animated, View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { Animated, View, Text, TouchableOpacity, StyleSheet, Platform, Modal } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -90,46 +90,82 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
   const blurTint = isDarkColorScheme ? 'dark' : 'light';
 
+  const toastOverlay = (
+    <View style={styles.container} pointerEvents="box-none">
+      {toasts.map(toast => {
+        const vc = getVariantConfig(toast.variant);
+        return (
+          <Animated.View
+            key={toast.id}
+            style={[
+              styles.toastOuter,
+              {
+                borderColor: vc.border + '55',
+                shadowColor: vc.border,
+                transform: [{ translateY: toast.translateY }],
+                opacity: toast.opacity,
+              },
+            ]}
+          >
+            {/* Frosted-glass base */}
+            <BlurView tint={blurTint} intensity={90} style={StyleSheet.absoluteFill} />
+            {/* Variant colour tint over the blur */}
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: vc.tint }]} />
+            {/* Content */}
+            <View style={styles.toastContent}>
+              <Ionicons name={vc.iconName} size={20} color={vc.icon} />
+              <Text style={[styles.message, { color: colors.text }]} numberOfLines={3}>
+                {toast.message}
+              </Text>
+              <TouchableOpacity
+                onPress={() => dismiss(toast.id, toast.opacity, toast.translateY)}
+                hitSlop={10}
+              >
+                <Ionicons name="close" size={15} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        );
+      })}
+    </View>
+  );
+
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <View style={styles.container} pointerEvents="box-none">
-        {toasts.map(toast => {
-          const vc = getVariantConfig(toast.variant);
-          return (
-            <Animated.View
-              key={toast.id}
-              style={[
-                styles.toastOuter,
-                {
-                  borderColor: vc.border + '55',
-                  shadowColor: vc.border,
-                  transform: [{ translateY: toast.translateY }],
-                  opacity: toast.opacity,
-                },
-              ]}
-            >
-              {/* Frosted-glass base */}
-              <BlurView tint={blurTint} intensity={90} style={StyleSheet.absoluteFill} />
-              {/* Variant colour tint over the blur */}
-              <View style={[StyleSheet.absoluteFill, { backgroundColor: vc.tint }]} />
-              {/* Content */}
-              <View style={styles.toastContent}>
-                <Ionicons name={vc.iconName} size={20} color={vc.icon} />
-                <Text style={[styles.message, { color: colors.text }]} numberOfLines={3}>
-                  {toast.message}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => dismiss(toast.id, toast.opacity, toast.translateY)}
-                  hitSlop={10}
-                >
-                  <Ionicons name="close" size={15} color={colors.textSecondary} />
-                </TouchableOpacity>
-              </View>
-            </Animated.View>
-          );
-        })}
-      </View>
+      {/*
+        A toast's zIndex only ranks it against OTHER PLAIN VIEWS in this
+        same stacking context — it does nothing against a native <Modal>
+        (TradeContractSheet/SignalEnterSheet's own pageSheet, or
+        BlindEntryModal on top of either), since iOS/Android present a
+        Modal in its own native layer entirely outside the regular view
+        hierarchy, unconditionally above every plain View no matter what
+        zIndex says. ToastProvider is mounted once at the app root
+        (app/_layout.tsx) — well below any screen's own Modal in z-order —
+        so an error fired while the entry sheet (and especially while
+        BlindEntryModal, stacked on top of IT) is open rendered invisibly
+        behind both (2026-10-01 bug report: toasts only visible after
+        exiting the modals quickly enough to catch the last second of the
+        3.5s auto-dismiss).
+        Fix: only when there's actually something to show, mount the SAME
+        overlay inside its own transparent, unanimated Modal instead of a
+        plain View. iOS/Android stack simultaneously-presented Modals in
+        presentation order — most-recently-presented on top — and a toast
+        is, by definition, always fired AFTER whatever modal is already
+        open, so this one is always the newest and always wins, regardless
+        of how many native Modals are already stacked underneath it.
+        animationType="none": the toast items already animate themselves
+        (translateY/opacity); the Modal's own slide/fade would double up.
+        onRequestClose is a no-op, not a dismiss-on-back: Android's back
+        button hits this Modal's handler whenever a toast happens to be up,
+        and a toast shouldn't eat a back-press meant for the modal beneath
+        it — it has nothing better to do, so it does nothing.
+      */}
+      {toasts.length > 0 && (
+        <Modal transparent visible animationType="none" onRequestClose={() => {}}>
+          {toastOverlay}
+        </Modal>
+      )}
     </ToastContext.Provider>
   );
 }

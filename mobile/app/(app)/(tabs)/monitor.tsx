@@ -7,6 +7,7 @@ import { MarketPulseStrip } from '@/common/components/orb/MarketPulseStrip';
 import * as SecureStore from 'expo-secure-store';
 import { useORBMonitoringState, ORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useORBRanges } from '@/hooks/queries/orb/useORBRanges';
+import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
 import { ORBCardGrid } from '@/common/components/orb/ORBCardGrid';
 import { ORBDetailModal } from '@/common/components/orb/ORBDetailModal';
 import { WatchlistsModal } from '@/common/components/watchlist/WatchlistsModal';
@@ -120,9 +121,27 @@ const ORBScreen = () => {
   const isContractsRunning = servicesStatus?.contracts?.running ?? false;
   const anyServiceRunning    = isORBRunning || isContractsRunning;
 
+  // The grid is YOUR ORB list: only tickers you follow. orb_monitoring_state
+  // holds every ticker the ORB service streams — anyone's follows plus the
+  // strategy core tickers (SPY/QQQ/IWM) — and the service can rewrite a
+  // just-unfollowed ticker's row until its next ticker refresh, so without
+  // this filter an unfollowed ticker kept reappearing. Mock data skips it.
+  const { data: follows, isLoading: followsLoading } = useUserORBFollows();
+  const followedTickers = useMemo(
+    () => new Set((follows ?? []).map(f => String(f.ticker).toUpperCase())),
+    [follows],
+  );
+  const usingMock = useMockData || useCalculationMockData;
+  const myOrbData = useMemo(() => {
+    if (!orbData) return orbData;
+    if (usingMock) return orbData;
+    if (followsLoading) return [];
+    return orbData.filter(item => followedTickers.has(item.ticker.toUpperCase()));
+  }, [orbData, usingMock, followsLoading, followedTickers]);
+
   const orbTickers = useMemo(
-    () => (orbData ?? []).map(item => item.ticker),
-    [orbData],
+    () => (myOrbData ?? []).map(item => item.ticker),
+    [myOrbData],
   );
 
   console.log('[ORB] calling useMarketStream, tickers:', orbTickers.length);
@@ -130,11 +149,11 @@ const ORBScreen = () => {
   console.log('[ORB] useMarketStream OK');
 
   const transformedORBData = useMemo(() => {
-    if (!orbData) return [];
-    const activeOnly = orbData.filter((item) => item.monitoring_active);
+    if (!myOrbData) return [];
+    const activeOnly = myOrbData.filter((item) => item.monitoring_active);
     if (!isORBRunning) return activeOnly.map((item) => ({ ...item, breakout_type: 'Offline' as const }));
     return activeOnly;
-  }, [orbData, isORBRunning]);
+  }, [myOrbData, isORBRunning]);
 
   useEffect(() => {
     if (orbData !== undefined && !orbLoading) setLastFetchTime(new Date());

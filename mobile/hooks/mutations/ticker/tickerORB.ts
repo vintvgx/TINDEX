@@ -39,6 +39,89 @@ export function useIsFollowingORB(ticker: string) {
 }
 
 /**
+ * Turns ORB following on/off for one ticker — the single implementation
+ * behind every ORB follow control (TickerDetailSheet's star, the ORB detail
+ * modal's Unfollow, the add-ticker sheet). Updates or inserts the
+ * user_stock_follows row; on unfollow it also clears the ticker's
+ * orb_monitoring_state rows so the card drops immediately.
+ *
+ * The monitoring-row delete is best-effort: the ORB grid already hides
+ * anything you don't follow (see monitor.tsx), and the backend drops the
+ * ticker's rows on its next ticker refresh (OrbService
+ * _drop_unfollowed_tickers), so a failed delete must not fail the unfollow.
+ */
+export async function setTickerORBFollow(userId: string, ticker: string, orbEnabled: boolean) {
+  const normalizedTicker = ticker.toUpperCase();
+
+  const { data: existingFollow, error: fetchError } = await supabase
+    .from("user_stock_follows")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("ticker", normalizedTicker)
+    .maybeSingle();
+  if (fetchError) throw fetchError;
+
+  if (existingFollow) {
+    console.debug(`User ORB status for ${normalizedTicker} updated to: ${orbEnabled}`);
+    const { data, error } = await supabase
+      .from("user_stock_follows")
+      .update({
+        orb_enabled: orbEnabled,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("user_id", userId)
+      .eq("ticker", normalizedTicker)
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+
+    if (!orbEnabled) {
+      // ALL rows for the ticker (not just "today"): the grid renders any
+      // monitoring_active row, and a UTC "today" diverges from the ET
+      // trade_date the backend stores.
+      const { data: deleted, error: deleteError } = await supabase
+        .from("orb_monitoring_state")
+        .delete()
+        .eq("ticker", normalizedTicker)
+        .select("ticker, trade_date");
+      if (deleteError) {
+        console.warn("Could not remove ticker from orb_monitoring_state:", deleteError);
+      } else {
+        console.debug(`Removed ${deleted?.length ?? 0} orb_monitoring_state row(s) for ${normalizedTicker}`);
+      }
+    }
+    return data;
+  }
+
+  // Not followed yet — nothing to turn off.
+  if (!orbEnabled) return null;
+
+  console.debug(`User following ORB of ${normalizedTicker}`);
+  const { data, error } = await supabase
+    .from("user_stock_follows")
+    .insert({
+      user_id: userId,
+      ticker: normalizedTicker,
+      orb_enabled: true,
+      notification_enabled: true,
+      notify_confirmed_breakout: true,
+      notify_reversal: true,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+/** Everything that shows ORB follow state: the star on any ticker, the
+ *  followed-ticker lists (Charts tab, ORB grid filter), and the grid rows. */
+export function invalidateORBFollowQueries(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ["followTickerORB"] });
+  queryClient.invalidateQueries({ queryKey: ["userORBFollows"] });
+  queryClient.invalidateQueries({ queryKey: ["orb-monitoring-state"] });
+}
+
+/**
  * Hook to toggle ORB following for a ticker
  */
 export function useToggleORBFollow(ticker?: string) {
@@ -51,83 +134,9 @@ export function useToggleORBFollow(ticker?: string) {
     mutationFn: async (orbEnabled: boolean) => {
       if (!user) throw new Error("User not authenticated");
       if (!ticker) throw new Error("Ticker not set");
-
-      const normalizedTicker = ticker.toUpperCase();
-
-      const { data: existingFollow } = await supabase
-        .from("user_stock_follows")
-        .select("*")
-        .eq("user_id", user.id)
-        .eq("ticker", normalizedTicker)
-        .single();
-
-      if (existingFollow) {
-        console.debug(`User ORB status for ${ticker} updated to: ${orbEnabled}`);
-        const { data, error } = await supabase
-          .from("user_stock_follows")
-          .update({
-            orb_enabled: orbEnabled,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("user_id", user.id)
-          .eq("ticker", normalizedTicker)
-          .select()
-          .single();
-
-        if (error) throw error;
-
-        // When removing, clean up the ticker's monitoring rows so the card drops
-        // from the ORB grid immediately without waiting for the service.
-        //
-        // Delete ALL rows for the ticker (not just "today"): the grid renders any
-        // row with monitoring_active=true regardless of trade_date, and the prior
-        // trade_date filter used a UTC date that diverges from the ET trade_date
-        // the backend stores — so it matched zero rows in the evening and the card
-        // never dropped.
-        if (!orbEnabled) {
-          const { data: deleted, error: deleteError } = await supabase
-            .from("orb_monitoring_state")
-            .delete()
-            .eq("ticker", normalizedTicker)
-            .select("ticker, trade_date");
-          if (deleteError) {
-            console.error("Error removing ticker from orb_monitoring_state:", deleteError);
-          } else {
-            console.debug(
-              `Removed ${deleted?.length ?? 0} orb_monitoring_state row(s) for ${normalizedTicker}`
-            );
-          }
-        }
-
-        return data;
-      } else {
-        // Only insert if actually following — no point inserting orb_enabled=false
-        if (!orbEnabled) return null;
-
-        console.debug(`User following ORB of ${ticker}`);
-        const { data, error } = await supabase
-          .from("user_stock_follows")
-          .insert({
-            user_id: user.id,
-            ticker: normalizedTicker,
-            orb_enabled: true,
-            notification_enabled: true,
-            notify_confirmed_breakout: true,
-            notify_reversal: true,
-          })
-          .select()
-          .single();
-
-        if (error) throw error;
-        return data;
-      }
+      return setTickerORBFollow(user.id, ticker, orbEnabled);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["followTickerORB", ticker, user?.id] });
-      queryClient.invalidateQueries({ queryKey: ["userORBFollows", user?.id] });
-      // Refresh the ORB grid so removals drop instantly and adds are reflected
-      queryClient.invalidateQueries({ queryKey: ["orb-monitoring-state"] });
-    },
+    onSuccess: () => invalidateORBFollowQueries(queryClient),
   });
 }
 

@@ -51,6 +51,16 @@ _INTRADAY_TTL_S = 15
 SECTOR_LEAD_PCT = 0.3        # |relative| below this = "Inline"
 SECTOR_STRONG_PCT = 1.0      # against the trade by this much = hard block
 
+# How close price has to be to a ZoneEngine zone's boundary to count as
+# "at" it for the zone gate factor — wider than StructureTracker's own
+# live zone_approach (_APPROACH_PCT = 0.15%), which fires per-tick chart/
+# alert events; this only needs to be right once per gate check.
+ZONE_NEAR_PCT = 0.003
+
+# A zone this strong, sitting against the trade, is a hard block rather
+# than a normal +1/-1 factor — same tier SECTOR_STRONG_PCT gives sector.
+ZONE_BLOCK_SCORE = 70.0
+
 # Verdict thresholds
 ENTER_MIN_SCORE = 3
 RSI_OVERBOUGHT = 70
@@ -272,6 +282,95 @@ def _sector_row(ticker: str) -> Optional[dict]:
     }
 
 
+def _zone_snapshot(ticker: str) -> dict:
+    """Thin wrapper so a ThreadPoolExecutor can fetch ZoneEngine's snapshot
+    in parallel with the daily/intraday/sector fetches — it needs no price,
+    only the ticker, so it doesn't have to wait on `_session_rows()`."""
+    from services.strategy.zone_engine import zones as _zones
+    return _zones(ticker)
+
+
+def apply_flips(zone_list: list, flips: list, tolerance: float) -> list:
+    """
+    Copies of `zone_list` with StructureTracker's flipped `current_type`
+    applied. Matched by NEAREST CENTER, not exact bounds: zone_engine
+    recomputes zones from live data, so a refresh can shift a boundary by a
+    cent between the tracker's snapshot and this one. Each flip goes to the
+    zone whose center is closest, accepted only within max(that zone's
+    half-width, the clustering `tolerance`); a flip with no zone that close
+    has expired (the zone moved or dropped out) and is ignored. Pure — no
+    I/O.
+    """
+    out = [dict(z) for z in zone_list]
+    for f in flips:
+        f_center = (f["low"] + f["high"]) / 2
+        best, best_d = None, None
+        for z in out:
+            d = abs(z["center"] - f_center) if "center" in z else abs((z["low"] + z["high"]) / 2 - f_center)
+            if best_d is None or d < best_d:
+                best, best_d = z, d
+        if best is not None and best_d <= max((best["high"] - best["low"]) / 2, tolerance):
+            best["type"] = f["current_type"]
+    return out
+
+
+def _zone_row(ticker: str, price: float, snap: Optional[dict] = None) -> Optional[dict]:
+    """
+    Nearest ZoneEngine zone to `price` — purely geometric (which side of
+    price the zone sits on, not which trade direction it favors), same
+    convention as `orb_row`/`vwap_row`: compute_verdict's own `is_call`
+    branch decides what "at_resistance" means for a CALL vs a PUT, this
+    function just reports geometry.
+
+    `type` reflects StructureTracker's live flip state for this session
+    when the ticker is being tracked (a support zone broken this morning
+    reports as resistance here too) — "closed through the zone" should
+    change what the zone gate says, not just what the chart draws.
+
+    Returns `{"position": "clear", ...}` (not None) when nothing is close
+    enough to matter — a real "no zone nearby" data point, not a fetch
+    failure, so compute_verdict can choose to skip it without treating it
+    as missing data the way a failed sector/daily-bars fetch would be.
+    """
+    if snap is None:
+        from services.strategy.zone_engine import zones as _zones
+        snap = _zones(ticker)
+    if snap.get("error"):
+        return None
+
+    flips: list = []
+    try:
+        from services.strategy.structure_tracker import get_structure_tracker
+        flips = get_structure_tracker().get_flipped_zones(ticker)
+    except Exception:
+        pass
+
+    candidates = apply_flips(snap.get("support", []) + snap.get("resistance", []),
+                             flips, snap.get("tolerance") or 0.0)
+    if not candidates:
+        return {"position": "clear", "high": None, "low": None, "score": None,
+                "distance_pct": None, "sources": []}
+
+    def _dist(z):
+        if z["low"] <= price <= z["high"]:
+            return 0.0
+        return min(abs(price - z["low"]), abs(price - z["high"]))
+
+    nearest = min(candidates, key=_dist)
+    d = _dist(nearest)
+    inside = nearest["low"] <= price <= nearest["high"]
+    if not (inside or (price and d / price <= ZONE_NEAR_PCT)):
+        return {"position": "clear", "high": None, "low": None, "score": None,
+                "distance_pct": None, "sources": []}
+
+    return {
+        "position": "at_resistance" if nearest["type"] == "resistance" else "at_support",
+        "high": nearest["high"], "low": nearest["low"], "score": nearest["score"],
+        "distance_pct": round(d / price * 100, 3) if price else None,
+        "sources": nearest["sources"],
+    }
+
+
 # ── Verdict ─────────────────────────────────────────────────────────────────────
 
 def compute_verdict(direction: str, rows: dict) -> dict:
@@ -288,7 +387,9 @@ def compute_verdict(direction: str, rows: dict) -> dict:
     """
     is_call = direction.upper() == "CALL"
     side = "call" if is_call else "put"
-    trend, rsi, vwap, orb, sector = (rows.get(k) for k in ("trend", "rsi", "vwap", "orb", "sector"))
+    trend, rsi, vwap, orb, sector, zone = (
+        rows.get(k) for k in ("trend", "rsi", "vwap", "orb", "sector", "zone")
+    )
 
     factors: list[dict] = []
     blockers: list[str] = []
@@ -355,6 +456,34 @@ def compute_verdict(direction: str, rows: dict) -> dict:
             add("sector", sector["label"] == want, 1, f"sector ({etf}) {want.lower()}",
                 f"waiting for {etf} to {'lead' if is_call else 'lag'} SPY (now {rel:+.1f}%)")
 
+    if zone and zone.get("position") != "clear":
+        at_res = zone["position"] == "at_resistance"
+        kind = "resistance" if at_res else "support"
+        level = zone["high"] if at_res else zone["low"]
+        score_val = zone["score"] or 0
+        # at_resistance is against a CALL (overhead supply in the way) and
+        # for a PUT (price capped below it); at_support is the mirror.
+        against = (at_res and is_call) or (not at_res and not is_call)
+        if against and score_val >= ZONE_BLOCK_SCORE:
+            # A real, confluence-scored wall — the TODO's own framing
+            # ("at scored resistance + rejection strengthens DON'T ENTER")
+            # treated as a hard block once the zone itself is strong enough
+            # to matter, same tier SECTOR_STRONG_PCT gives sector. This is a
+            # geometric read (price vs. the zone), not a live rejection
+            # signal — StructureTracker's zone_approach event is the sharper
+            # version of "actually rejecting right now," not yet wired in here.
+            blockers.append(
+                f"${level:.2f} scored {kind} zone ({score_val:.0f}/100, {_join(zone['sources'])}) "
+                f"is directly in the way of this {side}."
+            )
+            add("zone", False, 1, "", None, fail_note=f"at a {score_val:.0f}-scored {kind} zone (${level:.2f})")
+        elif against:
+            add("zone", False, 1, "",
+                f"waiting for a volume-confirmed close through the ${level:.2f} {kind} zone ({score_val:.0f}/100)")
+        else:
+            verb = "capped below" if at_res else "holding above"
+            add("zone", True, 1, f"{verb} the ${level:.2f} {kind} zone ({score_val:.0f}/100)", None)
+
     score = sum(f["points"] for f in factors)
     agree = sum(1 for f in factors if f["ok"])
     total = len(factors)
@@ -416,10 +545,11 @@ def get_entry_check(ticker: str, direction: str) -> dict:
     ticker = ticker.upper().strip()
     direction = direction.upper()
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         f_daily = pool.submit(_daily_closes, ticker)
         f_bars = pool.submit(_intraday_bars, ticker)
         f_sector = pool.submit(_sector_row, ticker)
+        f_zone = pool.submit(_zone_snapshot, ticker)
 
         errors: dict[str, str] = {}
         try:
@@ -437,6 +567,11 @@ def get_entry_check(ticker: str, direction: str) -> dict:
         except Exception as e:
             logger.warning("[entry_check] sector failed for %s: %s", ticker, e)
             sector, errors["sector"] = None, str(e)
+        try:
+            zone_snap = f_zone.result()
+        except Exception as e:
+            logger.warning("[entry_check] zone snapshot failed for %s: %s", ticker, e)
+            zone_snap, errors["zone"] = None, str(e)
 
     vwap_row, orb_row, last, session_date = _session_rows(ticker, bars)
     if last is None and closes is not None and len(closes):
@@ -448,7 +583,9 @@ def get_entry_check(ticker: str, direction: str) -> dict:
     if closes is not None and len(closes) >= 22:
         trend, rsi = _trend_and_rsi(closes, last)
 
-    rows = {"trend": trend, "rsi": rsi, "vwap": vwap_row, "orb": orb_row, "sector": sector}
+    zone_row = _zone_row(ticker, last, snap=zone_snap) if zone_snap is not None else None
+
+    rows = {"trend": trend, "rsi": rsi, "vwap": vwap_row, "orb": orb_row, "sector": sector, "zone": zone_row}
     verdicts = {d: compute_verdict(d, rows) for d in ("CALL", "PUT")}
     from services.utils.market_hours import is_market_hours
     return {
@@ -470,7 +607,7 @@ def get_entry_check(ticker: str, direction: str) -> dict:
 
 # ── Strategy technicals gate (automated ORB engines) ───────────────────────────
 
-GATE_FACTORS = ("trend", "trend_intraday", "rsi", "vwap", "orb", "sector")
+GATE_FACTORS = ("trend", "trend_intraday", "rsi", "vwap", "orb", "sector", "zone")
 
 INTRADAY_FAST, INTRADAY_SLOW, INTRADAY_BAR_MIN = 9, 21, 5
 
@@ -524,6 +661,8 @@ def prewarm(ticker: str, required: Optional[list[str]] = None) -> None:
             _daily_closes(ticker)
         if "sector" in required:
             _sector_of(ticker)
+        if "zone" in required:
+            _zone_snapshot(ticker)  # populates zone_engine's own 90s cache
     except Exception as e:
         logger.warning("[entry_check] prewarm failed for %s: %s", ticker, e)
 
@@ -598,6 +737,12 @@ def evaluate_gate(ticker: str, direction: str, required: list[str], price: float
         except Exception as e:
             errors.append(f"sector: {e}")
 
+    if "zone" in required:
+        try:
+            rows["zone"] = _zone_row(ticker, price)
+        except Exception as e:
+            errors.append(f"zone: {e}")
+
     intraday_row = None
     if "trend_intraday" in required:
         try:
@@ -610,7 +755,7 @@ def evaluate_gate(ticker: str, direction: str, required: list[str], price: float
         except Exception as e:
             errors.append(f"intraday trend: {e}")
 
-    verdict = compute_verdict(direction, {k: rows.get(k) for k in ("trend", "rsi", "vwap", "orb", "sector")})
+    verdict = compute_verdict(direction, {k: rows.get(k) for k in ("trend", "rsi", "vwap", "orb", "sector", "zone")})
     by_key = {f["key"]: f for f in verdict["factors"]}
 
     results = []
@@ -632,6 +777,12 @@ def evaluate_gate(ticker: str, direction: str, required: list[str], price: float
             continue
         if key == "sector" and rows.get("sector") and rows["sector"].get("label") == "n/a":
             results.append({"key": key, "ok": True, "skipped": True, "note": "no sector (ETF) — skipped"})
+        elif key == "zone" and rows.get("zone") and rows["zone"].get("position") == "clear":
+            # No zone near enough to matter — same "nothing to check" skip
+            # semantics as sector on an ETF, not a fail: a strategy
+            # requiring the zone factor shouldn't be permanently blocked
+            # just because price happens to sit in open space right now.
+            results.append({"key": key, "ok": True, "skipped": True, "note": "no nearby zone — skipped"})
         elif key == "orb" and rows.get("orb") and rows["orb"]["position"] == "Forming":
             results.append({"key": key, "ok": False, "skipped": False, "note": "opening range still forming"})
         elif f is None:

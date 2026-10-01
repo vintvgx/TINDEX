@@ -168,9 +168,13 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     });
   };
 
-  const doSubmit = () => {
-    if (!contract) return;
-    runSubmit({
+  // Shared by doSubmit, enterBlind, and the Blind Entry "Enter Anyway"
+  // retry (runSubmit's caller adds bypass_stream_check itself) — one place
+  // building the body means the stop/profile precedence logic below can
+  // never drift between the normal submit and the opt-in blind one.
+  const buildTradeBody = (): ImmediateTradeByTickerRequest | null => {
+    if (!contract) return null;
+    return {
       ticker,
       direction:       contract.option_type,
       contract_symbol: contract.symbol,
@@ -188,7 +192,21 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
       ...(slEnabled && useAlertStop && alertMaxLossPct != null
         ? { max_loss_pct: alertMaxLossPct }
         : (slEnabled && isManual) ? { max_loss_pct: manualSlPct / 100 } : {}),
-    });
+    };
+  };
+
+  const doSubmit = () => {
+    const body = buildTradeBody();
+    if (body) runSubmit(body);
+  };
+
+  // Opted into upfront, from the Review sheet's "Skip live price check" —
+  // see OrderReviewSheet's onEnterBlind doc comment. Only offered for a
+  // 0DTE contract (isZeroDteContract below) since that's the only case the
+  // backend's stream check — and therefore this bypass — does anything.
+  const enterBlind = () => {
+    const body = buildTradeBody();
+    if (body) runSubmit({ ...body, bypass_stream_check: true });
   };
 
   // Shown on the Review sheet in place of the old Alert confirms — the
@@ -205,6 +223,14 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     : (useAlertStop && alertMaxLossPct != null) ? alertMaxLossPct
     : isManual ? manualSlPct / 100
     : profile.maxLoss / 100;
+  // "Skip live price check" only means anything for a 0DTE contract —
+  // same is_zero_dte condition the backend gates verify_stream on
+  // (submit_manual_trade). A rough client-side date compare is fine here:
+  // it only decides whether to SHOW the option, never whether the bypass
+  // actually does anything — the backend re-derives is_zero_dte itself
+  // from the contract symbol regardless of what the client thinks.
+  const isZeroDteContract = contract?.expiration?.slice(0, 10) === new Date().toISOString().slice(0, 10);
+
   const reviewOrder: ReviewOrder = {
     ticker,
     optionType: contract.option_type,
@@ -438,6 +464,7 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
         warnings={reviewWarnings}
         isSubmitting={isPending}
         onSubmit={doSubmit}
+        onEnterBlind={isZeroDteContract ? enterBlind : undefined}
         onCancel={() => setReviewOpen(false)}
         successMessage={successMessage}
         onSuccessDone={() => { setSuccessMessage(null); setReviewOpen(false); onClose(); }}
