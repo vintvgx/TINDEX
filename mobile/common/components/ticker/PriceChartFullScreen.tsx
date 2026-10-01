@@ -11,8 +11,8 @@ import { useToast } from '@/common/components/ui/Toast';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
 import { useTickerSupportResistance } from '@/hooks/queries/technicals/useTickerSupportResistance';
-import { useTickerZones } from '@/hooks/queries/technicals/useTickerZones';
-import { AdvancedPriceChart, AdvancedScrubPoint, ChartReferenceLine, ChartWatchZone, ChartWatchDraft, ChartAutoZone } from '@/common/components/ticker/AdvancedPriceChart';
+import { useChartAutoZones } from '@/hooks/queries/technicals/useTickerZones';
+import { AdvancedPriceChart, AdvancedScrubPoint, ChartReferenceLine, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
 import type { PricePeriod, TickerHistoryData } from '@/common/types/blogPosts/ticker';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
 import { LiveModeToggle } from '@/common/components/strategy/LiveModeToggle';
@@ -142,29 +142,9 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
       ]
     : null;
 
-  // ZoneEngine's auto-detected zones (see OUTSTANDING.md #2) — gated on
-  // `chart.showAutoZones` the same way S/R above is gated on `showSR`, for
-  // the same reason: the underlying fetch is a real (if 90s-cached)
-  // yfinance call, not something to run unconditionally just because the
-  // chart happens to be open. Bounded to the same 20% distance as S/R
-  // above — a daily-timeframe swing zone can in principle sit far from
-  // spot even though most of ZoneEngine's sources (ORB, premarket, session
-  // VWAP, round numbers) keep it close in practice.
-  const zonesQuery = useTickerZones(visible && chart.showAutoZones ? ticker : null);
-  const autoZones: ChartAutoZone[] | null = zonesQuery.data
-    ? [
-        ...zonesQuery.data.support
-          .filter(z => (zonesQuery.data!.current_price - z.low) / zonesQuery.data!.current_price <= SR_MAX_DISTANCE_PCT)
-          .map((z): ChartAutoZone => ({
-            id: `support_${z.center}`, low: z.low, high: z.high, score: z.score, touches: z.touches, sources: z.sources, type: 'support',
-          })),
-        ...zonesQuery.data.resistance
-          .filter(z => (z.high - zonesQuery.data!.current_price) / zonesQuery.data!.current_price <= SR_MAX_DISTANCE_PCT)
-          .map((z): ChartAutoZone => ({
-            id: `resistance_${z.center}`, low: z.low, high: z.high, score: z.score, touches: z.touches, sources: z.sources, type: 'resistance',
-          })),
-      ]
-    : null;
+  // ZoneEngine's auto-detected zones — fetched only while the
+  // "Auto-detected zones" setting is on and this screen is visible.
+  const autoZones = useChartAutoZones(ticker, visible && chart.showAutoZones);
 
   // Extended-hours session boundary lines (Pre-Market/Market Close/
   // Post-Market/Overnight) — 1D only, only outside regular trading hours

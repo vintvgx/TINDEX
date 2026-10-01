@@ -820,6 +820,20 @@ class MonitoringStateCache:
                 self._stats["sync_errors"] += 1
                 # Don't remove from dirty set - will retry next cycle
     
+    def remove_ticker(self, ticker: str) -> int:
+        """
+        Drop every cached entry (all trade dates) for `ticker`, dirty or not.
+        Used when a ticker is unfollowed: without this, the next price update
+        or sync cycle re-upserts its orb_monitoring_state row and the ticker
+        reappears in the app's ORB grid right after being removed.
+        Returns how many entries were dropped.
+        """
+        keys = [key for key in self._cache if key[0] == ticker]
+        for key in keys:
+            del self._cache[key]
+            self._dirty_keys.discard(key)
+        return len(keys)
+
     def clear_cache(self):
         """
         Clear all cached entries.

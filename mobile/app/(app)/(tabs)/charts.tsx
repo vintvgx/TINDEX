@@ -15,6 +15,7 @@ import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft
 import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
 import { ChartTechnicalsStrip, CHART_TECHNICALS_STRIP_HEIGHT } from '@/common/components/ticker/ChartTechnicals';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
+import { useChartAutoZones } from '@/hooks/queries/technicals/useTickerZones';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
@@ -281,6 +282,9 @@ export default function ChartsScreen() {
   // Every chart display option (style, technicals, session lines, watch
   // levels, data points) lives in the chart settings modal — see useChartSettings.
   const chart = useChartSettings({ ticker: activeTicker, period, colors, canMarkWatchLevel: true });
+  // ZoneEngine's auto-detected support/resistance bands, same as the
+  // full-screen chart — fetched only while "Auto-detected zones" is on.
+  const autoZones = useChartAutoZones(activeTicker, chart.showAutoZones);
   const onChartAreaLayout = useCallback((e: LayoutChangeEvent) => {
     setChartAreaHeight(e.nativeEvent.layout.height);
   }, []);
@@ -491,6 +495,7 @@ export default function ChartsScreen() {
             showOrbRange={chart.showOrb}
             livePrice={resolvedLivePrice ?? null}
             watchZones={chartWatchZones}
+            autoZones={autoZones}
             onWatchConfirm={handleWatchConfirm}
             onDeleteWatchZone={handleDeleteWatchZone}
             onUpdateWatchZone={handleUpdateWatchZone}

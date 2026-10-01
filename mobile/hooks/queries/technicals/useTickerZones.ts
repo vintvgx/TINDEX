@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
+import type { ChartAutoZone } from '@/common/components/ticker/AdvancedPriceChart';
 
 export interface TickerZone {
   center: number;
@@ -68,4 +69,33 @@ export function useTickerZones(ticker: string | null | undefined, timeframe: '5m
       return json.data as TickerZones;
     },
   });
+}
+
+/** Zones farther than this from price are left off the chart — a far daily
+ *  swing zone would otherwise stretch the y-axis and crush the candles. */
+const CHART_ZONE_MAX_DISTANCE_PCT = 0.20;
+
+/** ZoneEngine zones → AdvancedPriceChart's `autoZones`, bounded to
+ *  CHART_ZONE_MAX_DISTANCE_PCT of price. */
+export function toChartAutoZones(data: TickerZones | undefined): ChartAutoZone[] | null {
+  if (!data) return null;
+  const price = data.current_price;
+  const map = (z: TickerZone, type: ChartAutoZone['type']): ChartAutoZone => ({
+    id: `${type}_${z.center}`, low: z.low, high: z.high, score: z.score, touches: z.touches, sources: z.sources, type,
+  });
+  return [
+    ...data.support.filter(z => (price - z.low) / price <= CHART_ZONE_MAX_DISTANCE_PCT).map(z => map(z, 'support')),
+    ...data.resistance.filter(z => (z.high - price) / price <= CHART_ZONE_MAX_DISTANCE_PCT).map(z => map(z, 'resistance')),
+  ];
+}
+
+/**
+ * Chart-ready auto zones for `ticker`, fetched only while `enabled` (the
+ * "Auto-detected zones" setting, and the chart being visible) — the fetch is
+ * a real, if 90s-cached, yfinance call. Shared by the Charts tab and
+ * PriceChartFullScreen.
+ */
+export function useChartAutoZones(ticker: string | null | undefined, enabled: boolean): ChartAutoZone[] | null {
+  const { data } = useTickerZones(enabled ? ticker : null);
+  return enabled ? toChartAutoZones(data) : null;
 }
