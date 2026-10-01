@@ -382,9 +382,11 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
     onSubmitted?.();
   };
 
-  const doSubmit = () => {
-    if (!ticker || !selected) return;
-    runSubmit({
+  // Shared by doSubmit and the opt-in enterBlind below — see
+  // TradeContractSheet's buildTradeBody for the same split and why.
+  const buildTradeBody = (): ImmediateTradeByTickerRequest | null => {
+    if (!ticker || !selected) return null;
+    return {
       ticker,
       direction:       selected.option_type,
       contract_symbol: selected.symbol,
@@ -396,7 +398,19 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
       sl_enabled: slEnabled,
       tp_enabled: tpEnabled,
       ...(slEnabled && isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
-    });
+    };
+  };
+
+  const doSubmit = () => {
+    const body = buildTradeBody();
+    if (body) runSubmit(body);
+  };
+
+  // Opted into upfront from the Review sheet's "Skip live price check" —
+  // see OrderReviewSheet's onEnterBlind doc comment.
+  const enterBlind = () => {
+    const body = buildTradeBody();
+    if (body) runSubmit({ ...body, bypass_stream_check: true });
   };
 
   // Review sheet warnings — replace the old Submit LIVE / No Stop Loss Alerts.
@@ -477,6 +491,10 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
     tp1Price: tpEnabled && !isManual && profile.tp1 > 0 ? reviewContract.ask * (1 + profile.tp1 / 100) : null,
     tp2Price: tpEnabled && !isManual && profile.tp2 > 0 ? reviewContract.ask * (1 + profile.tp2 / 100) : null,
   } : null;
+  // See TradeContractSheet's isZeroDteContract — same rough client-side
+  // check, purely to decide whether to show the option. Based on `selected`
+  // (what doSubmit/enterBlind actually submit), not reviewContract.
+  const isZeroDteContract = selected?.expiration?.slice(0, 10) === new Date().toISOString().slice(0, 10);
 
   // Technicals verdict first, then the order form — both inside the detail
   // modal's scroll content (right under the hero/pricing card) rather than
@@ -800,6 +818,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
               warnings={reviewWarnings}
               isSubmitting={isPending}
               onSubmit={doSubmit}
+              onEnterBlind={isZeroDteContract ? enterBlind : undefined}
               onCancel={() => setReviewOpen(false)}
               successMessage={successMessage}
               onSuccessDone={finishSuccess}

@@ -17,7 +17,7 @@ import queue
 import threading
 import time
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,12 @@ logger = logging.getLogger(__name__)
 # whatever's currently visible in the Service Status screen at any one
 # moment.
 HEALTH_LOG_INTERVAL_SEC = 1800
+
+# See __init__'s "_consecutive_verify_failures" comment — this many
+# verify_stream() timeouts in a row (across separate trade attempts, not
+# one contract's own thinness) forces a reconnect instead of waiting for a
+# manual restart.
+RECONNECT_AFTER_CONSECUTIVE_FAILURES = 3
 
 try:
     from alpaca.data.live.option import OptionDataStream
@@ -84,6 +90,29 @@ class OptionStreamManager:
         self._last_quote_at_any: float | None = None  # across ALL symbols
         self._quote_count: dict[str, int]     = {}   # symbol → lifetime tick count (this process)
         self._health_log_started = False
+        # Active counterpart to the passive staleness tracking above
+        # (2026-10-01) — a "connected zombie" never flips `_thread.is_alive()`
+        # to False, so _ensure_started's dead-thread check can never catch
+        # it; this is what actually DOES something about it. Any quote
+        # (verify_stream's own probe or a real subscribed callback) resets
+        # the counter; `_RECONNECT_AFTER_CONSECUTIVE_FAILURES` straight
+        # verify_stream timeouts in a row — meaning the connection has
+        # produced literally nothing for that many separate 8s windows —
+        # forces the connection closed so the next subscribe() rebuilds it
+        # fresh via the EXISTING dead-thread-restart path (see
+        # _force_reconnect). 3 is deliberately not 1: a single timeout is
+        # routine (a genuinely thin/illiquid contract can just not trade
+        # for 8s); 3 in a row across different symbols/attempts is the
+        # connection, not the contract.
+        self._consecutive_verify_failures = 0
+        # When/how often a forced reconnect has actually fired — surfaced
+        # through get_health() so the mobile app can tell the user "the
+        # price feed just reconnected" as a discrete, timestamped EVENT,
+        # not just infer it from the failure counter happening to be back
+        # at 0 on whatever poll caught it (a 15-30s poll interval can easily
+        # miss a counter that resets within the same tick it hits 3).
+        self._last_reconnect_at: float | None = None
+        self._reconnect_count = 0
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -178,11 +207,19 @@ class OptionStreamManager:
         self.subscribe(symbol, _probe)
         try:
             result_q.get(timeout=timeout)
+            # _make_handler already reset _consecutive_verify_failures to 0
+            # for us — any quote routed through it (this probe included)
+            # counts as proof of life for the connection, not just the symbol.
             logger.info("[OptionStream] Stream verified for %s", symbol)
             return True
         except queue.Empty:
             logger.warning("[OptionStream] No quote for %s in %.0fs — not streamable",
                            symbol, timeout)
+            with self._lock:
+                self._consecutive_verify_failures += 1
+                failures = self._consecutive_verify_failures
+            if failures >= RECONNECT_AFTER_CONSECUTIVE_FAILURES:
+                self._force_reconnect(failures)
             return False
         finally:
             self.unsubscribe(symbol, _probe)
@@ -221,6 +258,9 @@ class OptionStreamManager:
             running = bool(self._started and self._thread and self._thread.is_alive())
             subscribed = sorted(self._callbacks.keys())
             last_any = self._last_quote_at_any
+            consecutive_failures = self._consecutive_verify_failures
+            last_reconnect_at = self._last_reconnect_at
+            reconnect_count = self._reconnect_count
             per_symbol = {
                 sym: {
                     "last_quote_age_seconds": round(time.time() - ts, 1),
@@ -239,6 +279,21 @@ class OptionStreamManager:
             "expired_symbols":         expired,
             "expired_count":           len(expired),
             "last_quote_age_seconds":  round(time.time() - last_any, 1) if last_any is not None else None,
+            # How close the connection currently is to a forced reconnect
+            # (see _force_reconnect) — visible on the Service Status screen
+            # so "it's about to self-heal" is distinguishable from "it just
+            # silently reconnected a minute ago and this is fresh."
+            "consecutive_verify_failures": consecutive_failures,
+            # ISO timestamp of the most recent forced reconnect (see
+            # _force_reconnect), or null if none has fired this process —
+            # the discrete, pollable "it just rebuilt" signal. reconnect_count
+            # is the lifetime total, for a slower trend view if it's ever
+            # firing often enough to be worth watching over time.
+            "last_reconnect_at": (
+                datetime.fromtimestamp(last_reconnect_at, tz=timezone.utc).isoformat()
+                if last_reconnect_at is not None else None
+            ),
+            "reconnect_count": reconnect_count,
             "symbols":                 per_symbol,
         }
 
@@ -250,6 +305,45 @@ class OptionStreamManager:
             except Exception:
                 pass
         self._started = False
+
+    def _force_reconnect(self, failure_count: int):
+        """
+        Closes the current (zombie) WebSocket so the NEXT subscribe()/
+        verify_stream() rebuilds it — called after
+        RECONNECT_AFTER_CONSECUTIVE_FAILURES straight verify_stream
+        timeouts. Deliberately does NOT touch `self._started` (unlike
+        stop()) — leaving it True means _ensure_started's existing
+        dead-thread check treats this exactly like an ordinary unexpected
+        thread death: `was_running` comes back True, so it both rebuilds
+        the connection AND re-subscribes every symbol still in
+        `self._callbacks` (an open position's live price feed, most
+        importantly — see that method's own comment). No new recovery
+        path to get wrong; this just triggers the one that already exists,
+        for a failure mode (connected-but-silent) that nothing else could
+        detect on its own.
+
+        `stop_ws()` doesn't synchronously kill `self._thread` — the run
+        loop notices the stop flag and exits on its own, typically within
+        a second or so. A verify_stream call that lands in that short gap
+        just sees `is_alive()` still True and skips the rebuild once more;
+        the failure counter has already been reset below, so it takes
+        another full run of timeouts to trigger again rather than retrying
+        in a tight loop.
+        """
+        logger.error(
+            "[OptionStream] %d consecutive verify_stream timeouts — connection looks "
+            "like a zombie (alive but not delivering quotes); forcing a reconnect",
+            failure_count,
+        )
+        try:
+            if self._stream:
+                self._stream.stop_ws()
+        except Exception as ex:
+            logger.debug("[OptionStream] stop_ws during forced reconnect: %s", ex)
+        with self._lock:
+            self._consecutive_verify_failures = 0
+            self._last_reconnect_at = time.time()
+            self._reconnect_count += 1
 
     # ── Internal ───────────────────────────────────────────────────────────────
 
@@ -378,6 +472,12 @@ class OptionStreamManager:
                 self._last_quote_at[symbol] = now
                 self._last_quote_at_any     = now
                 self._quote_count[symbol]   = self._quote_count.get(symbol, 0) + 1
+                # Any real tick proves the connection is alive, not just
+                # the symbol — reset the zombie-detection counter here too,
+                # not only on verify_stream's own success path, so a
+                # healthy open-position feed keeps a later verify_stream
+                # attempt from inheriting a stale failure count.
+                self._consecutive_verify_failures = 0
                 targets = list(self._callbacks.get(symbol, []))
             for cb in targets:
                 try:

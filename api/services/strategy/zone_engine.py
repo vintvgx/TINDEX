@@ -98,6 +98,15 @@ _CONFLUENCE_STEPS = (12.0, 8.0, 5.0, 5.0, 5.0)
 _ROUND_1_MAX_DIST_PCT = 0.03
 _ROUND_5_MAX_DIST_PCT = 0.08
 
+# Bad-tick guard (2026-10-01) — defense in depth beyond the zero-volume
+# filter below. A real 30m gap this size on a liquid name is rare enough
+# that flagging it is correct; verified against the SPY case this exists
+# for (see module docstring): a 6.6% phantom print is caught with room to
+# spare. Named/tunable rather than inlined since "how big a gap is
+# suspicious" is exactly the kind of threshold worth being able to tune
+# without re-reading the filter's logic.
+BAD_TICK_PCT = 0.03
+
 _ALLOWED_TIMEFRAMES = ("5m", "15m", "30m")
 
 
@@ -374,7 +383,26 @@ def score_terms(touches: int, freshest_age_days: float, volume_ratio: float,
     }
 
 
+def _dedupe_cluster(cluster: list) -> list:
+    """
+    Collapses points with identical (round(price, 2), source) to one — the
+    same swing point must never count as two touches. Applied before
+    anything else reads `cluster` (touches, center/low/high, touch_detail,
+    confluence categories), so a duplicate point can't inflate the zone's
+    geometry OR its score. First occurrence wins (dict insertion order),
+    so touch_detail's eventual sort is unaffected by which duplicate
+    happened to carry the tie-broken date.
+    """
+    seen: dict = {}
+    for p in cluster:
+        key = (round(p["price"], 2), p["source"])
+        if key not in seen:
+            seen[key] = p
+    return list(seen.values())
+
+
 def _score_cluster(cluster: list, intraday_5d, tolerance_abs: float) -> dict:
+    cluster = _dedupe_cluster(cluster)
     center = sum(p["price"] for p in cluster) / len(cluster)
     low = min(p["price"] for p in cluster)
     high = max(p["price"] for p in cluster)
@@ -520,10 +548,93 @@ def zones(ticker: str, timeframe: str = "30m", force_refresh: bool = False) -> d
         return {"error": str(e), "ticker": ticker}
 
 
+def _drop_zero_volume_bars(ticker: str, bars, label: str):
+    """
+    Drops every REGULAR-SESSION bar with Volume <= 0 — a bar with no trades
+    is a placeholder row Yahoo prints, not market data, and its OHLC is
+    meaningless. One filter here, right at ingestion, fixes everything
+    downstream at once for the bars it actually touches: swing detection,
+    clustering, `current_price` (which then naturally falls back to the
+    last *traded* bar's close), and the volume baseline for the scoring
+    volume term.
+
+    DELIBERATELY SCOPED to the regular session (9:30-16:00 ET), unlike the
+    bad-tick guard below — verified 2026-10-01 against SPY/QQQ/AAPL: this
+    feed reports Volume=0 for essentially EVERY extended-hours bar
+    unconditionally (87/87 on a 5d/30m SPY pull), including completely
+    ordinary ones, while regular-session volume was reliable (0/58 zero).
+    Outside the regular session this field can't tell a real bar from a
+    bad one at all — applying it there wouldn't catch anything the
+    bad-tick guard doesn't already catch more precisely, and it WOULD
+    silently delete premarket_high/premarket_low's entire source data
+    every single day (every extended-hours bar, not just the bad ones),
+    directly undoing the "premarket/after-hours bars are legitimate
+    sources" requirement this fix is supposed to respect. The two-bar SPY
+    case this pair of filters was built for is itself an after-hours bug —
+    it's the price-based bad-tick guard, not this volume-based one, that
+    actually catches it; see that function's docstring.
+
+    Only intraday bars are checked at all — a 0-volume DAILY bar on a real
+    ticker doesn't happen; filtering one would be dead code.
+
+    Logged at debug, not warning — unlike _drop_bad_tick_bars below, a
+    zero-volume regular-session bar is rare (this is the backstop for a
+    genuine anomaly there), but still routine enough not to warrant a
+    server-log alarm every time it fires.
+    """
+    if bars is None or bars.empty:
+        return bars
+    import pandas as pd
+    idx_et = bars.index.tz_convert(ET) if bars.index.tz is not None else bars.index.tz_localize(ET)
+    reg_mask = _regular_session_mask(idx_et)
+    regular, extended = bars[reg_mask], bars[~reg_mask]
+    before = len(regular)
+    regular = regular[regular["Volume"] > 0]
+    dropped = before - len(regular)
+    if dropped:
+        logger.debug("[zone_engine] %s %s: dropped %d zero-volume regular-session bar(s)", ticker, label, dropped)
+    return pd.concat([regular, extended]).sort_index()
+
+
+def _drop_bad_tick_bars(ticker: str, bars, label: str):
+    """
+    Defense in depth beyond the zero-volume filter above: drops any bar
+    whose Low gaps more than BAD_TICK_PCT below the PRIOR bar's Close — a
+    bogus print that happens to carry nonzero volume (a thin/erroneous
+    trade print, rather than the zero-volume placeholder rows the other
+    filter catches) would otherwise sail through untouched. Checked
+    against the bar immediately before it in this same (already
+    zero-volume-filtered) series, so a dropped bar never cascades into
+    falsely flagging the next one.
+
+    Logged at WARNING — a bar with real volume that still gets dropped
+    here is a genuinely unusual event worth seeing in the server log, not
+    a routine occurrence like a thin pre-market bar.
+    """
+    if bars is None or bars.empty or len(bars) < 2:
+        return bars
+    prev_close = bars["Close"].shift(1)
+    gap_pct = (bars["Low"] - prev_close).abs() / prev_close
+    bad = gap_pct.fillna(0.0) > BAD_TICK_PCT  # first bar has no prev_close (NaN) — can't judge it, keep it
+    if bad.any():
+        for ts, is_bad in bad.items():
+            if is_bad:
+                logger.warning(
+                    "[zone_engine] %s %s: dropping bad tick @ %s — Low %.2f vs prior close %.2f (%.1f%% gap)",
+                    ticker, label, ts, bars.loc[ts, "Low"], prev_close.loc[ts], gap_pct.loc[ts] * 100,
+                )
+        bars = bars[~bad]
+    return bars
+
+
 def _fetch_history(ticker: str, timeframe: str) -> tuple:
     """The three live yfinance fetches zones() needs: (daily 60d, intraday
     5d at `timeframe`, today's 5m session incl. pre/post). Run on
-    _fetch_pool so zones() can bound the wait."""
+    _fetch_pool so zones() can bound the wait.
+
+    `prepost=True` is kept on both intraday fetches — premarket/after-hours
+    bars are legitimate sources (premarket_high/low). We filter GARBAGE
+    bars (zero-volume placeholders, bad ticks) below, never the session."""
     import yfinance as yf
     tk = yf.Ticker(ticker)
     daily = tk.history(period="60d", interval="1d")
@@ -531,6 +642,12 @@ def _fetch_history(ticker: str, timeframe: str) -> tuple:
         return daily, None, None
     intraday_5d = tk.history(period="5d", interval=timeframe, prepost=True)
     today_session = tk.history(period="1d", interval="5m", prepost=True)
+
+    intraday_5d = _drop_zero_volume_bars(ticker, intraday_5d, "intraday_5d")
+    intraday_5d = _drop_bad_tick_bars(ticker, intraday_5d, "intraday_5d")
+    today_session = _drop_zero_volume_bars(ticker, today_session, "today_session")
+    today_session = _drop_bad_tick_bars(ticker, today_session, "today_session")
+
     return daily, intraday_5d, today_session
 
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, Animated, Pressable, ActivityIndicator, Easing, ScrollView,
+  View, Text, StyleSheet, Animated, Pressable, ActivityIndicator, Easing, ScrollView, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -58,6 +58,15 @@ interface Props {
   isSubmitting: boolean;
   onSubmit: () => void;
   onCancel: () => void;
+  /** Lets the trader skip the backend's 8s live-tick verification upfront
+   *  (same effect as confirming the BlindEntryModal that appears
+   *  automatically on a stream_unavailable result, just opted into before
+   *  submitting instead of after a timeout) — shown as a secondary option
+   *  below the main hold button, confirmed with its own Alert since it's
+   *  a real "trust the last-polled price, not a live tick" decision.
+   *  Omitted entirely when the parent doesn't support it (e.g. not a 0DTE
+   *  contract, where the backend never does the stream check anyway). */
+  onEnterBlind?: () => void;
   /** Set by the parent once the order succeeds — plays the confirmation
    *  animation with this message, then calls onSuccessDone. */
   successMessage: string | null;
@@ -68,10 +77,15 @@ interface Props {
 
 const HOLD_MS = 1200;        // how long the button must be held to submit
 const SUCCESS_HOLD_MS = 1500; // how long the success state shows before closing
+// How long "Submitting…" shows before swapping to "Checking live price
+// feed…" — shorter than the backend's 8s stream-verify window so the
+// message changes while the user is still watching, not right as it's
+// about to time out.
+const SUBMIT_LABEL_DELAY_MS = 2000;
 
 export function OrderReviewSheet({
   visible, order, paperMode, check, overridden, warnings, isSubmitting, onSubmit, onCancel,
-  successMessage, onSuccessDone, colors,
+  onEnterBlind, successMessage, onSuccessDone, colors,
 }: Props) {
   const slide = useRef(new Animated.Value(1)).current;  // 1 = off-screen, 0 = shown
   const hold = useRef(new Animated.Value(0)).current;   // 0 → 1 while held
@@ -111,6 +125,24 @@ export function OrderReviewSheet({
     }
   }, [isSubmitting]);
 
+  // A 0DTE submit's first ~8s is the backend's live-tick verification, not
+  // a generic "placing the order" wait — a bare "Submitting…" the whole
+  // time reads as stuck well before the backend has actually given up
+  // (see docs/todos/OUTSTANDING.md's paper-trade-hang debugging session).
+  // Swapping the label after a short delay costs nothing when the order
+  // places quickly (most non-0DTE submits, and every blind-entry retry,
+  // settle before this ever shows) and gives an honest in-progress signal
+  // on the slow path instead of silence.
+  const [submitLabel, setSubmitLabel] = useState('Submitting…');
+  useEffect(() => {
+    if (!isSubmitting) {
+      setSubmitLabel('Submitting…');
+      return;
+    }
+    const id = setTimeout(() => setSubmitLabel('Checking live price feed…'), SUBMIT_LABEL_DELAY_MS);
+    return () => clearTimeout(id);
+  }, [isSubmitting]);
+
   // Success: pop a check mark in, pause so it registers, then hand back to
   // the parent to close the sheet(s).
   useEffect(() => {
@@ -145,6 +177,20 @@ export function OrderReviewSheet({
     if (fired.current) return;
     holdAnim.current?.stop();
     Animated.timing(hold, { toValue: 0, duration: 180, useNativeDriver: false }).start();
+  };
+
+  const handleEnterBlind = () => {
+    if (!onEnterBlind || isSubmitting || successMessage) return;
+    Alert.alert(
+      'Skip the live price check?',
+      `This enters off the last polled price (${money(order.premium)}) instead of waiting ` +
+      `to confirm a live tick — it may be a few seconds stale. Same confirmation you'd get ` +
+      `automatically if the live check timed out, just upfront.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Enter Anyway', style: 'destructive', onPress: onEnterBlind },
+      ],
+    );
   };
 
   const vDecision = check?.verdict.decision;
@@ -231,7 +277,7 @@ export function OrderReviewSheet({
             {isSubmitting ? (
               <View style={s.holdLabelRow}>
                 <ActivityIndicator color="#fff" />
-                <Text style={[s.holdText, { color: '#fff' }]}>Submitting…</Text>
+                <Text style={[s.holdText, { color: '#fff' }]}>{submitLabel}</Text>
               </View>
             ) : (
               <View style={s.holdLabelRow}>
@@ -243,6 +289,20 @@ export function OrderReviewSheet({
             )}
           </Pressable>
           <Text style={[s.holdHint, { color: muted }]}>Release early to cancel</Text>
+
+          {/* Opt into skipping the live-tick check upfront instead of
+              waiting out the 8s backend check and getting the same choice
+              as a fallback (BlindEntryModal) — see onEnterBlind's doc
+              comment. Hidden once submitting/succeeded, same as the main
+              button; the parent only passes this at all for a 0DTE
+              contract (where the backend's stream check — and therefore
+              this bypass — actually means something). */}
+          {onEnterBlind && !isSubmitting && !successMessage && (
+            <Pressable onPress={handleEnterBlind} hitSlop={8} style={s.blindLink}>
+              <Ionicons name="flash-outline" size={13} color={muted} />
+              <Text style={[s.blindLinkText, { color: muted }]}>Skip live price check</Text>
+            </Pressable>
+          )}
         </View>
 
         {/* Success confirmation */}
@@ -318,6 +378,8 @@ const s = StyleSheet.create({
   holdLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   holdText:     { fontSize: 15.5, fontWeight: '800' },
   holdHint:     { fontSize: 11.5, textAlign: 'center', marginTop: 8 },
+  blindLink:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 10, paddingVertical: 4 },
+  blindLinkText: { fontSize: 11.5, fontWeight: '600', textDecorationLine: 'underline' },
 
   successWrap:  { alignItems: 'center', justifyContent: 'center', padding: 24 },
   successCircle:{ width: 104, height: 104, borderRadius: 52, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
