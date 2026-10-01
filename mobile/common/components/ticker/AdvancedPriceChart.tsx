@@ -14,6 +14,8 @@ import { useChartInterval } from '@/hooks/useChartInterval';
 import { ALLOWED_INTERVALS, INTERVAL_LABEL, INTERVAL_MINUTES } from '@/lib/chartIntervals';
 import type { PricePeriod, TickerHistoryData } from '@/common/types/blogPosts/ticker';
 import type { OrbRangeLines } from '@/common/components/ticker/PriceChart';
+import { AUTO_ZONE_RESISTANCE_COLOR, AUTO_ZONE_SUPPORT_COLOR } from '@/common/components/ticker/autoZoneColors';
+import { ZoneDetailSheet } from '@/common/components/ticker/ZoneDetailSheet';
 
 const PERIODS: PricePeriod[] = ['1D', '1W', '1M', '3M', 'YTD', '1Y', '5Y'];
 
@@ -108,7 +110,7 @@ export const INVESTMENT_ZONE_COLOR = '#D4A537';
  */
 export interface ChartAutoZone {
   /** Stable only within one fetch — see structure_tracker.py's per-
-   *  snapshot zone ids; used here purely as a React key + Alert lookup. */
+   *  snapshot zone ids; used here purely as a React key. */
   id: string;
   low: number;
   high: number;
@@ -116,10 +118,24 @@ export interface ChartAutoZone {
   touches: number;
   sources: string[];
   type: 'support' | 'resistance';
+  /** Every point behind the zone, newest first — for ZoneDetailSheet.
+   *  Missing on responses cached before the API added it. */
+  touchDetail?: { price: number; date: string | null; source: string }[];
+  /** Scoring v2 breakdown (touch/30, recency/20, volume/15, confluence/35). */
+  scoreTerms?: { touch: number; recency: number; volume: number; confluence: number; score: number };
 }
 
-export const AUTO_ZONE_RESISTANCE_COLOR = '#6366F1'; // indigo — distinct from watch-zone red/green/gold and VWAP purple/EMA blue
-export const AUTO_ZONE_SUPPORT_COLOR = '#14B8A6';     // teal
+/** Market context ZoneDetailSheet uses for its distance/ATR/prior-day
+ *  section — straight from the /strategy/zones response. */
+export interface ChartZoneContext {
+  currentPrice: number | null;
+  atr: number | null;
+  priorDay: { high: number; low: number; close: number } | null;
+  /** Bar size zones/breaks are judged on (e.g. '30m'). */
+  timeframe?: string | null;
+}
+
+export { AUTO_ZONE_RESISTANCE_COLOR, AUTO_ZONE_SUPPORT_COLOR };
 
 interface AdvancedPriceChartProps {
   data: TickerHistoryData | undefined;
@@ -166,11 +182,12 @@ interface AdvancedPriceChartProps {
    *  which can legitimately sit far from spot; this component folds in
    *  whatever it's given unconditionally. */
   autoZones?: ChartAutoZone[] | null;
-  /** Fired when the user taps an auto zone's label — score/sources/touch
-   *  count for that zone. Left undefined, the chart shows a plain
-   *  Alert.alert with the same information (see handleAutoZoneTap) —
-   *  intended as a stopgap until an anchored popover replaces it. */
+  /** Fired when the user taps an auto zone's score pill. Left undefined,
+   *  the chart opens its own ZoneDetailSheet for that zone. */
   onAutoZoneTap?: (zone: ChartAutoZone) => void;
+  /** Price/ATR/prior-day context for ZoneDetailSheet; its Context section
+   *  hides when this is null. */
+  zoneContext?: ChartZoneContext | null;
   /** Fired when the user taps Confirm on a drawn zone. Return (or resolve
    *  to) `false` to signal the save failed — the chart then keeps the band
    *  and confirm bar up with an inline error instead of clearing it, so a
@@ -381,6 +398,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   onDeleteWatchZone,
   autoZones,
   onAutoZoneTap,
+  zoneContext = null,
   resetKey,
 }) => {
   const colors = useThemeColors();
@@ -492,7 +510,12 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     return next;
   }, [hasOhlc, chartData, isLiveBar, lastIdx, livePrice]);
 
-  const hasData = prices.length > 1 && width > 0;
+  // ONE bar is real data: at 09:30 on a 5m/15m chart the backend returns
+  // just today's first, still-forming candle (the prior session is dropped
+  // the moment today has a regular-session bar), and it stays the only bar
+  // for the whole first interval. Requiring 2+ bars here showed "No chart
+  // data available" for the first 5/15 minutes of every session.
+  const hasData = prices.length > 0 && width > 0;
   const lineColor = positive ? colors.success : colors.error;
 
   // "No chart data available" is a real dead-end state (bad ticker, API
@@ -795,13 +818,19 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // Only the visible window is drawn.
   const { linePath, areaPath } = useMemo(() => {
     if (!scale || mode !== 'line') return { linePath: '', areaPath: '' };
-    const points = visibleIndices.map(i => ({ x: scale.xForIndex(i), y: scale.yForPrice(ePrices[i]) }));
+    let points = visibleIndices.map(i => ({ x: scale.xForIndex(i), y: scale.yForPrice(ePrices[i]) }));
+    // A lone bar (first interval of the session) has no neighbor to draw a
+    // line to — draw its own move instead: open at the bar's left edge to
+    // the (live) close at its center.
+    if (points.length === 1) {
+      const i = visibleIndices[0];
+      const open = chartData?.opens?.[i] ?? ePrices[i];
+      points = [{ x: scale.xForIndex(i) - scale.step / 2, y: scale.yForPrice(open) }, points[0]];
+    }
     const p = smoothPath(points);
-    const lastI = visibleIndices[visibleIndices.length - 1];
-    const firstI = visibleIndices[0];
-    const area = `${p} L${scale.xForIndex(lastI)},${priceH} L${scale.xForIndex(firstI)},${priceH} Z`;
+    const area = `${p} L${points[points.length - 1].x},${priceH} L${points[0].x},${priceH} Z`;
     return { linePath: p, areaPath: area };
-  }, [scale, mode, ePrices, priceH, visibleIndices]);
+  }, [scale, mode, ePrices, priceH, visibleIndices, chartData]);
 
   // ── Crosshair scrub ────────────────────────────────────────────────────
   // The crosshair snaps to whole bar indices, so plain React state (updated
@@ -1002,22 +1031,15 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
     );
   }, [onDeleteWatchZone]);
 
+  // Tapped auto zone → ZoneDetailSheet (rendered at the end of this
+  // component). A caller-supplied onAutoZoneTap overrides it.
+  const [selectedAutoZone, setSelectedAutoZone] = useState<ChartAutoZone | null>(null);
   const handleAutoZoneTap = useCallback((zone: ChartAutoZone) => {
     if (onAutoZoneTap) {
       onAutoZoneTap(zone);
       return;
     }
-    // Stopgap until an anchored popover (see OUTSTANDING.md #4) replaces
-    // this — same score/sources/touch-count info the TODO's chart-layer
-    // spec asks a tap to reveal, just in a plain Alert for now.
-    const priceLabel = zone.high === zone.low
-      ? `$${zone.high.toFixed(2)}`
-      : `$${zone.low.toFixed(2)}–$${zone.high.toFixed(2)}`;
-    Alert.alert(
-      `${zone.type === 'resistance' ? 'Resistance' : 'Support'} · ${priceLabel}`,
-      `Score ${Math.round(zone.score)}/100 · ${zone.touches} touch${zone.touches === 1 ? '' : 'es'}\n` +
-      `Sources: ${zone.sources.join(', ')}`,
-    );
+    setSelectedAutoZone(zone);
   }, [onAutoZoneTap]);
 
   // Chart-body gestures — four distinct interactions, deliberately kept
@@ -2279,6 +2301,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           );
         })}
       </View>
+
+      <ZoneDetailSheet zone={selectedAutoZone} context={zoneContext} onClose={() => setSelectedAutoZone(null)} />
     </SafeAreaView>
   );
 };

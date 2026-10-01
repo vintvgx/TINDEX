@@ -9,13 +9,16 @@ never submits orders. It reuses the same live 1-minute bar bus
 same constraint: `OrbDataHub` only publishes bars for tickers with
 `user_stock_follows.orb_enabled = True`.
 
-Aggregation: 1-minute bars from the hub are folded into `timeframe`-wide
-buckets (15m/30m), anchored to the 09:30 ET session open — matching how
-Yahoo's own 30m bars are anchored, not wall-clock hour boundaries. A bucket
-is only "closed" (and only then eligible for swing/BOS/zone-break checks)
-once a later bar shows the next bucket has started; the in-progress bucket
-is exposed separately for zone-approach checks, which care about the live
-price, not a confirmed close.
+Two timeframes:
+  - Trend + BOS run on 1-minute bars folded into `timeframe`-wide buckets
+    (15m/30m), anchored to the 09:30 ET session open — matching how Yahoo's
+    own 30m bars are anchored. A bucket is only "closed" once a later bar
+    shows the next bucket has started.
+  - Zone breaks, failed breaks and approaches run on every closed 1-MINUTE
+    bar: a break is the first 1m close through the zone's far edge on
+    >= 1.2x the trailing 20-bar 1m volume (30m confirmation lagged real
+    breaks by up to half an hour). Pushes for new entries only go out inside
+    ENTRY_SIGNAL_WINDOW (09:30-10:00 ET by default); tracking runs all day.
 
 `start()` backfills today's 1-minute bars from
 `yfinance_service.get_intraday_chart_for_date` before subscribing to the
@@ -26,11 +29,11 @@ morning structure to judge BOS against. A late backfill failure degrades to
 "structure starts from whenever the hub feed picks up" rather than blocking
 start() — same non-fatal-degrade discipline as the rest of this codebase.
 
-Zone snapshots (from `zone_engine.zones()`) are pulled once per closed
-aggregation bar, not per tick — that call does a live yfinance fetch, so
-tying it to the 1-minute bar stream would hammer it needlessly. Each
-snapshot's zones get a PER-SNAPSHOT id (`"support_0"`, `"resistance_1"`,
-...) used only to key this session's flip/event bookkeeping — zones aren't
+Zone snapshots (from `zone_engine.zones()`) refresh at most once a minute,
+on a background thread (zone_engine itself caches 90s). Each snapshot's
+zones get a PER-SNAPSHOT id (`"support_0"`, `"resistance_1"`, ...) used to
+key this session's flip/event bookkeeping, re-keyed on every refresh by
+nearest center (remap_zone_ids) so state follows the zone — zones aren't
 DB rows with a stable cross-day identity, so "never delete, keep flipped
 zones with reduced score" (the TODO's own words) means keep the record for
 today's session and in `zone_events`, not guarantee a zone reconstructed
@@ -38,6 +41,7 @@ tomorrow is "the same" one.
 """
 
 import logging
+import os
 import threading
 from datetime import date as _date, datetime, timedelta
 
@@ -56,24 +60,53 @@ _SWING_WINDOW = 3
 # on a confirmed bar close.
 _APPROACH_PCT = 0.0015
 
-# "Zone break" needs a close through the boundary AND volume this far above
-# the trailing 20-bar average — a close alone is cheap; volume behind it is
-# what the TODO calls a real break vs. noise.
+# "Zone break" = the first CLOSED 1-MINUTE bar through the zone's far edge
+# with volume at least this multiple of the trailing 1m average. Breaks used
+# to confirm on 30m bucket closes, which lagged real breaks by up to half an
+# hour; trend/BOS still run on the 30m buckets (see _recompute).
 _BREAK_VOLUME_MULT = 1.2
 _VOLUME_LOOKBACK_BARS = 20
-# Fewer prior bars than this and the trailing average is too thin to judge
-# against — the volume requirement is skipped (close-through alone counts)
-# rather than compared against e.g. a single opening bar.
-_VOLUME_MIN_PRIOR_BARS = 5
+# Fewer prior session 1m bars than this and there's no break signal at all
+# (not "skip the volume check") — 10 minutes of baseline is the minimum to
+# judge "above average" against, and it keeps the opening-bar volume spike
+# from being the whole baseline.
+_VOLUME_MIN_PRIOR_BARS = 10
 
-# Push anti-spam: at most this many zone pushes (approach + break) per
-# ticker per session. Approach re-arms only after price moves away; a break
-# re-arms only after a failed break undoes the flip (see _on_closed_bar).
+# Push anti-spam: at most this many zone pushes per ticker per session.
+# An approach pushes once per zone and re-arms only after that zone's failed
+# break; a break re-arms only after a failed break undoes the flip.
 _MAX_PUSHES_PER_TICKER_PER_DAY = 3
 
-# A break that reverses back inside the zone within this many CLOSED bars is
-# a failed break (bull/bear trap) — the flip it caused gets undone.
-_FAILED_BREAK_WINDOW_BARS = 3
+# A break that closes back inside the zone (1m close) within this many
+# minutes is a failed break (bull/bear trap) — the flip it caused gets undone.
+# Was 3 x 30m bars; same ~90 minutes of probation, now on 1m closes.
+FAILED_BREAK_WINDOW_MINUTES = 90
+
+
+def _parse_entry_window(raw: str) -> tuple:
+    """'09:30-10:00' → (time(9,30), time(10,0)); falls back to the default
+    on anything malformed."""
+    from datetime import time as _time
+    try:
+        start_s, end_s = raw.split("-")
+        sh, sm = (int(x) for x in start_s.strip().split(":"))
+        eh, em = (int(x) for x in end_s.strip().split(":"))
+        start, end = _time(sh, sm), _time(eh, em)
+        if start < end:
+            return start, end
+    except Exception:
+        pass
+    logger.warning("[StructureTracker] bad TINDEX_ENTRY_SIGNAL_WINDOW %r — using 09:30-10:00", raw)
+    return _time(9, 30), _time(10, 0)
+
+
+# New-entry signal window (America/New_York): approach and break pushes only
+# fire for bars inside it — no new entries after 10:00 ET by default. Gates
+# PUSHES only: flips, failed-break detection, zone refresh and trend/BOS keep
+# running all session, and failed-break pushes for an already-pushed break
+# always go out (they're exits). Override with
+# TINDEX_ENTRY_SIGNAL_WINDOW="09:30-10:00".
+ENTRY_SIGNAL_WINDOW = _parse_entry_window(os.getenv("TINDEX_ENTRY_SIGNAL_WINDOW", "09:30-10:00"))
 
 # A flipped zone's score is reduced, not zeroed — it's demoted, not deleted.
 _FLIP_SCORE_MULT = 0.6
@@ -190,13 +223,13 @@ def detect_bos(bars: list, swing_high_idx: list, swing_low_idx: list) -> dict:
 
 def detect_zone_break(zone: dict, bar: dict, avg_volume: float) -> dict:
     """
-    None, or a `zone_break` event, from ONE closed bar against ONE zone —
+    None, or a `zone_break` event, from ONE closed 1m bar against ONE zone —
     a close through the zone's far boundary (up through a resistance zone,
     down through a support zone) with volume at least `_BREAK_VOLUME_MULT`
-    times `avg_volume` (the trailing average of the bars BEFORE this one —
-    see trailing_avg_volume). `avg_volume=None` (too few prior bars) skips
-    the volume requirement. Approach checks are separate (`detect_approach`)
-    since those read the live, not-yet-closed price.
+    times `avg_volume` (the trailing 1m average of the bars BEFORE this one
+    — see trailing_avg_volume). Callers skip the check entirely when there
+    isn't enough baseline (avg_volume None); passing None here skips only the
+    volume requirement.
     """
     close, volume = bar["close"], bar["volume"]
     broke_up = close > zone["high"] and zone["type"] == "resistance"
@@ -219,7 +252,71 @@ def trailing_avg_volume(bars: list, end_idx: int) -> "float | None":
     window = bars[max(0, end_idx - _VOLUME_LOOKBACK_BARS):end_idx]
     if len(window) < _VOLUME_MIN_PRIOR_BARS:
         return None
-    return sum(b["volume"] for b in window) / len(window)
+    return sum(b["volume"] or 0 for b in window) / len(window)
+
+
+def detect_failed_break_1m(zone: dict, direction: str, close: float) -> bool:
+    """True if a 1m `close` is back inside `zone` (or all the way back
+    through it) after a `direction` break — i.e. the break didn't hold.
+    `zone` carries the ORIGINAL bounds."""
+    if direction == "bullish":
+        return close <= zone["high"]
+    return close >= zone["low"]
+
+
+def in_entry_window(ts, window: tuple = None) -> bool:
+    """True if bar timestamp `ts` falls inside the new-entry signal window
+    (ET, start inclusive, end exclusive)."""
+    start, end = window or ENTRY_SIGNAL_WINDOW
+    t = (ts if getattr(ts, "tzinfo", None) else ET.localize(ts)).astimezone(ET).time()
+    return start <= t < end
+
+
+def session_bars_1m(raw_1m: list, session_date) -> list:
+    """Today's regular-session (09:30-16:00 ET) 1m bars as plain dicts,
+    oldest first — the series breaks, failed breaks and the volume baseline
+    are judged on."""
+    out = []
+    for b in raw_1m:
+        if b.close is None:
+            continue
+        ts = (b.ts if b.ts.tzinfo else ET.localize(b.ts)).astimezone(ET)
+        if ts.date() != session_date:
+            continue
+        minutes = ts.hour * 60 + ts.minute
+        if minutes < 9 * 60 + 30 or minutes >= 16 * 60:
+            continue
+        out.append({"ts": ts, "close": float(b.close), "high": b.high, "low": b.low, "volume": b.volume or 0})
+    return out
+
+
+def remap_zone_ids(old_snapshot: "dict | None", new_snapshot: dict) -> dict:
+    """
+    {old_zone_id: new_zone_id} between two zone_engine snapshots, matched by
+    nearest center within max(half-width, clustering tolerance). Zone ids
+    are per-snapshot positions ("support_0"), so a refresh that reorders or
+    shifts zones would otherwise attach a flip, pending break or pushed
+    signal to the wrong zone. Unmatched old ids are simply absent (that
+    zone moved or dropped out). Pure.
+    """
+    if not old_snapshot:
+        return {}
+    tol = new_snapshot.get("tolerance") or old_snapshot.get("tolerance") or 0.0
+    new_zones = list(_all_zones(new_snapshot))
+    mapping, taken = {}, set()
+    for old_id, oz in _all_zones(old_snapshot):
+        o_center = (oz["low"] + oz["high"]) / 2
+        best = None
+        for new_id, nz in new_zones:
+            if new_id in taken or nz["type"] != oz["type"]:
+                continue
+            d = abs((nz["low"] + nz["high"]) / 2 - o_center)
+            if best is None or d < best[0]:
+                best = (d, new_id, nz)
+        if best and best[0] <= max((best[2]["high"] - best[2]["low"]) / 2, tol):
+            mapping[old_id] = best[1]
+            taken.add(best[1])
+    return mapping
 
 
 def _fmt_band(zone: dict) -> str:
@@ -229,13 +326,14 @@ def _fmt_band(zone: dict) -> str:
 def format_zone_push(ticker: str, event: dict, zone: dict, timeframe: str) -> "tuple | None":
     """
     (title, body) for a zone push, or None for event types that aren't
-    pushed (bos, failed_break — those stay in zone_events/log only).
-    `zone` is the zone as the check saw it (current, possibly flipped,
-    type). Every push carries its invalidation. Invalidation is phrased on
-    `timeframe` closes because that's what this tracker actually confirms
-    breaks on.
+    pushed (bos stays in zone_events/log only). `zone` is the zone as the
+    check saw it (current, possibly flipped, type). Every entry push carries
+    its invalidation, phrased on 1m closes — what breaks confirm on.
+    `timeframe` is unused now that breaks are 1m-only; kept so callers
+    don't change.
     """
     kind = zone["type"]
+    timeframe = "1m"
     if event["type"] == "zone_approach":
         if kind == "support":
             invalidation = f"{timeframe} close below ${zone['low'] - 0.01:.2f}"
@@ -255,6 +353,15 @@ def format_zone_push(ticker: str, event: dict, zone: dict, timeframe: str) -> "t
             f"{ticker} closed {side} {_fmt_band(zone)} at ${event['close']:.2f}{vol}. "
             f"Zone flips to {new_kind}. Invalidation: {timeframe} close back inside.",
         )
+    if event["type"] == "failed_break":
+        # `zone` here is the original (un-flipped) zone the break went through.
+        side = "above" if kind == "resistance" else "below"
+        return (
+            f"↩️ {ticker} break failed",
+            f"{ticker} closed back inside {_fmt_band(zone)} {kind} at ${event['close']:.2f} "
+            f"within {FAILED_BREAK_WINDOW_MINUTES} min of breaking {side} it. "
+            f"Signal invalidated — zone is {kind} again.",
+        )
     return None
 
 
@@ -271,15 +378,30 @@ def detect_approach(zone: dict, price: float) -> bool:
     return False
 
 
-def detect_failed_break(zone: dict, bars_since_break: list) -> bool:
-    """True if price closed back inside `zone` within
-    `_FAILED_BREAK_WINDOW_BARS` closed bars of a break — the bull/bear trap
-    case. `bars_since_break` is the closed bars AFTER (not including) the
-    breaking bar, oldest first, already capped by the caller to the window."""
-    for b in bars_since_break[:_FAILED_BREAK_WINDOW_BARS]:
-        if zone["low"] <= b["close"] <= zone["high"]:
-            return True
-    return False
+def should_push(event: dict, pushes_sent: int, approach_pushed: set, break_pushed: set,
+                ticker: str = "") -> bool:
+    """
+    Push gating, pure:
+      - failed_break: only for a break whose push actually went out, and
+        ALWAYS (any time of day, even past the daily cap) — it's an exit.
+      - zone_approach / zone_break: entries — only inside the entry signal
+        window, under the daily cap, and an approach only once per zone
+        (re-armed by that zone's failed break).
+    """
+    etype, zone_id = event["type"], event.get("zone_id")
+    if etype == "failed_break":
+        return zone_id in break_pushed
+    if etype not in ("zone_approach", "zone_break"):
+        return False
+    if event.get("bar_ts") is None or not in_entry_window(event["bar_ts"]):
+        return False
+    if pushes_sent >= _MAX_PUSHES_PER_TICKER_PER_DAY:
+        logger.info("[StructureTracker] %s %s push skipped — daily cap (%d) reached",
+                    ticker, etype, _MAX_PUSHES_PER_TICKER_PER_DAY)
+        return False
+    if etype == "zone_approach" and zone_id in approach_pushed:
+        return False
+    return True
 
 
 # ── Live, stateful tracker ───────────────────────────────────────────────────
@@ -298,6 +420,9 @@ class _TickerState:
         self.pending_breaks: dict = {}    # zone_id -> {"broken_at_idx": int, "direction": str}
         self.approached: set = set()      # zone_ids already fired a zone_approach since last moving away
         self.pushes_sent: int = 0         # zone pushes this session — capped at _MAX_PUSHES_PER_TICKER_PER_DAY
+        self.approach_pushed: set = set() # zone_ids whose approach push already went out (re-armed by a failed break)
+        self.break_pushed: set = set()    # zone_ids whose break push went out — their failed break pushes too
+        self.refreshing: bool = False     # a background zone refresh is in flight
         self._swing_high_idx: list = []
         self._swing_low_idx: list = []
 
@@ -406,14 +531,22 @@ class StructureTracker:
                 st.pending_breaks = {}
                 st.approached = set()
                 st.pushes_sent = 0
+                st.approach_pushed = set()
+                st.break_pushed = set()
             st.raw_1m.append(bar)
             prev_closed_count = len(st.closed_bars)
             self._recompute(st)
             new_bars = st.closed_bars[prev_closed_count:]
+            session_1m = session_bars_1m(st.raw_1m, st.session_date)
 
+        # Trend/BOS: 30m buckets, unchanged.
         for closed_bar in new_bars:
             self._on_closed_bar(st, closed_bar)
-        self._check_approach(st, float(bar.close))
+        # Zone breaks / failed breaks / approaches: every closed 1m bar.
+        self._refresh_zones(st)
+        if session_1m and session_1m[-1]["ts"] == (bar.ts if bar.ts.tzinfo else ET.localize(bar.ts)).astimezone(ET):
+            self._on_1m_bar(st, session_1m)
+            self._check_approach(st, float(bar.close), session_1m[-1]["ts"])
 
     def _recompute(self, st: _TickerState) -> None:
         """Rebuilds aggregated bars + trend state from `st.raw_1m`. Called
@@ -426,32 +559,37 @@ class StructureTracker:
         st._swing_high_idx, st._swing_low_idx = hi_idx, lo_idx
 
     def _on_closed_bar(self, st: _TickerState, bar: dict) -> None:
-        # BOS.
+        """30m bucket close — trend/BOS only."""
         bos = detect_bos(st.closed_bars, st._swing_high_idx, st._swing_low_idx)
         if bos:
             self._emit(st.ticker, bos, session_date=st.session_date)
 
-        # Refresh the zone snapshot at most once per closed bar (not per tick).
-        self._refresh_zones(st)
+    def _on_1m_bar(self, st: _TickerState, session_1m: list) -> None:
+        """Latest closed 1m bar (`session_1m[-1]`) against every zone: failed
+        breaks for pending ones, fresh breaks for the rest."""
         if not st.zone_snapshot:
             return
-
-        bar_idx = next((i for i, b in enumerate(st.closed_bars) if b["ts"] == bar["ts"]), len(st.closed_bars) - 1)
-        avg_volume = trailing_avg_volume(st.closed_bars, bar_idx)
+        bar = session_1m[-1]
+        avg_volume = trailing_avg_volume(session_1m, len(session_1m) - 1)
         for zone_id, zone in _all_zones(st.zone_snapshot):
             pending = st.pending_breaks.get(zone_id)
             if pending is not None:
-                since = [b for b in st.closed_bars if b["ts"] > pending["broken_at_ts"]]
-                if detect_failed_break(_flip_view(zone, st.flips.get(zone_id)), since):
-                    self._undo_flip(st, zone_id)
-                    self._emit(st.ticker, {"type": "failed_break", "zone_id": zone_id,
-                                          "direction": pending["direction"], "bar_ts": bar["ts"]},
-                              session_date=st.session_date)
-                    del st.pending_breaks[zone_id]
-                elif len(since) >= _FAILED_BREAK_WINDOW_BARS:
+                age_min = (bar["ts"] - pending["broken_at_ts"]).total_seconds() / 60.0
+                if age_min > FAILED_BREAK_WINDOW_MINUTES:
                     del st.pending_breaks[zone_id]  # break stood — stop watching for a trap
+                elif detect_failed_break_1m(zone, pending["direction"], bar["close"]):
+                    self._undo_flip(st, zone_id)
+                    del st.pending_breaks[zone_id]
+                    # Re-arm this zone's approach push for a fresh attempt.
+                    st.approach_pushed.discard(zone_id)
+                    self._emit(st.ticker, {"type": "failed_break", "zone_id": zone_id,
+                                          "direction": pending["direction"], "close": bar["close"],
+                                          "bar_ts": bar["ts"]},
+                              session_date=st.session_date, st=st, zone=zone)
                 continue
 
+            if avg_volume is None:
+                continue  # under 10 baseline bars — no break signal yet
             effective = _flip_view(zone, st.flips.get(zone_id))
             brk = detect_zone_break(effective, bar, avg_volume)
             if brk:
@@ -460,7 +598,7 @@ class StructureTracker:
                 st.pending_breaks[zone_id] = {"broken_at_ts": bar["ts"], "direction": brk["direction"]}
                 self._emit(st.ticker, brk, session_date=st.session_date, st=st, zone=effective)
 
-    def _check_approach(self, st: _TickerState, price: float) -> None:
+    def _check_approach(self, st: _TickerState, price: float, bar_ts=None) -> None:
         if not st.zone_snapshot:
             return
         for zone_id, zone in _all_zones(st.zone_snapshot):
@@ -468,23 +606,49 @@ class StructureTracker:
             near = detect_approach(effective, price)
             if near and zone_id not in st.approached:
                 st.approached.add(zone_id)
-                self._emit(st.ticker, {"type": "zone_approach", "zone_id": zone_id, "close": price},
+                self._emit(st.ticker, {"type": "zone_approach", "zone_id": zone_id, "close": price,
+                                       "bar_ts": bar_ts},
                           session_date=st.session_date, st=st, zone=effective)
             elif not near:
                 st.approached.discard(zone_id)
 
     def _refresh_zones(self, st: _TickerState) -> None:
+        """Refresh the zone snapshot at most once a minute, OFF the bar
+        thread: it now runs per 1m bar, and a cold zone_engine fetch can take
+        up to its 10s timeout, which would stall every ticker's bars on the
+        hub's loop. Checks keep using the previous snapshot until the new one
+        lands."""
         now = datetime.now(ET)
-        if st.zone_snapshot_at and (now - st.zone_snapshot_at).total_seconds() < 60:
+        if st.refreshing or (st.zone_snapshot_at and (now - st.zone_snapshot_at).total_seconds() < 60):
             return
+        st.refreshing = True
+        threading.Thread(target=self._refresh_zones_worker, args=(st,), daemon=True,
+                         name=f"zone-refresh-{st.ticker}").start()
+
+    def _refresh_zones_worker(self, st: _TickerState) -> None:
         try:
             from services.strategy.zone_engine import zones as _zones
             snap = _zones(st.ticker, timeframe=st.timeframe)
             if not snap.get("error"):
-                st.zone_snapshot = snap
-                st.zone_snapshot_at = now
+                with self._lock:
+                    self._install_snapshot(st, snap)
         except Exception as e:
             logger.warning("[StructureTracker] zone refresh failed for %s: %s", st.ticker, e)
+        finally:
+            st.refreshing = False
+
+    def _install_snapshot(self, st: _TickerState, snap: dict) -> None:
+        """Swap in a new zone snapshot, carrying flips / pending breaks /
+        pushed-signal state over to the matching new zone ids (see
+        remap_zone_ids). Called under self._lock."""
+        mapping = remap_zone_ids(st.zone_snapshot, snap)
+        st.flips = {mapping[k]: v for k, v in st.flips.items() if k in mapping}
+        st.pending_breaks = {mapping[k]: v for k, v in st.pending_breaks.items() if k in mapping}
+        st.approached = {mapping[k] for k in st.approached if k in mapping}
+        st.approach_pushed = {mapping[k] for k in st.approach_pushed if k in mapping}
+        st.break_pushed = {mapping[k] for k in st.break_pushed if k in mapping}
+        st.zone_snapshot = snap
+        st.zone_snapshot_at = datetime.now(ET)
 
     # ── Flip bookkeeping ─────────────────────────────────────────────────────
 
@@ -533,23 +697,31 @@ class StructureTracker:
         """Zone approach/break → push to the users following this ticker,
         within the per-ticker daily cap. Never raises."""
         try:
+            if not self._should_push(st, event):
+                return
             msg = format_zone_push(st.ticker, event, zone, st.timeframe)
             if msg is None:
-                return
-            if st.pushes_sent >= _MAX_PUSHES_PER_TICKER_PER_DAY:
-                logger.info("[StructureTracker] %s %s push skipped — daily cap (%d) reached",
-                            st.ticker, event["type"], _MAX_PUSHES_PER_TICKER_PER_DAY)
                 return
             user_ids = self._followers(st.ticker)
             if not user_ids:
                 return
             st.pushes_sent += 1
+            zone_id = event.get("zone_id")
+            if event["type"] == "zone_break":
+                st.break_pushed.add(zone_id)
+            elif event["type"] == "zone_approach":
+                st.approach_pushed.add(zone_id)
+            elif event["type"] == "failed_break":
+                st.break_pushed.discard(zone_id)
             self._get_notifier().notify_zone_alert(
                 msg[0], msg[1], user_ids,
                 {"type": event["type"], "ticker": st.ticker, "zone_low": zone["low"], "zone_high": zone["high"]},
             )
         except Exception as e:
             logger.warning("[StructureTracker] %s %s push failed: %s", st.ticker, event.get("type"), e)
+
+    def _should_push(self, st: "_TickerState", event: dict) -> bool:
+        return should_push(event, st.pushes_sent, st.approach_pushed, st.break_pushed, st.ticker)
 
     def _followers(self, ticker: str) -> list:
         """User ids with this ticker ORB-followed — the same set whose follow

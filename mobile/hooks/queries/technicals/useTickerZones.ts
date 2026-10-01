@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
-import type { ChartAutoZone } from '@/common/components/ticker/AdvancedPriceChart';
+import type { ChartAutoZone, ChartZoneContext } from '@/common/components/ticker/AdvancedPriceChart';
 
 export interface TickerZone {
   center: number;
@@ -10,6 +10,10 @@ export interface TickerZone {
   touches: number;
   sources: string[];  // e.g. ['orh', 'premarket_high', 'round_1', 'swing_high_30m']
   type: 'support' | 'resistance';
+  /** Each point behind the zone, newest date first (absent on older cached responses). */
+  touch_detail?: { price: number; date: string | null; source: string }[];
+  /** Scoring v2 breakdown — touch/30, recency/20, volume/15, confluence/35. */
+  score_terms?: { touch: number; recency: number; volume: number; confluence: number; score: number };
 }
 
 export interface TickerFlippedZone {
@@ -29,6 +33,7 @@ export interface TickerZones {
   atr: number | null;
   tolerance: number;
   timeframe: string;
+  prior_day?: { high: number; low: number; close: number };
   resistance: TickerZone[];
   support: TickerZone[];
   /** Whether StructureTracker watches this ticker's live bars. Only
@@ -82,6 +87,7 @@ export function toChartAutoZones(data: TickerZones | undefined): ChartAutoZone[]
   const price = data.current_price;
   const map = (z: TickerZone, type: ChartAutoZone['type']): ChartAutoZone => ({
     id: `${type}_${z.center}`, low: z.low, high: z.high, score: z.score, touches: z.touches, sources: z.sources, type,
+    touchDetail: z.touch_detail, scoreTerms: z.score_terms,
   });
   return [
     ...data.support.filter(z => (price - z.low) / price <= CHART_ZONE_MAX_DISTANCE_PCT).map(z => map(z, 'support')),
@@ -90,12 +96,25 @@ export function toChartAutoZones(data: TickerZones | undefined): ChartAutoZone[]
 }
 
 /**
- * Chart-ready auto zones for `ticker`, fetched only while `enabled` (the
- * "Auto-detected zones" setting, and the chart being visible) — the fetch is
- * a real, if 90s-cached, yfinance call. Shared by the Charts tab and
+ * Chart-ready auto zones for `ticker` plus the market context the zone
+ * detail sheet shows, fetched only while `enabled` (the "Auto-detected
+ * zones" setting, and the chart being visible) — the fetch is a real, if
+ * 90s-cached, yfinance call. Shared by the Charts tab and
  * PriceChartFullScreen.
  */
-export function useChartAutoZones(ticker: string | null | undefined, enabled: boolean): ChartAutoZone[] | null {
+export function useChartAutoZones(
+  ticker: string | null | undefined,
+  enabled: boolean,
+): { zones: ChartAutoZone[] | null; context: ChartZoneContext | null } {
   const { data } = useTickerZones(enabled ? ticker : null);
-  return enabled ? toChartAutoZones(data) : null;
+  if (!enabled || !data) return { zones: null, context: null };
+  return {
+    zones: toChartAutoZones(data),
+    context: {
+      currentPrice: data.current_price ?? null,
+      atr: data.atr ?? null,
+      priorDay: data.prior_day ?? null,
+      timeframe: data.timeframe ?? null,
+    },
+  };
 }

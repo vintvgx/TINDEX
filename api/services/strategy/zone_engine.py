@@ -214,10 +214,20 @@ def _swing_source_points(highs: list, lows: list, timestamps: list, source_tag: 
 
     pts = []
     for i in hi_idx:
-        pts.append({"price": float(highs[i]), "source": f"swing_high_{source_tag}", "age_days": _age_days(timestamps[i])})
+        pts.append({"price": float(highs[i]), "source": f"swing_high_{source_tag}",
+                    "age_days": _age_days(timestamps[i]), "date": _et_date_iso(timestamps[i])})
     for i in lo_idx:
-        pts.append({"price": float(lows[i]), "source": f"swing_low_{source_tag}", "age_days": _age_days(timestamps[i])})
+        pts.append({"price": float(lows[i]), "source": f"swing_low_{source_tag}",
+                    "age_days": _age_days(timestamps[i]), "date": _et_date_iso(timestamps[i])})
     return pts
+
+
+def _et_date_iso(ts) -> str:
+    """YYYY-MM-DD of a bar timestamp in ET (naive timestamps are taken as ET,
+    which is how yfinance labels daily bars)."""
+    if getattr(ts, "tzinfo", None) is not None:
+        return ts.tz_convert(ET).date().isoformat()
+    return ts.date().isoformat()
 
 
 def _gather_points(ticker: str, daily, intraday_5d, today_session, timeframe: str) -> tuple:
@@ -229,6 +239,7 @@ def _gather_points(ticker: str, daily, intraday_5d, today_session, timeframe: st
     import pandas as pd
 
     today_et = datetime.now(ET).date()
+    today_iso = today_et.isoformat()
 
     daily_dates = daily.index.tz_localize(ET) if daily.index.tz is None else daily.index.tz_convert(ET)
     daily_is_today = daily_dates.date == today_et
@@ -259,10 +270,11 @@ def _gather_points(ticker: str, daily, intraday_5d, today_session, timeframe: st
 
     # Prior-day H/L/C.
     prev_row = daily_complete.iloc[-1]
+    prior_iso = _et_date_iso(daily_complete.index[-1])
     prior_day = {"high": float(prev_row["High"]), "low": float(prev_row["Low"]), "close": float(prev_row["Close"])}
-    points.append({"price": prior_day["high"], "source": "pdh", "age_days": 1.0})
-    points.append({"price": prior_day["low"], "source": "pdl", "age_days": 1.0})
-    points.append({"price": prior_day["close"], "source": "pdc", "age_days": 1.0})
+    points.append({"price": prior_day["high"], "source": "pdh", "age_days": 1.0, "date": prior_iso})
+    points.append({"price": prior_day["low"], "source": "pdl", "age_days": 1.0, "date": prior_iso})
+    points.append({"price": prior_day["close"], "source": "pdc", "age_days": 1.0, "date": prior_iso})
 
     # Premarket H/L + ORH/ORL + session VWAP — all from today's finer-grained session bars.
     orh = orl = None
@@ -271,8 +283,8 @@ def _gather_points(ticker: str, daily, intraday_5d, today_session, timeframe: st
         pre_mask = (idx_et.hour * 60 + idx_et.minute) < 9 * 60 + 30
         premarket = today_session[pre_mask]
         if not premarket.empty:
-            points.append({"price": float(premarket["High"].max()), "source": "premarket_high", "age_days": 0.0})
-            points.append({"price": float(premarket["Low"].min()), "source": "premarket_low", "age_days": 0.0})
+            points.append({"price": float(premarket["High"].max()), "source": "premarket_high", "age_days": 0.0, "date": today_iso})
+            points.append({"price": float(premarket["Low"].min()), "source": "premarket_low", "age_days": 0.0, "date": today_iso})
 
         try:
             from services.utils.orb_data_hub import get_orb_data_hub
@@ -287,13 +299,13 @@ def _gather_points(ticker: str, daily, intraday_5d, today_session, timeframe: st
             if not orb_bars.empty:
                 orh, orl = float(orb_bars["High"].max()), float(orb_bars["Low"].min())
         if orh is not None and orl is not None:
-            points.append({"price": orh, "source": "orh", "age_days": 0.0})
-            points.append({"price": orl, "source": "orl", "age_days": 0.0})
+            points.append({"price": orh, "source": "orh", "age_days": 0.0, "date": today_iso})
+            points.append({"price": orl, "source": "orl", "age_days": 0.0, "date": today_iso})
 
         reg_mask = _regular_session_mask(idx_et)
         session_vwap = _vwap_from_bars(today_session[reg_mask])
         if session_vwap:
-            points.append({"price": session_vwap, "source": "session_vwap", "age_days": 0.0})
+            points.append({"price": session_vwap, "source": "session_vwap", "age_days": 0.0, "date": today_iso})
 
     # Prior-day VWAP, from the 5d intraday set filtered to that date's regular session.
     if intraday_5d is not None and not intraday_5d.empty:
@@ -303,10 +315,11 @@ def _gather_points(ticker: str, daily, intraday_5d, today_session, timeframe: st
             day_mask = (idx_et5.date == prior_date) & _regular_session_mask(idx_et5)
             prior_vwap = _vwap_from_bars(intraday_5d[day_mask])
             if prior_vwap:
-                points.append({"price": prior_vwap, "source": "prior_day_vwap", "age_days": 1.0})
+                points.append({"price": prior_vwap, "source": "prior_day_vwap", "age_days": 1.0,
+                               "date": prior_date.isoformat()})
 
-    # Round numbers near current price.
-    points += _round_number_points(current_price)
+    # Round numbers near current price — "touched" as of today.
+    points += [{**p, "date": today_iso} for p in _round_number_points(current_price)]
 
     return points, current_price, atr, prior_day
 
@@ -392,7 +405,21 @@ def _score_cluster(cluster: list, intraday_5d, tolerance_abs: float) -> dict:
         "score": round(terms["score"], 1),
         "touches": touches,
         "sources": sorted({p["source"] for p in cluster}),
+        # Every point behind the zone, for the app's zone detail sheet:
+        # newest date first, then highest price.
+        "touch_detail": touch_detail(cluster),
+        # The v2 breakdown the detail sheet draws as bars.
+        "score_terms": {k: round(v, 1) for k, v in terms.items()},
     }
+
+
+def touch_detail(cluster: list) -> list:
+    """[{price, date, source}] for each point, newest date first, then
+    highest price. Pure — no I/O."""
+    rows = [{"price": round(p["price"], 2), "date": p.get("date"), "source": p["source"]} for p in cluster]
+    rows.sort(key=lambda r: r["price"], reverse=True)
+    rows.sort(key=lambda r: r["date"] or "", reverse=True)  # stable: keeps price order within a date
+    return rows
 
 
 def rank_zones(zone_list: list, current_price: float, limit: int = 3) -> list:

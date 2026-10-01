@@ -144,7 +144,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
 
   // ZoneEngine's auto-detected zones — fetched only while the
   // "Auto-detected zones" setting is on and this screen is visible.
-  const autoZones = useChartAutoZones(ticker, visible && chart.showAutoZones);
+  const { zones: autoZones, context: zoneContext } = useChartAutoZones(ticker, visible && chart.showAutoZones);
 
   // Extended-hours session boundary lines (Pre-Market/Market Close/
   // Post-Market/Overnight) — 1D only, only outside regular trading hours
@@ -437,6 +437,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
             onDeleteWatchZone={handleDeleteWatchZone}
             onUpdateWatchZone={handleUpdateWatchZone}
             autoZones={autoZones}
+            zoneContext={zoneContext}
             resetKey={ticker}
             settings={chart.chartSettings}
           />
