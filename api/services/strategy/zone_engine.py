@@ -30,15 +30,21 @@ Design, mapped straight from the TODO:
     session the ATR term alone is wide enough to swallow genuinely distinct
     multi-dollar levels (verified against AMZN 9/30 below); ATR only widens
     tolerance on a tight/low-ATR name where 0.2% of price would be sub-cent.
-  - SCORING v2 (0-100; see `score_terms`): diminishing-returns touch
-    count (30 * sqrt(touches/10), capped at 10) + recency (20, exponential
-    decay, 5-day half-life) + volume traded through the band (15) + a
-    diminishing confluence bonus for each DISTINCT extra source category
-    beyond the first (+12, +8, then +5 each, up to 5 extra = +35; repeated
-    swing touches are one category — "swing" — and both round tiers are one
-    "round"). The terms sum to exactly 100 at their caps, so 100 means "10
-    touches, tested today, heavy volume, 5 independent methods agreeing" —
-    rare by design, unlike v1 where real zones all tied at 100.
+  - SCORING v3 (0-100; see `score_terms`): time-weighted tested-touch count
+    (50 * sqrt(tw/10), capped at 10 — each genuine price test contributes
+    0.5^(age_days / 5d half-life), so recent tests count fully and old ones
+    fade) + volume traded through the band (15) + a diminishing confluence
+    bonus for each DISTINCT extra source category beyond the first (+12, +8,
+    then +5 each, up to 5 extra = +35; repeated swing touches are one
+    category — "swing" — and both round tiers are one "round"). Only price
+    levels the market actually printed (swing extremes, prior-day H/L/C,
+    premarket H/L, ORH/ORL) count as touches; generated reference levels
+    (round numbers, VWAPs) cluster zones into existence and contribute to
+    confluence, but never to touches — v2 let daily-regenerated round levels
+    fake a perfect freshness score on zones price hadn't touched in weeks.
+    The terms sum to exactly 100 at their caps, so 100 means "10 fresh
+    touches, heavy volume, 5 independent methods agreeing" — rare by design,
+    unlike v1 where real zones all tied at 100.
 
 Refreshed far more often than the old 8h S/R cache (`_CACHE_TTL_SECONDS`
 below) — several of the sources above (ORB, premarket, session VWAP) are
@@ -83,9 +89,14 @@ _TOL_ATR_MULT = 0.25
 # Fix 1). Every term has diminishing returns and the caps sum to exactly 100,
 # so nothing needs normalizing and real zones stop tying at the ceiling.
 _TOUCH_MAX = 10
-_TOUCH_WEIGHT = 30.0               # 30 * sqrt(min(touches, 10) / 10): 1 ≈ 9.5, 5 ≈ 21.2, 10 = 30
-_RECENCY_WEIGHT = 20.0
-_RECENCY_HALF_LIFE_DAYS = 5.0     # a touch 5 days old scores half of "just now"; 55 days old ~= 1/1024
+_TOUCH_WEIGHT = 50.0               # 50 * sqrt(min(time_weighted_touches, 10) / 10):
+                                  # each *tested* touch contributes 0.5^(age_days / half-life),
+                                  # so 10 fresh touches = 50; a touch 5d old counts ~0.5.
+                                  # Absorbs the old standalone recency term (v3, 2026-10-02):
+                                  # recency double-counted touches and synthetic generated
+                                  # levels (round numbers, VWAPs) stamped "today" faked a
+                                  # perfect freshness score on zones price never tested.
+_RECENCY_HALF_LIFE_DAYS = 5.0     # per-touch decay for the time-weighted touch count above
 _VOLUME_WEIGHT = 15.0
 _VOLUME_HEADROOM_MULT = 3.0        # zone volume at 3x the naive per-touch expectation maxes this term
 # Bonus per extra distinct source category beyond the first: +12, +8, then
@@ -356,6 +367,20 @@ def _cluster_points(points: list, tolerance_abs: float) -> list:
     return clusters
 
 
+def _is_tested_source(source: str) -> bool:
+    """True when the point is a price level the market actually printed —
+    a genuine *test* of the zone. Generated reference levels (round numbers,
+    VWAPs) are hypotheses, not tests: they contribute to confluence but must
+    never count as touches or freshness. (v3, 2026-10-02 — previously the
+    daily-regenerated round levels stamped age_days=0 faked a perfect
+    recency score on zones price hadn't touched in weeks.)"""
+    if source.startswith("swing_"):
+        return True
+    return source in ("pdh", "pdl", "pdc",
+                      "premarket_high", "premarket_low",
+                      "orh", "orl")
+
+
 def confluence_bonus(extra_categories: int) -> float:
     """Diminishing bonus for `extra_categories` distinct source categories
     beyond the first — see _CONFLUENCE_STEPS."""
@@ -363,23 +388,28 @@ def confluence_bonus(extra_categories: int) -> float:
     return sum(_CONFLUENCE_STEPS[:n])
 
 
-def score_terms(touches: int, freshest_age_days: float, volume_ratio: float,
+def score_terms(tw_touches: float, volume_ratio: float,
                 category_count: int) -> dict:
     """
-    Pure scoring v2 — no I/O, unit-testable directly. `volume_ratio` is zone
-    volume over its expected volume (avg bar volume * touches * headroom);
-    `category_count` is the number of distinct source categories.
-    Returns each term plus `score` = min(100, sum). Proximity to price is
-    deliberately NOT a term: that's the gate/alerts' job (ZONE_NEAR_PCT,
-    _APPROACH_PCT), and zones() uses it only as a display tiebreak.
+    Pure scoring v3 — no I/O, unit-testable directly. `tw_touches` is the
+    time-weighted tested-touch count: sum over tested points of
+    0.5^(age_days / half-life), so recent tests count fully and old ones
+    fade (this folds the old standalone recency term into touches — v3,
+    2026-10-02). `volume_ratio` is zone volume over its expected volume
+    (avg bar volume * tested touches * headroom); `category_count` is the
+    number of distinct source categories (synthetic levels still count
+    here — that's their proper role).
+    Returns each term plus `score` = min(100, sum). Caps sum to exactly 100
+    (50 + 15 + 35). Proximity to price is deliberately NOT a term: that's
+    the gate/alerts' job (ZONE_NEAR_PCT, _APPROACH_PCT), and zones() uses it
+    only as a display tiebreak.
     """
-    touch = _TOUCH_WEIGHT * (min(max(touches, 0), _TOUCH_MAX) / _TOUCH_MAX) ** 0.5
-    recency = _RECENCY_WEIGHT * 0.5 ** (max(freshest_age_days, 0.0) / _RECENCY_HALF_LIFE_DAYS)
+    touch = _TOUCH_WEIGHT * (min(max(tw_touches, 0.0), _TOUCH_MAX) / _TOUCH_MAX) ** 0.5
     volume = _VOLUME_WEIGHT * min(1.0, max(volume_ratio, 0.0))
     confluence = confluence_bonus(category_count - 1)
     return {
-        "touch": touch, "recency": recency, "volume": volume, "confluence": confluence,
-        "score": min(100.0, touch + recency + volume + confluence),
+        "touch": touch, "volume": volume, "confluence": confluence,
+        "score": min(100.0, touch + volume + confluence),
     }
 
 
@@ -410,41 +440,46 @@ def _score_cluster(cluster: list, intraday_5d, tolerance_abs: float) -> dict:
     low, high = center - half_width, center + half_width
 
     touches = len(cluster)
-    # Recency: the single freshest touch represents the zone — a level
-    # tested both 2 days ago and 50 days ago reads as "tested 2 days ago"
-    # for recency purposes; touch count already rewards the repeat separately.
-    freshest_age = min(p["age_days"] for p in cluster)
+    # Scoring v3: only genuine price tests count toward touches and
+    # recency. Generated levels (round numbers, VWAPs) are confluence-only —
+    # they cluster the zone into existence but must not inflate its score.
+    tested = [p for p in cluster if _is_tested_source(p["source"])]
+    tested_touches = len(tested)
+    tw_touches = sum(0.5 ** (max(p["age_days"], 0.0) / _RECENCY_HALF_LIFE_DAYS)
+                     for p in tested)
 
     volume_ratio = 0.0
     if intraday_5d is not None and not intraday_5d.empty:
         overlap = intraday_5d[(intraday_5d["High"] >= low) & (intraday_5d["Low"] <= high)]
         avg_bar_vol = float(intraday_5d["Volume"].mean() or 0.0)
-        expected = avg_bar_vol * max(touches, 1) * _VOLUME_HEADROOM_MULT
+        expected = avg_bar_vol * max(tested_touches, 1) * _VOLUME_HEADROOM_MULT
         if expected > 0:
             volume_ratio = float(overlap["Volume"].sum()) / expected
 
     categories = {_category(p["source"]) for p in cluster}
-    terms = score_terms(touches, freshest_age, volume_ratio, len(categories))
+    terms = score_terms(tw_touches, volume_ratio, len(categories))
 
     return {
         "center": round(center, 4),
         "low": round(low, 4),
         "high": round(high, 4),
         "score": round(terms["score"], 1),
-        "touches": touches,
+        "touches": tested_touches,
         "sources": sorted({p["source"] for p in cluster}),
         # Every point behind the zone, for the app's zone detail sheet:
-        # newest date first, then highest price.
+        # newest date first, then highest price. `tested` flags genuine
+        # price tests vs generated reference levels.
         "touch_detail": touch_detail(cluster),
-        # The v2 breakdown the detail sheet draws as bars.
+        # The v3 breakdown the detail sheet draws as bars.
         "score_terms": {k: round(v, 1) for k, v in terms.items()},
     }
 
 
 def touch_detail(cluster: list) -> list:
-    """[{price, date, source}] for each point, newest date first, then
+    """[{price, date, source, tested}] for each point, newest date first, then
     highest price. Pure — no I/O."""
-    rows = [{"price": round(p["price"], 2), "date": p.get("date"), "source": p["source"]} for p in cluster]
+    rows = [{"price": round(p["price"], 2), "date": p.get("date"), "source": p["source"],
+             "tested": _is_tested_source(p["source"])} for p in cluster]
     rows.sort(key=lambda r: r["price"], reverse=True)
     rows.sort(key=lambda r: r["date"] or "", reverse=True)  # stable: keeps price order within a date
     return rows
