@@ -147,7 +147,12 @@ def pc_ratios(contracts: list) -> dict:
 
 
 def unusual_contracts(contracts: list, min_volume: int = UNUSUAL_MIN_VOLUME, top_n: int = UNUSUAL_TOP_N) -> list:
-    """score = volume / max(OI, 1); volume >= min_volume; top N by score."""
+    """score = volume / max(OI, 1); volume >= min_volume; top N by score.
+    Empty when total OI is 0 (e.g. Yahoo's overnight zero-fill): with no OI
+    a volume/OI ratio is meaningless — you can't tell a new position from
+    missing data — so every row would be a 19039× artifact."""
+    if not any((_num(c.get("openInterest")) or 0) for c in contracts):
+        return []
     rows = []
     for c in contracts:
         vol = _num(c.get("volume")) or 0
@@ -175,12 +180,17 @@ def atm_iv(front: list, spot: float, band: float = ATM_BAND_PCT):
 
 
 def max_pain(front: list):
-    """S* = argmin over strikes of Σ_call OI·max(S−K,0) + Σ_put OI·max(K−S,0)."""
+    """S* = argmin over strikes of Σ_call OI·max(S−K,0) + Σ_put OI·max(K−S,0).
+    None when there are no strikes, or when total OI is 0 (e.g. Yahoo's
+    overnight zero-fill) — with no OI every strike ties at 0 and min()
+    would just return the lowest strike, a fake number."""
     strikes = sorted({c["strike"] for c in front})
     if not strikes:
         return None
     calls = [(c["strike"], _num(c.get("openInterest")) or 0) for c in front if c["type"] == "call"]
     puts = [(c["strike"], _num(c.get("openInterest")) or 0) for c in front if c["type"] == "put"]
+    if not any(oi for _, oi in calls) and not any(oi for _, oi in puts):
+        return None
 
     def pain(s):
         return (sum(oi * max(s - k, 0) for k, oi in calls)
