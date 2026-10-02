@@ -3,22 +3,16 @@ import { useState } from 'react';
 import { View, Text, ScrollView, Pressable, RefreshControl, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
 import { useChartInterval } from '@/hooks/useChartInterval';
 import { useIsFollowingORB, useToggleORBFollow } from '@/hooks/mutations/ticker/tickerORB';
-import { useGenerateTickerUpdateMutation } from '@/hooks/mutations/ticker/useGenerateTickerUpdateMutation';
 import { PriceChart, ScrubPoint } from '@/common/components/ticker/PriceChart';
 import { PriceChartFullScreen } from '@/common/components/ticker/PriceChartFullScreen';
-import { AnalyticsTab } from '@/common/components/ticker/AnalyticsTab';
-import { FinancialsTab } from '@/common/components/ticker/FinancialsTab';
 import { OptionsChainPicker } from '@/common/components/strategy/OptionsChainPicker';
-import { UpdatesTab } from '@/common/components/ticker/UpdatesTab';
-import { FiftyTwoWeekRangeBar } from '@/common/components/ticker/FiftyTwoWeekRangeBar';
+import { TickerBrief } from '@/common/components/ticker/brief/TickerBrief';
 import { Skeleton } from '@/common/components/ui/Skeleton';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
-import { formatMarketCap } from '@/common/utils/format/marketCap';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 
 interface TickerDetailSheetProps {
@@ -29,11 +23,12 @@ interface TickerDetailSheetProps {
   initialFullScreenChart?: boolean;
 }
 
-type SubScreen = 'contracts' | 'insights' | 'financials' | 'updates' | null;
+// The insights/financials/updates sub-screens were replaced by the inline
+// trading brief (TickerBrief); Contracts is the only sub-screen left.
+type SubScreen = 'contracts' | null;
 
 export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, onClose, initialFullScreenChart = false }) => {
   const colors = useThemeColors();
-  const { authState: { user } } = useAuth();
 
   const [period, setPeriod] = useState<PricePeriod>('1D');
   const [subScreen, setSubScreen] = useState<SubScreen>(null);
@@ -44,7 +39,7 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
   // a persistent background tint needs a value from above it to apply to).
   const [paperMode, setPaperMode] = useState(true);
 
-  const { data: tickerResponse, isLoading, isError, isRefetching, refetchFresh, refetch } = useTickerQuery(ticker);
+  const { data: tickerResponse, isError, isRefetching, refetchFresh } = useTickerQuery(ticker);
   const stockData = tickerResponse?.data;
 
   // Shares its persisted value with AdvancedPriceChart's own interval picker
@@ -62,7 +57,6 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
 
   const { data: isFollowingORB } = useIsFollowingORB(ticker);
   const toggleORBFollow = useToggleORBFollow(ticker);
-  const generateTickerUpdate = useGenerateTickerUpdateMutation();
 
   // Period-over-period direction drives the chart's line color, independent
   // of the header's day-change figure (which stays anchored to "today").
@@ -89,57 +83,12 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
 
   const contractsReady = !!stockData;
 
-  const handleGenerateTweet = () => {
-    if (!user?.id) return;
-    generateTickerUpdate.mutate({ ticker, userId: user.id, targetLength: 500 });
-  };
-
-  if (isError && !stockData) {
-    return (
-      <View style={{ flex: 1 }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4, marginBottom: 8, paddingHorizontal: 20 }}>
-          <Pressable onPress={onClose} hitSlop={10} style={{ padding: 4 }}>
-            <Ionicons name="chevron-down" size={22} color={colors.text} />
-          </Pressable>
-          <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>{ticker}</Text>
-          <View style={{ width: 22 }} />
-        </View>
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
-          <Ionicons name="cloud-offline-outline" size={40} color={colors.textTertiary} />
-          <Text style={{ marginTop: 14, fontSize: 15, fontWeight: '600', color: colors.text, textAlign: 'center' }}>
-            Unable to be fetched
-          </Text>
-          <Text style={{ marginTop: 6, fontSize: 13, color: colors.textSecondary, textAlign: 'center', lineHeight: 18 }}>
-            We couldn't load data for {ticker}. Check your connection and try again.
-          </Text>
-          <Pressable
-            onPress={() => refetch()}
-            style={{ marginTop: 20, backgroundColor: colors.accent, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 20 }}
-          >
-            <Text style={{ color: colors.accentForeground, fontWeight: '700', fontSize: 14 }}>Retry</Text>
-          </Pressable>
-        </View>
-      </View>
-    );
-  }
-
+  // No screen-level error: a failed ticker lookup leaves the header's price
+  // inline "unavailable", and every brief section below fetches and fails
+  // on its own.
   if (subScreen && stockData) {
     return (
-      <SubScreenHost
-        title={subScreenTitle(subScreen)}
-        onBack={() => setSubScreen(null)}
-        rightAction={
-          subScreen === 'updates' ? (
-            <Pressable onPress={handleGenerateTweet} disabled={generateTickerUpdate.isPending || !user?.id} hitSlop={10}>
-              {generateTickerUpdate.isPending ? (
-                <ActivityIndicator size="small" color={colors.accent} />
-              ) : (
-                <Ionicons name="create-outline" size={20} color={!user?.id ? colors.textTertiary : colors.accent} />
-              )}
-            </Pressable>
-          ) : undefined
-        }
-      >
+      <SubScreenHost title="Contracts" onBack={() => setSubScreen(null)}>
         {subScreen === 'contracts' &&
           (stockData.has_options === false ? (
             <EmptyState icon="analytics-outline" message="This ticker does not have options trading available." />
@@ -177,9 +126,6 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
               />
             </>
           ))}
-        {subScreen === 'insights' && <ScrollView contentContainerStyle={{ padding: 20 }}><AnalyticsTab stockData={stockData} /></ScrollView>}
-        {subScreen === 'financials' && <ScrollView contentContainerStyle={{ padding: 20 }}><FinancialsTab stockData={stockData} /></ScrollView>}
-        {subScreen === 'updates' && <UpdatesTab ticker={ticker} />}
       </SubScreenHost>
     );
   }
@@ -222,7 +168,7 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
         )}
         {stockData?.company_name ? (
           <Text style={{ color: colors.text, fontSize: 17, fontWeight: '700' }}>{stockData.company_name}</Text>
-        ) : (
+        ) : isError ? null : (
           <Skeleton width={140} height={18} />
         )}
       </View>
@@ -233,6 +179,8 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
           <Text style={{ color: colors.text, fontSize: 40, fontWeight: '800', letterSpacing: -1 }}>
             ${displayPrice.toFixed(2)}
           </Text>
+        ) : isError ? (
+          <UnavailableText />
         ) : (
           <Skeleton width={160} height={40} style={{ marginBottom: 6 }} />
         )}
@@ -249,7 +197,7 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
               {displayChange.toFixed(2)} ({displayChangePercent.toFixed(2)}%)
             </Text>
           </View>
-        ) : (
+        ) : isError ? null : (
           <Skeleton width={110} height={16} style={{ marginTop: 6 }} />
         )}
       </View>
@@ -332,130 +280,10 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
         )}
       </Pressable>
 
-      {/* Insights link */}
-      <Pressable
-        onPress={() => stockData && setSubScreen('insights')}
-        style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 20 }}
-      >
-        <Text style={{ color: colors.accent, fontSize: 16, fontWeight: '600' }}>Insights</Text>
-        <Ionicons name="arrow-forward" size={16} color={colors.accent} />
-      </Pressable>
-
-      {/* Market Cap */}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <Text style={{ color: colors.textSecondary, fontSize: 15, fontWeight: '500' }}>Market Cap</Text>
-        {!stockData ? (
-          <Skeleton width={70} height={16} />
-        ) : stockData.market_cap != null ? (
-          <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>{formatMarketCap(stockData.market_cap)}</Text>
-        ) : (
-          <UnavailableText />
-        )}
-      </View>
-
-      {/* 52-week range */}
-      {!stockData ? (
-        <Skeleton width="100%" height={56} style={{ marginBottom: 24 }} />
-      ) : stockData.year_low != null && stockData.year_high != null && stockData.current_price != null ? (
-        <FiftyTwoWeekRangeBar
-          currentPrice={stockData.current_price}
-          yearLow={stockData.year_low}
-          yearHigh={stockData.year_high}
-        />
-      ) : (
-        <View style={{ marginBottom: 24 }}>
-          <UnavailableText />
-        </View>
-      )}
-
-      {/* Revenue / P/E */}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginBottom: 24 }}>
-        <View style={{ alignItems: 'center' }}>
-          <Text style={{ color: colors.textTertiary, fontSize: 13, marginBottom: 4 }}>Revenue</Text>
-          {!stockData ? (
-            <Skeleton width={60} height={18} />
-          ) : stockData.revenue_growth != null ? (
-            <Text style={{ color: stockData.revenue_growth >= 0 ? colors.success : colors.error, fontSize: 18, fontWeight: '700' }}>
-              {stockData.revenue_growth >= 0 ? '+' : ''}
-              {(stockData.revenue_growth * 100).toFixed(1)}%
-            </Text>
-          ) : (
-            // Genuinely nullable field (e.g. no reported revenue growth) —
-            // not a fetch failure, so this isn't "Unable to be fetched".
-            <Text style={{ color: colors.textTertiary, fontSize: 18, fontWeight: '700' }}>N/A</Text>
-          )}
-          <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 2 }}>YoY growth</Text>
-        </View>
-        <View style={{ alignItems: 'center' }}>
-          <Text style={{ color: colors.textTertiary, fontSize: 13, marginBottom: 4 }}>P/E Ratio</Text>
-          {!stockData ? (
-            <Skeleton width={40} height={18} />
-          ) : stockData.pe_ratio != null ? (
-            <Text style={{ color: colors.text, fontSize: 18, fontWeight: '700' }}>{stockData.pe_ratio.toFixed(1)}</Text>
-          ) : (
-            <Text style={{ color: colors.textTertiary, fontSize: 18, fontWeight: '700' }}>N/A</Text>
-          )}
-          <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 2 }}>Valuation</Text>
-        </View>
-      </View>
-
-      {/* Financial Details */}
-      <Pressable
-        onPress={() => stockData && setSubScreen('financials')}
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          borderWidth: 1,
-          borderColor: colors.border,
-          borderRadius: 14,
-          paddingVertical: 14,
-          paddingHorizontal: 18,
-          marginBottom: 12,
-        }}
-      >
-        <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700', letterSpacing: 0.5 }}>FINANCIAL DETAILS</Text>
-        <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
-      </Pressable>
-
-      {/* Updates */}
-      <Pressable
-        onPress={() => stockData && setSubScreen('updates')}
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          borderWidth: 1,
-          borderColor: colors.border,
-          borderRadius: 14,
-          paddingVertical: 14,
-          paddingHorizontal: 18,
-        }}
-      >
-        <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700', letterSpacing: 0.5 }}>UPDATES</Text>
-        <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
-      </Pressable>
-
-      {isLoading && !stockData && (
-        <View style={{ alignItems: 'center', marginTop: 24 }}>
-          <ActivityIndicator size="small" color={colors.textTertiary} />
-        </View>
-      )}
+      {/* Trading brief — each section loads and fails independently */}
+      <TickerBrief ticker={ticker} />
     </ScrollView>
   );
-};
-
-const subScreenTitle = (screen: Exclude<SubScreen, null>) => {
-  switch (screen) {
-    case 'contracts':
-      return 'Contracts';
-    case 'insights':
-      return 'Insights';
-    case 'financials':
-      return 'Financial Details';
-    case 'updates':
-      return 'Updates';
-  }
 };
 
 const SubScreenHost: React.FC<{
@@ -494,7 +322,7 @@ const SubScreenHost: React.FC<{
 const UnavailableText: React.FC = () => {
   const colors = useThemeColors();
   return (
-    <Text style={{ color: colors.textTertiary, fontSize: 13, fontStyle: 'italic' }}>Unable to be fetched</Text>
+    <Text style={{ color: colors.textTertiary, fontSize: 13, fontStyle: 'italic' }}>Price unavailable</Text>
   );
 };
 

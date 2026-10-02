@@ -103,8 +103,10 @@ from routes.price_level_routes import bp as price_levels_bp
 from routes.contract_alert_routes import bp as contract_alerts_bp
 from routes.market_digest_routes import market_digest_bp
 from routes.muse import bp as muse_bp
+from routes.ticker_brief_routes import bp as ticker_brief_bp
 
 app.register_blueprint(ticker_bp)
+app.register_blueprint(ticker_brief_bp)
 app.register_blueprint(yahoo_bp)
 app.register_blueprint(monitoring_bp)
 app.register_blueprint(options_bp)
