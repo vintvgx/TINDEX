@@ -1,7 +1,7 @@
 import { useEffect, useRef, useMemo, useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
-  FlatList, ScrollView,
+  FlatList, ScrollView, Switch, Animated, type LayoutChangeEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
@@ -96,9 +96,14 @@ function pickTargetExpiration(available: string[]): string | null {
 
 // ── Chain helpers ─────────────────────────────────────────────────────────────
 
-const COL = { strike: 70, bid: 56, ask: 56, last: 56, oi: 64 };
-const ROW_H = 44;
-const SEP_H = 38;
+// Fixed heights for the iOS-style chain rows and the near-the-money
+// divider. The ITM auto-centering (offsets / getItemLayout / scrollToIndex
+// below) is computed from these two constants, and the row/divider styles
+// use them too, so they can't drift apart.
+const ROW_H = 54;
+const SEP_H = 36;
+// Bid/ask column width — fixed so tabular figures stay put on every poll.
+const QUOTE_W = 64;
 
 type OptionSide = 'CALL' | 'PUT';
 type ChainRow =
@@ -422,45 +427,41 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   const renderRow = ({ item }: { item: ChainRow }) => {
     if (item.type === 'separator') {
       return (
-        <View style={[styles.separatorRow, { backgroundColor: colors.surface, borderColor: colors.separator }]}>
-          <View style={[styles.separatorPill, { backgroundColor: colors.accent + '22' }]}>
-            <Text style={[styles.separatorPillText, { color: colors.accent }]}>ITM</Text>
-          </View>
-          <Text style={[styles.separatorPrice, { color: colors.text }]}>${item.price.toFixed(2)}</Text>
-          <View style={[styles.separatorPill, { backgroundColor: colors.accent + '22' }]}>
-            <Text style={[styles.separatorPillText, { color: colors.accent }]}>ITM</Text>
-          </View>
+        <View style={styles.separatorRow}>
+          <View style={[styles.separatorLine, { backgroundColor: colors.separator }]} />
+          <Text style={[styles.separatorText, { color: colors.textSecondary }]}>
+            Near the money — ${item.price.toFixed(2)}
+          </Text>
+          <View style={[styles.separatorLine, { backgroundColor: colors.separator }]} />
         </View>
       );
     }
     const c = item.data;
+    const detail = [
+      c.last_price != null ? `Last ${c.last_price.toFixed(2)}` : null,
+      `OI ${formatVol(c.open_interest)}`,
+      `Vol ${formatVol(c.volume)}`,
+    ].filter(Boolean).join('  ·  ');
     return (
       <TouchableOpacity
         onPress={() => setSelected(c)}
-        activeOpacity={0.7}
-        style={[styles.contractRow, {
-          backgroundColor: item.isITM ? colors.surface : 'transparent',
-          borderBottomColor: colors.separator,
-        }]}
+        activeOpacity={0.6}
+        style={[styles.contractRow, { backgroundColor: item.isITM ? colors.card : 'transparent' }]}
       >
-        <Text numberOfLines={1} style={[styles.cell, { width: COL.strike, color: colors.text, fontWeight: '600' }]}>
-          ${c.strike.toFixed(1)}
-        </Text>
-        <Text numberOfLines={1} style={[styles.cell, { width: COL.bid, color: colors.success }]}>
-          {c.bid > 0 ? c.bid.toFixed(2) : '-'}
-        </Text>
-        <Text numberOfLines={1} style={[styles.cell, { width: COL.ask, color: colors.error }]}>
-          {c.ask > 0 ? c.ask.toFixed(2) : '-'}
-        </Text>
-        <Text numberOfLines={1} style={[styles.cell, { width: COL.last, color: colors.textSecondary }]}>
-          {c.last_price != null ? c.last_price.toFixed(2) : '-'}
-        </Text>
-        <Text numberOfLines={1} style={[styles.cell, { width: COL.oi, color: colors.textTertiary }]}>
-          {formatVol(c.open_interest)}
-        </Text>
-        <Text numberOfLines={1} style={[styles.cell, { flex: 1, color: colors.textTertiary }]}>
-          {formatVol(c.volume)}
-        </Text>
+        <View style={[styles.contractInner, { borderBottomColor: colors.separator }]}>
+          <View style={{ flex: 1 }}>
+            <Text numberOfLines={1} style={[styles.strikeText, { color: colors.text }]}>
+              ${c.strike.toFixed(c.strike % 1 === 0 ? 0 : 1)}
+            </Text>
+            <Text numberOfLines={1} style={[styles.detailText, { color: colors.textTertiary }]}>{detail}</Text>
+          </View>
+          <Text numberOfLines={1} style={[styles.quoteText, { color: colors.text }]}>
+            {c.bid > 0 ? c.bid.toFixed(2) : '–'}
+          </Text>
+          <Text numberOfLines={1} style={[styles.quoteText, { color: colors.text }]}>
+            {c.ask > 0 ? c.ask.toFixed(2) : '–'}
+          </Text>
+        </View>
       </TouchableOpacity>
     );
   };
@@ -501,7 +502,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   // its pinned bottom bar, which used to hold all of this and covered half
   // the screen. Only the gated buy button stays pinned.
   const detailForm = selected ? (
-    <View style={{ gap: 12, marginBottom: 20 }}>
+    <View style={{ gap: 22, marginBottom: 20 }}>
       <EntryTechnicalsPanel
         data={entryCheck.data}
         isLoading={entryCheck.isLoading}
@@ -509,35 +510,24 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         direction={selected.option_type}
         colors={colors}
       />
-      {/* Profile dropdown — also where paper/live can be switched, right
-          before submitting, without backing out to the ticker picker.
-          Background tinted more strongly than the rest of the screen so
-          this card reads as "you're about to trade in X mode" at the exact
-          point the trade is confirmed. */}
-      <View style={[styles.exitProfileCard, { backgroundColor: blendHex(colors.card, modeTint, 0.16), borderColor: modeTint + '40' }]}>
-        <View style={styles.exitAccountRow}>
-          <Text style={[styles.footerLabel, { color: colors.tabBarInactive, marginBottom: 0 }]}>ACCOUNT</Text>
-          <View style={[styles.exitAccountToggle, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {([['Paper', true], ['Live', false]] as const).map(([label, isPaper]) => {
-              const active = paperMode === isPaper;
-              const tint = accountModeColor(isPaper, colors);
-              return (
-                <TouchableOpacity
-                  key={label}
-                  onPress={() => onChangePaperMode(isPaper)}
-                  activeOpacity={0.8}
-                  style={[styles.exitAccountBtn, active && { backgroundColor: tint + '22', borderRadius: 7 }]}
-                >
-                  <Text style={[styles.exitAccountText, { color: active ? tint : colors.tabBarInactive, fontWeight: active ? '700' : '500' }]}>
-                    {label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
 
-        <Text style={[styles.footerLabel, { color: colors.tabBarInactive, marginTop: 12 }]}>EXIT PROFILE</Text>
+      {/* Account — tinted with the paper/live wash, more strongly than the
+          rest of the screen, so the mode reads at the exact point the trade
+          is confirmed. */}
+      <View>
+        <Text style={[styles.sectionHeader, { color: colors.textTertiary }]}>ACCOUNT</Text>
+        <View style={[styles.groupCard, { backgroundColor: blendHex(colors.card, modeTint, 0.16), borderColor: modeTint + '40', borderWidth: 1 }]}>
+          <SegmentedControl
+            colors={colors}
+            options={[{ key: 'paper', label: 'Paper', tint: accountModeColor(true, colors) }, { key: 'live', label: 'Live', tint: accountModeColor(false, colors) }]}
+            value={paperMode ? 'paper' : 'live'}
+            onChange={k => onChangePaperMode(k === 'paper')}
+          />
+        </View>
+      </View>
+
+      <View>
+        <Text style={[styles.sectionHeader, { color: colors.textTertiary }]}>EXIT PROFILE</Text>
         <ProfileDropdown
           selectedIndex={profileIndex}
           onSelect={handleProfileSelect}
@@ -555,28 +545,35 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         />
       )}
 
-      {/* Contracts */}
-      <View style={styles.footerQtyRow}>
-        <View>
-          <Text style={[styles.footerLabel, { color: colors.tabBarInactive, marginBottom: 2 }]}>CONTRACTS</Text>
-          <Text style={[styles.qtyHint, { color: colors.tabBarInactive }]}>
-            {noSL ? 'No stop loss — size carefully' : `Default for ${profile.name}: ${profile.qty}`}
-          </Text>
-        </View>
-        <View style={styles.qtyGroup}>
-          <TouchableOpacity
-            onPress={() => setQty(q => Math.max(1, q - 1))}
-            style={[styles.qtyBtn, { borderColor: colors.border }]}
-          >
-            <Ionicons name="remove" size={18} color={colors.text} />
-          </TouchableOpacity>
-          <Text style={[styles.qtyValue, { color: colors.text }]}>{qty}</Text>
-          <TouchableOpacity
-            onPress={() => setQty(q => q + 1)}
-            style={[styles.qtyBtn, { borderColor: colors.border }]}
-          >
-            <Ionicons name="add" size={18} color={colors.text} />
-          </TouchableOpacity>
+      {/* Contracts — UIStepper-style − | + control */}
+      <View>
+        <Text style={[styles.sectionHeader, { color: colors.textTertiary }]}>CONTRACTS</Text>
+        <View style={[styles.groupCard, styles.groupRow, { backgroundColor: colors.card }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.qtyValue, { color: colors.text }]}>{qty}</Text>
+            <Text style={[styles.qtyHint, { color: colors.textTertiary }]}>
+              {noSL ? 'No stop loss — size carefully' : `Default for ${profile.name}: ${profile.qty}`}
+            </Text>
+          </View>
+          <View style={[styles.stepper, { backgroundColor: colors.surfaceSecondary }]}>
+            <TouchableOpacity
+              onPress={() => setQty(q => Math.max(1, q - 1))}
+              activeOpacity={0.5}
+              style={styles.stepperBtn}
+              hitSlop={{ top: 6, bottom: 6 }}
+            >
+              <Ionicons name="remove" size={18} color={qty <= 1 ? colors.textTertiary : colors.text} />
+            </TouchableOpacity>
+            <View style={[styles.stepperDivider, { backgroundColor: colors.separator }]} />
+            <TouchableOpacity
+              onPress={() => setQty(q => q + 1)}
+              activeOpacity={0.5}
+              style={styles.stepperBtn}
+              hitSlop={{ top: 6, bottom: 6 }}
+            >
+              <Ionicons name="add" size={18} color={colors.text} />
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -584,49 +581,17 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
           turning either off lets a runner run its course (or hold into
           close) instead of auto-exiting on that leg. */}
       <View>
-        <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>EXIT CONTROLS</Text>
-        <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.exitToggleRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Stop Loss</Text>
-              <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Auto-close on hard stop</Text>
-            </View>
-            <TouchableOpacity
-              onPress={() => setSlEnabled(v => !v)}
-              style={[styles.togglePill, { backgroundColor: slEnabled ? colors.accent + '33' : colors.border + '55', borderColor: slEnabled ? colors.accent : colors.border }]}
-            >
-              <View style={[styles.toggleThumb, { backgroundColor: slEnabled ? colors.accent : colors.tabBarInactive, transform: [{ translateX: slEnabled ? 14 : 0 }] }]} />
-            </TouchableOpacity>
-          </View>
-          <View style={[styles.exitToggleRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Take Profit</Text>
-              <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Auto-close on TP1/TP2</Text>
-            </View>
-            <TouchableOpacity
-              onPress={() => setTpEnabled(v => !v)}
-              style={[styles.togglePill, { backgroundColor: tpEnabled ? colors.accent + '33' : colors.border + '55', borderColor: tpEnabled ? colors.accent : colors.border }]}
-            >
-              <View style={[styles.toggleThumb, { backgroundColor: tpEnabled ? colors.accent : colors.tabBarInactive, transform: [{ translateX: tpEnabled ? 14 : 0 }] }]} />
-            </TouchableOpacity>
-          </View>
+        <Text style={[styles.sectionHeader, { color: colors.textTertiary }]}>EXIT CONTROLS</Text>
+        <View style={[styles.groupCard, { backgroundColor: colors.card, paddingVertical: 0 }]}>
+          <SwitchRow colors={colors} label="Stop Loss" sub="Auto-close on hard stop" value={slEnabled} onValueChange={setSlEnabled} />
+          <SwitchRow colors={colors} label="Take Profit" sub="Auto-close on TP1/TP2" value={tpEnabled} onValueChange={setTpEnabled} divider />
           {!isManual && (
-            <View style={[styles.exitToggleRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.exitToggleLabel, { color: colors.text }]}>Volume Exit</Text>
-                <Text style={[styles.exitToggleSub, { color: colors.tabBarInactive }]}>Close half on low volume</Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => setVolumeExit(v => !v)}
-                style={[styles.togglePill, { backgroundColor: volumeExit ? colors.accent + '33' : colors.border + '55', borderColor: volumeExit ? colors.accent : colors.border }]}
-              >
-                <View style={[styles.toggleThumb, { backgroundColor: volumeExit ? colors.accent : colors.tabBarInactive, transform: [{ translateX: volumeExit ? 14 : 0 }] }]} />
-              </TouchableOpacity>
-            </View>
+            <SwitchRow colors={colors} label="Volume Exit" sub="Close half on low volume" value={volumeExit} onValueChange={setVolumeExit} divider />
           )}
         </View>
         {slEnabled && (
-          <View style={{ marginTop: 10 }}>
+          <View style={{ marginTop: 22 }}>
+            <Text style={[styles.sectionHeader, { color: colors.textTertiary }]}>STOP TYPE</Text>
             <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
           </View>
         )}
@@ -650,31 +615,21 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
 
   return (
     <View style={{ flex: 1, backgroundColor: blendHex(colors.background, modeTint, 0.08) }}>
-      {/* Controls */}
-      <View style={styles.controls}>
+      {/* Controls — one inset grouped card */}
+      <View style={[styles.controlsCard, { backgroundColor: colors.card }]}>
         {/* Calls / Puts + price */}
         <View style={styles.controlRow}>
-          <View style={[styles.toggle, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            {(['CALL', 'PUT'] as const).map(s => {
-              const active = side === s;
-              const tint = s === 'CALL' ? colors.success : colors.error;
-              return (
-                <TouchableOpacity
-                  key={s}
-                  onPress={() => setSide(s)}
-                  activeOpacity={0.8}
-                  style={[styles.toggleBtn, { backgroundColor: active ? colors.surfaceTertiary : 'transparent' }]}
-                >
-                  <Text style={[styles.toggleText, { color: active ? tint : colors.textSecondary }]}>
-                    {s === 'CALL' ? 'Calls' : 'Puts'}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+          <View style={{ width: 170 }}>
+            <SegmentedControl
+              colors={colors}
+              options={[{ key: 'CALL', label: 'Calls', tint: colors.success }, { key: 'PUT', label: 'Puts', tint: colors.error }]}
+              value={side}
+              onChange={k => setSide(k as OptionSide)}
+            />
           </View>
           {currentPrice > 0 && (
             <Text style={[styles.priceText, { color: colors.textSecondary }]}>
-              {ticker} · ${currentPrice.toFixed(2)}
+              {ticker}  <Text style={{ color: colors.text, fontWeight: '600' }}>${currentPrice.toFixed(2)}</Text>
             </Text>
           )}
         </View>
@@ -682,59 +637,42 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         {/* Expiration date — pick a specific date instead of only trusting
             the auto "nearest match" (the auto-pick is what silently showed
             the wrong day's chain — see pickTargetExpiration above). The range
-            toggle controls how far out to look before picking a date — a
-            calendar would show mostly disabled days since real expirations
-            are sparse, so this stays a chip list, just fed from a wider or
-            narrower window. */}
-        <View>
+            control sets how far out to look; real expirations are sparse, so
+            this stays a chip list rather than a calendar. */}
+        <View style={{ gap: 10 }}>
           <View style={styles.expirationHeaderRow}>
-            <Text style={[styles.controlLabel, { color: colors.tabBarInactive, marginTop: 4 }]}>EXPIRATION</Text>
-            <View style={[styles.rangeToggle, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              {(Object.keys(RANGE_LABELS) as ExpirationRange[]).map(r => {
-                const active = expirationRange === r;
+            <Text style={[styles.sectionHeader, { color: colors.textTertiary, marginBottom: 0, marginLeft: 0 }]}>EXPIRATION</Text>
+            <View style={{ width: 168 }}>
+              <SegmentedControl
+                colors={colors}
+                compact
+                options={(Object.keys(RANGE_LABELS) as ExpirationRange[]).map(r => ({ key: r, label: RANGE_LABELS[r] }))}
+                value={expirationRange}
+                onChange={k => setExpirationRange(k as ExpirationRange)}
+              />
+            </View>
+          </View>
+          {availableExpirations.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+              {availableExpirations.map(exp => {
+                const active = exp === targetExpiration;
                 return (
                   <TouchableOpacity
-                    key={r}
-                    onPress={() => setExpirationRange(r)}
-                    activeOpacity={0.8}
-                    style={[styles.rangeBtn, { backgroundColor: active ? colors.surfaceTertiary : 'transparent' }]}
+                    key={exp}
+                    onPress={() => setManualExpiration(exp)}
+                    activeOpacity={0.6}
+                    hitSlop={{ top: 4, bottom: 4 }}
+                    style={[styles.expiryChip, { backgroundColor: active ? colors.accent : colors.surfaceSecondary }]}
                   >
-                    <Text style={[styles.rangeBtnText, { color: active ? colors.accent : colors.textSecondary }]}>
-                      {RANGE_LABELS[r]}
+                    <Text style={[styles.expiryChipText, { color: active ? colors.accentForeground : colors.text }]}>
+                      {fmtExpiryLabel(exp, today)}
                     </Text>
                   </TouchableOpacity>
                 );
               })}
-            </View>
-          </View>
-          {availableExpirations.length > 0 ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                {availableExpirations.map(exp => {
-                  const active = exp === targetExpiration;
-                  return (
-                    <TouchableOpacity
-                      key={exp}
-                      onPress={() => setManualExpiration(exp)}
-                      activeOpacity={0.8}
-                      style={[
-                        styles.expiryChip,
-                        {
-                          backgroundColor: active ? colors.accent + '22' : colors.card,
-                          borderColor: active ? colors.accent : colors.border,
-                        },
-                      ]}
-                    >
-                      <Text style={[styles.expiryChipText, { color: active ? colors.accent : colors.text }]}>
-                        {fmtExpiryLabel(exp, today)}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
             </ScrollView>
           ) : (
-            <Text style={[styles.emptySub, { color: colors.tabBarInactive, textAlign: 'left', paddingTop: 0 }]}>
+            <Text style={[styles.emptySub, { color: colors.textTertiary, textAlign: 'left' }]}>
               No {ticker || 'this ticker'} expirations found in this range.
             </Text>
           )}
@@ -743,13 +681,10 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
 
       {/* Column headers */}
       {!contractsLoading && !showError && rows.length > 0 && (
-        <View style={[styles.colHeaderRow, { backgroundColor: colors.surface, borderBottomColor: colors.separator }]}>
-          <Text style={[styles.colHead, { width: COL.strike, color: colors.textTertiary }]}>Strike</Text>
-          <Text style={[styles.colHead, { width: COL.bid,    color: colors.success }]}>Bid</Text>
-          <Text style={[styles.colHead, { width: COL.ask,    color: colors.error }]}>Ask</Text>
-          <Text style={[styles.colHead, { width: COL.last,   color: colors.textTertiary }]}>Last</Text>
-          <Text style={[styles.colHead, { width: COL.oi,     color: colors.textTertiary }]}>OI</Text>
-          <Text style={[styles.colHead, { flex: 1,           color: colors.textTertiary }]}>Volume</Text>
+        <View style={[styles.colHeaderRow, { borderBottomColor: colors.separator }]}>
+          <Text style={[styles.colHead, { flex: 1, color: colors.textTertiary }]}>STRIKE</Text>
+          <Text style={[styles.colHead, styles.colHeadQuote, { color: colors.textTertiary }]}>BID</Text>
+          <Text style={[styles.colHead, styles.colHeadQuote, { color: colors.textTertiary }]}>ASK</Text>
         </View>
       )}
 
@@ -760,15 +695,15 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         <View style={styles.centered}>
           <Ionicons name="alert-circle-outline" size={40} color={colors.error} />
           <Text style={[styles.emptyText, { color: colors.text }]}>Could not load the options chain</Text>
-          <Text style={[styles.emptySub, { color: colors.tabBarInactive }]}>
+          <Text style={[styles.emptySub, { color: colors.textTertiary }]}>
             Options data is only available during market hours.
           </Text>
         </View>
       ) : rows.length === 0 ? (
         <View style={styles.centered}>
-          <Ionicons name="layers-outline" size={32} color={colors.tabBarInactive} />
+          <Ionicons name="layers-outline" size={32} color={colors.textTertiary} />
           <Text style={[styles.emptyText, { color: colors.text }]}>No contracts found</Text>
-          <Text style={[styles.emptySub, { color: colors.tabBarInactive }]}>
+          <Text style={[styles.emptySub, { color: colors.textTertiary }]}>
             No {side === 'CALL' ? 'calls' : 'puts'} found for {ticker || 'this ticker'}
             {targetExpiration ? ` expiring ${targetExpiration}` : ' in the nearest expirations'}.
           </Text>
@@ -853,56 +788,131 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   );
 }
 
+// ── Visual building blocks ───────────────────────────────────────────────────
+
+type SegmentOption = { key: string; label: string; tint?: string };
+
+/**
+ * UISegmentedControl look: one rounded track, a raised highlight that slides
+ * to the selected segment, no per-segment borders. Purely presentational —
+ * it reports taps through `onChange` exactly like the buttons it replaces.
+ */
+function SegmentedControl({ options, value, onChange, colors, compact }: {
+  options: SegmentOption[];
+  value: string;
+  onChange: (key: string) => void;
+  colors: any;
+  compact?: boolean;
+}) {
+  const [width, setWidth] = useState(0);
+  const index = Math.max(0, options.findIndex(o => o.key === value));
+  const anim = useRef(new Animated.Value(index)).current;
+  useEffect(() => {
+    Animated.timing(anim, { toValue: index, duration: 180, useNativeDriver: true }).start();
+  }, [index, anim]);
+  const segW = width > 0 ? (width - 4) / options.length : 0;
+  const height = compact ? 30 : 34;
+  return (
+    <View
+      onLayout={(e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width)}
+      style={[styles.segTrack, { height, backgroundColor: colors.surfaceSecondary }]}
+    >
+      {segW > 0 && (
+        <Animated.View
+          style={[
+            styles.segThumb,
+            {
+              width: segW, height: height - 4, backgroundColor: colors.card,
+              transform: [{ translateX: Animated.multiply(anim, segW) }],
+            },
+          ]}
+        />
+      )}
+      {options.map(o => {
+        const active = o.key === value;
+        return (
+          <TouchableOpacity
+            key={o.key}
+            onPress={() => onChange(o.key)}
+            activeOpacity={0.6}
+            style={styles.segBtn}
+          >
+            <Text style={[styles.segText, { fontSize: compact ? 12 : 13, color: active ? (o.tint ?? colors.text) : colors.textSecondary, fontWeight: active ? '600' : '500' }]}>
+              {o.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+/** Settings-style row with a native iOS Switch. */
+function SwitchRow({ label, sub, value, onValueChange, colors, divider }: {
+  label: string; sub: string; value: boolean; onValueChange: (v: boolean) => void; colors: any; divider?: boolean;
+}) {
+  return (
+    <View style={[styles.switchRow, divider && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.separator }]}>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.switchLabel, { color: colors.text }]}>{label}</Text>
+        <Text style={[styles.switchSub, { color: colors.textTertiary }]}>{sub}</Text>
+      </View>
+      <Switch
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={{ true: colors.success, false: colors.surfaceTertiary }}
+        ios_backgroundColor={colors.surfaceTertiary}
+      />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  controls:     { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, gap: 10 },
+  controlsCard: { marginHorizontal: 16, marginTop: 12, marginBottom: 12, borderRadius: 13, padding: 12, gap: 14 },
   controlRow:   { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  controlLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 6 },
+  priceText:    { fontSize: 13, flex: 1, textAlign: 'right', fontVariant: ['tabular-nums'] },
 
-  toggle:     { flexDirection: 'row', alignSelf: 'flex-start', borderRadius: 100, padding: 3, borderWidth: 1 },
-  toggleBtn:  { paddingHorizontal: 18, paddingVertical: 6, borderRadius: 100 },
-  toggleText: { fontSize: 13, fontWeight: '600' },
-  priceText:  { fontSize: 13, fontWeight: '600', flex: 1, textAlign: 'right' },
-
-  expiryChip:     { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 100, borderWidth: 1 },
-  expiryChipText: { fontSize: 12, fontWeight: '700' },
+  segTrack: { flexDirection: 'row', borderRadius: 9, padding: 2, position: 'relative' },
+  segThumb: {
+    position: 'absolute', top: 2, left: 2, borderRadius: 7,
+    shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1,
+  },
+  segBtn:  { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  segText: { letterSpacing: -0.1 },
 
   expirationHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  rangeToggle:    { flexDirection: 'row', borderRadius: 100, padding: 2, borderWidth: 1 },
-  rangeBtn:       { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 100 },
-  rangeBtnText:   { fontSize: 11, fontWeight: '700' },
+  expiryChip:     { height: 36, paddingHorizontal: 14, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  expiryChipText: { fontSize: 13, fontWeight: '600' },
 
-  colHeaderRow: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 9, borderBottomWidth: StyleSheet.hairlineWidth },
-  colHead:      { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.4 },
-  contractRow:  { flexDirection: 'row', height: ROW_H, paddingHorizontal: 12, borderBottomWidth: StyleSheet.hairlineWidth, alignItems: 'center' },
-  cell:         { fontSize: 13, textAlign: 'left' },
+  colHeaderRow: { flexDirection: 'row', paddingHorizontal: 16, paddingBottom: 6, borderBottomWidth: StyleSheet.hairlineWidth },
+  colHead:      { fontSize: 11, fontWeight: '600', letterSpacing: 0.6 },
+  colHeadQuote: { width: QUOTE_W, textAlign: 'right' },
 
-  separatorRow:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', height: SEP_H, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, gap: 12 },
-  separatorPill:     { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 100 },
-  separatorPillText: { fontSize: 11, fontWeight: '700' },
-  separatorPrice:    { fontSize: 13, fontWeight: '700' },
+  contractRow:   { height: ROW_H, paddingLeft: 16 },
+  contractInner: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingRight: 16, borderBottomWidth: StyleSheet.hairlineWidth },
+  strikeText:    { fontSize: 17, fontWeight: '600', fontVariant: ['tabular-nums'], letterSpacing: -0.2 },
+  detailText:    { fontSize: 12, marginTop: 2, fontVariant: ['tabular-nums'] },
+  quoteText:     { width: QUOTE_W, textAlign: 'right', fontSize: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
+
+  separatorRow:  { height: SEP_H, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 10 },
+  separatorLine: { flex: 1, height: StyleSheet.hairlineWidth },
+  separatorText: { fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
 
   centered:   { alignItems: 'center', justifyContent: 'center', paddingTop: 60, paddingHorizontal: 32, gap: 6 },
   emptyText:  { fontSize: 15, fontWeight: '600', marginTop: 6 },
   emptySub:   { fontSize: 13, textAlign: 'center' },
 
-  // ── Footer ──
-  exitProfileCard:  { borderRadius: 12, borderWidth: 1, padding: 12 },
-  exitAccountRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  exitAccountToggle:{ flexDirection: 'row', borderRadius: 9, borderWidth: 1, padding: 2 },
-  exitAccountBtn:   { paddingHorizontal: 14, paddingVertical: 5 },
-  exitAccountText:  { fontSize: 12 },
-  footerLabel:    { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 },
-  footerQtyRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  qtyHint:        { fontSize: 10 },
-  qtyGroup:       { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  qtyBtn:         { width: 38, height: 38, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  qtyValue:       { fontSize: 18, fontWeight: '700', minWidth: 28, textAlign: 'center' },
+  // ── Detail form (iOS Settings-style grouped sections) ──
+  sectionHeader: { fontSize: 11, fontWeight: '600', letterSpacing: 0.6, marginBottom: 7, marginLeft: 4 },
+  groupCard:     { borderRadius: 13, padding: 12 },
+  groupRow:      { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  qtyValue:      { fontSize: 22, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  qtyHint:       { fontSize: 12, marginTop: 2 },
+  stepper:       { flexDirection: 'row', alignItems: 'center', borderRadius: 8, height: 32 },
+  stepperBtn:    { width: 47, height: 32, alignItems: 'center', justifyContent: 'center' },
+  stepperDivider:{ width: StyleSheet.hairlineWidth, height: 18 },
 
-  exitToggles:     { borderRadius: 12, borderWidth: 1, overflow: 'hidden' },
-  exitToggleRow:   { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, gap: 12 },
-  exitToggleLabel: { fontSize: 14, fontWeight: '500', marginBottom: 2 },
-  exitToggleSub:   { fontSize: 11 },
-  togglePill:      { width: 38, height: 24, borderRadius: 12, borderWidth: 1, justifyContent: 'center', paddingHorizontal: 3 },
-  toggleThumb:     { width: 18, height: 18, borderRadius: 9 },
-
+  switchRow:   { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, gap: 12, minHeight: 56 },
+  switchLabel: { fontSize: 15, fontWeight: '400' },
+  switchSub:   { fontSize: 12, marginTop: 2 },
 });
