@@ -23,6 +23,8 @@ export interface ChartDisplayPrefs {
   showOrb: boolean;
   /** Full-screen chart's support/resistance overlay. */
   showSR: boolean;
+  /** Options call/put OI walls (+ expiry-day max pain) on intraday views. */
+  showWalls: boolean;
 }
 
 export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
@@ -33,6 +35,7 @@ export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
   showEma: false,
   showOrb: true,
   showSR: false,
+  showWalls: true,
 };
 
 async function loadPrefs(): Promise<ChartDisplayPrefs> {

@@ -6,7 +6,7 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
 import { useChartInterval } from '@/hooks/useChartInterval';
-import { useIsFollowingORB, useToggleORBFollow } from '@/hooks/mutations/ticker/tickerORB';
+import { useIsFollowingORB, useToggleORBFollow, useToggleAlertStar } from '@/hooks/mutations/ticker/tickerORB';
 import { PriceChart, ScrubPoint } from '@/common/components/ticker/PriceChart';
 import { PriceChartFullScreen } from '@/common/components/ticker/PriceChartFullScreen';
 import { OptionsChainPicker } from '@/common/components/strategy/OptionsChainPicker';
@@ -57,6 +57,8 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
 
   const { data: isFollowingORB } = useIsFollowingORB(ticker);
   const toggleORBFollow = useToggleORBFollow(ticker);
+  const toggleAlertStar = useToggleAlertStar(ticker);
+  const alertStarred = !!isFollowingORB?.alert_starred;
 
   // Period-over-period direction drives the chart's line color, independent
   // of the header's day-change figure (which stays anchored to "today").
@@ -143,18 +145,34 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
           <Ionicons name="chevron-down" size={22} color={colors.text} />
         </Pressable>
         <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>{ticker}</Text>
-        <Pressable
-          onPress={() => toggleORBFollow.mutate(!isFollowingORB?.orb_enabled)}
-          disabled={toggleORBFollow.isPending}
-          hitSlop={10}
-          style={{ padding: 4 }}
-        >
-          <Ionicons
-            name={isFollowingORB?.orb_enabled ? 'star' : 'star-outline'}
-            size={20}
-            color={isFollowingORB?.orb_enabled ? colors.warning : colors.text}
-          />
-        </Pressable>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          {/* Alert priority — starred tickers get full zone-alert pushes. */}
+          <Pressable
+            onPress={() => toggleAlertStar.mutate(!alertStarred)}
+            disabled={toggleAlertStar.isPending}
+            hitSlop={10}
+            style={{ padding: 4 }}
+            accessibilityLabel={alertStarred ? 'Turn off priority alerts' : 'Turn on priority alerts'}
+          >
+            <Ionicons
+              name={alertStarred ? 'notifications' : 'notifications-outline'}
+              size={20}
+              color={alertStarred ? colors.accent : colors.text}
+            />
+          </Pressable>
+          <Pressable
+            onPress={() => toggleORBFollow.mutate(!isFollowingORB?.orb_enabled)}
+            disabled={toggleORBFollow.isPending}
+            hitSlop={10}
+            style={{ padding: 4 }}
+          >
+            <Ionicons
+              name={isFollowingORB?.orb_enabled ? 'star' : 'star-outline'}
+              size={20}
+              color={isFollowingORB?.orb_enabled ? colors.warning : colors.text}
+            />
+          </Pressable>
+        </View>
       </View>
 
       {/* Logo + company name */}

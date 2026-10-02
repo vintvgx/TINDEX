@@ -13,6 +13,7 @@ import { BlindEntryModal } from '@/common/components/strategy/BlindEntryModal';
 import { formatContractSymbol } from '@/lib/formatContract';
 import { useEntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
 import { EntryTechnicalsPanel } from '@/common/components/trade/EntryTechnicalsPanel';
+import { PositioningRow } from '@/common/components/trade/PositioningRow';
 import { GatedBuyButton } from '@/common/components/trade/GatedBuyButton';
 import { AccountModeBanner, AccountModeTint } from '@/common/components/trade/AccountModeBanner';
 import { OrderReviewSheet, type ReviewOrder } from '@/common/components/trade/OrderReviewSheet';
@@ -200,6 +201,7 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
               direction={contract.option_type}
               colors={colors}
             />
+            <PositioningRow ticker={contract.ticker} direction={contract.option_type} expiry={contract.expiration_date} colors={colors} />
           </View>
 
           {/* Paper / Live */}

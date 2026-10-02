@@ -12,6 +12,7 @@ Routes:
   GET  /ticker/<sym>/snapshot        price, name, summary, sector, market cap
   GET  /ticker/<sym>/levels          zone engine top-3 S/R + nearest above/below
   GET  /ticker/<sym>/flow            OI-based options positioning estimate
+  GET  /ticker/<sym>/positioning     positioning confluence modifier for a trade (display only)
   GET  /ticker/<sym>/analysts        rating, target, last 3 rating changes
   GET  /ticker/<sym>/institutional   top holders + top-holder ownership trend
   GET  /ticker/<sym>/linked          LLM + web search, 30-day cache
@@ -73,7 +74,21 @@ def levels(sym):
 
 @bp.route("/ticker/<sym>/flow", methods=["GET"])
 def flow(sym):
-    return _section("flow", sym, sections.build_flow, stale_key="flow:{sym}")
+    return _section("flow", sym, sections.build_flow)
+
+
+@bp.route("/ticker/<sym>/positioning", methods=["GET"])
+def positioning(sym):
+    """Positioning confluence for a trade: ?direction=CALL|PUT&expiry=YYYY-MM-DD
+    (expiry picks 0DTE vs swing weights), optional &target=<underlying price>.
+    Display-only modifier — never changes the gate verdict."""
+    from services.ticker_brief.positioning import build_positioning
+    direction = (request.args.get("direction") or "CALL").upper()
+    if direction not in ("CALL", "PUT"):
+        return jsonify({"data": None, "error": "direction must be CALL or PUT", "stale": True})
+    expiry = request.args.get("expiry")
+    target = request.args.get("target", type=float)
+    return _section("positioning", sym, lambda s: build_positioning(s, direction, expiry, target))
 
 
 @bp.route("/ticker/<sym>/analysts", methods=["GET"])

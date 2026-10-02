@@ -8,6 +8,9 @@ export interface FollowTickerORB {
     /** Per-type push toggles — gate BREAKOUT CONFIRMED / REVERSAL DETECTED independently per followed ticker. */
     notify_confirmed_breakout: boolean;
     notify_reversal: boolean;
+    /** Alert priority for zone notifications (the bell on the ticker sheet).
+     *  Missing on rows read before the column existed. */
+    alert_starred?: boolean;
     created_at: string;
     updated_at: string;
 }

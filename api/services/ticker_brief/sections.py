@@ -213,10 +213,16 @@ def chain_stats(contracts: list, front_expiry: str, spot: float) -> dict:
     }
 
 
-def build_flow(symbol: str):
+CHAIN_MAX_EXPIRIES = 8   # "all expiries" for P/C OI + unusual flow, bounded for fetch cost
+
+
+def chain_contracts(symbol: str) -> tuple:
+    """({expiries, spot, contracts}, fetched_at) for the nearest
+    CHAIN_MAX_EXPIRIES expiries — one cached fetch shared by the
+    positioning panel (front 2 expiries) and the positioning modifier."""
     def _fetch():
         tk = yf_ticker(symbol)
-        expiries = list(tk.options or [])[:2]
+        expiries = list(tk.options or [])[:CHAIN_MAX_EXPIRIES]
         if not expiries:
             raise RuntimeError("no listed options")
         spot = _num(tk.fast_info.last_price)
@@ -233,12 +239,20 @@ def build_flow(symbol: str):
                         "volume": r.get("volume"), "openInterest": r.get("openInterest"),
                         "impliedVolatility": r.get("impliedVolatility"),
                     })
-        return {
-            "expiries": expiries,
-            "spot": _round(spot),
-            **chain_stats(contracts, expiries[0], spot or 0),
-        }
-    data, fetched_at = cached(f"flow:{symbol}", TTL_FLOW, _fetch)
+        return {"expiries": expiries, "spot": spot, "contracts": contracts}
+    return cached(f"chain:{symbol}", TTL_FLOW, _fetch)
+
+
+def build_flow(symbol: str):
+    chain, fetched_at = chain_contracts(symbol)
+    expiries = chain["expiries"][:2]
+    contracts = [c for c in chain["contracts"] if c["expiry"] in expiries]
+    spot = chain["spot"]
+    data = {
+        "expiries": expiries,
+        "spot": _round(spot),
+        **chain_stats(contracts, expiries[0], spot or 0),
+    }
     return data, TTL_FLOW, fetched_at
 
 

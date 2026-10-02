@@ -20,6 +20,7 @@ import {
 import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
 import { useEntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
 import { EntryTechnicalsPanel } from '@/common/components/trade/EntryTechnicalsPanel';
+import { PositioningRow } from '@/common/components/trade/PositioningRow';
 import { GatedBuyButton } from '@/common/components/trade/GatedBuyButton';
 import { AccountModeBanner, accountModeColor } from '@/common/components/trade/AccountModeBanner';
 import { OrderReviewSheet, type ReviewOrder } from '@/common/components/trade/OrderReviewSheet';
@@ -510,6 +511,7 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         direction={selected.option_type}
         colors={colors}
       />
+      <PositioningRow ticker={ticker} direction={selected.option_type} expiry={selected.expiration} colors={colors} />
 
       {/* Account — tinted with the paper/live wash, more strongly than the
           rest of the screen, so the mode reads at the exact point the trade

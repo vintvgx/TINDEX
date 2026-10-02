@@ -59,6 +59,14 @@ _SWING_WINDOW = 3
 # the LIVE (not-yet-closed) price, unlike BOS/zone-break which only ever act
 # on a confirmed bar close.
 _APPROACH_PCT = 0.0015
+# Approach hysteresis: once a level has fired, price must move more than
+# this far from it before that level can fire again — and an approach push
+# goes out at most once per level per day. Keyed by PRICE, not by zone id:
+# zone ids are positions in the latest zone snapshot ("support_0"), and a
+# refresh that shifts a band re-keyed the same level under a new id, which
+# re-fired its approach every ~90s refresh at the open (the 2026-10-02
+# ~10 pushes/min flood across 15 tickers).
+_APPROACH_REARM_PCT = 0.003
 
 # "Zone break" = the first CLOSED 1-MINUTE bar through the zone's far edge
 # with volume at least this multiple of the trailing 1m average. Breaks used
@@ -368,17 +376,47 @@ def format_zone_push(ticker: str, event: dict, zone: dict, timeframe: str) -> "t
 def detect_approach(zone: dict, price: float) -> bool:
     """True if the live `price` sits within `_APPROACH_PCT` of either
     boundary of `zone` (and isn't already through it)."""
+    return approach_edge(zone, price) is not None
+
+
+def approach_edge(zone: dict, price: float) -> "float | None":
+    """The zone boundary `price` is approaching (within `_APPROACH_PCT`,
+    outside the band), or None."""
     low, high = zone["low"], zone["high"]
     if low <= price <= high:
-        return False
+        return None
     if high and abs(price - high) / high <= _APPROACH_PCT:
-        return True
+        return high
     if low and abs(price - low) / low <= _APPROACH_PCT:
-        return True
-    return False
+        return low
+    return None
 
 
-def should_push(event: dict, pushes_sent: int, approach_pushed: set, break_pushed: set,
+def _near_level(a: float, b: float, pct: float = _APPROACH_REARM_PCT) -> bool:
+    return b > 0 and abs(a - b) / b <= pct
+
+
+def level_already_alerted(level: "float | None", alerted: list) -> bool:
+    """True if an approach push already went out today for a level within
+    `_APPROACH_REARM_PCT` of `level` — one approach alert per zone per day,
+    however the zone was re-keyed by refreshes."""
+    return level is not None and any(_near_level(level, a) for a in alerted)
+
+
+def zone_event_short(ticker: str, event: dict, zone: dict) -> str:
+    """One-line digest entry, e.g. "MU broke above $1100.00"."""
+    etype = event["type"]
+    if etype == "zone_approach" and event.get("level") is not None:
+        return f"{ticker} approaching ${event['level']:.2f}"
+    if etype == "zone_break":
+        above = zone["type"] == "resistance"
+        return f"{ticker} broke {'above' if above else 'below'} ${(zone['high'] if above else zone['low']):.2f}"
+    if etype == "failed_break":
+        return f"{ticker} break failed {_fmt_band(zone)}"
+    return f"{ticker} {etype.replace('_', ' ')}"
+
+
+def should_push(event: dict, pushes_sent: int, approach_alerted: list, break_pushed: set,
                 ticker: str = "") -> bool:
     """
     Push gating, pure:
@@ -386,7 +424,7 @@ def should_push(event: dict, pushes_sent: int, approach_pushed: set, break_pushe
         ALWAYS (any time of day, even past the daily cap) — it's an exit.
       - zone_approach / zone_break: entries — only inside the entry signal
         window, under the daily cap, and an approach only once per zone
-        (re-armed by that zone's failed break).
+        level per day (see level_already_alerted).
     """
     etype, zone_id = event["type"], event.get("zone_id")
     if etype == "failed_break":
@@ -399,7 +437,7 @@ def should_push(event: dict, pushes_sent: int, approach_pushed: set, break_pushe
         logger.info("[StructureTracker] %s %s push skipped — daily cap (%d) reached",
                     ticker, etype, _MAX_PUSHES_PER_TICKER_PER_DAY)
         return False
-    if etype == "zone_approach" and zone_id in approach_pushed:
+    if etype == "zone_approach" and level_already_alerted(event.get("level"), approach_alerted):
         return False
     return True
 
@@ -418,9 +456,9 @@ class _TickerState:
         self.zone_snapshot_at: datetime = None
         self.flips: dict = {}             # zone_id -> flip record (see StructureTracker._apply_flip)
         self.pending_breaks: dict = {}    # zone_id -> {"broken_at_idx": int, "direction": str}
-        self.approached: set = set()      # zone_ids already fired a zone_approach since last moving away
+        self.approach_active: list = []   # levels that fired an approach and price hasn't left by _APPROACH_REARM_PCT yet
+        self.approach_alerted: list = []  # levels whose approach PUSH went out today (once per level per day)
         self.pushes_sent: int = 0         # zone pushes this session — capped at _MAX_PUSHES_PER_TICKER_PER_DAY
-        self.approach_pushed: set = set() # zone_ids whose approach push already went out (re-armed by a failed break)
         self.break_pushed: set = set()    # zone_ids whose break push went out — their failed break pushes too
         self.refreshing: bool = False     # a background zone refresh is in flight
         self._swing_high_idx: list = []
@@ -435,7 +473,7 @@ class StructureTracker:
         self._lock = threading.RLock()
         self._states: dict[str, _TickerState] = {}
         self._subscribed: set = set()
-        self._notifier = None
+        self._followers_cache: dict = {}
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -529,9 +567,9 @@ class StructureTracker:
                 st.trend = "range"
                 st.flips = {}
                 st.pending_breaks = {}
-                st.approached = set()
+                st.approach_active = []
                 st.pushes_sent = 0
-                st.approach_pushed = set()
+                st.approach_alerted = []
                 st.break_pushed = set()
             st.raw_1m.append(bar)
             prev_closed_count = len(st.closed_bars)
@@ -580,8 +618,6 @@ class StructureTracker:
                 elif detect_failed_break_1m(zone, pending["direction"], bar["close"]):
                     self._undo_flip(st, zone_id)
                     del st.pending_breaks[zone_id]
-                    # Re-arm this zone's approach push for a fresh attempt.
-                    st.approach_pushed.discard(zone_id)
                     self._emit(st.ticker, {"type": "failed_break", "zone_id": zone_id,
                                           "direction": pending["direction"], "close": bar["close"],
                                           "bar_ts": bar["ts"]},
@@ -601,16 +637,18 @@ class StructureTracker:
     def _check_approach(self, st: _TickerState, price: float, bar_ts=None) -> None:
         if not st.zone_snapshot:
             return
+        # Hysteresis: a level re-arms only once price is more than
+        # _APPROACH_REARM_PCT away from it.
+        st.approach_active = [lv for lv in st.approach_active if _near_level(price, lv)]
         for zone_id, zone in _all_zones(st.zone_snapshot):
             effective = _flip_view(zone, st.flips.get(zone_id))
-            near = detect_approach(effective, price)
-            if near and zone_id not in st.approached:
-                st.approached.add(zone_id)
-                self._emit(st.ticker, {"type": "zone_approach", "zone_id": zone_id, "close": price,
-                                       "bar_ts": bar_ts},
-                          session_date=st.session_date, st=st, zone=effective)
-            elif not near:
-                st.approached.discard(zone_id)
+            edge = approach_edge(effective, price)
+            if edge is None or any(_near_level(edge, lv) for lv in st.approach_active):
+                continue
+            st.approach_active.append(edge)
+            self._emit(st.ticker, {"type": "zone_approach", "zone_id": zone_id, "close": price,
+                                   "level": edge, "bar_ts": bar_ts},
+                      session_date=st.session_date, st=st, zone=effective)
 
     def _refresh_zones(self, st: _TickerState) -> None:
         """Refresh the zone snapshot at most once a minute, OFF the bar
@@ -644,8 +682,6 @@ class StructureTracker:
         mapping = remap_zone_ids(st.zone_snapshot, snap)
         st.flips = {mapping[k]: v for k, v in st.flips.items() if k in mapping}
         st.pending_breaks = {mapping[k]: v for k, v in st.pending_breaks.items() if k in mapping}
-        st.approached = {mapping[k] for k in st.approached if k in mapping}
-        st.approach_pushed = {mapping[k] for k in st.approach_pushed if k in mapping}
         st.break_pushed = {mapping[k] for k in st.break_pushed if k in mapping}
         st.zone_snapshot = snap
         st.zone_snapshot_at = datetime.now(ET)
@@ -694,51 +730,65 @@ class StructureTracker:
                            ticker, event.get("type"), e)
 
     def _push(self, st: "_TickerState", event: dict, zone: dict) -> None:
-        """Zone approach/break → push to the users following this ticker,
-        within the per-ticker daily cap. Never raises."""
+        """Zone event → AlertRouter, which picks each follower's channel
+        (active / quiet push / in-app only), applies the global throttle and
+        digest, and records it in the in-app timeline. This tracker's own
+        gating (entry window, daily cap, once per level) decides `pushable`;
+        a non-pushable event still reaches the timeline. Never raises."""
         try:
-            if not self._should_push(st, event):
-                return
             msg = format_zone_push(st.ticker, event, zone, st.timeframe)
             if msg is None:
                 return
             user_ids = self._followers(st.ticker)
             if not user_ids:
                 return
-            st.pushes_sent += 1
+            pushable = self._should_push(st, event)
             zone_id = event.get("zone_id")
-            if event["type"] == "zone_break":
-                st.break_pushed.add(zone_id)
-            elif event["type"] == "zone_approach":
-                st.approach_pushed.add(zone_id)
-            elif event["type"] == "failed_break":
-                st.break_pushed.discard(zone_id)
-            self._get_notifier().notify_zone_alert(
-                msg[0], msg[1], user_ids,
-                {"type": event["type"], "ticker": st.ticker, "zone_low": zone["low"], "zone_high": zone["high"]},
-            )
+            if event["type"] == "failed_break":
+                # A failed break of a break we actually pushed invalidates a
+                # live signal; any other failed break is information only.
+                kind = "invalidation" if zone_id in st.break_pushed else "failed_break"
+            else:
+                kind = {"zone_approach": "approach", "zone_break": "confirmation"}[event["type"]]
+            if pushable:
+                st.pushes_sent += 1
+                if event["type"] == "zone_break":
+                    st.break_pushed.add(zone_id)
+                elif event["type"] == "zone_approach":
+                    st.approach_alerted.append(event.get("level"))
+                elif event["type"] == "failed_break":
+                    st.break_pushed.discard(zone_id)
+            from services.notifications.alert_router import get_alert_router
+            get_alert_router().route({
+                "kind": kind,
+                "ticker": st.ticker,
+                "title": msg[0],
+                "body": msg[1],
+                "short": zone_event_short(st.ticker, event, zone),
+                "bar_ts": event.get("bar_ts"),
+                "data": {"type": event["type"], "ticker": st.ticker,
+                         "zone_low": zone["low"], "zone_high": zone["high"]},
+            }, user_ids, pushable=pushable)
         except Exception as e:
             logger.warning("[StructureTracker] %s %s push failed: %s", st.ticker, event.get("type"), e)
 
     def _should_push(self, st: "_TickerState", event: dict) -> bool:
-        return should_push(event, st.pushes_sent, st.approach_pushed, st.break_pushed, st.ticker)
+        return should_push(event, st.pushes_sent, st.approach_alerted, st.break_pushed, st.ticker)
 
     def _followers(self, ticker: str) -> list:
         """User ids with this ticker ORB-followed — the same set whose follow
-        put it on the live bar feed. Read fresh each push (≤ a few per ticker
-        per day), so a new or removed follow is picked up immediately."""
+        put it on the live bar feed. Cached for a minute (every zone event,
+        in-app ones included, needs it)."""
+        import time as _time
+        cached = self._followers_cache.get(ticker)
+        if cached and _time.time() - cached[0] < 60:
+            return cached[1]
         from services.supabase.supabase_service import get_supabase_service
         rows = (get_supabase_service().client.table("user_stock_follows").select("user_id")
                 .eq("ticker", ticker).eq("orb_enabled", True).execute().data or [])
-        return sorted({r["user_id"] for r in rows if r.get("user_id")})
-
-    def _get_notifier(self):
-        # One shared notifier: each StrategyNotifier starts its own drain thread.
-        if self._notifier is None:
-            from services.strategy.notifier import StrategyNotifier
-            from services.supabase.supabase_service import get_supabase_service
-            self._notifier = StrategyNotifier(get_supabase_service().client)
-        return self._notifier
+        users = sorted({r["user_id"] for r in rows if r.get("user_id")})
+        self._followers_cache[ticker] = (_time.time(), users)
+        return users
 
     # ── Read API (chart layer / gate) ────────────────────────────────────────
 

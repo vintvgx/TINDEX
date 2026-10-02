@@ -184,3 +184,56 @@ export function useGateExplanation(ticker: string | null | undefined, gate: Gate
     },
   });
 }
+
+export interface PositioningRead {
+  direction: 'CALL' | 'PUT';
+  expiry: string | null;
+  is_0dte: boolean;
+  target: number | null;
+  modifier: -1 | 0 | 1;
+  weighted_score: number;
+  headline: string;
+  reasons: { component: string; score: number; weight: number; text: string }[];
+  flags: { target_beyond_wall: boolean; crowded_caution: boolean; expensive_premium: boolean; stale: boolean };
+  notes: string[];
+  chain_as_of: string;
+  inputs: {
+    spot: number | null;
+    front_expiry: string;
+    pc_vol: number | null;
+    pc_oi: number | null;
+    iv_est: number | null;
+    max_pain: number | null;
+    call_walls: { strike: number; open_interest: number }[];
+    put_walls: { strike: number; open_interest: number }[];
+  };
+}
+
+/** Positioning confluence for a trade (GET /ticker/<sym>/positioning).
+ *  Display-only: it never changes the Technicals Gate verdict. With no
+ *  direction it still returns the direction-free inputs (walls, max pain)
+ *  the chart draws. */
+export function usePositioning(
+  ticker: string | null | undefined,
+  direction: 'CALL' | 'PUT' = 'CALL',
+  expiry?: string | null,
+  enabled = true,
+) {
+  return useQuery<BriefEnvelope<PositioningRead>>({
+    queryKey: ['ticker-brief', 'positioning', ticker, direction, expiry ?? null],
+    enabled: !!ticker && enabled,
+    staleTime: 90_000,
+    refetchInterval: enabled ? 90_000 : false,
+    retry: 1,
+    queryFn: async () => {
+      const params = new URLSearchParams({ direction });
+      if (expiry) params.set('expiry', expiry.slice(0, 10));
+      try {
+        const resp = await fetch(`${RAILWAY_BASE_URL}/ticker/${encodeURIComponent(ticker!)}/positioning?${params}`);
+        return (await resp.json()) as BriefEnvelope<PositioningRead>;
+      } catch (e) {
+        return { data: null, stale: true, error: e instanceof Error ? e.message : 'network error' };
+      }
+    },
+  });
+}

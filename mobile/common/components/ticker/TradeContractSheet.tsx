@@ -16,6 +16,7 @@ import { StopTypeSelector, type StopType } from '@/common/components/strategy/St
 import { BlindEntryModal } from '@/common/components/strategy/BlindEntryModal';
 import { useEntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
 import { EntryTechnicalsPanel } from '@/common/components/trade/EntryTechnicalsPanel';
+import { PositioningRow } from '@/common/components/trade/PositioningRow';
 import { GreeksExpander } from '@/common/components/trade/GreeksExpander';
 import { GatedBuyButton } from '@/common/components/trade/GatedBuyButton';
 import { AccountModeBanner, AccountModeTint } from '@/common/components/trade/AccountModeBanner';
@@ -299,6 +300,7 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
               direction={contract.option_type}
               colors={colors}
             />
+            <PositioningRow ticker={ticker} direction={contract.option_type} expiry={contract.expiration} colors={colors} />
           </View>
 
           {/* Alert-matched stop — only when the checklist's parsed contract
