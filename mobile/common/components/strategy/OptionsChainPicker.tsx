@@ -200,6 +200,15 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
     setSelected(null);
   }, [ticker]);
 
+  // Floor + breakeven grace are per-contract choices — reset whenever a
+  // (different) contract is opened so one trade's safety settings can't
+  // leak into the next.
+  useEffect(() => {
+    setFloorPct(null);
+    setBeGrace(BE_GRACE_DEFAULT);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.symbol]);
+
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
 
   const [expirationRange, setExpirationRange] = useState<ExpirationRange>('2W');

@@ -137,6 +137,10 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     setOverridden(false);
     setReviewOpen(false);
     setSuccessMessage(null);
+    // Entry-safety choices are per-contract — a new sheet must not inherit
+    // the previous trade's floor/grace.
+    setFloorPct(null);
+    setBeGrace(BE_GRACE_DEFAULT);
   // Only re-run when a different contract is opened, not on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, contract?.symbol]);
