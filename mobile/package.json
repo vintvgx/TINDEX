@@ -10,6 +10,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "clean": "rm -rf .expo node_modules",
+    "build:tvchart": "node scripts/build-tvchart-html.js",
+    "postinstall": "npm run build:tvchart",
     "postinwherestall": "npx tailwindcss -i ./global.css -o ./node_modules/.cache/nativewind/global.css"
   },
   "dependencies": {

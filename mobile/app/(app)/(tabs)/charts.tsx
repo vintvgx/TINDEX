@@ -551,8 +551,10 @@ export default function ChartsScreen() {
               autoZones={autoZones}
               watchZones={chartWatchZones}
               orbRange={effectiveOrb}
-              showOrbRange={chart.showOrb}
+              showOrbRange={chart.showOrb && period === '1D'}
               sessionReferenceLines={sessionReferenceLines}
+              showSessionLines={chart.chartSettings.showSessionLines}
+              referenceLines={chart.referenceLines}
               livePrice={resolvedLivePrice ?? null}
               onAutoZoneTap={handleTVAutoZoneTap}
               onWatchZoneTap={handleTVWatchZoneTap}

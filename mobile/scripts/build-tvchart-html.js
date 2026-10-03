@@ -49,22 +49,38 @@ function main() {
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0A0B0F; }
-  #chart { position: absolute; inset: 0; }
+  /* z-index on #chart traps lightweight-charts' own z-indexed canvases
+     (z 1/2) in its stacking context — without it they paint over #pills
+     and the score pills are invisible. */
+  #chart { position: absolute; inset: 0; z-index: 0; }
   /* Zone score pills live in this layer: real DOM, absolutely positioned
      via priceToCoordinate, so they're tappable (canvas can't do that). */
-  #pills { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  #pills { position: absolute; inset: 0; z-index: 10; pointer-events: none; overflow: hidden; }
+  /* Low-impact auto-zone pill: tiny score + trending arrow in the zone
+     color. Visually small, but the ::before pad gives it a ~29x29 tap
+     target so it's still easy to press. */
   .zpill {
-    position: absolute; pointer-events: auto;
-    display: flex; align-items: center; gap: 4px;
-    height: 22px; padding: 0 6px; border-radius: 6px;
-    font: 700 11px -apple-system, 'SF Pro Text', sans-serif;
+    position: absolute; pointer-events: auto; box-sizing: border-box;
+    display: flex; align-items: center; gap: 2px;
+    height: 13px; padding: 0 3px; border-radius: 3px;
+    font: 700 8px/11px -apple-system, 'SF Pro Text', sans-serif;
     border: 1px solid; cursor: pointer; white-space: nowrap;
     -webkit-tap-highlight-color: transparent; user-select: none;
   }
+  .zpill::before { content: ''; position: absolute; inset: -8px -6px; }
+  /* Technicals line names (EMA/VWAP/walls): plain small text, no box —
+     the built-in price-line title always paints a filled background. */
+  #reflabels { position: absolute; inset: 0; z-index: 9; pointer-events: none; overflow: hidden; }
+  .rlabel {
+    position: absolute; white-space: nowrap;
+    font: 600 9px/11px -apple-system, 'SF Pro Text', sans-serif;
+  }
+  .zpill svg { width: 8px; height: 8px; flex: none; display: block; }
 </style>
 </head>
 <body>
 <div id="chart"></div>
+<div id="reflabels"></div>
 <div id="pills"></div>
 <script>${lw}</script>
 <script>${bootstrap}</script>
