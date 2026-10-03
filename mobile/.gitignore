@@ -44,4 +44,6 @@ app-example
 test.json
 
 # claude memory files
-/.claudemobile/assets/tvchart.html
+/.claude
+assets/tvchart.html
+common/components/ticker/tvchart-html.generated.ts

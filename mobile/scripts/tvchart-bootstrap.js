@@ -50,6 +50,14 @@
     }
   }
 
+  function plog(message) { post({ type: 'log', message: message }); }
+
+  // Surface any uncaught JS error to the RN side (and on screen via the
+  // error overlay) — without this a throw during init is a silent spinner.
+  window.onerror = function (message, source, lineno) {
+    post({ type: 'error', message: 'window.onerror: ' + message + ' @' + (source || '') + ':' + (lineno || '') });
+  };
+
   // ── Zone bands: pane primitive ──────────────────────────────────────
   // Draws full-width shaded rects + edge lines for every zone, pinned to
   // price coordinates so they track pan/zoom for free. Band fills go in
@@ -340,8 +348,10 @@
   function init(msg) {
     if (inited) return;
     inited = true;
+    try {
     if (msg.theme) theme = Object.assign({}, theme, msg.theme);
     document.body.style.background = theme.background;
+    plog('creating chart, LWC v' + (LWC.version ? LWC.version() : 'unknown'));
     chart = LWC.createChart(chartEl, {
       autoSize: true,
       layout: {
@@ -380,13 +390,18 @@
     });
     zonePrimitive = new ZoneBandsPrimitive();
     chart.panes()[0].attachPrimitive(zonePrimitive);
+    plog('primitive attached, panes=' + chart.panes().length);
     chart.timeScale().subscribeVisibleLogicalRangeChange(function () { layoutPills(); });
     chart.subscribeClick(onChartClick);
     post({ type: 'ready' });
+    plog('ready posted');
     // flush anything that arrived early
     var q = pending;
     pending = [];
     for (var i = 0; i < q.length; i++) handleCommand(q[i]);
+    } catch (err) {
+      post({ type: 'error', message: 'init failed: ' + (err && err.message ? err.message : String(err)) });
+    }
   }
 
   function handleCommand(msg) {
