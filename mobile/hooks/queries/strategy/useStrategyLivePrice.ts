@@ -59,6 +59,10 @@ export interface LivePriceData {
    *  sl_outer_floor is set; a trader can turn it off (e.g. for a swing
    *  meant to be held through a drop past it) via the Advanced sheet. */
   sl_floor_enabled?: boolean;
+  /** Post-TP1 breakeven grace — see ExitManager.to_dict(). */
+  be_grace_seconds?: number | null;
+  be_grace_active?: boolean;
+  be_grace_deadline?: string | null;
   /** Current runner/cascade CONFIGURATION for this open trade (not just the
    *  profile default) — see exit_manager.py's to_dict(). Lets EditExitsModal
    *  pre-select the toggle to what's actually in effect right now. */

@@ -13,6 +13,7 @@ import {
   getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
 import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
+import { EntrySafetySelector, BE_GRACE_DEFAULT, effectiveFloorPct } from '@/common/components/trade/EntrySafetySelector';
 import { BlindEntryModal } from '@/common/components/strategy/BlindEntryModal';
 import { useEntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
 import { EntryTechnicalsPanel } from '@/common/components/trade/EntryTechnicalsPanel';
@@ -59,6 +60,9 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [qty, setQty]                   = useState(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], contract.ask));
   const [stopType, setStopType]         = useState<StopType>(5);
+  // Floor + breakeven grace chosen at entry (sent with the order).
+  const [floorPct, setFloorPct] = useState<number | null>(null);
+  const [beGrace, setBeGrace] = useState<number>(BE_GRACE_DEFAULT);
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
   // Defaults ON whenever the checklist's parsed contract had both an alert
@@ -185,6 +189,8 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
       volume_exit:     isManual ? false : volumeExit,
       sl_grace_minutes: (noSL || stopType === 'HARD') ? null : stopType,
       sl_enabled: slEnabled,
+      ...(slEnabled && !noSL && floorPct != null ? { sl_outer_floor_pct: floorPct } : {}),
+      be_grace_seconds: beGrace,
       tp_enabled: tpEnabled,
       // Alert-matched stop takes priority over both the profile default and
       // the manual slider whenever it's on and available — matches the
@@ -244,6 +250,9 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     stopLabel: stopPct == null ? 'Off' : stopType === 'HARD' ? 'Hard stop' : `${stopType}-min SL timer`,
     tp1Price: tpEnabled && !isManual && profile.tp1 > 0 ? contract.ask * (1 + profile.tp1 / 100) : null,
     tp2Price: tpEnabled && !isManual && profile.tp2 > 0 ? contract.ask * (1 + profile.tp2 / 100) : null,
+    floorPrice: (() => { const f = stopPct == null ? null : effectiveFloorPct(floorPct, stopType !== 'HARD'); return f == null ? null : contract.ask * (1 - f); })(),
+    floorIsDefault: floorPct == null,
+    beGraceSeconds: tpEnabled && !isManual ? beGrace : 0,
   };
   const mid = contract.bid > 0 && contract.ask > 0 ? (contract.bid + contract.ask) / 2 : null;
   const muted = colors.textSecondary ?? colors.tabBarInactive;
@@ -433,6 +442,10 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
           {slEnabled && (
             <View style={{ marginTop: 10 }}>
               <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
+              <View style={{ marginTop: 14 }}>
+                <EntrySafetySelector colors={colors} floorPct={floorPct} onFloorPct={setFloorPct}
+                  beGrace={beGrace} onBeGrace={setBeGrace} premium={contract.ask} stopIsTimer={stopType !== 'HARD'} />
+              </View>
             </View>
           )}
 

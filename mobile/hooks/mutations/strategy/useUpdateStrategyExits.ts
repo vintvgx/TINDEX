@@ -40,6 +40,14 @@ interface UpdateStrategyExitsPayload {
    *  which only toggles it on/off) — lets the user pick their own
    *  worst-case sell price instead of the profile's %-derived default. */
   sl_outer_floor?: number;
+  /** Post-TP1 breakeven grace in seconds (0 = off, max 120) — how long a
+   *  breakeven-stop breach waits for recovery before selling. The floor and
+   *  the pre-TP1 stop price still sell immediately. */
+  be_grace_seconds?: number;
+  /** Cancel a running breakeven-grace countdown and hold the position. The
+   *  breakeven stop stays armed: still below it on the next confirmed tick
+   *  starts a fresh window. */
+  cancel_be_grace?: boolean;
 }
 
 export function useUpdateStrategyExits() {

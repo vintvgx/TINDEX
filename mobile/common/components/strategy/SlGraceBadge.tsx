@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSharedValue, useAnimatedStyle, withRepeat, withTiming, Easing } from 'react-native-reanimated';
 
@@ -22,6 +22,11 @@ export interface SlGraceInfo {
    *  entirely when sl_floor_enabled is false. */
   sl_outer_floor?: number | null;
   sl_floor_enabled?: boolean;
+  /** Post-TP1 breakeven grace countdown (see ExitManager): while active,
+   *  a breakeven-stop breach is waiting for recovery before selling. */
+  be_grace_active?: boolean;
+  be_grace_deadline?: string | null;
+  be_grace_seconds?: number | null;
 }
 
 /**
@@ -42,23 +47,71 @@ export interface SlGraceInfo {
  * Shared by LivePositionPanel's card AND PositionInfoModal's full sheet so
  * the SL-breach countdown reads identically wherever a user sees it.
  */
-export function SlGraceBadge({ live, colors }: { live: SlGraceInfo; colors: any }) {
+export function SlGraceBadge({ live, colors, onCancelBeGrace, cancellingBeGrace }: {
+  live: SlGraceInfo;
+  colors: any;
+  /** Edit sheet only — shows a Cancel button on the running breakeven
+   *  timer (hold the position; the breakeven stop stays armed). */
+  onCancelBeGrace?: () => void;
+  cancellingBeGrace?: boolean;
+}) {
   const [, forceTick] = useState(0);
   const active = !!live.sl_grace_active && !!live.sl_grace_deadline;
+  const beActive = !!live.be_grace_active && !!live.be_grace_deadline;
 
   useEffect(() => {
-    if (!active) return;
+    if (!active && !beActive) return;
     const id = setInterval(() => forceTick(t => t + 1), 1000);
     return () => clearInterval(id);
-  }, [active]);
+  }, [active, beActive]);
+
+  // Post-TP1 breakeven grace — honest about which timer is running: this is
+  // the breakeven stop's short grace, not the SL timer (which never applies
+  // after TP1).
+  if (beActive) {
+    const left = Math.max(0, Math.round((new Date(live.be_grace_deadline!).getTime() - Date.now()) / 1000));
+    return (
+      <View style={[styles.slGraceBanner, { backgroundColor: '#FF9F0A16' }]}>
+        <Ionicons name="timer-outline" size={13} color="#FF9F0A" />
+        <Text style={[styles.slGraceBannerText, { color: '#FF9F0A' }]}>
+          Breakeven check in {left}s — sells if still below
+        </Text>
+        <Text style={[styles.slGraceSubText, { color: colors.textSecondary }]}>
+          below the original stop sells immediately
+        </Text>
+        {onCancelBeGrace && (
+          <Pressable
+            onPress={onCancelBeGrace}
+            disabled={cancellingBeGrace}
+            hitSlop={8}
+            style={[styles.cancelBtn, { borderColor: '#FF9F0A66', opacity: cancellingBeGrace ? 0.5 : 1 }]}
+          >
+            <Text style={styles.cancelBtnText}>{cancellingBeGrace ? 'Cancelling…' : 'Cancel timer'}</Text>
+          </Pressable>
+        )}
+      </View>
+    );
+  }
 
   if (!active) {
-    if (!live.sl_grace_enabled || live.sl_grace_minutes == null || live.tp1_hit) return null;
+    if (live.tp1_hit) {
+      // After TP1 the SL timer no longer applies — say what does.
+      if (!live.be_grace_seconds) return null;
+      return (
+        <View style={styles.slGraceRow}>
+          <Ionicons name="shield-checkmark-outline" size={12} color={colors.textTertiary} />
+          <Text style={[styles.slGraceText, { color: colors.textTertiary }]}>
+            Breakeven stop has {live.be_grace_seconds}s grace
+          </Text>
+        </View>
+      );
+    }
+    if (!live.sl_grace_enabled || live.sl_grace_minutes == null) return null;
     return (
       <View style={styles.slGraceRow}>
         <Ionicons name="shield-checkmark-outline" size={12} color={colors.textTertiary} />
         <Text style={[styles.slGraceText, { color: colors.textTertiary }]}>
-          Stop has {live.sl_grace_minutes}m grace
+          Initial stop has {live.sl_grace_minutes}m grace (until TP1)
         </Text>
       </View>
     );
@@ -120,6 +173,8 @@ export function useSlGracePulse(active: boolean) {
 }
 
 const styles = StyleSheet.create({
+  cancelBtn: { marginLeft: 'auto', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, borderWidth: 1 },
+  cancelBtnText: { color: '#FF9F0A', fontSize: 12, fontWeight: '700' },
   slGraceRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 },
   slGraceText: { fontSize: 11, fontWeight: '600' },
 

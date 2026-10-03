@@ -1442,6 +1442,8 @@ class ORBEngine:
                 profile=effective_profile,
                 is_zero_dte=is_zero_dte,
             )
+            self.exit_manager.log_context = {"ticker": self.ticker, "contract": contract.get("symbol"),
+                                             "strategy_id": self.strategy_id}
 
             # Use the override key when the user selected a profile at trade time
             # (immediate trades). This fixes the bug where all immediate trades were
@@ -1614,6 +1616,8 @@ class ORBEngine:
             profile=profile,
             is_zero_dte=is_zero_dte,
         )
+        self.exit_manager.log_context = {"ticker": self.ticker, "contract": row.get("contract_symbol"),
+                                         "strategy_id": self.strategy_id, "recovered": True}
         self.exit_manager.qty_remaining = qty_remaining
         try:
             self.exit_manager.entry_time = datetime.fromisoformat(
@@ -1637,6 +1641,14 @@ class ORBEngine:
         # TP1-hit state restored just above (a stale pre-TP1 hard_stop_price
         # would otherwise re-widen the stop past where it had already moved).
         if self.exit_manager.be_stop_active:
+            # Restore the breakeven grace's guard (the pre-TP1 stop) too —
+            # recovery sets be_stop_active directly rather than going through
+            # mark_breakeven(), which is what normally records it.
+            pre_stop = row.get("hard_stop_price")
+            if pre_stop is not None and 0 < float(pre_stop) < self.exit_manager.entry_premium:
+                self.exit_manager._be_guard = float(pre_stop)
+            elif profile.get("max_loss_pct", 1.0) < 1.0:
+                self.exit_manager._be_guard = self.exit_manager.entry_premium * (1 - profile["max_loss_pct"])
             self.exit_manager.hard_stop = self.exit_manager.entry_premium
         elif row.get("hard_stop_price") is not None:
             self.exit_manager.hard_stop = float(row["hard_stop_price"])
@@ -1906,6 +1918,29 @@ class ORBEngine:
                     self.debug.emit("WARN",
                         f"Approve requested a non-numeric qty override — using "
                         f"original qty={qty} instead")
+
+            # Stop type, floor and breakeven grace chosen on the confirm card
+            # (2026-10-02 — set at entry, not hand-armed afterward). Merged into
+            # the effective profile BEFORE the order so the trade's persisted
+            # profile snapshot carries them through a restart.
+            if overrides:
+                effective_profile = dict(effective_profile)
+                try:
+                    if "sl_grace_minutes" in overrides:
+                        from services.strategy.profiles import grace_fields_for_minutes
+                        raw = overrides.pop("sl_grace_minutes")
+                        effective_profile.update(grace_fields_for_minutes(int(raw) if raw is not None else None))
+                    if overrides.get("sl_outer_floor_pct") is not None:
+                        pct = float(overrides.pop("sl_outer_floor_pct"))
+                        if 0.05 <= pct <= 0.99:
+                            effective_profile.update(sl_outer_floor_pct=pct, sl_floor_custom=True,
+                                                     sl_floor_enabled=True)
+                    if overrides.get("be_grace_seconds") is not None:
+                        secs = int(overrides.pop("be_grace_seconds"))
+                        if 0 <= secs <= 120:
+                            effective_profile["be_grace_seconds"] = secs
+                except (TypeError, ValueError) as e:
+                    self.debug.emit("WARN", f"Confirm-entry stop/floor/grace override ignored ({e})")
 
             if self.stream_manager:
                 self.stream_manager.unsubscribe(contract["symbol"], self._on_pending_quote)
@@ -2957,6 +2992,12 @@ class ORBEngine:
             # countdown and the Advanced sheet pre-select the toggle.
             "sl_outer_floor":       em_state.get("sl_outer_floor"),
             "sl_floor_enabled":     em_state.get("sl_floor_enabled", True),
+            # Post-TP1 breakeven grace (config + live countdown) and whether the
+            # floor is a custom price — see ExitManager.to_dict().
+            "be_grace_seconds":    em_state.get("be_grace_seconds"),
+            "be_grace_active":     em_state.get("be_grace_active", False),
+            "be_grace_deadline":   em_state.get("be_grace_deadline"),
+            "sl_floor_custom":     em_state.get("sl_floor_custom", False),
             # Current runner/cascade CONFIGURATION for this trade (see
             # ExitManager.to_dict()) — 2026-08-04 fix: this payload used to
             # omit these entirely even though to_dict() included them, so

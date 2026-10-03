@@ -231,6 +231,12 @@ export interface ImmediateTradeByTickerRequest {
    *  Both default to enabled server-side when omitted. */
   sl_enabled?: boolean;
   tp_enabled?: boolean;
+  /** Worst-case floor chosen at entry, as a loss fraction of the fill
+   *  (0.5 = sell no matter what at −50%). Omitted = the stop type's default
+   *  (SL timers carry one, Hard Stop doesn't). */
+  sl_outer_floor_pct?: number;
+  /** Post-TP1 breakeven grace in seconds (0 = off, max 120). */
+  be_grace_seconds?: number;
 }
 
 /** An open position from a ticker-based immediate trade engine. */

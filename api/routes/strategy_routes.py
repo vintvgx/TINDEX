@@ -832,7 +832,7 @@ def update_strategy_exits(strategy_id: str):
     Update the live ExitManager's stop-loss and/or TP levels mid-trade.
     Body: { hard_stop?, tp1?, tp2?, sl_qty?, tp1_qty?, tp2_qty?, sl_grace_minutes?,
             runner_mode?, cascade_enabled?, sl_enabled?, tp_enabled?, sl_floor_enabled?,
-            sl_outer_floor? }
+            sl_outer_floor?, be_grace_seconds?, cancel_be_grace? }
     — all optional, only provided fields are changed. sl_qty/tp1_qty/tp2_qty
     are per-level contract counts; sl_grace_minutes is the stop-type choice
     (null = Hard Stop, 5/10/15 = SL timer); runner_mode is "trail"/"be_hold"/
@@ -867,6 +867,10 @@ def update_strategy_exits(strategy_id: str):
         "tp_enabled": data["tp_enabled"] if "tp_enabled" in data else None,
         "sl_floor_enabled": data["sl_floor_enabled"] if "sl_floor_enabled" in data else None,
         "sl_outer_floor": float(data["sl_outer_floor"]) if "sl_outer_floor" in data else None,
+        "be_grace_seconds": int(data["be_grace_seconds"]) if data.get("be_grace_seconds") is not None else None,
+        # Cancel a running breakeven-grace countdown (hold the position) —
+        # the edit sheet's Cancel button. In-memory only, nothing to persist.
+        "cancel_be_grace": bool(data.get("cancel_be_grace", False)),
     }
     if "sl_grace_minutes" in data:
         raw = data["sl_grace_minutes"]
@@ -889,15 +893,14 @@ def update_strategy_exits(strategy_id: str):
     if "sl_grace_minutes" in changed:
         grace_fields = grace_fields_for_minutes(changed["sl_grace_minutes"])
         exit_overrides_patch.update(grace_fields)
-        # grace_fields_for_minutes(None) (switching to Hard Stop) only sets
-        # sl_grace_enabled=False — it has no sl_outer_floor_pct key at all,
-        # so apply_overrides() above already cleared the in-memory floor to
-        # None via that same .get() miss. Mirror that here explicitly rather
-        # than leaving a stale (pre-switch) sl_outer_floor_pct sitting in the
-        # persisted JSON — recover_position() would otherwise resurrect a
-        # floor after a restart that the live in-memory trade doesn't have.
-        if "sl_outer_floor_pct" not in grace_fields:
-            exit_overrides_patch["sl_outer_floor_pct"] = None
+        # A stop-type switch never wipes the floor (2026-10-02) — persist
+        # whatever floor the live trade actually has after the switch (kept,
+        # custom, or re-derived from the new timer), not the timer's default,
+        # so recover_position() rebuilds exactly what's armed in memory.
+        exit_overrides_patch["sl_outer_floor_pct"] = (
+            1 - (em._sl_outer_floor / em.entry_premium)
+            if em._sl_outer_floor is not None and em.entry_premium else None
+        )
     if "tp_enabled" in changed:
         exit_overrides_patch["disable_tp1_exit"] = not changed["tp_enabled"]
     if "sl_floor_enabled" in changed:
@@ -911,6 +914,9 @@ def update_strategy_exits(strategy_id: str):
         exit_overrides_patch["sl_outer_floor_pct"] = (
             1 - (changed["sl_outer_floor"] / em.entry_premium) if em.entry_premium else None
         )
+        exit_overrides_patch["sl_floor_custom"] = True
+    if "be_grace_seconds" in changed:
+        exit_overrides_patch["be_grace_seconds"] = changed["be_grace_seconds"]
 
     # Persist to the open orb_trades row too — apply_overrides() above only
     # mutated the in-memory ExitManager, which a Railway restart wipes.
@@ -1103,7 +1109,9 @@ def sweep_pending_confirmations():
 
 @strategy_bp.route("/configs/<strategy_id>/pending/<pending_id>/approve", methods=["POST"])
 def approve_pending_confirmation(strategy_id: str, pending_id: str):
-    """Body: { hard_stop?, tp1?, tp2?, qty? } — optional user-edited overrides."""
+    """Body: { hard_stop?, tp1?, tp2?, qty?, sl_grace_minutes?, sl_outer_floor_pct?,
+    be_grace_seconds? } — optional user-edited overrides. The last three set the
+    stop type, worst-case floor and post-TP1 breakeven grace at entry."""
     engine = _resolve_any_engine(strategy_id)
     if not engine:
         # No live engine to ask (e.g. the strategy was deleted after the
@@ -1121,6 +1129,11 @@ def approve_pending_confirmation(strategy_id: str, pending_id: str):
     }
     if data.get("qty") is not None:
         overrides["qty"] = int(data["qty"])
+    if "sl_grace_minutes" in data:
+        overrides["sl_grace_minutes"] = data["sl_grace_minutes"]
+    for key in ("sl_outer_floor_pct", "be_grace_seconds"):
+        if data.get(key) is not None:
+            overrides[key] = data[key]
     try:
         result = engine.approve_pending_entry(pending_id, overrides or None)
     except Exception as e:
@@ -1256,6 +1269,26 @@ def set_debug_mode():
 
 # ── Immediate / conviction trade ────────────────────────────────────────────────
 
+def _entry_exit_fields(data: dict, exit_overrides: dict):
+    """Floor and breakeven grace chosen at entry (2026-10-02 — set them on
+    the entry sheet instead of hand-arming each trade afterward). Merged into
+    the trade's effective-profile snapshot, so they also survive a restart.
+    Returns an error message for bad input, else None."""
+    if data.get("sl_outer_floor_pct") is not None:
+        pct = float(data["sl_outer_floor_pct"])
+        if not 0.05 <= pct <= 0.99:
+            return "sl_outer_floor_pct must be between 0.05 and 0.99"
+        exit_overrides["sl_outer_floor_pct"] = pct
+        exit_overrides["sl_floor_custom"] = True
+        exit_overrides["sl_floor_enabled"] = True
+    if data.get("be_grace_seconds") is not None:
+        secs = int(data["be_grace_seconds"])
+        if not 0 <= secs <= 120:
+            return "be_grace_seconds must be between 0 and 120"  # default when omitted: 60
+        exit_overrides["be_grace_seconds"] = secs
+    return None
+
+
 @strategy_bp.route("/configs/<strategy_id>/immediate-trade", methods=["POST"])
 def immediate_trade(strategy_id: str):
     """
@@ -1289,6 +1322,10 @@ def immediate_trade(strategy_id: str):
             exit_overrides_cfg.update(grace_fields_for_minutes(int(raw) if raw is not None else None))
         except ValueError as e:
             return jsonify({"status": "error", "message": str(e)}), 400
+    if not is_no_stop_loss:
+        err = _entry_exit_fields(data, exit_overrides_cfg)
+        if err:
+            return jsonify({"status": "error", "message": err}), 400
 
     result = _submit_manual_trade_bounded(
         engine,
@@ -1309,7 +1346,8 @@ def immediate_trade_by_ticker():
     Submit an immediate / conviction trade for ANY ticker, independent of a saved
     strategy. A dedicated immediate engine for (ticker, paper/live) is created on
     demand and manages the exits (TP/SL/EOD). Body:
-      {ticker, direction: "CALL"|"PUT", contract_symbol, qty?, profile?, paper_mode?}
+      {ticker, direction: "CALL"|"PUT", contract_symbol, qty?, profile?, paper_mode?,
+       sl_grace_minutes?, sl_outer_floor_pct?, be_grace_seconds?, sl_enabled?, tp_enabled?}
     """
     data            = request.get_json() or {}
     ticker          = (data.get("ticker") or "").upper()
@@ -1345,6 +1383,9 @@ def immediate_trade_by_ticker():
                 exit_overrides.update(grace_fields_for_minutes(int(raw) if raw is not None else None))
             except ValueError as e:
                 return jsonify({"status": "error", "message": str(e)}), 400
+        err = _entry_exit_fields(data, exit_overrides)
+        if err:
+            return jsonify({"status": "error", "message": err}), 400
 
     # SL/TP enable-disable toggle (2026-08-30) — deliberately OUTSIDE the
     # is_no_stop_loss gate above: this is what NO_STOP_LOSS's behavior now
@@ -2340,6 +2381,12 @@ def _engine_position_response(engine: ORBEngine):
             "sl_grace_minutes":    em_state.get("sl_grace_minutes"),
             "sl_outer_floor":      em_state.get("sl_outer_floor"),
             "sl_floor_enabled":    em_state.get("sl_floor_enabled", True),
+            # Post-TP1 breakeven grace (config + live countdown) and whether the
+            # floor is a custom price — see ExitManager.to_dict().
+            "be_grace_seconds":    em_state.get("be_grace_seconds"),
+            "be_grace_active":     em_state.get("be_grace_active", False),
+            "be_grace_deadline":   em_state.get("be_grace_deadline"),
+            "sl_floor_custom":     em_state.get("sl_floor_custom", False),
             "runner_mode":         em_state.get("runner_mode", "trail"),
             "cascade_enabled":     em_state.get("cascade_enabled", True),
         })

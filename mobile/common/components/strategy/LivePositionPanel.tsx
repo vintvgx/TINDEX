@@ -44,6 +44,10 @@ export interface LivePositionStaticFallback {
   tp_enabled?: boolean;
   sl_outer_floor?: number | null;
   sl_floor_enabled?: boolean;
+  /** Post-TP1 breakeven grace — see ExitManager.to_dict(). */
+  be_grace_seconds?: number | null;
+  be_grace_active?: boolean;
+  be_grace_deadline?: string | null;
   runner_mode?: 'trail' | 'be_hold' | 'none';
   runner_trail?: number;
   cascade_enabled?: boolean;
@@ -125,6 +129,9 @@ export function LivePositionPanel({
         tp_enabled:    staticFallback!.tp_enabled,
         sl_outer_floor: staticFallback!.sl_outer_floor,
         sl_floor_enabled: staticFallback!.sl_floor_enabled,
+        be_grace_seconds: staticFallback!.be_grace_seconds,
+        be_grace_active: staticFallback!.be_grace_active,
+        be_grace_deadline: staticFallback!.be_grace_deadline,
         runner_mode:   staticFallback!.runner_mode,
         runner_trail:  staticFallback!.runner_trail,
         cascade_enabled: staticFallback!.cascade_enabled,
@@ -326,6 +333,9 @@ export function LivePositionPanel({
             sl_recovery_deadline: display.sl_recovery_deadline,
             sl_outer_floor: display.sl_outer_floor,
             sl_floor_enabled: display.sl_floor_enabled,
+            be_grace_seconds: display.be_grace_seconds,
+            be_grace_active: display.be_grace_active,
+            be_grace_deadline: display.be_grace_deadline,
             runner_mode: display.runner_mode,
             runner_trail: display.runner_trail,
             cascade_enabled: display.cascade_enabled,
