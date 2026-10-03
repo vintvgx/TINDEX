@@ -3,21 +3,17 @@ import {
   View, Text, ScrollView, TouchableOpacity, SafeAreaView, LayoutAnimation, Platform, UIManager,
   StyleSheet, LayoutChangeEvent, useWindowDimensions,
 } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { runOnJS } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { TickerContractsModal } from '@/common/components/ticker/TickerContractsModal';
-import { TickerLogo } from '@/common/components/ui/TickerLogo';
-import { Skeleton } from '@/common/components/ui/Skeleton';
 import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft, ChartAutoZone } from '@/common/components/ticker/AdvancedPriceChart';
 import { TVChart } from '@/common/components/ticker/TVChart';
 import { ZoneDetailSheet } from '@/common/components/ticker/ZoneDetailSheet';
-import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
+import { ChartBottomToolbar } from '@/common/components/ticker/ChartBottomToolbar';
 import { OptionsPositioningPanel } from '@/common/components/ticker/brief/TickerBrief';
-import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
+import { useChartTape } from '@/common/components/ui/ChartTapeContext';
 import { useChartAutoZones } from '@/hooks/queries/technicals/useTickerZones';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
@@ -110,32 +106,9 @@ export default function ChartsScreen() {
     ? selectedTicker
     : effectiveTickerList[0];
 
-  // Swipe left/right on the identity header to cycle tickers — wraps
-  // around at either end of effectiveTickerList.
-  const goToTicker = useCallback((direction: 1 | -1) => {
-    const idx = effectiveTickerList.indexOf(activeTicker);
-    if (idx === -1) return;
-    const nextIdx = (idx + direction + effectiveTickerList.length) % effectiveTickerList.length;
-    setSelectedTicker(effectiveTickerList[nextIdx]);
-  }, [effectiveTickerList, activeTicker]);
-
-  const headerSwipeGesture = useMemo(
-    () =>
-      Gesture.Pan()
-        .activeOffsetX([-20, 20]) // only claim clearly-horizontal drags
-        .failOffsetY([-15, 15])   // let a mostly-vertical touch fall through
-        .onEnd((e) => {
-          'worklet';
-          if (e.translationX <= -50) runOnJS(goToTicker)(1);
-          else if (e.translationX >= 50) runOnJS(goToTicker)(-1);
-        }),
-    [goToTicker],
-  );
-
-  // Open-ended ticker lookup — unlike the quick-switch strip below (scoped
-  // to followed/open-position tickers), not limited to that list — a
-  // watched-but-not-followed ticker, or any arbitrary symbol, needs to be
-  // reachable here too.
+  // Open-ended ticker lookup — the wheel's tap target (not limited to the
+  // followed + open-position set — a watched-but-not-followed ticker, or
+  // any arbitrary symbol, needs to be reachable too).
   const [searchOpen, setSearchOpen] = useState(false);
 
   // ── Price + chart data for the active ticker ────────────────────────────
@@ -218,7 +191,6 @@ export default function ChartsScreen() {
     ? ((liveChange ?? 0) / dayRefPrice) * 100
     : stockData?.price_change_percent;
   const displayPositive = (liveChange ?? 0) >= 0;
-  const priceColor = displayPositive ? colors.success : colors.error;
 
   // ── Positions panel — collapsed by default, expands on tap. No more
   // Paper/Live toggle: both are always shown together for this ticker, live
@@ -292,14 +264,9 @@ export default function ChartsScreen() {
   // ── TV chart toggle + layout hardening (todo 0f4aaad3) ───────────────
   // (zone-tap handlers live below, next to `toast` — TDZ otherwise)
   const { height: screenH } = useWindowDimensions();
-  // Default to the new TradingView chart; flips back to the legacy SVG chart.
+  // Default to the new TradingView chart; the Legacy fallback toggle moves
+  // into the chart settings sheet (phase 2).
   const [useTVChart, setUseTVChart] = useState(true);
-  // Measured height of everything above the canvas (contracts row, toggles,
-  // technicals strip, TV period pills) — replaces the old hardcoded constant.
-  const [chromeH, setChromeH] = useState(0);
-  const onChromeLayout = useCallback((e: LayoutChangeEvent) => {
-    setChromeH(e.nativeEvent.layout.height);
-  }, []);
   // TVChart doesn't own its zone sheet the way AdvancedPriceChart does —
   // a tapped auto zone lands here and opens the shared ZoneDetailSheet.
   const [tvZoneSheetZone, setTvZoneSheetZone] = useState<ChartAutoZone | null>(null);
@@ -322,17 +289,6 @@ export default function ChartsScreen() {
       id: l.id, low: l.level_low, high: l.level_high, direction: l.direction,
       status: l.status as 'watching' | 'confirmed', zoneType: l.zone_type ?? 'trade',
     }));
-
-  // Every ticker with a live watch zone/price target — drives the orange dot
-  // in TickerStrip (see the comment there for why it's a lower-precedence
-  // signal than the green open-position dot).
-  const watchTickers = useMemo(() => {
-    const set = new Set<string>();
-    for (const l of allKeyLevels ?? []) {
-      if (l.status === 'watching' || l.status === 'confirmed') set.add(l.ticker.toUpperCase());
-    }
-    return set;
-  }, [allKeyLevels]);
 
   const { mutateAsync: createKeyLevel } = useCreateKeyLevel();
   const handleWatchConfirm = async (draft: ChartWatchDraft): Promise<boolean> => {
@@ -396,151 +352,29 @@ export default function ChartsScreen() {
     }
   };
 
+  // ── Ticker tape headline — the old identity header (ticker, price,
+  // day change) is gone; that info now lives in the global TickerTape via
+  // ChartTapeContext while this tab is mounted. ──────────────────────────
+  const { setInfo: setTapeInfo } = useChartTape();
+  const tapeSignal = chart.technicals.data?.signal ?? null;
+  useEffect(() => {
+    setTapeInfo({
+      ticker: activeTicker,
+      price: resolvedLivePrice ?? null,
+      change: liveChange ?? null,
+      changePct: liveChangePercent ?? null,
+      signal: tapeSignal,
+      loading: tickerLoading && !stockData,
+    });
+    return () => setTapeInfo(null);
+  }, [activeTicker, resolvedLivePrice, liveChange, liveChangePercent, tapeSignal, tickerLoading, stockData, setTapeInfo]);
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-      {/* Identity header — swipe left/right still cycles tickers as a bonus
-          gesture, but the TickerStrip right below this is the primary,
-          visible way to switch now. Tapping the ticker title opens open-
-          ended search (not limited to tickerList's followed + open-position
-          set — a ticker you only just watched a level on, or any arbitrary
-          symbol, needs to be reachable here too; the strip's own trailing
-          search chip does the same thing). */}
-      <GestureDetector gesture={headerSwipeGesture}>
-        <View style={s.headerRow}>
-          {tickerLoading && !stockData ? (
-            <Skeleton width={34} height={34} borderRadius={9} />
-          ) : (
-            <TickerLogo uri={stockData?.logo_url} ticker={activeTicker} size={34} borderRadius={9} />
-          )}
-          <View style={{ flex: 1, gap: 5 }}>
-            <TouchableOpacity
-              onPress={() => setSearchOpen(true)}
-              hitSlop={8}
-              activeOpacity={0.7}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start' }}
-            >
-              <Text style={{ color: colors.text, fontSize: 17, fontWeight: '800' }}>{activeTicker}</Text>
-              <Ionicons name="chevron-down" size={14} color={colors.textTertiary} />
-            </TouchableOpacity>
-            {tickerLoading && !stockData ? (
-              <Skeleton width="60%" height={12} />
-            ) : !!stockData?.company_name && (
-              <Text style={{ color: colors.textSecondary, fontSize: 12 }} numberOfLines={1}>
-                {stockData.company_name}
-              </Text>
-            )}
-          </View>
-          <View style={{ alignItems: 'flex-end', gap: 5 }}>
-            {resolvedLivePrice != null ? (
-              <Text style={{ color: colors.text, fontSize: 20, fontWeight: '800' }}>
-                ${resolvedLivePrice.toFixed(2)}
-              </Text>
-            ) : (
-              <Skeleton width={70} height={20} />
-            )}
-            {liveChange != null && liveChangePercent != null ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                <Ionicons
-                  name="triangle"
-                  size={9}
-                  color={priceColor}
-                  style={{ transform: [{ rotate: displayPositive ? '0deg' : '180deg' }] }}
-                />
-                <Text style={{ color: priceColor, fontSize: 12, fontWeight: '700' }}>
-                  {displayPositive ? '+' : ''}{liveChange.toFixed(2)} ({liveChangePercent.toFixed(2)}%)
-                </Text>
-              </View>
-            ) : (
-              <Skeleton width={54} height={12} />
-            )}
-          </View>
-        </View>
-      </GestureDetector>
-
-      <View style={{ marginBottom: 8 }}>
-        <TickerStrip
-          tickers={effectiveTickerList}
-          activeTicker={activeTicker}
-          openPositionTickers={openPositionTickers}
-          watchTickers={watchTickers}
-          onSelect={setSelectedTicker}
-          onSearchPress={() => setSearchOpen(true)}
-          colors={colors}
-        />
-      </View>
-
-      {/* Chart — fills whatever's left above the position bar. Keyed on the
-          ticker so switching (swipe or picker) fully remounts it: a stale
-          zoom/pan window from the PREVIOUS ticker's data would otherwise
-          persist and show an arbitrary, no-longer-meaningful slice once the
-          new ticker's data loads — a full reset guarantees the chart always
-          renders its accurate default (auto-fit) view once data lands, not
-          whatever window happened to be set for a different symbol.
-          minHeight (55% of the screen) is the 0f4aaad3 fix: the expanded
-          positions list below can never squeeze the chart — it shrinks and
-          scrolls internally instead (flexShrink). */}
-      <View style={{ flex: 1, minHeight: screenH * 0.55, paddingHorizontal: 12 }} onLayout={onChartAreaLayout}>
-        {/* Chrome above the canvas — MEASURED (onChromeLayout), never
-            hardcoded, so new toolbar rows can't silently eat the plot. */}
-        <View onLayout={onChromeLayout}>
-          <View style={{ marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <TouchableOpacity
-              onPress={() => setContractsModalOpen(true)}
-              activeOpacity={0.8}
-              style={{
-                flexDirection: 'row', alignItems: 'center', gap: 5,
-                height: 30, paddingHorizontal: 12, borderRadius: 15,
-                borderWidth: 1, borderColor: colors.separator,
-              }}
-            >
-              <Ionicons name="layers-outline" size={14} color={colors.textSecondary} />
-              <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '700' }}>Contracts</Text>
-            </TouchableOpacity>
-            {/* TV/Legacy chart toggle */}
-            <TouchableOpacity
-              onPress={() => setUseTVChart(v => !v)}
-              activeOpacity={0.8}
-              style={{
-                flexDirection: 'row', alignItems: 'center', gap: 4,
-                height: 30, paddingHorizontal: 10, borderRadius: 15,
-                borderWidth: 1,
-                borderColor: useTVChart ? colors.accent : colors.separator,
-                backgroundColor: useTVChart ? colors.accent + '1A' : 'transparent',
-              }}
-            >
-              <Ionicons
-                name={useTVChart ? 'stats-chart' : 'stats-chart-outline'}
-                size={14}
-                color={useTVChart ? colors.accent : colors.textSecondary}
-              />
-              <Text style={{
-                color: useTVChart ? colors.accent : colors.textSecondary,
-                fontSize: 12, fontWeight: '800',
-              }}>
-                {useTVChart ? 'TV' : 'Legacy'}
-              </Text>
-            </TouchableOpacity>
-            <View style={{ flex: 1 }}>
-              <ChartControlToggles
-                colors={colors}
-                sections={chart.sections}
-                technicals={chart.technicalsContent}
-                onTechnicalsOpenChange={chart.onTechnicalsOpenChange}
-                positioning={<OptionsPositioningPanel ticker={activeTicker} />}
-              />
-            </View>
-          </View>
-          {chart.showStrip && (
-            <ChartTechnicalsStrip check={chart.technicals.data} isLoading={chart.technicals.isLoading} colors={colors} />
-          )}
-          {/* TV chart's period pills live here, in normal layout flow —
-              never absolutely positioned, so they can never overlap the
-              position cards (0f4aaad3). The legacy chart keeps its own
-              internal pills untouched. */}
-          {useTVChart && (
-            <PeriodPills period={period} onChange={setPeriod} colors={colors} />
-          )}
-        </View>
+      {/* Chart — fills everything above the toolbar now that the identity
+          header, ticker chips, and chrome rows are gone. Keyed on the
+          ticker so switching fully remounts it (see the old comment). */}
+      <View style={{ flex: 1, minHeight: screenH * 0.5, paddingHorizontal: 12, paddingTop: 8 }} onLayout={onChartAreaLayout}>
         {chartAreaHeight > 0 && (
           useTVChart ? (
             <TVChart
@@ -568,7 +402,7 @@ export default function ChartsScreen() {
               period={period}
               onPeriodChange={setPeriod}
               positive={displayPositive}
-              height={Math.max(220, chartAreaHeight - chromeH)}
+              height={Math.max(220, chartAreaHeight)}
               orbRange={effectiveOrb}
               showOrbRange={chart.showOrb}
               livePrice={resolvedLivePrice ?? null}
@@ -587,9 +421,26 @@ export default function ChartsScreen() {
         )}
       </View>
 
-      {/* Position bar — right above the docked tab bar. Tapping it
-          expands/collapses the position list; ticker switching now lives
-          entirely in the strip above (see TickerStrip). */}
+      {/* Bottom toolbar — TradingView-style: ticker wheel + period slider
+          fixed left, tool buttons scroll right. Hugs the chart. */}
+      <ChartBottomToolbar
+        tickers={effectiveTickerList}
+        activeTicker={activeTicker}
+        onSelectTicker={setSelectedTicker}
+        onSearchPress={() => setSearchOpen(true)}
+        period={period}
+        onPeriodChange={setPeriod}
+        technicalsContent={chart.technicalsContent}
+        positioningContent={<OptionsPositioningPanel ticker={activeTicker} />}
+        settingsSections={chart.sections}
+        onContractsPress={() => setContractsModalOpen(true)}
+        onPositionsPress={toggleExpanded}
+        openPositionCount={totalPositionsForTicker}
+      />
+
+      {/* Position bar — phase 4 replaces this + the expanded list with the
+          docked swipe pager. Until then the toolbar's Positions button
+          toggles the same expansion. */}
       <TouchableOpacity onPress={toggleExpanded} activeOpacity={0.8} style={[s.positionBar, { borderTopColor: colors.separator }]}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <View style={[s.tickerDot, { backgroundColor: totalPositionsForTicker > 0 ? colors.success : colors.tabBarInactive, width: 7, height: 7, borderRadius: 3.5 }]} />
@@ -641,147 +492,8 @@ export default function ChartsScreen() {
   );
 }
 
-/**
- * Period pills for the TV chart — rendered in normal layout flow above the
- * WebView (never absolutely positioned), so they can never overlap the
- * position cards. Mirrors the legacy chart's internal period row.
- */
-const TV_PERIODS: PricePeriod[] = ['1D', '1W', '1M', '3M', 'YTD', '1Y', '5Y'];
-
-function PeriodPills({
-  period, onChange, colors,
-}: {
-  period: PricePeriod; onChange: (p: PricePeriod) => void; colors: any;
-}) {
-  return (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingBottom: 8 }}>
-      {TV_PERIODS.map(p => {
-        const active = p === period;
-        return (
-          <TouchableOpacity
-            key={p}
-            onPress={() => onChange(p)}
-            activeOpacity={0.75}
-            style={{
-              paddingHorizontal: 11, paddingVertical: 6, borderRadius: 14,
-              backgroundColor: active ? colors.accent + '22' : colors.surfaceSecondary,
-              borderWidth: 1,
-              borderColor: active ? colors.accent : 'transparent',
-            }}
-          >
-            <Text style={{
-              fontSize: 12, fontWeight: active ? '800' : '600',
-              color: active ? colors.accent : colors.textSecondary,
-            }}>
-              {p}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
-}
-
-/**
- * Quick ticker switcher — a persistent, horizontally-scrollable strip of
- * chips (logo + symbol) for every followed/open-position ticker, current one
- * highlighted, tap any to jump straight there. Replaces relying on the
- * header's tap-to-search (still there, but that's for an ARBITRARY symbol —
- * see the search chip at the end of this strip) and the old long-press-on-
- * the-position-bar picker (removed — this strip covers exactly the same
- * list, always visible instead of hidden behind a gesture nobody discovers).
- * A small green dot marks tickers with an open position, same signal the
- * old picker's own list used. A ticker with a live watch zone/price target
- * but no open position gets an orange dot instead — green always wins when
- * both apply, since an active trade is the more urgent signal. Auto-scrolls
- * to keep the active chip in view when it changes (swipe-header gesture,
- * position bar, or a chip tap).
- */
-function TickerStrip({
-  tickers, activeTicker, openPositionTickers, watchTickers, onSelect, onSearchPress, colors,
-}: {
-  tickers: string[];
-  activeTicker: string;
-  openPositionTickers: string[];
-  watchTickers: Set<string>;
-  onSelect: (t: string) => void;
-  onSearchPress: () => void;
-  colors: any;
-}) {
-  const scrollRef = useRef<ScrollView>(null);
-  const offsetsRef = useRef<Record<string, number>>({});
-
-  useEffect(() => {
-    const x = offsetsRef.current[activeTicker];
-    if (x != null) {
-      scrollRef.current?.scrollTo({ x: Math.max(0, x - 32), animated: true });
-    }
-  }, [activeTicker]);
-
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', paddingLeft: 16 }}>
-      {/* Fixed, NOT part of the scrolling content — stays put (and first)
-          regardless of how far the chip strip is scrolled, per the ask that
-          this be reachable without having to scroll back to find it. */}
-      <TouchableOpacity
-        onPress={onSearchPress}
-        hitSlop={6}
-        activeOpacity={0.75}
-        style={{
-          width: 28, height: 28, borderRadius: 14,
-          alignItems: 'center', justifyContent: 'center',
-          backgroundColor: colors.surfaceSecondary,
-        }}
-      >
-        <Ionicons name="search" size={14} color={colors.textSecondary} />
-      </TouchableOpacity>
-
-      <ScrollView
-        ref={scrollRef}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingRight: 16 }}
-      >
-        {tickers.map(t => {
-          const active = t === activeTicker;
-          const hasPosition = openPositionTickers.includes(t);
-          const hasWatch = !hasPosition && watchTickers.has(t);
-          return (
-            <TouchableOpacity
-              key={t}
-              onPress={() => onSelect(t)}
-              onLayout={(e) => { offsetsRef.current[t] = e.nativeEvent.layout.x; }}
-              activeOpacity={0.75}
-              style={{
-                flexDirection: 'row', alignItems: 'center', gap: 5,
-                paddingHorizontal: 10, paddingVertical: 6, borderRadius: 9,
-                backgroundColor: active ? colors.text + '14' : 'transparent',
-              }}
-            >
-              <TickerLogo ticker={t} size={16} />
-              <Text style={{ fontSize: 12.5, fontWeight: active ? '800' : '600', color: active ? colors.text : colors.textSecondary }}>
-                {t}
-              </Text>
-              {hasPosition && <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: colors.success }} />}
-              {hasWatch && <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: '#FF9F0A' }} />}
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-    </View>
-  );
-}
-
 const s = StyleSheet.create({
   tickerDot: { width: 6, height: 6, borderRadius: 3 },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingBottom: 10,
-    paddingTop: 10,
-    gap: 10,
-  },
   positionBar: {
     flexDirection: 'row',
     alignItems: 'center',

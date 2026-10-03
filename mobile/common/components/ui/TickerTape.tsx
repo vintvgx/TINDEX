@@ -32,6 +32,8 @@ import { useAccountValueDisplay } from '@/hooks/queries/strategy/useAccountValue
 import { useSellStatus, type SellStatus } from '@/hooks/useSellStatus';
 import { useOptionStreamReconnectEvent } from '@/hooks/queries/strategy/useOptionStreamReconnectEvent';
 import { Skeleton } from '@/common/components/ui/Skeleton';
+import { useChartTape } from '@/common/components/ui/ChartTapeContext';
+import { signalMeta } from '@/common/components/ticker/ChartTechnicals';
 import type { WatchlistStock } from '@/common/types/watchlist';
 
 // Live-stream symbols (SPY arrives on its own field; the rest via livePrices).
@@ -369,11 +371,25 @@ export function TickerTape() {
 
   useEffect(() => () => { if (maxWaitRef.current) clearTimeout(maxWaitRef.current); }, []);
 
-  // ── Awaiting confirmation — replaces ticker prices entirely, not just an
-  // overlay, so it can't be mistaken for a passing banner among the market
-  // data. Stays up (and blocks the normal mode-cycle tap) until every pending
-  // confirmation is resolved (entered or skipped) — see the Dashboard's
-  // pending-confirmation cards, which is where tapping this sends you.
+  // ── Charts-tab ticker info — replaces the market marquee while the
+  // Charts tab is mounted (it publishes via ChartTapeContext). Takeovers
+  // below still win over this. Crossfades on ticker change; shows a
+  // skeleton for the price while the new ticker loads. ──────────────────
+  const { info: chartInfo } = useChartTape();
+  const showChartInfo = chartInfo != null && pendingCount === 0;
+  const chartInfoOpacity = useRef(new Animated.Value(1)).current;
+  const prevChartTicker = useRef<string | null>(null);
+  useEffect(() => {
+    if (!chartInfo) { prevChartTicker.current = null; return; }
+    if (prevChartTicker.current !== chartInfo.ticker) {
+      prevChartTicker.current = chartInfo.ticker;
+      chartInfoOpacity.setValue(0);
+      Animated.timing(chartInfoOpacity, {
+        toValue: 1, duration: 350, easing: Easing.out(Easing.quad), useNativeDriver: true,
+      }).start();
+    }
+  }, [chartInfo?.ticker]); // eslint-disable-line react-hooks/exhaustive-deps
+  const chartSignal = chartInfo ? signalMeta(chartInfo.signal ?? undefined, colors) : null;
   //
   // 2026-08-10: this (and the sell-status takeover below it) used to be a
   // full early `return` swapping in a completely different tree — which
@@ -389,21 +405,53 @@ export function TickerTape() {
     <View style={{ backgroundColor: colors.tape, paddingTop: insets.top }}>
       <Pressable
         style={styles.tape}
-        onPress={cycle}
+        onPress={showChartInfo ? undefined : cycle}
         onLongPress={handleTapeLongPress}
         onPressOut={handleTapePressOut}
         delayLongPress={350}
         accessibilityRole="button"
-        accessibilityLabel={`Ticker tape: ${mode.label}. Tap to change, hold for live account summary.`}
+        accessibilityLabel={showChartInfo ? `Ticker tape: ${chartInfo?.ticker}` : `Ticker tape: ${mode.label}. Tap to change, hold for live account summary.`}
       >
         <View style={[styles.liveDot, { backgroundColor: orbDotColor }]} />
 
+        {showChartInfo && chartInfo ? (
+          /* Charts-tab headline — ticker left, price/change/signal right */
+          <Animated.View style={[styles.chartInfoRow, { opacity: chartInfoOpacity }]}>
+            <Text style={[styles.symbol, { color: colors.tapeText, fontSize: 12 }]}>
+              ${chartInfo.ticker}
+            </Text>
+            <View style={{ flex: 1 }} />
+            {chartInfo.loading || chartInfo.price == null ? (
+              <Skeleton width={64} height={10} borderRadius={4} />
+            ) : (
+              <Text style={[styles.value, { color: colors.tapeText }]}>
+                ${chartInfo.price.toFixed(2)}
+              </Text>
+            )}
+            {chartInfo.change != null && chartInfo.changePct != null && !chartInfo.loading ? (
+              <Text style={[
+                styles.value,
+                { color: chartInfo.change >= 0 ? colors.tapeUp : colors.tapeDown, marginLeft: 8 },
+              ]}>
+                {chartInfo.change >= 0 ? '+' : ''}{chartInfo.change.toFixed(2)} ({chartInfo.changePct.toFixed(2)}%)
+              </Text>
+            ) : null}
+            {chartSignal && chartInfo.signal ? (
+              <View style={[styles.signalPill, { backgroundColor: chartSignal.color + '22', borderColor: chartSignal.color }]}>
+                <Text style={[styles.signalText, { color: chartSignal.color }]}>{chartSignal.label}</Text>
+              </View>
+            ) : null}
+          </Animated.View>
+        ) : (
+        <>
         {/* Marquee — hidden (opacity 0) under the skeleton until the first
             batch of data ever arrives, then crossfades in. */}
         <Animated.View style={[styles.track, { opacity: Animated.multiply(contentOpacity, marqueeVisibility), transform: [{ translateX }] }]}>
           <TapeRow items={display} onWidth={handleWidth} colors={colors} />
           <TapeRow items={display} colors={colors} />
         </Animated.View>
+        </>
+        )}
 
         {/* First-load skeleton — crossfades out once real data lands */}
         {skeletonVisible && (
@@ -421,10 +469,12 @@ export function TickerTape() {
           <Text style={[styles.titleText, { color: colors.tapeText }]}>{titleText}</Text>
         </Animated.View>
 
-        {/* Tap affordance */}
+        {/* Tap affordance — hidden in chart-info mode (tap does nothing there) */}
+        {!showChartInfo && (
         <View style={[styles.cycleHint, { backgroundColor: colors.tape }]} pointerEvents="none">
           <Ionicons name="swap-horizontal" size={13} color={colors.tapeMuted} />
         </View>
+        )}
       </Pressable>
 
       {/* Opaque overlay, positioned to exactly cover the Pressable above
@@ -550,6 +600,24 @@ const styles = StyleSheet.create({
   },
   skeletonItem: {
     marginRight: 18,
+  },
+  chartInfoRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: 12,
+  },
+  signalPill: {
+    marginLeft: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 9,
+    borderWidth: 1,
+  },
+  signalText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   track: {
     flexDirection: 'row',
