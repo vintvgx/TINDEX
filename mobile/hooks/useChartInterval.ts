@@ -54,3 +54,20 @@ export function useChartInterval(period: PricePeriod) {
 
   return { interval, setInterval, allowed };
 }
+
+/** Sets the bar size for any period (not just the hook's own) — used to
+ *  apply the launch defaults before switching to that period. */
+export function useSetChartIntervalFor() {
+  const qc = useQueryClient();
+  return useCallback(async (period: PricePeriod, next: string) => {
+    if (!ALLOWED_INTERVALS[period].includes(next)) return;
+    const current = qc.getQueryData<IntervalMap>(QUERY_KEY) ?? (await loadMap());
+    const nextMap = { ...current, [period]: next };
+    qc.setQueryData(QUERY_KEY, nextMap);
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(nextMap));
+    } catch {
+      // Best-effort, same as setInterval above.
+    }
+  }, [qc]);
+}

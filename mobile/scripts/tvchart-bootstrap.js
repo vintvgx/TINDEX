@@ -484,6 +484,13 @@
     rebuildEmas();
   }
 
+  function setOptions(msg) {
+    if (!chart) return;
+    chart.applyOptions({
+      crosshair: { mode: msg.crosshair === false ? LWC.CrosshairMode.Hidden : LWC.CrosshairMode.Normal },
+    });
+  }
+
   function setZones(msg) {
     zones.auto = msg.auto || [];
     zones.watch = msg.watch || [];
@@ -594,6 +601,7 @@
       case 'setZones': setZones(msg); break;
       case 'setRefLines': setRefLines(msg.lines); break;
       case 'setEmaOverlays': setEmaOverlays(msg); break;
+      case 'setOptions': setOptions(msg); break;
       case 'applyTheme': applyTheme(msg.theme); break;
     }
   }

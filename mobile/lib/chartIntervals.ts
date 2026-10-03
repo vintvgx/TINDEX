@@ -9,8 +9,8 @@ import type { PricePeriod } from '@/common/types/blogPosts/ticker';
  * own copy), this one only drives which chips the picker shows.
  */
 export const ALLOWED_INTERVALS: Record<PricePeriod, string[]> = {
-  '1D':  ['5m', '15m'],
-  '1W':  ['15m', '30m', '1h'],
+  '1D':  ['1m', '5m', '15m', '30m', '1h'],
+  '1W':  ['1m', '5m', '15m', '30m', '1h'],
   '1M':  ['1h', '1d'],
   '3M':  ['1d', '1wk'],
   YTD:   ['1d', '1wk'],
@@ -30,7 +30,7 @@ export const DEFAULT_INTERVAL: Record<PricePeriod, string> = {
 };
 
 export const INTERVAL_LABEL: Record<string, string> = {
-  '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1H',
+  '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1H',
   '1d': '1D', '1wk': '1W', '1mo': '1M',
 };
 
@@ -38,5 +38,5 @@ export const INTERVAL_LABEL: Record<string, string> = {
  *  session width on the 1D chart — see AdvancedPriceChart's
  *  fullSessionBarCount. Only 1D's own intervals need an entry here. */
 export const INTERVAL_MINUTES: Record<string, number> = {
-  '5m': 5, '15m': 15, '30m': 30, '1h': 60,
+  '1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60,
 };

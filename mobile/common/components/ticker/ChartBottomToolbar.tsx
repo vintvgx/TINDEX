@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet, Switch, Modal, KeyboardAvoidingView, Platform, StatusBar } from 'react-native';
+import { View, Text, Pressable, ScrollView, StyleSheet, Switch } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { TickerWheel } from './TickerWheel';
-import { PeriodSlider } from './PeriodSlider';
+import { TickerWheel, type TickerStatus } from './TickerWheel';
+import { TimeframeChips } from './TimeframeChips';
 import { ChartBottomSheet } from './ChartBottomSheet';
-import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 import type { ChartSettingsSection } from './ChartControlToggles';
 
@@ -22,10 +21,11 @@ interface ToolButton {
 
 /**
  * ChartBottomToolbar — TradingView-style bottom bar for the Charts tab.
- * Fixed left: ticker wheel + period slider (unaffected by scrolling).
- * Scrollable right: Trade, Technicals, Options Positioning, Open Positions,
- * Chart Settings, Contracts. Technicals/Positioning/Settings open bottom
- * sheets; Trade opens the immediate-trade panel.
+ * Fixed left: ticker wheel + date-range / bar-size chips (unaffected by
+ * scrolling). Scrollable right, icon-only: Technicals, Options
+ * Positioning, Open Positions, Chart Settings. Technicals/Positioning/
+ * Settings open bottom sheets.
+ * (Contracts moved to the ticker tape's signal pill.)
  */
 export function ChartBottomToolbar({
   tickers,
@@ -34,12 +34,15 @@ export function ChartBottomToolbar({
   onSearchPress,
   period,
   onPeriodChange,
+  interval,
+  allowedIntervals,
+  onIntervalChange,
   technicalsContent,
   positioningContent,
   settingsSections,
-  onContractsPress,
   onPositionsPress,
   openPositionCount,
+  tickerStatus,
 }: {
   tickers: string[];
   activeTicker: string;
@@ -47,24 +50,25 @@ export function ChartBottomToolbar({
   onSearchPress: () => void;
   period: PricePeriod;
   onPeriodChange: (p: PricePeriod) => void;
+  interval: string;
+  allowedIntervals: string[];
+  onIntervalChange: (i: string) => void;
   technicalsContent: React.ReactNode;
   positioningContent: React.ReactNode;
   settingsSections: ChartSettingsSection[];
-  onContractsPress: () => void;
   onPositionsPress: () => void;
   openPositionCount: number;
+  /** Per-ticker position/watch state for the wheel's letter badges. */
+  tickerStatus?: Record<string, TickerStatus>;
 }) {
   const colors = useThemeColors();
   const [sheet, setSheet] = useState<'technicals' | 'positioning' | 'settings' | null>(null);
-  const [tradeOpen, setTradeOpen] = useState(false);
 
   const buttons: ToolButton[] = [
-    { key: 'trade', icon: 'flash', label: 'Trade', onPress: () => setTradeOpen(true), accent: true },
     { key: 'technicals', icon: 'pulse-outline', label: 'Technicals', onPress: () => setSheet('technicals') },
     { key: 'positioning', icon: 'bar-chart-outline', label: 'Positioning', onPress: () => setSheet('positioning') },
     { key: 'positions', icon: 'briefcase-outline', label: 'Positions', onPress: onPositionsPress, badge: openPositionCount || undefined },
     { key: 'settings', icon: 'options-outline', label: 'Settings', onPress: () => setSheet('settings') },
-    { key: 'contracts', icon: 'layers-outline', label: 'Contracts', onPress: onContractsPress },
   ];
 
   return (
@@ -77,8 +81,15 @@ export function ChartBottomToolbar({
             activeTicker={activeTicker}
             onSelect={onSelectTicker}
             onSearchPress={onSearchPress}
+            status={tickerStatus}
           />
-          <PeriodSlider period={period} onChange={onPeriodChange} />
+          <TimeframeChips
+            period={period}
+            onPeriodChange={onPeriodChange}
+            interval={interval}
+            allowedIntervals={allowedIntervals}
+            onIntervalChange={onIntervalChange}
+          />
         </View>
         <View style={[s.divider, { backgroundColor: colors.separator }]} />
         {/* Scrollable tool buttons */}
@@ -92,10 +103,12 @@ export function ChartBottomToolbar({
             <Pressable
               key={b.key}
               onPress={b.onPress}
-              hitSlop={6}
+              hitSlop={4}
               style={({ pressed }) => [
                 s.toolBtn,
-                { opacity: pressed ? 0.6 : 1 },
+                {
+                  backgroundColor: pressed ? colors.surfaceSecondary : 'transparent',
+                },
               ]}
               accessibilityRole="button"
               accessibilityLabel={b.label}
@@ -112,9 +125,6 @@ export function ChartBottomToolbar({
                   </View>
                 ) : null}
               </View>
-              <Text style={[s.toolLabel, { color: b.accent ? colors.accent : colors.textSecondary }]}>
-                {b.label}
-              </Text>
             </Pressable>
           ))}
         </ScrollView>
@@ -139,33 +149,6 @@ export function ChartBottomToolbar({
         ))}
       </ChartBottomSheet>
 
-      {/* Immediate trade — moved here from the old global AppHeader */}
-      <Modal
-        visible={tradeOpen}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setTradeOpen(false)}
-      >
-        <StatusBar barStyle="light-content" />
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1, backgroundColor: colors.background }}
-        >
-          <View style={[s.panelHeader, { borderBottomColor: colors.border }]}>
-            <Pressable onPress={() => setTradeOpen(false)} hitSlop={12} style={{ width: 64 }}>
-              <Text style={{ fontSize: 15, fontWeight: '600', color: colors.accent }}>Close</Text>
-            </Pressable>
-            <Text style={{ fontSize: 17, fontWeight: '700', color: colors.text }}>Immediate Trade</Text>
-            <View style={{ width: 64 }} />
-          </View>
-          <ImmediateTradePanel
-            colors={colors}
-            tickerOptions={tickers}
-            visible={tradeOpen}
-            onClose={() => setTradeOpen(false)}
-          />
-        </KeyboardAvoidingView>
-      </Modal>
     </>
   );
 }
@@ -194,10 +177,13 @@ function SettingsRow({ row, colors }: { row: ChartSettingsSection['rows'][number
     );
   }
   if (row.kind === 'segment') {
+    // More than 3 options (e.g. the 7 date ranges) won't fit beside the
+    // label — stack the label above a full-width, wrapping segment.
+    const stacked = row.options.length > 3;
     return (
-      <View style={s.rowLine}>
-        <Text style={[s.rowLabel, { color: colors.text, flex: 1 }]}>{row.label}</Text>
-        <View style={[s.segment, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+      <View style={stacked ? { gap: 6 } : s.rowLine}>
+        <Text style={[s.rowLabel, { color: colors.text }, !stacked && { flex: 1 }]}>{row.label}</Text>
+        <View style={[s.segment, stacked && { flexWrap: 'wrap', alignSelf: 'stretch' }, { borderColor: colors.border, backgroundColor: colors.surface }]}>
           {row.options.map(o => {
             const active = o.value === row.value;
             return (
@@ -232,14 +218,16 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderTopWidth: StyleSheet.hairlineWidth,
-    paddingVertical: 8,
+    paddingVertical: 5,
     paddingLeft: 10,
-    minHeight: 76,
   },
+  // Generous gaps so the wheel and the two timeframe labels never
+  // steal each other's touches; the tool buttons scroll, so they give up
+  // the width.
   fixed: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 18,
   },
   divider: {
     width: StyleSheet.hairlineWidth,
@@ -247,23 +235,25 @@ const s = StyleSheet.create({
     marginHorizontal: 10,
     marginVertical: 4,
   },
+  // Icon-only buttons spread across whatever width is left; if it ever
+  // runs out they still scroll.
   scrollContent: {
+    flexGrow: 1,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-evenly',
     gap: 4,
-    paddingRight: 12,
+    paddingRight: 8,
+    // Room for the Positions count badge (sits 6px above its icon) — the
+    // ScrollView clips anything outside its content box.
+    paddingVertical: 8,
   },
   toolBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
-    paddingHorizontal: 11,
-    paddingVertical: 4,
-    minWidth: 62,
-  },
-  toolLabel: {
-    fontSize: 10,
-    fontWeight: '600',
   },
   badge: {
     position: 'absolute',
@@ -287,13 +277,4 @@ const s = StyleSheet.create({
   rowDesc: { fontSize: 11.5, lineHeight: 15, marginTop: 1 },
   segment: { flexDirection: 'row', borderRadius: 9, borderWidth: 1, padding: 2 },
   segmentBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 7 },
-  panelHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
 });

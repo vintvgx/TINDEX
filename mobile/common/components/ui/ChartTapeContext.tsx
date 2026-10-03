@@ -15,6 +15,10 @@ export interface ChartTapeInfo {
   changePct: number | null;
   signal: ChartTapeSignal;
   loading: boolean;
+  /** Tapping the signal pill — the Charts tab opens that ticker's contracts. */
+  onSignalPress?: () => void;
+  /** Tapping the ticker symbol — the Charts tab opens ticker search. */
+  onTickerPress?: () => void;
 }
 
 interface Ctx {

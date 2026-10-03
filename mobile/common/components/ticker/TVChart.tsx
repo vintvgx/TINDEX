@@ -80,6 +80,7 @@ type WVOutbound =
   | { type: 'setZones'; auto: TVZoneBand[]; watch: TVZoneBand[]; bands: TVZoneBand[] }
   | { type: 'setRefLines'; lines: TVRefLine[] }
   | { type: 'setEmaOverlays'; emas: TVEmaOverlay[] }
+  | { type: 'setOptions'; crosshair: boolean }
   | { type: 'applyTheme'; theme: TVTheme };
 type WVInbound =
   | { type: 'loaded' }
@@ -109,6 +110,11 @@ export interface TVChartProps {
   resetKey?: string;
   /** Timeframe EMA overlays — computed in-page from the loaded bars. */
   emas?: TVEmaOverlay[] | null;
+  /** Chart style setting, already resolved to the period's default when
+   *  unset. 'line' draws a close line even when OHLC data exists. */
+  mode?: 'candle' | 'line';
+  /** "Data points" setting — off hides the press-and-hold crosshair. */
+  crosshair?: boolean;
   style?: any;
 }
 
@@ -132,7 +138,7 @@ const TV_ORB_EDGE = '#B2B5BE';
 
 export function TVChart({
   data, isLoading, autoZones, watchZones, orbRange, showOrbRange,
-  sessionReferenceLines, referenceLines, showSessionLines, onAutoZoneTap, onWatchZoneTap, resetKey, emas, style,
+  sessionReferenceLines, referenceLines, showSessionLines, onAutoZoneTap, onWatchZoneTap, resetKey, emas, mode, crosshair = true, style,
 }: TVChartProps) {
   const colors = useThemeColors();
   const { visible: showWatchZones } = useWatchZonesVisibility();
@@ -199,7 +205,7 @@ export function TVChart({
     }
     return out;
   }, [data]);
-  const ohlc = !!(data?.opens && data?.highs && data?.lows);
+  const ohlc = !!(data?.opens && data?.highs && data?.lows) && mode !== 'line';
 
   const fit = prevResetKey.current !== resetKey;
   useEffect(() => { prevResetKey.current = resetKey; });
@@ -324,6 +330,12 @@ export function TVChart({
     send({ type: 'setEmaOverlays', emas: emas ?? [] });
   }, [chartReady, emas, send]);
 
+  // ── Crosshair ("Data points") ──────────────────────────────────────
+  useEffect(() => {
+    if (!chartReady) return;
+    send({ type: 'setOptions', crosshair });
+  }, [chartReady, crosshair, send]);
+
   // ── Theme ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!chartReady) return;
@@ -377,7 +389,13 @@ export function TVChart({
           onLoadStart={() => {
             console.log('[TVChart] WebView onLoadStart');
             readyRef.current = false;
+            // A reload (e.g. iOS reclaimed the WebView while backgrounded)
+            // starts a blank page — dropping chartReady makes every effect
+            // re-send its state once the new page reports `ready`.
+            queueRef.current = [];
+            setChartReady(false);
           }}
+          onContentProcessDidTerminate={() => webViewRef.current?.reload()}
           onLoadEnd={() => console.log('[TVChart] WebView onLoadEnd')}
           onError={(e) => console.warn('[TVChart] WebView onError', JSON.stringify(e.nativeEvent))}
           onHttpError={(e) => console.warn('[TVChart] WebView onHttpError', JSON.stringify(e.nativeEvent))}

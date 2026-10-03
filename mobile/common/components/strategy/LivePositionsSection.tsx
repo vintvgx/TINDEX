@@ -132,7 +132,7 @@ export function useLivePositionsData(mode: 'live' | 'paper', tickerFilter?: stri
 // a parent's .map()).
 
 export function PositionRow({
-  pos, colors, onLiveUpdate, hideChartButton,
+  pos, colors, onLiveUpdate, hideChartButton, hideTicker,
 }: {
   pos: PositionEntry;
   colors: any;
@@ -140,6 +140,9 @@ export function PositionRow({
   /** True when rendered inside PriceChartFullScreen's own open-contracts
    *  section — a button that reopens the chart you're on is noise there. */
   hideChartButton?: boolean;
+  /** Drop the logo + ticker name — the Charts tab's docked pager is
+   *  already scoped to the ticker on screen. */
+  hideTicker?: boolean;
 }) {
   const { toTicker } = useBaseNavigation();
   const { data: live, connected, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
@@ -160,6 +163,7 @@ export function PositionRow({
     <View style={styles.positionBlock}>
       {/* Strategy label row */}
       <View style={styles.stratLabelRow}>
+        {!hideTicker && (
         <TouchableOpacity
           onPress={() => toTicker(pos.ticker)}
           hitSlop={6}
@@ -172,6 +176,7 @@ export function PositionRow({
           />
           <Text style={[styles.stratTicker, { color: colors.text }]}>{pos.ticker}</Text>
         </TouchableOpacity>
+        )}
         {pos.strategy_name ? (
           <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>{pos.strategy_name}</Text>
         ) : (

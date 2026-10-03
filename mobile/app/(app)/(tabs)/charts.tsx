@@ -5,6 +5,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
+import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { TickerContractsModal } from '@/common/components/ticker/TickerContractsModal';
 import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft, ChartAutoZone } from '@/common/components/ticker/AdvancedPriceChart';
@@ -20,7 +22,8 @@ import { useChartAutoZones } from '@/hooks/queries/technicals/useTickerZones';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
-import { useChartInterval } from '@/hooks/useChartInterval';
+import { useChartInterval, useSetChartIntervalFor } from '@/hooks/useChartInterval';
+import type { TickerStatus } from '@/common/components/ticker/TickerWheel';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
 import { useMarketStream } from '@/hooks/useMarketStream';
@@ -44,11 +47,11 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-// Always surface the major index ETFs right after open-position tickers,
-// ahead of the rest of the followed list — they're the reference charts
-// checked every session regardless of what's actively being traded, and
-// the list's guaranteed floor when there are no positions/follows at all.
-const PINNED_TICKERS = ['SPY', 'QQQ', 'IWM'];
+// The major index ETFs come right after position and watched-level
+// tickers, ahead of the rest of the followed list — they're the reference
+// charts checked every session, and the list's guaranteed floor when there
+// are no positions/follows at all.
+const PINNED_TICKERS = ['SPY', 'IWM', 'QQQ'];
 // Chart chrome above the canvas (contracts row, control toggles, technicals
 // strip, TV period pills) is MEASURED via onLayout (see chromeH), not
 // hardcoded — new toolbar rows can't silently eat the plot anymore.
@@ -67,26 +70,57 @@ export default function ChartsScreen() {
   const colors = useThemeColors();
   const [contractsModalOpen, setContractsModalOpen] = useState(false);
 
-  // ── Ticker list: open-position tickers, then SPY/QQQ/IWM, then followed (alphabetical) ──
+  // ── Ticker list, by priority: open positions (live, then paper-only) →
+  // tickers with an active watch level → SPY/IWM/QQQ → followed
+  // (alphabetical). Each ticker appears once, at its highest tier. ──────
   const allLive = useLivePositionsData('live');
   const allPaper = useLivePositionsData('paper');
   const { data: follows } = useUserORBFollows();
+  const { data: allKeyLevels } = useKeyLevels();
 
-  const openPositionTickers = useMemo(() => {
-    const tickers = new Set<string>();
-    for (const p of allLive.filteredPositions) tickers.add(p.ticker.toUpperCase());
-    for (const p of allPaper.filteredPositions) tickers.add(p.ticker.toUpperCase());
-    return Array.from(tickers);
-  }, [allLive.filteredPositions, allPaper.filteredPositions]);
+  const liveTickers = useMemo(
+    () => new Set(allLive.filteredPositions.map(p => p.ticker.toUpperCase())),
+    [allLive.filteredPositions],
+  );
+  const paperTickers = useMemo(
+    () => new Set(allPaper.filteredPositions.map(p => p.ticker.toUpperCase())),
+    [allPaper.filteredPositions],
+  );
+  const watchedTickers = useMemo(() => {
+    const set = new Set<string>();
+    for (const l of allKeyLevels ?? []) {
+      if (l.status === 'watching' || l.status === 'confirmed') set.add(l.ticker.toUpperCase());
+    }
+    return set;
+  }, [allKeyLevels]);
 
   const tickerList = useMemo(() => {
-    const pinned = PINNED_TICKERS.filter(t => !openPositionTickers.includes(t));
-    const followed = new Set((follows ?? []).map(f => f.ticker.toUpperCase()));
-    for (const t of openPositionTickers) followed.delete(t);
-    for (const t of pinned) followed.delete(t);
-    const rest = Array.from(followed).sort();
-    return [...openPositionTickers, ...pinned, ...rest];
-  }, [follows, openPositionTickers]);
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const add = (ts: Iterable<string>) => {
+      for (const t of ts) if (!seen.has(t)) { seen.add(t); out.push(t); }
+    };
+    add(Array.from(liveTickers).sort());
+    add(Array.from(paperTickers).sort());
+    add(Array.from(watchedTickers).sort());
+    add(PINNED_TICKERS);
+    add((follows ?? []).map(f => f.ticker.toUpperCase()).sort());
+    return out;
+  }, [liveTickers, paperTickers, watchedTickers, follows]);
+
+  // Letter-badge state for the ticker wheel (see TickerWheel's LetterBadge).
+  const tickerStatus = useMemo(() => {
+    const map: Record<string, TickerStatus> = {};
+    for (const t of tickerList) {
+      map[t] = {
+        live: liveTickers.has(t),
+        paper: paperTickers.has(t),
+        watching: watchedTickers.has(t),
+        pinned: PINNED_TICKERS.includes(t),
+      };
+    }
+    return map;
+  }, [tickerList, liveTickers, paperTickers, watchedTickers]);
 
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   // A tapped zone-alert push lands here with ?ticker= (see
@@ -118,7 +152,7 @@ export default function ChartsScreen() {
   // Shares its persisted value with AdvancedPriceChart's own interval picker
   // via the same React-Query cache key (useChartInterval) — no prop
   // threading needed for the two to stay in sync.
-  const { interval: chartInterval } = useChartInterval(period);
+  const { interval: chartInterval, setInterval: setChartInterval, allowed: allowedIntervals } = useChartInterval(period);
   const { data: tickerResponse, isLoading: tickerLoading } = useTickerQuery(activeTicker);
   const stockData = tickerResponse?.success ? tickerResponse.data : undefined;
   const { data: historyResponse, isLoading: historyLoading, isPlaceholderData: historyIsStale } = useTickerHistoryQuery(
@@ -255,7 +289,30 @@ export default function ChartsScreen() {
   const [chartAreaHeight, setChartAreaHeight] = useState(0);
   // Every chart display option (style, technicals, session lines, watch
   // levels, data points) lives in the chart settings modal — see useChartSettings.
-  const chart = useChartSettings({ ticker: activeTicker, period, colors, canMarkWatchLevel: true });
+  // "Mark a watch level" drives AdvancedPriceChart's drag-to-mark mode —
+  // TVChart has no equivalent yet, so the row only shows on the legacy
+  // engine. The Signal & RSI strip isn't rendered on this screen (the tape
+  // carries the signal), so its toggle is hidden too.
+  const { prefs: displayPrefs, loaded: displayPrefsLoaded } = useChartDisplayPrefs();
+  const chart = useChartSettings({
+    ticker: activeTicker, period, colors,
+    canMarkWatchLevel: displayPrefs.chartEngine === 'legacy',
+    hideStripRow: true,
+    showDefaults: true,
+  });
+
+  // Launch defaults (Chart settings → Defaults): once the stored prefs are
+  // read, open on that date range + bar size. Applied once per launch —
+  // switching ranges afterwards is just for this session.
+  const setIntervalFor = useSetChartIntervalFor();
+  const defaultsApplied = useRef(false);
+  useEffect(() => {
+    if (!displayPrefsLoaded || defaultsApplied.current) return;
+    defaultsApplied.current = true;
+    setIntervalFor(chart.defaultPeriod, chart.defaultInterval);
+    setPeriod(chart.defaultPeriod);
+  }, [displayPrefsLoaded, chart.defaultPeriod, chart.defaultInterval, setIntervalFor]);
+  const tvMode = chart.chartSettings.mode ?? (period === '1D' || period === '1W' ? 'candle' : 'line');
   // ZoneEngine's auto-detected support/resistance bands, same as the
   // full-screen chart — fetched only while "Auto-detected zones" is on.
   const { zones: autoZones, context: zoneContext } = useChartAutoZones(activeTicker, chart.showAutoZones);
@@ -284,7 +341,6 @@ export default function ChartsScreen() {
   const handleTVWatchZoneTap = useCallback((z: ChartWatchZone) => {
     toast.info(`${activeTicker} $${z.low.toFixed(2)}–$${z.high.toFixed(2)}`);
   }, [activeTicker, toast]);
-  const { data: allKeyLevels } = useKeyLevels();
   const chartWatchZones: ChartWatchZone[] = (allKeyLevels ?? [])
     .filter(l => l.ticker === activeTicker && (l.status === 'watching' || l.status === 'confirmed'))
     .map(l => ({
@@ -359,7 +415,17 @@ export default function ChartsScreen() {
   // ChartTapeContext while this tab is mounted. ──────────────────────────
   const { setInfo: setTapeInfo } = useChartTape();
   const tapeSignal = chart.technicals.data?.signal ?? null;
+  const openContracts = useCallback(() => setContractsModalOpen(true), []);
+  const openSearch = useCallback(() => setSearchOpen(true), []);
+  // Tabs stay mounted when you switch away, so unmount cleanup alone never
+  // ran — the tape kept showing this chart's ticker on every other screen.
+  // Publish only while this tab is focused; clear the moment it blurs.
+  const isFocused = useIsFocused();
   useEffect(() => {
+    if (!isFocused) {
+      setTapeInfo(null);
+      return;
+    }
     setTapeInfo({
       ticker: activeTicker,
       price: resolvedLivePrice ?? null,
@@ -367,9 +433,11 @@ export default function ChartsScreen() {
       changePct: liveChangePercent ?? null,
       signal: tapeSignal,
       loading: tickerLoading && !stockData,
+      onSignalPress: openContracts,
+      onTickerPress: openSearch,
     });
     return () => setTapeInfo(null);
-  }, [activeTicker, resolvedLivePrice, liveChange, liveChangePercent, tapeSignal, tickerLoading, stockData, setTapeInfo]);
+  }, [isFocused, activeTicker, resolvedLivePrice, liveChange, liveChangePercent, tapeSignal, tickerLoading, stockData, setTapeInfo, openContracts, openSearch]);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
@@ -396,6 +464,8 @@ export default function ChartsScreen() {
               onWatchZoneTap={handleTVWatchZoneTap}
               resetKey={`${activeTicker}:${period}`}
               emas={chart.emaOverlays}
+              mode={tvMode}
+              crosshair={chart.crosshairEnabled}
             />
           ) : (
             <AdvancedPriceChart
@@ -433,6 +503,9 @@ export default function ChartsScreen() {
         onSearchPress={() => setSearchOpen(true)}
         period={period}
         onPeriodChange={setPeriod}
+        interval={chartInterval}
+        allowedIntervals={allowedIntervals}
+        onIntervalChange={setChartInterval}
         technicalsContent={
           <TechnicalsSheet
             check={chart.technicals.data}
@@ -442,9 +515,9 @@ export default function ChartsScreen() {
         }
         positioningContent={<OptionsPositioningPanel ticker={activeTicker} />}
         settingsSections={chart.sections}
-        onContractsPress={() => setContractsModalOpen(true)}
         onPositionsPress={toggleExpanded}
         openPositionCount={totalPositionsForTicker}
+        tickerStatus={tickerStatus}
       />
 
       {/* Positions docked panel — expands below the toolbar, pushing the

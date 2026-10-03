@@ -29,9 +29,11 @@ PERIOD_MAP = {
 # that Yahoo doesn't actually serve; an invalid `interval_override` silently
 # falls back to the period's PERIOD_MAP default rather than erroring, so a
 # stale/bad client value never breaks the chart, it just ignores the request.
+# 1m is only served for the last ~7 days, which covers 1D's and 1W's "5d"
+# fetch window.
 ALLOWED_INTERVALS = {
-    "1D":  ["5m", "15m"],
-    "1W":  ["15m", "30m", "1h"],
+    "1D":  ["1m", "5m", "15m", "30m", "1h"],
+    "1W":  ["1m", "5m", "15m", "30m", "1h"],
     "1M":  ["1h", "1d"],
     "3M":  ["1d", "1wk"],
     "YTD": ["1d", "1wk"],

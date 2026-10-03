@@ -8,6 +8,8 @@ import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
 import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 import { usePositioning, type PositioningRead } from '@/hooks/queries/ticker/useTickerBrief';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
+import { ALLOWED_INTERVALS, DEFAULT_INTERVAL, INTERVAL_LABEL } from '@/lib/chartIntervals';
+import { PERIOD_STOPS, intervalCycleFor } from '@/common/components/ticker/TimeframeChips';
 
 /**
  * Everything behind the chart's Technicals and settings modals, shared by the Charts tab
@@ -26,12 +28,23 @@ interface Options {
   canMarkWatchLevel: boolean;
   /** Screen-specific overlay rows (e.g. the full-screen chart's S/R). */
   extraOverlayRows?: ChartSettingRow[];
+  /** Hide the "Signal & RSI strip" row on screens that don't render the
+   *  strip (the Charts tab shows the signal in the ticker tape instead). */
+  hideStripRow?: boolean;
+  /** Show the "Defaults" section (launch date range + bar size). */
+  showDefaults?: boolean;
 }
 
-export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, extraOverlayRows = [] }: Options) {
+export function useChartSettings({
+  ticker, period, colors, canMarkWatchLevel, extraOverlayRows = [], hideStripRow = false, showDefaults = false,
+}: Options) {
   const { prefs, setPref } = useChartDisplayPrefs();
   const { mode, showSessionLines, showStrip, showVwap, showEma, showOrb, showWalls,
-    ema20, ema50, ema200, ema400, chartEngine } = prefs;
+    ema20, ema50, ema200, ema400, chartEngine, defaultPeriod } = prefs;
+  const defaultIntervalOptions = intervalCycleFor(ALLOWED_INTERVALS[defaultPeriod]);
+  const defaultInterval = prefs.defaultInterval && defaultIntervalOptions.includes(prefs.defaultInterval)
+    ? prefs.defaultInterval
+    : DEFAULT_INTERVAL[defaultPeriod];
   const setMode = (v: ChartMode | null) => setPref('mode', v);
   const setShowSessionLines = (v: boolean) => setPref('showSessionLines', v);
   const setShowStrip = (v: boolean) => setPref('showStrip', v);
@@ -69,6 +82,29 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
 
   const defaultMode: ChartMode = period === '1D' || period === '1W' ? 'candle' : 'line';
   const sections: ChartSettingsSection[] = [
+    ...(showDefaults ? [{
+      title: 'Defaults',
+      rows: [
+        {
+          kind: 'segment' as const, key: 'defaultPeriod', label: 'Date range on launch',
+          value: defaultPeriod,
+          options: PERIOD_STOPS.map(p => ({ value: p, label: p })),
+          onChange: (v: string) => {
+            setPref('defaultPeriod', v as PricePeriod);
+            // Keep the saved bar size only if the new range supports it.
+            if (prefs.defaultInterval && !ALLOWED_INTERVALS[v as PricePeriod].includes(prefs.defaultInterval)) {
+              setPref('defaultInterval', null);
+            }
+          },
+        },
+        {
+          kind: 'segment' as const, key: 'defaultInterval', label: 'Bar size on launch',
+          value: defaultInterval,
+          options: defaultIntervalOptions.map(i => ({ value: i, label: INTERVAL_LABEL[i] ?? i })),
+          onChange: (v: string) => setPref('defaultInterval', v),
+        },
+      ],
+    }] : []),
     {
       title: 'Chart engine',
       rows: [{
@@ -119,9 +155,9 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
     {
       title: 'Technicals',
       rows: [
-        { kind: 'toggle', key: 'strip', icon: 'pulse-outline', label: 'Signal & RSI strip',
+        ...(hideStripRow ? [] : [{ kind: 'toggle' as const, key: 'strip', icon: 'pulse-outline' as const, label: 'Signal & RSI strip',
           description: 'BUY CALL / BUY PUT / WAIT pill with Trend, RSI, VWAP and ORB chips above the chart',
-          value: showStrip, onChange: setShowStrip },
+          value: showStrip, onChange: setShowStrip }]),
         { kind: 'toggle', key: 'vwap', icon: 'git-commit-outline', label: 'VWAP line',
           description: 'Session VWAP (1D only)', value: showVwap, onChange: setShowVwap },
         { kind: 'toggle', key: 'ema', icon: 'trending-up-outline', label: 'Trend: daily EMA-20 / 50',
@@ -158,12 +194,15 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
 
   // Timeframe EMA overlays for the TV chart — computed in-page from the
   // loaded bars (no backend change).
-  const emaOverlays = [
+  // Memoized: TVChart re-sends (and the page rebuilds every EMA series) on
+  // each new identity, so a fresh array per render meant a full rebuild on
+  // every live-price tick.
+  const emaOverlays = useMemo(() => [
     { period: 20, color: '#4A9EFF', visible: ema20 },
     { period: 50, color: '#F59E0B', visible: ema50 },
     { period: 200, color: '#B388FF', visible: ema200 },
     { period: 400, color: '#A1887F', visible: ema400 },
-  ];
+  ], [ema20, ema50, ema200, ema400]);
 
   return {
     technicals,
@@ -176,6 +215,9 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
     technicalsContent,
     emaOverlays,
     chartEngine,
+    crosshairEnabled,
+    defaultPeriod,
+    defaultInterval,
     onTechnicalsOpenChange: setModalOpen,
   };
 }
