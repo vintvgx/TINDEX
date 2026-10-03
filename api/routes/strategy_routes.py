@@ -928,6 +928,15 @@ def update_strategy_exits(strategy_id: str):
         exit_overrides_patch["sl_floor_custom"] = True
     if "be_grace_seconds" in changed:
         exit_overrides_patch["be_grace_seconds"] = changed["be_grace_seconds"]
+        if changed["be_grace_seconds"] == 0:
+            # Grace turned off mid-countdown — drop the persisted start too,
+            # or a restart would resurrect a countdown the user just killed.
+            exit_overrides_patch["be_grace_start"] = None
+    if "be_grace_cancelled" in changed:
+        # Cancel button: the in-memory countdown is already cleared by
+        # apply_overrides() — clear the persisted start so a restart
+        # doesn't resurrect it either.
+        exit_overrides_patch["be_grace_start"] = None
 
     # Persist to the open orb_trades row too — apply_overrides() above only
     # mutated the in-memory ExitManager, which a Railway restart wipes.
@@ -1142,9 +1151,12 @@ def approve_pending_confirmation(strategy_id: str, pending_id: str):
         overrides["qty"] = int(data["qty"])
     if "sl_grace_minutes" in data:
         overrides["sl_grace_minutes"] = data["sl_grace_minutes"]
-    for key in ("sl_outer_floor_pct", "be_grace_seconds"):
-        if data.get(key) is not None:
-            overrides[key] = data[key]
+    # Floor + breakeven grace go through the same validation as the
+    # immediate-trade routes: bad input is a 400 here, never a silent
+    # drop (the engine used to ignore out-of-range values quietly).
+    err = _entry_exit_fields(data, overrides)
+    if err:
+        return jsonify({"status": "error", "message": err}), 400
     try:
         result = engine.approve_pending_entry(pending_id, overrides or None)
     except Exception as e:
