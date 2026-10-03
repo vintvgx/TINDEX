@@ -178,6 +178,15 @@ export interface PendingConfirmation {
     entry_premium: number | null;
     entry_time: string | null;
   } | null;
+  /** Resolved profile snapshot captured when the confirmation was created —
+   *  carries the strategy's own floor/grace defaults so the exit-plan
+   *  preview can show the effective floor when the user leaves the floor
+   *  choice on Default (matching what the backend arms on approval). */
+  effective_profile: {
+    sl_outer_floor_pct?: number | null;
+    sl_floor_enabled?: boolean;
+    be_grace_seconds?: number;
+  } | null;
 }
 
 /** Live price message shape pushed over /ws/strategy/<id>/live while a

@@ -288,8 +288,19 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
                 qty,
                 stopPrice: parseFloat(stopVal) || null,
                 stopLabel: 'Stop loss',
-                floorPrice: floorPct != null ? livePremium * (1 - floorPct) : null,
-                floorIsDefault: false,
+                // Effective floor = the explicit choice, else the strategy's
+                // own default from the pending's effective profile — the same
+                // floor the backend arms on approval when the choice is left
+                // on Default. floorIsDefault tags it so the ladder shows
+                // "(default)" instead of implying the user picked it.
+                floorPrice: (() => {
+                  const ep = pending.effective_profile;
+                  const strategyFloorPct = ep?.sl_floor_enabled && ep.sl_outer_floor_pct != null
+                    ? ep.sl_outer_floor_pct : null;
+                  const eff = floorPct ?? strategyFloorPct;
+                  return eff != null ? livePremium * (1 - eff) : null;
+                })(),
+                floorIsDefault: floorPct == null,
                 beGraceSeconds: beGrace,
                 tp1Price: parseFloat(tp1Val) || null,
                 tp2Price: tp2Val ? parseFloat(tp2Val) || null : null,
