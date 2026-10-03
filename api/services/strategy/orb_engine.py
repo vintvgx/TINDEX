@@ -761,7 +761,13 @@ class ORBEngine:
                         direction, self.ticker, price)
             self.debug.emit("INFO",
                 f"Entering reversal trade — {direction} @ {price:.2f}")
-            self._enter_trade(direction, price)
+            # Flag so a technicals-gate block inside _enter_trade is reported
+            # back to the scorer (publish_reversal_declined) — see there.
+            self._reversal_entry_in_progress = True
+            try:
+                self._enter_trade(direction, price)
+            finally:
+                self._reversal_entry_in_progress = False
 
     def _start_retest_watch(self, direction: str, breakout_price: float,
                              now_et, deadline):
@@ -1039,6 +1045,10 @@ class ORBEngine:
         gate_cfg = self.config.get("technicals_gate") or {}
         if gate_cfg.get("enabled") and gate_cfg.get("required"):
             if not self._check_technicals_gate(direction, trigger_price, gate_cfg["required"]):
+                # A blocked REVERSAL entry tells the scorer, which un-latches
+                # with a cooldown so it may fire again later this session.
+                if getattr(self, "_reversal_entry_in_progress", False):
+                    self._hub.publish_reversal_declined(self.ticker, direction)
                 return
 
         # VWAP soft confirmation (log only — does not block entry)
