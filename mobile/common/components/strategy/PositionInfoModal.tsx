@@ -144,7 +144,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const marketValue = data.mid_price * data.qty_remaining * 100;
 
   const editable = !!strategyId;
-  const slPulseStyle = useSlGracePulse(!!data.sl_grace_active);
+  const slPulseStyle = useSlGracePulse(!!data.sl_grace_active || !!data.be_grace_active);
   const mutation = useUpdateStrategyExits();
   const { authState: { user } } = useAuth();
   const alertMutation = useCreateContractAlert(strategyId ?? '');
@@ -217,7 +217,10 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
     !!stopVal || !!tp1Val || !!tp2Val || !!floorPriceVal ||
     slOn !== initial.current.sl || tpOn !== initial.current.tp ||
     (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && graceMinutes !== initial.current.minutes))) ||
-    (slOn && (floorEnabled !== initial.current.floor || beGrace !== initial.current.beGrace)) ||
+    // The floor is independent of the stop loss (it stays armed when SL is
+    // turned off), so its dirty check isn't gated on slOn. The breakeven
+    // grace only matters while TP can still fire.
+    (floorEnabled !== initial.current.floor || (tpOn && beGrace !== initial.current.beGrace)) ||
     (canSplit && (runnerMode !== initial.current.runnerMode || cascadeOn !== initial.current.cascade));
 
   const pctLabel = (abs: number | undefined) => {
@@ -288,16 +291,17 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
     if (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && graceMinutes !== initial.current.minutes))) {
       payload.sl_grace_minutes = stopMode === 'TIMER' ? graceMinutes : null;
     }
-    // Floor + breakeven grace are independent of the stop type — editable
-    // whether the trade is on a Hard Stop or an SL timer.
-    if (slOn && floorEnabled !== initial.current.floor) {
+    // Floor is independent of the stop loss AND the stop type — editable
+    // whether the trade is on a Hard Stop or an SL timer, and stays visible
+    // (and armed) even if SL is turned off. Breakeven grace needs TP on.
+    if (floorEnabled !== initial.current.floor) {
       payload.sl_floor_enabled = floorEnabled;
     }
-    if (slOn && floor !== undefined && !isNaN(floor)) {
+    if (floor !== undefined && !isNaN(floor)) {
       payload.sl_outer_floor = floor;
       if (!floorEnabled) payload.sl_floor_enabled = true;  // setting a price arms it
     }
-    if (slOn && beGrace !== initial.current.beGrace) {
+    if (tpOn && beGrace !== initial.current.beGrace) {
       payload.be_grace_seconds = beGrace;
     }
     if (canSplit && runnerMode !== initial.current.runnerMode) payload.runner_mode = runnerMode;
@@ -455,7 +459,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
             <ExitSafetyControls
               colors={colors}
               editable={editable}
-              slOn={slOn}
+              tpOn={tpOn}
               floor={data.sl_outer_floor}
               floorEnabled={floorEnabled}
               onFloorEnabled={setFloorEnabled}

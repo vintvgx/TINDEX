@@ -49,7 +49,7 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
   const [floorPct, setFloorPct] = useState<number | null>(null);
   const [beGrace, setBeGrace]   = useState<number>(BE_GRACE_DEFAULT);
   const [qty, setQty]         = useState(pending.qty);
-  const touched = useRef({ hard_stop: false, tp1: false, tp2: false });
+  const touched = useRef({ hard_stop: false, tp1: false, tp2: false, be_grace: false });
 
   const [, forceTick] = useState(0);
 
@@ -59,7 +59,7 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
     setTp1Val(pending.tp1.toFixed(2));
     setTp2Val(pending.tp2 != null ? pending.tp2.toFixed(2) : '');
     setQty(pending.qty);
-    touched.current = { hard_stop: false, tp1: false, tp2: false };
+    touched.current = { hard_stop: false, tp1: false, tp2: false, be_grace: false };
   }, [pending.id]);
 
   // Live preview keeps unedited fields in sync with the streaming premium —
@@ -88,7 +88,11 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
     const overrides: {
       hard_stop?: number; tp1?: number; tp2?: number; qty?: number;
       sl_outer_floor_pct?: number; be_grace_seconds?: number;
-    } = { be_grace_seconds: beGrace };
+    } = {};
+    // Only send the breakeven grace when the stepper was actually touched —
+    // otherwise the strategy's own default (whatever the backend resolves)
+    // stays in effect instead of being clobbered by this sheet's default.
+    if (touched.current.be_grace) overrides.be_grace_seconds = beGrace;
     if (floorPct != null) overrides.sl_outer_floor_pct = floorPct;
     if (touched.current.hard_stop) overrides.hard_stop = parseFloat(stopVal);
     if (touched.current.tp1) overrides.tp1 = parseFloat(tp1Val);
@@ -271,7 +275,8 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
               ladder — what happens at each level, before the order goes in. */}
           <View style={{ marginBottom: 16 }}>
             <EntrySafetySelector colors={colors} floorPct={floorPct} onFloorPct={setFloorPct}
-              beGrace={beGrace} onBeGrace={setBeGrace} premium={livePremium} stopIsTimer={false}
+              beGrace={beGrace} onBeGrace={v => { touched.current.be_grace = true; setBeGrace(v); }}
+              premium={livePremium} stopIsTimer={false}
               defaultFloorHint="Default keeps this strategy's own floor setting, if it has one." />
           </View>
           <FieldLabel text="EXIT PLAN" colors={colors} />
