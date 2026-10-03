@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, SafeAreaView, LayoutAnimation, Platform, UIManager,
-  StyleSheet, LayoutChangeEvent,
+  StyleSheet, LayoutChangeEvent, useWindowDimensions,
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
@@ -11,10 +11,12 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { TickerContractsModal } from '@/common/components/ticker/TickerContractsModal';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import { Skeleton } from '@/common/components/ui/Skeleton';
-import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
+import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft, ChartAutoZone } from '@/common/components/ticker/AdvancedPriceChart';
+import { TVChart } from '@/common/components/ticker/TVChart';
+import { ZoneDetailSheet } from '@/common/components/ticker/ZoneDetailSheet';
 import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
 import { OptionsPositioningPanel } from '@/common/components/ticker/brief/TickerBrief';
-import { ChartTechnicalsStrip, CHART_TECHNICALS_STRIP_HEIGHT } from '@/common/components/ticker/ChartTechnicals';
+import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
 import { useChartAutoZones } from '@/hooks/queries/technicals/useTickerZones';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
@@ -49,12 +51,9 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 // checked every session regardless of what's actively being traded, and
 // the list's guaranteed floor when there are no positions/follows at all.
 const PINNED_TICKERS = ['SPY', 'QQQ', 'IWM'];
-// AdvancedPriceChart's own chrome OUTSIDE the `height` prop: the top row
-// (mode toggle + date label, 26 + 6 margin) plus the period-picker row below
-// the canvas (~12 margin + ~28 row), plus this screen's own ChartControlToggles
-// row (30 + 8 margin) sitting above it. Subtracted from the measured flex
-// area so the whole component fits without clipping or an inner scroll.
-const CHART_CHROME_HEIGHT = 78 + 38;
+// Chart chrome above the canvas (contracts row, control toggles, technicals
+// strip, TV period pills) is MEASURED via onLayout (see chromeH), not
+// hardcoded — new toolbar rows can't silently eat the plot anymore.
 
 /**
  * Charts tab — a TradingView-style full-screen chart, reached via its own
@@ -290,12 +289,32 @@ export default function ChartsScreen() {
     setChartAreaHeight(e.nativeEvent.layout.height);
   }, []);
 
+  // ── TV chart toggle + layout hardening (todo 0f4aaad3) ───────────────
+  // (zone-tap handlers live below, next to `toast` — TDZ otherwise)
+  const { height: screenH } = useWindowDimensions();
+  // Default to the new TradingView chart; flips back to the legacy SVG chart.
+  const [useTVChart, setUseTVChart] = useState(true);
+  // Measured height of everything above the canvas (contracts row, toggles,
+  // technicals strip, TV period pills) — replaces the old hardcoded constant.
+  const [chromeH, setChromeH] = useState(0);
+  const onChromeLayout = useCallback((e: LayoutChangeEvent) => {
+    setChromeH(e.nativeEvent.layout.height);
+  }, []);
+  // TVChart doesn't own its zone sheet the way AdvancedPriceChart does —
+  // a tapped auto zone lands here and opens the shared ZoneDetailSheet.
+  const [tvZoneSheetZone, setTvZoneSheetZone] = useState<ChartAutoZone | null>(null);
+
   // ── Watch mode: draw a key price level directly on the chart ───────────
   // Same wiring as PriceChartFullScreen's — see AdvancedPriceChart's Watch
   // toggle. useKeyLevels has no per-ticker filter server-side, so it's
   // scoped down client-side here.
   const { authState: { user } } = useAuth();
   const toast = useToast();
+  // TVChart zone taps (declared here — after `toast` — to avoid a TDZ).
+  const handleTVAutoZoneTap = useCallback((z: ChartAutoZone) => setTvZoneSheetZone(z), []);
+  const handleTVWatchZoneTap = useCallback((z: ChartWatchZone) => {
+    toast.info(`${activeTicker} $${z.low.toFixed(2)}–$${z.high.toFixed(2)}`);
+  }, [activeTicker, toast]);
   const { data: allKeyLevels } = useKeyLevels();
   const chartWatchZones: ChartWatchZone[] = (allKeyLevels ?? [])
     .filter(l => l.ticker === activeTicker && (l.status === 'watching' || l.status === 'confirmed'))
@@ -456,57 +475,113 @@ export default function ChartsScreen() {
           persist and show an arbitrary, no-longer-meaningful slice once the
           new ticker's data loads — a full reset guarantees the chart always
           renders its accurate default (auto-fit) view once data lands, not
-          whatever window happened to be set for a different symbol. */}
-      <View style={{ flex: 1, paddingHorizontal: 12 }} onLayout={onChartAreaLayout}>
-        <View style={{ marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <TouchableOpacity
-            onPress={() => setContractsModalOpen(true)}
-            activeOpacity={0.8}
-            style={{
-              flexDirection: 'row', alignItems: 'center', gap: 5,
-              height: 30, paddingHorizontal: 12, borderRadius: 15,
-              borderWidth: 1, borderColor: colors.separator,
-            }}
-          >
-            <Ionicons name="layers-outline" size={14} color={colors.textSecondary} />
-            <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '700' }}>Contracts</Text>
-          </TouchableOpacity>
-          <View style={{ flex: 1 }}>
-            <ChartControlToggles
-              colors={colors}
-              sections={chart.sections}
-              technicals={chart.technicalsContent}
-              onTechnicalsOpenChange={chart.onTechnicalsOpenChange}
-              positioning={<OptionsPositioningPanel ticker={activeTicker} />}
-            />
+          whatever window happened to be set for a different symbol.
+          minHeight (55% of the screen) is the 0f4aaad3 fix: the expanded
+          positions list below can never squeeze the chart — it shrinks and
+          scrolls internally instead (flexShrink). */}
+      <View style={{ flex: 1, minHeight: screenH * 0.55, paddingHorizontal: 12 }} onLayout={onChartAreaLayout}>
+        {/* Chrome above the canvas — MEASURED (onChromeLayout), never
+            hardcoded, so new toolbar rows can't silently eat the plot. */}
+        <View onLayout={onChromeLayout}>
+          <View style={{ marginBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <TouchableOpacity
+              onPress={() => setContractsModalOpen(true)}
+              activeOpacity={0.8}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 5,
+                height: 30, paddingHorizontal: 12, borderRadius: 15,
+                borderWidth: 1, borderColor: colors.separator,
+              }}
+            >
+              <Ionicons name="layers-outline" size={14} color={colors.textSecondary} />
+              <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '700' }}>Contracts</Text>
+            </TouchableOpacity>
+            {/* TV/Legacy chart toggle */}
+            <TouchableOpacity
+              onPress={() => setUseTVChart(v => !v)}
+              activeOpacity={0.8}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 4,
+                height: 30, paddingHorizontal: 10, borderRadius: 15,
+                borderWidth: 1,
+                borderColor: useTVChart ? colors.accent : colors.separator,
+                backgroundColor: useTVChart ? colors.accent + '1A' : 'transparent',
+              }}
+            >
+              <Ionicons
+                name={useTVChart ? 'stats-chart' : 'stats-chart-outline'}
+                size={14}
+                color={useTVChart ? colors.accent : colors.textSecondary}
+              />
+              <Text style={{
+                color: useTVChart ? colors.accent : colors.textSecondary,
+                fontSize: 12, fontWeight: '800',
+              }}>
+                {useTVChart ? 'TV' : 'Legacy'}
+              </Text>
+            </TouchableOpacity>
+            <View style={{ flex: 1 }}>
+              <ChartControlToggles
+                colors={colors}
+                sections={chart.sections}
+                technicals={chart.technicalsContent}
+                onTechnicalsOpenChange={chart.onTechnicalsOpenChange}
+                positioning={<OptionsPositioningPanel ticker={activeTicker} />}
+              />
+            </View>
           </View>
+          {chart.showStrip && (
+            <ChartTechnicalsStrip check={chart.technicals.data} isLoading={chart.technicals.isLoading} colors={colors} />
+          )}
+          {/* TV chart's period pills live here, in normal layout flow —
+              never absolutely positioned, so they can never overlap the
+              position cards (0f4aaad3). The legacy chart keeps its own
+              internal pills untouched. */}
+          {useTVChart && (
+            <PeriodPills period={period} onChange={setPeriod} colors={colors} />
+          )}
         </View>
-        {chart.showStrip && (
-          <ChartTechnicalsStrip check={chart.technicals.data} isLoading={chart.technicals.isLoading} colors={colors} />
-        )}
         {chartAreaHeight > 0 && (
-          <AdvancedPriceChart
-            key={activeTicker}
-            data={historyData}
-            isLoading={historyLoading || historyIsStale}
-            period={period}
-            onPeriodChange={setPeriod}
-            positive={displayPositive}
-            height={Math.max(220, chartAreaHeight - CHART_CHROME_HEIGHT - (chart.showStrip ? CHART_TECHNICALS_STRIP_HEIGHT : 0))}
-            orbRange={effectiveOrb}
-            showOrbRange={chart.showOrb}
-            livePrice={resolvedLivePrice ?? null}
-            watchZones={chartWatchZones}
-            autoZones={autoZones}
-            zoneContext={zoneContext}
-            onWatchConfirm={handleWatchConfirm}
-            onDeleteWatchZone={handleDeleteWatchZone}
-            onUpdateWatchZone={handleUpdateWatchZone}
-            resetKey={activeTicker}
-            sessionReferenceLines={sessionReferenceLines}
-            referenceLines={chart.referenceLines}
-            settings={chart.chartSettings}
-          />
+          useTVChart ? (
+            <TVChart
+              key={activeTicker}
+              style={{ flex: 1 }}
+              data={historyData}
+              isLoading={historyLoading || historyIsStale}
+              autoZones={autoZones}
+              watchZones={chartWatchZones}
+              orbRange={effectiveOrb}
+              showOrbRange={chart.showOrb}
+              sessionReferenceLines={sessionReferenceLines}
+              livePrice={resolvedLivePrice ?? null}
+              onAutoZoneTap={handleTVAutoZoneTap}
+              onWatchZoneTap={handleTVWatchZoneTap}
+              resetKey={`${activeTicker}:${period}`}
+            />
+          ) : (
+            <AdvancedPriceChart
+              key={activeTicker}
+              data={historyData}
+              isLoading={historyLoading || historyIsStale}
+              period={period}
+              onPeriodChange={setPeriod}
+              positive={displayPositive}
+              height={Math.max(220, chartAreaHeight - chromeH)}
+              orbRange={effectiveOrb}
+              showOrbRange={chart.showOrb}
+              livePrice={resolvedLivePrice ?? null}
+              watchZones={chartWatchZones}
+              autoZones={autoZones}
+              zoneContext={zoneContext}
+              onWatchConfirm={handleWatchConfirm}
+              onDeleteWatchZone={handleDeleteWatchZone}
+              onUpdateWatchZone={handleUpdateWatchZone}
+              resetKey={activeTicker}
+              sessionReferenceLines={sessionReferenceLines}
+              referenceLines={chart.referenceLines}
+              settings={chart.chartSettings}
+            />
+          )
         )}
       </View>
 
@@ -539,8 +614,16 @@ export default function ChartsScreen() {
         hasOptions={stockData?.has_options}
       />
 
+      {/* Auto zone tapped in the TV chart — the legacy chart opens its
+          own sheet internally; TVChart reports up here instead. */}
+      <ZoneDetailSheet
+        zone={tvZoneSheetZone}
+        context={zoneContext}
+        onClose={() => setTvZoneSheetZone(null)}
+      />
+
       {expanded && (
-        <View style={{ paddingHorizontal: 16, paddingBottom: 12, maxHeight: 320 }}>
+        <View style={{ paddingHorizontal: 16, paddingBottom: 12, maxHeight: 320, flexShrink: 1 }}>
           <ScrollView showsVerticalScrollIndicator={false}>
             <LivePositionsBody
               data={positionsData}
@@ -553,6 +636,47 @@ export default function ChartsScreen() {
         </View>
       )}
     </SafeAreaView>
+  );
+}
+
+/**
+ * Period pills for the TV chart — rendered in normal layout flow above the
+ * WebView (never absolutely positioned), so they can never overlap the
+ * position cards. Mirrors the legacy chart's internal period row.
+ */
+const TV_PERIODS: PricePeriod[] = ['1D', '1W', '1M', '3M', 'YTD', '1Y', '5Y'];
+
+function PeriodPills({
+  period, onChange, colors,
+}: {
+  period: PricePeriod; onChange: (p: PricePeriod) => void; colors: any;
+}) {
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingBottom: 8 }}>
+      {TV_PERIODS.map(p => {
+        const active = p === period;
+        return (
+          <TouchableOpacity
+            key={p}
+            onPress={() => onChange(p)}
+            activeOpacity={0.75}
+            style={{
+              paddingHorizontal: 11, paddingVertical: 6, borderRadius: 14,
+              backgroundColor: active ? colors.accent + '22' : colors.surfaceSecondary,
+              borderWidth: 1,
+              borderColor: active ? colors.accent : 'transparent',
+            }}
+          >
+            <Text style={{
+              fontSize: 12, fontWeight: active ? '800' : '600',
+              color: active ? colors.accent : colors.textSecondary,
+            }}>
+              {p}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
   );
 }
 
