@@ -7,6 +7,8 @@ import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMorningBrief } from '@/hooks/queries/brief/useMorningBrief';
 import { BriefPlayCard } from '@/common/components/brief/BriefPlayCard';
+import { BriefReviewModal } from '@/common/components/brief/BriefReviewModal';
+import { useBriefConfig } from '@/hooks/queries/brief/useBriefReview';
 import type { BriefPlay, MorningBrief } from '@/common/types/morningBrief';
 
 interface Props {
@@ -31,6 +33,9 @@ export default function MorningBriefScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
   const { data: brief, isLoading, error, refetch, dataUpdatedAt } = useMorningBrief();
   const [refreshing, setRefreshing] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const { data: config } = useBriefConfig();
+  const cfg = config?.settings;
 
   // Server-clock offset for the countdowns (confirm window, limit timeout).
   const clockOffsetMs = brief?.server_time ? brief.server_time * 1000 - dataUpdatedAt : 0;
@@ -64,6 +69,16 @@ export default function MorningBriefScreen({ embedded = false }: Props) {
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
       >
+        <TouchableOpacity
+          onPress={() => setReviewOpen(true)}
+          activeOpacity={0.8}
+          style={[styles.reviewBtn, { borderColor: colors.border, backgroundColor: colors.surface }]}
+        >
+          <Ionicons name="flask-outline" size={16} color={colors.accent} />
+          <Text style={[styles.reviewText, { color: colors.text }]}>Paper-testing review & thresholds</Text>
+          <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+        </TouchableOpacity>
+
         {isLoading ? (
           <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />
         ) : error ? (
@@ -82,7 +97,8 @@ export default function MorningBriefScreen({ embedded = false }: Props) {
                 <Text style={[styles.summaryTitle, { color: colors.text }]}>{PHASE_LABEL[brief.phase]}</Text>
               </View>
               <Text style={[styles.summaryNote, { color: colors.textSecondary }]}>
-                Paper only · score ≥ 80 + Technicals Gate ENTER · 0DTE · 2 losses ends the day · max 2 open
+                Paper only · score ≥ {cfg?.min_setup_score ?? 80} + Technicals Gate ENTER · 0DTE ·{' '}
+                {cfg?.max_losses_per_day ?? 2} losses ends the day · max {cfg?.max_open_trades ?? 2} open
               </Text>
             </View>
 
@@ -98,7 +114,8 @@ export default function MorningBriefScreen({ embedded = false }: Props) {
             ) : (
               <View style={{ gap: 12 }}>
                 {[...live, ...rest].map(p => (
-                  <BriefPlayCard key={p.ticker} play={p} colors={colors} clockOffsetMs={clockOffsetMs} onOpenChart={openChart} />
+                  <BriefPlayCard key={p.ticker} play={p} colors={colors} clockOffsetMs={clockOffsetMs}
+                    onOpenChart={openChart} settings={cfg} />
                 ))}
               </View>
             )}
@@ -118,6 +135,7 @@ export default function MorningBriefScreen({ embedded = false }: Props) {
         )}
         <View style={{ height: 60 }} />
       </ScrollView>
+      <BriefReviewModal visible={reviewOpen} onClose={() => setReviewOpen(false)} />
     </SafeAreaView>
   );
 }
@@ -145,6 +163,8 @@ const styles = StyleSheet.create({
   blockedRow: { flexDirection: 'row', gap: 10, alignItems: 'baseline' },
   blockedTicker: { fontSize: 13, fontWeight: '700', width: 56 },
   blockedReason: { fontSize: 12 },
+  reviewBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
+  reviewText: { flex: 1, fontSize: 13, fontWeight: '600' },
   emptyWrap: { alignItems: 'center', paddingVertical: 40, gap: 10, paddingHorizontal: 24 },
   emptyText: { fontSize: 13, textAlign: 'center', lineHeight: 19 },
 });

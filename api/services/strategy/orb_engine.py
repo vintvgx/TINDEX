@@ -1448,7 +1448,14 @@ class ORBEngine:
             # should show the real sizing profile that was actually used;
             # the grace timer is now its own separate, visible field
             # (ExitManager.to_dict()'s sl_grace_minutes).
-            if entry_premium < 0.25:
+            #
+            # Morning-brief entries (trade_type_override="BRIEF") are exempt:
+            # their SCALP_* profiles are an agreed −30% HARD stop, and their
+            # 0DTE OTM contracts are routinely under $0.50 — a grace window
+            # would quietly turn that hard stop into a timer.
+            if trade_type_override == "BRIEF":
+                pass
+            elif entry_premium < 0.25:
                 effective_profile = {**effective_profile, **grace_fields_for_minutes(10)}
             elif entry_premium < 0.50:
                 effective_profile = {**effective_profile, **grace_fields_for_minutes(5)}
@@ -1544,6 +1551,16 @@ class ORBEngine:
                 self.debug.emit("ERROR",
                     f"Supabase log_entry failed — {contract['symbol']} trade not recorded in DB. "
                     "Check Railway logs or Supabase connectivity.")
+            elif trade_type == "STRATEGY":
+                # Paper-testing loop, path B (ORB breakout) — zone/gate
+                # snapshot + setup levels, off-thread (network calls).
+                from services.brief.signal_log import record_orb_signal
+                threading.Thread(
+                    target=record_orb_signal, daemon=True, name=f"orb-signal-{self.ticker}",
+                    args=(self.ticker, direction, self.active_trade_id, fib_levels.get("orh"),
+                          fib_levels.get("orl"), entry_premium, qty, contract["symbol"],
+                          logged_profile_key, self.paper, self._get_underlying_price()),
+                ).start()
             self.notifier.notify_entry(
                 ticker=self.ticker,
                 direction=direction,

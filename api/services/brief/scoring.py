@@ -136,7 +136,8 @@ def score_setup(direction: str, inp: dict) -> "dict | None":
     }
 
 
-def score_ticker(ticker: str, inp: dict) -> "dict | None":
+def score_ticker(ticker: str, inp: dict, earnings_block_days: int = EARNINGS_BLOCK_DAYS,
+                 min_trigger_zone_score: float = 0.0) -> "dict | None":
     """Best setup for `ticker` (long or short), with its technicals and
     blocking reasons attached; None when neither direction has a setup."""
     best = None
@@ -148,8 +149,11 @@ def score_ticker(ticker: str, inp: dict) -> "dict | None":
         return None
     days = inp.get("earnings_in_days")
     blocked = None
-    if days is not None and 0 <= days <= EARNINGS_BLOCK_DAYS:
+    if days is not None and 0 <= days <= earnings_block_days:
         blocked = f"earnings in {days} day{'s' if days != 1 else ''}"
+    elif (best["trigger_zone"].get("score") or 0) < min_trigger_zone_score:
+        blocked = (f"trigger zone scores {best['trigger_zone'].get('score') or 0:.0f} "
+                   f"(min {min_trigger_zone_score:.0f})")
     return {
         "ticker": ticker,
         **best,

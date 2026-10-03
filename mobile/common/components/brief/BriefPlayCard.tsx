@@ -7,7 +7,9 @@ import {
 } from '@/hooks/mutations/brief/useBriefPlayActions';
 import type { BriefPlay, BriefPlayStatus } from '@/common/types/morningBrief';
 
-const STALE_PCT = 0.003;   // same 0.3% no-chase / drift band as entry_rules.py
+// Fallbacks when /brief/config hasn't loaded — same as services/brief/config.py.
+const DEFAULT_STALE_PCT = 0.003;
+const DEFAULT_CONFIRM_TTL = 180;
 
 interface Props {
   play: BriefPlay;
@@ -15,6 +17,8 @@ interface Props {
   /** ms to add to Date.now() to get the server's clock */
   clockOffsetMs: number;
   onOpenChart: (play: BriefPlay) => void;
+  /** /brief/config settings (thresholds) */
+  settings?: Record<string, number>;
 }
 
 /**
@@ -24,7 +28,8 @@ interface Props {
  * the limit-order tracking card (limit, elapsed wait, auto-cancel countdown,
  * underlying vs trigger). Tapping the setup opens the chart.
  */
-export function BriefPlayCard({ play, colors, clockOffsetMs, onOpenChart }: Props) {
+export function BriefPlayCard({ play, colors, clockOffsetMs, onOpenChart, settings }: Props) {
+  const stalePct = settings?.stale_pct ?? DEFAULT_STALE_PCT;
   const isLong = play.direction === 'CALL';
   const dirColor = isLong ? colors.success : colors.error;
   const live = ['checking', 'awaiting_confirmation', 'working'].includes(play.status);
@@ -49,7 +54,7 @@ export function BriefPlayCard({ play, colors, clockOffsetMs, onOpenChart }: Prop
           <LevelRow
             label="Trigger"
             value={play.trigger}
-            note={`1m close ${isLong ? 'above' : 'below'} on ≥1.2× vol`}
+            note={`1m close ${isLong ? 'above' : 'below'} on ≥${settings?.trigger_volume_mult ?? 1.2}× vol`}
             color={colors.text}
             colors={colors}
           />
@@ -71,10 +76,12 @@ export function BriefPlayCard({ play, colors, clockOffsetMs, onOpenChart }: Prop
       <StatusLine play={play} colors={colors} />
 
       {play.status === 'awaiting_confirmation' && (
-        <ConfirmCard play={play} colors={colors} clockOffsetMs={clockOffsetMs} />
+        <ConfirmCard play={play} colors={colors} clockOffsetMs={clockOffsetMs}
+          ttlSeconds={settings?.confirm_ttl_seconds ?? DEFAULT_CONFIRM_TTL}
+          timeoutSeconds={settings?.limit_timeout_seconds ?? 75} />
       )}
       {(play.status === 'working' || play.status === 'checking') && (
-        <LimitOrderTracker play={play} colors={colors} clockOffsetMs={clockOffsetMs} />
+        <LimitOrderTracker play={play} colors={colors} clockOffsetMs={clockOffsetMs} stalePct={stalePct} />
       )}
       {play.order && ['filled', 'cancelled', 'scratch'].includes(play.status) && (
         <OrderResult play={play} colors={colors} />
@@ -138,14 +145,16 @@ const mmss = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
-function ConfirmCard({ play, colors, clockOffsetMs }: { play: BriefPlay; colors: any; clockOffsetMs: number }) {
+function ConfirmCard({ play, colors, clockOffsetMs, ttlSeconds, timeoutSeconds }: {
+  play: BriefPlay; colors: any; clockOffsetMs: number; ttlSeconds: number; timeoutSeconds: number;
+}) {
   const toast = useToast();
   const now = useNow() + clockOffsetMs;
   const confirm = useConfirmBriefPlay();
   const skip = useSkipBriefPlay();
   const busy = confirm.isPending || skip.isPending;
   const msLeft = play.confirm_expires_at ? new Date(play.confirm_expires_at).getTime() - now : 0;
-  const total = 3 * 60 * 1000;
+  const total = ttlSeconds * 1000;
 
   return (
     <View style={[styles.subCard, { backgroundColor: '#F59E0B12', borderColor: '#F59E0B55' }]}>
@@ -158,7 +167,7 @@ function ConfirmCard({ play, colors, clockOffsetMs }: { play: BriefPlay; colors:
       <ProgressBar fraction={msLeft / total} color={msLeft < 30000 ? colors.error : '#F59E0B'} colors={colors} />
       <Text style={[styles.subNote, { color: colors.textSecondary }]}>
         Paper · 0DTE {play.direction === 'CALL' ? 'call' : 'put'} near the ${play.target.toFixed(2)} target · size by premium
-        (≤$1.00 ×3, ≤$1.50 ×2, ≤$2.50 ×1) · limit order, auto-cancels in 75s
+        (≤$1.00 ×3, ≤$1.50 ×2, ≤$2.50 ×1) · limit order, auto-cancels in {timeoutSeconds}s
       </Text>
       <View style={styles.actionsRow}>
         <TouchableOpacity
@@ -194,7 +203,9 @@ function ConfirmCard({ play, colors, clockOffsetMs }: { play: BriefPlay; colors:
 
 // ── Limit-order tracking card ──────────────────────────────────────────────
 
-function LimitOrderTracker({ play, colors, clockOffsetMs }: { play: BriefPlay; colors: any; clockOffsetMs: number }) {
+function LimitOrderTracker({ play, colors, clockOffsetMs, stalePct }: {
+  play: BriefPlay; colors: any; clockOffsetMs: number; stalePct: number;
+}) {
   const now = (useNow(500) + clockOffsetMs) / 1000;
   const o = play.order;
   const working = o?.state === 'WORKING' && o.started_at != null;
@@ -204,7 +215,7 @@ function LimitOrderTracker({ play, colors, clockOffsetMs }: { play: BriefPlay; c
 
   const px = play.live_price;
   const distPct = px != null ? (px - play.trigger) / play.trigger : null;
-  const nearDrift = distPct != null && Math.abs(distPct) > STALE_PCT * 0.75;
+  const nearDrift = distPct != null && Math.abs(distPct) > stalePct * 0.75;
 
   return (
     <View style={[styles.subCard, { backgroundColor: colors.background, borderColor: colors.border }]}>
@@ -242,7 +253,7 @@ function LimitOrderTracker({ play, colors, clockOffsetMs }: { play: BriefPlay; c
         />
       </View>
       <Text style={[styles.subNote, { color: colors.textTertiary }]}>
-        Auto-cancels if unfilled at {timeout}s or if price moves more than 0.3% from the trigger.
+        Auto-cancels if unfilled at {timeout}s or if price moves more than {+(stalePct * 100).toFixed(2)}% from the trigger.
         A partial fill is sold right away.
       </Text>
     </View>

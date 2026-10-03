@@ -46,7 +46,8 @@ def _filled_qty(order) -> int:
 
 def run_limit_entry(client, symbol: str, qty: int, limit_price: float, trigger: float,
                     underlying_price, on_update=None, clock=_time.time, sleep=_time.sleep,
-                    timeout: float = TIMEOUT_SECONDS, poll: float = POLL_SECONDS) -> dict:
+                    timeout: float = TIMEOUT_SECONDS, poll: float = POLL_SECONDS,
+                    drift_pct: float = 0.003) -> dict:
     """
     Submit a DAY limit buy and manage it to a terminal state. Returns
     {state, filled_qty, avg_price, order, reason}. `underlying_price()` →
@@ -94,8 +95,8 @@ def run_limit_entry(client, symbol: str, qty: int, limit_price: float, trigger: 
             reason = f"not filled within {int(timeout)}s"
             break
         px = underlying_price()
-        if px is not None and drifted(trigger, px):
-            reason = f"underlying moved to {px:.2f}, > 0.3% from the {trigger:.2f} trigger"
+        if px is not None and drifted(trigger, px, drift_pct):
+            reason = f"underlying moved to {px:.2f}, > {drift_pct * 100:.1f}% from the {trigger:.2f} trigger"
             break
         sleep(poll)
 

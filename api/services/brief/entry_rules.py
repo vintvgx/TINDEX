@@ -35,13 +35,13 @@ def in_entry_window(t) -> bool:
 
 
 def trigger_hit(direction: str, trigger: float, close: float, volume: float,
-                baseline_1m: "float | None") -> bool:
+                baseline_1m: "float | None", volume_mult: float = TRIGGER_VOLUME_MULT) -> bool:
     """1m close through the trigger with volume ≥ 1.2× the baseline. No
     baseline → no signal (a volume check can't be skipped on an entry)."""
     through = close > trigger if direction == "CALL" else close < trigger
     if not through or not baseline_1m or baseline_1m <= 0:
         return False
-    return (volume or 0) >= TRIGGER_VOLUME_MULT * baseline_1m
+    return (volume or 0) >= volume_mult * baseline_1m
 
 
 def stale_through(direction: str, trigger: float, price: float, pct: float = STALE_PCT) -> bool:
@@ -126,14 +126,20 @@ def pick_contract(rows: list, direction: str, trigger: float, target: float) -> 
 
 
 def play_guard(play: dict, *, brief_losses_today: int, open_brief_trades: int,
-               orb_position_open: bool, now_t, max_losses: int = 2, max_open: int = 2) -> "str | None":
-    """Reason this play must stand down right now, or None."""
+               orb_position_open: bool, now_t, max_losses: int = 2,
+               max_open: int = 2) -> "tuple[str, bool] | None":
+    """
+    (reason, retry) when this play can't enter right now, else None.
+    retry=True means the block is temporary — the max-open slots are full —
+    so the play stays armed and re-checks on its next trigger bar; every
+    other guard stands the play down for the day.
+    """
     if brief_losses_today >= max_losses:
-        return f"daily kill switch — {brief_losses_today} brief losses today"
-    if open_brief_trades >= max_open:
-        return f"{open_brief_trades} brief trades already open (max {max_open})"
+        return f"daily kill switch — {brief_losses_today} brief losses today", False
     if orb_position_open:
-        return "an ORB strategy has an open position in this ticker"
+        return "an ORB strategy has an open position in this ticker", False
     if not in_entry_window(now_t):
-        return "outside the 9:30–10:00 entry window"
+        return "outside the 9:30–10:00 entry window", False
+    if open_brief_trades >= max_open:
+        return f"{open_brief_trades} brief trades already open (max {max_open}) — re-checking on the next trigger bar", True
     return None

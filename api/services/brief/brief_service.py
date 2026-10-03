@@ -36,14 +36,15 @@ from datetime import date, datetime, timedelta
 import pytz
 
 from services.brief import entry_rules as rules
-from services.brief.scoring import PROMISING_SCORE, rank_plays, score_ticker
+from services.brief.config import DEFAULTS as CONFIG_DEFAULTS
+from services.brief.scoring import rank_plays, score_ticker
 
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
-CONFIRM_TTL_SECONDS = 3 * 60
 VOLUME_LOOKBACK_BARS = 20
 VOLUME_MIN_SESSION_BARS = 10
+OPEN_BAR_MINUTE = 9 * 60 + 30   # the 9:30 bar — the only bar the stale-at-open check runs on
 
 TERMINAL = {"cut", "stood_down", "filled", "cancelled", "skipped", "scratch", "expired", "error"}
 # Non-terminal statuses during a live trigger: checking → awaiting_confirmation | working.
@@ -58,10 +59,22 @@ class BriefService:
         self.io = io or BriefIO()
         self._lock = threading.RLock()
         self._brief: "dict | None" = None
+        # Per-trading-day state — cleared by _reset_day() when the date rolls
+        # (Railway doesn't restart daily, so the singleton outlives a session).
+        self._day: "date | None" = None
         self._session_bars: dict = {}     # ticker -> [(ts, close, volume)]
         self._last_price: dict = {}
-        self._first_bar_seen: set = set()
+        # Hub subscriptions persist across days (the handler filters by date).
         self._subscribed: set = set()
+
+    def _reset_day(self, today: date) -> None:
+        """Drop yesterday's bars and prices the first time we see a new date,
+        so the volume baseline and live prices never blend sessions."""
+        with self._lock:
+            if self._day != today:
+                self._day = today
+                self._session_bars = {}
+                self._last_price = {}
 
     # ── Build / re-score / lock ──────────────────────────────────────────────
 
@@ -70,12 +83,14 @@ class BriefService:
             raise ValueError("phase must be build, rescore or lock")
         now = self.io.now()
         today = now.date()
+        self._reset_day(today)
         with self._lock:
             prev = self._load_today(today)
         if prev and prev.get("locked"):
             return prev   # never rebuild a locked brief
 
-        scored = self._score_universe()
+        cfg = self.io.config()
+        scored = self._score_universe(cfg)
         ranked = rank_plays(scored)
         prev_by_ticker = {p["ticker"]: p for p in (prev or {}).get("plays", [])}
 
@@ -94,9 +109,10 @@ class BriefService:
 
         locked = phase == "lock"
         if locked:
+            min_score = cfg["min_setup_score"]
             for play in plays:
-                if play["score"] < PROMISING_SCORE:
-                    self._set_status(play, "cut", f"score {play['score']:.0f} below {PROMISING_SCORE} at the 9:28 lock", now)
+                if play["score"] < min_score:
+                    self._set_status(play, "cut", f"score {play['score']:.0f} below {min_score:.0f} at the 9:28 lock", now)
                 else:
                     self._set_status(play, "armed", None, now)
 
@@ -124,13 +140,14 @@ class BriefService:
             self.start_watching()
         return brief
 
-    def _score_universe(self) -> list:
+    def _score_universe(self, cfg: dict) -> list:
         tickers = self.io.universe()
         out = []
         with ThreadPoolExecutor(max_workers=6) as pool:
             for t, inp in zip(tickers, pool.map(self._safe_inputs, tickers)):
                 if inp:
-                    s = score_ticker(t, inp)
+                    s = score_ticker(t, inp, earnings_block_days=cfg["earnings_block_days"],
+                                     min_trigger_zone_score=cfg["min_trigger_zone_score"])
                     if s:
                         out.append(s)
         return out
@@ -190,15 +207,19 @@ class BriefService:
             if now >= datetime.fromisoformat(play["confirm_expires_at"]):
                 self._set_status(play, "expired", "confirmation window passed", now)
                 self._save()
+                self._log_signal(play, fill_status="expired")
                 raise ValueError("confirmation expired")
             if not rules.in_entry_window(now.time()):
                 self._set_status(play, "stood_down", "outside the 9:30–10:00 entry window", now)
                 self._save()
+                self._log_signal(play, fill_status="stood_down")
                 raise ValueError("outside the entry window")
             px = self._last_price.get(ticker)
-            if px is not None and rules.stale_through(play["direction"], play["trigger"], px):
-                self._set_status(play, "stood_down", f"price {px:.2f} ran > 0.3% past the trigger", now)
+            stale = self.io.config()["stale_pct"]
+            if px is not None and rules.stale_through(play["direction"], play["trigger"], px, stale):
+                self._set_status(play, "stood_down", f"price {px:.2f} ran > {stale * 100:.1f}% past the trigger", now)
                 self._save()
+                self._log_signal(play, fill_status="stood_down")
                 raise ValueError("price ran past the trigger")
             self._set_status(play, "working", "confirmed — placing limit order", now)
             self._save()
@@ -210,8 +231,11 @@ class BriefService:
             play = self._play(ticker)
             if play["status"] in TERMINAL or play["status"] == "working":
                 raise ValueError(f"{ticker} is {play['status']}")
+            was_signal = play["status"] == "awaiting_confirmation"
             self._set_status(play, "skipped", "skipped by you", self.io.now())
             self._save()
+            if was_signal:
+                self._log_signal(play, fill_status="skipped")
             return play
 
     # ── Live watch ───────────────────────────────────────────────────────────
@@ -244,12 +268,15 @@ class BriefService:
         today = self.io.now().date()
         if ts.date() != today:
             return
+        self._reset_day(today)
         self._last_price[ticker] = float(bar.close)
         minutes = ts.hour * 60 + ts.minute
         if minutes < 9 * 60 + 30:
             return
         bars = self._session_bars.setdefault(ticker, [])
 
+        cfg = self.io.config()
+        stale = cfg["stale_pct"]
         with self._lock:
             brief = self._load_today(today)
             if not brief or not brief.get("locked"):
@@ -271,23 +298,27 @@ class BriefService:
                 self._save()
                 return
 
-            if ticker not in self._first_bar_seen:
-                self._first_bar_seen.add(ticker)
+            # Stale-at-open runs on the actual 9:30 bar only. After a
+            # mid-session restart the first bar we see might be 9:45 — that's
+            # not "the open", and treating it as one would stand down a play
+            # that legitimately triggered at 9:40 as "chased". (The trigger
+            # bar's own stale check below still applies to every trigger.)
+            if minutes == OPEN_BAR_MINUTE:
                 open_px = float(bar.open if bar.open is not None else bar.close)
-                if rules.stale_through(play["direction"], play["trigger"], open_px):
-                    self._stand_down(play, f"opened at {open_px:.2f}, already > 0.3% through the "
+                if rules.stale_through(play["direction"], play["trigger"], open_px, stale):
+                    self._stand_down(play, f"opened at {open_px:.2f}, already > {stale * 100:.1f}% through the "
                                            f"{play['trigger']:.2f} trigger — not chasing", now, notify=True)
                     return
 
             if not rules.trigger_hit(play["direction"], play["trigger"], float(bar.close),
-                                     float(bar.volume or 0), baseline):
+                                     float(bar.volume or 0), baseline, cfg["trigger_volume_mult"]):
                 if not rules.in_entry_window(ts.time()) and minutes >= 10 * 60:
                     self._stand_down(play, "no trigger in the 9:30–10:00 window", now, notify=False)
                 return
 
             close = float(bar.close)
-            if rules.stale_through(play["direction"], play["trigger"], close):
-                self._stand_down(play, f"trigger bar closed at {close:.2f}, > 0.3% past the "
+            if rules.stale_through(play["direction"], play["trigger"], close, stale):
+                self._stand_down(play, f"trigger bar closed at {close:.2f}, > {stale * 100:.1f}% past the "
                                        f"{play['trigger']:.2f} trigger — not chasing", now, notify=True)
                 return
 
@@ -295,6 +326,8 @@ class BriefService:
             # hub's bar thread (it serves every ticker). "checking" blocks a
             # second trigger meanwhile.
             self._set_status(play, "checking", f"triggered at {close:.2f} — checking guards and gate", now)
+            play["signal_at"] = _now_iso(ts)
+            play["signal_price"] = close
             self._save()
         threading.Thread(target=self._evaluate_trigger, args=(ticker, close, ts), daemon=True,
                          name=f"brief-check-{ticker}").start()
@@ -306,24 +339,38 @@ class BriefService:
             play = self._play(ticker)
             brief = self._brief
             working = self._working_count(brief)
-        reason = rules.play_guard(
+        cfg = self.io.config()
+        guard = rules.play_guard(
             play,
             brief_losses_today=self.io.brief_losses_today(today),
             open_brief_trades=self.io.open_brief_trades(today) + working,
             orb_position_open=self.io.orb_position_open(ticker),
             now_t=ts.time(),
+            max_losses=cfg["max_losses_per_day"],
+            max_open=cfg["max_open_trades"],
         )
-        decision = None if reason else self.io.gate_decision(ticker, play["direction"])
+        verdict = {} if guard else (self.io.gate_verdict(ticker, play["direction"]) or {})
+        decision = verdict.get("decision")
 
         enter = False
         with self._lock:
             play = self._play(ticker)
             if play["status"] != "checking":
                 return
-            if reason:
+            if guard:
+                reason, retry = guard
+                if retry:
+                    # Slots full — stay armed; the next qualifying trigger bar
+                    # re-runs the guards (a slot may have freed by then).
+                    self._set_status(play, "armed", reason, now)
+                    self._save()
+                    return
                 self._stand_down(play, reason, now, notify=True)
+                self._log_signal(play, fill_status="stood_down")
                 return
             play["gate_at_trigger"] = decision
+            play["gate_agree"] = verdict.get("factors_agree")
+            play["gate_total"] = verdict.get("factors_total")
             if decision != "ENTER":
                 # Not a stand-down: a later qualifying bar re-checks the gate.
                 self._set_status(play, "armed", f"trigger hit but Technicals Gate said {decision or 'unavailable'}", now)
@@ -333,16 +380,18 @@ class BriefService:
                 self._set_status(play, "working", "triggered — placing limit order", now)
                 enter = True
             else:
-                play["confirm_expires_at"] = _now_iso(now + timedelta(seconds=CONFIRM_TTL_SECONDS))
+                ttl = cfg["confirm_ttl_seconds"]
+                play["confirm_expires_at"] = _now_iso(now + timedelta(seconds=ttl))
                 self._set_status(play, "awaiting_confirmation",
-                                 f"triggered at {close:.2f} — confirm within 3 min", now)
+                                 f"triggered at {close:.2f} — confirm within {ttl // 60}:{ttl % 60:02d}", now)
             self._save()
+        self._log_signal(play, fill_status="pending")
         if enter:
             self._enter(ticker)
         elif play["status"] == "awaiting_confirmation":
             self.io.push(f"⏳ {ticker} brief play triggered — confirm?",
                          f"{'Long' if play['direction'] == 'CALL' else 'Short'} through {play['trigger']:.2f}, "
-                         f"score {play['score']:.0f}, gate ENTER. Paper. Expires in 3 min.",
+                         f"score {play['score']:.0f}, gate ENTER. Paper. Expires in {cfg['confirm_ttl_seconds'] // 60} min.",
                          {"type": "brief_confirm", "ticker": ticker}, "active")
 
     def _working_count(self, brief) -> int:
@@ -351,7 +400,8 @@ class BriefService:
     def _expire_confirmations(self, brief, now):
         for p in brief["plays"]:
             if p["status"] == "awaiting_confirmation" and now >= datetime.fromisoformat(p["confirm_expires_at"]):
-                self._set_status(p, "expired", "not confirmed within 3 min", now)
+                self._set_status(p, "expired", "not confirmed in time", now)
+                self._log_signal(p, fill_status="expired")
 
     # ── Entry ────────────────────────────────────────────────────────────────
 
@@ -369,7 +419,7 @@ class BriefService:
                 self._save()
 
         try:
-            result = self.io.execute_entry(play, lambda: self._last_price.get(ticker), on_update)
+            result = self.io.execute_entry(play, lambda: self._last_price.get(ticker), on_update, self.io.config())
         except Exception as e:
             logger.error("[brief] entry failed for %s: %s", ticker, e, exc_info=True)
             result = {"state": "ERROR", "reason": str(e)}
@@ -380,6 +430,10 @@ class BriefService:
             p = self._play(ticker)
             if state == "FILLED":
                 p["trade_id"] = result.get("trade_id")
+                # The final result is authoritative for the fill (on_update
+                # may have missed the last transition).
+                p["order"] = {**(p.get("order") or {}), "state": "FILLED",
+                              **{k: result[k] for k in ("filled_qty", "avg_price", "profile") if result.get(k) is not None}}
                 self._set_status(p, "filled", f"filled {result.get('filled_qty')} @ {result.get('avg_price'):.2f} "
                                              f"({result.get('profile')})", now)
                 title, level = f"✅ {ticker} brief entry filled", "active"
@@ -396,7 +450,49 @@ class BriefService:
                 self._set_status(p, "error", result.get("reason") or "entry failed", now)
                 title, level = f"⚠️ {ticker} brief entry failed", "active"
             self._save()
+        self._log_signal(p, fill_status=p["status"])
         self.io.push(title, p["status_reason"] or "", {"type": "brief_order", "ticker": ticker, "state": state}, level)
+
+    # ── Signal log (part 3) ──────────────────────────────────────────────────
+
+    def _log_signal(self, play: dict, fill_status: str) -> None:
+        """Upsert this play's path-A row in paper_signals — one per play per
+        day, updated as it moves pending → filled / cancelled / skipped …
+        The setup outcome and the trade's P&L are filled in by the 16:15
+        resolve job (POST /brief/review/resolve)."""
+        o = play.get("order") or {}
+        brief_date = (self._brief or {}).get("brief_date") or self.io.now().date().isoformat()
+        row = {
+            "id": f"A-{brief_date}-{play['ticker']}",
+            "signal_path": "A",
+            "signal_date": brief_date,
+            "ticker": play["ticker"],
+            "direction": play["direction"],
+            "signal_at": play.get("signal_at"),
+            "signal_price": play.get("signal_price"),
+            "setup_score": play.get("score"),
+            "zone_score": (play.get("trigger_zone") or {}).get("score"),
+            "gate_decision": play.get("gate_at_trigger"),
+            "gate_agree": play.get("gate_agree"),
+            "gate_total": play.get("gate_total"),
+            "trigger": play["trigger"],
+            "target": play["target"],
+            "invalidation": play["invalidation"],
+            "fill_status": fill_status,
+            "trade_id": play.get("trade_id"),
+            "contract_symbol": o.get("symbol"),
+            "qty": o.get("filled_qty") if fill_status == "filled" else o.get("qty"),
+            "profile": o.get("profile"),
+            "entry_premium": o.get("avg_price") if fill_status == "filled" else None,
+            "paper_mode": True,
+        }
+        def _write():
+            try:
+                self.io.log_signal(row)
+            except Exception as e:
+                logger.warning("[brief] signal log failed for %s: %s", row["ticker"], e)
+        # Off-thread: callers may hold the brief lock on the hub's bar thread.
+        threading.Thread(target=_write, daemon=True, name=f"brief-signal-{row['ticker']}").start()
 
     # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -571,24 +667,45 @@ class BriefIO:
         except Exception as e:
             logger.warning("[brief] push failed: %s", e)
 
-    def gate_decision(self, ticker: str, direction: str) -> "str | None":
+    def config(self) -> dict:
+        if not hasattr(self, "_config"):
+            from services.brief.config import ConfigStore
+            self._config = ConfigStore(self._sb)
+        return self._config.get()
+
+    def gate_verdict(self, ticker: str, direction: str) -> "dict | None":
+        """Technicals Gate verdict: {decision, factors_agree, factors_total, …}."""
         try:
             from services.entry_check_service import get_entry_check
             chk = get_entry_check(ticker, direction) or {}
-            v = (chk.get("verdicts") or {}).get(direction) or chk.get("verdict") or {}
-            return v.get("decision")
+            return (chk.get("verdicts") or {}).get(direction) or chk.get("verdict") or None
         except Exception as e:
             logger.warning("[brief] gate check failed for %s: %s", ticker, e)
             return None
 
+    def update_config(self, patch: dict) -> dict:
+        self.config()   # ensure the store exists
+        return self._config.update(patch)
+
+    def signals_between(self, start: date, end: date, paper_only: bool) -> list:
+        q = (self._sb().table("paper_signals").select("*")
+             .gte("signal_date", start.isoformat()).lte("signal_date", end.isoformat()))
+        if paper_only:
+            q = q.eq("paper_mode", True)
+        return q.order("signal_at", desc=True).execute().data or []
+
+    def log_signal(self, row: dict) -> None:
+        from services.brief.signal_log import upsert_signal
+        upsert_signal(self._sb(), row)
+
     def brief_losses_today(self, today: date) -> int:
         rows = (self._sb().table("orb_trades").select("pnl, exit_time").eq("trade_type", "BRIEF")
-                .eq("session_date", today.isoformat()).execute().data or [])
+                .eq("trade_date", today.isoformat()).execute().data or [])
         return sum(1 for r in rows if r.get("exit_time") and (r.get("pnl") or 0) < 0)
 
     def open_brief_trades(self, today: date) -> int:
         rows = (self._sb().table("orb_trades").select("exit_time").eq("trade_type", "BRIEF")
-                .eq("session_date", today.isoformat()).execute().data or [])
+                .eq("trade_date", today.isoformat()).execute().data or [])
         return sum(1 for r in rows if not r.get("exit_time"))
 
     def orb_position_open(self, ticker: str) -> bool:
@@ -601,7 +718,7 @@ class BriefIO:
         from services.utils.orb_data_hub import get_orb_data_hub
         get_orb_data_hub().subscribe_bar(ticker, cb)
 
-    def execute_entry(self, play: dict, underlying_price, on_update) -> dict:
+    def execute_entry(self, play: dict, underlying_price, on_update, cfg: "dict | None" = None) -> dict:
         """Live chain → zone-anchored contract → size tier → spread gate →
         buying-power check → managed limit buy → paper immediate engine."""
         from routes.strategy_routes import _get_or_create_immediate_engine
@@ -640,8 +757,10 @@ class BriefIO:
                                "profile": profile_key, "limit": gate["limit"], "limit_basis": gate["action"],
                                "spread_pct": gate["spread_pct"], "delta_target": pick["delta_target"]})
 
+        cfg = cfg or CONFIG_DEFAULTS
         result = run_limit_entry(engine.trading_client, pick["symbol"], qty, gate["limit"],
-                                 play["trigger"], underlying_price, on_update=on_update)
+                                 play["trigger"], underlying_price, on_update=on_update,
+                                 timeout=cfg["limit_timeout_seconds"], drift_pct=cfg["stale_pct"])
         if result["state"] != FILLED:
             return result
         contract = {"symbol": pick["symbol"], "strike": pick["strike"], "ask": result["avg_price"],

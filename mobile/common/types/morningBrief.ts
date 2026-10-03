@@ -88,3 +88,68 @@ export interface MorningBrief {
   /** epoch seconds — server clock at response time */
   server_time: number;
 }
+
+// ── Paper-testing loop (part 3) ─────────────────────────────────────────────
+
+export type SignalPath = 'A' | 'B';
+export type SignalOutcome = 'target_hit' | 'stopped' | 'expired';
+
+export interface PaperSignal {
+  id: string;
+  signal_path: SignalPath;
+  signal_date: string;
+  ticker: string;
+  direction: 'CALL' | 'PUT';
+  signal_at: string | null;
+  signal_price: number | null;
+  setup_score: number | null;
+  zone_score: number | null;
+  gate_decision: string | null;
+  gate_agree: number | null;
+  gate_total: number | null;
+  trigger: number;
+  target: number;
+  invalidation: number;
+  fill_status: string;
+  trade_id: string | null;
+  contract_symbol: string | null;
+  qty: number | null;
+  profile: string | null;
+  entry_premium: number | null;
+  paper_mode: boolean;
+  outcome: SignalOutcome | null;
+  mfe_pct: number | null;
+  mae_pct: number | null;
+  pnl: number | null;
+  pnl_pct: number | null;
+}
+
+export interface SignalStats {
+  signals: number;
+  traded: number;
+  fill_rate: number | null;
+  win_rate: number | null;
+  avg_return_pct: number | null;
+  total_pnl: number;
+  target_hit_rate: number | null;
+  stopped_rate: number | null;
+  expired_rate: number | null;
+}
+
+export interface BriefReview {
+  start: string;
+  end: string;
+  paper_only: boolean;
+  overall: SignalStats;
+  by_path: Record<SignalPath, SignalStats>;
+  by_zone_score: (SignalStats & { bucket: string; path: SignalPath })[];
+  by_setup_score: (SignalStats & { bucket: string })[];
+  signals: PaperSignal[];
+}
+
+export interface BriefConfigBound { default: number; min: number; max: number; type: 'int' | 'float' }
+
+export interface BriefConfig {
+  settings: Record<string, number>;
+  bounds: Record<string, BriefConfigBound>;
+}
