@@ -25,6 +25,13 @@ export interface ChartDisplayPrefs {
   showSR: boolean;
   /** Options call/put OI walls (+ expiry-day max pain) on intraday views. */
   showWalls: boolean;
+  /** Timeframe moving-average overlays (computed from the loaded bars). */
+  ema20: boolean;
+  ema50: boolean;
+  ema200: boolean;
+  ema400: boolean;
+  /** Which chart engine renders the Charts tab. */
+  chartEngine: 'tv' | 'legacy';
 }
 
 export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
@@ -36,6 +43,11 @@ export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
   showOrb: true,
   showSR: false,
   showWalls: true,
+  ema20: true,
+  ema50: true,
+  ema200: false,
+  ema400: false,
+  chartEngine: 'tv',
 };
 
 async function loadPrefs(): Promise<ChartDisplayPrefs> {

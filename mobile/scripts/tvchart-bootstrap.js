@@ -425,7 +425,63 @@
     } else {
       try { chart.timeScale().scrollToRealTime(); } catch (e) {}
     }
+    lastCloses = candles.map(function (c) { return { t: c.t, c: c.c }; });
+    rebuildEmas();
     schedulePills();
+  }
+
+  // ── Timeframe EMA overlays (computed from the loaded bars) ─────────
+  var emaConfig = [];
+  var emaSeriesMap = {};
+  var lastCloses = [];
+
+  function emaValues(closes, period) {
+    var k = 2 / (period + 1);
+    var out = new Array(closes.length);
+    if (closes.length < period) return out;
+    // Seed with the SMA of the first `period` closes (TV-like warmup).
+    var seed = 0;
+    for (var i = 0; i < period; i++) seed += closes[i].c;
+    var prev = seed / period;
+    for (var j = 0; j < closes.length; j++) {
+      if (j < period - 1) { out[j] = null; continue; }
+      if (j === period - 1) { out[j] = prev; continue; }
+      prev = closes[j].c * k + prev * (1 - k);
+      out[j] = prev;
+    }
+    return out;
+  }
+
+  function rebuildEmas() {
+    if (!chart || !inited) return;
+    for (var p in emaSeriesMap) {
+      try { chart.removeSeries(emaSeriesMap[p]); } catch (e) {}
+    }
+    emaSeriesMap = {};
+    if (!lastCloses.length) return;
+    emaConfig.forEach(function (cfg) {
+      if (!cfg.visible) return;
+      var vals = emaValues(lastCloses, cfg.period);
+      var data = [];
+      for (var i = 0; i < vals.length; i++) {
+        if (vals[i] != null) data.push({ time: lastCloses[i].t, value: vals[i] });
+      }
+      if (!data.length) { plog('EMA ' + cfg.period + ': not enough bars'); return; }
+      var s = chart.addSeries(LWC.LineSeries, {
+        color: cfg.color,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        crosshairMarkerVisible: true,
+      });
+      s.setData(data);
+      emaSeriesMap[cfg.period] = s;
+    });
+  }
+
+  function setEmaOverlays(msg) {
+    emaConfig = msg.emas || [];
+    rebuildEmas();
   }
 
   function setZones(msg) {
@@ -537,6 +593,7 @@
       case 'setData': setData(msg); break;
       case 'setZones': setZones(msg); break;
       case 'setRefLines': setRefLines(msg.lines); break;
+      case 'setEmaOverlays': setEmaOverlays(msg); break;
       case 'applyTheme': applyTheme(msg.theme); break;
     }
   }

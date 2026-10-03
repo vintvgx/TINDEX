@@ -30,7 +30,8 @@ interface Options {
 
 export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, extraOverlayRows = [] }: Options) {
   const { prefs, setPref } = useChartDisplayPrefs();
-  const { mode, showSessionLines, showStrip, showVwap, showEma, showOrb, showWalls } = prefs;
+  const { mode, showSessionLines, showStrip, showVwap, showEma, showOrb, showWalls,
+    ema20, ema50, ema200, ema400, chartEngine } = prefs;
   const setMode = (v: ChartMode | null) => setPref('mode', v);
   const setShowSessionLines = (v: boolean) => setPref('showSessionLines', v);
   const setShowStrip = (v: boolean) => setPref('showStrip', v);
@@ -68,6 +69,33 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
 
   const defaultMode: ChartMode = period === '1D' || period === '1W' ? 'candle' : 'line';
   const sections: ChartSettingsSection[] = [
+    {
+      title: 'Chart engine',
+      rows: [{
+        kind: 'segment', key: 'engine', label: 'Engine',
+        value: chartEngine,
+        options: [
+          { value: 'tv', label: 'TradingView', icon: 'stats-chart-outline' },
+          { value: 'legacy', label: 'Legacy', icon: 'analytics-outline' },
+        ],
+        onChange: v => setPref('chartEngine', v as 'tv' | 'legacy'),
+      }],
+    },
+    {
+      title: 'Moving averages',
+      rows: ([
+        [20, '#4A9EFF', ema20, 'ema20'],
+        [50, '#F59E0B', ema50, 'ema50'],
+        [200, '#B388FF', ema200, 'ema200'],
+        [400, '#A1887F', ema400, 'ema400'],
+      ] as const).map(([period, color, value, key]) => ({
+        kind: 'toggle' as const, key: `ema-${period}`, icon: 'trending-up-outline' as const,
+        label: `EMA ${period}`,
+        description: `Of the visible bars${period >= 200 ? ' — needs deep history' : ''}`,
+        value, onChange: (v: boolean) => setPref(key, v),
+        color,
+      })),
+    },
     ...(canMarkWatchLevel ? [{
       title: 'Watch',
       rows: [{
@@ -128,6 +156,15 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
     <ChartTechnicalsInfo check={technicals.data} isLoading={technicals.isLoading} error={technicals.error} colors={colors} />
   );
 
+  // Timeframe EMA overlays for the TV chart — computed in-page from the
+  // loaded bars (no backend change).
+  const emaOverlays = [
+    { period: 20, color: '#4A9EFF', visible: ema20 },
+    { period: 50, color: '#F59E0B', visible: ema50 },
+    { period: 200, color: '#B388FF', visible: ema200 },
+    { period: 400, color: '#A1887F', visible: ema400 },
+  ];
+
   return {
     technicals,
     showStrip,
@@ -137,6 +174,8 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
     chartSettings,
     sections,
     technicalsContent,
+    emaOverlays,
+    chartEngine,
     onTechnicalsOpenChange: setModalOpen,
   };
 }

@@ -174,10 +174,11 @@ export function ChartBottomToolbar({
  *  sheet with the Analysis-hub-style redesign. */
 function SettingsRow({ row, colors }: { row: ChartSettingsSection['rows'][number]; colors: any }) {
   if (row.kind === 'toggle') {
+    const accent = row.color ?? colors.accent;
     return (
       <View style={s.rowLine}>
-        <View style={[s.rowIcon, { backgroundColor: colors.accent + '14' }]}>
-          <Ionicons name={row.icon} size={14} color={colors.accent} />
+        <View style={[s.rowIcon, { backgroundColor: accent + '14' }]}>
+          <Ionicons name={row.icon} size={14} color={accent} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[s.rowLabel, { color: colors.text }]}>{row.label}</Text>

@@ -261,12 +261,12 @@ export default function ChartsScreen() {
     setChartAreaHeight(e.nativeEvent.layout.height);
   }, []);
 
-  // ── TV chart toggle + layout hardening (todo 0f4aaad3) ───────────────
+  // ── Chart engine (todo 0f4aaad3) ────────────────────────────────────
   // (zone-tap handlers live below, next to `toast` — TDZ otherwise)
   const { height: screenH } = useWindowDimensions();
-  // Default to the new TradingView chart; the Legacy fallback toggle moves
-  // into the chart settings sheet (phase 2).
-  const [useTVChart, setUseTVChart] = useState(true);
+  // TV/Legacy lives in the chart settings sheet now (persisted globally via
+  // useChartDisplayPrefs) — defaults to the new TradingView chart.
+  const useTVChart = chart.chartEngine !== 'legacy';
   // TVChart doesn't own its zone sheet the way AdvancedPriceChart does —
   // a tapped auto zone lands here and opens the shared ZoneDetailSheet.
   const [tvZoneSheetZone, setTvZoneSheetZone] = useState<ChartAutoZone | null>(null);
@@ -393,6 +393,7 @@ export default function ChartsScreen() {
               onAutoZoneTap={handleTVAutoZoneTap}
               onWatchZoneTap={handleTVWatchZoneTap}
               resetKey={`${activeTicker}:${period}`}
+              emas={chart.emaOverlays}
             />
           ) : (
             <AdvancedPriceChart

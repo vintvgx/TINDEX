@@ -40,6 +40,7 @@ import { AUTO_ZONE_RESISTANCE_COLOR, AUTO_ZONE_SUPPORT_COLOR } from './autoZoneC
 
 // ── Bridge protocol ──────────────────────────────────────────────────
 interface TVCandle { t: number; o: number; h: number; l: number; c: number; v: number }
+export interface TVEmaOverlay { period: number; color: string; visible: boolean }
 interface TVZoneBand {
   id: string; low: number; high: number; color: string; opacity: number; edgeOpacity: number; dashed: boolean;
   score?: number;
@@ -78,6 +79,7 @@ type WVOutbound =
   | { type: 'setData'; candles: TVCandle[]; ohlc: boolean; fit: boolean }
   | { type: 'setZones'; auto: TVZoneBand[]; watch: TVZoneBand[]; bands: TVZoneBand[] }
   | { type: 'setRefLines'; lines: TVRefLine[] }
+  | { type: 'setEmaOverlays'; emas: TVEmaOverlay[] }
   | { type: 'applyTheme'; theme: TVTheme };
 type WVInbound =
   | { type: 'loaded' }
@@ -105,6 +107,8 @@ export interface TVChartProps {
   onWatchZoneTap?: (zone: ChartWatchZone) => void;
   /** Changing identity (ticker/period) refits the viewport. */
   resetKey?: string;
+  /** Timeframe EMA overlays — computed in-page from the loaded bars. */
+  emas?: TVEmaOverlay[] | null;
   style?: any;
 }
 
@@ -128,7 +132,7 @@ const TV_ORB_EDGE = '#B2B5BE';
 
 export function TVChart({
   data, isLoading, autoZones, watchZones, orbRange, showOrbRange,
-  sessionReferenceLines, referenceLines, showSessionLines, onAutoZoneTap, onWatchZoneTap, resetKey, style,
+  sessionReferenceLines, referenceLines, showSessionLines, onAutoZoneTap, onWatchZoneTap, resetKey, emas, style,
 }: TVChartProps) {
   const colors = useThemeColors();
   const { visible: showWatchZones } = useWatchZonesVisibility();
@@ -286,6 +290,12 @@ export function TVChart({
     if (!chartReady) return;
     send({ type: 'setRefLines', lines: refLines });
   }, [chartReady, refLines, send]);
+
+  // ── EMA overlays ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!chartReady) return;
+    send({ type: 'setEmaOverlays', emas: emas ?? [] });
+  }, [chartReady, emas, send]);
 
   // ── Theme ──────────────────────────────────────────────────────────
   useEffect(() => {
