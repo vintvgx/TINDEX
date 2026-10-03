@@ -61,11 +61,11 @@ function formatAsOf(iso: string | null | undefined) {
     : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function Section({ title, caption, children }: { title: string; caption?: string | null; children: React.ReactNode }) {
+function Section({ title, caption, children }: { title: string | null; caption?: string | null; children: React.ReactNode }) {
   const colors = useThemeColors();
   return (
     <View>
-      <Text style={[s.sectionTitle, { color: colors.textTertiary }]}>{title}</Text>
+      {title ? <Text style={[s.sectionTitle, { color: colors.textTertiary }]}>{title}</Text> : null}
       <View style={[s.card, { backgroundColor: colors.card, borderColor: colors.cardBorder ?? colors.border }]}>
         {children}
       </View>
@@ -292,11 +292,14 @@ function LevelsSection({ ticker }: { ticker: string }) {
 
 // ── Options positioning (OI-based) ──────────────────────────────────────────
 
-function PositioningSection({ ticker }: { ticker: string }) {
+/** The ticker sheet's Options Positioning section. Also exported as
+ *  OptionsPositioningPanel for the chart's positioning button, where the
+ *  modal supplies the title (`title={null}`). */
+export function PositioningSection({ ticker, title = 'Options Positioning' }: { ticker: string; title?: string | null }) {
   const colors = useThemeColors();
   const q = useBriefSection(ticker, 'flow');
   return (
-    <Section title="Options Positioning" caption="Chain stats ~15 min delayed — not a live flow feed.">
+    <Section title={title} caption="Chain stats ~15 min delayed — not a live flow feed.">
       <Text style={[s.estimate, { color: colors.textTertiary }]}>OI-based positioning estimate — not a live flow feed.</Text>
       <SectionBody q={q} rows={6}>
         {(d, env) => (
@@ -505,3 +508,9 @@ const s = StyleSheet.create({
 
   linkedRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
 });
+
+/** Options Positioning without its section header — for the chart's
+ *  positioning modal, which shows its own title. */
+export function OptionsPositioningPanel({ ticker }: { ticker: string }) {
+  return <PositioningSection ticker={ticker} title={null} />;
+}

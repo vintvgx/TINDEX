@@ -21,13 +21,16 @@ interface Props {
   technicals: React.ReactNode;
   /** Lets the caller fetch technicals only while that modal is open. */
   onTechnicalsOpenChange?: (open: boolean) => void;
+  /** Body of the Options Positioning modal (same section as the ticker
+   *  sheet). The button only shows when this is passed. */
+  positioning?: React.ReactNode;
 }
 
-type OpenSheet = 'technicals' | 'settings' | null;
+type OpenSheet = 'technicals' | 'positioning' | 'settings' | null;
 
 /**
- * The chart's two header buttons: one opens the Technicals readout, the
- * other the chart-settings modal holding every display option (style,
+ * The chart's header buttons: Technicals readout, Options Positioning (when
+ * `positioning` is passed), and the chart-settings modal holding every display option (style,
  * technicals overlays, session lines, watch levels, data points…) instead
  * of a row of icon buttons above the chart. Each renders in a transparent
  * native Modal so it's centered on the whole screen — an absoluteFill
@@ -36,7 +39,7 @@ type OpenSheet = 'technicals' | 'settings' | null;
  * (presented on top of it), which RN supports; only sibling Modals are
  * unreliable.
  */
-export function ChartControlToggles({ sections, colors, technicals, onTechnicalsOpenChange }: Props) {
+export function ChartControlToggles({ sections, colors, technicals, onTechnicalsOpenChange, positioning }: Props) {
   const [openSheet, setOpenSheetState] = useState<OpenSheet>(null);
   const setOpenSheet = (v: OpenSheet) => {
     setOpenSheetState(v);
@@ -50,6 +53,16 @@ export function ChartControlToggles({ sections, colors, technicals, onTechnicals
         <Pressable onPress={() => setOpenSheet('technicals')} hitSlop={8} style={[s.iconBtn, { borderColor: colors.separator }]}>
           <Ionicons name="pulse-outline" size={16} color={colors.textTertiary} />
         </Pressable>
+        {positioning ? (
+          <Pressable
+            onPress={() => setOpenSheet('positioning')}
+            hitSlop={8}
+            style={[s.iconBtn, { borderColor: colors.separator }]}
+            accessibilityLabel="Options positioning"
+          >
+            <Ionicons name="bar-chart-outline" size={15} color={colors.textTertiary} />
+          </Pressable>
+        ) : null}
         <Pressable onPress={() => setOpenSheet('settings')} hitSlop={8} style={[s.iconBtn, { borderColor: colors.separator }]}>
           <Ionicons name="options-outline" size={16} color={colors.textTertiary} />
         </Pressable>
@@ -58,6 +71,12 @@ export function ChartControlToggles({ sections, colors, technicals, onTechnicals
       <CenteredSheet visible={openSheet === 'technicals'} title="Technicals" onClose={close} colors={colors}>
         {technicals}
       </CenteredSheet>
+
+      {positioning ? (
+        <CenteredSheet visible={openSheet === 'positioning'} title="Options Positioning" onClose={close} colors={colors}>
+          {positioning}
+        </CenteredSheet>
+      ) : null}
 
       <CenteredSheet visible={openSheet === 'settings'} title="Chart settings" onClose={close} colors={colors}>
         {sections.map(section => (

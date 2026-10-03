@@ -23,6 +23,7 @@ import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLev
 import { useCancelKeyLevel } from '@/hooks/mutations/priceLevels/useCancelKeyLevel';
 import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLevel';
 import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
+import { OptionsPositioningPanel } from '@/common/components/ticker/brief/TickerBrief';
 import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
 import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
@@ -414,6 +415,7 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
               sections={chart.sections}
               technicals={chart.technicalsContent}
               onTechnicalsOpenChange={chart.onTechnicalsOpenChange}
+              positioning={<OptionsPositioningPanel ticker={ticker} />}
             />
           </View>
           {chart.showStrip && (

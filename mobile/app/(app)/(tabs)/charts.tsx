@@ -13,6 +13,7 @@ import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import { Skeleton } from '@/common/components/ui/Skeleton';
 import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft } from '@/common/components/ticker/AdvancedPriceChart';
 import { ChartControlToggles } from '@/common/components/ticker/ChartControlToggles';
+import { OptionsPositioningPanel } from '@/common/components/ticker/brief/TickerBrief';
 import { ChartTechnicalsStrip, CHART_TECHNICALS_STRIP_HEIGHT } from '@/common/components/ticker/ChartTechnicals';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
 import { useChartAutoZones } from '@/hooks/queries/technicals/useTickerZones';
@@ -476,6 +477,7 @@ export default function ChartsScreen() {
               sections={chart.sections}
               technicals={chart.technicalsContent}
               onTechnicalsOpenChange={chart.onTechnicalsOpenChange}
+              positioning={<OptionsPositioningPanel ticker={activeTicker} />}
             />
           </View>
         </View>
