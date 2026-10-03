@@ -18,6 +18,7 @@ import {
   getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
 import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
+import { EntrySafetySelector, BE_GRACE_DEFAULT, effectiveFloorPct } from '@/common/components/trade/EntrySafetySelector';
 import { useEntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
 import { EntryTechnicalsPanel } from '@/common/components/trade/EntryTechnicalsPanel';
 import { PositioningRow } from '@/common/components/trade/PositioningRow';
@@ -159,6 +160,9 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   const [selected, setSelected]         = useState<OptionsContract | null>(null);
   const [qty, setQty]                   = useState(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], 0));
   const [stopType, setStopType]         = useState<StopType>(5);
+  // Floor + breakeven grace chosen at entry (sent with the order).
+  const [floorPct, setFloorPct] = useState<number | null>(null);
+  const [beGrace, setBeGrace] = useState<number>(BE_GRACE_DEFAULT);
   const [volumeExit, setVolumeExit]     = useState(false);
   const [manualSlPct, setManualSlPct]   = useState(30);
   const [autoGraceMinutes, setAutoGraceMinutes] = useState<5 | 10 | null>(null);
@@ -195,6 +199,15 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   useEffect(() => {
     setSelected(null);
   }, [ticker]);
+
+  // Floor + breakeven grace are per-contract choices — reset whenever a
+  // (different) contract is opened so one trade's safety settings can't
+  // leak into the next.
+  useEffect(() => {
+    setFloorPct(null);
+    setBeGrace(BE_GRACE_DEFAULT);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.symbol]);
 
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
 
@@ -402,6 +415,8 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
       volume_exit:     isManual ? false : volumeExit,
       sl_grace_minutes: (noSL || stopType === 'HARD') ? null : stopType,
       sl_enabled: slEnabled,
+      ...(slEnabled && !noSL && floorPct != null ? { sl_outer_floor_pct: floorPct } : {}),
+      be_grace_seconds: beGrace,
       tp_enabled: tpEnabled,
       ...(slEnabled && isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
     };
@@ -492,6 +507,9 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
     stopLabel: stopPct == null ? 'Off' : stopType === 'HARD' ? 'Hard stop' : `${stopType}-min SL timer`,
     tp1Price: tpEnabled && !isManual && profile.tp1 > 0 ? reviewContract.ask * (1 + profile.tp1 / 100) : null,
     tp2Price: tpEnabled && !isManual && profile.tp2 > 0 ? reviewContract.ask * (1 + profile.tp2 / 100) : null,
+    floorPrice: (() => { const f = stopPct == null ? null : effectiveFloorPct(floorPct, stopType !== 'HARD'); return f == null ? null : reviewContract.ask * (1 - f); })(),
+    floorIsDefault: floorPct == null,
+    beGraceSeconds: tpEnabled && !isManual ? beGrace : 0,
   } : null;
   // See TradeContractSheet's isZeroDteContract — same rough client-side
   // check, purely to decide whether to show the option. Based on `selected`
@@ -595,6 +613,10 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
           <View style={{ marginTop: 22 }}>
             <Text style={[styles.sectionHeader, { color: colors.textTertiary }]}>STOP TYPE</Text>
             <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
+            <View style={{ marginTop: 16 }}>
+              <EntrySafetySelector colors={colors} floorPct={floorPct} onFloorPct={setFloorPct}
+                beGrace={beGrace} onBeGrace={setBeGrace} premium={(liveSelected ?? selected).ask} stopIsTimer={stopType !== 'HARD'} />
+            </View>
           </View>
         )}
       </View>

@@ -7,6 +7,7 @@ import * as Haptics from 'expo-haptics';
 import type { EntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
 import { verdictColor, verdictLabel } from './EntryTechnicalsPanel';
 import { accountModeColor } from './AccountModeBanner';
+import { ExitPlanLadder } from '@/common/components/trade/ExitPlanLadder';
 
 export interface ReviewOrder {
   ticker: string;
@@ -20,6 +21,12 @@ export interface ReviewOrder {
   stopLabel: string;           // "Hard stop" | "5-min SL timer" | "Off"
   tp1Price: number | null;
   tp2Price: number | null;
+  /** Worst-case floor price (null = none) and whether it's the stop type's
+   *  default rather than a choice made on the entry sheet. */
+  floorPrice?: number | null;
+  floorIsDefault?: boolean;
+  /** Post-TP1 breakeven grace, seconds (0 = none). */
+  beGraceSeconds?: number;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -231,17 +238,16 @@ export function OrderReviewSheet({
           </View>
 
           <Text style={[s.section, { color: muted }]}>EXIT PLAN · {order.profileLabel}</Text>
-          <View style={[s.exitCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <ExitLine label={order.stopLabel === 'Off' ? 'Stop loss' : order.stopLabel}
-              value={order.stopPrice == null ? 'Off — no automatic stop' : `≈ ${money(order.stopPrice)}  (−${money((order.premium - order.stopPrice) * order.qty * 100)})`}
-              color={order.stopPrice == null ? colors.warning : colors.error} colors={colors} />
-            <ExitLine label="Take profit 1"
-              value={order.tp1Price == null ? 'Off' : `≈ ${money(order.tp1Price)}  (+${money((order.tp1Price - order.premium) * order.qty * 100)})`}
-              color={colors.success} colors={colors} />
-            {order.tp2Price != null && (
-              <ExitLine label="Take profit 2" value={`≈ ${money(order.tp2Price)}`} color={colors.success} colors={colors} last />
-            )}
-          </View>
+          <ExitPlanLadder
+            colors={colors}
+            plan={{
+              premium: order.premium, qty: order.qty,
+              stopPrice: order.stopPrice, stopLabel: order.stopLabel,
+              floorPrice: order.floorPrice ?? null, floorIsDefault: order.floorIsDefault,
+              beGraceSeconds: order.beGraceSeconds ?? 0,
+              tp1Price: order.tp1Price, tp2Price: order.tp2Price,
+            }}
+          />
           <Text style={[s.fineprint, { color: muted }]}>Levels are estimated from the {money(order.premium)} ask; final levels are set from your fill price.</Text>
 
           <View style={[s.verdictRecap, { backgroundColor: vColor + '1A', borderColor: vColor + '55' }]}>
@@ -330,15 +336,6 @@ function Stat({ label, value, color, colors }: { label: string; value: string; c
     <View style={s.stat}>
       <Text style={[s.statLabel, { color: colors.textSecondary ?? colors.tabBarInactive }]}>{label}</Text>
       <Text style={[s.statValue, { color: color ?? colors.text }]}>{value}</Text>
-    </View>
-  );
-}
-
-function ExitLine({ label, value, color, colors, last }: { label: string; value: string; color: string; colors: any; last?: boolean }) {
-  return (
-    <View style={[s.exitLine, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
-      <Text style={[s.exitLabel, { color: colors.text }]}>{label}</Text>
-      <Text style={[s.exitValue, { color }]}>{value}</Text>
     </View>
   );
 }

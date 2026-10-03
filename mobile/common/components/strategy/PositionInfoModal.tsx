@@ -17,6 +17,7 @@ import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useHiddenPositions } from '@/hooks/useHiddenPositions';
 import { useToast } from '@/common/components/ui/Toast';
 import { SlGraceBadge, useSlGracePulse } from '@/common/components/strategy/SlGraceBadge';
+import { ExitSafetyControls, BE_GRACE_DEFAULT } from '@/common/components/strategy/ExitSafetyControls';
 import type { ProfileKey } from '@/common/types/strategy';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 
@@ -50,6 +51,10 @@ export interface PositionInfoData {
    *  currently armed — see ExitManager.to_dict()/apply_overrides. */
   sl_outer_floor?: number | null;
   sl_floor_enabled?: boolean;
+  /** Post-TP1 breakeven grace (seconds) + live countdown — see ExitManager. */
+  be_grace_seconds?: number | null;
+  be_grace_active?: boolean;
+  be_grace_deadline?: string | null;
   runner_mode?: 'trail' | 'be_hold' | 'none';
   runner_trail?: number;
   cascade_enabled?: boolean;
@@ -139,7 +144,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const marketValue = data.mid_price * data.qty_remaining * 100;
 
   const editable = !!strategyId;
-  const slPulseStyle = useSlGracePulse(!!data.sl_grace_active);
+  const slPulseStyle = useSlGracePulse(!!data.sl_grace_active || !!data.be_grace_active);
   const mutation = useUpdateStrategyExits();
   const { authState: { user } } = useAuth();
   const alertMutation = useCreateContractAlert(strategyId ?? '');
@@ -162,12 +167,14 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const [graceMinutes, setGraceMinutes] = useState<GraceMinutes>(5);
   const [floorEnabled, setFloorEnabled] = useState(true);
   const [floorPriceVal, setFloorPriceVal] = useState('');
+  const [beGrace, setBeGrace] = useState<number>(BE_GRACE_DEFAULT);
   const [runnerMode, setRunnerMode] = useState<'trail' | 'be_hold' | 'none'>('trail');
   const [cascadeOn, setCascadeOn] = useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const initial = useRef({
     sl: true, tp: true, stopMode: 'HARD' as 'HARD' | 'TIMER', minutes: 5 as GraceMinutes, floor: true,
+    beGrace: BE_GRACE_DEFAULT as number,
     runnerMode: 'trail' as 'trail' | 'be_hold' | 'none', cascade: true,
   });
 
@@ -194,8 +201,10 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
       setRunnerMode(rMode);
       setCascadeOn(rCascade);
       setFloorEnabled(rFloor);
+      const rBeGrace = data.be_grace_seconds ?? BE_GRACE_DEFAULT;
+      setBeGrace(rBeGrace);
       setAdvancedOpen(false);
-      initial.current = { sl, tp, stopMode: sMode, minutes: sMinutes, floor: rFloor, runnerMode: rMode, cascade: rCascade };
+      initial.current = { sl, tp, stopMode: sMode, minutes: sMinutes, floor: rFloor, beGrace: rBeGrace, runnerMode: rMode, cascade: rCascade };
     }
     wasVisibleRef.current = visible;
   }, [visible, data]);
@@ -207,15 +216,28 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const dirty =
     !!stopVal || !!tp1Val || !!tp2Val || !!floorPriceVal ||
     slOn !== initial.current.sl || tpOn !== initial.current.tp ||
-    (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && (
-      graceMinutes !== initial.current.minutes || floorEnabled !== initial.current.floor
-    )))) ||
+    (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && graceMinutes !== initial.current.minutes))) ||
+    // The floor is independent of the stop loss (it stays armed when SL is
+    // turned off), so its dirty check isn't gated on slOn. The breakeven
+    // grace only matters while TP can still fire.
+    (floorEnabled !== initial.current.floor || (tpOn && beGrace !== initial.current.beGrace)) ||
     (canSplit && (runnerMode !== initial.current.runnerMode || cascadeOn !== initial.current.cascade));
 
   const pctLabel = (abs: number | undefined) => {
     if (!abs || !entry) return '';
     const pct = ((abs - entry) / entry) * 100;
     return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+  };
+
+  const handleCancelBeGrace = async () => {
+    try {
+      await mutation.mutateAsync({ strategy_id: strategyId!, cancel_be_grace: true });
+      onUpdated?.({ be_grace_active: false, be_grace_deadline: null });
+      toast.success('Timer cancelled — holding the position');
+    } catch (e) {
+      // Usually the window already ended (sold or held) a moment before the tap.
+      toast.error(e instanceof Error ? e.message : 'Could not cancel the timer');
+    }
   };
 
   const handleSave = async () => {
@@ -269,11 +291,18 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
     if (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && graceMinutes !== initial.current.minutes))) {
       payload.sl_grace_minutes = stopMode === 'TIMER' ? graceMinutes : null;
     }
-    if (slOn && stopMode === 'TIMER' && floorEnabled !== initial.current.floor) {
+    // Floor is independent of the stop loss AND the stop type — editable
+    // whether the trade is on a Hard Stop or an SL timer, and stays visible
+    // (and armed) even if SL is turned off. Breakeven grace needs TP on.
+    if (floorEnabled !== initial.current.floor) {
       payload.sl_floor_enabled = floorEnabled;
     }
-    if (slOn && stopMode === 'TIMER' && floor !== undefined && !isNaN(floor)) {
+    if (floor !== undefined && !isNaN(floor)) {
       payload.sl_outer_floor = floor;
+      if (!floorEnabled) payload.sl_floor_enabled = true;  // setting a price arms it
+    }
+    if (tpOn && beGrace !== initial.current.beGrace) {
+      payload.be_grace_seconds = beGrace;
     }
     if (canSplit && runnerMode !== initial.current.runnerMode) payload.runner_mode = runnerMode;
     if (canSplit && cascadeOn !== initial.current.cascade) payload.cascade_enabled = cascadeOn;
@@ -417,7 +446,30 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
                 {slOn ? `$${data.hard_stop.toFixed(2)}` : 'Disabled'}
               </Animated.Text>
             )}
-            {slOn && <SlGraceBadge live={data} colors={colors} />}
+            {/* Live SL / breakeven timer, right under the stop — the
+                breakeven one can be cancelled here (hold the position). */}
+            {slOn && (
+              <SlGraceBadge
+                live={data}
+                colors={colors}
+                onCancelBeGrace={editable && strategyId ? handleCancelBeGrace : undefined}
+                cancellingBeGrace={mutation.isPending}
+              />
+            )}
+            <ExitSafetyControls
+              colors={colors}
+              editable={editable}
+              tpOn={tpOn}
+              floor={data.sl_outer_floor}
+              floorEnabled={floorEnabled}
+              onFloorEnabled={setFloorEnabled}
+              floorPriceVal={floorPriceVal}
+              onFloorPriceVal={setFloorPriceVal}
+              beGrace={beGrace}
+              onBeGrace={setBeGrace}
+              slGraceMinutes={stopMode === 'TIMER' ? graceMinutes : null}
+              tp1Hit={data.tp1_hit}
+            />
 
             {/* ── Take Profit ── */}
             <View style={[s.divider, { backgroundColor: colors.separator }]} />
@@ -631,41 +683,6 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
                             );
                           })}
                         </View>
-                        {/* Worst-case floor — bypasses the grace window entirely
-                            and force-sells if hit. Off by default only for a
-                            swing meant to hold through a drop this deep. */}
-                        {data.sl_outer_floor != null && (
-                          <View style={[s.inlineSwitchRow, { marginTop: 12 }]}>
-                            <View style={{ flex: 1 }}>
-                              <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
-                                Worst-case floor
-                              </Text>
-                              <Text style={[s.hintText, { color: colors.textTertiary, marginTop: 2 }]}>
-                                {floorEnabled
-                                  ? `Sells no matter what at $${data.sl_outer_floor.toFixed(2)}`
-                                  : 'Off — this trade can hold through any drop'}
-                              </Text>
-                            </View>
-                            <Switch
-                              value={floorEnabled}
-                              onValueChange={setFloorEnabled}
-                              trackColor={{ false: colors.border, true: colors.error + '66' }}
-                              thumbColor={floorEnabled ? colors.error : undefined}
-                            />
-                          </View>
-                        )}
-                        {data.sl_outer_floor != null && floorEnabled && (
-                          <View style={[s.editRow, { marginTop: 8 }]}>
-                            <TextInput
-                              value={floorPriceVal}
-                              onChangeText={setFloorPriceVal}
-                              keyboardType="decimal-pad"
-                              placeholder={data.sl_outer_floor.toFixed(2)}
-                              placeholderTextColor={colors.textTertiary}
-                              style={[s.editInput, { color: colors.error }]}
-                            />
-                          </View>
-                        )}
                       </>
                     )}
                   </View>

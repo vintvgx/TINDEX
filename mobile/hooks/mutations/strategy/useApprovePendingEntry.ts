@@ -9,6 +9,10 @@ interface ApprovePendingEntryPayload {
   tp1?: number;
   tp2?: number;
   qty?: number;
+  /** Floor (loss fraction of the fill) and post-TP1 breakeven grace chosen
+   *  on the confirm card — applied to the trade at entry. */
+  sl_outer_floor_pct?: number;
+  be_grace_seconds?: number;
 }
 
 export function useApprovePendingEntry() {

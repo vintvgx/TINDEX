@@ -9,6 +9,7 @@ import {
   getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
 import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
+import { EntrySafetySelector, BE_GRACE_DEFAULT, effectiveFloorPct } from '@/common/components/trade/EntrySafetySelector';
 import { BlindEntryModal } from '@/common/components/strategy/BlindEntryModal';
 import { formatContractSymbol } from '@/lib/formatContract';
 import { useEntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
@@ -41,6 +42,9 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [qty, setQty] = useState(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], 0));
   const [stopType, setStopType] = useState<StopType>(5);
+  // Floor + breakeven grace chosen at entry (sent with the order).
+  const [floorPct, setFloorPct] = useState<number | null>(null);
+  const [beGrace, setBeGrace] = useState<number>(BE_GRACE_DEFAULT);
   const [volumeExit, setVolumeExit] = useState(false);
   const [manualSlPct, setManualSlPct] = useState(30);
 
@@ -75,6 +79,10 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
     setOverridden(false);
     setReviewOpen(false);
     setSuccessMessage(null);
+    // Entry-safety choices are per-contract — a new sheet must not inherit
+    // the previous trade's floor/grace.
+    setFloorPct(null);
+    setBeGrace(BE_GRACE_DEFAULT);
   // Only re-run when a different contract is opened, not on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contract?.contract_symbol]);
@@ -126,6 +134,8 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
     paper_mode: paperMode,
     volume_exit: (isManual || isNoStopLoss) ? false : volumeExit,
     sl_grace_minutes: (isNoStopLoss || stopType === 'HARD') ? null : stopType,
+    ...(!isNoStopLoss && floorPct != null ? { sl_outer_floor_pct: floorPct } : {}),
+    be_grace_seconds: beGrace,
     ...(isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
   });
 
@@ -156,6 +166,9 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
     stopLabel: stopPct == null ? 'Off' : stopType === 'HARD' ? 'Hard stop' : `${stopType}-min SL timer`,
     tp1Price: !isManual && !isNoStopLoss && profile.tp1 > 0 ? askPrice * (1 + profile.tp1 / 100) : null,
     tp2Price: !isManual && !isNoStopLoss && profile.tp2 > 0 ? askPrice * (1 + profile.tp2 / 100) : null,
+    floorPrice: (() => { const f = stopPct == null ? null : effectiveFloorPct(floorPct, stopType !== 'HARD'); return f == null ? null : askPrice * (1 - f); })(),
+    floorIsDefault: floorPct == null,
+    beGraceSeconds: !isManual && !isNoStopLoss ? beGrace : 0,
   };
 
   return (
@@ -255,6 +268,10 @@ export function SignalEnterSheet({ contract, livePrice, colors, visible, onClose
             <View style={{ marginTop: 16 }}>
               <Text style={[styles.footerLabel, { color: colors.tabBarInactive }]}>EXIT CONTROLS</Text>
               <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
+              <View style={{ marginTop: 14 }}>
+                <EntrySafetySelector colors={colors} floorPct={floorPct} onFloorPct={setFloorPct}
+                  beGrace={beGrace} onBeGrace={setBeGrace} premium={askPrice} stopIsTimer={stopType !== 'HARD'} />
+              </View>
               {!isManual && (
               <View style={[styles.exitToggles, { backgroundColor: colors.card, borderColor: colors.border, marginTop: 10 }]}>
                 <View style={styles.exitToggleRow}>

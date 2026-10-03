@@ -39,6 +39,10 @@ from services.utils.stock_streaming_base import StockStreamingService, StockBar
 from services.utils.breakout_confirmation import BreakoutConfirmation
 from services.utils.monitoring_state_cache import MonitoringStateCache, MonitoringState
 from services.utils.orb_data_hub import get_orb_data_hub, OrbBar, OrbStatus
+from services.strategy.reversal_signals import (
+    SessionVwap, fire_threshold, in_cooldown, restore_after_decline,
+    rsi_exhausted, rsi_wilder, zone_wall,
+)
 from services.gap_analysis_service import get_gap_analysis_service, compute_gap_context
 
 logging.basicConfig(level=logging.INFO)
@@ -97,6 +101,7 @@ class OrbService:
         # ORB data hub: publishes bars + ORB status to the strategy engines.
         # Single coupling point so the engines never re-fetch market data.
         self._hub = get_orb_data_hub()
+        self._hub.set_reversal_declined_handler(self._on_reversal_declined)
 
         # Initialize monitoring state cache
         self._state_cache = MonitoringStateCache(
@@ -158,8 +163,17 @@ class OrbService:
         #   "fired": bool,                True after entry published (prevents re-fire)
         # }}
         self._rev_state: Dict[str, Dict] = {}
-        # Minimum composite score (out of 5) required to fire a reversal entry.
+        # Minimum composite score required to fire a reversal entry. The base;
+        # _score_reversal raises it to 4 when price is on the wrong side of
+        # session VWAP for the reversal direction (see reversal_signals).
         self._reversal_fire_threshold = 3
+        # Running session VWAP per ticker (bar history only keeps 100 bars).
+        self._session_vwap = SessionVwap()
+        # Scoring state captured when a reversal fired, and tickers whose
+        # fired reversal an engine's technicals gate declined — restored with
+        # a cooldown so the scorer may fire again (see _on_reversal_declined).
+        self._rev_last_fired: Dict[str, Dict] = {}
+        self._rev_declined: Set[str] = set()
 
         # Retest/reclaim state machine: replaces the old one-way high_broken/
         # low_broken latch. Per ticker, per side ("high"/"low"):
@@ -766,6 +780,13 @@ class OrbService:
             self._bar_history[ticker] = []
         
         self._bar_history[ticker].append(bar)
+        try:
+            ts = bar.timestamp
+            session_date = (ts.astimezone(self.et_timezone).date() if ts is not None and ts.tzinfo
+                            else self.get_current_et_time().date())
+            self._session_vwap.update(ticker, session_date, bar.high, bar.low, bar.close, bar.volume)
+        except Exception as e:
+            logger.debug("[REV] session VWAP update failed for %s: %s", ticker, e)
         
         # Keep only the most recent bars
         if len(self._bar_history[ticker]) > self._max_bar_history:
@@ -783,9 +804,12 @@ class OrbService:
         Score the current bar's contribution to a potential reversal.
 
         State is accumulated in self._rev_state[ticker] across consecutive bars.
-        Each of 6 distinct signals can fire at most once per breakout episode
+        Each of 8 distinct signals can fire at most once per breakout episode
         (tracked in signals_hit set), so no single dimension can dominate the score.
-        Effective score = len(signals_hit) - penalty.  Fire when effective_score >= threshold (3).
+        Effective score = len(signals_hit) - penalty.  Fire when effective_score >=
+        threshold: 3, or 4 when price is on the wrong side of session VWAP for the
+        reversal direction. A fire the engine's gate declines re-opens with a
+        5-minute cooldown (see _on_reversal_declined).
 
         Signals (+score):
           level_violated    — bar closes on wrong side of ORH (CALL) / ORL (PUT)
@@ -794,6 +818,8 @@ class OrbService:
           momentum_shift    — lower high (CALL→PUT) / higher low (PUT→CALL) while wrong-side
           volume_surge      — current bar volume > 1.5× 5-bar avg
           deep_violation    — close ≥ 0.3% past key level (strong conviction bar)
+          rsi_exhaustion    — breakout confirmed with intraday RSI-14 ≥ 70 (CALL) / ≤ 30 (PUT)
+          zone_wall         — breakout ran into a zone-engine zone scoring ≥ 50
 
         Penalties (-score, recalculated each bar):
           bounce_penalty    — price recovers ≥ 0.3% from worst wrong-side close
@@ -826,6 +852,15 @@ class OrbService:
             (original_direction == "CALL" and current_close < key_level) or
             (original_direction == "PUT"  and current_close > key_level)
         )
+
+        # ── Confluence signals snapshotted at breakout confirm ─────────────────────
+        # (see _confirm_breakout): breakout into RSI exhaustion, breakout into a
+        # scored zone wall. Re-added after a re-break reset clears signals_hit,
+        # since both describe the breakout itself.
+        if state.get("rsi_exhaustion") and "rsi_exhaustion" not in signals_hit:
+            signals_hit.add("rsi_exhaustion")
+        if state.get("zone_wall") and "zone_wall" not in signals_hit:
+            signals_hit.add("zone_wall")
 
         # ── Signal 1: Level violated ─────────────────────────────────────────────
         if wrong_side:
@@ -967,14 +1002,49 @@ class OrbService:
         min_penetration = orb_range * 0.20 if orb_range > 0 else 0.0
         cleared_boundary_buffer = penetration >= min_penetration
 
-        fire = effective_score >= self._reversal_fire_threshold and cleared_boundary_buffer
-        if effective_score >= self._reversal_fire_threshold and not cleared_boundary_buffer:
+        # VWAP-aware threshold: 4 instead of 3 when price is on the wrong side
+        # of session VWAP for the reversal direction (counter-trend).
+        reversal_direction = "PUT" if original_direction == "CALL" else "CALL"
+        session_vwap = self._session_vwap.get(ticker, self.get_current_et_time().date())
+        threshold = max(self._reversal_fire_threshold,
+                        fire_threshold(reversal_direction, current_close, session_vwap))
+        state["threshold"] = threshold
+
+        fire = effective_score >= threshold and cleared_boundary_buffer
+        # A reversal the gate declined re-opened under a cooldown — keep
+        # scoring, but no re-fire until it has passed.
+        if fire and in_cooldown(state, self.get_current_et_time()):
+            logger.debug("[REV %s] fire held: decline cooldown until %s", ticker, state["cooldown_until"])
+            fire = False
+        if effective_score >= threshold and not cleared_boundary_buffer:
             logger.debug(
                 "[REV %s] fire suppressed: penetration %.4f < min %.4f (20%% of range %.4f)",
                 ticker, penetration, min_penetration, orb_range,
             )
 
-        return {"score": effective_score, "signals": list(signals_hit), "fire": fire}
+        if fire:
+            logger.info("[REV %s] fire: score %d >= threshold %d (vwap %s) signals=%s",
+                        ticker, effective_score, threshold,
+                        f"{session_vwap:.2f}" if session_vwap else "n/a", sorted(signals_hit))
+        return {"score": effective_score, "signals": list(signals_hit), "fire": fire,
+                "threshold": threshold}
+
+    def _on_reversal_declined(self, ticker: str, direction: str) -> None:
+        """Hub callback: an engine's technicals gate declined the reversal it
+        was just handed. Re-open scoring for this breakout episode with a
+        cooldown (see reversal_signals.restore_after_decline). Usually runs
+        synchronously inside the fire block (before it clears the state), so
+        it's queued and applied right after; if it arrives later, the state
+        captured at fire time is restored immediately."""
+        rev = self._rev_state.get(ticker)
+        if rev is not None and rev.get("fired"):
+            self._rev_declined.add(ticker)
+            return
+        snapshot = self._rev_last_fired.get(ticker)
+        if rev is None and snapshot is not None:
+            self._rev_state[ticker] = restore_after_decline(snapshot, self.get_current_et_time())
+            logger.info("[REV] %s reversal re-opened after gate decline (cooldown until %s)",
+                        ticker, self._rev_state[ticker]["cooldown_until"])
     
     def _publish_bar_to_hub(self, stock_bar: StockBar):
         """
@@ -1341,6 +1411,10 @@ class OrbService:
                     if result["fire"]:
                         reversal_direction = "PUT" if original_direction == "CALL" else "CALL"
                         rev["fired"] = True  # prevent re-fire before state is cleaned up
+                        # Kept so a gate decline can re-open this episode.
+                        self._rev_last_fired[ticker] = {k: (set(v) if isinstance(v, set) else v)
+                                                        for k, v in rev.items()}
+                        self._rev_declined.discard(ticker)
 
                         # Publish to hub FIRST — trade timing is critical.
                         self._hub.publish_reversal_confirmed(
@@ -1384,6 +1458,15 @@ class OrbService:
                             timestamp=self.get_current_et_time().isoformat(),
                         )
                         self._rev_state.pop(ticker, None)
+                        # An engine's gate declined this reversal during the
+                        # publish above — re-open scoring with a cooldown.
+                        if ticker in self._rev_declined:
+                            self._rev_declined.discard(ticker)
+                            self._rev_state[ticker] = restore_after_decline(
+                                self._rev_last_fired[ticker], self.get_current_et_time())
+                            logger.info("[REV] %s reversal re-opened after gate decline "
+                                        "(cooldown until %s)", ticker,
+                                        self._rev_state[ticker]["cooldown_until"])
     
     def _reset_side_state(self, ticker: str, side: str) -> None:
         """Reset one side (high/low) of the retest state machine back to UNBROKEN."""
@@ -1600,6 +1683,23 @@ class OrbService:
         # Arm reversal scoring for this ticker. Per-bar scoring starts on the
         # next bar via handle_bar → _score_reversal. Clears any stale state
         # from a previous breakout on the same day.
+        # Confluence snapshots at arm time (2026-10-02): intraday RSI-14 from
+        # the 1-minute bars already in memory, and the zone engine's zones at
+        # the breakout price (cached ~90s and prewarmed; fetched off the loop
+        # with a timeout so a cold fetch can't stall bar processing).
+        closes = [float(b.close) for b in self._bar_history.get(ticker, []) if b.close is not None]
+        rsi_at_confirm = rsi_wilder(closes)
+        wall = None
+        try:
+            from services.strategy.zone_engine import zones as _zones
+            snap = await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(None, _zones, ticker), timeout=12)
+            wall = zone_wall(snap if not snap.get("error") else None, engine_direction, float(current_price))
+        except Exception as e:
+            logger.warning("[REV] %s zone-wall lookup failed: %s", ticker, e)
+        self._rev_last_fired.pop(ticker, None)
+        self._rev_declined.discard(ticker)
+
         self._rev_state[ticker] = {
             "direction":          engine_direction,
             "score":              0,
@@ -1611,8 +1711,16 @@ class OrbService:
             "worst_wrong_close":  None,
             "prev_wrong_close":   None,
             "consec_recovery":    0,
+            "rsi_at_confirm":     rsi_at_confirm,
+            "rsi_exhaustion":     rsi_exhausted(engine_direction, rsi_at_confirm),
+            "zone_wall":          ({"low": wall["low"], "high": wall["high"], "score": wall["score"]}
+                                   if wall else None),
         }
-        logger.info("[REV] %s reversal scoring armed (original=%s)", ticker, engine_direction)
+        logger.info("[REV] %s reversal scoring armed (original=%s, rsi=%s%s, zone_wall=%s)",
+                    ticker, engine_direction,
+                    f"{rsi_at_confirm:.1f}" if rsi_at_confirm is not None else "n/a",
+                    " EXHAUSTED" if self._rev_state[ticker]["rsi_exhaustion"] else "",
+                    f"${wall['low']:.2f}-${wall['high']:.2f} ({wall['score']:.0f})" if wall else "none")
 
         await self.send_confirmation_notification(ticker, direction, current_price, orb_high, orb_low)
 
@@ -1700,6 +1808,8 @@ class OrbService:
             if ticker in self._rev_state:
                 logger.debug("Clearing reversal scoring state for %s due to new breakout", ticker)
                 del self._rev_state[ticker]
+            self._rev_last_fired.pop(ticker, None)
+            self._rev_declined.discard(ticker)
             
             # Update cache state (NO DATABASE CALL)
             self._state_cache.set_breakout(

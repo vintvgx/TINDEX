@@ -74,6 +74,9 @@ class OrbDataHub:
         # configured with the REVERSAL profile listen on this channel — regular
         # breakout engines are unaffected.
         self._reversal_subs: dict[str, list[Callable[[str, float], None]]] = defaultdict(list)
+        # OrbService's handler for "an engine's technicals gate declined a
+        # fired reversal" (ticker, direction) — lets the scorer re-open.
+        self._reversal_declined_handler: Callable[[str, str], None] | None = None
         # Retest-event subscribers: OrbService publishes here on every retest
         # state transition (break detected, invalidated/re-armed, exhausted,
         # confirmed) so engines can surface it to their own Debug tab — this
@@ -235,6 +238,26 @@ class OrbDataHub:
                 cb(direction, price)
             except Exception as e:
                 logger.error("[OrbDataHub] reversal subscriber error for %s: %s",
+                             ticker, e, exc_info=True)
+
+    def set_reversal_declined_handler(self, cb: Callable[[str, str], None]) -> None:
+        """OrbService registers cb(ticker, direction), called when an engine's
+        technicals gate declines a reversal it was just handed."""
+        with self._lock:
+            self._reversal_declined_handler = cb
+
+    def publish_reversal_declined(self, ticker: str, direction: str) -> None:
+        """An engine's technicals gate blocked the reversal entry for
+        `ticker`. The scorer un-latches (with a cooldown) so the reversal may
+        fire again rather than dying on one blocked attempt."""
+        with self._lock:
+            cb = self._reversal_declined_handler
+        logger.info("[OrbDataHub] reversal declined at the gate %s %s", ticker, direction)
+        if cb:
+            try:
+                cb(ticker, direction)
+            except Exception as e:
+                logger.error("[OrbDataHub] reversal-declined handler error for %s: %s",
                              ticker, e, exc_info=True)
 
     def publish_retest_event(self, ticker: str, level: str, message: str) -> None:

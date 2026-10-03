@@ -512,6 +512,11 @@ class ORBEngine:
                 )
                 return
             self._option_price_unavailable_logged = False
+            # Snapshot the breakeven-grace countdown state before evaluate():
+            # if this tick starts or ends it, the transition is persisted
+            # below so a restart resumes (or drops) the countdown instead
+            # of silently granting a fresh window.
+            be_grace_was_active = self.exit_manager._be_grace_start is not None
             action = self.exit_manager.evaluate(
                 current_option_price=current_option_price,
                 current_underlying_price=current_price,
@@ -541,6 +546,30 @@ class ORBEngine:
                     self._reversal_down_since = None
 
             self._handle_exit_action(action, current_price, current_option_price)
+
+            # Persist breakeven-grace countdown transitions (started / ended
+            # this tick) into the trade row's exit_overrides JSON so
+            # recover_position() can resume the remaining window after a
+            # restart instead of granting a fresh one. Transition-only, so
+            # this is at most two small writes per grace episode, not per
+            # tick. Best-effort: a failed persist only affects a later
+            # restart, never this session's in-memory countdown.
+            if self.exit_manager and self.active_trade_id:
+                be_grace_now = self.exit_manager._be_grace_start
+                if (be_grace_now is not None) != be_grace_was_active:
+                    try:
+                        self.logger.update_exit_levels(
+                            trade_id=self.active_trade_id,
+                            exit_overrides_patch={
+                                "be_grace_start":
+                                    be_grace_now.isoformat() if be_grace_now else None,
+                            },
+                        )
+                    except Exception:
+                        logger.error(
+                            "[ORBEngine] Failed to persist be_grace_start transition",
+                            exc_info=True,
+                        )
 
             # Contract price alerts — user-defined "notify me when THIS
             # CONTRACT hits $X" (contract_alert_routes.py / PositionInfoModal's
@@ -761,7 +790,13 @@ class ORBEngine:
                         direction, self.ticker, price)
             self.debug.emit("INFO",
                 f"Entering reversal trade — {direction} @ {price:.2f}")
-            self._enter_trade(direction, price)
+            # Flag so a technicals-gate block inside _enter_trade is reported
+            # back to the scorer (publish_reversal_declined) — see there.
+            self._reversal_entry_in_progress = True
+            try:
+                self._enter_trade(direction, price)
+            finally:
+                self._reversal_entry_in_progress = False
 
     def _start_retest_watch(self, direction: str, breakout_price: float,
                              now_et, deadline):
@@ -1039,6 +1074,10 @@ class ORBEngine:
         gate_cfg = self.config.get("technicals_gate") or {}
         if gate_cfg.get("enabled") and gate_cfg.get("required"):
             if not self._check_technicals_gate(direction, trigger_price, gate_cfg["required"]):
+                # A blocked REVERSAL entry tells the scorer, which un-latches
+                # with a cooldown so it may fire again later this session.
+                if getattr(self, "_reversal_entry_in_progress", False):
+                    self._hub.publish_reversal_declined(self.ticker, direction)
                 return
 
         # VWAP soft confirmation (log only — does not block entry)
@@ -1442,6 +1481,8 @@ class ORBEngine:
                 profile=effective_profile,
                 is_zero_dte=is_zero_dte,
             )
+            self.exit_manager.log_context = {"ticker": self.ticker, "contract": contract.get("symbol"),
+                                             "strategy_id": self.strategy_id}
 
             # Use the override key when the user selected a profile at trade time
             # (immediate trades). This fixes the bug where all immediate trades were
@@ -1593,8 +1634,12 @@ class ORBEngine:
         # Prefer the exact effective-profile snapshot captured at entry
         # (post-2026-07-14 trades) over re-deriving the named profile's
         # *default* thresholds — a manual/custom override wouldn't otherwise
-        # be recoverable from just the profile key.
-        profile = row.get("exit_overrides") or get_profile(self.profile_key)
+        # be recoverable from just the profile key. be_grace_start is runtime
+        # countdown state persisted alongside (see the tick handler), not a
+        # profile field — lift it out before the dict is used as a profile.
+        stored_overrides = dict(row.get("exit_overrides") or {})
+        be_grace_start_iso = stored_overrides.pop("be_grace_start", None)
+        profile = stored_overrides or get_profile(self.profile_key)
         fib_levels = dict(row.get("fib_targets") or {})
         fib_levels.setdefault("orh", row.get("orh"))
         fib_levels.setdefault("orl", row.get("orl"))
@@ -1614,6 +1659,8 @@ class ORBEngine:
             profile=profile,
             is_zero_dte=is_zero_dte,
         )
+        self.exit_manager.log_context = {"ticker": self.ticker, "contract": row.get("contract_symbol"),
+                                         "strategy_id": self.strategy_id, "recovered": True}
         self.exit_manager.qty_remaining = qty_remaining
         try:
             self.exit_manager.entry_time = datetime.fromisoformat(
@@ -1632,11 +1679,44 @@ class ORBEngine:
         if {"TP2", "TP2_FULL_CLOSE"} & reasons_hit or row.get("tp2_premium") is not None:
             self.exit_manager.tp2_hit = True
 
+        # Resume an in-flight breakeven-grace countdown instead of granting
+        # a fresh window: the tick handler persists be_grace_start into
+        # exit_overrides when the countdown starts (and clears it when it
+        # ends). Only a timestamp still inside its window is honored — a
+        # stale one (grace ended pre-restart, or the persisted value was
+        # never cleared) is ignored and evaluate() starts fresh, which is
+        # the safe direction.
+        if be_grace_start_iso and self.exit_manager.be_stop_active:
+            try:
+                grace_start = datetime.fromisoformat(be_grace_start_iso)
+                if grace_start.tzinfo is None:
+                    grace_start = grace_start.replace(tzinfo=ET)
+                elapsed = (datetime.now(ET) - grace_start).total_seconds()
+                grace_secs = self.exit_manager._be_grace_seconds
+                if 0 <= elapsed < grace_secs:
+                    self.exit_manager._be_grace_start = grace_start
+                    logger.info(
+                        "[ORBEngine] Position recovery: resuming breakeven-grace "
+                        "countdown with %.0fs remaining (started %s)",
+                        grace_secs - elapsed, be_grace_start_iso,
+                    )
+            except Exception:
+                logger.error("[ORBEngine] Position recovery: bad be_grace_start %r — "
+                             "starting fresh", be_grace_start_iso, exc_info=True)
+
         # Exact persisted levels win over whatever the reconstructed profile
         # would recompute — except the breakeven stop, which must reflect the
         # TP1-hit state restored just above (a stale pre-TP1 hard_stop_price
         # would otherwise re-widen the stop past where it had already moved).
         if self.exit_manager.be_stop_active:
+            # Restore the breakeven grace's guard (the pre-TP1 stop) too —
+            # recovery sets be_stop_active directly rather than going through
+            # mark_breakeven(), which is what normally records it.
+            pre_stop = row.get("hard_stop_price")
+            if pre_stop is not None and 0 < float(pre_stop) < self.exit_manager.entry_premium:
+                self.exit_manager._be_guard = float(pre_stop)
+            elif profile.get("max_loss_pct", 1.0) < 1.0:
+                self.exit_manager._be_guard = self.exit_manager.entry_premium * (1 - profile["max_loss_pct"])
             self.exit_manager.hard_stop = self.exit_manager.entry_premium
         elif row.get("hard_stop_price") is not None:
             self.exit_manager.hard_stop = float(row["hard_stop_price"])
@@ -1906,6 +1986,29 @@ class ORBEngine:
                     self.debug.emit("WARN",
                         f"Approve requested a non-numeric qty override — using "
                         f"original qty={qty} instead")
+
+            # Stop type, floor and breakeven grace chosen on the confirm card
+            # (2026-10-02 — set at entry, not hand-armed afterward). Merged into
+            # the effective profile BEFORE the order so the trade's persisted
+            # profile snapshot carries them through a restart.
+            if overrides:
+                effective_profile = dict(effective_profile)
+                try:
+                    if "sl_grace_minutes" in overrides:
+                        from services.strategy.profiles import grace_fields_for_minutes
+                        raw = overrides.pop("sl_grace_minutes")
+                        effective_profile.update(grace_fields_for_minutes(int(raw) if raw is not None else None))
+                    if overrides.get("sl_outer_floor_pct") is not None:
+                        pct = float(overrides.pop("sl_outer_floor_pct"))
+                        if 0.05 <= pct <= 0.99:
+                            effective_profile.update(sl_outer_floor_pct=pct, sl_floor_custom=True,
+                                                     sl_floor_enabled=True)
+                    if overrides.get("be_grace_seconds") is not None:
+                        secs = int(overrides.pop("be_grace_seconds"))
+                        if 0 <= secs <= 120:
+                            effective_profile["be_grace_seconds"] = secs
+                except (TypeError, ValueError) as e:
+                    self.debug.emit("WARN", f"Confirm-entry stop/floor/grace override ignored ({e})")
 
             if self.stream_manager:
                 self.stream_manager.unsubscribe(contract["symbol"], self._on_pending_quote)
@@ -2752,6 +2855,18 @@ class ORBEngine:
             # does — the remainder should be protected at breakeven with no
             # grace/timer, not left sitting on the original pre-sale stop.
             self.exit_manager.mark_breakeven()
+            # mark_breakeven() clears any in-flight grace countdown — clear
+            # the persisted start too so a restart can't resurrect it.
+            if self.active_trade_id:
+                try:
+                    self.logger.update_exit_levels(
+                        trade_id=self.active_trade_id,
+                        exit_overrides_patch={"be_grace_start": None},
+                    )
+                except Exception:
+                    logger.error(
+                        "[ORBEngine] Failed to clear persisted be_grace_start "
+                        "after manual partial sell", exc_info=True)
 
         # Same (exit - entry) * qty * 100 convention as TradeLogger.log_exit's
         # stage_pnl — options premium is quoted per-share, contracts are
@@ -2957,6 +3072,12 @@ class ORBEngine:
             # countdown and the Advanced sheet pre-select the toggle.
             "sl_outer_floor":       em_state.get("sl_outer_floor"),
             "sl_floor_enabled":     em_state.get("sl_floor_enabled", True),
+            # Post-TP1 breakeven grace (config + live countdown) and whether the
+            # floor is a custom price — see ExitManager.to_dict().
+            "be_grace_seconds":    em_state.get("be_grace_seconds"),
+            "be_grace_active":     em_state.get("be_grace_active", False),
+            "be_grace_deadline":   em_state.get("be_grace_deadline"),
+            "sl_floor_custom":     em_state.get("sl_floor_custom", False),
             # Current runner/cascade CONFIGURATION for this trade (see
             # ExitManager.to_dict()) — 2026-08-04 fix: this payload used to
             # omit these entirely even though to_dict() included them, so

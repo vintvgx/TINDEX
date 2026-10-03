@@ -20,6 +20,8 @@ RETESTER    — 4 contracts,  TP1 +20% / $0.20 floor, cascade(3 ticks, 50%), tra
 REVERSAL    — 3 contracts,  TP1 +15% / $0.18 floor, cascade(5 ticks, 50%), be_hold runner
 """
 
+import json
+import logging
 import math
 import pytz
 from datetime import datetime, time, timedelta
@@ -28,6 +30,20 @@ from collections import deque
 from services.strategy.profiles import grace_fields_for_minutes
 
 ET = pytz.timezone("America/New_York")
+logger = logging.getLogger(__name__)
+
+# Post-TP1 breakeven grace (2026-10-02 NVTS debrief: a 9:38 BE stop fired the
+# instant price touched entry, costing ~$100 of the move that followed). A
+# breach of the breakeven stop starts a fixed window — about one 1-minute
+# candle — and at the END of it the stop is checked once: still at/below
+# breakeven → sell; back above → hold. A bounce mid-window does NOT cancel
+# it early; only the trader can (cancel_be_grace, from the edit sheet).
+# Bypassed — sells immediately — by the worst-case floor and by the BE guard
+# (the pre-TP1 stop price): grace can never let a trade that already banked
+# TP1 fall past where its original stop sat. Per trade via the profile /
+# exit_overrides key `be_grace_seconds` (0 disables, max 120).
+BE_GRACE_DEFAULT_SECONDS = 60
+BE_GRACE_MAX_SECONDS = 120
 
 # ─── KILL-SWITCH (added 2026-08-04, re-enabled 2026-08-07) ─────────────────
 # Originally hard-disabled both RUNNER_TRAIL_STOP and CASCADE_EXIT after
@@ -227,6 +243,19 @@ class ExitManager:
         # restart can't silently re-arm a floor the trader deliberately
         # disabled.
         self._sl_floor_enabled = profile.get("sl_floor_enabled", True)
+        # True once the floor PRICE was set explicitly (at entry or via
+        # sl_outer_floor) rather than derived from the stop type — a later
+        # stop-type switch keeps an explicit floor instead of recomputing it.
+        self._sl_floor_custom = bool(profile.get("sl_floor_custom", False))
+
+        # Post-TP1 breakeven grace — see BE_GRACE_DEFAULT_SECONDS.
+        self._be_grace_seconds = int(profile.get("be_grace_seconds", BE_GRACE_DEFAULT_SECONDS))
+        self._be_grace_start   = None
+        self._be_guard         = None   # pre-TP1 stop price, set by mark_breakeven()
+
+        # Context for structured [EXIT_DECISION] log lines (ticker, contract,
+        # strategy id) — set by the owning ORBEngine.
+        self.log_context: dict = {}
 
         # NO_STOP_LOSS: fully manual, hold until sold — even past EOD. The
         # separate scheduler._eod_reset() cron backstop also checks this flag
@@ -297,14 +326,22 @@ class ExitManager:
         it's triggered by TP1 auto-firing (see the TP1 branch in evaluate())
         or a manual partial sell (see ORBEngine.submit_manual_exit()): once
         some of the position has been banked, the remainder is protected at
-        breakeven with no grace/timer, not given fresh room to develop.
+        breakeven — a dip below it starts the be_grace_seconds countdown
+        (BE_GRACE) instead of selling on first touch, while the pre-TP1 stop
+        price is kept as the BE guard that still sells immediately.
         Clears any grace window already in progress rather than letting it
         run out against a stop that no longer applies — evaluate()'s grace
         branch is gated on `not self.be_stop_active` regardless, but this
         also stops SlGraceBadge-style stale countdowns from lingering.
         """
+        # The stop being replaced becomes the BE guard (see
+        # BE_GRACE_DEFAULT_SECONDS) — unless SL was disabled (hard_stop 0).
+        self._be_guard = self.hard_stop if self.hard_stop and self.hard_stop < self.entry_premium else None
+        self._be_grace_start = None
         self.be_stop_active = True
         self.hard_stop      = self.entry_premium
+        self._log_decision("BREAKEVEN_ARMED", stop=self.hard_stop, be_guard=self._be_guard,
+                           be_grace_seconds=self._be_grace_seconds)
         self._sl_grace_active    = False
         self._sl_grace_start     = None
         self._sl_grace_down_bars = 0
@@ -347,6 +384,23 @@ class ExitManager:
 
             reason = "BREAKEVEN_STOP" if self.be_stop_active else "HARD_STOP"
 
+            # Post-TP1 breakeven grace — a fixed window from the first breach;
+            # at its end, still at/below breakeven → sell. The BE guard (old
+            # stop) and the worst-case floor (checked above) bypass it.
+            if self.be_stop_active and self._be_grace_seconds > 0:
+                if self._be_guard is not None and current_option_price <= self._be_guard:
+                    self._log_decision("BE_GRACE_BYPASSED", price=current_option_price, be_guard=self._be_guard)
+                    self._be_grace_start = None
+                    return self._action("CLOSE_ALL", self.qty_remaining, reason, current_option_price)
+                if self._be_grace_start is None:
+                    self._be_grace_start = datetime.now(ET)
+                    self._log_decision("BE_GRACE_STARTED", price=current_option_price,
+                                       stop=self.hard_stop, seconds=self._be_grace_seconds)
+                if (datetime.now(ET) - self._be_grace_start).total_seconds() >= self._be_grace_seconds:
+                    self._be_grace_start = None
+                    return self._action("CLOSE_ALL", self.qty_remaining, reason, current_option_price)
+                return self._action("HOLD", 0, "BE_GRACE")
+
             # Grace window only applies to the pre-TP1 hard stop — post-TP1 this
             # is protecting already-banked TP1 profit (breakeven), not giving a
             # fresh entry room to develop, so it exits on confirmation like normal.
@@ -355,6 +409,8 @@ class ExitManager:
                     self._sl_grace_active    = True
                     self._sl_grace_start     = datetime.now(ET)
                     self._sl_grace_down_bars = 0
+                    self._log_decision("SL_GRACE_STARTED", price=current_option_price, stop=self.hard_stop,
+                                       seconds=self._sl_grace_seconds, floor=self._sl_outer_floor)
                 # Back below the stop — any pending recovery confirmation is
                 # moot, since the price didn't actually hold above the line.
                 self._sl_recovery_start = None
@@ -372,6 +428,13 @@ class ExitManager:
             return self._action(action_type, qty, reason, current_option_price)
         else:
             self._sl_ticks = 0
+            # Breakeven grace keeps running through a bounce (no early
+            # cancel); when the window ends with price back above the stop,
+            # the breach is over — hold and clear the timer.
+            if (self._be_grace_start is not None
+                    and (datetime.now(ET) - self._be_grace_start).total_seconds() >= self._be_grace_seconds):
+                self._log_decision("BE_GRACE_HELD", price=current_option_price, stop=self.hard_stop)
+                self._be_grace_start = None
             if self._sl_grace_active:
                 if self._sl_grace_recovery_seconds <= 0:
                     # No recovery-confirmation window configured (e.g.
@@ -380,6 +443,7 @@ class ExitManager:
                     self._sl_grace_active    = False
                     self._sl_grace_down_bars = 0
                     self._sl_recovery_start  = None
+                    self._log_decision("SL_GRACE_CANCELLED", price=current_option_price, stop=self.hard_stop)
                 else:
                     if self._sl_recovery_start is None:
                         self._sl_recovery_start = datetime.now(ET)
@@ -391,6 +455,7 @@ class ExitManager:
                         self._sl_grace_active    = False
                         self._sl_grace_down_bars = 0
                         self._sl_recovery_start  = None
+                        self._log_decision("SL_GRACE_RECOVERED", price=current_option_price, stop=self.hard_stop)
                     # else: recovery still pending — grace stays active and
                     # its own deadline (checked above, on the next tick that's
                     # back at/below the stop) keeps counting uninterrupted.
@@ -546,8 +611,24 @@ class ExitManager:
 
     def _action(self, action_type: str, qty: int, reason: str,
                 current_premium: float = None) -> dict:
+        if action_type != "HOLD":
+            self._log_decision("EXIT", action=action_type, qty=qty, reason=reason, price=current_premium,
+                               stop=self.hard_stop, floor=self._sl_outer_floor if self._sl_floor_enabled else None,
+                               tp1=self.tp1, tp1_hit=self.tp1_hit, be_stop_active=self.be_stop_active,
+                               qty_remaining=self.qty_remaining)
         return {"type": action_type, "qty": qty, "reason": reason,
                 "current_premium": current_premium}
+
+    def _log_decision(self, event: str, **fields) -> None:
+        """One structured `[EXIT_DECISION] {json}` line per exit decision or
+        grace-state transition (never per HOLD tick) — grep a trade's whole
+        exit story by contract in the logs. Never raises."""
+        try:
+            payload = {"event": event, **self.log_context,
+                       **{k: (round(v, 4) if isinstance(v, float) else v) for k, v in fields.items()}}
+            logger.info("[EXIT_DECISION] %s", json.dumps(payload, default=str))
+        except Exception:
+            pass
 
     def on_underlying_bar(self, open_: float, close: float) -> None:
         """
@@ -632,7 +713,9 @@ class ExitManager:
                         sl_enabled: bool | None = None,
                         tp_enabled: bool | None = None,
                         sl_floor_enabled: bool | None = None,
-                        sl_outer_floor: float | None = None) -> dict:
+                        sl_outer_floor: float | None = None,
+                        be_grace_seconds: int | None = None,
+                        cancel_be_grace: bool = False) -> dict:
         """
         Validate and apply user-supplied SL/TP1/TP2 price and/or qty overrides
         to this (already open) position. Raises ValueError with a user-facing
@@ -700,6 +783,8 @@ class ExitManager:
             raise ValueError("hard_stop must be > 0")
         if sl_outer_floor is not None and sl_outer_floor <= 0:
             raise ValueError("sl_outer_floor must be > 0")
+        if be_grace_seconds is not None and not (0 <= be_grace_seconds <= BE_GRACE_MAX_SECONDS):
+            raise ValueError(f"be_grace_seconds must be between 0 and {BE_GRACE_MAX_SECONDS}")
         if runner_mode is not None and runner_mode not in ("trail", "be_hold", "none"):
             raise ValueError("runner_mode must be 'trail', 'be_hold', or 'none'")
         if tp1 is not None and tp1 <= self.entry_premium:
@@ -736,10 +821,13 @@ class ExitManager:
             self._sl_grace_enabled = grace_fields["sl_grace_enabled"]
             self._sl_grace_seconds = grace_fields.get("sl_grace_seconds", 0)
             self._sl_grace_recovery_seconds = grace_fields.get("sl_grace_recovery_seconds", 0)
+            # A stop-type switch never wipes the floor (2026-10-02): an
+            # explicitly-set floor price is kept as-is; otherwise the floor
+            # follows the new timer's default depth, and switching to Hard
+            # Stop (no default depth) keeps whatever floor is already armed.
             outer_floor_pct = grace_fields.get("sl_outer_floor_pct")
-            self._sl_outer_floor = (
-                self.entry_premium * (1 - outer_floor_pct) if outer_floor_pct is not None else None
-            )
+            if not self._sl_floor_custom and outer_floor_pct is not None:
+                self._sl_outer_floor = self.entry_premium * (1 - outer_floor_pct)
             if not self._sl_grace_enabled:
                 # Switching to Hard Stop cancels any grace window already in
                 # progress — a pending countdown shouldn't linger after the
@@ -787,7 +875,21 @@ class ExitManager:
             changed["sl_floor_enabled"] = sl_floor_enabled
         if sl_outer_floor is not None:
             self._sl_outer_floor = sl_outer_floor
+            self._sl_floor_custom = True
             changed["sl_outer_floor"] = round(sl_outer_floor, 4)
+        if be_grace_seconds is not None:
+            self._be_grace_seconds = be_grace_seconds
+            if be_grace_seconds == 0:
+                self._be_grace_start = None
+            changed["be_grace_seconds"] = be_grace_seconds
+        if cancel_be_grace and self._be_grace_start is not None:
+            # Trader chose to hold through this breach: stop the countdown,
+            # keep the position. The breakeven stop stays armed — still below
+            # it on the next confirmed tick starts a fresh window.
+            self._be_grace_start = None
+            changed["be_grace_cancelled"] = True
+        if changed:
+            self._log_decision("OVERRIDES_APPLIED", **{k: v for k, v in changed.items()})
         return changed
 
     def to_dict(self) -> dict:
@@ -846,6 +948,15 @@ class ExitManager:
             # on the SL-grace countdown and drive the Advanced on/off toggle.
             "sl_outer_floor":        round(self._sl_outer_floor, 4) if self._sl_outer_floor is not None else None,
             "sl_floor_enabled":      self._sl_floor_enabled,
+            "sl_floor_custom":       self._sl_floor_custom,
+            # Post-TP1 breakeven grace — configuration + live countdown.
+            "be_grace_seconds":      self._be_grace_seconds,
+            "be_grace_active":       self._be_grace_start is not None,
+            "be_grace_deadline":     (
+                (self._be_grace_start + timedelta(seconds=self._be_grace_seconds)).isoformat()
+                if self._be_grace_start else None
+            ),
+            "be_guard":              round(self._be_guard, 4) if self._be_guard is not None else None,
             # "Advanced" per-level qty overrides — null means "profile default".
             "sl_qty":                self._sl_qty_override,
             "tp1_qty":               self._tp1_qty_override,

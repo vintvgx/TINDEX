@@ -10,6 +10,8 @@ import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePr
 import { useApprovePendingEntry } from '@/hooks/mutations/strategy/useApprovePendingEntry';
 import { useSkipPendingEntry } from '@/hooks/mutations/strategy/useSkipPendingEntry';
 import type { PendingConfirmation } from '@/common/types/strategy';
+import { EntrySafetySelector, BE_GRACE_DEFAULT } from '@/common/components/trade/EntrySafetySelector';
+import { ExitPlanLadder } from '@/common/components/trade/ExitPlanLadder';
 
 interface Props {
   visible: boolean;
@@ -43,8 +45,11 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
   const [stopVal, setStopVal] = useState(pending.hard_stop.toFixed(2));
   const [tp1Val, setTp1Val]   = useState(pending.tp1.toFixed(2));
   const [tp2Val, setTp2Val]   = useState(pending.tp2 != null ? pending.tp2.toFixed(2) : '');
+  // Floor + breakeven grace for this entry (null floor = the strategy's own default).
+  const [floorPct, setFloorPct] = useState<number | null>(null);
+  const [beGrace, setBeGrace]   = useState<number>(BE_GRACE_DEFAULT);
   const [qty, setQty]         = useState(pending.qty);
-  const touched = useRef({ hard_stop: false, tp1: false, tp2: false });
+  const touched = useRef({ hard_stop: false, tp1: false, tp2: false, be_grace: false });
 
   const [, forceTick] = useState(0);
 
@@ -54,7 +59,7 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
     setTp1Val(pending.tp1.toFixed(2));
     setTp2Val(pending.tp2 != null ? pending.tp2.toFixed(2) : '');
     setQty(pending.qty);
-    touched.current = { hard_stop: false, tp1: false, tp2: false };
+    touched.current = { hard_stop: false, tp1: false, tp2: false, be_grace: false };
   }, [pending.id]);
 
   // Live preview keeps unedited fields in sync with the streaming premium —
@@ -80,7 +85,15 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
   const isBusy = approving || skipping;
 
   const handleEnter = () => {
-    const overrides: { hard_stop?: number; tp1?: number; tp2?: number; qty?: number } = {};
+    const overrides: {
+      hard_stop?: number; tp1?: number; tp2?: number; qty?: number;
+      sl_outer_floor_pct?: number; be_grace_seconds?: number;
+    } = {};
+    // Only send the breakeven grace when the stepper was actually touched —
+    // otherwise the strategy's own default (whatever the backend resolves)
+    // stays in effect instead of being clobbered by this sheet's default.
+    if (touched.current.be_grace) overrides.be_grace_seconds = beGrace;
+    if (floorPct != null) overrides.sl_outer_floor_pct = floorPct;
     if (touched.current.hard_stop) overrides.hard_stop = parseFloat(stopVal);
     if (touched.current.tp1) overrides.tp1 = parseFloat(tp1Val);
     if (touched.current.tp2 && tp2Val) overrides.tp2 = parseFloat(tp2Val);
@@ -255,6 +268,43 @@ export function PendingConfirmationModal({ visible, pending, onResolved }: Props
               placeholder="e.g. 0.65"
               placeholderTextColor={colors.textTertiary}
               style={{ backgroundColor: colors.background, borderRadius: 10, padding: 12, color: '#F59E0B', fontSize: 18, fontWeight: '700', borderWidth: 1, borderColor: '#F59E0B44' }}
+            />
+          </View>
+
+          {/* Floor + breakeven grace at entry, then the whole exit plan as a
+              ladder — what happens at each level, before the order goes in. */}
+          <View style={{ marginBottom: 16 }}>
+            <EntrySafetySelector colors={colors} floorPct={floorPct} onFloorPct={setFloorPct}
+              beGrace={beGrace} onBeGrace={v => { touched.current.be_grace = true; setBeGrace(v); }}
+              premium={livePremium} stopIsTimer={false}
+              defaultFloorHint="Default keeps this strategy's own floor setting, if it has one." />
+          </View>
+          <FieldLabel text="EXIT PLAN" colors={colors} />
+          <View style={{ marginBottom: 24 }}>
+            <ExitPlanLadder
+              colors={colors}
+              plan={{
+                premium: livePremium,
+                qty,
+                stopPrice: parseFloat(stopVal) || null,
+                stopLabel: 'Stop loss',
+                // Effective floor = the explicit choice, else the strategy's
+                // own default from the pending's effective profile — the same
+                // floor the backend arms on approval when the choice is left
+                // on Default. floorIsDefault tags it so the ladder shows
+                // "(default)" instead of implying the user picked it.
+                floorPrice: (() => {
+                  const ep = pending.effective_profile;
+                  const strategyFloorPct = ep?.sl_floor_enabled && ep.sl_outer_floor_pct != null
+                    ? ep.sl_outer_floor_pct : null;
+                  const eff = floorPct ?? strategyFloorPct;
+                  return eff != null ? livePremium * (1 - eff) : null;
+                })(),
+                floorIsDefault: floorPct == null,
+                beGraceSeconds: beGrace,
+                tp1Price: parseFloat(tp1Val) || null,
+                tp2Price: tp2Val ? parseFloat(tp2Val) || null : null,
+              }}
             />
           </View>
 
