@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, SafeAreaView, LayoutAnimation, Platform, UIManager,
-  StyleSheet, LayoutChangeEvent, useWindowDimensions,
+  LayoutChangeEvent, useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
@@ -11,6 +11,7 @@ import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft
 import { TVChart } from '@/common/components/ticker/TVChart';
 import { ZoneDetailSheet } from '@/common/components/ticker/ZoneDetailSheet';
 import { ChartBottomToolbar } from '@/common/components/ticker/ChartBottomToolbar';
+import { PositionsPager } from '@/common/components/ticker/PositionsPager';
 import { TechnicalsSheet } from '@/common/components/ticker/TechnicalsSheet';
 import { OptionsPositioningPanel } from '@/common/components/ticker/brief/TickerBrief';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
@@ -26,7 +27,7 @@ import { useMarketStream } from '@/hooks/useMarketStream';
 import { useChartLiveStream } from '@/hooks/queries/ticker/useChartLiveStream';
 import { useChartPriceSource } from '@/hooks/useChartPriceSource';
 import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
-import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
+import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
 import type { UseLivePositionsDataResult } from '@/common/components/strategy/LivePositionsSection';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { useHiddenPositions } from '@/hooks/useHiddenPositions';
@@ -446,21 +447,16 @@ export default function ChartsScreen() {
         openPositionCount={totalPositionsForTicker}
       />
 
-      {/* Position bar — phase 4 replaces this + the expanded list with the
-          docked swipe pager. Until then the toolbar's Positions button
-          toggles the same expansion. */}
-      <TouchableOpacity onPress={toggleExpanded} activeOpacity={0.8} style={[s.positionBar, { borderTopColor: colors.separator }]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <View style={[s.tickerDot, { backgroundColor: totalPositionsForTicker > 0 ? colors.success : colors.tabBarInactive, width: 7, height: 7, borderRadius: 3.5 }]} />
-          <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>{activeTicker}</Text>
-          <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
-            {totalPositionsForTicker > 0
-              ? `${totalPositionsForTicker} Position${totalPositionsForTicker === 1 ? '' : 's'} Open`
-              : 'No Positions'}
-          </Text>
-        </View>
-        <Ionicons name={expanded ? 'chevron-down' : 'chevron-up'} size={16} color={colors.textTertiary} />
-      </TouchableOpacity>
+      {/* Positions docked panel — expands below the toolbar, pushing the
+          chart up (chart keeps its min-height guard). One card per page,
+          swipe to paginate, LIVE/PAPER badge per card. */}
+      {expanded && (
+        <PositionsPager
+          data={positionsData}
+          ticker={activeTicker}
+          onLiveUpdate={handlePositionLiveUpdate}
+        />
+      )}
 
       <SearchBottomSheet
         visible={searchOpen}
@@ -482,32 +478,8 @@ export default function ChartsScreen() {
         context={zoneContext}
         onClose={() => setTvZoneSheetZone(null)}
       />
-
-      {expanded && (
-        <View style={{ paddingHorizontal: 16, paddingBottom: 12, maxHeight: 320, flexShrink: 1 }}>
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <LivePositionsBody
-              data={positionsData}
-              colors={colors}
-              emptyTitle="No Open Positions"
-              emptySubtitle={`Open ${activeTicker} positions will appear here.`}
-              hideChartButton
-            />
-          </ScrollView>
-        </View>
-      )}
     </SafeAreaView>
   );
 }
 
-const s = StyleSheet.create({
-  tickerDot: { width: 6, height: 6, borderRadius: 3 },
-  positionBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-});
+
