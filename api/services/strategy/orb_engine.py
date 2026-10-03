@@ -512,6 +512,11 @@ class ORBEngine:
                 )
                 return
             self._option_price_unavailable_logged = False
+            # Snapshot the breakeven-grace countdown state before evaluate():
+            # if this tick starts or ends it, the transition is persisted
+            # below so a restart resumes (or drops) the countdown instead
+            # of silently granting a fresh window.
+            be_grace_was_active = self.exit_manager._be_grace_start is not None
             action = self.exit_manager.evaluate(
                 current_option_price=current_option_price,
                 current_underlying_price=current_price,
@@ -541,6 +546,30 @@ class ORBEngine:
                     self._reversal_down_since = None
 
             self._handle_exit_action(action, current_price, current_option_price)
+
+            # Persist breakeven-grace countdown transitions (started / ended
+            # this tick) into the trade row's exit_overrides JSON so
+            # recover_position() can resume the remaining window after a
+            # restart instead of granting a fresh one. Transition-only, so
+            # this is at most two small writes per grace episode, not per
+            # tick. Best-effort: a failed persist only affects a later
+            # restart, never this session's in-memory countdown.
+            if self.exit_manager and self.active_trade_id:
+                be_grace_now = self.exit_manager._be_grace_start
+                if (be_grace_now is not None) != be_grace_was_active:
+                    try:
+                        self.logger.update_exit_levels(
+                            trade_id=self.active_trade_id,
+                            exit_overrides_patch={
+                                "be_grace_start":
+                                    be_grace_now.isoformat() if be_grace_now else None,
+                            },
+                        )
+                    except Exception:
+                        logger.error(
+                            "[ORBEngine] Failed to persist be_grace_start transition",
+                            exc_info=True,
+                        )
 
             # Contract price alerts — user-defined "notify me when THIS
             # CONTRACT hits $X" (contract_alert_routes.py / PositionInfoModal's
@@ -1605,8 +1634,12 @@ class ORBEngine:
         # Prefer the exact effective-profile snapshot captured at entry
         # (post-2026-07-14 trades) over re-deriving the named profile's
         # *default* thresholds — a manual/custom override wouldn't otherwise
-        # be recoverable from just the profile key.
-        profile = row.get("exit_overrides") or get_profile(self.profile_key)
+        # be recoverable from just the profile key. be_grace_start is runtime
+        # countdown state persisted alongside (see the tick handler), not a
+        # profile field — lift it out before the dict is used as a profile.
+        stored_overrides = dict(row.get("exit_overrides") or {})
+        be_grace_start_iso = stored_overrides.pop("be_grace_start", None)
+        profile = stored_overrides or get_profile(self.profile_key)
         fib_levels = dict(row.get("fib_targets") or {})
         fib_levels.setdefault("orh", row.get("orh"))
         fib_levels.setdefault("orl", row.get("orl"))
@@ -1645,6 +1678,31 @@ class ORBEngine:
             self.exit_manager.be_stop_active = True
         if {"TP2", "TP2_FULL_CLOSE"} & reasons_hit or row.get("tp2_premium") is not None:
             self.exit_manager.tp2_hit = True
+
+        # Resume an in-flight breakeven-grace countdown instead of granting
+        # a fresh window: the tick handler persists be_grace_start into
+        # exit_overrides when the countdown starts (and clears it when it
+        # ends). Only a timestamp still inside its window is honored — a
+        # stale one (grace ended pre-restart, or the persisted value was
+        # never cleared) is ignored and evaluate() starts fresh, which is
+        # the safe direction.
+        if be_grace_start_iso and self.exit_manager.be_stop_active:
+            try:
+                grace_start = datetime.fromisoformat(be_grace_start_iso)
+                if grace_start.tzinfo is None:
+                    grace_start = grace_start.replace(tzinfo=ET)
+                elapsed = (datetime.now(ET) - grace_start).total_seconds()
+                grace_secs = self.exit_manager._be_grace_seconds
+                if 0 <= elapsed < grace_secs:
+                    self.exit_manager._be_grace_start = grace_start
+                    logger.info(
+                        "[ORBEngine] Position recovery: resuming breakeven-grace "
+                        "countdown with %.0fs remaining (started %s)",
+                        grace_secs - elapsed, be_grace_start_iso,
+                    )
+            except Exception:
+                logger.error("[ORBEngine] Position recovery: bad be_grace_start %r — "
+                             "starting fresh", be_grace_start_iso, exc_info=True)
 
         # Exact persisted levels win over whatever the reconstructed profile
         # would recompute — except the breakeven stop, which must reflect the
@@ -2797,6 +2855,18 @@ class ORBEngine:
             # does — the remainder should be protected at breakeven with no
             # grace/timer, not left sitting on the original pre-sale stop.
             self.exit_manager.mark_breakeven()
+            # mark_breakeven() clears any in-flight grace countdown — clear
+            # the persisted start too so a restart can't resurrect it.
+            if self.active_trade_id:
+                try:
+                    self.logger.update_exit_levels(
+                        trade_id=self.active_trade_id,
+                        exit_overrides_patch={"be_grace_start": None},
+                    )
+                except Exception:
+                    logger.error(
+                        "[ORBEngine] Failed to clear persisted be_grace_start "
+                        "after manual partial sell", exc_info=True)
 
         # Same (exit - entry) * qty * 100 convention as TradeLogger.log_exit's
         # stage_pnl — options premium is quoted per-share, contracts are
