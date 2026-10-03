@@ -77,11 +77,17 @@ def positioning_inputs(symbol: str) -> tuple:
         calls = sum((_num(c.get(field)) or 0) for c in rows if c["type"] == "call")
         return round(puts / calls, 2) if calls > 0 else None
 
+    # No usable OI at all (e.g. Yahoo's overnight zero-fill): a volume/OI
+    # ratio is meaningless, so the unusual component stays out rather than
+    # firing a bogus "unusual flow" tailwind/headwind on missing data.
+    oi_available = any((_num(c.get("openInterest")) or 0) for c in contracts)
     unusual = []
     for c in contracts:
         vol = _num(c.get("volume")) or 0
         oi = _num(c.get("openInterest")) or 0
         if vol < UNUSUAL_MIN_VOLUME:
+            continue
+        if not oi_available:
             continue
         ratio = vol / max(oi, 1)
         if ratio >= UNUSUAL_RATIO:
