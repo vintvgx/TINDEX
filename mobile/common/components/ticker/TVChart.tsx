@@ -27,6 +27,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { Asset } from 'expo-asset';
+import * as FileSystem from 'expo-file-system';
 import { useThemeColors } from '@/lib/useColorScheme';
 import type { TickerHistoryData } from '@/common/types/blogPosts/ticker';
 import {
@@ -82,11 +83,13 @@ export function TVChart({
   const webViewRef = useRef<WebView>(null);
   const readyRef = useRef(false);
   const queueRef = useRef<WVOutbound[]>([]);
-  const [htmlUri, setHtmlUri] = useState<string | null>(null);
+  const [html, setHtml] = useState<string | null>(null);
   const [chartReady, setChartReady] = useState(false);
   const prevResetKey = useRef<string | undefined>(undefined);
 
-  // Load the bundled chart HTML via expo-asset (offline, no CDN).
+  // Load the bundled chart HTML via expo-asset, then read it into a string.
+  // source={{ html }} (not a file:// URI) is what reliably renders local
+  // HTML on iOS — file:// URLs hit "Unable to open URL" in the WebView.
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -94,7 +97,9 @@ export function TVChart({
         // Relative require — Metro bundles .html via the default assetExts.
         const asset = Asset.fromModule(require('../../../assets/tvchart.html'));
         await asset.downloadAsync();
-        if (alive) setHtmlUri(asset.localUri ?? asset.uri);
+        const uri = asset.localUri ?? asset.uri;
+        const htmlString = await FileSystem.readAsStringAsync(uri);
+        if (alive) setHtml(htmlString);
       } catch (e) {
         console.warn('[TVChart] failed to load tvchart.html asset', e);
       }
@@ -237,10 +242,11 @@ export function TVChart({
   // Rebuild the HTML if it's regenerated (dev).
   return (
     <View style={[{ flex: 1 }, style]}>
-      {htmlUri ? (
+      {html ? (
         <WebView
           ref={webViewRef}
-          source={{ uri: htmlUri }}
+          source={{ html, baseUrl: '' }}
+          originWhitelist={['*']}
           style={[StyleSheet.absoluteFill, { backgroundColor: colors.background }]}
           javaScriptEnabled
           domStorageEnabled={false}
