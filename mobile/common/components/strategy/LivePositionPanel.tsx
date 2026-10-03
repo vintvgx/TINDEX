@@ -151,7 +151,7 @@ export function LivePositionPanel({
   const showSL  = !noSL && !!display && display.hard_stop > 0;
   const showTp1 = tpEnabled && !!display && display.tp1 > 0;
   const showTp2Chip = tpEnabled && showTp2 && !!display && display.tp2 > 0 && display.tp2 !== display.tp1;
-  const slPulseStyle = useSlGracePulse(!!display?.sl_grace_active);
+  const slPulseStyle = useSlGracePulse(!!display?.sl_grace_active || !!display?.be_grace_active);
 
   const pnlColor = display
     ? (display.pnl >= 0 ? colors.success : colors.error)
@@ -292,6 +292,20 @@ export function LivePositionPanel({
             {/* SL grace-timer countdown — urgent, so it stays on the card
                 instead of behind a tap into the info sheet. */}
             {!noSL && <SlGraceBadge live={display} colors={colors} />}
+            {/* Worst-case floor — always visible (spec: never conditional on
+                stop type or on a floor existing). Shown for no-SL trades too
+                when one is armed, since the backend floor stays live even
+                with SL turned off. */}
+            {(!noSL || display.sl_outer_floor != null) && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 }}>
+                <Ionicons name="shield-outline" size={11} color={colors.textTertiary} />
+                <Text style={{ fontSize: 11, fontWeight: '600', color: colors.textTertiary }}>
+                  Floor {display.sl_outer_floor != null
+                    ? `$${display.sl_outer_floor.toFixed(2)}${display.sl_floor_enabled === false ? ' (off)' : ''}`
+                    : '— not set'}
+                </Text>
+              </View>
+            )}
           </>
         ) : (
           <ActivityIndicator size="small" color={colors.accent} style={{ marginTop: 10 }} />

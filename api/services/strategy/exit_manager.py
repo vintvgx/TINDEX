@@ -326,7 +326,9 @@ class ExitManager:
         it's triggered by TP1 auto-firing (see the TP1 branch in evaluate())
         or a manual partial sell (see ORBEngine.submit_manual_exit()): once
         some of the position has been banked, the remainder is protected at
-        breakeven with no grace/timer, not given fresh room to develop.
+        breakeven — a dip below it starts the be_grace_seconds countdown
+        (BE_GRACE) instead of selling on first touch, while the pre-TP1 stop
+        price is kept as the BE guard that still sells immediately.
         Clears any grace window already in progress rather than letting it
         run out against a stop that no longer applies — evaluate()'s grace
         branch is gated on `not self.be_stop_active` regardless, but this

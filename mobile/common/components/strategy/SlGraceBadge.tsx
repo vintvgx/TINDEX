@@ -77,7 +77,7 @@ export function SlGraceBadge({ live, colors, onCancelBeGrace, cancellingBeGrace 
           Breakeven check in {left}s — sells if still below
         </Text>
         <Text style={[styles.slGraceSubText, { color: colors.textSecondary }]}>
-          below the original stop sells immediately
+          Falling below the original stop sells immediately
         </Text>
         {onCancelBeGrace && (
           <Pressable
