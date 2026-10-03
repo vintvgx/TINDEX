@@ -226,30 +226,57 @@ export function TVChart({
     };
   }), [showWatchZones, watchZones, colors]);
 
-  // ORB band starts at the first 09:45 ET bar — the 09:30-09:45 range is
-  // what produces ORH/ORL, so it isn't shaded (same as AdvancedPriceChart).
-  const orbStartTime = useMemo(() => {
-    if (!showOrbRange || !orbRange || !candles?.length) return undefined;
-    for (const c of candles) {
-      const [hh, mm] = new Date(c.t * 1000).toLocaleString('en-US', {
-        timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
-      }).split(':').map(Number);
-      if (hh * 60 + mm >= 9 * 60 + 45) return c.t;
-    }
-    return undefined;
-  }, [showOrbRange, orbRange, candles]);
-
+  // Per-day ORB boxes (TradingView-style context): for each trading day in
+  // intraday data, the 09:30–09:45 ET high/low becomes a box from the first
+  // 09:45 bar to the day's last bar. Today's box prefers the backend's
+  // orbRange (1-min precision) when available. On daily+ bars there's no
+  // intraday data, so only today's backend box is drawn.
   const orbBands: TVZoneBand[] = useMemo(() => {
-    if (!showOrbRange || !orbRange) return [];
-    // TradingView's ORB box: teal fill, thin grey top/bottom edges, dashed
-    // midline, from the 09:45 bar to the last bar (not the right edge).
-    return [{
-      id: '__orb__', low: orbRange.low, high: orbRange.high,
-      startTime: orbStartTime, endTime: candles?.[candles.length - 1]?.t,
+    if (!showOrbRange || !candles?.length) return [];
+    const etParts = (t: number) => {
+      const s = new Date(t * 1000).toLocaleString('en-US', {
+        timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      });
+      const [date, hm] = s.split(', ');
+      const [hh, mm] = hm.split(':').map(Number);
+      return { date, mins: hh * 60 + mm };
+    };
+    const intraday = candles.length >= 2 && (candles[1].t - candles[0].t) < 86400;
+    const box = (id: string, low: number, high: number, startTime: number | undefined, endTime: number | undefined): TVZoneBand => ({
+      id, low, high, startTime, endTime,
       color: TV_UP, opacity: 0.18, edgeColor: TV_ORB_EDGE, edgeOpacity: 0.75,
       dashed: false, midline: true,
-    }];
-  }, [showOrbRange, orbRange, orbStartTime, candles]);
+    });
+    if (!intraday) {
+      if (!orbRange) return [];
+      return [box('__orb__', orbRange.low, orbRange.high, undefined, candles[candles.length - 1].t)];
+    }
+    const byDay = new Map<string, typeof candles>();
+    for (const c of candles) {
+      const { date } = etParts(c.t);
+      const arr = byDay.get(date);
+      if (arr) arr.push(c); else byDay.set(date, [c]);
+    }
+    const todayKey = etParts(candles[candles.length - 1].t).date;
+    const bands: TVZoneBand[] = [];
+    for (const [date, dc] of byDay) {
+      let hi = -Infinity, lo = Infinity, startT: number | undefined;
+      for (const c of dc) {
+        const { mins } = etParts(c.t);
+        if (mins >= 570 && mins < 585) {
+          if (c.h > hi) hi = c.h;
+          if (c.l < lo) lo = c.l;
+        }
+        if (mins >= 585 && startT === undefined) startT = c.t;
+      }
+      if (hi === -Infinity || startT === undefined) continue;
+      let high = hi, low = lo;
+      if (date === todayKey && orbRange) { high = orbRange.high; low = orbRange.low; }
+      bands.push(box(`__orb__${date}`, low, high, startT, dc[dc.length - 1].t));
+    }
+    return bands;
+  }, [showOrbRange, orbRange, candles]);
 
   useEffect(() => {
     if (!chartReady) return;

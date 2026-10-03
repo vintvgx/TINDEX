@@ -387,7 +387,7 @@ export default function ChartsScreen() {
               autoZones={autoZones}
               watchZones={chartWatchZones}
               orbRange={effectiveOrb}
-              showOrbRange={chart.showOrb && period === '1D'}
+              showOrbRange={chart.showOrb && (period === '1D' || period === '1W')}
               sessionReferenceLines={sessionReferenceLines}
               showSessionLines={chart.chartSettings.showSessionLines}
               referenceLines={chart.referenceLines}
