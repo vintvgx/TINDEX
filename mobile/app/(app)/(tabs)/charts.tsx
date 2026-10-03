@@ -11,6 +11,7 @@ import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft
 import { TVChart } from '@/common/components/ticker/TVChart';
 import { ZoneDetailSheet } from '@/common/components/ticker/ZoneDetailSheet';
 import { ChartBottomToolbar } from '@/common/components/ticker/ChartBottomToolbar';
+import { TechnicalsSheet } from '@/common/components/ticker/TechnicalsSheet';
 import { OptionsPositioningPanel } from '@/common/components/ticker/brief/TickerBrief';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
 import { useChartTape } from '@/common/components/ui/ChartTapeContext';
@@ -431,7 +432,13 @@ export default function ChartsScreen() {
         onSearchPress={() => setSearchOpen(true)}
         period={period}
         onPeriodChange={setPeriod}
-        technicalsContent={chart.technicalsContent}
+        technicalsContent={
+          <TechnicalsSheet
+            check={chart.technicals.data}
+            isLoading={chart.technicals.isLoading}
+            error={chart.technicals.error}
+          />
+        }
         positioningContent={<OptionsPositioningPanel ticker={activeTicker} />}
         settingsSections={chart.sections}
         onContractsPress={() => setContractsModalOpen(true)}
