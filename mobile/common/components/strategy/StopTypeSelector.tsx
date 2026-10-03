@@ -38,18 +38,19 @@ export function StopTypeSelector({
 }) {
   return (
     <View>
-      <View style={[styles.row, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      {/* UISegmentedControl look: one track, a raised selected segment. */}
+      <View style={[styles.row, { backgroundColor: colors.surfaceSecondary }]}>
         {OPTIONS.map(opt => {
           const active = value === opt.value;
           return (
             <TouchableOpacity
               key={String(opt.value)}
               onPress={() => onChange(opt.value)}
-              activeOpacity={0.75}
-              style={[styles.tab, active && { backgroundColor: colors.accent + '22' }]}
+              activeOpacity={0.6}
+              style={[styles.tab, active && [styles.tabActive, { backgroundColor: colors.card }]]}
             >
-              <Ionicons name={opt.icon} size={14} color={active ? colors.accent : colors.tabBarInactive} />
-              <Text style={[styles.tabLabel, { color: active ? colors.accent : colors.tabBarInactive }]}>
+              <Ionicons name={opt.icon} size={14} color={active ? colors.text : colors.textSecondary} />
+              <Text style={[styles.tabLabel, { color: active ? colors.text : colors.textSecondary, fontWeight: active ? '600' : '500' }]}>
                 {opt.label}
               </Text>
             </TouchableOpacity>
@@ -70,13 +71,16 @@ export function StopTypeSelector({
 
 const styles = StyleSheet.create({
   row: {
-    flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3, gap: 3,
+    flexDirection: 'row', borderRadius: 9, padding: 2, height: 34,
   },
   tab: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 5, paddingVertical: 8, borderRadius: 8,
+    gap: 5, borderRadius: 7,
   },
-  tabLabel: { fontSize: 12, fontWeight: '700' },
+  tabActive: {
+    shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1,
+  },
+  tabLabel: { fontSize: 13 },
   hintRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 5, marginTop: 6 },
   hintText: { fontSize: 11, flex: 1, lineHeight: 15 },
 });

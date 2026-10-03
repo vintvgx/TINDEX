@@ -141,6 +141,55 @@ export function useToggleORBFollow(ticker?: string) {
 }
 
 /**
+ * Star / unstar a ticker for zone-alert priority (notification engine v2):
+ * starred tickers get quiet pushes for approaches and active pushes for
+ * confirmations; unstarred ones get approaches in-app only and quiet
+ * confirmations. Until any ticker is starred, every followed ticker is
+ * treated as starred (see api/services/notifications/alert_router.py).
+ * Stored on the user_stock_follows row — inserted with orb_enabled=false if
+ * the ticker isn't followed yet, so the star never turns ORB monitoring on.
+ */
+export function useToggleAlertStar(ticker?: string) {
+  const {
+    authState: { user },
+  } = useAuth();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (starred: boolean) => {
+      if (!user) throw new Error("User not authenticated");
+      if (!ticker) throw new Error("Ticker not set");
+      const normalizedTicker = ticker.toUpperCase();
+
+      const { data: existing, error: fetchError } = await supabase
+        .from("user_stock_follows")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("ticker", normalizedTicker)
+        .maybeSingle();
+      if (fetchError) throw fetchError;
+
+      if (existing) {
+        const { error } = await supabase
+          .from("user_stock_follows")
+          .update({ alert_starred: starred, updated_at: new Date().toISOString() })
+          .eq("user_id", user.id)
+          .eq("ticker", normalizedTicker);
+        if (error) throw error;
+        return starred;
+      }
+      if (!starred) return starred;
+      const { error } = await supabase
+        .from("user_stock_follows")
+        .insert({ user_id: user.id, ticker: normalizedTicker, orb_enabled: false, alert_starred: true });
+      if (error) throw error;
+      return starred;
+    },
+    onSuccess: () => invalidateORBFollowQueries(queryClient),
+  });
+}
+
+/**
  * Hook to get all ORB-enabled tickers for a user
  */
 export function useUserORBFollows() {

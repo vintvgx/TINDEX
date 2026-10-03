@@ -568,12 +568,14 @@ class StrategyNotifier:
             user_ids=[user_id],
         )
 
-    def notify_zone_alert(self, title: str, body: str, user_ids: list[str], data: dict | None = None):
+    def notify_zone_alert(self, title: str, body: str, user_ids: list[str], data: dict | None = None,
+                          interruption_level: str = "active"):
         """
-        StructureTracker zone alert (approach / volume-confirmed break) for
-        a ticker — sent only to `user_ids` (the users who follow that
-        ticker), never broadcast. Gated on the `zone_alerts` preference.
-        The tracker enforces its own per-ticker daily cap before calling this.
+        StructureTracker zone alert, already routed by AlertRouter (channel,
+        throttle, digest — see services/notifications/alert_router.py). Sent
+        only to `user_ids`, never broadcast. Gated on the `zone_alerts`
+        preference. `interruption_level` "passive" = quiet: Notification
+        Center + badge, no sound or vibration (iOS).
         """
         self._dispatch(
             title=title,
@@ -582,6 +584,7 @@ class StrategyNotifier:
             priority=P_MARKET,
             pref_key="zone_alerts",
             user_ids=user_ids,
+            interruption_level=interruption_level,
         )
 
     def notify_review_ready(self, review_date: str, trade_count: int, net_pnl: float,
@@ -640,7 +643,7 @@ class StrategyNotifier:
 
     def _dispatch(self, title: str, body: str, data: dict | None = None,
                   priority: int = P_INFO, pref_key: str | None = None,
-                  user_ids: list[str] | None = None):
+                  user_ids: list[str] | None = None, interruption_level: str | None = None):
         """
         Enqueue a notification. The worker thread drains in (priority, seq) order,
         so lower priority values always arrive on-device first. Items at the same
@@ -660,7 +663,7 @@ class StrategyNotifier:
         with self._seq_lock:
             seq = self._seq
             self._seq += 1
-        self._queue.put((priority, seq, (title, body, data or {}, pref_key, user_ids)))
+        self._queue.put((priority, seq, (title, body, data or {}, pref_key, user_ids, interruption_level)))
 
     # Seconds to wait between consecutive notifications. Gives iOS enough time to
     # deliver each banner individually so none are silently collapsed by the system.
@@ -680,33 +683,35 @@ class StrategyNotifier:
         last_sent_priority = None
         while True:
             try:
-                priority, seq, (title, body, data, pref_key, user_ids) = self._queue.get()
+                priority, seq, (title, body, data, pref_key, user_ids, interruption_level) = self._queue.get()
                 # Skip the inter-notification delay for trade exits — stops and TPs
                 # are time-critical and should arrive as fast as possible.
                 if last_sent_priority is not None and priority != P_TRADE_EXIT:
                     time.sleep(self.INTER_NOTIFICATION_DELAY)
-                self._send_all(title, body, data, pref_key, user_ids)
+                self._send_all(title, body, data, pref_key, user_ids, interruption_level)
                 last_sent_priority = priority
                 self._queue.task_done()
             except Exception as e:
                 logger.error("[StrategyNotifier] drain error: %s", e)
 
     def _send_all(self, title: str, body: str, data: dict, pref_key: str | None = None,
-                  user_ids: list[str] | None = None):
+                  user_ids: list[str] | None = None, interruption_level: str | None = None):
         tokens = self._fetch_tokens(pref_key, user_ids)
         if not tokens:
             return
+        message = {"title": title, "body": body, "data": data, "sound": "default"}
+        if interruption_level:
+            # iOS interruption level (Expo push field). "passive" lands in
+            # Notification Center + badge without lighting the screen, so it
+            # also goes out silent.
+            message["interruptionLevel"] = interruption_level
+            if interruption_level == "passive":
+                message.pop("sound")
         for token in tokens:
             try:
                 resp = requests.post(
                     EXPO_PUSH_URL,
-                    json={
-                        "to":    token,
-                        "title": title,
-                        "body":  body,
-                        "data":  data,
-                        "sound": "default",
-                    },
+                    json={"to": token, **message},
                     headers={
                         "Accept":          "application/json",
                         "Accept-Encoding": "gzip, deflate",

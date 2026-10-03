@@ -6,6 +6,7 @@ import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
 import { useAutoZonesVisibility } from '@/hooks/useAutoZonesVisibility';
 import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
 import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
+import { usePositioning, type PositioningRead } from '@/hooks/queries/ticker/useTickerBrief';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 
 /**
@@ -29,13 +30,18 @@ interface Options {
 
 export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, extraOverlayRows = [] }: Options) {
   const { prefs, setPref } = useChartDisplayPrefs();
-  const { mode, showSessionLines, showStrip, showVwap, showEma, showOrb } = prefs;
+  const { mode, showSessionLines, showStrip, showVwap, showEma, showOrb, showWalls } = prefs;
   const setMode = (v: ChartMode | null) => setPref('mode', v);
   const setShowSessionLines = (v: boolean) => setPref('showSessionLines', v);
   const setShowStrip = (v: boolean) => setPref('showStrip', v);
   const setShowVwap = (v: boolean) => setPref('showVwap', v);
   const setShowEma = (v: boolean) => setPref('showEma', v);
   const setShowOrb = (v: boolean) => setPref('showOrb', v);
+  const setShowWalls = (v: boolean) => setPref('showWalls', v);
+  // Options walls are an intraday read (0DTE / near-term OI) — drawn on the
+  // 1D and 1W views only, refreshed on the same ~90s cadence as zones.
+  const wallsActive = showWalls && (period === '1D' || period === '1W');
+  const positioning = usePositioning(ticker, 'CALL', null, wallsActive);
   const [watchMode, setWatchMode] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const { visible: showWatchZones, setVisible: setShowWatchZones } = useWatchZonesVisibility();
@@ -51,8 +57,11 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
   const technicals = useChartTechnicals(ticker, showStrip || showVwap || showEma || modalOpen);
 
   const referenceLines: ChartReferenceLine[] = useMemo(
-    () => technicalsReferenceLines(technicals.data, period, { vwap: showVwap, ema: showEma }),
-    [technicals.data, period, showVwap, showEma],
+    () => [
+      ...technicalsReferenceLines(technicals.data, period, { vwap: showVwap, ema: showEma }),
+      ...(wallsActive ? optionsWallLines(positioning.data?.data ?? null) : []),
+    ],
+    [technicals.data, period, showVwap, showEma, wallsActive, positioning.data],
   );
 
   const chartSettings: ChartDisplaySettings = { mode, showSessionLines, watchMode, onWatchModeChange: setWatchMode };
@@ -104,6 +113,9 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
         { kind: 'toggle', key: 'autoZones', icon: 'grid-outline', label: 'Auto-detected zones',
           description: 'Support/resistance ZoneEngine finds automatically, scored by confluence (separate from your own watch levels)',
           value: showAutoZones, onChange: setShowAutoZones },
+        { kind: 'toggle', key: 'walls', icon: 'reorder-four-outline', label: 'Options walls',
+          description: 'Top call/put open-interest strikes (dotted) and expiry-day max pain — 1D/1W, ~15 min delayed',
+          value: showWalls, onChange: setShowWalls },
         ...extraOverlayRows,
         { kind: 'toggle', key: 'crosshair', icon: 'locate-outline', label: 'Data points',
           description: 'Tap-and-hold the chart to inspect an exact price/time',
@@ -127,4 +139,41 @@ export function useChartSettings({ ticker, period, colors, canMarkWatchLevel, ex
     technicalsContent,
     onTechnicalsOpenChange: setModalOpen,
   };
+}
+
+// Faint dotted wall lines — gray for call walls, purple for put walls, so
+// they never read as zone bands (shaded) or user levels (solid) — plus an
+// amber max-pain line on the front expiry's expiration day only. Walls more
+// than WALL_MAX_DISTANCE_PCT from price are skipped: every reference line is
+// folded into the y-axis, and a far strike would flatten the candles.
+const WALL_CALL_COLOR = '#8E8E93';
+const WALL_PUT_COLOR = '#A78BFA';
+const MAX_PAIN_COLOR = '#F5A524';
+const WALL_MAX_DISTANCE_PCT = 0.03;
+
+function fmtOi(n: number) {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+function etToday() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
+export function optionsWallLines(p: PositioningRead | null): ChartReferenceLine[] {
+  const spot = p?.inputs.spot;
+  if (!p || !spot) return [];
+  const near = (k: number) => Math.abs(k - spot) / spot <= WALL_MAX_DISTANCE_PCT;
+  const fmtStrike = (k: number) => `$${k.toFixed(2)}`;
+  const lines: ChartReferenceLine[] = [
+    ...p.inputs.call_walls.filter(w => near(w.strike)).map(w => ({
+      label: `${fmtStrike(w.strike)} · ${fmtOi(w.open_interest)}`, price: w.strike, color: WALL_CALL_COLOR, dash: '2,4',
+    })),
+    ...p.inputs.put_walls.filter(w => near(w.strike)).map(w => ({
+      label: `${fmtStrike(w.strike)} · ${fmtOi(w.open_interest)}`, price: w.strike, color: WALL_PUT_COLOR, dash: '2,4',
+    })),
+  ];
+  if (p.inputs.max_pain != null && p.inputs.front_expiry === etToday() && near(p.inputs.max_pain)) {
+    lines.push({ label: `Max pain ${fmtStrike(p.inputs.max_pain)}`, price: p.inputs.max_pain, color: MAX_PAIN_COLOR, dash: '2,4' });
+  }
+  return lines;
 }
