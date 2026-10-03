@@ -21,6 +21,13 @@ const ROUTE_BY_SCREEN: Record<string, string> = {
   // Home (feed.tsx) — the Market Digest modal presents on top of it, same
   // pattern as `section` deep-links into the Home pager (see feed.tsx).
   market_digest: '/(app)/(tabs)/feed',
+  // Morning brief (brief / confirm / order pushes) — the ORB tab's Brief page.
+  brief:         '/(app)/(tabs)/orb',
+};
+
+/** Screens that live as a page of a pager: push the pager with ?section=. */
+const SECTION_BY_SCREEN: Record<string, string> = {
+  brief: 'brief',
 };
 
 /**
@@ -45,6 +52,7 @@ export function navigateFromNotification(data: NotificationData | undefined | nu
   if (!path) return;
 
   const params: Record<string, string> = {};
+  if (SECTION_BY_SCREEN[screen])    params.section = SECTION_BY_SCREEN[screen];
   if (data.symbol != null)          params.symbol = String(data.symbol);
   if (data.paper_mode != null)      params.paper_mode = String(data.paper_mode);
   if (data.review_date != null)     params.review_date = String(data.review_date);

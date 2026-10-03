@@ -587,6 +587,24 @@ class StrategyNotifier:
             interruption_level=interruption_level,
         )
 
+    def notify_brief_event(self, title: str, body: str, user_ids: list[str],
+                           data: dict | None = None, interruption_level: str = "active"):
+        """
+        Morning brief (services/brief/brief_service.py): the 9:00 brief, a
+        changed top 4, a confirm-first play awaiting approval, and limit-order
+        FILLED / CANCELLED results. Sent only to `user_ids`. Gated on the
+        `morning_brief` preference.
+        """
+        self._dispatch(
+            title=title,
+            body=body,
+            data={"screen": "brief", **(data or {})},
+            priority=P_TRADE_ENTRY if interruption_level == "active" else P_MARKET,
+            pref_key="morning_brief",
+            user_ids=user_ids,
+            interruption_level=interruption_level,
+        )
+
     def notify_review_ready(self, review_date: str, trade_count: int, net_pnl: float,
                              paper_mode: bool = True):
         """Daily performance review finished generating and saving for ONE account.

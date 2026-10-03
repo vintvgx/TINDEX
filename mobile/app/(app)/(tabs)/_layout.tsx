@@ -62,6 +62,7 @@ function Shell() {
                 real routes (router.push target for deep-linking a section). */}
             <Tabs.Screen name="dashboard" options={{ href: null }} />
             <Tabs.Screen name="monitor" options={{ href: null }} />
+            <Tabs.Screen name="brief" options={{ href: null }} />
             <Tabs.Screen name="strategy" options={{ href: null }} />
             <Tabs.Screen name="tradelog" options={{ href: null }} />
             <Tabs.Screen name="daily_review" options={{ href: null }} />

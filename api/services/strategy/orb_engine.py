@@ -1396,7 +1396,8 @@ class ORBEngine:
 
     def _execute_entry(self, direction: str, contract: dict, qty: int,
                        effective_profile: dict, fib_levels: dict, manual: bool = False,
-                       profile_key_override: str | None = None):
+                       profile_key_override: str | None = None,
+                       prefilled_order=None, trade_type_override: str | None = None):
         """
         Submit the market order, set trade state, initialise ExitManager, log and
         notify. Shared by the auto path (_enter_trade) and the manual conviction
@@ -1405,15 +1406,24 @@ class ORBEngine:
         profile_key_override: the profile key actually used for this trade (differs
         from self.profile_key when the user selects a profile at trade submission time).
         Always pass this from submit_manual_trade so immediate trades log correctly.
+
+        prefilled_order: an order that's ALREADY filled (the morning brief's
+        managed limit buy — services/brief/limit_entry.py). Skips submitting a
+        market order and runs only the post-fill setup below, anchored to that
+        order's fill price. trade_type_override labels the trade log row (e.g.
+        "BRIEF") so brief trades can be counted for the daily kill switch.
         """
         try:
-            order_req = MarketOrderRequest(
-                symbol=contract["symbol"],
-                qty=qty,
-                side=OrderSide.BUY,
-                time_in_force=TimeInForce.DAY
-            )
-            submitted = self.trading_client.submit_order(order_req)
+            if prefilled_order is not None:
+                submitted = prefilled_order
+            else:
+                order_req = MarketOrderRequest(
+                    symbol=contract["symbol"],
+                    qty=qty,
+                    side=OrderSide.BUY,
+                    time_in_force=TimeInForce.DAY
+                )
+                submitted = self.trading_client.submit_order(order_req)
 
             # Prefer the actual fill price over the pre-order ask so that all
             # TP/SL levels are anchored to what was actually paid.
@@ -1488,7 +1498,7 @@ class ORBEngine:
             # (immediate trades). This fixes the bug where all immediate trades were
             # logged as THUNDER_CAT regardless of the profile the user picked.
             logged_profile_key = profile_key_override or self.profile_key
-            trade_type = "IMMEDIATE" if manual else "STRATEGY"
+            trade_type = trade_type_override or ("IMMEDIATE" if manual else "STRATEGY")
 
             # Update engine's profile_key so /immediate-positions reflects it correctly.
             if profile_key_override:

@@ -394,6 +394,77 @@ PROFILES = {
         "vix_max_override":        35,
     },
     # ─── PRECISION — Disciplined, ATM, tight stop ────────────────────────────────
+    # ─── Morning-brief scalp tiers (2026-10-03) ───────────────────────────────
+    # Used by the morning brief's auto/confirm entries. Size is chosen by the
+    # contract's premium (see services/brief/entry_rules.size_tier):
+    #   premium ≤ $1.00 → SCALP_30_100 (3 contracts)
+    #   premium ≤ $1.50 → SCALP_50     (2 contracts)
+    #   premium ≤ $2.50 → SCALP_100    (1 contract)
+    # Same −30% hard stop and fast-cut behaviour as SCALPER.
+    "SCALP_30_100": {
+        "qty_contracts":           3,
+        "max_loss_pct":            0.30,
+        "tp1_mult":                1.30,
+        "tp2_mult":                2.00,
+        # 1 at TP1 (+30%), 1 at TP2 (+100%), 1 runner — same split as SCALPER.
+        "tp1_close_pct":           0.34,
+        "tp2_close_pct":           0.50,
+        "use_tp2":                 True,
+        "runner_trail_pct":        0.25,
+        "runner_mode":             "trail",
+        "sl_confirm_ticks":        1,
+        "volume_exit":             False,
+        "volume_exit_threshold":   0.25,
+        "strike_offset_min":       0.50,
+        "strike_offset_max":       1.50,
+        "target_delta_min":        0.20,
+        "target_delta_max":        0.60,
+        "eod_buffer_minutes":      30,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        35,
+    },
+    "SCALP_50": {
+        "qty_contracts":           2,
+        "max_loss_pct":            0.30,
+        "tp1_mult":                1.50,
+        "tp2_mult":                2.00,   # unused — 2 contracts: TP1 sells 1, the other is the runner
+        "tp1_close_pct":           0.50,
+        "tp2_close_pct":           1.00,
+        "use_tp2":                 False,
+        "runner_trail_pct":        0.25,
+        "runner_mode":             "trail",
+        "sl_confirm_ticks":        1,
+        "volume_exit":             False,
+        "volume_exit_threshold":   0.25,
+        "strike_offset_min":       0.50,
+        "strike_offset_max":       1.50,
+        "target_delta_min":        0.20,
+        "target_delta_max":        0.60,
+        "eod_buffer_minutes":      30,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        35,
+    },
+    "SCALP_100": {
+        "qty_contracts":           1,
+        "max_loss_pct":            0.30,
+        "tp1_mult":                2.00,   # single contract: TP +100% closes it
+        "tp2_mult":                2.00,
+        "tp1_close_pct":           1.00,
+        "tp2_close_pct":           1.00,
+        "use_tp2":                 False,
+        "runner_trail_pct":        0.25,
+        "runner_mode":             "trail",
+        "sl_confirm_ticks":        1,
+        "volume_exit":             False,
+        "volume_exit_threshold":   0.25,
+        "strike_offset_min":       0.50,
+        "strike_offset_max":       1.50,
+        "target_delta_min":        0.20,
+        "target_delta_max":        0.60,
+        "eod_buffer_minutes":      30,
+        "breakout_time_limit_min": 240,
+        "vix_max_override":        35,
+    },
     "PRECISION": {
         "qty_contracts":           2,
         "max_loss_pct":            0.25,
@@ -698,6 +769,10 @@ GRACE_OVERRIDE_KEYS = {
     "sl_grace_recovery_seconds", "sl_outer_floor_pct",
     "runner_trail_confirm_seconds",
     "disable_tp1_exit", "use_tp2", "tp1_close_pct", "tp2_close_pct",
+    # Entry-time floor + post-TP1 breakeven grace (2026-10-02 exit
+    # hardening) — without these, get_profile() silently dropped the floor's
+    # custom flag and the chosen breakeven grace on every immediate trade.
+    "sl_floor_custom", "sl_floor_enabled", "be_grace_seconds",
 }
 
 

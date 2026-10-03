@@ -104,9 +104,11 @@ from routes.contract_alert_routes import bp as contract_alerts_bp
 from routes.market_digest_routes import market_digest_bp
 from routes.muse import bp as muse_bp
 from routes.ticker_brief_routes import bp as ticker_brief_bp
+from routes.brief_routes import bp as brief_bp
 
 app.register_blueprint(ticker_bp)
 app.register_blueprint(ticker_brief_bp)
+app.register_blueprint(brief_bp)
 app.register_blueprint(yahoo_bp)
 app.register_blueprint(monitoring_bp)
 app.register_blueprint(options_bp)
@@ -361,6 +363,14 @@ try:
         ).start()
     except Exception as _structure_boot_err:
         logger.warning("[App] Structure tracker start failed: %s", _structure_boot_err)
+
+    # Morning brief: if today's brief is already locked (a mid-session
+    # restart), resume watching its armed plays' live bars.
+    try:
+        from services.brief.brief_service import get_brief_service
+        get_brief_service().start_watching()
+    except Exception as _brief_boot_err:
+        logger.warning("[App] Morning brief resume failed: %s", _brief_boot_err)
 
     # Daily 9 AM ET heads-up (1 day / 2 days / this week) for any open position
     # approaching its own expiration — the replacement for the blanket EOD
