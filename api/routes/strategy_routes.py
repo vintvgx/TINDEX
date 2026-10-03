@@ -854,6 +854,17 @@ def update_strategy_exits(strategy_id: str):
         return jsonify({"status": "error", "message": "No active position — nothing to update"}), 409
 
     data = request.get_json() or {}
+    # be_grace_seconds / sl_outer_floor are converted BEFORE the kwargs dict
+    # is built: int()/float() on a garbage value raises outside the
+    # apply_overrides try/except below, which would 500 instead of 400.
+    try:
+        be_grace_seconds = (int(data["be_grace_seconds"])
+                            if data.get("be_grace_seconds") is not None else None)
+        sl_outer_floor = (float(data["sl_outer_floor"])
+                          if "sl_outer_floor" in data else None)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error",
+                        "message": "be_grace_seconds must be an integer 0-120; sl_outer_floor must be a number"}), 400
     kwargs = {
         "hard_stop": float(data["hard_stop"]) if "hard_stop" in data else None,
         "tp1":       float(data["tp1"]) if "tp1" in data else None,
@@ -866,8 +877,8 @@ def update_strategy_exits(strategy_id: str):
         "sl_enabled": data["sl_enabled"] if "sl_enabled" in data else None,
         "tp_enabled": data["tp_enabled"] if "tp_enabled" in data else None,
         "sl_floor_enabled": data["sl_floor_enabled"] if "sl_floor_enabled" in data else None,
-        "sl_outer_floor": float(data["sl_outer_floor"]) if "sl_outer_floor" in data else None,
-        "be_grace_seconds": int(data["be_grace_seconds"]) if data.get("be_grace_seconds") is not None else None,
+        "sl_outer_floor": sl_outer_floor,
+        "be_grace_seconds": be_grace_seconds,
         # Cancel a running breakeven-grace countdown (hold the position) —
         # the edit sheet's Cancel button. In-memory only, nothing to persist.
         "cancel_be_grace": bool(data.get("cancel_be_grace", False)),
@@ -1275,14 +1286,20 @@ def _entry_exit_fields(data: dict, exit_overrides: dict):
     the trade's effective-profile snapshot, so they also survive a restart.
     Returns an error message for bad input, else None."""
     if data.get("sl_outer_floor_pct") is not None:
-        pct = float(data["sl_outer_floor_pct"])
+        try:
+            pct = float(data["sl_outer_floor_pct"])
+        except (TypeError, ValueError):
+            return "sl_outer_floor_pct must be a number between 0.05 and 0.99"
         if not 0.05 <= pct <= 0.99:
             return "sl_outer_floor_pct must be between 0.05 and 0.99"
         exit_overrides["sl_outer_floor_pct"] = pct
         exit_overrides["sl_floor_custom"] = True
         exit_overrides["sl_floor_enabled"] = True
     if data.get("be_grace_seconds") is not None:
-        secs = int(data["be_grace_seconds"])
+        try:
+            secs = int(data["be_grace_seconds"])
+        except (TypeError, ValueError):
+            return "be_grace_seconds must be an integer between 0 and 120"
         if not 0 <= secs <= 120:
             return "be_grace_seconds must be between 0 and 120"  # default when omitted: 60
         exit_overrides["be_grace_seconds"] = secs
