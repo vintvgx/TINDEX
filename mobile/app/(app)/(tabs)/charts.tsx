@@ -195,7 +195,10 @@ export default function ChartsScreen() {
     ticker: activeTicker,
     period,
     interval: chartInterval,
-    pollMs: period === '1D' ? 30_000 : undefined,
+    // Every intraday bar size, not just the 1D range — the hook ignores it
+    // for daily+ bars. Live ticks (streamPrice → TVChart) move the forming
+    // candle between polls; the poll brings in real volume/corrections.
+    pollMs: 30_000,
     enabled: useTVChart,
   });
   const historyData = useTVChart ? lazyHistory.data : legacyHistoryData;
@@ -234,6 +237,10 @@ export default function ChartsScreen() {
   const { livePrices } = useMarketStream([activeTicker], { enabled: true });
   const alpacaUsable = useAlpacaStream && !chartStream.error && chartStream.price != null;
   const resolvedLivePrice = alpacaUsable ? chartStream.price! : livePrices[activeTicker] ?? stockData?.current_price;
+  // Streamed prices only (Alpaca, else the /ws/prices feed) — never the REST
+  // snapshot, which can be minutes old and would paint a stale price into
+  // the forming candle.
+  const streamPrice = alpacaUsable ? chartStream.price! : livePrices[activeTicker] ?? null;
 
   const dayRefPrice = (stockData?.current_price != null && stockData?.price_change != null)
     ? stockData.current_price - stockData.price_change
@@ -245,7 +252,8 @@ export default function ChartsScreen() {
   // same dashed reference-line rendering AdvancedPriceChart already has for
   // entry/TP/stop levels.
   const sessionReferenceLines: ChartReferenceLine[] | null = useMemo(() => {
-    if (period !== '1D' || !historyData?.session_lines) return null;
+    // Intraday views only (1D/1W) — the lines describe today's session.
+    if ((period !== '1D' && period !== '1W') || !historyData?.session_lines) return null;
     const sl = historyData.session_lines;
     const lines: ChartReferenceLine[] = [];
     if (sl.pre_market_close != null) {
@@ -606,7 +614,7 @@ export default function ChartsScreen() {
               sessionReferenceLines={sessionReferenceLines}
               showSessionLines={chart.chartSettings.showSessionLines}
               referenceLines={chart.referenceLines}
-              livePrice={resolvedLivePrice ?? null}
+              livePrice={streamPrice}
               onAutoZoneTap={handleTVAutoZoneTap}
               onWatchZoneTap={handleTVWatchZoneTap}
               resetKey={`${activeTicker}:${period}:${chartInterval}`}

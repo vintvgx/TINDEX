@@ -73,8 +73,20 @@ async function postHistory(ticker: string, body: object, signal?: AbortSignal): 
   }
 }
 
-/** Merge two bar payloads: dedupe by date, ascending chronological order. */
-function mergeHistory(a: TickerHistoryData, b: TickerHistoryData): TickerHistoryData {
+/** Merge `incoming` into `current`: dedupe by date, ascending order.
+ *  On a duplicate timestamp the INCOMING bar wins — a tail poll re-fetches
+ *  the still-forming bar, and keeping the stale copy (the old behavior)
+ *  meant the live candle never updated, only new ones got appended.
+ *  Session lines come from the incoming payload only when it's the live
+ *  tail (`sessionFromIncoming`); a backfill window's lines describe some
+ *  older day and must not replace today's. */
+function mergeHistory(
+  current: TickerHistoryData,
+  incoming: TickerHistoryData,
+  sessionFromIncoming = false,
+): TickerHistoryData {
+  const a = incoming;
+  const b = current;
   const seen = new Set<string>();
   const dates: string[] = [];
   const prices: number[] = [];
@@ -106,8 +118,10 @@ function mergeHistory(a: TickerHistoryData, b: TickerHistoryData): TickerHistory
     opens: at(opens),
     highs: at(highs),
     lows: at(lows),
-    interval: a.interval ?? b.interval,
-    session_lines: a.session_lines ?? b.session_lines,
+    interval: b.interval ?? a.interval,
+    session_lines: sessionFromIncoming
+      ? (incoming.session_lines ?? current.session_lines)
+      : current.session_lines,
   };
 }
 
@@ -226,7 +240,7 @@ export function useLazyTickerHistory(opts: {
       try {
         const end = addDays(etToday(), 1);
         const data = await postHistory(ticker, { interval, start: addDays(end, -TAIL_DAYS), end });
-        setBars((prev) => (prev ? mergeHistory(prev, data) : data));
+        setBars((prev) => (prev ? mergeHistory(prev, data, true) : data));
       } catch {
         /* next poll retries */
       }

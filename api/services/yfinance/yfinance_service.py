@@ -327,9 +327,22 @@ def get_historical_window(ticker: str, interval: str, start, end) -> dict:
         logger.warning(f"Windowed history fetch failed for {ticker} ({interval} {start_d}..{end_d}): {str(e)}")
         hist = pd.DataFrame()
 
+    # Pre-Market / Market Close / Post-Market lines for the window's latest
+    # day, from the untrimmed extended-hours bars. Unlike the 1D period
+    # path these are included during regular hours too — the helper only
+    # emits boundaries that have already passed, so during the session that
+    # is just the pre-market close (TradingView keeps that line all day).
+    session_lines = (
+        _session_boundary_lines(_latest_date_only(hist))
+        if prepost and not hist.empty
+        else None
+    )
     if prepost:
         hist = _regular_session_all_days(hist)
-    return _serialize_history(hist, interval)
+    result = _serialize_history(hist, interval)
+    if session_lines:
+        result["session_lines"] = session_lines
+    return result
 
 
 def _is_regular_trading_hours(now_et: "datetime | None" = None) -> bool:

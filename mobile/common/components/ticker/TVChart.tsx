@@ -78,6 +78,8 @@ interface TVTheme {
 type WVOutbound =
   | { type: 'init'; theme: TVTheme }
   | { type: 'setData'; candles: TVCandle[]; ohlc: boolean; fit: boolean; preserve?: boolean; visibleFrom?: number }
+  /** Live-tick path: update the last bar and/or append one — no full reload. */
+  | { type: 'updateBars'; bars: TVCandle[] }
   | { type: 'setZones'; auto: TVZoneBand[]; watch: TVZoneBand[]; bands: TVZoneBand[] }
   | { type: 'setRefLines'; lines: TVRefLine[] }
   | { type: 'setEmaOverlays'; emas: TVEmaOverlay[] }
@@ -151,10 +153,41 @@ const TV_UP = '#089981';
 const TV_DOWN = '#F23645';
 const TV_ORB_EDGE = '#B2B5BE';
 
+/** Bar length per history interval — drives live-candle bucketing. */
+const INTERVAL_SECONDS: Record<string, number> = { '1m': 60, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600 };
+const SESSION_OPEN_MIN = 9 * 60 + 30;
+const SESSION_CLOSE_MIN = 16 * 60;
+
+/** ET calendar date + minute-of-day + second-of-day for a unix time.
+ *  Cached: the ORB scan runs over every bar on each live tick, and
+ *  toLocaleString is far too slow to call thousands of times a second. */
+const etCache = new Map<number, { date: string; mins: number; secs: number; weekday: string }>();
+function etParts(t: number) {
+  const hit = etCache.get(t);
+  if (hit) return hit;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, weekday: 'short',
+  }).formatToParts(new Date(t * 1000));
+  const get = (k: string) => parts.find(p => p.type === k)?.value ?? '';
+  const hh = Number(get('hour')) % 24;
+  const mm = Number(get('minute'));
+  const ss = Number(get('second'));
+  const v = {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    mins: hh * 60 + mm,
+    secs: hh * 3600 + mm * 60 + ss,
+    weekday: get('weekday'),
+  };
+  if (etCache.size > 50_000) etCache.clear();
+  etCache.set(t, v);
+  return v;
+}
+
 export function TVChart({
   data, isLoading, autoZones, watchZones, orbRange, showOrbRange,
   sessionReferenceLines, referenceLines, showSessionLines, onAutoZoneTap, onWatchZoneTap, resetKey, emas, mode, crosshair = true, style,
-  visibleSeconds, onRequestMoreHistory, historyExhausted, onAddAlertAtPrice,
+  visibleSeconds, onRequestMoreHistory, historyExhausted, onAddAlertAtPrice, livePrice,
 }: TVChartProps) {
   const colors = useThemeColors();
   const { visible: showWatchZones } = useWatchZonesVisibility();
@@ -191,7 +224,16 @@ export function TVChart({
     down: TV_DOWN,
   }), [colors]);
 
+  // Overlay messages (zones, lines, EMAs, theme…) are re-derived on every
+  // live tick; skip ones identical to the last of their type so the page
+  // isn't rebuilding price lines every second. Bar data is never deduped.
+  const lastSentJson = useRef<Record<string, string>>({});
   const send = useCallback((msg: WVOutbound) => {
+    if (msg.type !== 'setData' && msg.type !== 'updateBars' && msg.type !== 'init') {
+      const json = JSON.stringify(msg);
+      if (lastSentJson.current[msg.type] === json) return;
+      lastSentJson.current[msg.type] = json;
+    }
     if (!readyRef.current || !webViewRef.current) {
       // Queue until the page script has loaded; flushed after init.
       queueRef.current.push(msg);
@@ -207,7 +249,7 @@ export function TVChart({
   }, []);
 
   // ── Data ───────────────────────────────────────────────────────────
-  const candles: TVCandle[] | null = useMemo(() => {
+  const baseCandles: TVCandle[] | null = useMemo(() => {
     if (!data?.dates?.length || !data.prices?.length) return null;
     const n = Math.min(data.dates.length, data.prices.length);
     const hasOhlc = !!data.opens && !!data.highs && !!data.lows;
@@ -227,6 +269,60 @@ export function TVChart({
     }
     return out;
   }, [data]);
+
+  // ── Live candle ────────────────────────────────────────────────────
+  // Streamed price ticks build the forming bar between history polls, like
+  // TradingView: a tick inside the latest bar's interval moves its close
+  // (stretching high/low); a tick past it opens a new bar. Regular session
+  // only (09:30-16:00 ET, weekdays) — the candles are regular-session bars,
+  // so pre/post-market ticks would distort them. Daily bars take ticks into
+  // today's bar once the poll/history has it.
+  const barSec = data?.interval ? INTERVAL_SECONDS[data.interval] : undefined;
+  const isDailyBars = data?.interval === '1d';
+  const [liveBar, setLiveBar] = useState<TVCandle | null>(null);
+  useEffect(() => { setLiveBar(null); }, [resetKey]);
+  useEffect(() => {
+    if (livePrice == null || !isFinite(livePrice) || livePrice <= 0 || !baseCandles?.length) return;
+    if (!barSec && !isDailyBars) return;
+    const now = Math.floor(Date.now() / 1000);
+    const et = etParts(now);
+    if (et.weekday === 'Sat' || et.weekday === 'Sun') return;
+    if (et.mins < SESSION_OPEN_MIN || et.mins >= SESSION_CLOSE_MIN) return;
+    const baseLast = baseCandles[baseCandles.length - 1];
+    let bucket: number;
+    if (barSec) {
+      const sinceOpen = et.secs - SESSION_OPEN_MIN * 60;
+      bucket = now - (sinceOpen % barSec);
+    } else {
+      // Daily: only extend today's bar, never invent one.
+      if (etParts(baseLast.t).date !== et.date) return;
+      bucket = baseLast.t;
+    }
+    const p = livePrice;
+    setLiveBar(prev => {
+      if (bucket < baseLast.t) return null; // history already past this bar
+      if (prev && prev.t === bucket) {
+        return { ...prev, h: Math.max(prev.h, p), l: Math.min(prev.l, p), c: p };
+      }
+      if (bucket === baseLast.t) {
+        return { ...baseLast, h: Math.max(baseLast.h, p), l: Math.min(baseLast.l, p), c: p };
+      }
+      return { t: bucket, o: p, h: p, l: p, c: p, v: 0 };
+    });
+  }, [livePrice, baseCandles, barSec, isDailyBars]);
+
+  // History + the live bar: replaces the matching bar (keeping the poll's
+  // volume and the wider of the two high/low) or appends a new one.
+  const candles: TVCandle[] | null = useMemo(() => {
+    if (!baseCandles?.length || !liveBar) return baseCandles;
+    const last = baseCandles[baseCandles.length - 1];
+    if (liveBar.t < last.t) return baseCandles;
+    if (liveBar.t === last.t) {
+      const merged = { ...last, h: Math.max(last.h, liveBar.h), l: Math.min(last.l, liveBar.l), c: liveBar.c };
+      return [...baseCandles.slice(0, -1), merged];
+    }
+    return [...baseCandles, liveBar];
+  }, [baseCandles, liveBar]);
   const ohlc = !!(data?.opens && data?.highs && data?.lows) && mode !== 'line';
 
   const fit = prevResetKey.current !== resetKey;
@@ -246,10 +342,28 @@ export function TVChart({
     return candles[candles.length - 1].t - visibleSeconds;
   }, [visibleSeconds, candles]);
 
+  // Full setData only when the history itself changed (load, poll,
+  // backfill, ticker/range switch, style). A live tick that only moved the
+  // last bar — or opened one new bar — goes as a tiny 'updateBars' message,
+  // so the page never reloads thousands of bars per second.
+  const sentRef = useRef<{ base: TVCandle[] | null; ohlc: boolean; key?: string; ready: boolean; lastT?: number }>({ base: null, ohlc: false, ready: false });
   useEffect(() => {
     if (!chartReady || !candles) return;
+    const prev = sentRef.current;
+    const historyChanged = !prev.ready || prev.base !== baseCandles || prev.ohlc !== ohlc || prev.key !== resetKey;
+    const last = candles[candles.length - 1];
+    sentRef.current = { base: baseCandles, ohlc, key: resetKey, ready: true, lastT: last.t };
+    if (!historyChanged && baseCandles?.length) {
+      // When a new bar just opened, finalize the one before it too (the
+      // page can only update the newest bar, so it must go first).
+      const opened = prev.lastT !== undefined && last.t > prev.lastT && candles.length >= 2;
+      send({ type: 'updateBars', bars: opened ? [candles[candles.length - 2], last] : [last] });
+      return;
+    }
     send({ type: 'setData', candles, ohlc, fit, preserve: isBackfill, visibleFrom: fit ? visibleFrom : undefined });
-  }, [chartReady, candles, ohlc, fit, isBackfill, visibleFrom, send]);
+  }, [chartReady, candles, baseCandles, ohlc, fit, isBackfill, visibleFrom, resetKey, send]);
+  // A page reload re-sends everything as a full setData.
+  useEffect(() => { if (!chartReady) sentRef.current = { base: null, ohlc: false, ready: false }; }, [chartReady]);
 
   useEffect(() => {
     if (candles?.length) prevFirstT.current = candles[0].t;
@@ -279,15 +393,6 @@ export function TVChart({
   // intraday data, so only today's backend box is drawn.
   const orbBands: TVZoneBand[] = useMemo(() => {
     if (!showOrbRange || !candles?.length) return [];
-    const etParts = (t: number) => {
-      const s = new Date(t * 1000).toLocaleString('en-US', {
-        timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', hour12: false,
-      });
-      const [date, hm] = s.split(', ');
-      const [hh, mm] = hm.split(':').map(Number);
-      return { date, mins: hh * 60 + mm };
-    };
     const intraday = candles.length >= 2 && (candles[1].t - candles[0].t) < 86400;
     const box = (id: string, low: number, high: number, startTime: number | undefined, endTime: number | undefined): TVZoneBand => ({
       id, low, high, startTime, endTime,
@@ -307,16 +412,25 @@ export function TVChart({
     const todayKey = etParts(candles[candles.length - 1].t).date;
     const bands: TVZoneBand[] = [];
     for (const [date, dc] of byDay) {
-      let hi = -Infinity, lo = Infinity, startT: number | undefined;
+      let hi = -Infinity, lo = Infinity, startT: number | undefined, formStartT: number | undefined;
       for (const c of dc) {
         const { mins } = etParts(c.t);
         if (mins >= 570 && mins < 585) {
           if (c.h > hi) hi = c.h;
           if (c.l < lo) lo = c.l;
+          if (formStartT === undefined) formStartT = c.t;
         }
         if (mins >= 585 && startT === undefined) startT = c.t;
       }
-      if (hi === -Infinity || startT === undefined) continue;
+      if (hi === -Infinity) continue;
+      if (startT === undefined) {
+        // Still forming (09:30-09:45, today only): a box over the bars so
+        // far that grows with every tick, like TradingView's live ORB.
+        if (date === todayKey) {
+          bands.push(box(`__orb__${date}`, lo, hi, formStartT, dc[dc.length - 1].t));
+        }
+        continue;
+      }
       let high = hi, low = lo;
       if (date === todayKey && orbRange) { high = orbRange.high; low = orbRange.low; }
       bands.push(box(`__orb__${date}`, low, high, startT, dc[dc.length - 1].t));
@@ -330,12 +444,19 @@ export function TVChart({
   }, [chartReady, autoBands, watchBands, orbBands, send]);
 
   // ── Reference lines (ORB edges, session lines) ─────────────────────
+  const lastBarDate = candles?.length ? etParts(candles[candles.length - 1].t).date : null;
   const refLines: TVRefLine[] = useMemo(() => {
     const lines: TVRefLine[] = [];
-    if (showOrbRange && orbRange) {
+    // ORH/ORL axis tags follow today's box (live while it forms); daily
+    // bars, with no intraday box, fall back to the backend range.
+    const todayBox = orbBands.length ? orbBands[orbBands.length - 1] : null;
+    const orbTag = todayBox && lastBarDate && todayBox.id === `__orb__${lastBarDate}`
+      ? { high: todayBox.high, low: todayBox.low }
+      : orbRange;
+    if (showOrbRange && orbTag) {
       // The box primitive draws the ORB lines; these are axis tags only.
-      lines.push({ price: orbRange.high, color: TV_ORB_EDGE, title: 'ORH', dashed: false, lineVisible: false });
-      lines.push({ price: orbRange.low, color: TV_ORB_EDGE, title: 'ORL', dashed: false, lineVisible: false });
+      lines.push({ price: orbTag.high, color: TV_ORB_EDGE, title: 'ORH', dashed: false, lineVisible: false });
+      lines.push({ price: orbTag.low, color: TV_ORB_EDGE, title: 'ORL', dashed: false, lineVisible: false });
     }
     if (showSessionLines) {
       for (const l of sessionReferenceLines ?? []) {
@@ -360,7 +481,7 @@ export function TVChart({
       }
     }
     return lines;
-  }, [showOrbRange, orbRange, showSessionLines, sessionReferenceLines, referenceLines, watchBands, colors]);
+  }, [showOrbRange, orbRange, orbBands, lastBarDate, showSessionLines, sessionReferenceLines, referenceLines, watchBands, colors]);
 
   useEffect(() => {
     if (!chartReady) return;
@@ -472,6 +593,7 @@ export function TVChart({
             // starts a blank page — dropping chartReady makes every effect
             // re-send its state once the new page reports `ready`.
             queueRef.current = [];
+            lastSentJson.current = {};
             setChartReady(false);
           }}
           onContentProcessDidTerminate={() => webViewRef.current?.reload()}

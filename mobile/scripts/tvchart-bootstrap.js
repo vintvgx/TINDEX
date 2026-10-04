@@ -414,6 +414,14 @@
     var candles = msg.candles || [];
     if (!candles.length) return;
     var prevCount = lastCandles.length;
+    // Where the user is looking BEFORE the reload: a live history poll must
+    // not yank a panned-back view to the latest bar (it used to, every 30s).
+    var atLiveEdge = true, savedRange = null;
+    try {
+      var ts0 = chart.timeScale();
+      atLiveEdge = ts0.scrollPosition() > -2;
+      savedRange = ts0.getVisibleLogicalRange();
+    } catch (e) {}
     ensureSeries(msg.ohlc ? 'candle' : 'line');
     if (msg.ohlc) {
       mainSeries.setData(candles.map(function (c) {
@@ -459,11 +467,14 @@
           chart.timeScale().setVisibleLogicalRange({ from: lastLogicalRange.from + n, to: lastLogicalRange.to + n });
         } catch (e) {}
       }
-    } else {
+    } else if (atLiveEdge || !savedRange) {
       try { chart.timeScale().scrollToRealTime(); } catch (e) {}
+    } else {
+      // Bars only appended on the right, so logical indexes still line up.
+      try { chart.timeScale().setVisibleLogicalRange(savedRange); } catch (e) {}
     }
     lastCloses = candles.map(function (c) { return { t: c.t, c: c.c }; });
-    lastCandles = candles;
+    lastCandles = candles.slice();
     rebuildEmas();
     rebuildVwap();
     schedulePills();
@@ -531,6 +542,48 @@
 
   function etDayKey(t) {
     return new Date(t * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  }
+
+  // ── Live ticks ───────────────────────────────────────────────────────
+  // Update the forming bar / append a new one in place (series.update —
+  // the chart keeps its viewport and follows the edge only when you're on
+  // it). EMAs/VWAP are full recomputes, so they're throttled during ticks.
+  var indicatorTimer = null;
+  function scheduleIndicators() {
+    if (indicatorTimer) return;
+    indicatorTimer = setTimeout(function () {
+      indicatorTimer = null;
+      rebuildEmas();
+      rebuildVwap();
+    }, 1000);
+  }
+  function updateBars(msg) {
+    if (!mainSeries || !lastCandles.length) return;
+    var bars = msg.bars || [];
+    for (var i = 0; i < bars.length; i++) {
+      var c = bars[i];
+      var last = lastCandles[lastCandles.length - 1];
+      if (c.t < last.t) continue; // only the newest bar can change
+      try {
+        if (mainSeries._tvKind === 'candle') {
+          mainSeries.update({ time: c.t, open: c.o, high: c.h, low: c.l, close: c.c });
+        } else {
+          mainSeries.update({ time: c.t, value: c.c });
+        }
+        if (volumeSeries) {
+          volumeSeries.update({ time: c.t, value: c.v || 0, color: c.c >= c.o ? theme.up + '80' : theme.down + '80' });
+        }
+      } catch (e) { continue; }
+      if (c.t === last.t) {
+        lastCandles[lastCandles.length - 1] = c;
+        lastCloses[lastCloses.length - 1] = { t: c.t, c: c.c };
+      } else {
+        lastCandles.push(c);
+        lastCloses.push({ t: c.t, c: c.c });
+      }
+    }
+    scheduleIndicators();
+    schedulePills();
   }
 
   function rebuildVwap() {
@@ -760,6 +813,7 @@
     if (!inited) { pending.push(msg); return; }
     switch (msg.type) {
       case 'setData': setData(msg); break;
+      case 'updateBars': updateBars(msg); break;
       case 'setZones': setZones(msg); break;
       case 'setRefLines': setRefLines(msg.lines); break;
       case 'setEmaOverlays': setEmaOverlays(msg); break;
