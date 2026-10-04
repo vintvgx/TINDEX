@@ -46,6 +46,7 @@ import type { WatchedPriceLevel } from '@/common/types/priceLevels';
 import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
 import { useCancelKeyLevel } from '@/hooks/mutations/priceLevels/useCancelKeyLevel';
 import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLevel';
+import { useMorningBrief } from '@/hooks/queries/brief/useMorningBrief';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -382,6 +383,19 @@ export default function ChartsScreen() {
   // ZoneEngine's auto-detected support/resistance bands, same as the
   // full-screen chart — fetched only while "Auto-detected zones" is on.
   const { zones: autoZones, context: zoneContext } = useChartAutoZones(activeTicker, chart.showAutoZones);
+  // Today's morning-brief play for this ticker (if any) draws its if/then
+  // levels — trigger, target, invalid — alongside the chart's own lines.
+  const { data: morningBrief } = useMorningBrief();
+  const chartReferenceLines = useMemo<ChartReferenceLine[] | null>(() => {
+    const play = morningBrief?.plays.find(p => p.ticker === activeTicker);
+    if (!play) return chart.referenceLines ?? null;
+    return [
+      ...(chart.referenceLines ?? []),
+      { label: 'Brief trigger', price: play.trigger, color: '#F59E0B', dash: '6,4' },
+      { label: 'Brief target', price: play.target, color: colors.success, dash: '6,4' },
+      { label: 'Brief invalid', price: play.invalidation, color: colors.error, dash: '2,4' },
+    ];
+  }, [morningBrief, activeTicker, chart.referenceLines, colors.success, colors.error]);
   const onChartAreaLayout = useCallback((e: LayoutChangeEvent) => {
     setChartAreaHeight(e.nativeEvent.layout.height);
   }, []);
@@ -649,7 +663,8 @@ export default function ChartsScreen() {
               showOrbRange={chart.showOrb && (period === '1D' || period === '1W')}
               sessionReferenceLines={sessionReferenceLines}
               showSessionLines={chart.chartSettings.showSessionLines}
-              referenceLines={chart.referenceLines}
+              // Includes today's morning-brief play levels for this ticker.
+              referenceLines={chartReferenceLines}
               livePrice={streamPrice}
               onAutoZoneTap={handleTVAutoZoneTap}
               onWatchZoneTap={handleTVWatchZoneTap}
@@ -685,7 +700,8 @@ export default function ChartsScreen() {
               onUpdateWatchZone={handleUpdateWatchZone}
               resetKey={activeTicker}
               sessionReferenceLines={sessionReferenceLines}
-              referenceLines={chart.referenceLines}
+              // Includes today's morning-brief play levels for this ticker.
+              referenceLines={chartReferenceLines}
               settings={chart.chartSettings}
             />
           )

@@ -311,7 +311,94 @@ def apply_flips(zone_list: list, flips: list, tolerance: float) -> list:
                 best, best_d = z, d
         if best is not None and best_d <= max((best["high"] - best["low"]) / 2, tolerance):
             best["type"] = f["current_type"]
+            best["_flipped"] = True  # a confirmed structural break, not geometry
     return out
+
+
+# ── Sticky zone side (gate whipsaw fix, TODO 22ad923f) ───────────────────────
+# While price is INSIDE a band its polarity is ambiguous, and the zone's
+# positional label ("resistance" if center > price) flips on a ~cent drift
+# across the center line. On IWM 2026-10-01 that flipped a ≥70 hard block
+# from CALL to PUT and back (BUY PUT → BUY CALL) with no break of either edge.
+# So the gate keys off FAR-EDGE crosses: outside the band the side is plain
+# geometry; inside, it holds whatever was last reported for that zone.
+#
+# Per ticker: [{"center", "half", "position"}], matched across refreshes by
+# nearest center (zone_engine recomputes bounds each refresh — same matching
+# rule as apply_flips). Evicted by idle time rather than a global call count:
+# with many tickers on a refresh loop, "not seen in ~10 calls" would evict
+# every ticker before its own next check.
+_ZONE_SIDE_TTL_S = 30 * 60
+_ZONE_SIDE_MAX_TICKERS = 200
+_ZONE_SIDE_MAX_ZONES = 30
+_zone_side_lock = threading.Lock()
+_zone_side_memory: dict[str, dict] = {}  # ticker -> {"seen": ts, "zones": [...]}
+
+
+def _match_zone_entry(entries: list, zone: dict, tolerance: float) -> Optional[dict]:
+    center = zone.get("center", (zone["low"] + zone["high"]) / 2)
+    best, best_d = None, None
+    for e in entries:
+        d = abs(e["center"] - center)
+        if best_d is None or d < best_d:
+            best, best_d = e, d
+    if best is not None and best_d <= max((zone["high"] - zone["low"]) / 2, best["half"], tolerance):
+        return best
+    return None
+
+
+def sticky_zone_position(ticker: str, zone: dict, price: float, tolerance: float = 0.0,
+                         now: Optional[float] = None) -> str:
+    """
+    "at_resistance" / "at_support" for the gate's zone factor:
+      - price > high → at_support (zone underneath); price < low →
+        at_resistance (overhead) — a far-edge cross, unambiguous;
+      - inside the band → a confirmed StructureTracker flip if one applies
+        to this zone, else the side last reported for it (so a center-line
+        drift can't flip the hard block), else — first sighting — the
+        center rule.
+    Records the result for the next call.
+    """
+    now = time.time() if now is None else now
+    low, high = zone["low"], zone["high"]
+    center = zone.get("center", (low + high) / 2)
+    with _zone_side_lock:
+        # Housekeeping: idle tickers out, then a hard cap (oldest first).
+        stale = [t for t, v in _zone_side_memory.items() if now - v["seen"] > _ZONE_SIDE_TTL_S]
+        for t in stale:
+            del _zone_side_memory[t]
+        if len(_zone_side_memory) >= _ZONE_SIDE_MAX_TICKERS and ticker not in _zone_side_memory:
+            oldest = min(_zone_side_memory, key=lambda t: _zone_side_memory[t]["seen"])
+            del _zone_side_memory[oldest]
+
+        mem = _zone_side_memory.setdefault(ticker, {"seen": now, "zones": []})
+        mem["seen"] = now
+        entry = _match_zone_entry(mem["zones"], zone, tolerance)
+
+        if price > high:
+            position = "at_support"
+        elif price < low:
+            position = "at_resistance"
+        elif zone.get("_flipped"):
+            position = "at_resistance" if zone["type"] == "resistance" else "at_support"
+        elif entry is not None:
+            position = entry["position"]
+        else:
+            position = "at_resistance" if center > price else "at_support"
+
+        if entry is None:
+            mem["zones"].append({"center": center, "half": (high - low) / 2, "position": position})
+            if len(mem["zones"]) > _ZONE_SIDE_MAX_ZONES:
+                mem["zones"].pop(0)
+        else:
+            entry.update(center=center, half=(high - low) / 2, position=position)
+        return position
+
+
+def reset_zone_side_memory() -> None:
+    """Tests / a new session."""
+    with _zone_side_lock:
+        _zone_side_memory.clear()
 
 
 def _zone_row(ticker: str, price: float, snap: Optional[dict] = None) -> Optional[dict]:
@@ -364,7 +451,10 @@ def _zone_row(ticker: str, price: float, snap: Optional[dict] = None) -> Optiona
                 "distance_pct": None, "sources": []}
 
     return {
-        "position": "at_resistance" if nearest["type"] == "resistance" else "at_support",
+        # Far-edge crosses, sticky while inside the band — see
+        # sticky_zone_position (the old center-line label whipsawed the
+        # hard block on a few cents of drift).
+        "position": sticky_zone_position(ticker, nearest, price, snap.get("tolerance") or 0.0),
         "high": nearest["high"], "low": nearest["low"], "score": nearest["score"],
         "distance_pct": round(d / price * 100, 3) if price else None,
         "sources": nearest["sources"],

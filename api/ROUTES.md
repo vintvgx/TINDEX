@@ -9,6 +9,7 @@
 | File | Blueprint name | URL prefix | Owns |
 |------|---------------|------------|------|
 | `routes/ticker_routes.py` | `ticker` | *(none)* | Ticker research, blog posts, ticker updates, FINVIZ trending |
+| `routes/brief_routes.py` | `brief` | *(none)* | Morning brief (TODO 8): `POST /brief/generate` (pg_cron 9:00/9:10/9:20/9:28), `GET /brief/today`, `PATCH /brief/plays/<ticker>` (mode), `POST /brief/plays/<ticker>/confirm` and `/skip`; paper-testing loop: `GET /brief/review`, `POST /brief/review/resolve` (pg_cron 16:15), `GET`/`PATCH /brief/config` |
 | `routes/ticker_brief_routes.py` | `ticker_brief` | *(none)* | Ticker sheet brief — one GET per section (`/ticker/<sym>/snapshot`, `levels`, `flow`, `analysts`, `institutional`, `linked`, `catalysts`) + `POST /ticker/<sym>/explain`; always 200 with a `{data, asOf, ttlSeconds, stale}` envelope |
 | `routes/yahoo_routes.py` | `yahoo` | *(none)* | Yahoo Finance gainers/losers/trending/most-active, `/watchlist/all` |
 | `routes/monitoring_routes.py` | `monitoring` | *(none)* | ORB service, options contract monitor, `/services/*` unified control, global `ORB_SERVICE` / `OPTIONS_MONITOR_SERVICE` state |

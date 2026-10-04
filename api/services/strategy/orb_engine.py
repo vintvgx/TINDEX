@@ -1396,7 +1396,8 @@ class ORBEngine:
 
     def _execute_entry(self, direction: str, contract: dict, qty: int,
                        effective_profile: dict, fib_levels: dict, manual: bool = False,
-                       profile_key_override: str | None = None):
+                       profile_key_override: str | None = None,
+                       prefilled_order=None, trade_type_override: str | None = None):
         """
         Submit the market order, set trade state, initialise ExitManager, log and
         notify. Shared by the auto path (_enter_trade) and the manual conviction
@@ -1405,15 +1406,24 @@ class ORBEngine:
         profile_key_override: the profile key actually used for this trade (differs
         from self.profile_key when the user selects a profile at trade submission time).
         Always pass this from submit_manual_trade so immediate trades log correctly.
+
+        prefilled_order: an order that's ALREADY filled (the morning brief's
+        managed limit buy — services/brief/limit_entry.py). Skips submitting a
+        market order and runs only the post-fill setup below, anchored to that
+        order's fill price. trade_type_override labels the trade log row (e.g.
+        "BRIEF") so brief trades can be counted for the daily kill switch.
         """
         try:
-            order_req = MarketOrderRequest(
-                symbol=contract["symbol"],
-                qty=qty,
-                side=OrderSide.BUY,
-                time_in_force=TimeInForce.DAY
-            )
-            submitted = self.trading_client.submit_order(order_req)
+            if prefilled_order is not None:
+                submitted = prefilled_order
+            else:
+                order_req = MarketOrderRequest(
+                    symbol=contract["symbol"],
+                    qty=qty,
+                    side=OrderSide.BUY,
+                    time_in_force=TimeInForce.DAY
+                )
+                submitted = self.trading_client.submit_order(order_req)
 
             # Prefer the actual fill price over the pre-order ask so that all
             # TP/SL levels are anchored to what was actually paid.
@@ -1438,7 +1448,14 @@ class ORBEngine:
             # should show the real sizing profile that was actually used;
             # the grace timer is now its own separate, visible field
             # (ExitManager.to_dict()'s sl_grace_minutes).
-            if entry_premium < 0.25:
+            #
+            # Morning-brief entries (trade_type_override="BRIEF") are exempt:
+            # their SCALP_* profiles are an agreed −30% HARD stop, and their
+            # 0DTE OTM contracts are routinely under $0.50 — a grace window
+            # would quietly turn that hard stop into a timer.
+            if trade_type_override == "BRIEF":
+                pass
+            elif entry_premium < 0.25:
                 effective_profile = {**effective_profile, **grace_fields_for_minutes(10)}
             elif entry_premium < 0.50:
                 effective_profile = {**effective_profile, **grace_fields_for_minutes(5)}
@@ -1488,7 +1505,7 @@ class ORBEngine:
             # (immediate trades). This fixes the bug where all immediate trades were
             # logged as THUNDER_CAT regardless of the profile the user picked.
             logged_profile_key = profile_key_override or self.profile_key
-            trade_type = "IMMEDIATE" if manual else "STRATEGY"
+            trade_type = trade_type_override or ("IMMEDIATE" if manual else "STRATEGY")
 
             # Update engine's profile_key so /immediate-positions reflects it correctly.
             if profile_key_override:
@@ -1534,6 +1551,16 @@ class ORBEngine:
                 self.debug.emit("ERROR",
                     f"Supabase log_entry failed — {contract['symbol']} trade not recorded in DB. "
                     "Check Railway logs or Supabase connectivity.")
+            elif trade_type == "STRATEGY":
+                # Paper-testing loop, path B (ORB breakout) — zone/gate
+                # snapshot + setup levels, off-thread (network calls).
+                from services.brief.signal_log import record_orb_signal
+                threading.Thread(
+                    target=record_orb_signal, daemon=True, name=f"orb-signal-{self.ticker}",
+                    args=(self.ticker, direction, self.active_trade_id, fib_levels.get("orh"),
+                          fib_levels.get("orl"), entry_premium, qty, contract["symbol"],
+                          logged_profile_key, self.paper, self._get_underlying_price()),
+                ).start()
             self.notifier.notify_entry(
                 ticker=self.ticker,
                 direction=direction,
