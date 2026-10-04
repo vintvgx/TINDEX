@@ -153,6 +153,10 @@ export function useLazyTickerHistory(opts: {
   const live = useRef({ bars: null as TickerHistoryData | null, loadingMore: false, exhausted: false });
   live.current = { bars, loadingMore, exhausted };
   const prevTicker = useRef(ticker);
+  // Generation: bumped every time the initial-load effect (re)runs. An
+  // in-flight backfill or tail poll from the previous ticker/period/interval
+  // must not merge its bars — or its exhausted flag — into the new one.
+  const gen = useRef(0);
 
   const intraday = !!interval && INTRADAY.has(interval);
 
@@ -161,6 +165,9 @@ export function useLazyTickerHistory(opts: {
     if (!enabled || !ticker) return;
     const tickerChanged = prevTicker.current !== ticker;
     prevTicker.current = ticker;
+    // Bump the generation: any in-flight backfill or tail poll captured the
+    // previous value and will discard its result below.
+    gen.current += 1;
     // New ticker → blank chart (never flash the previous ticker's bars);
     // period/interval switch keeps old bars until the new ones land.
     if (tickerChanged) setBars(null);
@@ -205,6 +212,7 @@ export function useLazyTickerHistory(opts: {
   const loadMore = useCallback(() => {
     const s = live.current;
     if (!enabled || !intraday || s.loadingMore || s.exhausted || !s.bars?.dates?.length) return;
+    const myGen = gen.current;
     setLoadingMore(true);
     (async () => {
       try {
@@ -215,17 +223,24 @@ export function useLazyTickerHistory(opts: {
           start: addDays(oldest, -chunk),
           end: oldest,
         });
+        // Ticker/period/interval moved on mid-flight: this window belongs to
+        // the old one. Drop it — a 400 here must not mark the NEW ticker
+        // exhausted, and its bars must not merge into the new series.
+        if (myGen !== gen.current) return;
         if (!data.dates?.length) {
           setExhausted(true);
         } else {
           setBars((prev) => (prev ? mergeHistory(prev, data) : data));
         }
       } catch (e) {
+        if (myGen !== gen.current) return;
         // 400 = past Yahoo's lookback cap (or bad window) → genuinely no
         // more history; stop asking. Anything else (network) just lets the
         // next pan retry.
         if (e instanceof HistoryHttpError && e.status === 400) setExhausted(true);
       } finally {
+        // Always clear: a stuck `true` would block the new ticker's
+        // backfills forever; a redundant `false` is harmless.
         setLoadingMore(false);
       }
     })();
@@ -237,9 +252,13 @@ export function useLazyTickerHistory(opts: {
     const id = setInterval(async () => {
       const s = live.current;
       if (!s.bars?.dates?.length || s.loadingMore) return;
+      const myGen = gen.current;
       try {
         const end = addDays(etToday(), 1);
         const data = await postHistory(ticker, { interval, start: addDays(end, -TAIL_DAYS), end });
+        // A ticker/period/interval switch mid-flight: don't merge the old
+        // ticker's tail into the new ticker's chart.
+        if (myGen !== gen.current) return;
         setBars((prev) => (prev ? mergeHistory(prev, data, true) : data));
       } catch {
         /* next poll retries */

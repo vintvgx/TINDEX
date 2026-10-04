@@ -323,16 +323,28 @@ export function TVChart({
   }, [baseCandles, liveBar]);
   const ohlc = !!(data?.opens && data?.highs && data?.lows) && mode !== 'line';
 
-  const fit = prevResetKey.current !== resetKey;
-  // Backfill detection: same identity, first candle got older (bars were
-  // prepended on the left). A live poll appends on the right instead.
+  // Fit the viewport exactly once per resetKey — on the first setData that
+  // carries the NEW key's own candles. A render-time
+  // `prevResetKey.current !== resetKey` check is true for a single render:
+  // on mount that's the render where chartReady is still false, and on a
+  // period/interval change it's the render still showing the old key's
+  // candles — so the fit request always died before any setData could carry
+  // it. The pending flag survives until the setData effect actually sends.
+  const fitPending = useRef(true);
+  const candlesAtKeyChange = useRef<TVCandle[] | null>(null);
   const prevFirstT = useRef<number | null>(null);
   useEffect(() => {
-    prevResetKey.current = resetKey;
-    if (fit) prevFirstT.current = null;
+    if (prevResetKey.current !== resetKey) {
+      prevResetKey.current = resetKey;
+      fitPending.current = true;
+      candlesAtKeyChange.current = candles;
+      prevFirstT.current = null;
+    }
   });
+  // Backfill detection: same key, first candle got older (bars were
+  // prepended on the left). A live poll appends on the right instead.
   const isBackfill =
-    !fit && !!candles?.length && prevFirstT.current != null && candles[0].t < prevFirstT.current;
+    !!candles?.length && prevFirstT.current != null && candles[0].t < prevFirstT.current;
 
   // The date range is only the initial viewport — frame it on fit.
   const visibleFrom = useMemo(() => {
@@ -358,8 +370,14 @@ export function TVChart({
       send({ type: 'updateBars', bars: opened ? [candles[candles.length - 2], last] : [last] });
       return;
     }
-    send({ type: 'setData', candles, ohlc, fit, preserve: isBackfill, visibleFrom: fit ? visibleFrom : undefined });
-  }, [chartReady, candles, baseCandles, ohlc, fit, isBackfill, visibleFrom, resetKey, send]);
+    // First setData carrying this key's own candles → frame it. While the
+    // previous key's candles are still on screen (or on a backfill), send
+    // without fit so the incoming range — not the outgoing one — gets
+    // framed, and backfilled bars shift the view instead of refitting it.
+    const fit = fitPending.current && candles !== candlesAtKeyChange.current;
+    if (fit) fitPending.current = false;
+    send({ type: 'setData', candles, ohlc, fit, preserve: !fit && isBackfill, visibleFrom: fit ? visibleFrom : undefined });
+  }, [chartReady, candles, baseCandles, ohlc, isBackfill, visibleFrom, resetKey, send]);
   // A page reload re-sends everything as a full setData.
   useEffect(() => { if (!chartReady) sentRef.current = { base: null, ohlc: false, ready: false }; }, [chartReady]);
 
@@ -585,7 +603,12 @@ export function TVChart({
             readyRef.current = false;
             // A reload (e.g. iOS reclaimed the WebView while backgrounded)
             // starts a blank page — dropping chartReady makes every effect
-            // re-send its state once the new page reports `ready`.
+            // re-send its state once the new page reports `ready`. Re-arm
+            // the fit too (with a cleared snapshot so the unchanged candles
+            // still count as this key's own) so the initial viewport is
+            // restored instead of the default full-range view.
+            fitPending.current = true;
+            candlesAtKeyChange.current = null;
             queueRef.current = [];
             lastSentJson.current = {};
             setChartReady(false);

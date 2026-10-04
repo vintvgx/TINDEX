@@ -315,6 +315,15 @@ def get_historical_window(ticker: str, interval: str, start, end) -> dict:
     cap = WINDOW_MAX_DAYS[interval]
     if window_days > cap:
         raise ValueError(f"{interval} bars only go back ~{cap} days — split the window")
+    if interval in INTRADAY_INTERVALS:
+        # Yahoo's intraday lookback counts back from TODAY, not from the
+        # window's end: a small window parked months ago passes the size
+        # check but comes back empty, which the client misreads as "no more
+        # history" and stops backfilling for good.
+        earliest = datetime.now(ET).date() - timedelta(days=cap - 1)
+        if end_d <= earliest:
+            raise ValueError(f"{interval} bars only go back ~{cap} days")
+        start_d = max(start_d, earliest)
     if window_days > 3650:
         raise ValueError("window too large (max ~10 years)")
 

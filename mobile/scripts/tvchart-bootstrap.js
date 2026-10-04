@@ -80,6 +80,10 @@
     alertAddEl.style.display = 'block';
     aaLine.style.top = Math.round(y) + 'px';
     aaLine.style.width = Math.max(0, W - axisW - 30) + 'px';
+    // Theme the dashed line in JS — the CSS hardcodes a light color that
+    // vanishes on the light theme.
+    aaLine.style.borderTop = '1px dashed ' + theme.text;
+    aaLine.style.opacity = '0.75';
     aaBtn.style.top = Math.round(y - 13) + 'px';
     aaBtn.style.right = (axisW + 2) + 'px';
     aaLabel.style.top = Math.round(y - 11) + 'px';
@@ -662,11 +666,18 @@
       var val = v > 0 ? pv / v : lastVal;
       if (val == null) val = tp;
       lastVal = val;
-      // Break the line at session boundaries so days don't bridge.
-      if (i > 0 && k !== etDayKey(lastCandles[i - 1].t)) {
-        data.push({ time: c.t }); // whitespace gap
-      }
-      data.push({ time: c.t, value: val });
+      // Break the line at session boundaries so days don't bridge. A
+      // whitespace point can't do it — setData needs strictly unique,
+      // ascending times, so the old same-time gap marker threw on any
+      // multi-day intraday load. Instead the session's LAST point is
+      // transparent: in this build a segment takes the color of the point
+      // it leads INTO, and the style change strokes at the boundary — so
+      // the bridge segment goes invisible while each session's own last
+      // segment keeps its color.
+      var sessionEnd = i + 1 < lastCandles.length && k !== etDayKey(lastCandles[i + 1].t);
+      data.push(sessionEnd
+        ? { time: c.t, value: val, color: 'rgba(0,0,0,0)' }
+        : { time: c.t, value: val });
     }
     vwapSeries = chart.addSeries(LWC.LineSeries, {
       color: '#A855F7',
