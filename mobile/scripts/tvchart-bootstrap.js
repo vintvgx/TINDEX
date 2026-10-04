@@ -426,7 +426,9 @@
       try { chart.timeScale().scrollToRealTime(); } catch (e) {}
     }
     lastCloses = candles.map(function (c) { return { t: c.t, c: c.c }; });
+    lastCandles = candles;
     rebuildEmas();
+    rebuildVwap();
     schedulePills();
   }
 
@@ -438,14 +440,12 @@
   function emaValues(closes, period) {
     var k = 2 / (period + 1);
     var out = new Array(closes.length);
-    if (closes.length < period) return out;
-    // Seed with the SMA of the first `period` closes (TV-like warmup).
-    var seed = 0;
-    for (var i = 0; i < period; i++) seed += closes[i].c;
-    var prev = seed / period;
+    if (!closes.length) return out;
+    // TradingView-style: seed from the first close and plot from bar 0, so
+    // the line is never cut off on the left. The seed's influence washes out
+    // after ~period bars; with lazy-loaded history the warmup is exact.
+    var prev = closes[0].c;
     for (var j = 0; j < closes.length; j++) {
-      if (j < period - 1) { out[j] = null; continue; }
-      if (j === period - 1) { out[j] = prev; continue; }
       prev = closes[j].c * k + prev * (1 - k);
       out[j] = prev;
     }
@@ -482,6 +482,57 @@
   function setEmaOverlays(msg) {
     emaConfig = msg.emas || [];
     rebuildEmas();
+  }
+
+  // ── Session VWAP (computed per-bar, resets each ET session) ──────────
+  // The old straight VWAP price line is replaced by a real series: cumulative
+  // typical-price×volume / cumulative volume, restarted at each ET midnight.
+  // Unlike EMA it needs no warmup — it's defined from the first bar.
+  var vwapVisible = false;
+  var vwapSeries = null;
+  var lastCandles = [];
+
+  function etDayKey(t) {
+    return new Date(t * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  }
+
+  function rebuildVwap() {
+    if (!chart || !inited) return;
+    if (vwapSeries) { try { chart.removeSeries(vwapSeries); } catch (e) {} vwapSeries = null; }
+    if (!vwapVisible || !lastCandles.length) return;
+    var data = [];
+    var pv = 0, v = 0, day = null, lastVal = null;
+    for (var i = 0; i < lastCandles.length; i++) {
+      var c = lastCandles[i];
+      var k = etDayKey(c.t);
+      if (k !== day) { day = k; pv = 0; v = 0; }
+      var tp = (c.h + c.l + c.c) / 3;
+      var vol = c.v || 0;
+      pv += tp * vol; v += vol;
+      // A zero-volume bar holds the previous value so the line never gaps.
+      var val = v > 0 ? pv / v : lastVal;
+      if (val == null) val = tp;
+      lastVal = val;
+      // Break the line at session boundaries so days don't bridge.
+      if (i > 0 && k !== etDayKey(lastCandles[i - 1].t)) {
+        data.push({ time: c.t }); // whitespace gap
+      }
+      data.push({ time: c.t, value: val });
+    }
+    vwapSeries = chart.addSeries(LWC.LineSeries, {
+      color: '#A855F7',
+      lineWidth: 2,
+      lineStyle: LWC.LineStyle.Dashed,
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: true,
+    });
+    vwapSeries.setData(data);
+  }
+
+  function setVwap(msg) {
+    vwapVisible = !!msg.visible;
+    rebuildVwap();
   }
 
   function setOptions(msg) {
@@ -601,6 +652,7 @@
       case 'setZones': setZones(msg); break;
       case 'setRefLines': setRefLines(msg.lines); break;
       case 'setEmaOverlays': setEmaOverlays(msg); break;
+      case 'setVwap': setVwap(msg); break;
       case 'setOptions': setOptions(msg); break;
       case 'applyTheme': applyTheme(msg.theme); break;
     }

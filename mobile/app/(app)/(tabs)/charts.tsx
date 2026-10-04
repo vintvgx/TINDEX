@@ -15,6 +15,7 @@ import { ZoneDetailSheet } from '@/common/components/ticker/ZoneDetailSheet';
 import { ChartBottomToolbar } from '@/common/components/ticker/ChartBottomToolbar';
 import { PositionsPager } from '@/common/components/ticker/PositionsPager';
 import { TechnicalsSheet } from '@/common/components/ticker/TechnicalsSheet';
+import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals';
 import { OptionsPositioningPanel } from '@/common/components/ticker/brief/TickerBrief';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
 import { useChartTape } from '@/common/components/ui/ChartTapeContext';
@@ -291,13 +292,12 @@ export default function ChartsScreen() {
   // levels, data points) lives in the chart settings modal — see useChartSettings.
   // "Mark a watch level" drives AdvancedPriceChart's drag-to-mark mode —
   // TVChart has no equivalent yet, so the row only shows on the legacy
-  // engine. The Signal & RSI strip isn't rendered on this screen (the tape
-  // carries the signal), so its toggle is hidden too.
+  // engine. The Signal & RSI strip renders right below the ticker tape.
   const { prefs: displayPrefs, loaded: displayPrefsLoaded } = useChartDisplayPrefs();
   const chart = useChartSettings({
     ticker: activeTicker, period, colors,
     canMarkWatchLevel: displayPrefs.chartEngine === 'legacy',
-    hideStripRow: true,
+    hideStripRow: false,
     showDefaults: true,
   });
 
@@ -441,6 +441,17 @@ export default function ChartsScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+      {/* Technicals strip — right below the global ticker tape, toggleable
+          in Chart settings. */}
+      {chart.showStrip && (
+        <View style={{ paddingHorizontal: 12, paddingTop: 4 }}>
+          <ChartTechnicalsStrip
+            check={chart.technicals.data}
+            isLoading={chart.technicals.isLoading}
+            colors={colors}
+          />
+        </View>
+      )}
       {/* Chart — fills everything above the toolbar now that the identity
           header, ticker chips, and chrome rows are gone. Keyed on the
           ticker so switching fully remounts it (see the old comment). */}

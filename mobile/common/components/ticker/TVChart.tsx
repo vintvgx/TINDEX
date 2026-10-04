@@ -80,6 +80,7 @@ type WVOutbound =
   | { type: 'setZones'; auto: TVZoneBand[]; watch: TVZoneBand[]; bands: TVZoneBand[] }
   | { type: 'setRefLines'; lines: TVRefLine[] }
   | { type: 'setEmaOverlays'; emas: TVEmaOverlay[] }
+  | { type: 'setVwap'; visible: boolean }
   | { type: 'setOptions'; crosshair: boolean }
   | { type: 'applyTheme'; theme: TVTheme };
 type WVInbound =
@@ -303,6 +304,9 @@ export function TVChart({
       }
     }
     for (const l of referenceLines ?? []) {
+      // VWAP is drawn as a dynamic session series in-page (setVwap) instead
+      // of the backend's straight price line — skip it here.
+      if (l.label === 'VWAP') continue;
       lines.push({
         price: l.price, color: l.color ?? colors.textSecondary, title: l.label,
         ...refLineStyle(l.dash), fitInScale: true, textLabel: true,
@@ -323,6 +327,18 @@ export function TVChart({
     if (!chartReady) return;
     send({ type: 'setRefLines', lines: refLines });
   }, [chartReady, refLines, send]);
+
+  // ── Dynamic session VWAP ──────────────────────────────────────────
+  // The VWAP reference line (1D only, from the technicals check) becomes a
+  // per-bar series in-page instead of a straight price line.
+  const vwapVisible = useMemo(
+    () => (referenceLines ?? []).some((l) => l.label === 'VWAP'),
+    [referenceLines],
+  );
+  useEffect(() => {
+    if (!chartReady) return;
+    send({ type: 'setVwap', visible: vwapVisible });
+  }, [chartReady, vwapVisible, send]);
 
   // ── EMA overlays ───────────────────────────────────────────────────
   useEffect(() => {
