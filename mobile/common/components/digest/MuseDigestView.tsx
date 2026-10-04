@@ -495,14 +495,142 @@ function SectionHeader({ label, colors }: { label: string; colors: ReturnType<ty
   );
 }
 
+// --- Overnight tape (news) -----------------------------------------------------
+
+function NewsSection({
+  news,
+  colors,
+}: {
+  news: NonNullable<MuseBriefContent['news']>;
+  colors: ReturnType<typeof useThemeColors>;
+}) {
+  if (news.length === 0) return null;
+  return (
+    <View style={{ gap: 8 }}>
+      {news.map((n, i) => (
+        <View
+          key={i}
+          style={{
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: colors.cardBorder,
+            backgroundColor: colors.card,
+            padding: 10,
+            borderLeftWidth: 2,
+            borderLeftColor: colors.warning,
+          }}
+        >
+          <Text style={{ fontSize: 12.5, color: colors.text, lineHeight: 17, fontWeight: '600' }}>
+            {n.headline}
+          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 8 }}>
+            <Text style={[styles.mono, { fontSize: 10, color: colors.textTertiary }]}>{n.source}</Text>
+            {n.tickers.slice(0, 3).map((t) => (
+              <Text
+                key={t}
+                style={[
+                  styles.mono,
+                  { fontSize: 9, color: colors.textSecondary, backgroundColor: colors.surfaceSecondary, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4 },
+                ]}
+              >
+                {t}
+              </Text>
+            ))}
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+// --- Today's catalysts (economic + earnings calendar) ---------------------------
+
+function EventsSection({
+  events,
+  colors,
+}: {
+  events: NonNullable<MuseBriefContent['events']>;
+  colors: ReturnType<typeof useThemeColors>;
+}) {
+  if (events.length === 0) return null;
+  const impactColor = (impact: string) =>
+    impact === 'high' ? colors.error : impact === 'medium' ? colors.warning : colors.textTertiary;
+  return (
+    <View
+      style={{
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: colors.cardBorder,
+        backgroundColor: colors.card,
+        padding: 12,
+      }}
+    >
+      {events.map((e, i) => (
+        <View key={i} style={{ flexDirection: 'row', gap: 10, paddingVertical: 7 }}>
+          <Text style={[styles.mono, { width: 64, fontSize: 10.5, color: colors.textSecondary, paddingTop: 1 }]}>
+            {e.time_et}
+          </Text>
+          <View
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: 4,
+              backgroundColor: impactColor(e.impact),
+              marginTop: 4,
+            }}
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 12.5, color: colors.text, fontWeight: '600' }}>{e.label}</Text>
+            {(e.consensus || e.prior) && (
+              <Text style={[styles.mono, { fontSize: 10, color: colors.textTertiary, marginTop: 2 }]}>
+                {e.consensus ? `cons ${e.consensus}` : ''}
+                {e.consensus && e.prior ? '   ·   ' : ''}
+                {e.prior ? `prior ${e.prior}` : ''}
+              </Text>
+            )}
+          </View>
+          <Text style={[styles.mono, { fontSize: 9, fontWeight: '800', color: impactColor(e.impact), paddingTop: 2 }]}>
+            {e.impact.toUpperCase()}
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+// --- What to watch ---------------------------------------------------------------
+
+function WatchSection({
+  watch,
+  colors,
+}: {
+  watch: NonNullable<MuseBriefContent['watch']>;
+  colors: ReturnType<typeof useThemeColors>;
+}) {
+  if (watch.length === 0) return null;
+  return (
+    <View style={{ gap: 7 }}>
+      {watch.map((w, i) => (
+        <View key={i} style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>
+          <Text style={[styles.mono, { fontSize: 11, color: colors.success, paddingTop: 1 }]}>{'>'}</Text>
+          <Text style={{ flex: 1, fontSize: 12.5, color: colors.textSecondary, lineHeight: 18 }}>{w}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 // --- Main view -------------------------------------------------------------------
 
 export function MuseDigestView({
   content,
   dateLabel,
+  preview = false,
 }: {
   content: MuseBriefContent;
   dateLabel: string;
+  /** In-app preview of the layout with sample data — badges the masthead. */
+  preview?: boolean;
 }) {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
@@ -550,9 +678,17 @@ export function MuseDigestView({
         <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 2 }}>
           <Text style={[styles.mono, { fontSize: 11, color: colors.textTertiary }]}>{'~/morning-brief'}</Text>
           <View style={{ flex: 1 }} />
+          {preview ? (
+            <View style={[styles.badge, { backgroundColor: colors.warning + '1E', borderColor: colors.warning + '55' }]}>
+              <Text style={[styles.mono, { fontSize: 10, fontWeight: '800', color: colors.warning }]}>
+                PREVIEW DATA
+              </Text>
+            </View>
+          ) : null}
           <View
             style={[
               styles.badge,
+              preview ? { marginLeft: 6 } : null,
               {
                 backgroundColor: silent ? colors.warning + '1E' : colors.success + '1E',
                 borderColor: silent ? colors.warning + '55' : colors.success + '55',
@@ -624,28 +760,52 @@ export function MuseDigestView({
         <EtfRow etfs={content.etfs} animate={animate} colors={colors} />
       </Enter>
 
+      {/* overnight tape */}
+      {(content.news?.length ?? 0) > 0 && (
+        <Enter index={4} silent={silent}>
+          <SectionHeader label="OVERNIGHT TAPE" colors={colors} />
+          <NewsSection news={content.news ?? []} colors={colors} />
+        </Enter>
+      )}
+
+      {/* today's catalysts */}
+      {(content.events?.length ?? 0) > 0 && (
+        <Enter index={5} silent={silent}>
+          <SectionHeader label="TODAY'S CATALYSTS" colors={colors} />
+          <EventsSection events={content.events ?? []} colors={colors} />
+        </Enter>
+      )}
+
+      {/* what to watch */}
+      {(content.watch?.length ?? 0) > 0 && (
+        <Enter index={6} silent={silent}>
+          <SectionHeader label="WHAT TO WATCH" colors={colors} />
+          <WatchSection watch={content.watch ?? []} colors={colors} />
+        </Enter>
+      )}
+
       {/* watchlist */}
-      <Enter index={4} silent={silent}>
+      <Enter index={7} silent={silent}>
         <SectionHeader label="WATCHLIST · TINDEX" colors={colors} />
       </Enter>
       {content.watchlist.map((t, i) => (
-        <Enter key={t.ticker} index={5 + i} silent={silent}>
+        <Enter key={t.ticker} index={8 + i} silent={silent}>
           <TickerCard t={t} bandit={false} animate={animate} colors={colors} chartWidth={chartWidth} />
         </Enter>
       ))}
 
       {/* bandit's picks */}
-      <Enter index={9} silent={silent}>
+      <Enter index={12} silent={silent}>
         <SectionHeader label="BANDIT'S PICKS" colors={colors} />
       </Enter>
       {content.muse_picks.map((t, i) => (
-        <Enter key={t.ticker} index={10 + i} silent={silent}>
+        <Enter key={t.ticker} index={13 + i} silent={silent}>
           <TickerCard t={t} bandit animate={animate} colors={colors} chartWidth={chartWidth} />
         </Enter>
       ))}
 
       {/* footer */}
-      <Enter index={14} silent={silent}>
+      <Enter index={17} silent={silent}>
         <View style={{ marginTop: 22 }}>
           {content.correlation_note ? (
             <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>

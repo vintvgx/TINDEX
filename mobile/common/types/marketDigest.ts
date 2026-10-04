@@ -168,6 +168,22 @@ export interface MuseBriefEtf {
   note: string;
 }
 
+export interface MuseBriefNewsItem {
+  headline: string;
+  source: string;
+  url: string;
+  /** Tickers this story is relevant to, e.g. ["SPY", "NVDA"]. */
+  tickers: string[];
+}
+
+export interface MuseBriefEvent {
+  time_et: string;
+  label: string;
+  consensus: string | null;
+  prior: string | null;
+  impact: 'high' | 'medium' | 'low';
+}
+
 export interface MuseBriefContent {
   version: 'muse-brief-v1';
   digest_date: string;
@@ -180,6 +196,12 @@ export interface MuseBriefContent {
     vix: number | null;
   };
   etfs: MuseBriefEtf[];
+  /** Overnight / premarket stories moving the tape. */
+  news?: MuseBriefNewsItem[];
+  /** Today's economic + earnings calendar. */
+  events?: MuseBriefEvent[];
+  /** What actually matters today — short bullets. */
+  watch?: string[];
   watchlist: MuseBriefTicker[];
   muse_picks: MuseBriefTicker[];
   earnings_blackout: string[];

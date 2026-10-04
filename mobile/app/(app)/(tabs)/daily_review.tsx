@@ -22,6 +22,7 @@ import { useToast } from '@/common/components/ui/Toast';
 import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { MarketDigestModal } from '@/common/components/digest/MarketDigestModal';
+import { MUSE_BRIEF_PREVIEW } from '@/common/components/digest/museBriefPreview';
 import { useMarketDigest, useMarketDigestList, fetchMarketDigest } from '@/hooks/queries/digest/useMarketDigest';
 import type { ReviewNote } from '@/common/types/reviewNotes';
 
@@ -120,6 +121,7 @@ export default function DailyReviewScreen() {
   const todayKey = dateKey(today);
   const { data: todayDigest } = useMarketDigest(todayKey);
   const [digestModalDate, setDigestModalDate] = useState<string | null>(null);
+  const [briefPreviewOpen, setBriefPreviewOpen] = useState(false);
   // Digest generation moved to the Muse-published morning brief (8:00 AM ET
   // cron) — the deprecated on-demand Claude generation is gone, so this only
   // ever opens an already-published brief.
@@ -249,6 +251,14 @@ export default function DailyReviewScreen() {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
           <TouchableOpacity onPress={handleDigestPress} hitSlop={10} style={{ padding: 6 }}>
             <Ionicons name="sunny-outline" size={22} color={colors.text} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setBriefPreviewOpen(true)}
+            hitSlop={10}
+            style={{ padding: 6 }}
+            accessibilityLabel="Preview morning brief layout"
+          >
+            <Ionicons name="terminal-outline" size={22} color={colors.textTertiary} />
           </TouchableOpacity>
           <TouchableOpacity onPress={() => router.push('/backlog')} hitSlop={10} style={{ padding: 6 }}>
             <Ionicons name="list-outline" size={22} color={colors.text} />
@@ -626,6 +636,12 @@ export default function DailyReviewScreen() {
         date={digestModalDate}
         visible={!!digestModalDate}
         onClose={() => setDigestModalDate(null)}
+      />
+      <MarketDigestModal
+        date={null}
+        visible={briefPreviewOpen}
+        onClose={() => setBriefPreviewOpen(false)}
+        previewContent={MUSE_BRIEF_PREVIEW}
       />
     </SafeAreaView>
   );

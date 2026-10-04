@@ -3,7 +3,7 @@ import { Modal, View, TouchableOpacity, ActivityIndicator, Text, ScrollView, use
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Defs, RadialGradient, Stop, Rect } from 'react-native-svg';
 import { MuseDigestView } from './MuseDigestView';
-import { isMuseBriefContent } from '@/common/types/marketDigest';
+import { isMuseBriefContent, type MuseBriefContent } from '@/common/types/marketDigest';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TabView, type NavigationState } from 'react-native-tab-view';
@@ -27,6 +27,12 @@ interface Props {
   date: string | null;
   visible: boolean;
   onClose: () => void;
+  /**
+   * In-app preview: when provided, the modal renders this content directly
+   * (always muse-brief-v1) instead of fetching `date` from the API. Used by
+   * the Daily Review preview toggle.
+   */
+  previewContent?: MuseBriefContent | null;
 }
 
 /**
@@ -40,7 +46,7 @@ interface Props {
  * (POST /muse/market-digest/publish), and this only ever opens once a digest
  * for `date` already exists.
  */
-export function MarketDigestModal({ date, visible, onClose }: Props) {
+export function MarketDigestModal({ date, visible, onClose, previewContent }: Props) {
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
       {/* Two providers, both needed for the same underlying reason: a core
@@ -70,14 +76,15 @@ export function MarketDigestModal({ date, visible, onClose }: Props) {
   );
 }
 
-function DigestModalContent({ date, visible, onClose }: Props) {
+function DigestModalContent({ date, visible, onClose, previewContent }: Props) {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
   const layout = useWindowDimensions();
   const [index, setIndex] = useState(0);
 
-  const { data, isLoading, error } = useMarketDigest(visible ? date : null);
-  const content = data?.data?.content_json;
+  const { data, isLoading, error } = useMarketDigest(visible && !previewContent ? date : null);
+  // Preview mode bypasses the API entirely and renders the fixture.
+  const content = previewContent ?? data?.data?.content_json;
   const { markSeen } = useSeenMarketDigests();
 
   // Reset to slide 0 every time the modal (re)opens for a date, and record
@@ -95,7 +102,8 @@ function DigestModalContent({ date, visible, onClose }: Props) {
   const museBrief = isMuseBriefContent(content);
 
   const renderScene = useCallback(({ route }: { route: DigestRoute }) => {
-    if (!content) return null;
+    // Legacy slide deck only — muse-brief-v1 returns before the TabView.
+    if (!content || isMuseBriefContent(content)) return null;
     switch (route.key) {
       case 'setup':      return <SlideScroll insets={insets}><MarketSetupSlide data={content} dateLabel={dateLabel} colors={colors} /></SlideScroll>;
       case 'headlines':   return <SlideScroll insets={insets}><HeadlinesSlide data={content} dateLabel={dateLabel} colors={colors} /></SlideScroll>;
@@ -133,7 +141,7 @@ function DigestModalContent({ date, visible, onClose }: Props) {
               : <ActivityIndicator size="large" color={colors.accent} />}
           </View>
         ) : (
-          <MuseDigestView content={content} dateLabel={dateLabel} />
+          <MuseDigestView content={content} dateLabel={dateLabel} preview={!!previewContent} />
         )}
       </View>
     );
