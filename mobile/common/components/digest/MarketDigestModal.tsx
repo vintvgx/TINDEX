@@ -69,7 +69,7 @@ export function MarketDigestModal({ date, visible, onClose, previewContent }: Pr
             gestures too, not just this modal's own. */}
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
-          <DigestModalContent date={date} visible={visible} onClose={onClose} />
+          <DigestModalContent date={date} visible={visible} onClose={onClose} previewContent={previewContent} />
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </Modal>
