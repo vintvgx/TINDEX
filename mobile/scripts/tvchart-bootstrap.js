@@ -682,17 +682,40 @@
     });
     chart.subscribeClick(onChartClick);
     // Long-press (press-and-hold) → report the crosshair price on release so
-    // RN can offer a "set crossing alert here" pill. Quick taps never fire:
-    // the price is only posted when the finger stays down past LONG_PRESS_MS.
+    // RN can offer a "set crossing alert here" pill. Quick taps and pans
+    // never fire it:
+    // - touchmove before the crosshair appears (a real pan) cancels the
+    //   timer, so scrolling the chart can't pop the pill up mid-gesture;
+    // - once LWC's own long-tap enters tracking mode (crosshair visible),
+    //   moving the finger just repositions the crosshair — that's the
+    //   "hold, drag to the exact price, release" flow, so it must NOT cancel.
     var LONG_PRESS_MS = 450;
+    var MOVE_SLOP_PX2 = 100; // ~10px
     var pressTimer = null;
     var longPressArmed = false;
     var lastCrosshairPrice = null;
-    chartEl.addEventListener('touchstart', function () {
+    var crosshairShownThisPress = false;
+    var touchStartX = 0, touchStartY = 0;
+    chartEl.addEventListener('touchstart', function (e) {
       longPressArmed = false;
       lastCrosshairPrice = null;
+      crosshairShownThisPress = false;
+      var t = e.touches && e.touches[0];
+      touchStartX = t ? t.clientX : 0;
+      touchStartY = t ? t.clientY : 0;
       if (pressTimer) clearTimeout(pressTimer);
       pressTimer = setTimeout(function () { longPressArmed = true; }, LONG_PRESS_MS);
+    }, { passive: true });
+    chartEl.addEventListener('touchmove', function (e) {
+      if (crosshairShownThisPress || !pressTimer) return;
+      var t = e.touches && e.touches[0];
+      if (!t) return;
+      var dx = t.clientX - touchStartX, dy = t.clientY - touchStartY;
+      if (dx * dx + dy * dy > MOVE_SLOP_PX2) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+        longPressArmed = false;
+      }
     }, { passive: true });
     function endPress() {
       if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
@@ -701,6 +724,7 @@
       }
       longPressArmed = false;
       lastCrosshairPrice = null;
+      crosshairShownThisPress = false;
     }
     chartEl.addEventListener('touchend', endPress, { passive: true });
     chartEl.addEventListener('touchcancel', endPress, { passive: true });
@@ -708,6 +732,7 @@
       if (param && param.point && mainSeries) {
         var p = mainSeries.coordinateToPrice(param.point.y);
         lastCrosshairPrice = (p === null || p === undefined) ? null : p;
+        crosshairShownThisPress = true;
       } else {
         lastCrosshairPrice = null;
       }

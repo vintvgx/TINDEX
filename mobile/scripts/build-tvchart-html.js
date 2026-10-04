@@ -52,7 +52,7 @@ function main() {
   /* z-index on #chart traps lightweight-charts' own z-indexed canvases
      (z 1/2) in its stacking context — without it they paint over #pills
      and the score pills are invisible. */
-  #chart { position: absolute; inset: 0; z-index: 0; }
+  #chart { position: absolute; inset: 0; z-index: 0; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
   /* Zone score pills live in this layer: real DOM, absolutely positioned
      via priceToCoordinate, so they're tappable (canvas can't do that). */
   #pills { position: absolute; inset: 0; z-index: 10; pointer-events: none; overflow: hidden; }

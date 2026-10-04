@@ -156,7 +156,9 @@ export function useLazyTickerHistory(opts: {
         let data: TickerHistoryData;
         if (intraday) {
           const days = INITIAL_DAYS[interval!] ?? 30;
-          const end = etToday();
+          // Backend window is [start, end) — end on tomorrow so today's
+          // bars are included on trading days.
+          const end = addDays(etToday(), 1);
           data = await postHistory(ticker, { interval, start: addDays(end, -days), end }, ctrl.signal);
         } else {
           data = await postHistory(ticker, { period, ...(interval ? { interval } : {}) }, ctrl.signal);
@@ -166,7 +168,9 @@ export function useLazyTickerHistory(opts: {
           setIsLoading(false);
         }
       } catch (e) {
-        if (!dead && !(e instanceof DOMException && e.name === "AbortError")) {
+        // DOMException may not exist on Hermes — check the name instead.
+        const aborted = (e as { name?: string } | null)?.name === "AbortError";
+        if (!dead && !aborted) {
           setIsError(true);
           setIsLoading(false);
         }
@@ -215,7 +219,7 @@ export function useLazyTickerHistory(opts: {
       const s = live.current;
       if (!s.bars?.dates?.length || s.loadingMore) return;
       try {
-        const end = etToday();
+        const end = addDays(etToday(), 1);
         const data = await postHistory(ticker, { interval, start: addDays(end, -TAIL_DAYS), end });
         setBars((prev) => (prev ? mergeHistory(prev, data) : data));
       } catch {
