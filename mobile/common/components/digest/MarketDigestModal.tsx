@@ -141,7 +141,7 @@ function DigestModalContent({ date, visible, onClose, previewContent }: Props) {
               : <ActivityIndicator size="large" color={colors.accent} />}
           </View>
         ) : (
-          <MuseDigestView content={content} dateLabel={dateLabel} preview={!!previewContent} />
+          <MuseDigestView content={content} dateLabel={dateLabel} preview={!!previewContent} onCloseDigest={onClose} />
         )}
       </View>
     );

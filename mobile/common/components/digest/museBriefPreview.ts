@@ -40,6 +40,19 @@ export const MUSE_BRIEF_PREVIEW: MuseBriefContent = {
       note: 'Small caps lagging — breadth is the tell today.',
     },
   ],
+  sectors: [
+    { ticker: 'XLK', name: 'Technology', change_pct: 1.84, change_5d_pct: 3.2 },
+    { ticker: 'XLC', name: 'Communication Services', change_pct: 1.21, change_5d_pct: 2.4 },
+    { ticker: 'XLI', name: 'Industrials', change_pct: 0.62, change_5d_pct: 1.1 },
+    { ticker: 'XLF', name: 'Financials', change_pct: 0.45, change_5d_pct: 0.8 },
+    { ticker: 'XLY', name: 'Consumer Discretionary', change_pct: 0.31, change_5d_pct: -0.4 },
+    { ticker: 'XLV', name: 'Health Care', change_pct: 0.12, change_5d_pct: 0.5 },
+    { ticker: 'XLB', name: 'Materials', change_pct: -0.08, change_5d_pct: -0.9 },
+    { ticker: 'XLU', name: 'Utilities', change_pct: -0.34, change_5d_pct: -1.2 },
+    { ticker: 'XLP', name: 'Consumer Staples', change_pct: -0.41, change_5d_pct: -0.6 },
+    { ticker: 'XLRE', name: 'Real Estate', change_pct: -0.77, change_5d_pct: -1.8 },
+    { ticker: 'XLE', name: 'Energy', change_pct: -1.15, change_5d_pct: -2.6 },
+  ],
   news: [
     {
       headline: 'CPI due 8:30 AM ET — economists expect +0.3% m/m, +3.0% y/y',

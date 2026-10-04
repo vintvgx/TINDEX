@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, useWindowDimensions } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Line } from 'react-native-svg';
 import Animated, {
@@ -15,10 +15,15 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { format, parseISO } from 'date-fns';
 import { useThemeColors } from '@/lib/useColorScheme';
+import { TickerContractsModal } from '@/common/components/ticker/TickerContractsModal';
+import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
+import { useBriefEntryModes } from '@/hooks/queries/brief/useBriefEntryModes';
+import { useSetBriefEntryMode } from '@/hooks/mutations/brief/useSetBriefEntryMode';
 import type {
   MuseBriefContent,
   MuseBriefTicker,
   MuseBriefEtf,
+  MuseBriefSector,
 } from '@/common/types/marketDigest';
 
 // ---------------------------------------------------------------------------
@@ -363,15 +368,33 @@ function TickerCard({
   animate,
   colors,
   chartWidth,
+  preview,
+  entryMode,
+  onSetEntryMode,
+  onOpenChart,
 }: {
   t: MuseBriefTicker;
   bandit: boolean;
   animate: boolean;
   colors: ReturnType<typeof useThemeColors>;
   chartWidth: number;
+  preview?: boolean;
+  /** confirm/auto preference — watchlist cards only. */
+  entryMode?: 'confirm' | 'auto';
+  onSetEntryMode?: (mode: 'confirm' | 'auto') => void;
+  onOpenChart?: () => void;
 }) {
   const dirUp = t.direction === 'CALL';
   const dirColor = dirUp ? colors.success : colors.error;
+  const [contractsVisible, setContractsVisible] = useState(false);
+  const iconBtn = {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    backgroundColor: colors.surfaceSecondary,
+  };
   return (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
       {/* header */}
@@ -383,8 +406,77 @@ function TickerCard({
           <Text style={[styles.mono, { fontSize: 10, fontWeight: '800', color: dirColor }]}>{t.direction}</Text>
         </View>
         <View style={{ flex: 1 }} />
+        {!preview && (
+          <>
+            <TouchableOpacity
+              onPress={() => setContractsVisible(true)}
+              style={iconBtn}
+              accessibilityLabel={`${t.ticker} contracts`}
+            >
+              <Ionicons name="layers-outline" size={15} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onOpenChart} style={iconBtn} accessibilityLabel={`${t.ticker} chart`}>
+              <Ionicons name="stats-chart-outline" size={15} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </>
+        )}
         <Text style={[styles.mono, { fontSize: 10, color: colors.textTertiary }]}>{t.premium_tier}</Text>
       </View>
+
+      {/* entry mode: confirm first (default) or auto-enter — watchlist only */}
+      {!bandit && !preview && entryMode && onSetEntryMode && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 8 }}>
+          <Text style={[styles.mono, { fontSize: 9, letterSpacing: 1.5, color: colors.textTertiary }]}>
+            ENTRY
+          </Text>
+          <View
+            style={{
+              flex: 1,
+              flexDirection: 'row',
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: colors.border,
+              overflow: 'hidden',
+            }}
+          >
+            {(['confirm', 'auto'] as const).map((m) => {
+              const active = entryMode === m;
+              return (
+                <TouchableOpacity
+                  key={m}
+                  onPress={() => onSetEntryMode(m)}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 7,
+                    alignItems: 'center',
+                    backgroundColor: active ? colors.text + '16' : 'transparent',
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.mono,
+                      {
+                        fontSize: 10,
+                        fontWeight: '800',
+                        letterSpacing: 0.5,
+                        color: active ? colors.text : colors.textTertiary,
+                      },
+                    ]}
+                  >
+                    {m === 'confirm' ? 'CONFIRM FIRST' : 'AUTO-ENTER'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      )}
+
+      <TickerContractsModal
+        ticker={t.ticker}
+        visible={contractsVisible}
+        onClose={() => setContractsVisible(false)}
+      />
 
       <View style={{ flexDirection: 'row', gap: 12, marginTop: 10 }}>
         <Gauge score={t.score} animate={animate} colors={colors} />
@@ -479,6 +571,69 @@ function EtfRow({
       {etfs.map((e) => (
         <EtfCard key={e.ticker} etf={e} animate={animate} colors={colors} />
       ))}
+    </View>
+  );
+}
+
+// --- Sector rotation: last-session % change per sector ETF -------------------
+
+function SectorFlow({
+  sectors,
+  colors,
+}: {
+  sectors: MuseBriefSector[];
+  colors: ReturnType<typeof useThemeColors>;
+}) {
+  if (sectors.length === 0) return null;
+  const max = Math.max(...sectors.map((s) => Math.abs(s.change_pct)), 0.5);
+  return (
+    <View
+      style={{
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: colors.cardBorder,
+        backgroundColor: colors.card,
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+      }}
+    >
+      {sectors.map((s) => {
+        const up = s.change_pct >= 0;
+        const c = up ? colors.success : colors.error;
+        return (
+          <View key={s.ticker} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 5, gap: 8 }}>
+            <Text style={[styles.mono, { fontSize: 11, fontWeight: '700', color: colors.text, width: 118 }]} numberOfLines={1}>
+              {s.name}
+            </Text>
+            <View
+              style={{
+                flex: 1,
+                height: 5,
+                borderRadius: 3,
+                backgroundColor: colors.textTertiary + '1E',
+                overflow: 'hidden',
+                flexDirection: 'row',
+                justifyContent: up ? 'flex-start' : 'flex-end',
+              }}
+            >
+              <View
+                style={{
+                  height: '100%',
+                  width: `${(Math.abs(s.change_pct) / max) * 100}%`,
+                  backgroundColor: c,
+                  borderRadius: 3,
+                }}
+              />
+            </View>
+            <Text style={[styles.mono, { fontSize: 11, fontWeight: '700', color: c, width: 60, textAlign: 'right' }]}>
+              {up ? '+' : ''}{s.change_pct.toFixed(2)}%
+            </Text>
+            <Text style={[styles.mono, { fontSize: 9, color: colors.textTertiary, width: 56, textAlign: 'right' }]}>
+              5d {s.change_5d_pct >= 0 ? '+' : ''}{s.change_5d_pct.toFixed(1)}%
+            </Text>
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -626,11 +781,14 @@ export function MuseDigestView({
   content,
   dateLabel,
   preview = false,
+  onCloseDigest,
 }: {
   content: MuseBriefContent;
   dateLabel: string;
   /** In-app preview of the layout with sample data — badges the masthead. */
   preview?: boolean;
+  /** Dismiss the digest (the chart icon closes it, then opens the ticker chart). */
+  onCloseDigest?: () => void;
 }) {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
@@ -638,6 +796,19 @@ export function MuseDigestView({
   const chartWidth = Math.max(200, layout.width - 56); // screen padding + card padding
   const silent = content.silent_update === true;
   const animate = !silent;
+  const { toTicker } = useBaseNavigation();
+
+  // Per-ticker entry preferences (confirm = ask first, auto = enter on
+  // trigger). Missing tickers default to confirm — same as the 9:00 ET build.
+  const { data: entryModes } = useBriefEntryModes();
+  const setEntryMode = useSetBriefEntryMode();
+
+  const openTickerChart = (ticker: string) => {
+    // The digest is a native full-screen modal; the ticker sheet would open
+    // behind it, so dismiss first, then navigate once it's gone.
+    onCloseDigest?.();
+    setTimeout(() => toTicker(ticker, { fullScreenChart: true }), 350);
+  };
 
   const regimeColor =
     content.market.regime === 'risk-on'
@@ -760,6 +931,14 @@ export function MuseDigestView({
         <EtfRow etfs={content.etfs} animate={animate} colors={colors} />
       </Enter>
 
+      {/* sector flow — where the market is positioning */}
+      {(content.sectors?.length ?? 0) > 0 && (
+        <Enter index={3.5} silent={silent}>
+          <SectionHeader label="SECTOR FLOW" colors={colors} />
+          <SectorFlow sectors={content.sectors ?? []} colors={colors} />
+        </Enter>
+      )}
+
       {/* overnight tape */}
       {(content.news?.length ?? 0) > 0 && (
         <Enter index={4} silent={silent}>
@@ -790,7 +969,17 @@ export function MuseDigestView({
       </Enter>
       {content.watchlist.map((t, i) => (
         <Enter key={t.ticker} index={8 + i} silent={silent}>
-          <TickerCard t={t} bandit={false} animate={animate} colors={colors} chartWidth={chartWidth} />
+          <TickerCard
+            t={t}
+            bandit={false}
+            animate={animate}
+            colors={colors}
+            chartWidth={chartWidth}
+            preview={preview}
+            entryMode={entryModes?.[t.ticker] ?? 'confirm'}
+            onSetEntryMode={(mode) => setEntryMode.mutate({ ticker: t.ticker, mode })}
+            onOpenChart={() => openTickerChart(t.ticker)}
+          />
         </Enter>
       ))}
 
@@ -800,7 +989,15 @@ export function MuseDigestView({
       </Enter>
       {content.muse_picks.map((t, i) => (
         <Enter key={t.ticker} index={13 + i} silent={silent}>
-          <TickerCard t={t} bandit animate={animate} colors={colors} chartWidth={chartWidth} />
+          <TickerCard
+            t={t}
+            bandit
+            animate={animate}
+            colors={colors}
+            chartWidth={chartWidth}
+            preview={preview}
+            onOpenChart={() => openTickerChart(t.ticker)}
+          />
         </Enter>
       ))}
 

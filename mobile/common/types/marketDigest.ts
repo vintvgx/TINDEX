@@ -168,6 +168,14 @@ export interface MuseBriefEtf {
   note: string;
 }
 
+/** Sector rotation read: last-session % change per SPDR sector ETF. */
+export interface MuseBriefSector {
+  ticker: string;
+  name: string;
+  change_pct: number;
+  change_5d_pct: number;
+}
+
 export interface MuseBriefNewsItem {
   headline: string;
   source: string;
@@ -196,6 +204,8 @@ export interface MuseBriefContent {
     vix: number | null;
   };
   etfs: MuseBriefEtf[];
+  /** Sector rotation: last-session % change per SPDR sector ETF (best→worst). */
+  sectors?: MuseBriefSector[];
   /** Overnight / premarket stories moving the tape. */
   news?: MuseBriefNewsItem[];
   /** Today's economic + earnings calendar. */
