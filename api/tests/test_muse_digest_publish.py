@@ -260,3 +260,108 @@ def test_brief_contract_shape():
         _assert_ticker_shape(t)
     assert "thesis" in b["muse_picks"][0]
     assert isinstance(b["earnings_blackout"], list)
+
+
+# ---------------------------------------------------------------------------
+# Tests for GET /muse/digest/compose mapping (muse-brief-v1 ticker shape)
+# ---------------------------------------------------------------------------
+
+import routes.muse as muse_routes  # noqa: E402
+
+
+def _scored_play(**kw):
+    base = {
+        "ticker": "AMZN",
+        "direction": "CALL",
+        "score": 87.8,
+        "components": {"zone": 25.0, "proximity": 12.3, "reward": 5.5, "trend": 15.0,
+                       "rsi": 10.0, "premarket": 10.0, "prior_day": 10.0},
+        "trigger": 246.20,
+        "target": 248.50,
+        "invalidation": 244.80,
+        "expected_move": 2.30,
+        "price": 245.90,
+        "gap_pct": 0.20,
+        "technicals": {"trend": "Bullish", "rsi": 58.0, "sector": "Technology"},
+    }
+    base.update(kw)
+    return base
+
+
+def test_digest_play_call_breakout_shape():
+    p = muse_routes._digest_play(_scored_play())
+    assert p["ticker"] == "AMZN"
+    assert p["direction"] == "CALL"
+    assert p["setup"] == "Breakout"
+    assert p["score"] == 87.8
+    assert p["components"]["zone"] == 25.0
+    assert "246.20" in p["if_then"] and "248.50" in p["if_then"]
+    assert "244.80" in p["invalidation"]
+    assert p["levels"]["support"] == 244.80
+    assert p["levels"]["resistance"] == 246.20
+    assert p["levels"]["orh"] is None and p["levels"]["orl"] is None
+    assert p["trend"] == "Bullish" and p["sector"] == "Technology"
+
+
+def test_digest_play_put_gap_and_go():
+    p = muse_routes._digest_play(_scored_play(direction="PUT", gap_pct=-0.8,
+                                              trigger=244.80, target=243.50, invalidation=246.20))
+    assert p["direction"] == "PUT"
+    assert p["setup"] == "Gap-and-go"
+    assert p["levels"]["support"] == 244.80
+    assert p["levels"]["resistance"] == 246.20
+    assert "loses 244.80" in p["if_then"]
+
+
+def test_digest_etf_trend_mapping():
+    e = muse_routes._digest_etf(_scored_play(ticker="SPY"))
+    assert e["ticker"] == "SPY"
+    assert e["trend"] == "up"
+    assert e["levels"] == {"support": 244.80, "resistance": 246.20}
+    e2 = muse_routes._digest_etf(_scored_play(technicals={"trend": "Bearish", "rsi": 40.0, "sector": None}))
+    assert e2["trend"] == "down"
+    e3 = muse_routes._digest_etf(_scored_play(technicals={"trend": "Chop", "rsi": 52.0, "sector": None}))
+    assert e3["trend"] == "flat"
+
+
+class _FakeOptSvc:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def get_options(self, **kwargs):
+        return {"calls": self._rows, "puts": self._rows}
+
+
+def _patch_opt(monkeypatch, factory):
+    """Stub services.alpaca.alpaca_option_service (the alpaca SDK isn't
+    installed in this test env) with a fake get_alpaca_option_service."""
+    import types
+    mod = types.ModuleType("services.alpaca.alpaca_option_service")
+    mod.get_alpaca_option_service = factory
+    for parent in ("services", "services.alpaca"):
+        sys.modules.setdefault(parent, types.ModuleType(parent))
+    monkeypatch.setitem(sys.modules, "services.alpaca.alpaca_option_service", mod)
+
+
+def test_premium_tier_from_chain(monkeypatch):
+    rows = [
+        {"strike": 245.0, "ask": 0.80, "expiration": "2026-10-09"},
+        {"strike": 247.5, "ask": 0.45, "expiration": "2026-10-09"},
+    ]
+    _patch_opt(monkeypatch, lambda: _FakeOptSvc(rows))
+    # trigger 246.20 -> nearest strike 247.5, ask 0.45 -> SCALP_30_100
+    assert muse_routes._estimate_premium_tier("AMZN", "CALL", 246.20) == "SCALP_30_100"
+
+
+def test_premium_tier_below_floor(monkeypatch):
+    rows = [{"strike": 245.0, "ask": 0.20, "expiration": "2026-10-09"}]
+    _patch_opt(monkeypatch, lambda: _FakeOptSvc(rows))
+    assert muse_routes._estimate_premium_tier("AMZN", "CALL", 245.10) == "BELOW_FLOOR"
+
+
+def test_premium_tier_tbd_on_failure(monkeypatch):
+    def _boom():
+        raise RuntimeError("alpaca down")
+
+    _patch_opt(monkeypatch, _boom)
+    assert muse_routes._estimate_premium_tier("AMZN", "CALL", 245.0) == "TBD"

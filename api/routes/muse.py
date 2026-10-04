@@ -1256,6 +1256,158 @@ def publish_market_digest():
         return _err(f"Failed to publish digest: {e}", 500)
 
 
+def _digest_play(p: dict) -> dict:
+    """Map one score_ticker() result onto the muse-brief-v1 ticker shape."""
+    d = p["direction"]
+    trigger, target, inv = p["trigger"], p["target"], p["invalidation"]
+    gap = p.get("gap_pct") or 0.0
+    t = p["ticker"]
+    if d == "CALL":
+        setup = "Gap-and-go" if gap > 0.5 else "Breakout"
+        verb, inv_verb = "breaks above", "back under"
+    else:
+        setup = "Gap-and-go" if gap < -0.5 else "Breakdown"
+        verb, inv_verb = "loses", "back above"
+    tech = p.get("technicals") or {}
+    return {
+        "ticker": t,
+        "score": p["score"],
+        "components": p["components"],
+        "direction": d,
+        "setup": setup,
+        "trigger": trigger,
+        "target": target,
+        "if_then": (f"If {t} {verb} {trigger:.2f} on a 1m close with volume > 1.2x baseline, "
+                    f"then {d} toward {target:.2f}."),
+        "invalidation": (f"A 1m close {inv_verb} {inv:.2f} kills the setup — "
+                         "no chase, no second try."),
+        "levels": {"support": min(trigger, inv), "resistance": max(trigger, inv),
+                   "orh": None, "orl": None},  # no opening range exists premarket
+        "premium_tier": _estimate_premium_tier(t, d, trigger),
+        "price": p.get("price"),
+        "gap_pct": gap,
+        "trend": tech.get("trend"),
+        "rsi": tech.get("rsi"),
+        "sector": tech.get("sector"),
+        "expected_move": p.get("expected_move"),
+    }
+
+
+def _digest_etf(s: dict) -> dict:
+    trend = (s.get("technicals") or {}).get("trend")
+    return {
+        "ticker": s["ticker"],
+        "score": s["score"],
+        "trend": "up" if trend == "Bullish" else "down" if trend == "Bearish" else "flat",
+        "levels": {"support": min(s["trigger"], s["invalidation"]),
+                   "resistance": max(s["trigger"], s["invalidation"])},
+        "note": f"{s['score']:.0f}/100 {s['direction']} setup ({s.get('gap_pct') or 0:+.1f}% premarket).",
+    }
+
+
+def _estimate_premium_tier(ticker: str, direction: str, trigger: float) -> str:
+    """Best-effort premium tier from the nearest-expiry chain (strike nearest
+    the trigger). Display estimate only — 'TBD' when quotes are unavailable."""
+    try:
+        from services.alpaca.alpaca_option_service import get_alpaca_option_service
+        from services.brief.entry_rules import size_tier
+        svc = get_alpaca_option_service()
+        today = datetime.now(ET).date()
+        side = "calls" if direction == "CALL" else "puts"
+        result = _run_async(svc.get_options(
+            ticker=ticker, limit=6,
+            expiration_date_gte=today.isoformat(),
+            expiration_date_lte=(today + timedelta(days=14)).isoformat()))
+        rows = [c for c in (result.get(side) or [])
+                if (c.get("ask") or 0) > 0 and c.get("strike") and c.get("expiration")]
+        if not rows:
+            return "TBD"
+        nearest_exp = min(c["expiration"] for c in rows)
+        cands = [c for c in rows if c["expiration"] == nearest_exp]
+        best = min(cands, key=lambda c: abs(c["strike"] - trigger))
+        ask = best["ask"]
+        if ask < 0.35:
+            return "BELOW_FLOOR"
+        tier = size_tier(ask)
+        return tier["profile"] if tier else "NO_TRADE"
+    except Exception as e:
+        logger.info("[muse/digest/compose] premium estimate failed for %s: %s", ticker, e)
+        return "TBD"
+
+
+@bp.route("/digest/compose", methods=["GET"])
+def compose_digest():
+    """
+    Score the morning-brief universe with the brief scoring engine and return
+    digest-ready plays for the Muse morning brief (muse-brief-v1).
+    ?tickers=A,B,C scores an explicit list instead of the orb_enabled
+    universe — used to score Bandit-pick candidates with the identical engine.
+    Pure read: no side effects, no pushes.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from services.brief.brief_service import BriefIO
+    from services.brief.scoring import score_ticker, rank_plays
+    from services.brief.config import DEFAULTS
+
+    io = BriefIO()
+    try:
+        cfg = io.config()
+    except Exception:
+        cfg = dict(DEFAULTS)
+
+    override = (request.args.get("tickers") or "").strip()
+    if override:
+        universe = [t.strip().upper() for t in override.split(",") if t.strip()][:12]
+    else:
+        try:
+            universe = io.universe()
+        except Exception as e:
+            return _err(f"Failed to load universe: {e}", 502)
+    if not universe:
+        return _err("Empty universe — nothing to score", 502)
+
+    def _inputs(t):
+        try:
+            return io.gather_inputs(t)
+        except Exception as e:
+            logger.warning("[muse/digest/compose] inputs failed for %s: %s", t, e)
+            return None
+
+    scored = []
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for t, inp in zip(universe, pool.map(_inputs, universe)):
+            if not inp:
+                continue
+            try:
+                s = score_ticker(t, inp, earnings_block_days=cfg["earnings_block_days"])
+                if s:
+                    scored.append(s)
+            except Exception as e:
+                logger.warning("[muse/digest/compose] scoring failed for %s: %s", t, e)
+    ranked = rank_plays(scored, top_n=4)
+
+    etfs = []
+    for t in ("SPY", "QQQ", "IWM"):
+        inp = _inputs(t)
+        if not inp:
+            continue
+        try:
+            s = score_ticker(t, inp, earnings_block_days=0)
+            if s:
+                etfs.append(_digest_etf(s))
+        except Exception as e:
+            logger.warning("[muse/digest/compose] ETF scoring failed for %s: %s", t, e)
+
+    return _ok({
+        "as_of": datetime.now(ET).isoformat(),
+        "universe": sorted(universe),
+        "watchlist": [_digest_play(p) for p in ranked["plays"]],
+        "etfs": etfs,
+        "blocked": ranked["blocked"],
+        "correlation_note": ranked["correlation_label"],
+    })
+
+
 def _q(name, desc, typ="string", enum=None, required=False):
     schema = {"type": typ}
     if enum:
@@ -1467,6 +1619,13 @@ _OPENAPI = {
                 "silent": {"type": "boolean",
                            "description": "Skip the push notification"},
             }, ["content"]))},
+        "/muse/digest/compose": {"get": _op(
+            "composeDigest", "Compose digest inputs",
+            "Score the morning-brief universe (or ?tickers= override) with the brief "
+            "scoring engine and return digest-ready plays for the Muse morning brief. "
+            "Pure read, no side effects.",
+            [_q("tickers", "Comma-separated tickers to score instead of the orb_enabled universe",
+                required=False)])},
     },
 }
 
