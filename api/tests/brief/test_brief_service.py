@@ -234,3 +234,42 @@ def test_restart_still_blocks_a_chased_trigger_bar():
     io.t = et(*D1, 9, 46)
     io.subs["AMZN"](bar(D1, 9, 45, 248.60, 248.70, 164000))      # close 0.38% through
     assert status(restarted, "AMZN")[0] == "stood_down"
+
+
+# ── entry-mode preferences (digest toggle) ─────────────────────────────────
+
+def test_build_seeds_modes_from_entry_modes_table():
+    io = FakeIO(et(*D1, 9, 0))
+    io.inputs = {"AMZN": long_setup(**AMZN), "META": long_setup(**META)}
+    io.set_entry_mode("AMZN", "auto")   # set from the digest before the build
+    svc = bs.BriefService(io)
+    b = svc.generate("build")
+    modes = {p["ticker"]: p["mode"] for p in b["plays"]}
+    assert modes["AMZN"] == "auto"
+    assert modes["META"] == "confirm"   # default stays confirm
+
+
+def test_set_mode_persists_to_entry_modes():
+    io = FakeIO(et(*D1, 9, 0))
+    io.inputs = {"AMZN": long_setup(**AMZN), "META": long_setup(**META)}
+    svc = bs.BriefService(io)
+    svc.generate("build")
+    svc.set_mode("AMZN", "auto")
+    assert io.entry_modes()["AMZN"] == "auto"
+    # A fresh-day build picks the persisted preference back up.
+    io2 = FakeIO(et(*D2, 9, 0))
+    io2.inputs = {"AMZN": long_setup(**AMZN), "META": long_setup(**META)}
+    io2.modes = dict(io.modes)
+    svc2 = bs.BriefService(io2)
+    b2 = svc2.generate("build")
+    assert {p["ticker"]: p["mode"] for p in b2["plays"]}["AMZN"] == "auto"
+
+
+def test_set_entry_mode_rejects_bad_mode():
+    io = FakeIO(et(*D1, 9, 0))
+    try:
+        io.set_entry_mode("AMZN", "yolo")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError")

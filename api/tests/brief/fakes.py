@@ -56,12 +56,19 @@ class FakeIO:
         self.orb_open = set()
         self.gate = {}
         self.inputs = {}
+        self.modes = {}
         self.cfg = dict(DEFAULTS)
         self.baseline = 82000.0
         self.entry_result = None
 
     def now(self): return self.t
     def config(self): return dict(self.cfg)
+    def entry_modes(self): return dict(self.modes)
+    def set_entry_mode(self, t, mode):
+        if mode not in ("confirm", "auto"):
+            raise ValueError("mode must be confirm or auto")
+        self.modes[t.upper()] = mode
+        return {"ticker": t.upper(), "mode": mode}
     def universe(self): return sorted(self.inputs)
     def gather_inputs(self, t): return self.inputs[t]
     def iex_open_baseline(self, t, d): return self.baseline
