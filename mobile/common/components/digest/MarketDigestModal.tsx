@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Modal, View, TouchableOpacity, ActivityIndicator, Text, ScrollView, useWindowDimensions, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Defs, RadialGradient, Stop, Rect } from 'react-native-svg';
+import { MuseDigestView } from './MuseDigestView';
+import { isMuseBriefContent } from '@/common/types/marketDigest';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TabView, type NavigationState } from 'react-native-tab-view';
@@ -34,9 +36,9 @@ interface Props {
  * SegmentedPager.tsx) so nested vertical scrolling inside a slide (long
  * headline/event lists) doesn't fight the horizontal swipe gesture.
  *
- * Pure viewer, same split as ReviewDetailModal — generation happens
- * elsewhere (Home card / Daily Review button) behind DigestGeneratingOverlay,
- * and this only ever opens once a digest for `date` already exists.
+ * Pure viewer — the brief is published by the 8:00 AM ET job
+ * (POST /muse/market-digest/publish), and this only ever opens once a digest
+ * for `date` already exists.
  */
 export function MarketDigestModal({ date, visible, onClose }: Props) {
   return (
@@ -88,6 +90,10 @@ function DigestModalContent({ date, visible, onClose }: Props) {
 
   const dateLabel = content ? format(parseISO(content.digest_date), 'EEE, MMM d') : '';
 
+  // Muse-published briefs (muse-brief-v1) render as a single scrolling
+  // terminal view; Claude-era digests keep the legacy slide deck for history.
+  const museBrief = isMuseBriefContent(content);
+
   const renderScene = useCallback(({ route }: { route: DigestRoute }) => {
     if (!content) return null;
     switch (route.key) {
@@ -104,6 +110,34 @@ function DigestModalContent({ date, visible, onClose }: Props) {
   }, [content, dateLabel, colors, insets, onClose]);
 
   const navigationState: NavigationState<DigestRoute> = { index, routes: ROUTES };
+
+  if (museBrief && isMuseBriefContent(content)) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <View style={{ paddingTop: insets.top + 8, paddingHorizontal: 16, paddingBottom: 6, flexDirection: 'row', justifyContent: 'flex-end' }}>
+          <TouchableOpacity
+            onPress={onClose}
+            hitSlop={10}
+            style={{
+              width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center',
+              backgroundColor: colors.surfaceSecondary,
+            }}
+          >
+            <Ionicons name="close" size={18} color={colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
+        {isLoading || !content ? (
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+            {error
+              ? <Text style={{ color: colors.textTertiary, fontSize: 13 }}>Digest unavailable for this date.</Text>
+              : <ActivityIndicator size="large" color={colors.accent} />}
+          </View>
+        ) : (
+          <MuseDigestView content={content} dateLabel={dateLabel} />
+        )}
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
