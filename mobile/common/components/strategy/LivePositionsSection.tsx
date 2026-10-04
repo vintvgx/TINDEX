@@ -65,6 +65,12 @@ function toPositionEntry(pos: ImmediatePosition): PositionEntry {
     sl_grace_minutes:    full.sl_grace_minutes,
     sl_enabled:          full.sl_enabled,
     tp_enabled:          full.tp_enabled,
+    sl_outer_floor:      full.sl_outer_floor,
+    sl_floor_enabled:    full.sl_floor_enabled,
+    be_grace_seconds:    full.be_grace_seconds,
+    be_grace_active:     full.be_grace_active,
+    be_grace_deadline:   full.be_grace_deadline,
+    cascade_enabled:     full.cascade_enabled,
   };
 }
 
@@ -218,6 +224,12 @@ export function PositionRow({
           tp_enabled:    pos.tp_enabled,
           runner_mode:   pos.runner_mode,
           runner_trail:  pos.runner_trail,
+          sl_outer_floor:   pos.sl_outer_floor,
+          sl_floor_enabled: pos.sl_floor_enabled,
+          be_grace_seconds: pos.be_grace_seconds,
+          be_grace_active:  pos.be_grace_active,
+          be_grace_deadline: pos.be_grace_deadline,
+          cascade_enabled:  pos.cascade_enabled,
         }}
         streaming={connected}
         accentColor={accentColor}

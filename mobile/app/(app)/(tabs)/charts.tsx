@@ -348,6 +348,7 @@ export default function ChartsScreen() {
     canMarkWatchLevel: displayPrefs.chartEngine === 'legacy',
     hideStripRow: false,
     showDefaults: true,
+    showCrosshairRow: displayPrefs.chartEngine === 'legacy',
   });
 
   // Defaults (Chart settings → Defaults) are both the launch state and a
@@ -462,12 +463,43 @@ export default function ChartsScreen() {
     setTappedAlert(level);
   }, [allKeyLevels]);
   const [tappedAlert, setTappedAlert] = useState<WatchedPriceLevel | null>(null);
-  const chartWatchZones: ChartWatchZone[] = (allKeyLevels ?? [])
-    .filter(l => l.ticker === activeTicker && (l.status === 'watching' || l.status === 'confirmed'))
-    .map(l => ({
+  // Optimistic alert lines, TradingView-style — the line itself is the
+  // confirmation (no toasts): a created alert draws the instant ⊕ is tapped,
+  // a deleted one disappears the instant delete is confirmed. Both roll
+  // back (with an error toast) if the write fails.
+  const [pendingAlerts, setPendingAlerts] = useState<{ id: string; ticker: string; price: number }[]>([]);
+  const [deletedAlertIds, setDeletedAlertIds] = useState<Set<string>>(() => new Set());
+  const chartWatchZones: ChartWatchZone[] = useMemo(() => {
+    const saved = (allKeyLevels ?? [])
+      .filter(l => l.ticker === activeTicker && (l.status === 'watching' || l.status === 'confirmed'))
+      .filter(l => !deletedAlertIds.has(l.id));
+    const zones: ChartWatchZone[] = saved.map(l => ({
       id: l.id, low: l.level_low, high: l.level_high, direction: l.direction,
       status: l.status as 'watching' | 'confirmed', zoneType: l.zone_type ?? 'trade',
     }));
+    for (const p of pendingAlerts) {
+      if (p.ticker !== activeTicker) continue;
+      // Drop the placeholder once the real level has arrived.
+      if (saved.some(l => Math.abs(l.level_high - p.price) < 0.005 && Math.abs(l.level_low - p.price) < 0.005)) continue;
+      zones.push({ id: p.id, low: p.price, high: p.price, direction: 'either', status: 'watching', zoneType: 'trade' });
+    }
+    return zones;
+  }, [allKeyLevels, activeTicker, deletedAlertIds, pendingAlerts]);
+  // Housekeeping: forget placeholders/deletions once the server agrees.
+  useEffect(() => {
+    const levels = allKeyLevels ?? [];
+    setPendingAlerts(prev => {
+      const next = prev.filter(p => !levels.some(l => l.ticker === p.ticker
+        && Math.abs(l.level_high - p.price) < 0.005 && Math.abs(l.level_low - p.price) < 0.005));
+      return next.length === prev.length ? prev : next;
+    });
+    setDeletedAlertIds(prev => {
+      if (!prev.size) return prev;
+      const live = new Set(levels.filter(l => l.status === 'watching' || l.status === 'confirmed').map(l => l.id));
+      const next = new Set([...prev].filter(id => live.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [allKeyLevels]);
 
   const { mutateAsync: createKeyLevel } = useCreateKeyLevel();
   // Long-press on the TV chart resolved to a price — create a crossing alert
@@ -478,18 +510,22 @@ export default function ChartsScreen() {
       toast.error('Not authenticated');
       return;
     }
+    const rounded = Math.round(price * 100) / 100;
+    const pendingId = `pending-${Date.now()}`;
+    setPendingAlerts(prev => [...prev, { id: pendingId, ticker: activeTicker, price: rounded }]);
     try {
       await createKeyLevel({
         userId: user.id,
         ticker: activeTicker,
         direction: 'either',
-        levelLow: price,
-        levelHigh: price,
+        levelLow: rounded,
+        levelHigh: rounded,
         source: 'self',
         zoneType: 'trade',
       });
-      toast.success(`Alert set: ${activeTicker} crossing $${price.toFixed(2)}`);
+      // No toast — the line that just appeared is the confirmation.
     } catch (e) {
+      setPendingAlerts(prev => prev.filter(p => p.id !== pendingId));
       toast.error(e instanceof Error ? e.message : 'Failed to set the alert');
     }
   }, [user?.id, activeTicker, createKeyLevel, toast]);
@@ -620,7 +656,10 @@ export default function ChartsScreen() {
               resetKey={`${activeTicker}:${period}:${chartInterval}`}
               emas={chart.emaOverlays}
               mode={tvMode}
-              crosshair={chart.crosshairEnabled}
+              // Always on, like TradingView: press-and-hold shows the
+              // crosshair with its price + date/time labels. ("Data points"
+              // only applies to the legacy engine.)
+              crosshair
               visibleSeconds={tvVisibleSeconds}
               onRequestMoreHistory={lazyHistory.loadMore}
               historyExhausted={lazyHistory.exhausted}
@@ -663,9 +702,13 @@ export default function ChartsScreen() {
                 onPress={() => {
                   const id = tappedAlert.id;
                   setTappedAlert(null);
+                  // Line disappears right away — that's the confirmation.
+                  setDeletedAlertIds(prev => new Set(prev).add(id));
                   cancelKeyLevel(id, {
-                    onSuccess: () => toast.info('Alert deleted'),
-                    onError: (e: Error) => toast.error(e.message || 'Failed to delete the alert'),
+                    onError: (e: Error) => {
+                      setDeletedAlertIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+                      toast.error(e.message || 'Failed to delete the alert');
+                    },
                   });
                 }}
                 hitSlop={10}

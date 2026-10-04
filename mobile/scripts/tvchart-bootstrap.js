@@ -32,6 +32,60 @@
 
   var chartEl = document.getElementById('chart');
   var pillsEl = document.getElementById('pills');
+
+  // ── Pending alert (TradingView-style ⊕) ─────────────────────────────
+  // After a long-press, the released price keeps a dashed line with a ⊕
+  // button beside its axis label; tapping ⊕ creates the alert (RN does the
+  // write, no popup). Any other tap on the chart dismisses it.
+  var pendingAlertPrice = null;
+  var pendingShownAt = 0;
+  var alertAddEl = document.createElement('div');
+  alertAddEl.id = 'alertadd';
+  alertAddEl.innerHTML =
+    '<div class="aa-line"></div>' +
+    '<div class="aa-btn" role="button" aria-label="Add alert">' +
+      '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
+      '<path d="M12 7v10M7 12h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>' +
+    '</div>' +
+    '<div class="aa-label"></div>';
+  document.body.appendChild(alertAddEl);
+  var aaLine = alertAddEl.querySelector('.aa-line');
+  var aaBtn = alertAddEl.querySelector('.aa-btn');
+  var aaLabel = alertAddEl.querySelector('.aa-label');
+  function onAlertAddTap(ev) {
+    if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+    if (pendingAlertPrice === null) return;
+    post({ type: 'addAlert', price: pendingAlertPrice });
+    hidePendingAlert();
+  }
+  aaBtn.addEventListener('click', onAlertAddTap);
+  aaBtn.addEventListener('touchend', onAlertAddTap);
+  function showPendingAlert(price) {
+    pendingAlertPrice = price;
+    pendingShownAt = Date.now();
+    aaLabel.textContent = price.toFixed(2);
+    layoutPendingAlert();
+  }
+  function hidePendingAlert() {
+    pendingAlertPrice = null;
+    alertAddEl.style.display = 'none';
+  }
+  function layoutPendingAlert() {
+    if (pendingAlertPrice === null || !mainSeries || !chart) { alertAddEl.style.display = 'none'; return; }
+    var y = mainSeries.priceToCoordinate(pendingAlertPrice);
+    var H = chartEl.clientHeight, W = chartEl.clientWidth;
+    if (y === null || y === undefined || y < 0 || y > H - 28) { alertAddEl.style.display = 'none'; return; }
+    var axisW = 0;
+    try { axisW = chart.priceScale('right').width(); } catch (e) {}
+    alertAddEl.style.display = 'block';
+    aaLine.style.top = Math.round(y) + 'px';
+    aaLine.style.width = Math.max(0, W - axisW - 30) + 'px';
+    aaBtn.style.top = Math.round(y - 13) + 'px';
+    aaBtn.style.right = (axisW + 2) + 'px';
+    aaLabel.style.top = Math.round(y - 11) + 'px';
+    aaLabel.style.width = axisW + 'px';
+    aaLabel.style.color = theme.text;
+  }
   var refLabelsEl = document.getElementById('reflabels');
 
   var chart = null;
@@ -199,6 +253,7 @@
       pillsScheduled = false;
       layoutPills();
       layoutRefLabels();
+      layoutPendingAlert();
     });
   }
 
@@ -300,6 +355,9 @@
   }
 
   function onChartClick(param) {
+    // A tap elsewhere dismisses a pending ⊕ (but not the click LWC may emit
+    // as the long-press itself ends).
+    if (pendingAlertPrice !== null && Date.now() - pendingShownAt > 400) hidePendingAlert();
     if (!param || !param.point || !mainSeries) return;
     var price = mainSeries.coordinateToPrice(param.point.y);
     if (price === null) return;
@@ -448,6 +506,7 @@
       };
     }));
     if (msg.fit) {
+      hidePendingAlert(); // new ticker/range — a pending ⊕ no longer applies
       try { chart.timeScale().fitContent(); } catch (e) {}
       // The date range is only the initial viewport now — frame it after fit.
       if (msg.visibleFrom && candles.length) {
@@ -779,7 +838,7 @@
           ' price=' + (lastCrosshairPrice === null ? 'null' : lastCrosshairPrice.toFixed(2)));
       }
       if (longPressArmed && lastCrosshairPrice !== null) {
-        post({ type: 'longPressPrice', price: lastCrosshairPrice });
+        showPendingAlert(lastCrosshairPrice);
       }
       longPressArmed = false;
       lastCrosshairPrice = null;

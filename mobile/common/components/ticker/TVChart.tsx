@@ -24,8 +24,7 @@
  * price streaming into the last bar.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet, Pressable } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
@@ -91,7 +90,8 @@ type WVInbound =
   | { type: 'loaded' }
   | { type: 'ready' }
   | { type: 'requestMoreHistory' }
-  | { type: 'longPressPrice'; price: number }
+  /** The page's ⊕ (shown after a long-press) was tapped at this price. */
+  | { type: 'addAlert'; price: number }
   | { type: 'zone-tap'; id: string; kind: 'auto' | 'watch' }
   | { type: 'log'; message: string }
   | { type: 'error'; message: string };
@@ -200,8 +200,6 @@ export function TVChart({
   const prevResetKey = useRef<string | undefined>(undefined);
   // Long-press price from the page — shows the "set alert here" pill until
   // tapped, dismissed, or replaced by a newer long-press.
-  const [longPressPrice, setLongPressPrice] = useState<number | null>(null);
-  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onAddAlertRef = useRef(onAddAlertAtPrice);
   onAddAlertRef.current = onAddAlertAtPrice;
 
@@ -538,16 +536,12 @@ export function TVChart({
       setPageError(msg.message);
     } else if (msg.type === 'requestMoreHistory') {
       onRequestMoreHistory?.();
-    } else if (msg.type === 'longPressPrice') {
-      // Press-and-hold resolved to a chart price — offer the crossing-alert
-      // pill. Deliberately NOT gated on the "Data points" setting: that
-      // only hides the crosshair, and gating here made long-press silently
-      // do nothing whenever it was off. The pill auto-dismisses after 10s;
-      // a newer long-press replaces it.
-      if (typeof msg.price === 'number' && isFinite(msg.price) && onAddAlertRef.current) {
-        if (longPressTimer.current) clearTimeout(longPressTimer.current);
-        setLongPressPrice(msg.price);
-        longPressTimer.current = setTimeout(() => setLongPressPrice(null), 10000);
+    } else if (msg.type === 'addAlert') {
+      // TradingView flow: long-press → the page pins a ⊕ on that price's
+      // line → tapping it lands here and creates the alert directly (no
+      // confirmation pill; the new line on the chart is the confirmation).
+      if (typeof msg.price === 'number' && isFinite(msg.price)) {
+        onAddAlertRef.current?.(msg.price);
       }
     } else if (msg.type === 'zone-tap') {
       if (msg.kind === 'auto') {
@@ -610,29 +604,6 @@ export function TVChart({
       ) : (!chartReady || isLoading) && (
         <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }]}>
           <ActivityIndicator size="small" color={colors.textSecondary} />
-        </View>
-      )}
-      {longPressPrice !== null && (
-        <View style={{ position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center' }} pointerEvents="box-none">
-          <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: 20, paddingVertical: 8, paddingLeft: 14, paddingRight: 8, gap: 8, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 8, elevation: 6, borderWidth: 1, borderColor: colors.border }}>
-            <Pressable
-              onPress={() => { const p = longPressPrice; setLongPressPrice(null); onAddAlertRef.current?.(p); }}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
-              accessibilityLabel={`Set crossing alert at ${longPressPrice.toFixed(2)}`}
-            >
-              <Ionicons name="notifications-outline" size={16} color={colors.accent} />
-              <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }}>
-                Alert at ${longPressPrice.toFixed(2)}
-              </Text>
-            </Pressable>
-            <Pressable
-              onPress={() => { if (longPressTimer.current) clearTimeout(longPressTimer.current); setLongPressPrice(null); }}
-              hitSlop={8}
-              accessibilityLabel="Dismiss"
-            >
-              <Ionicons name="close" size={16} color={colors.textSecondary} />
-            </Pressable>
-          </View>
         </View>
       )}
     </View>

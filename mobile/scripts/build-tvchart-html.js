@@ -75,6 +75,22 @@ function main() {
     position: absolute; white-space: nowrap;
     font: 600 9px/11px -apple-system, 'SF Pro Text', sans-serif;
   }
+  /* Pending-alert ⊕ after a long-press (TradingView-style). */
+  #alertadd { position: absolute; inset: 0; z-index: 12; pointer-events: none; display: none; }
+  #alertadd .aa-line { position: absolute; left: 0; height: 0; border-top: 1px dashed rgba(242,242,240,0.75); }
+  #alertadd .aa-btn {
+    position: absolute; width: 26px; height: 26px; pointer-events: auto;
+    display: flex; align-items: center; justify-content: center;
+    color: #F2F2F0; background: #3A3A3C; border-radius: 5px; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #alertadd .aa-btn::before { content: ''; position: absolute; inset: -9px; }
+  #alertadd .aa-btn svg { width: 18px; height: 18px; }
+  #alertadd .aa-label {
+    position: absolute; right: 0; height: 22px; line-height: 22px; text-align: center;
+    background: #3A3A3C; border-radius: 3px;
+    font: 500 12px -apple-system, 'SF Pro Text', sans-serif;
+  }
   .zpill svg { width: 8px; height: 8px; flex: none; display: block; }
 </style>
 </head>

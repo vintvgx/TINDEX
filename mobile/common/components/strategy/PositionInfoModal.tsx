@@ -254,7 +254,11 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
       Alert.alert('Invalid', 'Floor must be a positive price.');
       return;
     }
-    if (floor !== undefined && !isNaN(floor) && floor >= (stop ?? data.hard_stop)) {
+    // Only meaningful while a stop exists: with SL off the stop price is 0,
+    // and this used to reject every floor — even though the floor is
+    // independent of the stop loss (it stays armed with SL off).
+    const effectiveStop = stop ?? data.hard_stop;
+    if (floor !== undefined && !isNaN(floor) && slOn && effectiveStop > 0 && floor >= effectiveStop) {
       Alert.alert('Invalid', 'Floor must be below the stop-loss price.');
       return;
     }

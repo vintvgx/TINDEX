@@ -13,7 +13,7 @@ import { logDebug } from "@/common/utils/strings/function";
 import { Session } from "@supabase/supabase-js";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 //@ts-ignore
-import { router } from "expo-router";
+import { router, useSegments } from "expo-router";
 import React, {
   createContext,
   useContext,
@@ -256,27 +256,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [authState.user?.id, queryClient]);
 
-  // Handle navigation based on auth and onboarding state
+  // Route guard: redirect only when the user is in the wrong route group
+  // for their auth state — signed out inside (app), or signed in outside it
+  // (auth screen / root index on launch).
+  //
+  // This used to depend on the whole `authState` object and replace() to
+  // Feed every time it ran while signed in. authState gets a new identity
+  // on every Supabase TOKEN_REFRESHED (hourly, and on app resume) and on
+  // every ["profile", userId] query-cache event (refetches, invalidations,
+  // screens mounting the profile) — so the app kept "randomly" jumping to
+  // Feed from whatever screen was open.
+  const segments = useSegments();
+  const inAppGroup = segments[0] === "(app)";
+  const inPublicGroup = segments[0] === "(public)";
+  const signedIn = !!authState.session && authState.isAuthenticated;
   useEffect(() => {
-    console.log("Handling navigation based on auth and onboarding state");
-    if (authState.isLoading) return;
-
-    if (isInitialized) {
-      // Not authenticated
-      if (!authState.session) {
-        console.log("Navigating to Auth");
+    if (authState.isLoading || !isInitialized) return;
+    if (!signedIn) {
+      if (!inPublicGroup) {
+        console.log("Not signed in — navigating to Auth");
         router.replace("/(public)/auth");
-        return;
       }
-
-      // User is fully authenticated
-      if (authState.isAuthenticated && authState.session) {
-        console.log("Navigating to Feed");
-        // Navigate to Home
-        router.replace("/(app)/(tabs)/feed");
-      }
+      return;
     }
-  }, [authState, isInitialized]);
+    if (!inAppGroup) {
+      console.log("Signed in — navigating to Feed");
+      router.replace("/(app)/(tabs)/feed");
+    }
+  }, [authState.isLoading, isInitialized, signedIn, inAppGroup, inPublicGroup]);
 
   /**
    * Mutation for signing out the user

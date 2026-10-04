@@ -23,6 +23,7 @@ export function ExitSafetyControls({
   editable: boolean;
   /** Take-profit still on — gates the breakeven-grace stepper (no TP1, no
    *  breakeven stop, no grace). */
+  tpOn: boolean;
   /** Current floor price from the backend (null = none set). */
   floor: number | null | undefined;
   floorEnabled: boolean;

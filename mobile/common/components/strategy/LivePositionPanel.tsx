@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, Platform, UIManager } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -109,7 +109,22 @@ export function LivePositionPanel({
   // Merge live over the REST snapshot — the card renders immediately with
   // whatever position.tsx already had from its poll, then upgrades in place
   // the moment the WS connects, instead of a blank spinner the whole time.
-  const display: DisplayData | undefined = live ?? (hasFallback
+  // Saved edits (from PositionInfoModal) layered over the REST snapshot.
+  // patchData only patches *live* data and is a no-op before the WS has
+  // pushed (market closed, no quotes yet) — so without this a saved floor/
+  // stop/etc. kept showing the old value and looked like it never saved.
+  // Cleared when a fresh snapshot arrives (it then carries the saved value).
+  const [fallbackPatch, setFallbackPatch] = useState<Partial<DisplayData>>({});
+  // Keyed on content — staticFallback is a fresh object literal every
+  // parent render, so identity would reset the patch constantly.
+  const fallbackKey = JSON.stringify(staticFallback ?? null);
+  useEffect(() => { setFallbackPatch({}); }, [fallbackKey]);
+  const handleUpdated = useCallback((patch: Partial<LivePriceData>) => {
+    patchData?.(patch);
+    setFallbackPatch(prev => ({ ...prev, ...(patch as Partial<DisplayData>) }));
+  }, [patchData]);
+
+  const fallbackDisplay: DisplayData | undefined = (hasFallback
     ? {
         contract:      staticFallback!.contract ?? '',
         entry_premium: staticFallback!.entry_premium!,
@@ -136,8 +151,10 @@ export function LivePositionPanel({
         runner_trail:  staticFallback!.runner_trail,
         cascade_enabled: staticFallback!.cascade_enabled,
         market_value:  (staticFallback!.mid_price ?? staticFallback!.entry_premium!) * (staticFallback!.qty_remaining ?? 0) * 100,
+        ...fallbackPatch,
       }
     : undefined);
+  const display: DisplayData | undefined = live ?? fallbackDisplay;
 
   // Absent on older cached data → default to showing TP2 (matches the
   // pre-use_tp2 behavior) rather than hiding a value that might be real.
@@ -166,6 +183,17 @@ export function LivePositionPanel({
   const isLive = isMock ? false : marketOpen && streaming;
   const statusColor = isMock ? colors.accent : isLive ? colors.success : colors.tabBarInactive;
   const marketValue = display ? (display.market_value ?? display.mid_price * display.qty_remaining * 100) : null;
+  // Compact meta-row values. Grace: the pre-TP1 initial stop's window
+  // (e.g. "10m"); after TP1 that window no longer applies, so it shows the
+  // breakeven stop's grace instead ("30s"). N/A when none/no SL.
+  const graceValue = !display || noSL
+    ? 'N/A'
+    : display.tp1_hit
+      ? (display.be_grace_seconds ? `${display.be_grace_seconds}s` : 'N/A')
+      : (display.sl_grace_enabled && display.sl_grace_minutes != null ? `${display.sl_grace_minutes}m` : 'N/A');
+  const floorValue = display?.sl_outer_floor != null
+    ? `$${display.sl_outer_floor.toFixed(2)}${display.sl_floor_enabled === false ? ' off' : ''}`
+    : 'N/A';
 
   return (
     <>
@@ -247,8 +275,6 @@ export function LivePositionPanel({
             <View style={styles.captionRow}>
               <Text style={[styles.caption, { color: colors.textTertiary }]} numberOfLines={1}>
                 ${display.entry_premium.toFixed(2)} → ${display.mid_price.toFixed(2)}
-                {'  ·  Qty '}{display.qty_remaining}
-                {paperMode ? '  ·  Paper' : ''}
               </Text>
 
               {(showSL || showTp1 || showTp2Chip) && (
@@ -289,23 +315,25 @@ export function LivePositionPanel({
               )}
             </View>
 
-            {/* SL grace-timer countdown — urgent, so it stays on the card
-                instead of behind a tap into the info sheet. */}
-            {!noSL && <SlGraceBadge live={display} colors={colors} />}
-            {/* Worst-case floor — always visible (spec: never conditional on
-                stop type or on a floor existing). Shown for no-SL trades too
-                when one is armed, since the backend floor stays live even
-                with SL turned off. */}
-            {(!noSL || display.sl_outer_floor != null) && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 }}>
-                <Ionicons name="shield-outline" size={11} color={colors.textTertiary} />
-                <Text style={{ fontSize: 11, fontWeight: '600', color: colors.textTertiary }}>
-                  Floor {display.sl_outer_floor != null
-                    ? `$${display.sl_outer_floor.toFixed(2)}${display.sl_floor_enabled === false ? ' (off)' : ''}`
-                    : '— not set'}
-                </Text>
+            {/* Meta row: Qty, then the initial-stop grace and the worst-case
+                floor as icon + value side by side (was two extra full-width
+                lines). Floor stays always visible (spec: never conditional
+                on stop type or on a floor existing). */}
+            <View style={styles.metaRow}>
+              <Text style={[styles.metaText, { color: colors.textTertiary }]}>Qty {display.qty_remaining}</Text>
+              <View style={styles.metaItem} accessibilityLabel={`Initial stop grace ${graceValue}`}>
+                <Ionicons name="shield-checkmark-outline" size={12} color={colors.textTertiary} />
+                <Text style={[styles.metaText, { color: colors.textTertiary }]}>{graceValue}</Text>
               </View>
-            )}
+              <View style={styles.metaItem} accessibilityLabel={`Floor ${floorValue}`}>
+                <Ionicons name="shield-outline" size={12} color={colors.textTertiary} />
+                <Text style={[styles.metaText, { color: colors.textTertiary }]}>{floorValue}</Text>
+              </View>
+              {paperMode ? <Text style={[styles.metaText, { color: colors.textTertiary }]}>Paper</Text> : null}
+            </View>
+            {/* Live SL / breakeven grace countdowns — urgent, so they stay on
+                the card instead of behind a tap into the info sheet. */}
+            {!noSL && <SlGraceBadge live={display} colors={colors} hideIdle />}
           </>
         ) : (
           <ActivityIndicator size="small" color={colors.accent} style={{ marginTop: 10 }} />
@@ -319,7 +347,7 @@ export function LivePositionPanel({
           colors={colors}
           profile={profile as ProfileKey | undefined}
           strategyId={strategyId}
-          onUpdated={patchData}
+          onUpdated={handleUpdated}
           hideKey={hideKey}
           data={{
             ticker,
@@ -385,6 +413,9 @@ const styles = StyleSheet.create({
     alignItems: 'center', marginTop: 8, rowGap: 4, columnGap: 8,
   },
   caption: { fontSize: 12, flexShrink: 1 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 6 },
+  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  metaText: { fontSize: 12, fontWeight: '600' },
 
   exitsRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 0 },
   exitChip:  { flexDirection: 'row', alignItems: 'center', gap: 2 },

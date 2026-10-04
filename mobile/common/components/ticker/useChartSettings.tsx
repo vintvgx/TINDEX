@@ -33,10 +33,14 @@ interface Options {
   hideStripRow?: boolean;
   /** Show the "Defaults" section (launch date range + bar size). */
   showDefaults?: boolean;
+  /** Offer the "Data points" (crosshair) toggle. The TV chart always shows
+   *  its crosshair on press-and-hold, like TradingView, so the Charts tab
+   *  hides this on that engine. */
+  showCrosshairRow?: boolean;
 }
 
 export function useChartSettings({
-  ticker, period, colors, canMarkWatchLevel, extraOverlayRows = [], hideStripRow = false, showDefaults = false,
+  ticker, period, colors, canMarkWatchLevel, extraOverlayRows = [], hideStripRow = false, showDefaults = false, showCrosshairRow = true,
 }: Options) {
   const { prefs, setPref } = useChartDisplayPrefs();
   const { mode, showSessionLines, showStrip, showVwap, showEma, showOrb, showWalls,
@@ -181,9 +185,9 @@ export function useChartSettings({
           description: 'Top call/put open-interest strikes (dotted) and expiry-day max pain — 1D/1W, ~15 min delayed',
           value: showWalls, onChange: setShowWalls },
         ...extraOverlayRows,
-        { kind: 'toggle', key: 'crosshair', icon: 'locate-outline', label: 'Data points',
+        ...(showCrosshairRow ? [{ kind: 'toggle' as const, key: 'crosshair', icon: 'locate-outline' as const, label: 'Data points',
           description: 'Tap-and-hold the chart to inspect an exact price/time',
-          value: crosshairEnabled, onChange: setCrosshairEnabled },
+          value: crosshairEnabled, onChange: setCrosshairEnabled }] : []),
       ],
     },
   ];

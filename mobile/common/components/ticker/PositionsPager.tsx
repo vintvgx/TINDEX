@@ -106,8 +106,9 @@ export function PositionsPager({
 
 const s = StyleSheet.create({
   panel: {
-    // One card + dots; was 264 with the LIVE/PAPER badge row.
-    height: 236,
+    // One card + dots; was 264 with the LIVE/PAPER badge row, 236 before
+    // the card's grace/floor lines merged into its Qty meta row.
+    height: 218,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   page: {

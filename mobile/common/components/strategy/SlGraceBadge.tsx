@@ -47,9 +47,12 @@ export interface SlGraceInfo {
  * Shared by LivePositionPanel's card AND PositionInfoModal's full sheet so
  * the SL-breach countdown reads identically wherever a user sees it.
  */
-export function SlGraceBadge({ live, colors, onCancelBeGrace, cancellingBeGrace }: {
+export function SlGraceBadge({ live, colors, onCancelBeGrace, cancellingBeGrace, hideIdle }: {
   live: SlGraceInfo;
   colors: any;
+  /** Compact cards show the idle grace value inline (see
+   *  LivePositionPanel's meta row) — render only the live countdowns. */
+  hideIdle?: boolean;
   /** Edit sheet only — shows a Cancel button on the running breakeven
    *  timer (hold the position; the breakeven stop stays armed). */
   onCancelBeGrace?: () => void;
@@ -94,6 +97,7 @@ export function SlGraceBadge({ live, colors, onCancelBeGrace, cancellingBeGrace 
   }
 
   if (!active) {
+    if (hideIdle) return null;
     if (live.tp1_hit) {
       // After TP1 the SL timer no longer applies — say what does.
       if (!live.be_grace_seconds) return null;
