@@ -228,7 +228,22 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
     def _col(name: str) -> list:
         return hist[name].tolist() if not hist.empty and name in hist.columns else []
 
-    result = {
+    result = _serialize_history(hist, interval)
+
+    if session_lines:
+        result["session_lines"] = session_lines
+
+    return result
+
+
+def _serialize_history(hist: "pd.DataFrame", interval: str) -> dict:
+    """The chart's bar payload — dates/prices/volumes/OHLC + the actual
+    interval. Shared by the period fetch and the windowed backfill fetch so
+    the client can merge both by timestamp."""
+    def _col(name: str) -> list:
+        return hist[name].tolist() if not hist.empty and name in hist.columns else []
+
+    return {
         "dates": (
             hist.index.strftime("%Y-%m-%dT%H:%M:%S%z").tolist()
             if not hist.empty and hasattr(hist.index, "strftime")
@@ -242,10 +257,79 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
         "interval": interval,
     }
 
-    if session_lines:
-        result["session_lines"] = session_lines
 
-    return result
+# ── Windowed history fetch (chart lazy-load backfill) ─────────────────────
+
+INTRADAY_INTERVALS = {"1m", "5m", "15m", "30m", "1h"}
+# Yahoo's real lookback caps for sub-daily bars. The endpoint 400s past these
+# instead of returning silently empty data — an empty backfill looks exactly
+# like "no more history" to the client's pan-back watermark.
+WINDOW_MAX_DAYS = {
+    "1m": 7, "5m": 60, "15m": 60, "30m": 60, "1h": 730,
+    "1d": 3650, "1wk": 3650, "1mo": 3650,
+}
+
+
+def _regular_session_all_days(hist: "pd.DataFrame") -> "pd.DataFrame":
+    """Regular-session bars (09:30-16:00 ET) for EVERY date in `hist`.
+
+    Sibling of _regular_session_only(), which keeps only the latest date's
+    session (right for the 1D view, wrong for a multi-day backfill window).
+    """
+    if hist.empty or getattr(hist.index, "tz", None) is None:
+        return hist
+    idx_et = hist.index.tz_convert(ET)
+    minutes = idx_et.hour * 60 + idx_et.minute
+    in_session = (minutes >= 9 * 60 + 30) & (minutes < 16 * 60)
+    return hist[in_session]
+
+
+def _parse_window_date(value, name: str):
+    from datetime import date as _date, datetime as _dt
+    if isinstance(value, _date) and not isinstance(value, _dt):
+        return value
+    if isinstance(value, str):
+        try:
+            return _date.fromisoformat(value.strip()[:10])
+        except ValueError:
+            pass
+    raise ValueError(f"{name} must be a YYYY-MM-DD date")
+
+
+def get_historical_window(ticker: str, interval: str, start, end) -> dict:
+    """OHLCV bars for an explicit [start, end) window — the chart's lazy-load
+    backfill path (pan back past the initially loaded data).
+
+    Intraday intervals fetch prepost=True and are regular-session-trimmed,
+    exactly like the 1D period fetch, so backfilled bars stay consistent
+    with the live view (ORB boxes, session VWAP and the EMAs all assume
+    this). Raises ValueError on bad input — the route turns it into a 400.
+    """
+    if interval not in WINDOW_MAX_DAYS:
+        raise ValueError(f"Invalid interval. Must be one of: {', '.join(sorted(WINDOW_MAX_DAYS))}")
+    start_d = _parse_window_date(start, "start")
+    end_d = _parse_window_date(end, "end")
+    if start_d >= end_d:
+        raise ValueError("start must be before end")
+    window_days = (end_d - start_d).days
+    cap = WINDOW_MAX_DAYS[interval]
+    if window_days > cap:
+        raise ValueError(f"{interval} bars only go back ~{cap} days — split the window")
+    if window_days > 3650:
+        raise ValueError("window too large (max ~10 years)")
+
+    prepost = interval in INTRADAY_INTERVALS
+    try:
+        hist = yf.Ticker(ticker).history(start=start_d, end=end_d, interval=interval, prepost=prepost)
+        if not hist.empty and "Close" in hist.columns:
+            hist = hist.dropna(subset=["Close"])
+    except Exception as e:
+        logger.warning(f"Windowed history fetch failed for {ticker} ({interval} {start_d}..{end_d}): {str(e)}")
+        hist = pd.DataFrame()
+
+    if prepost:
+        hist = _regular_session_all_days(hist)
+    return _serialize_history(hist, interval)
 
 
 def _is_regular_trading_hours(now_et: "datetime | None" = None) -> bool:
