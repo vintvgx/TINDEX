@@ -303,10 +303,23 @@
     if (!param || !param.point || !mainSeries) return;
     var price = mainSeries.coordinateToPrice(param.point.y);
     if (price === null) return;
-    // Watch zones have no pills — hit-test the band directly.
+    // Watch zones have no pills — hit-test the band directly. ±14px tolerance
+    // so thin/point levels (high == low) stay tappable on touch.
+    var TAP_TOL_PX = 14;
     for (var i = 0; i < zones.watch.length; i++) {
       var z = zones.watch[i];
-      if (price <= z.high && price >= z.low) {
+      var yTop = mainSeries.priceToCoordinate(z.high);
+      var yBot = mainSeries.priceToCoordinate(z.low);
+      if (yTop === null || yTop === undefined || yBot === null || yBot === undefined) {
+        if (price <= z.high && price >= z.low) {
+          post({ type: 'zone-tap', id: z.id, kind: 'watch' });
+          return;
+        }
+        continue;
+      }
+      var lo = Math.min(yTop, yBot) - TAP_TOL_PX;
+      var hi = Math.max(yTop, yBot) + TAP_TOL_PX;
+      if (param.point.y >= lo && param.point.y <= hi) {
         post({ type: 'zone-tap', id: z.id, kind: 'watch' });
         return;
       }
@@ -668,6 +681,37 @@
       }
     });
     chart.subscribeClick(onChartClick);
+    // Long-press (press-and-hold) → report the crosshair price on release so
+    // RN can offer a "set crossing alert here" pill. Quick taps never fire:
+    // the price is only posted when the finger stays down past LONG_PRESS_MS.
+    var LONG_PRESS_MS = 450;
+    var pressTimer = null;
+    var longPressArmed = false;
+    var lastCrosshairPrice = null;
+    chartEl.addEventListener('touchstart', function () {
+      longPressArmed = false;
+      lastCrosshairPrice = null;
+      if (pressTimer) clearTimeout(pressTimer);
+      pressTimer = setTimeout(function () { longPressArmed = true; }, LONG_PRESS_MS);
+    }, { passive: true });
+    function endPress() {
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      if (longPressArmed && lastCrosshairPrice !== null) {
+        post({ type: 'longPressPrice', price: lastCrosshairPrice });
+      }
+      longPressArmed = false;
+      lastCrosshairPrice = null;
+    }
+    chartEl.addEventListener('touchend', endPress, { passive: true });
+    chartEl.addEventListener('touchcancel', endPress, { passive: true });
+    chart.subscribeCrosshairMove(function (param) {
+      if (param && param.point && mainSeries) {
+        var p = mainSeries.coordinateToPrice(param.point.y);
+        lastCrosshairPrice = (p === null || p === undefined) ? null : p;
+      } else {
+        lastCrosshairPrice = null;
+      }
+    });
     post({ type: 'ready' });
     plog('ready posted');
     // flush anything that arrived early

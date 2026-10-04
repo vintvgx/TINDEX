@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, SafeAreaView, LayoutAnimation, Platform, UIManager,
+  View, Text, ScrollView, TouchableOpacity, Pressable, SafeAreaView, LayoutAnimation, Platform, UIManager,
   LayoutChangeEvent, useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -41,6 +41,7 @@ import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useToast } from '@/common/components/ui/Toast';
 import { useKeyLevels } from '@/hooks/queries/priceLevels/useKeyLevels';
+import type { WatchedPriceLevel } from '@/common/types/priceLevels';
 import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
 import { useCancelKeyLevel } from '@/hooks/mutations/priceLevels/useCancelKeyLevel';
 import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLevel';
@@ -372,8 +373,12 @@ export default function ChartsScreen() {
   // TVChart zone taps (declared here — after `toast` — to avoid a TDZ).
   const handleTVAutoZoneTap = useCallback((z: ChartAutoZone) => setTvZoneSheetZone(z), []);
   const handleTVWatchZoneTap = useCallback((z: ChartWatchZone) => {
-    toast.info(`${activeTicker} $${z.low.toFixed(2)}–$${z.high.toFixed(2)}`);
-  }, [activeTicker, toast]);
+    // Tapping an alert line shows the "TICKER Crossing $X.XX" pill with a
+    // delete option (TradingView-style) instead of the old toast.
+    const level = (allKeyLevels ?? []).find(l => l.id === z.id) ?? null;
+    setTappedAlert(level);
+  }, [allKeyLevels]);
+  const [tappedAlert, setTappedAlert] = useState<WatchedPriceLevel | null>(null);
   const chartWatchZones: ChartWatchZone[] = (allKeyLevels ?? [])
     .filter(l => l.ticker === activeTicker && (l.status === 'watching' || l.status === 'confirmed'))
     .map(l => ({
@@ -382,6 +387,29 @@ export default function ChartsScreen() {
     }));
 
   const { mutateAsync: createKeyLevel } = useCreateKeyLevel();
+  // Long-press on the TV chart resolved to a price — create a crossing alert
+  // there. Direction 'either' = notify when a 1m bar closes through the
+  // level from either side (TradingView's "Crossing" semantics).
+  const handleAddAlertAtPrice = useCallback(async (price: number) => {
+    if (!user?.id) {
+      toast.error('Not authenticated');
+      return;
+    }
+    try {
+      await createKeyLevel({
+        userId: user.id,
+        ticker: activeTicker,
+        direction: 'either',
+        levelLow: price,
+        levelHigh: price,
+        source: 'self',
+        zoneType: 'trade',
+      });
+      toast.success(`Alert set: ${activeTicker} crossing $${price.toFixed(2)}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to set the alert');
+    }
+  }, [user?.id, activeTicker, createKeyLevel, toast]);
   const handleWatchConfirm = async (draft: ChartWatchDraft): Promise<boolean> => {
     if (!user?.id) {
       toast.error('Not authenticated');
@@ -513,6 +541,7 @@ export default function ChartsScreen() {
               visibleSeconds={tvVisibleSeconds}
               onRequestMoreHistory={lazyHistory.loadMore}
               historyExhausted={lazyHistory.exhausted}
+              onAddAlertAtPrice={handleAddAlertAtPrice}
             />
           ) : (
             <AdvancedPriceChart
@@ -538,6 +567,34 @@ export default function ChartsScreen() {
               settings={chart.chartSettings}
             />
           )
+        )}
+        {/* Tapped alert line → TradingView-style pill with delete. */}
+        {tappedAlert && (
+          <View style={{ position: 'absolute', top: 16, left: 0, right: 0, alignItems: 'center' }} pointerEvents="box-none">
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: 10, borderWidth: 1, borderColor: colors.border, paddingVertical: 8, paddingHorizontal: 14, gap: 10, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 8, elevation: 6 }}>
+              <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600' }}>
+                {tappedAlert.ticker} Crossing {tappedAlert.level_high.toFixed(2)}
+              </Text>
+              <View style={{ width: 1, alignSelf: 'stretch', backgroundColor: colors.border }} />
+              <Pressable
+                onPress={() => {
+                  const id = tappedAlert.id;
+                  setTappedAlert(null);
+                  cancelKeyLevel(id, {
+                    onSuccess: () => toast.info('Alert deleted'),
+                    onError: (e: Error) => toast.error(e.message || 'Failed to delete the alert'),
+                  });
+                }}
+                hitSlop={10}
+                accessibilityLabel="Delete alert"
+              >
+                <Ionicons name="trash-outline" size={18} color={colors.text} />
+              </Pressable>
+              <Pressable onPress={() => setTappedAlert(null)} hitSlop={10} accessibilityLabel="Dismiss">
+                <Ionicons name="close" size={16} color={colors.textSecondary} />
+              </Pressable>
+            </View>
+          </View>
         )}
       </View>
 
