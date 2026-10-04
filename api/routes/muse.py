@@ -1305,6 +1305,48 @@ def _digest_etf(s: dict) -> dict:
     }
 
 
+# SPDR sector ETFs: last-session rotation read for the Morning Brief.
+_SECTOR_ETFS = (
+    ("XLK", "Technology"),
+    ("XLV", "Health Care"),
+    ("XLF", "Financials"),
+    ("XLE", "Energy"),
+    ("XLI", "Industrials"),
+    ("XLP", "Consumer Staples"),
+    ("XLY", "Consumer Discretionary"),
+    ("XLU", "Utilities"),
+    ("XLRE", "Real Estate"),
+    ("XLB", "Materials"),
+    ("XLC", "Communication Services"),
+)
+
+
+def _sector_performance() -> list:
+    """Day and 5-day % change for the 11 SPDR sector ETFs, best→worst.
+    Best-effort: [] on failure. Values reflect the last completed session
+    (premarket the daily bar isn't done yet)."""
+    try:
+        import yfinance as yf
+        out = []
+        for ticker, name in _SECTOR_ETFS:
+            try:
+                closes = yf.Ticker(ticker).history(period="5d", auto_adjust=False)["Close"].dropna()
+                if len(closes) < 2:
+                    continue
+                day = (closes.iloc[-1] / closes.iloc[-2] - 1) * 100
+                week = (closes.iloc[-1] / closes.iloc[0] - 1) * 100
+                out.append({"ticker": ticker, "name": name,
+                            "change_pct": round(float(day), 2),
+                            "change_5d_pct": round(float(week), 2)})
+            except Exception as e:
+                logger.info("[muse/digest/compose] sector %s failed: %s", ticker, e)
+        out.sort(key=lambda s: s["change_pct"], reverse=True)
+        return out
+    except Exception as e:
+        logger.warning("[muse/digest/compose] sectors failed: %s", e)
+        return []
+
+
 def _estimate_premium_tier(ticker: str, direction: str, trigger: float) -> str:
     """Best-effort premium tier from the nearest-expiry chain (strike nearest
     the trigger). Display estimate only — 'TBD' when quotes are unavailable."""
@@ -1403,6 +1445,7 @@ def compose_digest():
         "universe": sorted(universe),
         "watchlist": [_digest_play(p) for p in ranked["plays"]],
         "etfs": etfs,
+        "sectors": _sector_performance(),
         "blocked": ranked["blocked"],
         "correlation_note": ranked["correlation_label"],
     })

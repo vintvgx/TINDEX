@@ -365,3 +365,44 @@ def test_premium_tier_tbd_on_failure(monkeypatch):
 
     _patch_opt(monkeypatch, _boom)
     assert muse_routes._estimate_premium_tier("AMZN", "CALL", 245.0) == "TBD"
+
+
+def test_sector_performance_shape_and_sort(monkeypatch):
+    import pandas as pd
+
+    closes = pd.Series([100.0, 101.0, 100.5, 102.0, 103.0])  # day +0.98%, 5d +3.0%
+
+    class _FakeTicker:
+        def __init__(self, t):
+            self._t = t
+
+        def history(self, **kwargs):
+            if self._t == "XLE":
+                raise RuntimeError("yahoo down")  # one failure skips the sector
+            return pd.DataFrame({"Close": closes})
+
+    import types
+    yf = types.ModuleType("yfinance")
+    yf.Ticker = _FakeTicker
+    monkeypatch.setitem(sys.modules, "yfinance", yf)
+
+    sectors = muse_routes._sector_performance()
+    assert len(sectors) == len(muse_routes._SECTOR_ETFS) - 1
+    first = sectors[0]
+    assert set(first) == {"ticker", "name", "change_pct", "change_5d_pct"}
+    assert first["ticker"] == "XLK" and first["name"] == "Technology"
+    assert first["change_pct"] == round((103.0 / 102.0 - 1) * 100, 2)
+    assert first["change_5d_pct"] == round((103.0 / 100.0 - 1) * 100, 2)
+    assert all(s["ticker"] != "XLE" for s in sectors)
+
+
+def test_sector_performance_empty_on_yfinance_failure(monkeypatch):
+    import types
+    yf = types.ModuleType("yfinance")
+
+    def _boom(t):
+        raise RuntimeError("no network")
+
+    yf.Ticker = _boom
+    monkeypatch.setitem(sys.modules, "yfinance", yf)
+    assert muse_routes._sector_performance() == []
