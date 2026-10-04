@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as SecureStore from 'expo-secure-store';
 import type { ChartMode } from '@/common/components/ticker/AdvancedPriceChart';
+import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 
 const STORAGE_KEY = 'chart_display_prefs_v1';
 const QUERY_KEY = ['chart-display-prefs'];
@@ -25,6 +26,17 @@ export interface ChartDisplayPrefs {
   showSR: boolean;
   /** Options call/put OI walls (+ expiry-day max pain) on intraday views. */
   showWalls: boolean;
+  /** Timeframe moving-average overlays (computed from the loaded bars). */
+  ema20: boolean;
+  ema50: boolean;
+  ema200: boolean;
+  ema400: boolean;
+  /** Which chart engine renders the Charts tab. */
+  chartEngine: 'tv' | 'legacy';
+  /** Date range + bar size the Charts tab opens on at launch. */
+  defaultPeriod: PricePeriod;
+  /** null = that period's own default bar size. */
+  defaultInterval: string | null;
 }
 
 export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
@@ -36,6 +48,13 @@ export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
   showOrb: true,
   showSR: false,
   showWalls: true,
+  ema20: true,
+  ema50: true,
+  ema200: false,
+  ema400: false,
+  chartEngine: 'tv',
+  defaultPeriod: '1D',
+  defaultInterval: null,
 };
 
 async function loadPrefs(): Promise<ChartDisplayPrefs> {
@@ -58,7 +77,7 @@ async function loadPrefs(): Promise<ChartDisplayPrefs> {
  */
 export function useChartDisplayPrefs() {
   const qc = useQueryClient();
-  const { data: prefs = DEFAULT_CHART_DISPLAY_PREFS } = useQuery<ChartDisplayPrefs>({
+  const { data: prefs = DEFAULT_CHART_DISPLAY_PREFS, isSuccess: loaded } = useQuery<ChartDisplayPrefs>({
     queryKey: QUERY_KEY,
     queryFn: loadPrefs,
     staleTime: Infinity,
@@ -72,5 +91,6 @@ export function useChartDisplayPrefs() {
     SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
   }, [qc]);
 
-  return { prefs, setPref };
+  /** `loaded` — the stored prefs have been read (vs. still showing defaults). */
+  return { prefs, setPref, loaded };
 }

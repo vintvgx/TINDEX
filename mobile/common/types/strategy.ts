@@ -310,6 +310,16 @@ export interface StrategyPosition {
    *  position — see ExitManager.to_dict(). Defaults true when absent. */
   sl_enabled?: boolean;
   tp_enabled?: boolean;
+  /** Worst-case floor price + on/off, breakeven grace config/countdown,
+   *  cascade — all returned by /strategy/positions (see
+   *  _engine_position_response). Without these the card had no floor to
+   *  show until the live WS pushed, and an edit looked unsaved. */
+  sl_outer_floor?: number | null;
+  sl_floor_enabled?: boolean;
+  be_grace_seconds?: number | null;
+  be_grace_active?: boolean;
+  be_grace_deadline?: string | null;
+  cascade_enabled?: boolean;
 }
 
 export interface ExitStage {

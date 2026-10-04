@@ -65,6 +65,12 @@ function toPositionEntry(pos: ImmediatePosition): PositionEntry {
     sl_grace_minutes:    full.sl_grace_minutes,
     sl_enabled:          full.sl_enabled,
     tp_enabled:          full.tp_enabled,
+    sl_outer_floor:      full.sl_outer_floor,
+    sl_floor_enabled:    full.sl_floor_enabled,
+    be_grace_seconds:    full.be_grace_seconds,
+    be_grace_active:     full.be_grace_active,
+    be_grace_deadline:   full.be_grace_deadline,
+    cascade_enabled:     full.cascade_enabled,
   };
 }
 
@@ -132,7 +138,7 @@ export function useLivePositionsData(mode: 'live' | 'paper', tickerFilter?: stri
 // a parent's .map()).
 
 export function PositionRow({
-  pos, colors, onLiveUpdate, hideChartButton,
+  pos, colors, onLiveUpdate, hideChartButton, hideTicker,
 }: {
   pos: PositionEntry;
   colors: any;
@@ -140,6 +146,9 @@ export function PositionRow({
   /** True when rendered inside PriceChartFullScreen's own open-contracts
    *  section — a button that reopens the chart you're on is noise there. */
   hideChartButton?: boolean;
+  /** Drop the logo + ticker name — the Charts tab's docked pager is
+   *  already scoped to the ticker on screen. */
+  hideTicker?: boolean;
 }) {
   const { toTicker } = useBaseNavigation();
   const { data: live, connected, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
@@ -160,6 +169,7 @@ export function PositionRow({
     <View style={styles.positionBlock}>
       {/* Strategy label row */}
       <View style={styles.stratLabelRow}>
+        {!hideTicker && (
         <TouchableOpacity
           onPress={() => toTicker(pos.ticker)}
           hitSlop={6}
@@ -172,6 +182,7 @@ export function PositionRow({
           />
           <Text style={[styles.stratTicker, { color: colors.text }]}>{pos.ticker}</Text>
         </TouchableOpacity>
+        )}
         {pos.strategy_name ? (
           <Text style={[styles.stratName, { color: colors.tabBarInactive }]}>{pos.strategy_name}</Text>
         ) : (
@@ -213,6 +224,12 @@ export function PositionRow({
           tp_enabled:    pos.tp_enabled,
           runner_mode:   pos.runner_mode,
           runner_trail:  pos.runner_trail,
+          sl_outer_floor:   pos.sl_outer_floor,
+          sl_floor_enabled: pos.sl_floor_enabled,
+          be_grace_seconds: pos.be_grace_seconds,
+          be_grace_active:  pos.be_grace_active,
+          be_grace_deadline: pos.be_grace_deadline,
+          cascade_enabled:  pos.cascade_enabled,
         }}
         streaming={connected}
         accentColor={accentColor}
