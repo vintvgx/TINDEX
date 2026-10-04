@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 type IconName = keyof typeof Ionicons.glyphMap;
 
 export type ChartSettingRow =
-  | { kind: 'toggle'; key: string; icon: IconName; label: string; description?: string; value: boolean; onChange: (v: boolean) => void }
+  | { kind: 'toggle'; key: string; icon: IconName; label: string; description?: string; value: boolean; onChange: (v: boolean) => void; color?: string }
   | { kind: 'segment'; key: string; label: string; value: string; options: { value: string; label: string; icon?: IconName }[]; onChange: (v: string) => void }
   | { kind: 'action'; key: string; icon: IconName; label: string; description?: string; onPress: () => void };
 

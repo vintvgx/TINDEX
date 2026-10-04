@@ -2,9 +2,11 @@ import { Tabs } from 'expo-router';
 import { View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaInsetsContext, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSegments } from 'expo-router';
 import { CustomTabBar } from '@/common/components/ui/CustomTabBar';
 import { TickerTape } from '@/common/components/ui/TickerTape';
 import { AppHeader } from '@/common/components/ui/AppHeader';
+import { ChartTapeProvider } from '@/common/components/ui/ChartTapeContext';
 import { OptionsTickerProvider } from '@/lib/optionsTickerContext';
 import { useThemeColors } from '@/lib/useColorScheme';
 
@@ -32,11 +34,17 @@ import { useThemeColors } from '@/lib/useColorScheme';
 function Shell() {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
+  const segments = useSegments();
+  // The Charts tab owns its chrome now (ticker wheel + bottom toolbar, TV-
+  // style) — the global AppHeader would just be clutter there. Every other
+  // tab keeps it.
+  const hideAppHeader = segments[segments.length - 1] === 'charts';
 
   return (
+    <ChartTapeProvider>
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <TickerTape />
-      <AppHeader />
+      {!hideAppHeader && <AppHeader />}
 
       <View style={{ flex: 1 }}>
         <SafeAreaInsetsContext.Provider
@@ -85,6 +93,7 @@ function Shell() {
 
       <StatusBar style="light" />
     </View>
+    </ChartTapeProvider>
   );
 }
 

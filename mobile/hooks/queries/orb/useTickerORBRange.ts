@@ -12,7 +12,12 @@ import type { ORBRange } from "@/common/types/orb";
  * the ORB grid — this is for a single chart's overlay.
  */
 export function useTickerORBRange(ticker: string) {
-  const today = useMemo(() => new Date().toISOString().split("T")[0], []);
+  // trade_date is an ET trading day — toISOString() is UTC, which is already
+  // "tomorrow" between 8pm-midnight ET and would miss today's row.
+  const today = useMemo(
+    () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()),
+    [],
+  );
 
   return useQuery({
     queryKey: ["orb-range", ticker, today],

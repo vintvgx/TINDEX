@@ -32,6 +32,8 @@ import { useAccountValueDisplay } from '@/hooks/queries/strategy/useAccountValue
 import { useSellStatus, type SellStatus } from '@/hooks/useSellStatus';
 import { useOptionStreamReconnectEvent } from '@/hooks/queries/strategy/useOptionStreamReconnectEvent';
 import { Skeleton } from '@/common/components/ui/Skeleton';
+import { useChartTape } from '@/common/components/ui/ChartTapeContext';
+import { signalMeta } from '@/common/components/ticker/ChartTechnicals';
 import type { WatchlistStock } from '@/common/types/watchlist';
 
 // Live-stream symbols (SPY arrives on its own field; the rest via livePrices).
@@ -300,12 +302,21 @@ export function TickerTape() {
   }, [everReady]);
   const marqueeVisibility = skeletonOpacity.interpolate({ inputRange: [0, 1], outputRange: [1, 0] });
 
+  // Charts-tab headline (see below) — declared up here because the marquee
+  // loop depends on it.
+  const { info: chartInfo } = useChartTape();
+  const showChartInfo = chartInfo != null && pendingCount === 0;
+
   // ── Marquee scroll ──────────────────────────────────────────────────────────
   const translateX = useRef(new Animated.Value(0)).current;
   const [rowWidth, setRowWidth] = useState(0);
 
+  // Paused while the Charts headline replaces the marquee, and restarted
+  // from the top the moment it's visible again: iOS drops a native loop
+  // running on a display:none'd view, so leaving the Charts tab used to
+  // bring the list back frozen.
   useEffect(() => {
-    if (rowWidth <= 0) return;
+    if (rowWidth <= 0 || showChartInfo) return;
     translateX.setValue(0);
     const duration = (rowWidth / SCROLL_SPEED_PX_PER_SEC) * 1000;
     const anim = Animated.loop(
@@ -318,9 +329,12 @@ export function TickerTape() {
     );
     anim.start();
     return () => anim.stop();
-  }, [rowWidth, translateX]);
+  }, [rowWidth, translateX, showChartInfo]);
 
   const handleWidth = (w: number) => {
+    // A display:none'd marquee (Charts headline showing) can report 0 —
+    // keep the last real width so the loop resumes intact.
+    if (w <= 0) return;
     // Ignore sub-pixel jitter from live price digit changes to avoid scroll resets.
     setRowWidth(prev => (Math.abs(prev - w) > 2 ? w : prev));
   };
@@ -369,11 +383,32 @@ export function TickerTape() {
 
   useEffect(() => () => { if (maxWaitRef.current) clearTimeout(maxWaitRef.current); }, []);
 
-  // ── Awaiting confirmation — replaces ticker prices entirely, not just an
-  // overlay, so it can't be mistaken for a passing banner among the market
-  // data. Stays up (and blocks the normal mode-cycle tap) until every pending
-  // confirmation is resolved (entered or skipped) — see the Dashboard's
-  // pending-confirmation cards, which is where tapping this sends you.
+  // ── Charts-tab ticker info — replaces the market marquee while the
+  // Charts tab is mounted (it publishes via ChartTapeContext). Takeovers
+  // below still win over this. Crossfades on ticker change; shows a
+  // skeleton for the price while the new ticker loads. ──────────────────
+  const chartInfoOpacity = useRef(new Animated.Value(1)).current;
+  const prevChartTicker = useRef<string | null>(null);
+  useEffect(() => {
+    if (!chartInfo) { prevChartTicker.current = null; return; }
+    if (prevChartTicker.current !== chartInfo.ticker) {
+      prevChartTicker.current = chartInfo.ticker;
+      chartInfoOpacity.stopAnimation();
+      chartInfoOpacity.setValue(0);
+      // JS-driven on purpose: this row mounts/unmounts as the Charts tab
+      // gains/loses focus and on takeovers, and a native-driven value
+      // doesn't reliably reattach to a freshly mounted view (see the
+      // 2026-08-10 note below) — it could stay stuck at opacity 0, leaving
+      // the tape black after a ticker switch. One 350ms opacity fade on the
+      // JS thread is negligible.
+      Animated.timing(chartInfoOpacity, {
+        toValue: 1, duration: 350, easing: Easing.out(Easing.quad), useNativeDriver: false,
+      }).start(({ finished }) => {
+        if (!finished) chartInfoOpacity.setValue(1);
+      });
+    }
+  }, [chartInfo?.ticker]); // eslint-disable-line react-hooks/exhaustive-deps
+  const chartSignal = chartInfo ? signalMeta(chartInfo.signal ?? undefined, colors) : null;
   //
   // 2026-08-10: this (and the sell-status takeover below it) used to be a
   // full early `return` swapping in a completely different tree — which
@@ -389,24 +424,76 @@ export function TickerTape() {
     <View style={{ backgroundColor: colors.tape, paddingTop: insets.top }}>
       <Pressable
         style={styles.tape}
-        onPress={cycle}
+        onPress={showChartInfo ? undefined : cycle}
         onLongPress={handleTapeLongPress}
         onPressOut={handleTapePressOut}
         delayLongPress={350}
         accessibilityRole="button"
-        accessibilityLabel={`Ticker tape: ${mode.label}. Tap to change, hold for live account summary.`}
+        accessibilityLabel={showChartInfo ? `Ticker tape: ${chartInfo?.ticker}` : `Ticker tape: ${mode.label}. Tap to change, hold for live account summary.`}
       >
         <View style={[styles.liveDot, { backgroundColor: orbDotColor }]} />
 
+        {showChartInfo && chartInfo ? (
+          /* Charts-tab headline — ticker left, price/change/signal right */
+          <Animated.View style={[styles.chartInfoRow, { opacity: chartInfoOpacity }]}>
+            <Pressable
+              onPress={chartInfo.onTickerPress}
+              disabled={!chartInfo.onTickerPress}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 12 }}
+              accessibilityRole="button"
+              accessibilityLabel={`${chartInfo.ticker} — search for another ticker`}
+            >
+              <Text style={[styles.symbol, { color: colors.tapeText, fontSize: 15, fontWeight: '800' }]}>
+                ${chartInfo.ticker}
+              </Text>
+            </Pressable>
+            <View style={{ flex: 1 }} />
+            {chartInfo.loading || chartInfo.price == null ? (
+              <Skeleton width={64} height={10} borderRadius={4} />
+            ) : (
+              <Text style={[styles.value, { color: colors.tapeText }]}>
+                ${chartInfo.price.toFixed(2)}
+              </Text>
+            )}
+            {chartInfo.change != null && chartInfo.changePct != null && !chartInfo.loading ? (
+              <Text style={[
+                styles.value,
+                { color: chartInfo.change >= 0 ? colors.tapeUp : colors.tapeDown, marginLeft: 8 },
+              ]}>
+                {chartInfo.change >= 0 ? '+' : ''}{chartInfo.change.toFixed(2)} ({chartInfo.changePct.toFixed(2)}%)
+              </Text>
+            ) : null}
+            {chartSignal && chartInfo.signal ? (
+              // Unstyled tap wrapper — the pill itself renders exactly as before.
+              <Pressable
+                onPress={chartInfo.onSignalPress}
+                disabled={!chartInfo.onSignalPress}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={`${chartSignal.label} — open ${chartInfo.ticker} contracts`}
+              >
+                <View style={[styles.signalPill, { backgroundColor: chartSignal.color + '22', borderColor: chartSignal.color }]}>
+                  <Text style={[styles.signalText, { color: chartSignal.color }]}>{chartSignal.label}</Text>
+                </View>
+              </Pressable>
+            ) : null}
+          </Animated.View>
+        ) : null}
         {/* Marquee — hidden (opacity 0) under the skeleton until the first
-            batch of data ever arrives, then crossfades in. */}
+            batch of data ever arrives, then crossfades in. Stays MOUNTED
+            while the Charts headline shows (display:none only) — unmounting
+            it detached its native-driven scroll/opacity values, the same
+            failure the 2026-08-10 note describes. */}
+        <View style={[styles.track, showChartInfo && { display: 'none' }]}>
         <Animated.View style={[styles.track, { opacity: Animated.multiply(contentOpacity, marqueeVisibility), transform: [{ translateX }] }]}>
           <TapeRow items={display} onWidth={handleWidth} colors={colors} />
           <TapeRow items={display} colors={colors} />
         </Animated.View>
+        </View>
 
         {/* First-load skeleton — crossfades out once real data lands */}
-        {skeletonVisible && (
+        {/* Not over the Charts headline — that row has its own price skeleton. */}
+        {skeletonVisible && !showChartInfo && (
           <Animated.View style={[styles.skeletonRow, { opacity: skeletonOpacity }]} pointerEvents="none">
             {[42, 34, 46, 38, 50, 36].map((w, i) => (
               <View key={i} style={styles.skeletonItem}>
@@ -421,10 +508,12 @@ export function TickerTape() {
           <Text style={[styles.titleText, { color: colors.tapeText }]}>{titleText}</Text>
         </Animated.View>
 
-        {/* Tap affordance */}
+        {/* Tap affordance — hidden in chart-info mode (tap does nothing there) */}
+        {!showChartInfo && (
         <View style={[styles.cycleHint, { backgroundColor: colors.tape }]} pointerEvents="none">
           <Ionicons name="swap-horizontal" size={13} color={colors.tapeMuted} />
         </View>
+        )}
       </Pressable>
 
       {/* Opaque overlay, positioned to exactly cover the Pressable above
@@ -550,6 +639,24 @@ const styles = StyleSheet.create({
   },
   skeletonItem: {
     marginRight: 18,
+  },
+  chartInfoRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: 12,
+  },
+  signalPill: {
+    marginLeft: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 9,
+    borderWidth: 1,
+  },
+  signalText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   track: {
     flexDirection: 'row',

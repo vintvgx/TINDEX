@@ -45,3 +45,5 @@ test.json
 
 # claude memory files
 /.claude
+assets/tvchart.html
+common/components/ticker/tvchart-html.generated.ts

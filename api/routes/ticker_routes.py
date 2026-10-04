@@ -15,7 +15,7 @@ from services.anthropic.anthropic_service import anthropic_service
 from services.supabase.supabase_service import get_supabase_service
 from services.utils.research_service import get_research_service
 from services.utils.blog_generation_service import get_blog_service
-from services.yfinance.yfinance_service import get_historical_prices, PERIOD_MAP, ALLOWED_INTERVALS, get_intraday_chart_for_date
+from services.yfinance.yfinance_service import get_historical_prices, get_historical_window, PERIOD_MAP, ALLOWED_INTERVALS, get_intraday_chart_for_date
 from utils.cache import TrendingStocksCache
 
 import requests as _requests
@@ -135,16 +135,27 @@ def get_ticker_history(ticker: str):
             return jsonify({"success": False, "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."}), 400
 
         data = request.get_json() or {}
+        interval = data.get("interval")
+
+        # Windowed backfill (chart lazy-load): explicit [start, end) window at
+        # the requested interval, e.g. {"interval": "5m", "start":
+        # "2026-08-01", "end": "2026-09-01"}. Same bar payload as the period
+        # fetch so the client can merge by timestamp.
+        if data.get("start") or data.get("end"):
+            if not interval:
+                return jsonify({"success": False, "error": "Windowed fetch requires an interval (e.g. '5m')."}), 400
+            try:
+                historical_data = get_historical_window(ticker, interval, data.get("start"), data.get("end"))
+            except ValueError as e:
+                return jsonify({"success": False, "error": str(e)}), 400
+            return jsonify({"success": True, "data": historical_data,
+                            "interval": historical_data.get("interval"),
+                            "start": data.get("start"), "end": data.get("end"),
+                            "timestamp": time.time(), "from_cache": False})
+
         period = data.get("period", "1M")
         if period not in PERIOD_MAP:
             return jsonify({"success": False, "error": f"Invalid period. Must be one of: {', '.join(PERIOD_MAP.keys())}"}), 400
-
-        # Client-requested bar granularity (e.g. "15m" instead of 1D's
-        # default "5m") — invalid/mismatched-period values are silently
-        # ignored inside get_historical_prices, never a 400 here, so a stale
-        # interval left over from switching periods client-side can't break
-        # the request.
-        interval = data.get("interval")
 
         historical_data = get_historical_prices(ticker, period, interval_override=interval)
 
