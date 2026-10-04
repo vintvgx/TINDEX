@@ -16,6 +16,8 @@ interface ToolButton {
   label: string;
   onPress: () => void;
   accent?: boolean;
+  /** Icon color override (e.g. the gold star of a followed ticker). */
+  color?: string;
   badge?: number;
 }
 
@@ -41,6 +43,8 @@ export function ChartBottomToolbar({
   positioningContent,
   settingsSections,
   onPositionsPress,
+  isFollowed,
+  onToggleFollow,
   openPositionCount,
   tickerStatus,
 }: {
@@ -58,6 +62,10 @@ export function ChartBottomToolbar({
   settingsSections: ChartSettingsSection[];
   onPositionsPress: () => void;
   openPositionCount: number;
+  /** Whether the active ticker is followed (in the chart list via follow). */
+  isFollowed: boolean;
+  /** Star button: follow / unfollow the active ticker. */
+  onToggleFollow: () => void;
   /** Per-ticker position/watch state for the wheel's letter badges. */
   tickerStatus?: Record<string, TickerStatus>;
 }) {
@@ -69,6 +77,13 @@ export function ChartBottomToolbar({
     { key: 'positioning', icon: 'bar-chart-outline', label: 'Positioning', onPress: () => setSheet('positioning') },
     { key: 'positions', icon: 'briefcase-outline', label: 'Positions', onPress: onPositionsPress, badge: openPositionCount || undefined },
     { key: 'settings', icon: 'options-outline', label: 'Settings', onPress: () => setSheet('settings') },
+    {
+      key: 'follow',
+      icon: isFollowed ? 'star' : 'star-outline',
+      label: isFollowed ? `Unfollow ${activeTicker}` : `Follow ${activeTicker}`,
+      onPress: onToggleFollow,
+      color: isFollowed ? colors.warning : undefined,
+    },
   ];
 
   return (
@@ -117,7 +132,7 @@ export function ChartBottomToolbar({
                 <Ionicons
                   name={b.icon}
                   size={21}
-                  color={b.accent ? colors.accent : colors.textSecondary}
+                  color={b.color ?? (b.accent ? colors.accent : colors.textSecondary)}
                 />
                 {b.badge ? (
                   <View style={[s.badge, { backgroundColor: colors.accent }]}>

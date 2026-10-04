@@ -717,8 +717,14 @@
         longPressArmed = false;
       }
     }, { passive: true });
-    function endPress() {
+    function endPress(e) {
       if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      // One line per press in Metro ("[TVChart] page log: press …") so a
+      // long-press that doesn't offer the alert shows exactly why.
+      if (longPressArmed || crosshairShownThisPress) {
+        plog('press ' + (e && e.type) + ' armed=' + longPressArmed + ' crosshair=' + crosshairShownThisPress +
+          ' price=' + (lastCrosshairPrice === null ? 'null' : lastCrosshairPrice.toFixed(2)));
+      }
       if (longPressArmed && lastCrosshairPrice !== null) {
         post({ type: 'longPressPrice', price: lastCrosshairPrice });
       }

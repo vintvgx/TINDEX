@@ -169,8 +169,6 @@ export function TVChart({
   // tapped, dismissed, or replaced by a newer long-press.
   const [longPressPrice, setLongPressPrice] = useState<number | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const crosshairRef = useRef(crosshair);
-  crosshairRef.current = crosshair;
   const onAddAlertRef = useRef(onAddAlertAtPrice);
   onAddAlertRef.current = onAddAlertAtPrice;
 
@@ -421,9 +419,11 @@ export function TVChart({
       onRequestMoreHistory?.();
     } else if (msg.type === 'longPressPrice') {
       // Press-and-hold resolved to a chart price — offer the crossing-alert
-      // pill (only when the crosshair/"Data points" setting is on). The pill
-      // auto-dismisses after 10s; a newer long-press replaces it.
-      if (crosshairRef.current && typeof msg.price === 'number' && isFinite(msg.price) && onAddAlertRef.current) {
+      // pill. Deliberately NOT gated on the "Data points" setting: that
+      // only hides the crosshair, and gating here made long-press silently
+      // do nothing whenever it was off. The pill auto-dismisses after 10s;
+      // a newer long-press replaces it.
+      if (typeof msg.price === 'number' && isFinite(msg.price) && onAddAlertRef.current) {
         if (longPressTimer.current) clearTimeout(longPressTimer.current);
         setLongPressPrice(msg.price);
         longPressTimer.current = setTimeout(() => setLongPressPrice(null), 10000);
@@ -458,6 +458,11 @@ export function TVChart({
           domStorageEnabled={false}
           scrollEnabled={false}
           bounces={false}
+          // WKWebView's own long-press recognizers (text selection loupe,
+          // link preview) can claim a press-and-hold and cancel the page's
+          // touches before the alert long-press arms.
+          textInteractionEnabled={false}
+          allowsLinkPreview={false}
           showsVerticalScrollIndicator={false}
           showsHorizontalScrollIndicator={false}
           onLoadStart={() => {

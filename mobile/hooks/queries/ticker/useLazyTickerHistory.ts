@@ -6,8 +6,8 @@ import { PricePeriod, TickerHistoryData } from "@/common/types/blogPosts/ticker"
  * Lazy-loading chart history for the TradingView chart.
  *
  * The period slider is only the *initial viewport* — data is no longer
- * bounded by it. For intraday intervals the initial fetch is a ~1-month
- * windowed call (POST /ticker/<ticker>/history {interval, start, end}),
+ * bounded by it. For intraday intervals the initial fetch is a ~3-month
+ * windowed call (or as much as Yahoo serves for that bar size) (POST /ticker/<ticker>/history {interval, start, end}),
  * and `loadMore()` backfills older windows as the user pans left. Daily+
  * intervals keep the existing period fetch (they already span years).
  *
@@ -17,8 +17,12 @@ import { PricePeriod, TickerHistoryData } from "@/common/types/blogPosts/ticker"
  */
 
 const INTRADAY = new Set(["1m", "5m", "15m", "30m", "1h"]);
-// Initial load sizes in days — at or below the backend's Yahoo caps.
-const INITIAL_DAYS: Record<string, number> = { "1m": 7, "5m": 30, "15m": 30, "30m": 30, "1h": 60 };
+// Initial load sizes in days: ~3 months where Yahoo has it. 5m/15m/30m
+// only exist for the last ~60 days and 1m for ~7 (backend caps match), so
+// those load everything available.
+const INITIAL_DAYS: Record<string, number> = { "1m": 7, "5m": 60, "15m": 60, "30m": 60, "1h": 92 };
+// Daily+ bars load by period — never less than 3 months up front.
+const MIN_DAILY_PERIOD: Partial<Record<PricePeriod, PricePeriod>> = { "1D": "3M", "1W": "3M", "1M": "3M" };
 // Backfill chunk sizes in days — at or below the backend's Yahoo caps
 // (5m/15m/30m ~60d, 1m ~7d, 1h ~730d).
 const BACKFILL_DAYS: Record<string, number> = { "1m": 7, "5m": 55, "15m": 55, "30m": 55, "1h": 120 };
@@ -161,7 +165,8 @@ export function useLazyTickerHistory(opts: {
           const end = addDays(etToday(), 1);
           data = await postHistory(ticker, { interval, start: addDays(end, -days), end }, ctrl.signal);
         } else {
-          data = await postHistory(ticker, { period, ...(interval ? { interval } : {}) }, ctrl.signal);
+          const fetchPeriod = MIN_DAILY_PERIOD[period] ?? period;
+          data = await postHistory(ticker, { period: fetchPeriod, ...(interval ? { interval } : {}) }, ctrl.signal);
         }
         if (!dead) {
           setBars(data);

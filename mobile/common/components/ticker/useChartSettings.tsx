@@ -83,10 +83,10 @@ export function useChartSettings({
   const defaultMode: ChartMode = period === '1D' || period === '1W' ? 'candle' : 'line';
   const sections: ChartSettingsSection[] = [
     ...(showDefaults ? [{
-      title: 'Defaults',
+      title: 'Timeframe · also used on launch',
       rows: [
         {
-          kind: 'segment' as const, key: 'defaultPeriod', label: 'Date range on launch',
+          kind: 'segment' as const, key: 'defaultPeriod', label: 'Date range',
           value: defaultPeriod,
           options: PERIOD_STOPS.map(p => ({ value: p, label: p })),
           onChange: (v: string) => {
@@ -98,7 +98,7 @@ export function useChartSettings({
           },
         },
         {
-          kind: 'segment' as const, key: 'defaultInterval', label: 'Bar size on launch',
+          kind: 'segment' as const, key: 'defaultInterval', label: 'Bar size',
           value: defaultInterval,
           options: defaultIntervalOptions.map(i => ({ value: i, label: INTERVAL_LABEL[i] ?? i })),
           onChange: (v: string) => setPref('defaultInterval', v),

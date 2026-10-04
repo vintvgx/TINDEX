@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, Pressable, SafeAreaView, LayoutAnimation, Platform, UIManager,
-  LayoutChangeEvent, useWindowDimensions,
+  LayoutChangeEvent, useWindowDimensions, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
@@ -31,7 +31,8 @@ import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFr
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { useChartLiveStream } from '@/hooks/queries/ticker/useChartLiveStream';
 import { useChartPriceSource } from '@/hooks/useChartPriceSource';
-import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
+import { useUserORBFollows, setTickerORBFollow, invalidateORBFollowQueries } from '@/hooks/mutations/ticker/tickerORB';
+import { useQueryClient } from '@tanstack/react-query';
 import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
 import type { UseLivePositionsDataResult } from '@/common/components/strategy/LivePositionsSection';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
@@ -126,20 +127,40 @@ export default function ChartsScreen() {
   }, [tickerList, liveTickers, paperTickers, watchedTickers]);
 
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+  // A ticker opened from search or a deep link that isn't otherwise in the
+  // list (not followed, no position/watch). Kept separately from the
+  // selection: the old version prepended whatever was *selected*, so a
+  // ticker you unfollowed while viewing it never left the list.
+  const [adHocTicker, setAdHocTicker] = useState<string | null>(null);
+  const openTicker = useCallback((t: string) => {
+    const up = t.toUpperCase();
+    setAdHocTicker(up);
+    setSelectedTicker(up);
+  }, []);
   // A tapped zone-alert push lands here with ?ticker= (see
   // NotificationNavigationService) — open that ticker's chart.
   const { ticker: tickerParam } = useLocalSearchParams<{ ticker?: string }>();
   useEffect(() => {
-    if (tickerParam) setSelectedTicker(tickerParam.toUpperCase());
-  }, [tickerParam]);
+    if (tickerParam) openTicker(tickerParam);
+  }, [tickerParam, openTicker]);
 
-  // A ticker reached via search (see handleSearchSelect below) might not be
-  // followed or have an open position yet — prepend it so it's immediately
-  // viewable and stays part of the swipe-cycle, instead of the selection
-  // silently falling back to tickerList[0] because it isn't in the list.
+  // Unfollowed anywhere (this toolbar's star, or the ticker sheet's star in
+  // TickerDetailSheet — both refresh userORBFollows) → drop it from the
+  // ad-hoc slot too, so it actually leaves the list.
+  const prevFollowed = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const now = new Set((follows ?? []).map(f => f.ticker.toUpperCase()));
+    for (const t of prevFollowed.current) {
+      if (!now.has(t)) setAdHocTicker(a => (a === t ? null : a));
+    }
+    prevFollowed.current = now;
+  }, [follows]);
+
+  // A searched-for ticker stays viewable and part of the swipe-cycle even
+  // though it isn't followed / held / watched.
   const effectiveTickerList = useMemo(
-    () => (selectedTicker && !tickerList.includes(selectedTicker) ? [selectedTicker, ...tickerList] : tickerList),
-    [selectedTicker, tickerList],
+    () => (adHocTicker && !tickerList.includes(adHocTicker) ? [adHocTicker, ...tickerList] : tickerList),
+    [adHocTicker, tickerList],
   );
   const activeTicker = selectedTicker && effectiveTickerList.includes(selectedTicker)
     ? selectedTicker
@@ -321,14 +342,14 @@ export default function ChartsScreen() {
     showDefaults: true,
   });
 
-  // Launch defaults (Chart settings → Defaults): once the stored prefs are
-  // read, open on that date range + bar size. Applied once per launch —
-  // switching ranges afterwards is just for this session.
+  // Defaults (Chart settings → Defaults) are both the launch state and a
+  // live control: applied once the stored prefs are read, and again the
+  // moment either default changes in the sheet. The toolbar chips still
+  // switch freely in between — that only lasts until the next change here
+  // or the next launch.
   const setIntervalFor = useSetChartIntervalFor();
-  const defaultsApplied = useRef(false);
   useEffect(() => {
-    if (!displayPrefsLoaded || defaultsApplied.current) return;
-    defaultsApplied.current = true;
+    if (!displayPrefsLoaded) return;
     setIntervalFor(chart.defaultPeriod, chart.defaultInterval);
     setPeriod(chart.defaultPeriod);
   }, [displayPrefsLoaded, chart.defaultPeriod, chart.defaultInterval, setIntervalFor]);
@@ -370,6 +391,60 @@ export default function ChartsScreen() {
   // scoped down client-side here.
   const { authState: { user } } = useAuth();
   const toast = useToast();
+
+  // ── Follow / unfollow the active ticker (toolbar star) ─────────────────
+  // Same write as TickerDetailSheet's star (setTickerORBFollow: flips
+  // orb_enabled and stops ORB monitoring), so both stay in sync.
+  const queryClient = useQueryClient();
+  const isActiveFollowed = useMemo(
+    () => (follows ?? []).some(f => f.ticker.toUpperCase() === activeTicker),
+    [follows, activeTicker],
+  );
+  const [followBusy, setFollowBusy] = useState(false);
+  const handleToggleFollow = useCallback(() => {
+    if (!user?.id || !activeTicker || followBusy) return;
+    const t = activeTicker;
+    const run = async (follow: boolean) => {
+      setFollowBusy(true);
+      try {
+        await setTickerORBFollow(user.id, t, follow);
+        if (!follow) {
+          // Move on to the next ticker, unless this one stays listed for
+          // another reason (position / watch level / pinned index ETF).
+          const st = tickerStatus[t];
+          const staysListed = !!(st?.live || st?.paper || st?.watching || st?.pinned);
+          if (!staysListed) {
+            const idx = effectiveTickerList.indexOf(t);
+            const rest = effectiveTickerList.filter(x => x !== t);
+            if (rest.length) setSelectedTicker(rest[Math.min(Math.max(idx, 0), rest.length - 1)]);
+            setAdHocTicker(a => (a === t ? null : a));
+            toast.info(`Unfollowed ${t}`);
+          } else {
+            toast.info(`Unfollowed ${t} — still listed (open position, watch level, or index ETF)`);
+          }
+        } else {
+          toast.success(`Following ${t}`);
+        }
+        invalidateORBFollowQueries(queryClient);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : 'Could not update follow');
+      } finally {
+        setFollowBusy(false);
+      }
+    };
+    if (!isActiveFollowed) {
+      run(true);
+      return;
+    }
+    Alert.alert(
+      `Unfollow ${t}?`,
+      'It will be removed from your chart list and ORB monitoring stops.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Unfollow', style: 'destructive', onPress: () => run(false) },
+      ],
+    );
+  }, [user?.id, activeTicker, followBusy, isActiveFollowed, tickerStatus, effectiveTickerList, toast, queryClient]);
   // TVChart zone taps (declared here — after `toast` — to avoid a TDZ).
   const handleTVAutoZoneTap = useCallback((z: ChartAutoZone) => setTvZoneSheetZone(z), []);
   const handleTVWatchZoneTap = useCallback((z: ChartWatchZone) => {
@@ -605,6 +680,8 @@ export default function ChartsScreen() {
         activeTicker={activeTicker}
         onSelectTicker={setSelectedTicker}
         onSearchPress={() => setSearchOpen(true)}
+        isFollowed={isActiveFollowed}
+        onToggleFollow={handleToggleFollow}
         period={period}
         onPeriodChange={setPeriod}
         interval={chartInterval}
@@ -638,7 +715,7 @@ export default function ChartsScreen() {
       <SearchBottomSheet
         visible={searchOpen}
         onClose={() => setSearchOpen(false)}
-        onSelectTicker={setSelectedTicker}
+        onSelectTicker={openTicker}
       />
 
       <TickerContractsModal
