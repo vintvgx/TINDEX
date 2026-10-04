@@ -392,9 +392,15 @@
     return res;
   }
 
+  // ── Lazy-load backfill state ───────────────────────────────────────
+  var lastLogicalRange = null;
+  var lastHistoryRequest = 0;
+  var historyExhausted = false;
+
   function setData(msg) {
     var candles = msg.candles || [];
     if (!candles.length) return;
+    var prevCount = lastCandles.length;
     ensureSeries(msg.ohlc ? 'candle' : 'line');
     if (msg.ohlc) {
       mainSeries.setData(candles.map(function (c) {
@@ -422,6 +428,24 @@
     }));
     if (msg.fit) {
       try { chart.timeScale().fitContent(); } catch (e) {}
+      // The date range is only the initial viewport now — frame it after fit.
+      if (msg.visibleFrom && candles.length) {
+        try {
+          chart.timeScale().setVisibleRange({ from: msg.visibleFrom, to: candles[candles.length - 1].t + 120 });
+        } catch (e) {}
+      }
+      lastLogicalRange = null;
+      lastHistoryRequest = 0;
+      historyExhausted = false;
+    } else if (msg.preserve && prevCount > 0) {
+      // Backfill prepended bars on the left: shift the visible window right
+      // by the added count so the viewport doesn't jump.
+      var n = candles.length - prevCount;
+      if (n > 0 && lastLogicalRange) {
+        try {
+          chart.timeScale().setVisibleLogicalRange({ from: lastLogicalRange.from + n, to: lastLogicalRange.to + n });
+        } catch (e) {}
+      }
     } else {
       try { chart.timeScale().scrollToRealTime(); } catch (e) {}
     }
@@ -630,7 +654,19 @@
     zonePrimitive = new ZoneBandsPrimitive();
     chart.panes()[0].attachPrimitive(zonePrimitive);
     plog('primitive attached, panes=' + chart.panes().length);
-    chart.timeScale().subscribeVisibleLogicalRangeChange(function () { schedulePills(); });
+    chart.timeScale().subscribeVisibleLogicalRangeChange(function (range) {
+      schedulePills();
+      // Lazy-load backfill: panning near the oldest loaded bar asks RN for
+      // the next older window. Throttled + naturally hysteresis'd — after a
+      // prepend the visible range shifts right by the added bars.
+      if (!range) return;
+      lastLogicalRange = range;
+      var now = Date.now();
+      if (range.from < 30 && !historyExhausted && now - lastHistoryRequest > 2000) {
+        lastHistoryRequest = now;
+        post({ type: 'requestMoreHistory' });
+      }
+    });
     chart.subscribeClick(onChartClick);
     post({ type: 'ready' });
     plog('ready posted');
@@ -653,6 +689,7 @@
       case 'setRefLines': setRefLines(msg.lines); break;
       case 'setEmaOverlays': setEmaOverlays(msg); break;
       case 'setVwap': setVwap(msg); break;
+      case 'setHistoryExhausted': historyExhausted = !!msg.exhausted; break;
       case 'setOptions': setOptions(msg); break;
       case 'applyTheme': applyTheme(msg.theme); break;
     }

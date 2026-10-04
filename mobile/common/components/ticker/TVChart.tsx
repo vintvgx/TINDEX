@@ -76,16 +76,18 @@ interface TVTheme {
 }
 type WVOutbound =
   | { type: 'init'; theme: TVTheme }
-  | { type: 'setData'; candles: TVCandle[]; ohlc: boolean; fit: boolean }
+  | { type: 'setData'; candles: TVCandle[]; ohlc: boolean; fit: boolean; preserve?: boolean; visibleFrom?: number }
   | { type: 'setZones'; auto: TVZoneBand[]; watch: TVZoneBand[]; bands: TVZoneBand[] }
   | { type: 'setRefLines'; lines: TVRefLine[] }
   | { type: 'setEmaOverlays'; emas: TVEmaOverlay[] }
   | { type: 'setVwap'; visible: boolean }
+  | { type: 'setHistoryExhausted'; exhausted: boolean }
   | { type: 'setOptions'; crosshair: boolean }
   | { type: 'applyTheme'; theme: TVTheme };
 type WVInbound =
   | { type: 'loaded' }
   | { type: 'ready' }
+  | { type: 'requestMoreHistory' }
   | { type: 'zone-tap'; id: string; kind: 'auto' | 'watch' }
   | { type: 'log'; message: string }
   | { type: 'error'; message: string };
@@ -116,6 +118,13 @@ export interface TVChartProps {
   mode?: 'candle' | 'line';
   /** "Data points" setting — off hides the press-and-hold crosshair. */
   crosshair?: boolean;
+  /** Initial viewport width in seconds (the date range is only the initial
+   *  viewport now that history lazy-loads). Applied on fit. */
+  visibleSeconds?: number;
+  /** Fired when the user pans near the oldest loaded bar — backfill more. */
+  onRequestMoreHistory?: () => void;
+  /** No older history exists — stop asking the page to request it. */
+  historyExhausted?: boolean;
   style?: any;
 }
 
@@ -140,6 +149,7 @@ const TV_ORB_EDGE = '#B2B5BE';
 export function TVChart({
   data, isLoading, autoZones, watchZones, orbRange, showOrbRange,
   sessionReferenceLines, referenceLines, showSessionLines, onAutoZoneTap, onWatchZoneTap, resetKey, emas, mode, crosshair = true, style,
+  visibleSeconds, onRequestMoreHistory, historyExhausted,
 }: TVChartProps) {
   const colors = useThemeColors();
   const { visible: showWatchZones } = useWatchZonesVisibility();
@@ -209,12 +219,30 @@ export function TVChart({
   const ohlc = !!(data?.opens && data?.highs && data?.lows) && mode !== 'line';
 
   const fit = prevResetKey.current !== resetKey;
-  useEffect(() => { prevResetKey.current = resetKey; });
+  // Backfill detection: same identity, first candle got older (bars were
+  // prepended on the left). A live poll appends on the right instead.
+  const prevFirstT = useRef<number | null>(null);
+  useEffect(() => {
+    prevResetKey.current = resetKey;
+    if (fit) prevFirstT.current = null;
+  });
+  const isBackfill =
+    !fit && !!candles?.length && prevFirstT.current != null && candles[0].t < prevFirstT.current;
+
+  // The date range is only the initial viewport — frame it on fit.
+  const visibleFrom = useMemo(() => {
+    if (!visibleSeconds || !candles?.length) return undefined;
+    return candles[candles.length - 1].t - visibleSeconds;
+  }, [visibleSeconds, candles]);
 
   useEffect(() => {
     if (!chartReady || !candles) return;
-    send({ type: 'setData', candles, ohlc, fit });
-  }, [chartReady, candles, ohlc, fit, send]);
+    send({ type: 'setData', candles, ohlc, fit, preserve: isBackfill, visibleFrom: fit ? visibleFrom : undefined });
+  }, [chartReady, candles, ohlc, fit, isBackfill, visibleFrom, send]);
+
+  useEffect(() => {
+    if (candles?.length) prevFirstT.current = candles[0].t;
+  });
 
   // ── Zones → primitive bands ────────────────────────────────────────
   const autoBands: TVZoneBand[] = useMemo(() => (autoZones ?? []).map(z => ({
@@ -376,6 +404,8 @@ export function TVChart({
     } else if (msg.type === 'error') {
       console.warn('[TVChart] page error:', msg.message);
       setPageError(msg.message);
+    } else if (msg.type === 'requestMoreHistory') {
+      onRequestMoreHistory?.();
     } else if (msg.type === 'zone-tap') {
       if (msg.kind === 'auto') {
         const z = (autoZones ?? []).find(z => z.id === msg.id);
@@ -385,7 +415,13 @@ export function TVChart({
         if (z) onWatchZoneTap?.(z);
       }
     }
-  }, [autoZones, watchZones, onAutoZoneTap, onWatchZoneTap, theme, send, flush]);
+  }, [autoZones, watchZones, onAutoZoneTap, onWatchZoneTap, onRequestMoreHistory, theme, send, flush]);
+
+  // Tell the page when there's no older history so it stops asking.
+  useEffect(() => {
+    if (!chartReady) return;
+    send({ type: 'setHistoryExhausted', exhausted: !!historyExhausted });
+  }, [chartReady, historyExhausted, send]);
 
   // Rebuild the HTML if it's regenerated (dev).
   return (

@@ -23,6 +23,7 @@ import { useChartAutoZones } from '@/hooks/queries/technicals/useTickerZones';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
+import { useLazyTickerHistory } from '@/hooks/queries/ticker/useLazyTickerHistory';
 import { useChartInterval, useSetChartIntervalFor } from '@/hooks/useChartInterval';
 import type { TickerStatus } from '@/common/components/ticker/TickerWheel';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
@@ -156,10 +157,28 @@ export default function ChartsScreen() {
   const { interval: chartInterval, setInterval: setChartInterval, allowed: allowedIntervals } = useChartInterval(period);
   const { data: tickerResponse, isLoading: tickerLoading } = useTickerQuery(activeTicker);
   const stockData = tickerResponse?.success ? tickerResponse.data : undefined;
-  const { data: historyResponse, isLoading: historyLoading, isPlaceholderData: historyIsStale } = useTickerHistoryQuery(
+  // ── Chart engine flag, early: the history source depends on it (lazy
+  // backfill is a TVChart-only path; the legacy engine keeps the period
+  // fetch). useChartSettings below reuses displayPrefs.
+  const { prefs: displayPrefs, loaded: displayPrefsLoaded } = useChartDisplayPrefs();
+  const useTVChart = displayPrefs.chartEngine !== 'legacy';
+
+  const { data: legacyHistoryResponse, isLoading: legacyHistoryLoading, isPlaceholderData: legacyHistoryIsStale } = useTickerHistoryQuery(
     activeTicker, period, period === '1D' ? 30_000 : undefined, chartInterval,
   );
-  const historyData = historyResponse?.data;
+  const legacyHistoryData = legacyHistoryResponse?.data;
+  // Lazy history for the TV chart: the period is only the initial viewport,
+  // older bars backfill as the user pans left.
+  const lazyHistory = useLazyTickerHistory({
+    ticker: activeTicker,
+    period,
+    interval: chartInterval,
+    pollMs: period === '1D' ? 30_000 : undefined,
+    enabled: useTVChart,
+  });
+  const historyData = useTVChart ? lazyHistory.data : legacyHistoryData;
+  const historyLoading = useTVChart ? lazyHistory.isLoading : legacyHistoryLoading;
+  const historyIsStale = useTVChart ? false : legacyHistoryIsStale;
   // useTickerHistoryQuery's placeholderData:keepPreviousData is meant for a
   // smooth PERIOD switch within the same ticker (shows the prior period's
   // bars while the new one loads) — but the same masking kicks in on a
@@ -174,7 +193,7 @@ export default function ChartsScreen() {
   // one exists, else computed client-side from this chart's own 1D bars —
   // so the band shows for any ticker, not just ones an active strategy covers.
   const { data: orbData } = useTickerORBRange(activeTicker);
-  const fallbackOrb = !orbData ? computeOrbRangeFromHistory(historyData) : null;
+  const fallbackOrb = !orbData ? computeOrbRangeFromHistory(historyData ?? undefined) : null;
   const effectiveOrb = orbData
     ? { high: orbData.orb_high, low: orbData.orb_low }
     : fallbackOrb
@@ -293,7 +312,7 @@ export default function ChartsScreen() {
   // "Mark a watch level" drives AdvancedPriceChart's drag-to-mark mode —
   // TVChart has no equivalent yet, so the row only shows on the legacy
   // engine. The Signal & RSI strip renders right below the ticker tape.
-  const { prefs: displayPrefs, loaded: displayPrefsLoaded } = useChartDisplayPrefs();
+  // (displayPrefs/useTVChart were hoisted above the history hooks.)
   const chart = useChartSettings({
     ticker: activeTicker, period, colors,
     canMarkWatchLevel: displayPrefs.chartEngine === 'legacy',
@@ -313,6 +332,22 @@ export default function ChartsScreen() {
     setPeriod(chart.defaultPeriod);
   }, [displayPrefsLoaded, chart.defaultPeriod, chart.defaultInterval, setIntervalFor]);
   const tvMode = chart.chartSettings.mode ?? (period === '1D' || period === '1W' ? 'candle' : 'line');
+  // The date range is only the TV chart's *initial viewport* now that
+  // history lazy-loads — frame it in seconds after fit.
+  const tvVisibleSeconds = useMemo(() => {
+    switch (period) {
+      case '1D': return 86_400;
+      case '1W': return 7 * 86_400;
+      case '1M': return 30 * 86_400;
+      case '3M': return 90 * 86_400;
+      case 'YTD': {
+        const now = new Date();
+        return Math.max(86_400, (now.getTime() - new Date(now.getFullYear(), 0, 1).getTime()) / 1000);
+      }
+      case '1Y': return 365 * 86_400;
+      case '5Y': return 5 * 365 * 86_400;
+    }
+  }, [period]);
   // ZoneEngine's auto-detected support/resistance bands, same as the
   // full-screen chart — fetched only while "Auto-detected zones" is on.
   const { zones: autoZones, context: zoneContext } = useChartAutoZones(activeTicker, chart.showAutoZones);
@@ -323,9 +358,7 @@ export default function ChartsScreen() {
   // ── Chart engine (todo 0f4aaad3) ────────────────────────────────────
   // (zone-tap handlers live below, next to `toast` — TDZ otherwise)
   const { height: screenH } = useWindowDimensions();
-  // TV/Legacy lives in the chart settings sheet now (persisted globally via
-  // useChartDisplayPrefs) — defaults to the new TradingView chart.
-  const useTVChart = chart.chartEngine !== 'legacy';
+  // (useTVChart is hoisted above the history hooks.)
   // TVChart doesn't own its zone sheet the way AdvancedPriceChart does —
   // a tapped auto zone lands here and opens the shared ZoneDetailSheet.
   const [tvZoneSheetZone, setTvZoneSheetZone] = useState<ChartAutoZone | null>(null);
@@ -473,15 +506,18 @@ export default function ChartsScreen() {
               livePrice={resolvedLivePrice ?? null}
               onAutoZoneTap={handleTVAutoZoneTap}
               onWatchZoneTap={handleTVWatchZoneTap}
-              resetKey={`${activeTicker}:${period}`}
+              resetKey={`${activeTicker}:${period}:${chartInterval}`}
               emas={chart.emaOverlays}
               mode={tvMode}
               crosshair={chart.crosshairEnabled}
+              visibleSeconds={tvVisibleSeconds}
+              onRequestMoreHistory={lazyHistory.loadMore}
+              historyExhausted={lazyHistory.exhausted}
             />
           ) : (
             <AdvancedPriceChart
               key={activeTicker}
-              data={historyData}
+              data={historyData ?? undefined}
               isLoading={historyLoading || historyIsStale}
               period={period}
               onPeriodChange={setPeriod}
