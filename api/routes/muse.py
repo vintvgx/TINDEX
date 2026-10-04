@@ -1213,7 +1213,48 @@ def review(review_date: str):
         return _err(f"Failed to load review: {e}", 500)
 
 
-# ── OpenAPI spec (public — contains no data or secrets) ────────────────────────
+@bp.route("/market-digest/publish", methods=["POST"])
+def publish_market_digest():
+    """
+    Publish the Muse-generated morning digest (replaces the deprecated
+    Claude-generated digest at POST /market-digest/generate).
+    Body: { "date": "YYYY-MM-DD" (default: today ET),
+            "content": { ...digest JSON... },
+            "silent": false }
+    Upserts the market_digests row through the same write path the old
+    generator used, so the app's existing read routes keep working.
+    silent=true (the 9 AM refresh) skips the push notification; the 8 AM
+    publish notifies like the old flow did.
+    """
+    body = request.get_json(silent=True) or {}
+    content = body.get("content")
+    if not isinstance(content, dict):
+        return _err("content must be a JSON object")
+    # Light contract check — the full schema is versioned inside content.
+    for key in ("version", "generated_at"):
+        if key not in content:
+            return _err(f"content.{key} is required")
+    date_str = body.get("date")
+    try:
+        digest_date = date.fromisoformat(date_str) if date_str else datetime.now(ET).date()
+    except ValueError:
+        return _err(f"Invalid date: {date_str}")
+    silent = bool(body.get("silent", False))
+    sb = get_supabase_service().client
+    try:
+        sb.table("market_digests").upsert({
+            "digest_date": str(digest_date),
+            "content_json": content,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }, on_conflict="digest_date").execute()
+        if not silent:
+            from services.strategy.notifier import StrategyNotifier
+            StrategyNotifier(sb).notify_market_digest_ready(str(digest_date))
+        return _ok({"date": str(digest_date), "silent": silent})
+    except Exception as e:
+        logger.error("[muse/market-digest/publish] %s", e, exc_info=True)
+        return _err(f"Failed to publish digest: {e}", 500)
+
 
 def _q(name, desc, typ="string", enum=None, required=False):
     schema = {"type": typ}
@@ -1414,6 +1455,18 @@ _OPENAPI = {
             "The end-of-day performance review and the pre-market digest for a date.",
             [_p("review_date", "YYYY-MM-DD, 'today', or 'latest'"),
              _q("account", "live (default) or paper", enum=["live", "paper"])])},
+        "/muse/market-digest/publish": {"post": _op(
+            "publishMarketDigest", "Publish morning digest",
+            "Upsert the Muse-generated morning digest into market_digests (replaces the deprecated "
+            "Claude-generated digest). silent=true skips the push notification (the 9 AM refresh).",
+            body=_body({
+                "date": {"type": "string", "format": "date",
+                         "description": "Digest date YYYY-MM-DD (default: today ET)"},
+                "content": {"type": "object",
+                            "description": "Digest JSON (must include version and generated_at)"},
+                "silent": {"type": "boolean",
+                           "description": "Skip the push notification"},
+            }, ["content"]))},
     },
 }
 
