@@ -903,7 +903,13 @@
 
   function handleCommand(msg) {
     if (!msg || !msg.type) return;
-    if (msg.type === 'init') { init(msg); return; }
+    if (msg.type === 'init') {
+      // A repeated init (RN re-sent after a re-posted `loaded`) means RN may
+      // have missed our `ready` — say it again.
+      if (inited) { post({ type: 'ready' }); return; }
+      init(msg);
+      return;
+    }
     if (!inited) { pending.push(msg); return; }
     switch (msg.type) {
       case 'setData': setData(msg); break;
@@ -929,5 +935,13 @@
   // Handshake: tell RN the page script is live so it sends `init`. The
   // page then answers with `ready` once the chart exists. (Without this,
   // RN waits for `ready` and the page waits for `init` — forever spinner.)
+  // Re-announce until `init` arrives: a single `loaded` lost in transit
+  // (or handled before RN's onLoadStart reset) used to strand the chart on
+  // its spinner for good.
   post({ type: 'loaded' });
+  var loadedRetries = 0;
+  var loadedTimer = setInterval(function () {
+    if (inited || ++loadedRetries > 20) { clearInterval(loadedTimer); return; }
+    post({ type: 'loaded' });
+  }, 500);
 })();

@@ -24,7 +24,7 @@
  * price streaming into the last bar.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet, AppState } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
@@ -196,6 +196,9 @@ export function TVChart({
   const queueRef = useRef<WVOutbound[]>([]);
   const [htmlReady, setHtmlReady] = useState(false);
   const [chartReady, setChartReady] = useState(false);
+  // Bumped on every page (re)load so the handshake watchdog re-arms.
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const watchdogReloads = useRef(0);
   const [pageError, setPageError] = useState<string | null>(null);
   const prevResetKey = useRef<string | undefined>(undefined);
   // Long-press price from the page — shows the "set alert here" pill until
@@ -560,6 +563,11 @@ export function TVChart({
       webViewRef.current?.postMessage(JSON.stringify({ type: 'init', theme } as WVOutbound));
       flush();
     } else if (msg.type === 'ready') {
+      // Also (re)opens the outbound channel: if a stray onLoadStart landed
+      // after `loaded`, readyRef would be false here and every setData
+      // would sit in the queue forever behind a "ready" chart.
+      readyRef.current = true;
+      flush();
       setChartReady(true);
       setPageError(null);
     } else if (msg.type === 'log') {
@@ -586,6 +594,26 @@ export function TVChart({
       }
     }
   }, [autoZones, watchZones, onAutoZoneTap, onWatchZoneTap, onRequestMoreHistory, theme, send, flush]);
+
+  // Handshake watchdog: if the page hasn't reported `ready` a few seconds
+  // after (re)loading, or when the app returns to the foreground still not
+  // ready, reload the WebView. Before this, a lost handshake left the
+  // spinner up until iOS happened to recycle the WebView in the background.
+  useEffect(() => {
+    if (chartReady) { watchdogReloads.current = 0; return; }
+    if (!htmlReady) return;
+    // Capped: a WebView parked offscreen may not run JS at all — don't
+    // reload it every 6s forever. Foregrounding still gets a retry.
+    const t = watchdogReloads.current < 3 ? setTimeout(() => {
+      watchdogReloads.current += 1;
+      console.warn('[TVChart] no ready after 6s — reloading WebView');
+      webViewRef.current?.reload();
+    }, 6_000) : undefined;
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'active') webViewRef.current?.reload();
+    });
+    return () => { if (t) clearTimeout(t); sub.remove(); };
+  }, [chartReady, htmlReady, reloadNonce]);
 
   // Tell the page when there's no older history so it stops asking.
   useEffect(() => {
@@ -627,6 +655,7 @@ export function TVChart({
             queueRef.current = [];
             lastSentJson.current = {};
             setChartReady(false);
+            setReloadNonce((n) => n + 1);
           }}
           onContentProcessDidTerminate={() => webViewRef.current?.reload()}
           onLoadEnd={() => console.log('[TVChart] WebView onLoadEnd')}
@@ -639,7 +668,9 @@ export function TVChart({
         <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background, padding: 24 }]}>
           <Text style={{ color: colors.error, fontSize: 13, textAlign: 'center' }}>{pageError}</Text>
         </View>
-      ) : (!chartReady || isLoading) && (
+      ) : (!chartReady || (isLoading && !candles?.length)) && (
+        // Only when there's nothing to draw — a background reload/refetch
+        // must never hide candles that are already on the chart.
         <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }]}>
           <ActivityIndicator size="small" color={colors.textSecondary} />
         </View>

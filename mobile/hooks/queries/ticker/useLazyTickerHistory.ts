@@ -73,6 +73,22 @@ async function postHistory(ticker: string, body: object, signal?: AbortSignal): 
   }
 }
 
+/** postHistory with a couple of retries on timeouts / network / 5xx — the
+ *  initial load is the one request the chart can't paint without (a cold
+ *  Yahoo fetch can take seconds). 4xx and caller cancellation never retry. */
+async function postHistoryRetry(ticker: string, body: object, signal: AbortSignal, attempts = 3): Promise<TickerHistoryData> {
+  for (let i = 0; ; i++) {
+    try {
+      return await postHistory(ticker, body, signal);
+    } catch (e) {
+      if (signal.aborted || i >= attempts - 1 || (e instanceof HistoryHttpError && e.status < 500)) throw e;
+      await new Promise((r) => setTimeout(r, 800 * (i + 1)));
+      // postHistory can't observe an abort that fired during the wait.
+      if (signal.aborted) throw e;
+    }
+  }
+}
+
 /** Merge `incoming` into `current`: dedupe by date, ascending order.
  *  On a duplicate timestamp the INCOMING bar wins — a tail poll re-fetches
  *  the still-forming bar, and keeping the stale copy (the old behavior)
@@ -159,12 +175,24 @@ export function useLazyTickerHistory(opts: {
   // in-flight backfill or tail poll from the previous ticker/period/interval
   // must not merge its bars — or its exhausted flag — into the new one.
   const gen = useRef(0);
+  // ticker|period|interval|extendedHours of the last successful initial
+  // load. Re-enabling (tab refocus after the 30s blur pause) with the same
+  // key keeps the bars and lets the tail poll catch up, instead of
+  // re-running the whole staged load behind a spinner.
+  const loadedKey = useRef<string | null>(null);
 
   const intraday = !!interval && INTRADAY.has(interval);
 
   // ── Initial load ──────────────────────────────────────────────────
   useEffect(() => {
-    if (!enabled || !ticker) return;
+    if (!enabled || !ticker) {
+      // Paused mid-load: don't leave the spinner latched on.
+      setIsLoading(false);
+      return;
+    }
+    const key = `${ticker}|${period}|${interval ?? ""}|${extendedHours}`;
+    if (loadedKey.current === key && live.current.bars?.dates?.length) return;
+    loadedKey.current = null;
     const tickerChanged = prevTicker.current !== ticker;
     prevTicker.current = ticker;
     // Bump the generation: any in-flight backfill or tail poll captured the
@@ -196,7 +224,7 @@ export function useLazyTickerHistory(opts: {
           // came back EMPTY on Sundays, Monday pre-open and after holidays.
           const quickDays = Math.min(interval === "1m" ? 4 : 5, fullDays);
           const quickStart = addDays(end, -quickDays);
-          const quick = await postHistory(ticker, { interval, start: quickStart, end,
+          const quick = await postHistoryRetry(ticker, { interval, start: quickStart, end,
             ...(extendedHours ? { extended_hours: true } : {}) }, ctrl.signal);
           if (dead) return;
           const quickHasBars = !!quick.dates?.length;
@@ -205,6 +233,7 @@ export function useLazyTickerHistory(opts: {
           if (quickHasBars) {
             setBars(quick);
             setIsLoading(false);
+            loadedKey.current = key;
           }
           if (fullDays > quickDays) {
             // Let the WebView finish painting stage 1 before handing it
@@ -224,19 +253,23 @@ export function useLazyTickerHistory(opts: {
           if (dead) return;
           if (!quickHasBars && fullDays <= quickDays) setBars(quick);
           setIsLoading(false);
+          loadedKey.current = key;
         } else {
           const fetchPeriod = MIN_DAILY_PERIOD[period] ?? period;
-          const data = await postHistory(ticker, { period: fetchPeriod, ...(interval ? { interval } : {}),
+          const data = await postHistoryRetry(ticker, { period: fetchPeriod, ...(interval ? { interval } : {}),
             ...(extendedHours ? { extended_hours: true } : {}) }, ctrl.signal);
           if (!dead) {
             setBars(data);
             setIsLoading(false);
+            loadedKey.current = key;
           }
         }
-      } catch (e) {
-        // DOMException may not exist on Hermes — check the name instead.
-        const aborted = (e as { name?: string } | null)?.name === "AbortError";
-        if (!dead && !aborted) {
+      } catch {
+        // Only `dead` means "superseded, ignore". postHistory's own 20s
+        // timeout also surfaces as an AbortError — treating that as a
+        // cancellation (the old name check) left isLoading stuck true and
+        // the chart spinning forever on a slow/cold request.
+        if (!dead) {
           setIsError(true);
           setIsLoading(false);
         }
@@ -290,7 +323,7 @@ export function useLazyTickerHistory(opts: {
   // ── Live tail poll ────────────────────────────────────────────────
   useEffect(() => {
     if (!enabled || !pollMs || !intraday) return;
-    const id = setInterval(async () => {
+    const tick = async () => {
       const s = live.current;
       if (!s.bars?.dates?.length || s.loadingMore) return;
       const myGen = gen.current;
@@ -308,7 +341,11 @@ export function useLazyTickerHistory(opts: {
       } catch {
         /* next poll retries */
       }
-    }, pollMs);
+    };
+    // Catch up right away (no-op until bars exist) — on refocus the bars
+    // were kept, so don't leave them a full interval stale.
+    tick();
+    const id = setInterval(tick, pollMs);
     return () => clearInterval(id);
   }, [enabled, pollMs, ticker, interval, intraday, extendedHours]);
 
