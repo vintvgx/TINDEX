@@ -3,6 +3,9 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
+import { SlGraceBadge } from '@/common/components/strategy/SlGraceBadge';
+import type { SlGraceInfo } from '@/common/components/strategy/SlGraceBadge';
+import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
 import { PositionEditSheet } from '../PositionEditSheet';
 
@@ -52,71 +55,14 @@ export function DynamicOpenContractsView() {
           </View>
         ) : (
           <View style={{ marginTop: 6 }}>
-            {positions.map((p) => {
-              const dirColor = p.direction === 'PUT' ? colors.error : colors.success;
-              const pnl = p.unrealized_pnl ?? 0;
-              const pnlPct = p.unrealized_pnl_pct;
-              const pnlColor = pnl >= 0 ? colors.success : colors.error;
-              const qty = p.qty_remaining ?? 0;
-              const mv = p.current_price != null ? p.current_price * qty * 100 : null;
-              const modeColor = p.paper_mode ? colors.warning : colors.success;
-              const meta = (label: string, value: string, color?: string) => (
-                <Text style={[styles.mono, { fontSize: 10.5, color: colors.textTertiary }]}>
-                  {label} <Text style={{ color: color ?? colors.textSecondary, fontWeight: '700' }}>{value}</Text>
-                </Text>
-              );
-              return (
-                <TouchableOpacity
-                  key={p.strategy_id}
-                  activeOpacity={0.7}
-                  onPress={() => setEditing(p)}
-                  style={[styles.item, { borderColor: colors.border }]}
-                  accessibilityLabel={`Edit ${p.ticker} position`}
-                >
-                  {/* ticker · direction · LIVE/PAPER ........ P&L */}
-                  <View style={styles.line}>
-                    <Text style={[styles.mono, { fontSize: 13, fontWeight: '800', color: colors.text }]}>{p.ticker}</Text>
-                    {p.direction && (
-                      <View style={[styles.badge, { backgroundColor: dirColor + '22', borderColor: dirColor + '55' }]}>
-                        <Text style={[styles.mono, { fontSize: 9, fontWeight: '800', color: dirColor }]}>{p.direction}</Text>
-                      </View>
-                    )}
-                    <View style={[styles.badge, { backgroundColor: modeColor + '1E', borderColor: modeColor + '44' }]}>
-                      <Text style={[styles.mono, { fontSize: 9, fontWeight: '800', color: modeColor }]}>
-                        {p.paper_mode ? 'PAPER' : 'LIVE'}
-                      </Text>
-                    </View>
-                    <View style={{ flex: 1 }} />
-                    <Text style={[styles.mono, { fontSize: 12, fontWeight: '800', color: pnlColor }]}>
-                      {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
-                      {pnlPct != null ? ` (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%)` : ''}
-                    </Text>
-                    <Ionicons name="chevron-forward" size={13} color={colors.textTertiary} />
-                  </View>
-                  {/* contract × qty · entry → now */}
-                  <View style={[styles.line, { marginTop: 5 }]}>
-                    <Text style={[styles.mono, { fontSize: 11, color: colors.textSecondary }]}>
-                      {p.contract ? shortContract(p.contract) : '—'} × {qty}
-                    </Text>
-                    <View style={{ flex: 1 }} />
-                    <Text style={[styles.mono, { fontSize: 11, color: colors.textSecondary }]}>
-                      {p.entry_premium != null ? `$${p.entry_premium.toFixed(2)}` : '—'}
-                      {' → '}
-                      <Text style={{ color: colors.text, fontWeight: '700' }}>
-                        {p.current_price != null ? `$${p.current_price.toFixed(2)}` : '—'}
-                      </Text>
-                    </Text>
-                  </View>
-                  {/* value · stop · targets */}
-                  <View style={[styles.line, { marginTop: 4, flexWrap: 'wrap', columnGap: 12, rowGap: 2 }]}>
-                    {meta('Value', mv != null ? `$${mv.toFixed(2)}` : '—', colors.text)}
-                    {p.sl_enabled !== false && p.hard_stop ? meta('SL', `$${p.hard_stop.toFixed(2)}`, colors.error) : null}
-                    {p.tp_enabled !== false && p.tp1 ? meta('TP1', `$${p.tp1.toFixed(2)}${p.tp1_hit ? ' ✓' : ''}`, colors.success) : null}
-                    {p.use_tp2 && p.tp2 ? meta('TP2', `$${p.tp2.toFixed(2)}${p.tp2_hit ? ' ✓' : ''}`, colors.success) : null}
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
+            {positions.map((p) => (
+              <DynamicPositionRow
+                key={p.strategy_id}
+                pos={p}
+                colors={colors}
+                onEdit={() => setEditing(p)}
+              />
+            ))}
           </View>
         )}
       </ScrollView>
@@ -125,6 +71,110 @@ export function DynamicOpenContractsView() {
         <PositionEditSheet pos={editing} visible onClose={() => setEditing(null)} />
       )}
     </>
+  );
+}
+
+/**
+ * One open-contract row. Subscribes to the same live-price feed the chart's
+ * position rows use (useStrategyLivePrice), so PnL / mark tick in real time
+ * here too — the row previously only showed the query's cached
+ * unrealized_pnl, which is why home lagged the chart. Falls back to the
+ * static values when the socket hasn't delivered yet.
+ */
+function DynamicPositionRow({ pos: p, colors, onEdit }: {
+  pos: PositionEntry; colors: any; onEdit: () => void;
+}) {
+  const { data: live } = useStrategyLivePrice(p.strategy_id, p.active);
+
+  const dirColor = p.direction === 'PUT' ? colors.error : colors.success;
+  const pnl = live?.pnl ?? p.unrealized_pnl ?? 0;
+  const pnlPct = live?.pnl_pct ?? p.unrealized_pnl_pct;
+  const pnlColor = pnl >= 0 ? colors.success : colors.error;
+  const qty = live?.qty_remaining ?? p.qty_remaining ?? 0;
+  const curPrice = live?.mid_price ?? p.current_price;
+  const mv = live?.market_value ?? (curPrice != null ? curPrice * qty * 100 : null);
+  const modeColor = p.paper_mode ? colors.warning : colors.success;
+  // TP state comes from the live feed (same source the chart rows use) so a
+  // hit shows here the moment it happens, not on the next query refetch.
+  const tp1Hit = live?.tp1_hit ?? p.tp1_hit;
+  const tp2Hit = live?.tp2_hit ?? p.tp2_hit;
+  const graceInfo: SlGraceInfo = {
+    sl_grace_active: live?.sl_grace_active,
+    sl_grace_deadline: live?.sl_grace_deadline,
+    sl_recovery_deadline: live?.sl_recovery_deadline,
+    sl_grace_enabled: live?.sl_grace_enabled ?? p.sl_grace_enabled,
+    sl_grace_minutes: live?.sl_grace_minutes ?? p.sl_grace_minutes,
+    tp1_hit: tp1Hit,
+    sl_outer_floor: live?.sl_outer_floor ?? p.sl_outer_floor,
+    sl_floor_enabled: live?.sl_floor_enabled ?? p.sl_floor_enabled,
+    be_grace_active: live?.be_grace_active,
+    be_grace_deadline: live?.be_grace_deadline,
+    be_grace_seconds: live?.be_grace_seconds ?? p.be_grace_seconds,
+  };
+  const meta = (label: string, value: string, color?: string) => (
+    <Text style={[styles.mono, { fontSize: 10.5, color: colors.textTertiary }]}>
+      {label} <Text style={{ color: color ?? colors.textSecondary, fontWeight: '700' }}>{value}</Text>
+    </Text>
+  );
+  const tpHitChip = tp2Hit ? 'TP2 ✓' : tp1Hit ? 'TP1 ✓' : null;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.7}
+      onPress={onEdit}
+      style={[styles.item, { borderColor: colors.border }]}
+      accessibilityLabel={`Edit ${p.ticker} position`}
+    >
+      {/* ticker · direction · LIVE/PAPER ........ P&L */}
+      <View style={styles.line}>
+        <Text style={[styles.mono, { fontSize: 13, fontWeight: '800', color: colors.text }]}>{p.ticker}</Text>
+        {p.direction && (
+          <View style={[styles.badge, { backgroundColor: dirColor + '22', borderColor: dirColor + '55' }]}>
+            <Text style={[styles.mono, { fontSize: 9, fontWeight: '800', color: dirColor }]}>{p.direction}</Text>
+          </View>
+        )}
+        <View style={[styles.badge, { backgroundColor: modeColor + '1E', borderColor: modeColor + '44' }]}>
+          <Text style={[styles.mono, { fontSize: 9, fontWeight: '800', color: modeColor }]}>
+            {p.paper_mode ? 'PAPER' : 'LIVE'}
+          </Text>
+        </View>
+        {tpHitChip && (
+          <View style={[styles.badge, { backgroundColor: colors.success + '22', borderColor: colors.success + '55' }]}>
+            <Text style={[styles.mono, { fontSize: 9, fontWeight: '800', color: colors.success }]}>{tpHitChip}</Text>
+          </View>
+        )}
+        <View style={{ flex: 1 }} />
+        <Text style={[styles.mono, { fontSize: 12, fontWeight: '800', color: pnlColor }]}>
+          {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+          {pnlPct != null ? ` (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%)` : ''}
+        </Text>
+        <Ionicons name="chevron-forward" size={13} color={colors.textTertiary} />
+      </View>
+      {/* contract × qty · entry → now */}
+      <View style={[styles.line, { marginTop: 5 }]}>
+        <Text style={[styles.mono, { fontSize: 11, color: colors.textSecondary }]}>
+          {p.contract ? shortContract(p.contract) : '—'} × {qty}
+        </Text>
+        <View style={{ flex: 1 }} />
+        <Text style={[styles.mono, { fontSize: 11, color: colors.textSecondary }]}>
+          {p.entry_premium != null ? `$${p.entry_premium.toFixed(2)}` : '—'}
+          {' → '}
+          <Text style={{ color: colors.text, fontWeight: '700' }}>
+            {curPrice != null ? `$${curPrice.toFixed(2)}` : '—'}
+          </Text>
+        </Text>
+      </View>
+      {/* value · stop · targets */}
+      <View style={[styles.line, { marginTop: 4, flexWrap: 'wrap', columnGap: 12, rowGap: 2 }]}>
+        {meta('Value', mv != null ? `$${mv.toFixed(2)}` : '—', colors.text)}
+        {p.sl_enabled !== false && p.hard_stop ? meta('SL', `$${p.hard_stop.toFixed(2)}`, colors.error) : null}
+        {p.tp_enabled !== false && p.tp1 ? meta('TP1', `$${p.tp1.toFixed(2)}${tp1Hit ? ' ✓' : ''}`, tp1Hit ? colors.success : undefined) : null}
+        {p.use_tp2 && p.tp2 ? meta('TP2', `$${p.tp2.toFixed(2)}${tp2Hit ? ' ✓' : ''}`, tp2Hit ? colors.success : undefined) : null}
+      </View>
+      {/* Live SL / breakeven grace countdown — same badge the chart rows
+          use, so a running stop timer shows here the moment it starts. */}
+      <SlGraceBadge live={graceInfo} colors={colors} hideIdle />
+    </TouchableOpacity>
   );
 }
 
