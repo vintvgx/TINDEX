@@ -7,7 +7,7 @@ import { useTrackedContracts } from '@/hooks/queries/track/useTrackedContracts';
 import { useSocialSignalContracts } from '@/hooks/queries/social/useSocialSignalContracts';
 import { useMarketDigest } from '@/hooks/queries/digest/useMarketDigest';
 import { isMuseBriefContent } from '@/common/types/marketDigest';
-import { liveAvailableFunds } from './views/DynamicAccountView';
+import { accountAvailableFunds } from './views/DynamicAccountView';
 import type { DynamicViewKey, TickerInfo } from './DynamicCard';
 
 /**
@@ -68,7 +68,7 @@ function ChartsStrip({ info, colors }: { info: TickerInfo; colors: Colors }) {
 function AccountStrip({ colors }: { colors: Colors }) {
   const { data: accounts } = useAlpacaBothAccounts();
   const { data: history } = useAlpacaAccountsHistory();
-  const avail = liveAvailableFunds(accounts);
+  const avail = accountAvailableFunds(accounts?.live);
   const today = history?.live?.pnl_today ?? accounts?.live?.pnl_today;
   return (
     <Strip

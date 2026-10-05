@@ -43,11 +43,12 @@ export function useStrategyStatsByHour(profile?: ProfileKey) {
   });
 }
 
-export function useStrategyPerformance() {
+export function useStrategyPerformance(mode?: 'live' | 'paper') {
   return useQuery<StrategyPerformance>({
-    queryKey: ['strategy-performance'],
+    queryKey: ['strategy-performance', mode ?? 'all'],
     queryFn: async () => {
-      const res = await fetch(`${RAILWAY_BASE_URL}/strategy/performance`);
+      const qs = mode ? `?mode=${mode}` : '';
+      const res = await fetch(`${RAILWAY_BASE_URL}/strategy/performance${qs}`);
       if (!res.ok) throw new Error('Failed to fetch performance');
       return res.json();
     },
