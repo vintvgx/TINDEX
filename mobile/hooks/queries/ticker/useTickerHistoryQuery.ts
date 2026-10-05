@@ -1,1 +1,71 @@
-aW1wb3J0IHsgdXNlUXVlcnksIGtlZXBQcmV2aW91c0RhdGEgfSBmcm9tICJAdGFuc3RhY2svcmVhY3QtcXVlcnkiOwppbXBvcnQgeyB1c2VBdXRoIH0gZnJvbSAiQC9jb21tb24vdXRpbHMvY29udGV4dC9hdXRoL0F1dGhDb250ZXh0IjsKaW1wb3J0IHsgUHJpY2VQZXJpb2QsIFRpY2tlckhpc3RvcnlSZXNwb25zZSB9IGZyb20gIkAvY29tbW9uL3R5cGVzL2Jsb2dQb3N0cy90aWNrZXIiOwppbXBvcnQgeyBSQUlMV0FZX0JBU0VfVVJMIH0gZnJvbSAiQC9saWIvcmFpbHdheS5jb25maWciOwoKLyoqCiAqIEZldGNoZXMgYSBzaW5nbGUgdGltZWZyYW1lJ3MgcHJpY2Ugc2VyaWVzIGZvciB0aGUgdGlja2VyIGNoYXJ0LgogKiBLZXB0IHNlcGFyYXRlIGZyb20gdXNlVGlja2VyUXVlcnkgKGZ1bmRhbWVudGFscykgc28gc3dpdGNoaW5nIHRpbWVmcmFtZXMKICogZG9lc24ndCByZWZldGNoL3JlLXJlbmRlciBjb21wYW55IGluZm8sIHByaWNlLCBtYXJrZXQgY2FwLCBldGMuCiAqCiAqIEBwYXJhbSB0aWNrZXIgLSBTdG9jayB0aWNrZXIgc3ltYm9sCiAqIEBwYXJhbSBwZXJpb2QgLSBTZWxlY3RlZCBjaGFydCB0aW1lZnJhbWUgKDFELzFXLzFNLzNNL1lURC8xWS81WSkKICogQHBhcmFtIHJlZmV0Y2hJbnRlcnZhbE1zIC0gT3B0aW9uYWwgYmFja2dyb3VuZCBwb2xsIGludGVydmFsIChlLmcuIHNvIGEgMUQKICogICBjaGFydCdzIDUtbWluIGNhbmRsZXMgcGljayB1cCB0aGUgbmV3ZXN0IGJhciBvbiB0aGVpciBvd24gaW5zdGVhZCBvZgogKiAgIHJlcXVpcmluZyB0aGUgc2NyZWVuIHRvIGJlIGNsb3NlZCBhbmQgcmVvcGVuZWQpLiBPbWl0IGZvciBhIG9uZS1zaG90IGZldGNoLgogKiBAcGFyYW0gaW50ZXJ2YWwgLSBPcHRpb25hbCBiYXItZ3JhbnVsYXJpdHkgb3ZlcnJpZGUgKGUuZy4gIjE1bSIgaW5zdGVhZCBvZgogKiAgIDFEJ3MgZGVmYXVsdCAiNW0iKSDigJQgc2VlIHlmaW5hbmNlX3NlcnZpY2UuQUxMT1dFRF9JTlRFUlZBTFMgZm9yIHdoYXQncwogKiAgIHZhbGlkIHBlciBwZXJpb2QuIEFuIGludmFsaWQvbWlzbWF0Y2hlZCB2YWx1ZSBpcyBzaWxlbnRseSBpZ25vcmVkCiAqICAgc2VydmVyLXNpZGUsIG5ldmVyIGEgZmFpbGVkIHJlcXVlc3QuCiAqLwpleHBvcnQgZnVuY3Rpb24gdXNlVGlja2VySGlzdG9yeVF1ZXJ5KHRpY2tlcjogc3RyaW5nLCBwZXJpb2Q6IFByaWNlUGVyaW9kLCByZWZldGNoSW50ZXJ2YWxNcz86IG51bWJlciwgaW50ZXJ2YWw/OiBzdHJpbmcsIGV4dGVuZGVkSG91cnM/OiBib29sZWFuKSB7CiAgY29uc3QgeyBhdXRoU3RhdGU6IHsgdXNlciwgaXNMb2FkaW5nOiBhdXRoTG9hZGluZyB9IH0gPSB1c2VBdXRoKCk7CgogIHJldHVybiB1c2VRdWVyeSh7CiAgICBxdWVyeUtleTogWyJ0aWNrZXItaGlzdG9yeSIsIHRpY2tlciwgcGVyaW9kLCBpbnRlcnZhbCwgZXh0ZW5kZWRIb3VycyA/PyBmYWxzZV0sCiAgICBxdWVyeUZuOiBhc3luYyAoKTogUHJvbWlzZTxUaWNrZXJIaXN0b3J5UmVzcG9uc2U+ID0+IHsKICAgICAgdHJ5IHsKICAgICAgICAvLyBTZWUgdXNlVGlja2VyUXVlcnkudHMgZm9yIHdoeSB0aGlzIG5lZWRzIGFuIGV4cGxpY2l0IGFib3J0IOKAlCBzYW1lCiAgICAgICAgLy8gdW5jYWNoZWQgeWZpbmFuY2UgY2FsbCB1bmRlcm5lYXRoLCBzYW1lIHJpc2sgb2YgaGFuZ2luZyBvdGhlcndpc2UuCiAgICAgICAgY29uc3QgY29udHJvbGxlciA9IG5ldyBBYm9ydENvbnRyb2xsZXIoKTsKICAgICAgICBjb25zdCB0aW1lb3V0SWQgPSBzZXRUaW1lb3V0KCgpID0+IGNvbnRyb2xsZXIuYWJvcnQoKSwgMjBfMDAwKTsKCiAgICAgICAgY29uc3QgcmVzcG9uc2UgPSBhd2FpdCBmZXRjaChgJHtSQUlMV0FZX0JBU0VfVVJMfS90aWNrZXIvJHt0aWNrZXJ9L2hpc3RvcnlgLCB7CiAgICAgICAgICBtZXRob2Q6ICJQT1NUIiwKICAgICAgICAgIGhlYWRlcnM6IHsgIkNvbnRlbnQtVHlwZSI6ICJhcHBsaWNhdGlvbi9qc29uIiB9LAogICAgICAgICAgYm9keTogSlNPTi5zdHJpbmdpZnkoeyBwZXJpb2QsIC4uLihpbnRlcnZhbCA/IHsgaW50ZXJ2YWwgfSA6IHt9KSwgLi4uKGV4dGVuZGVkSG91cnMgPyB7IGV4dGVuZGVkX2hvdXJzOiB0cnVlIH0gOiB7fSkgfSksCiAgICAgICAgICBzaWduYWw6IGNvbnRyb2xsZXIuc2lnbmFsLAogICAgICAgIH0pLmZpbmFsbHkoKCkgPT4gY2xlYXJUaW1lb3V0KHRpbWVvdXRJZCkpOwoKICAgICAgICBpZiAoIXJlc3BvbnNlLm9rKSB7CiAgICAgICAgICB0aHJvdyBuZXcgRXJyb3IoYEZhaWxlZCB0byBmZXRjaCB0aWNrZXIgaGlzdG9yeTogJHtyZXNwb25zZS5zdGF0dXNUZXh0fWApOwogICAgICAgIH0KCiAgICAgICAgY29uc3QgZGF0YSA9IGF3YWl0IHJlc3BvbnNlLmpzb24oKTsKICAgICAgICBpZiAoIWRhdGEuc3VjY2VzcykgewogICAgICAgICAgdGhyb3cgbmV3IEVycm9yKGRhdGEuZXJyb3IgfHwgIkZhaWxlZCB0byBmZXRjaCB0aWNrZXIgaGlzdG9yeSIpOwogICAgICAgIH0KCiAgICAgICAgcmV0dXJuIGRhdGE7CiAgICAgIH0gY2F0Y2ggKGVycm9yKSB7CiAgICAgICAgLy8gTm8gbW9jayBmYWxsYmFjayDigJQgbGV0IHRoZSBlcnJvciBzdXJmYWNlIHNvIHRoZSBjaGFydCBjYW4gc2hvdwogICAgICAgIC8vICJVbmFibGUgdG8gYmUgZmV0Y2hlZCIgaW5zdGVhZCBvZiBxdWlldGx5IHJlbmRlcmluZyBmYWtlIGRhdGEuCiAgICAgICAgY29uc29sZS53YXJuKGBIaXN0b3J5IEFQSSBjYWxsIGZhaWxlZCBmb3IgJHt0aWNrZXJ9ICgke3BlcmlvZH0pOmAsIGVycm9yKTsKICAgICAgICB0aHJvdyBlcnJvciBpbnN0YW5jZW9mIEVycm9yID8gZXJyb3IgOiBuZXcgRXJyb3IoIkZhaWxlZCB0byBmZXRjaCB0aWNrZXIgaGlzdG9yeSIpOwogICAgICB9CiAgICB9LAogICAgZW5hYmxlZDogISF0aWNrZXIgJiYgISF1c2VyPy5pZCAmJiAhYXV0aExvYWRpbmcsCiAgICAvLyBObyBzdGFsZVRpbWUg4oCUIGV2ZXJ5IG1vdW50L3JlZmV0Y2ggaGl0cyB0aGUgbmV0d29yayBzbyB0aGUgY2hhcnQgbmV2ZXIKICAgIC8vIHNpbGVudGx5IHJlcGxheXMgYW4gb2xkIGluLW1lbW9yeSBzZXJpZXMuCiAgICBzdGFsZVRpbWU6IDAsCiAgICByZXRyeTogMSwKICAgIHJldHJ5RGVsYXk6IDEwMDAsCiAgICByZWZldGNoSW50ZXJ2YWw6IHJlZmV0Y2hJbnRlcnZhbE1zID8/IGZhbHNlLAogICAgLy8gU3dpdGNoaW5nIHRpbWVmcmFtZXMgY2hhbmdlcyB0aGUgcXVlcnkga2V5ICh0aWNrZXItaGlzdG9yeSBpbmNsdWRlcwogICAgLy8gcGVyaW9kKSDigJQgd2l0aG91dCB0aGlzLCB0aGUgY2hhcnQgd291bGQgZHJvcCBiYWNrIHRvIGEgbG9hZGluZyBzdGF0ZQogICAgLy8gb24gZXZlcnkgdGFiIHRhcC4gS2VlcGluZyB0aGUgcHJldmlvdXMgcGVyaW9kJ3MgZGF0YSBkaXNwbGF5ZWQgd2hpbGUKICAgIC8vIHRoZSBuZXcgb25lIGZldGNoZXMsIHRoZW4gc3dhcHBpbmcgb25jZSBpdCBsYW5kcywgaXMgdGhlIHNtb290aAogICAgLy8gUm9iaW5ob29kLXN0eWxlIHRyYW5zaXRpb24gaW5zdGVhZCBvZiBhIHNrZWxldG9uIGZsYXNoIGVhY2ggdGltZS4KICAgIHBsYWNlaG9sZGVyRGF0YToga2VlcFByZXZpb3VzRGF0YSwKICB9KTsKfQo=
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { useAuth } from "@/common/utils/context/auth/AuthContext";
+import { PricePeriod, TickerHistoryResponse } from "@/common/types/blogPosts/ticker";
+import { RAILWAY_BASE_URL } from "@/lib/railway.config";
+
+/**
+ * Fetches a single timeframe's price series for the ticker chart.
+ * Kept separate from useTickerQuery (fundamentals) so switching timeframes
+ * doesn't refetch/re-render company info, price, market cap, etc.
+ *
+ * @param ticker - Stock ticker symbol
+ * @param period - Selected chart timeframe (1D/1W/1M/3M/YTD/1Y/5Y)
+ * @param refetchIntervalMs - Optional background poll interval (e.g. so a 1D
+ *   chart's 5-min candles pick up the newest bar on their own instead of
+ *   requiring the screen to be closed and reopened). Omit for a one-shot fetch.
+ * @param interval - Optional bar-granularity override (e.g. "15m" instead of
+ *   1D's default "5m") — see yfinance_service.ALLOWED_INTERVALS for what's
+ *   valid per period. An invalid/mismatched value is silently ignored
+ *   server-side, never a failed request.
+ */
+export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refetchIntervalMs?: number, interval?: string, extendedHours?: boolean) {
+  const { authState: { user, isLoading: authLoading } } = useAuth();
+
+  return useQuery({
+    queryKey: ["ticker-history", ticker, period, interval, extendedHours ?? false],
+    queryFn: async (): Promise<TickerHistoryResponse> => {
+      try {
+        // See useTickerQuery.ts for why this needs an explicit abort — same
+        // uncached yfinance call underneath, same risk of hanging otherwise.
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20_000);
+
+        const response = await fetch(`${RAILWAY_BASE_URL}/ticker/${ticker}/history`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ period, ...(interval ? { interval } : {}), ...(extendedHours ? { extended_hours: true } : {}) }),
+          signal: controller.signal,
+        }).finally(() => clearTimeout(timeoutId));
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch ticker history: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        if (!data.success) {
+          throw new Error(data.error || "Failed to fetch ticker history");
+        }
+
+        return data;
+      } catch (error) {
+        // No mock fallback — let the error surface so the chart can show
+        // "Unable to be fetched" instead of quietly rendering fake data.
+        console.warn(`History API call failed for ${ticker} (${period}):`, error);
+        throw error instanceof Error ? error : new Error("Failed to fetch ticker history");
+      }
+    },
+    enabled: !!ticker && !!user?.id && !authLoading,
+    // No staleTime — every mount/refetch hits the network so the chart never
+    // silently replays an old in-memory series.
+    staleTime: 0,
+    retry: 1,
+    retryDelay: 1000,
+    refetchInterval: refetchIntervalMs ?? false,
+    // Switching timeframes changes the query key (ticker-history includes
+    // period) — without this, the chart would drop back to a loading state
+    // on every tab tap. Keeping the previous period's data displayed while
+    // the new one fetches, then swapping once it lands, is the smooth
+    // Robinhood-style transition instead of a skeleton flash each time.
+    placeholderData: keepPreviousData,
+  });
+}

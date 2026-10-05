@@ -1,1 +1,100 @@
-aW1wb3J0IHsgdXNlQ2FsbGJhY2sgfSBmcm9tICdyZWFjdCc7CmltcG9ydCB7IHVzZVF1ZXJ5LCB1c2VRdWVyeUNsaWVudCB9IGZyb20gJ0B0YW5zdGFjay9yZWFjdC1xdWVyeSc7CmltcG9ydCAqIGFzIFNlY3VyZVN0b3JlIGZyb20gJ2V4cG8tc2VjdXJlLXN0b3JlJzsKaW1wb3J0IHR5cGUgeyBDaGFydE1vZGUgfSBmcm9tICdAL2NvbW1vbi9jb21wb25lbnRzL3RpY2tlci9BZHZhbmNlZFByaWNlQ2hhcnQnOwppbXBvcnQgdHlwZSB7IFByaWNlUGVyaW9kIH0gZnJvbSAnQC9jb21tb24vdHlwZXMvYmxvZ1Bvc3RzL3RpY2tlcic7Cgpjb25zdCBTVE9SQUdFX0tFWSA9ICdjaGFydF9kaXNwbGF5X3ByZWZzX3YxJzsKY29uc3QgUVVFUllfS0VZID0gWydjaGFydC1kaXNwbGF5LXByZWZzJ107CgovKioKICogQ2hhcnQgZGlzcGxheSBvcHRpb25zIGZyb20gdGhlIGNoYXJ0IHNldHRpbmdzIG1vZGFsIHRoYXQgcGVyc2lzdCBhY3Jvc3MKICogYXBwIGxhdW5jaGVzLiBTaGFyZWQgYnkgdGhlIENoYXJ0cyB0YWIgYW5kIFByaWNlQ2hhcnRGdWxsU2NyZWVuLiBXYXRjaAogKiBtb2RlIGlzIGRlbGliZXJhdGVseSBub3QgaGVyZSDigJQgaXQncyBhIHRyYW5zaWVudCBkcmF3aW5nIHN0YXRlLCBub3QgYQogKiBwcmVmZXJlbmNlLiBXYXRjaC1sZXZlbCB2aXNpYmlsaXR5LCBhdXRvLXpvbmUgdmlzaWJpbGl0eSBhbmQgRGF0YSBQb2ludHMKICogcGVyc2lzdCB0aHJvdWdoIHRoZWlyIG93biBob29rcy4KICovCmV4cG9ydCBpbnRlcmZhY2UgQ2hhcnREaXNwbGF5UHJlZnMgewogIC8qKiBudWxsID0gdGhlIHRpbWVmcmFtZSdzIGRlZmF1bHQgKGNhbmRsZXMgb24gMUQvMVcsIGxpbmUgb3RoZXJ3aXNlKS4gKi8KICBtb2RlOiBDaGFydE1vZGUgfCBudWxsOwogIHNob3dTZXNzaW9uTGluZXM6IGJvb2xlYW47CiAgLyoqIDFEIGNhbmRsZXMgaW5jbHVkZSB0aGUgZXh0ZW5kZWQtaG91cnMgc2Vzc2lvbiAocHJlbWFya2V0ICsgcmVndWxhciksCiAgICogIG5vdCBqdXN0IDA5OjMw4oCTMTY6MDAgRVQuICovCiAgc2hvd0V4dGVuZGVkSG91cnM6IGJvb2xlYW47CiAgc2hvd1N0cmlwOiBib29sZWFuOwogIHNob3dWd2FwOiBib29sZWFuOwogIHNob3dFbWE6IGJvb2xlYW47CiAgc2hvd09yYjogYm9vbGVhbjsKICAvKiogRnVsbC1zY3JlZW4gY2hhcnQncyBzdXBwb3J0L3Jlc2lzdGFuY2Ugb3ZlcmxheS4gKi8KICBzaG93U1I6IGJvb2xlYW47CiAgLyoqIE9wdGlvbnMgY2FsbC9wdXQgT0kgd2FsbHMgKCsgZXhwaXJ5LWRheSBtYXggcGFpbikgb24gaW50cmFkYXkgdmlld3MuICovCiAgc2hvd1dhbGxzOiBib29sZWFuOwogIC8qKiBUaW1lZnJhbWUgbW92aW5nLWF2ZXJhZ2Ugb3ZlcmxheXMgKGNvbXB1dGVkIGZyb20gdGhlIGxvYWRlZCBiYXJzKS4gKi8KICBlbWEyMDogYm9vbGVhbjsKICBlbWE1MDogYm9vbGVhbjsKICBlbWEyMDA6IGJvb2xlYW47CiAgZW1hNDAwOiBib29sZWFuOwogIC8qKiBXaGljaCBjaGFydCBlbmdpbmUgcmVuZGVycyB0aGUgQ2hhcnRzIHRhYi4gKi8KICBjaGFydEVuZ2luZTogJ3R2JyB8ICdsZWdhY3knOwogIC8qKiBEYXRlIHJhbmdlICsgYmFyIHNpemUgdGhlIENoYXJ0cyB0YWIgb3BlbnMgb24gYXQgbGF1bmNoLiAqLwogIGRlZmF1bHRQZXJpb2Q6IFByaWNlUGVyaW9kOwogIC8qKiBudWxsID0gdGhhdCBwZXJpb2QncyBvd24gZGVmYXVsdCBiYXIgc2l6ZS4gKi8KICBkZWZhdWx0SW50ZXJ2YWw6IHN0cmluZyB8IG51bGw7Cn0KCmV4cG9ydCBjb25zdCBERUZBVUxUX0NIQVJUX0RJU1BMQVlfUFJFRlM6IENoYXJ0RGlzcGxheVByZWZzID0gewogIG1vZGU6IG51bGwsCiAgc2hvd1Nlc3Npb25MaW5lczogZmFsc2UsCiAgc2hvd0V4dGVuZGVkSG91cnM6IHRydWUsCiAgc2hvd1N0cmlwOiBmYWxzZSwKICBzaG93VndhcDogZmFsc2UsCiAgc2hvd0VtYTogZmFsc2UsCiAgc2hvd09yYjogdHJ1ZSwKICBzaG93U1I6IGZhbHNlLAogIHNob3dXYWxsczogdHJ1ZSwKICBlbWEyMDogdHJ1ZSwKICBlbWE1MDogdHJ1ZSwKICBlbWEyMDA6IGZhbHNlLAogIGVtYTQwMDogZmFsc2UsCiAgY2hhcnRFbmdpbmU6ICd0dicsCiAgZGVmYXVsdFBlcmlvZDogJzFEJywKICBkZWZhdWx0SW50ZXJ2YWw6IG51bGwsCn07Cgphc3luYyBmdW5jdGlvbiBsb2FkUHJlZnMoKTogUHJvbWlzZTxDaGFydERpc3BsYXlQcmVmcz4gewogIHRyeSB7CiAgICBjb25zdCByYXcgPSBhd2FpdCBTZWN1cmVTdG9yZS5nZXRJdGVtQXN5bmMoU1RPUkFHRV9LRVkpOwogICAgaWYgKCFyYXcpIHJldHVybiBERUZBVUxUX0NIQVJUX0RJU1BMQVlfUFJFRlM7CiAgICAvLyBNZXJnZSBvdmVyIHRoZSBkZWZhdWx0cyBzbyBhIHByZWYgYWRkZWQgbGF0ZXIgZ2V0cyBpdHMgZGVmYXVsdAogICAgLy8gaW5zdGVhZCBvZiB1bmRlZmluZWQgZm9yIGFueW9uZSB3aXRoIGFuIG9sZGVyIHNhdmVkIGJsb2IuCiAgICByZXR1cm4geyAuLi5ERUZBVUxUX0NIQVJUX0RJU1BMQVlfUFJFRlMsIC4uLkpTT04ucGFyc2UocmF3KSB9OwogIH0gY2F0Y2ggewogICAgcmV0dXJuIERFRkFVTFRfQ0hBUlRfRElTUExBWV9QUkVGUzsKICB9Cn0KCi8qKgogKiBQZXJzaXN0ZWQgY2hhcnQgZGlzcGxheSBwcmVmczogU2VjdXJlU3RvcmUgZm9yIHN0b3JhZ2UsIG1pcnJvcmVkIGluIHRoZQogKiBSZWFjdCBRdWVyeSBjYWNoZSBzbyBldmVyeSBtb3VudGVkIGNoYXJ0IHVwZGF0ZXMgdG9nZXRoZXIgdGhlIG1vbWVudCBvbmUKICogb2YgdGhlbSBjaGFuZ2VzIGEgc2V0dGluZyAoc2FtZSBjYWNoZS1taXJyb3IgcGF0dGVybiBhcwogKiB1c2VXYXRjaFpvbmVzVmlzaWJpbGl0eSwgd2l0aCBTZWN1cmVTdG9yZSBpbnN0ZWFkIG9mIEFzeW5jU3RvcmFnZSkuCiAqLwpleHBvcnQgZnVuY3Rpb24gdXNlQ2hhcnREaXNwbGF5UHJlZnMoKSB7CiAgY29uc3QgcWMgPSB1c2VRdWVyeUNsaWVudCgpOwogIGNvbnN0IHsgZGF0YTogcHJlZnMgPSBERUZBVUxUX0NIQVJUX0RJU1BMQVlfUFJFRlMsIGlzU3VjY2VzczogbG9hZGVkIH0gPSB1c2VRdWVyeTxDaGFydERpc3BsYXlQcmVmcz4oewogICAgcXVlcnlLZXk6IFFVRVJZX0tFWSwKICAgIHF1ZXJ5Rm46IGxvYWRQcmVmcywKICAgIHN0YWxlVGltZTogSW5maW5pdHksCiAgfSk7CgogIGNvbnN0IHNldFByZWYgPSB1c2VDYWxsYmFjayg8SyBleHRlbmRzIGtleW9mIENoYXJ0RGlzcGxheVByZWZzPihrZXk6IEssIHZhbHVlOiBDaGFydERpc3BsYXlQcmVmc1tLXSkgPT4gewogICAgY29uc3QgbmV4dCA9IHsgLi4uKHFjLmdldFF1ZXJ5RGF0YTxDaGFydERpc3BsYXlQcmVmcz4oUVVFUllfS0VZKSA/PyBERUZBVUxUX0NIQVJUX0RJU1BMQVlfUFJFRlMpLCBba2V5XTogdmFsdWUgfTsKICAgIHFjLnNldFF1ZXJ5RGF0YShRVUVSWV9LRVksIG5leHQpOwogICAgLy8gQmVzdC1lZmZvcnQgcGVyc2lzdGVuY2Ug4oCUIHRoZSBjYWNoZSBhYm92ZSBhbHJlYWR5IHJlZmxlY3RzIHRoZSBjaGFuZ2UKICAgIC8vIGZvciB0aGUgcmVzdCBvZiB0aGlzIHNlc3Npb24gZXZlbiBpZiB0aGUgd3JpdGUgZmFpbHMuCiAgICBTZWN1cmVTdG9yZS5zZXRJdGVtQXN5bmMoU1RPUkFHRV9LRVksIEpTT04uc3RyaW5naWZ5KG5leHQpKS5jYXRjaCgoKSA9PiB7fSk7CiAgfSwgW3FjXSk7CgogIC8qKiBgbG9hZGVkYCDigJQgdGhlIHN0b3JlZCBwcmVmcyBoYXZlIGJlZW4gcmVhZCAodnMuIHN0aWxsIHNob3dpbmcgZGVmYXVsdHMpLiAqLwogIHJldHVybiB7IHByZWZzLCBzZXRQcmVmLCBsb2FkZWQgfTsKfQo=
+import { useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import * as SecureStore from 'expo-secure-store';
+import type { ChartMode } from '@/common/components/ticker/AdvancedPriceChart';
+import type { PricePeriod } from '@/common/types/blogPosts/ticker';
+
+const STORAGE_KEY = 'chart_display_prefs_v1';
+const QUERY_KEY = ['chart-display-prefs'];
+
+/**
+ * Chart display options from the chart settings modal that persist across
+ * app launches. Shared by the Charts tab and PriceChartFullScreen. Watch
+ * mode is deliberately not here — it's a transient drawing state, not a
+ * preference. Watch-level visibility, auto-zone visibility and Data Points
+ * persist through their own hooks.
+ */
+export interface ChartDisplayPrefs {
+  /** null = the timeframe's default (candles on 1D/1W, line otherwise). */
+  mode: ChartMode | null;
+  showSessionLines: boolean;
+  /** 1D candles include the extended-hours session (premarket + regular),
+   *  not just 09:30–16:00 ET. */
+  showExtendedHours: boolean;
+  showStrip: boolean;
+  showVwap: boolean;
+  showEma: boolean;
+  showOrb: boolean;
+  /** Full-screen chart's support/resistance overlay. */
+  showSR: boolean;
+  /** Options call/put OI walls (+ expiry-day max pain) on intraday views. */
+  showWalls: boolean;
+  /** Timeframe moving-average overlays (computed from the loaded bars). */
+  ema20: boolean;
+  ema50: boolean;
+  ema200: boolean;
+  ema400: boolean;
+  /** Which chart engine renders the Charts tab. */
+  chartEngine: 'tv' | 'legacy';
+  /** Date range + bar size the Charts tab opens on at launch. */
+  defaultPeriod: PricePeriod;
+  /** null = that period's own default bar size. */
+  defaultInterval: string | null;
+}
+
+export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
+  mode: null,
+  showSessionLines: false,
+  showExtendedHours: true,
+  showStrip: false,
+  showVwap: false,
+  showEma: false,
+  showOrb: true,
+  showSR: false,
+  showWalls: true,
+  ema20: true,
+  ema50: true,
+  ema200: false,
+  ema400: false,
+  chartEngine: 'tv',
+  defaultPeriod: '1D',
+  defaultInterval: null,
+};
+
+async function loadPrefs(): Promise<ChartDisplayPrefs> {
+  try {
+    const raw = await SecureStore.getItemAsync(STORAGE_KEY);
+    if (!raw) return DEFAULT_CHART_DISPLAY_PREFS;
+    // Merge over the defaults so a pref added later gets its default
+    // instead of undefined for anyone with an older saved blob.
+    return { ...DEFAULT_CHART_DISPLAY_PREFS, ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_CHART_DISPLAY_PREFS;
+  }
+}
+
+/**
+ * Persisted chart display prefs: SecureStore for storage, mirrored in the
+ * React Query cache so every mounted chart updates together the moment one
+ * of them changes a setting (same cache-mirror pattern as
+ * useWatchZonesVisibility, with SecureStore instead of AsyncStorage).
+ */
+export function useChartDisplayPrefs() {
+  const qc = useQueryClient();
+  const { data: prefs = DEFAULT_CHART_DISPLAY_PREFS, isSuccess: loaded } = useQuery<ChartDisplayPrefs>({
+    queryKey: QUERY_KEY,
+    queryFn: loadPrefs,
+    staleTime: Infinity,
+  });
+
+  const setPref = useCallback(<K extends keyof ChartDisplayPrefs>(key: K, value: ChartDisplayPrefs[K]) => {
+    const next = { ...(qc.getQueryData<ChartDisplayPrefs>(QUERY_KEY) ?? DEFAULT_CHART_DISPLAY_PREFS), [key]: value };
+    qc.setQueryData(QUERY_KEY, next);
+    // Best-effort persistence — the cache above already reflects the change
+    // for the rest of this session even if the write fails.
+    SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+  }, [qc]);
+
+  /** `loaded` — the stored prefs have been read (vs. still showing defaults). */
+  return { prefs, setPref, loaded };
+}
