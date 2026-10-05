@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, Pressable, SafeAreaView, LayoutAnimation, Platform, UIManager,
+  View, Text, ScrollView, TouchableOpacity, Pressable, LayoutAnimation, Platform, UIManager,
   LayoutChangeEvent, useWindowDimensions, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -73,7 +74,12 @@ const PINNED_TICKERS = ['SPY', 'IWM', 'QQQ'];
  * ChartsContent is the route-independent body; the default export is the
  * thin route wrapper that feeds ?ticker= in as initialTicker.
  */
-export function ChartsContent({ initialTicker }: { initialTicker?: string | null }) {
+export function ChartsContent({ initialTicker, topInset }: {
+  initialTicker?: string | null;
+  /** Override the top safe-area padding — 0 when rendered under the global
+   *  ticker tape (the tape already clears the notch). */
+  topInset?: number;
+}) {
   const colors = useThemeColors();
   const [contractsModalOpen, setContractsModalOpen] = useState(false);
 
@@ -656,8 +662,19 @@ export function ChartsContent({ initialTicker }: { initialTicker?: string | null
     return () => setTapeInfo(null);
   }, [isFocused, activeTicker, resolvedLivePrice, liveChange, liveChangePercent, tapeSignal, tickerLoading, stockData, setTapeInfo, openContracts, openSearch]);
 
+  // Top inset as padding; the BOTTOM inset is handed to the last element
+  // (toolbar, or the positions pager when open) as its own padding, so its
+  // background runs to the screen edge — a SafeAreaView left an empty band
+  // under the toolbar, and that height now goes to the chart instead.
+  const safeInsets = useSafeAreaInsets();
+  // Mostly reclaimed: the toolbar sits just above the home indicator
+  // (TradingView-style) instead of leaving the full ~34px inset as an empty
+  // band under it — that height goes to the chart. Keeps ~8px so the
+  // toolbar's content clears the indicator itself.
+  const bottomInset = Math.max(safeInsets.bottom - 26, 2);
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+    <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: topInset ?? safeInsets.top }}>
       {/* Technicals strip — right below the global ticker tape, toggleable
           in Chart settings. */}
       {chart.showStrip && (
@@ -770,6 +787,7 @@ export function ChartsContent({ initialTicker }: { initialTicker?: string | null
         activeTicker={activeTicker}
         onSelectTicker={setSelectedTicker}
         onSearchPress={() => setSearchOpen(true)}
+        bottomInset={expanded ? 0 : bottomInset}
         isFollowed={isActiveFollowed}
         onToggleFollow={handleToggleFollow}
         period={period}
@@ -795,11 +813,14 @@ export function ChartsContent({ initialTicker }: { initialTicker?: string | null
           chart up (chart keeps its min-height guard). One card per page,
           swipe to paginate, LIVE/PAPER badge per card. */}
       {expanded && (
-        <PositionsPager
-          data={positionsData}
-          ticker={activeTicker}
-          onLiveUpdate={handlePositionLiveUpdate}
-        />
+        <>
+          <PositionsPager
+            data={positionsData}
+            ticker={activeTicker}
+            onLiveUpdate={handlePositionLiveUpdate}
+          />
+          <View style={{ height: bottomInset, backgroundColor: colors.background }} />
+        </>
       )}
 
       <SearchBottomSheet
@@ -822,7 +843,7 @@ export function ChartsContent({ initialTicker }: { initialTicker?: string | null
         context={zoneContext}
         onClose={() => setTvZoneSheetZone(null)}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 

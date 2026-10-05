@@ -40,6 +40,9 @@ export interface ChartDisplayPrefs {
   defaultPeriod: PricePeriod;
   /** null = that period's own default bar size. */
   defaultInterval: string | null;
+  /** Home dynamic card's chart page (Profile → Home chart timeframe). */
+  homeChartPeriod: PricePeriod;
+  homeChartInterval: string;
 }
 
 export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
@@ -59,6 +62,8 @@ export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
   chartEngine: 'tv',
   defaultPeriod: '1D',
   defaultInterval: null,
+  homeChartPeriod: '1D',
+  homeChartInterval: '15m',
 };
 
 async function loadPrefs(): Promise<ChartDisplayPrefs> {
