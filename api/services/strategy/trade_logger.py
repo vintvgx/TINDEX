@@ -780,11 +780,15 @@ class TradeLogger:
         except Exception as e:
             logger.error("[TradeLogger] reconcile_orphaned_trades failed: %s", e)
 
-    def get_stats(self, profile: str = None) -> dict:
+    def get_stats(self, profile: str = None, paper_mode: bool = None) -> dict:
         try:
             q = self.client.table("orb_trades").select("pnl, pnl_pct, exit_reason")
             if profile:
                 q = q.eq("profile", profile)
+            # paper_mode filter keeps the home account card's PERFORMANCE
+            # section mode-pure (live vs paper) instead of blending both.
+            if paper_mode is not None:
+                q = q.eq("paper_mode", paper_mode)
             rows = q.execute().data or []
             if not rows:
                 return self._empty_stats()
@@ -865,22 +869,26 @@ class TradeLogger:
             logger.error("[TradeLogger] get_stats_by_hour failed: %s", e)
             return []
 
-    def get_performance(self) -> dict:
+    def get_performance(self, paper_mode: bool = None) -> dict:
         """
         Returns overall + per-strategy + per-profile performance ratings (0–100).
         Queries orb_trades joined with strategy_configs for per-strategy breakdowns.
+        paper_mode=True/False restricts every section to paper/live trades;
+        None keeps the legacy blended behavior.
         """
         try:
             # Overall
-            all_stats = self.get_stats()
+            all_stats = self.get_stats(paper_mode=paper_mode)
             overall = {**all_stats, **self.compute_rating(all_stats)}
 
             # Per-strategy: group by strategy_id
-            res = (
+            q = (
                 self.client.table("orb_trades")
                 .select("strategy_id, pnl, pnl_pct, exit_reason")
-                .execute()
             )
+            if paper_mode is not None:
+                q = q.eq("paper_mode", paper_mode)
+            res = q.execute()
             rows = res.data or []
 
             # Load config names
@@ -910,7 +918,7 @@ class TradeLogger:
             from services.strategy.profiles import PROFILES
             by_profile = []
             for pk in PROFILES:
-                s = self.get_stats(profile=pk)
+                s = self.get_stats(profile=pk, paper_mode=paper_mode)
                 by_profile.append({**s, **self.compute_rating(s), "profile": pk})
 
             return {
