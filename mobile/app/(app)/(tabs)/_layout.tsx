@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Tabs } from 'expo-router';
 import { View, TouchableOpacity, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -44,10 +45,17 @@ function Shell() {
 function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets> }) {
   const colors = useThemeColors();
   const { open: chartOpen, ticker: chartTicker, closeChart } = useChartOverlay();
+  // The chart overlay starts BELOW the ticker tape: charts.tsx has no tape of
+  // its own — it publishes its ticker/price/signal to this global tape via
+  // ChartTapeContext — so covering the tape hid that headline (and its
+  // tap-ticker-to-search / tap-signal-for-contracts shortcuts).
+  const [tapeH, setTapeH] = useState(0);
 
   return (
     <View style={{ flex: 1 }}>
-      <TickerTape />
+      <View onLayout={(e) => setTapeH(e.nativeEvent.layout.height)}>
+        <TickerTape />
+      </View>
       <AppHeader />
 
       <View style={{ flex: 1 }}>
@@ -56,7 +64,9 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
         >
           <Tabs
             initialRouteName="feed"
-            screenOptions={{ headerShown: false }}
+            // Theme background behind every screen — the default scene
+            // color showed through as black around/below shorter content.
+            screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: colors.background } }}
             tabBar={chartOpen ? () => null : (props) => <WheelTabBar {...props} />}
           >
             {/* Wheel screens */}
@@ -89,11 +99,11 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
         </SafeAreaInsetsContext.Provider>
       </View>
 
-      {/* Full-screen chart overlay — covers tape, header, and tab bar.
-          Only the X remains, floating where the Profile button was. */}
+      {/* Chart overlay — covers the header and tab bar, but not the ticker
+          tape (which carries the chart's headline). Only the X remains. */}
       {chartOpen && (
-        <View style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.background, zIndex: 50 }]}>
-          <ChartsContent initialTicker={chartTicker} />
+        <View style={[StyleSheet.absoluteFillObject, { top: tapeH, backgroundColor: colors.background, zIndex: 50 }]}>
+          <ChartsContent initialTicker={chartTicker} topInset={0} />
           <TouchableOpacity
             onPress={closeChart}
             activeOpacity={0.7}
@@ -101,7 +111,7 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
             style={[
               styles.closeBtn,
               {
-                top: Math.max(insets.top, 12) + 6,
+                top: 8,
                 backgroundColor: colors.surfaceSecondary,
                 borderColor: colors.border,
               },

@@ -15,6 +15,9 @@ import { DynamicBriefView } from './views/DynamicBriefView';
 import { DynamicSignalsView } from './views/DynamicSignalsView';
 import { DynamicNewsView } from './views/DynamicNewsView';
 import { DynamicContractsView } from './views/DynamicContractsView';
+import { DynamicOpenContractsView } from './views/DynamicOpenContractsView';
+import { DynamicAccountView } from './views/DynamicAccountView';
+import { DynamicCollapsedSummary } from './DynamicCollapsedSummary';
 import { ConfirmStackCard, usePendingConfirmations } from './cards/ConfirmStackCard';
 import { SoldCard } from './cards/SoldCard';
 import { useSoldTradeAlert } from './cards/useSoldTradeAlert';
@@ -24,18 +27,27 @@ import { useSoldTradeAlert } from './cards/useSoldTradeAlert';
  *
  * - Collapses to a slim strip on scroll (driven by the parent's scrollY),
  *   expands back on scroll up — springy, like the reference video.
- * - Horizontal swipe between views: charts | signals | brief | contracts |
- *   news, with animated transitions.
+ * - Horizontal swipe between views: charts | account (live funds +
+ *   performance) | brief | open (held contracts → edit sheet) | watched
+ *   (tracked → contract window) | news | signals.
+ * - Collapsed, each view shows its own one-line summary
+ *   (DynamicCollapsedSummary).
+ * - Rendered by the parent as an OVERLAY above its ScrollView (not inside
+ *   it): animating a scroll child's height changes the content height
+ *   mid-scroll, which fed back into scrollY and made it jitter/bounce.
  * - Transient states (confirm-entry stack, sold card) take over the card;
  *   see ConfirmStackCard / SoldCard.
  */
 
-export const DYNAMIC_VIEWS = ['charts', 'signals', 'brief', 'contracts', 'news'] as const;
+export const DYNAMIC_VIEWS = ['charts', 'account', 'brief', 'open', 'watched', 'news', 'signals'] as const;
 export type DynamicViewKey = (typeof DYNAMIC_VIEWS)[number];
 
 export const EXPANDED_H = 380;
-const COLLAPSED_H = 76;
-const COLLAPSE_RANGE = 140;
+export const COLLAPSED_H = 76;
+/** Scroll distance over which the card collapses — exactly the height it
+ *  loses, so its bottom edge tracks the content scrolling under it 1:1
+ *  (no gap opening up, no overlap). */
+export const COLLAPSE_RANGE = EXPANDED_H - COLLAPSED_H;
 
 export interface TickerInfo {
   ticker: string;
@@ -127,13 +139,19 @@ export function DynamicCard({
         case 'brief':
           view = <DynamicBriefView onOpenBrief={handleOpenBrief} />;
           break;
+        case 'account':
+          view = <DynamicAccountView />;
+          break;
         case 'signals':
           view = <DynamicSignalsView />;
           break;
         case 'news':
           view = <DynamicNewsView />;
           break;
-        case 'contracts':
+        case 'open':
+          view = <DynamicOpenContractsView />;
+          break;
+        case 'watched':
           view = <DynamicContractsView />;
           break;
       }
@@ -142,7 +160,6 @@ export function DynamicCard({
     [pageWidth, handleOpenBrief],
   );
 
-  const changeUp = (tickerInfo.changePct ?? 0) >= 0;
 
   return (
     <Animated.View
@@ -195,28 +212,9 @@ export function DynamicCard({
             style={[StyleSheet.absoluteFillObject, collapsedStyle, styles.collapsedRow]}
             pointerEvents={collapsed ? 'auto' : 'none'}
           >
-            <Text style={[styles.mono, { fontSize: 14, fontWeight: '800', color: colors.text }]}>
-              {tickerInfo.ticker || '—'}
-            </Text>
-            {tickerInfo.price != null && (
-              <Text style={[styles.mono, { fontSize: 14, color: colors.textSecondary }]}>
-                ${tickerInfo.price.toFixed(2)}
-              </Text>
-            )}
-            {tickerInfo.changePct != null && (
-              <Text
-                style={[
-                  styles.mono,
-                  { fontSize: 12, fontWeight: '700', color: changeUp ? colors.success : colors.error },
-                ]}
-              >
-                {changeUp ? '+' : ''}{tickerInfo.changePct.toFixed(2)}%
-              </Text>
-            )}
-            <View style={{ flex: 1 }} />
-            <Text style={[styles.mono, { fontSize: 10, color: colors.textTertiary }]}>
-              {DYNAMIC_VIEWS[viewIndex].toUpperCase()}
-            </Text>
+            {/* A short version of whichever view is showing — not the chart
+                ticker on every page. */}
+            <DynamicCollapsedSummary view={DYNAMIC_VIEWS[viewIndex]} tickerInfo={tickerInfo} />
           </Animated.View>
         </>
       )}

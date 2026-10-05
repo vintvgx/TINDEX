@@ -9,7 +9,7 @@ import { useThemeColors } from '@/lib/useColorScheme';
 
 // TradingView-style: the selected ticker in full, with its neighbours
 // dimmed and half cut off by the top/bottom edges.
-const ROW_H = 26;
+const ROW_H = 30;
 const WHEEL_H = ROW_H * 2 + 4;
 /** Minimum rows in the recycled loop — enough to cover the visible window
  *  plus fade-in/out rows even for a 1-2 ticker list. */
@@ -196,8 +196,11 @@ function WheelRow({ slot, slots, offset, ticker, status, colors }: {
     const d = (((raw % slots) + slots) % slots) - slots / 2;
     const dist = Math.min(1, Math.abs(d));
     return {
-      transform: [{ translateY: d * ROW_H }],
-      // Same size throughout (as TradingView); neighbours just dim.
+      // The selected (centered) ticker is noticeably bigger so it reads as
+      // selected; neighbours shrink a touch and dim. Scaled from the left
+      // edge so the left-aligned text doesn't drift sideways.
+      transform: [{ translateY: d * ROW_H }, { scale: 1.2 - dist * 0.35 }],
+      transformOrigin: 'left center',
       opacity: Math.abs(d) > 1.6 ? 0 : 1 - dist * 0.72,
     };
   });
@@ -243,7 +246,7 @@ function LetterBadge({ ticker, status, colors }: { ticker: string; status?: Tick
 
 const s = StyleSheet.create({
   wheel: {
-    width: 104,
+    width: 118,
     height: WHEEL_H,
     overflow: 'hidden',
   },

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, TouchableOpacity, StyleSheet } from 'react-native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
@@ -18,22 +18,45 @@ import { useThemeColors, useAppColorScheme } from '@/lib/useColorScheme';
 import { useChartOverlay } from './ChartOverlayContext';
 
 /**
- * 0.7 redesign tab bar: three buttons — Home (screen wheel), Chart
- * (full-screen overlay), Profile. The Home button copies the TickerWheel
- * interaction: vertical scrub cycles through screens, single tap spins
- * back to Home.
+ * 0.7 redesign tab bar — matches the reference: a floating pill of
+ * icon-only buttons on the left (screen wheel + Chart) and a detached round
+ * Profile button on the right.
+ *
+ * The first pill button is the screen wheel: it shows the current screen's
+ * icon in a highlight circle; scrub it vertically to cycle screens (haptic
+ * tick per screen), tap it to spin back to Home.
  */
 
 export const WHEEL_SCREENS = [
-  { key: 'feed', label: 'Home' },
-  { key: 'monitor', label: 'Monitor' },
-  { key: 'daily_review', label: 'Daily' },
-  { key: 'tradelog', label: 'Log' },
-  { key: 'accounts', label: 'Account' },
-  { key: 'menu', label: 'Menu' },
+  { key: 'feed', label: 'Home', icon: 'home-outline' },
+  { key: 'position', label: 'Positions', icon: 'briefcase-outline' },
+  { key: 'monitor', label: 'Monitor', icon: 'pulse-outline' },
+  { key: 'daily_review', label: 'Daily', icon: 'calendar-outline' },
+  { key: 'tradelog', label: 'Log', icon: 'receipt-outline' },
+  { key: 'accounts', label: 'Account', icon: 'wallet-outline' },
+  { key: 'menu', label: 'Menu', icon: 'grid-outline' },
 ] as const;
 
-const ROW_H = 18;
+/** Screens whose content runs UNDER the bar (they reserve their own bottom
+ *  clearance) — the bar floats over them so the list fills to the bottom
+ *  edge with no band behind the bar. Elsewhere it sits in normal flow. */
+const FLOATING_ON = new Set(['feed', 'position']);
+
+const BTN = 46;        // pill button / wheel window size
+const PILL_PAD = 6;
+const BAR_TOP_PAD = 6;
+/** Lift above the home indicator — sitting right on the safe-area edge
+ *  felt cramped (and put the wheel scrub in iOS Reachability's zone). */
+const BOTTOM_LIFT = 14;
+
+/** Total height the bar occupies from the screen bottom — screens the bar
+ *  floats over (FLOATING_ON) pad their content by this. */
+export function useWheelTabBarHeight(): number {
+  const insets = useSafeAreaInsets();
+  return BAR_TOP_PAD + BTN + PILL_PAD * 2 + Math.max(insets.bottom, 10) + BOTTOM_LIFT;
+}
+const ROW_H = BTN;     // one icon per wheel row
+const SCRUB_PX = 22;   // finger travel per screen while scrubbing
 
 function hapticTick() {
   Haptics.selectionAsync().catch(() => {});
@@ -86,7 +109,7 @@ function ScreenWheel({
     })
     .onUpdate((e) => {
       'worklet';
-      const o = dragStart.value - e.translationY / ROW_H;
+      const o = dragStart.value - e.translationY / SCRUB_PX;
       offset.value = Math.max(-0.35, Math.min(n - 1 + 0.35, o));
       const p = Math.round(offset.value);
       if (p !== lastPreview.value && p >= 0 && p < n) {
@@ -111,61 +134,67 @@ function ScreenWheel({
   });
 
   const stackStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: ROW_H * (1 - offset.value) }],
+    transform: [{ translateY: -ROW_H * offset.value }],
   }));
 
   return (
     <GestureDetector gesture={Gesture.Race(pan, tap)}>
-      <View style={styles.wheelWindow}>
-        <Animated.View style={stackStyle}>
+      <View
+        style={[styles.btn, { backgroundColor: colors.text + '14', overflow: 'hidden' }]}
+        accessibilityRole="button"
+        accessibilityLabel={`${WHEEL_SCREENS[index]?.label ?? 'Home'} — swipe up or down to switch screens, tap for Home`}
+      >
+        <Animated.View style={[{ position: 'absolute', top: 0, left: 0, right: 0 }, stackStyle]}>
           {WHEEL_SCREENS.map((w, i) => (
-            <WheelLabel key={w.key} label={w.label} i={i} offset={offset} colors={colors} />
+            <WheelIcon key={w.key} icon={w.icon} i={i} offset={offset} colors={colors} />
           ))}
         </Animated.View>
-        {/* center-row indicator */}
-        <View
-          pointerEvents="none"
-          style={[
-            styles.wheelHighlight,
-            { top: ROW_H, height: ROW_H, backgroundColor: colors.text + '14' },
-          ]}
-        />
       </View>
     </GestureDetector>
   );
 }
 
-function WheelLabel({
-  label,
+function WheelIcon({
+  icon,
   i,
   offset,
   colors,
 }: {
-  label: string;
+  icon: (typeof WHEEL_SCREENS)[number]['icon'];
   i: number;
   offset: Animated.SharedValue<number>;
   colors: ReturnType<typeof useThemeColors>;
 }) {
   const style = useAnimatedStyle(() => {
     const d = Math.abs(i - offset.value);
-    return {
-      opacity: d > 1.4 ? 0 : 1 - Math.min(1, d) * 0.75,
-    };
+    return { opacity: d > 1 ? 0 : 1 - d, transform: [{ scale: 1 - Math.min(1, d) * 0.25 }] };
   });
-  const textStyle = useAnimatedStyle(() => ({
-    color: Math.abs(i - offset.value) < 0.5 ? colors.text : colors.textTertiary,
-  }));
   return (
-    <Animated.View style={[{ height: ROW_H, justifyContent: 'center', alignItems: 'center' }, style]}>
-      <Animated.Text
-        style={[
-          { fontSize: 11, fontWeight: '700', letterSpacing: 0.4 },
-          textStyle,
-        ]}
-      >
-        {label}
-      </Animated.Text>
+    <Animated.View style={[{ height: ROW_H, alignItems: 'center', justifyContent: 'center' }, style]}>
+      <Ionicons name={icon} size={21} color={colors.text} />
     </Animated.View>
+  );
+}
+
+/** Blurred, hairline-rimmed glass backing shared by the pill and the
+ *  round Profile button. */
+function Glass({ radius, isDark }: { radius: number; isDark: boolean }) {
+  return (
+    <View style={[StyleSheet.absoluteFillObject, { borderRadius: radius, overflow: 'hidden' }]}>
+      <BlurView tint={isDark ? 'dark' : 'light'} intensity={70} style={StyleSheet.absoluteFill} />
+      <View
+        pointerEvents="none"
+        style={[
+          StyleSheet.absoluteFillObject,
+          {
+            borderRadius: radius,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.1)',
+            backgroundColor: isDark ? 'rgba(22,23,29,0.35)' : 'rgba(250,249,245,0.4)',
+          },
+        ]}
+      />
+    </View>
   );
 }
 
@@ -194,75 +223,56 @@ export const WheelTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) 
     [navigation, state.routes],
   );
 
-  const blurTint: 'light' | 'dark' = isDark ? 'dark' : 'light';
+  const pillRadius = (BTN + PILL_PAD * 2) / 2;
+  const roundSize = BTN + PILL_PAD * 2;
+
+  const floating = FLOATING_ON.has(routeName ?? '');
 
   return (
     <View
       style={[
         styles.outer,
-        {
-          marginBottom: Math.max(insets.bottom, 10) + 6,
-          shadowColor: '#000',
-        },
+        { paddingBottom: Math.max(insets.bottom, 10) + BOTTOM_LIFT },
+        floating
+          ? { position: 'absolute', left: 0, right: 0, bottom: 0 }
+          : { backgroundColor: colors.background },
       ]}
+      pointerEvents="box-none"
     >
-      <View style={[StyleSheet.absoluteFillObject, { borderRadius: 26, overflow: 'hidden' }]}>
-        <BlurView
-          tint={blurTint}
-          intensity={70}
-          style={StyleSheet.absoluteFill}
-        />
-        <View
-          pointerEvents="none"
-          style={[
-            StyleSheet.absoluteFillObject,
-            {
-              borderRadius: 26,
-              borderWidth: StyleSheet.hairlineWidth,
-              borderColor: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.1)',
-              backgroundColor: isDark ? 'rgba(22,23,29,0.35)' : 'rgba(250,249,245,0.4)',
-            },
-          ]}
-        />
-      </View>
-
-      {/* Home / screen wheel */}
-      <View style={styles.section}>
-        <Ionicons name="home-outline" size={19} color={colors.textSecondary} style={{ marginBottom: 2 }} />
+      {/* Left pill: screen wheel + Chart */}
+      <View style={[styles.pill, styles.shadow, { padding: PILL_PAD, borderRadius: pillRadius }]}>
+        <Glass radius={pillRadius} isDark={isDark} />
         <ScreenWheel
           index={wheelIndex}
           colors={colors}
           onSelect={(i) => goTo(WHEEL_SCREENS[i].key)}
           onHomeTap={() => goTo('feed')}
         />
+        <TouchableOpacity
+          onPress={() => openChart()}
+          activeOpacity={0.6}
+          style={styles.btn}
+          accessibilityLabel="Open chart"
+        >
+          <Ionicons name="stats-chart-outline" size={21} color={colors.textSecondary} />
+        </TouchableOpacity>
       </View>
 
-      {/* Chart overlay */}
-      <TouchableOpacity
-        onPress={() => openChart()}
-        activeOpacity={0.7}
-        style={styles.section}
-        accessibilityLabel="Open chart"
-      >
-        <Ionicons name="stats-chart-outline" size={21} color={colors.text} />
-        <Text style={[styles.label, { color: colors.textSecondary }]}>Chart</Text>
-      </TouchableOpacity>
+      <View style={{ flex: 1 }} />
 
-      {/* Profile */}
+      {/* Right: detached round Profile button */}
       <TouchableOpacity
         onPress={() => goTo('profile')}
         activeOpacity={0.7}
-        style={styles.section}
+        style={[styles.shadow, { width: roundSize, height: roundSize, borderRadius: roundSize / 2, alignItems: 'center', justifyContent: 'center' }]}
         accessibilityLabel="Profile"
       >
+        <Glass radius={roundSize / 2} isDark={isDark} />
         <Ionicons
           name={isProfile ? 'person' : 'person-outline'}
           size={21}
           color={isProfile ? colors.text : colors.textSecondary}
         />
-        <Text style={[styles.label, { color: isProfile ? colors.text : colors.textSecondary }]}>
-          Profile
-        </Text>
       </TouchableOpacity>
     </View>
   );
@@ -271,35 +281,27 @@ export const WheelTabBar: React.FC<BottomTabBarProps> = ({ state, navigation }) 
 const styles = StyleSheet.create({
   outer: {
     flexDirection: 'row',
-    marginHorizontal: 18,
-    borderRadius: 26,
-    paddingVertical: 8,
-    // iOS shadow
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingTop: BAR_TOP_PAD,
+  },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  shadow: {
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18,
+    shadowOpacity: 0.16,
     shadowRadius: 12,
     elevation: 8,
   },
-  section: {
-    flex: 1,
+  btn: {
+    width: BTN,
+    height: BTN,
+    borderRadius: BTN / 2,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  label: {
-    fontSize: 10,
-    fontWeight: '600',
-    marginTop: 3,
-    letterSpacing: 0.3,
-  },
-  wheelWindow: {
-    height: ROW_H * 3,
-    width: 92,
-    overflow: 'hidden',
-  },
-  wheelHighlight: {
-    position: 'absolute',
-    left: 6,
-    right: 6,
-    borderRadius: 8,
   },
 });

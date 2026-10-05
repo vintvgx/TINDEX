@@ -9,9 +9,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useAlpacaPositionValues } from '@/hooks/queries/strategy/useAlpacaPositionValues';
-import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
+import { useLivePositionsData, type UseLivePositionsDataResult } from '@/common/components/strategy/LivePositionsSection';
 import { BriefPositionsBody } from '@/common/components/home/BriefPositionsBody';
-import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
+import { useWheelTabBarHeight } from '@/common/components/ui/WheelTabBar';
 
 interface Props {
   /**
@@ -26,7 +26,8 @@ interface Props {
 export default function PositionScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
   const [mode, setMode] = useState<'live' | 'paper'>('live');
-  const tabBarHeight = useFloatingTabBarHeight();
+  // The 0.7 tab bar floats over this screen — clear its full height.
+  const tabBarHeight = useWheelTabBarHeight() + 12;
 
   // Deep-link from a notification tap (see NotificationNavigationService) —
   // consume `paper_mode` exactly once, same pattern as orb.tsx's `section`
@@ -114,6 +115,27 @@ export default function PositionScreen({ embedded = false }: Props) {
 
   const toggleMode = () => setMode(m => (m === 'live' ? 'paper' : 'live'));
 
+  // Home (embedded): live AND paper together — live first — with each card
+  // badged LIVE/PAPER, instead of a toggle between the two lists.
+  const liveSide = useLivePositionsData('live');
+  const paperSide = useLivePositionsData('paper');
+  const combinedData: UseLivePositionsDataResult = useMemo(() => ({
+    isLoading: liveSide.isLoading || paperSide.isLoading,
+    filteredPositions: [...liveSide.filteredPositions, ...paperSide.filteredPositions],
+    displayedPositions: [...liveSide.displayedPositions, ...paperSide.displayedPositions],
+    hiddenCount: liveSide.hiddenCount + paperSide.hiddenCount,
+    showHidden: liveSide.showHidden,
+    setShowHidden: (v) => {
+      liveSide.setShowHidden(v);
+      paperSide.setShowHidden(v);
+    },
+    liveByStrategy: { ...liveSide.liveByStrategy, ...paperSide.liveByStrategy },
+    handleLiveUpdate: (id, d) => {
+      liveSide.handleLiveUpdate(id, d);
+      paperSide.handleLiveUpdate(id, d);
+    },
+  }), [liveSide, paperSide]);
+
   const positionsBody = (
     <BriefPositionsBody
       data={positionsData}
@@ -131,21 +153,13 @@ export default function PositionScreen({ embedded = false }: Props) {
   if (embedded) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
-        <View style={[styles.embeddedHeader, { borderBottomColor: colors.border }]}>
-          <View style={{ flex: 1 }} />
-          <TouchableOpacity
-            onPress={toggleMode}
-            hitSlop={8}
-            activeOpacity={0.75}
-            style={[styles.activeBadge, { backgroundColor: (mode === 'live' ? '#30D158' : '#FF9F0A') + '22' }]}
-          >
-            <View style={[styles.liveDot, { backgroundColor: mode === 'live' ? '#30D158' : '#FF9F0A' }]} />
-            <Text style={[styles.activeBadgeText, { color: mode === 'live' ? '#30D158' : '#FF9F0A' }]}>
-              {mode === 'live' ? 'LIVE' : 'PAPER'}
-            </Text>
-          </TouchableOpacity>
+        <View style={styles.content}>
+          <BriefPositionsBody
+            data={combinedData}
+            colors={colors}
+            emptySubtitle="Live and paper positions will appear here in real time"
+          />
         </View>
-        <View style={styles.content}>{positionsBody}</View>
       </View>
     );
   }
@@ -271,15 +285,6 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   headerSide:      { width: 36, alignItems: 'flex-start', justifyContent: 'center' },
-  embeddedHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    flexGrow: 0,
-    flexShrink: 0,
-  },
   headerCenter:    { flex: 1, alignItems: 'center', gap: 4 },
   title:           { fontSize: 18, fontWeight: '700' },
   activeBadge:     { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },

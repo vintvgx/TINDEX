@@ -47,6 +47,7 @@ export function ChartBottomToolbar({
   onToggleFollow,
   openPositionCount,
   tickerStatus,
+  bottomInset = 0,
 }: {
   tickers: string[];
   activeTicker: string;
@@ -68,6 +69,9 @@ export function ChartBottomToolbar({
   onToggleFollow: () => void;
   /** Per-ticker position/watch state for the wheel's letter badges. */
   tickerStatus?: Record<string, TickerStatus>;
+  /** Home-indicator inset, added as bottom padding so the bar's background
+   *  fills to the screen edge (no empty band under it). */
+  bottomInset?: number;
 }) {
   const colors = useThemeColors();
   const [sheet, setSheet] = useState<'technicals' | 'positioning' | 'settings' | null>(null);
@@ -88,7 +92,7 @@ export function ChartBottomToolbar({
 
   return (
     <>
-      <View style={[s.bar, { backgroundColor: colors.background, borderTopColor: colors.separator }]}>
+      <View style={[s.bar, { backgroundColor: colors.background, borderTopColor: colors.separator, paddingBottom: 5 + bottomInset }]}>
         {/* Fixed left — ticker wheel + period slider, never scrolls away */}
         <View style={s.fixed}>
           <TickerWheel
