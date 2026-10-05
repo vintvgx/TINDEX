@@ -538,9 +538,16 @@
     }
     lastCloses = candles.map(function (c) { return { t: c.t, c: c.c }; });
     lastCandles = candles.slice();
-    rebuildEmas();
-    rebuildVwap();
-    schedulePills();
+    // Indicators after paint: candles are the priority. EMAs/VWAP/pills
+    // follow on the next tick so the first frame isn't blocked by a full
+    // recompute over hundreds of bars.
+    var myCandles = lastCandles;
+    setTimeout(function () {
+      if (lastCandles !== myCandles) return; // a newer setData superseded this one
+      rebuildEmas();
+      rebuildVwap();
+      schedulePills();
+    }, 0);
   }
 
   // ── Timeframe EMA overlays (computed from the loaded bars) ─────────

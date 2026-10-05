@@ -188,8 +188,23 @@ export function ChartsContent({ initialTicker }: { initialTicker?: string | null
   const { prefs: displayPrefs, loaded: displayPrefsLoaded } = useChartDisplayPrefs();
   const useTVChart = displayPrefs.chartEngine !== 'legacy';
 
+  // Tabs stay mounted when you switch away, so the 30s history poll, 15s
+  // technicals refetch and zone queries would otherwise run forever in the
+  // background, heating the phone. Keep them alive 30s after blur (in case
+  // he's just peeking at another tab), then halt everything until refocus.
+  const tabFocused = useIsFocused();
+  const [chartLive, setChartLive] = useState(true);
+  useEffect(() => {
+    if (tabFocused) {
+      setChartLive(true);
+      return;
+    }
+    const t = setTimeout(() => setChartLive(false), 30_000);
+    return () => clearTimeout(t);
+  }, [tabFocused]);
+
   const { data: legacyHistoryResponse, isLoading: legacyHistoryLoading, isPlaceholderData: legacyHistoryIsStale } = useTickerHistoryQuery(
-    activeTicker, period, period === '1D' ? 30_000 : undefined, chartInterval, displayPrefs.showExtendedHours,
+    activeTicker, period, period === '1D' ? 30_000 : undefined, chartInterval, displayPrefs.showExtendedHours, chartLive,
   );
   const legacyHistoryData = legacyHistoryResponse?.data;
   // Lazy history for the TV chart: the period is only the initial viewport,
@@ -202,12 +217,16 @@ export function ChartsContent({ initialTicker }: { initialTicker?: string | null
     // for daily+ bars. Live ticks (streamPrice → TVChart) move the forming
     // candle between polls; the poll brings in real volume/corrections.
     pollMs: 30_000,
-    enabled: useTVChart,
+    enabled: useTVChart && chartLive,
     extendedHours: displayPrefs.showExtendedHours,
   });
   const historyData = useTVChart ? lazyHistory.data : legacyHistoryData;
   const historyLoading = useTVChart ? lazyHistory.isLoading : legacyHistoryLoading;
   const historyIsStale = useTVChart ? false : legacyHistoryIsStale;
+  // Staged loading: candles paint first, then the backend technicals (gate
+  // strip, zones, walls) fire. One thundering herd on every ticker switch
+  // is what made the chart feel strenuous — this staggers it.
+  const technicalsGo = chartLive && !!historyData;
   // useTickerHistoryQuery's placeholderData:keepPreviousData is meant for a
   // smooth PERIOD switch within the same ticker (shows the prior period's
   // bars while the new one loads) — but the same masking kicks in on a
@@ -350,6 +369,7 @@ export function ChartsContent({ initialTicker }: { initialTicker?: string | null
   const chart = useChartSettings({
     ticker: activeTicker, period, colors,
     canMarkWatchLevel: displayPrefs.chartEngine === 'legacy',
+    technicalsGo,
     hideStripRow: false,
     showDefaults: true,
     showCrosshairRow: displayPrefs.chartEngine === 'legacy',
@@ -385,7 +405,7 @@ export function ChartsContent({ initialTicker }: { initialTicker?: string | null
   }, [period]);
   // ZoneEngine's auto-detected support/resistance bands, same as the
   // full-screen chart — fetched only while "Auto-detected zones" is on.
-  const { zones: autoZones, context: zoneContext } = useChartAutoZones(activeTicker, chart.showAutoZones);
+  const { zones: autoZones, context: zoneContext } = useChartAutoZones(activeTicker, chart.showAutoZones && technicalsGo);
   // Today's morning-brief play for this ticker (if any) draws its if/then
   // levels — trigger, target, invalid — alongside the chart's own lines.
   const { data: morningBrief } = useMorningBrief();
