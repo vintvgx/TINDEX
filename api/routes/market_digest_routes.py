@@ -8,12 +8,9 @@ it has no dependency on the ORB engine state that file otherwise centers on.
 """
 
 import logging
-from datetime import date as _date
 
 from flask import Blueprint, jsonify, request
 
-from services.strategy.market_digest_generator import MarketDigestGenerator
-from services.strategy.notifier import StrategyNotifier
 from services.supabase.supabase_service import get_supabase_service
 
 logger = logging.getLogger(__name__)
@@ -64,27 +61,12 @@ def get_digest(digest_date: str):
 @market_digest_bp.route("/generate", methods=["POST"])
 def trigger_digest():
     """
-    Generate today's (or a given date's) digest and save it.
-    Body: { "date": "YYYY-MM-DD" } — defaults to today. No body is the
-    normal case: this is what the Supabase pg_cron job at 8:30 AM ET calls.
-    A manual on-demand call from the Daily Review screen passes the same
-    shape and gets the same one push notification on success.
+    DEPRECATED — the Claude-generated digest is retired. Digests are now
+    published by Muse's morning cron via POST /muse/market-digest/publish
+    (8 AM ET notify, 9 AM ET silent refresh). This route returns 410; the
+    app's regenerate button is removed in the digest UI redesign.
     """
-    body = request.get_json(silent=True) or {}
-    date_str = body.get("date")
-    try:
-        digest_date = _date.fromisoformat(date_str) if date_str else _date.today()
-    except ValueError:
-        return jsonify({"success": False, "error": f"Invalid date: {date_str}"}), 400
-
-    sb = get_supabase_service().client
-    gen = MarketDigestGenerator(sb)
-
-    try:
-        content = gen.generate(digest_date)
-        gen.save_to_supabase(digest_date, content)
-        StrategyNotifier(sb).notify_market_digest_ready(str(digest_date))
-        return jsonify({"success": True, "date": str(digest_date), "data": content})
-    except Exception as e:
-        logger.error("[market-digest/generate] Failed: %s", e, exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+    return jsonify({
+        "success": False,
+        "error": "Digest generation is deprecated — digests are now published by the morning cron.",
+    }), 410
