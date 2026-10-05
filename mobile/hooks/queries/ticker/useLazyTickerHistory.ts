@@ -180,22 +180,41 @@ export function useLazyTickerHistory(opts: {
     setExhausted(false);
     (async () => {
       try {
-        let data: TickerHistoryData;
         if (intraday) {
-          const days = INITIAL_DAYS[interval!] ?? 30;
+          const fullDays = INITIAL_DAYS[interval!] ?? 30;
           // Backend window is [start, end) — end on tomorrow so today's
           // bars are included on trading days.
           const end = addDays(etToday(), 1);
-          data = await postHistory(ticker, { interval, start: addDays(end, -days), end,
+          // Staged initial load: the full 60-day window is ~3,100 bars /
+          // ~330KB, which the phone then has to parse, inject into the
+          // WebView, and render — that's the "chart takes a while" wait.
+          // Stage 1 fetches just the last few days (~400 bars) so candles
+          // paint immediately; the on-chart indicators (EMAs up to 200,
+          // session-anchored VWAP) only need this much. Stage 2 backfills
+          // the rest for pan-back in the background.
+          const quickDays = Math.min(interval === "1m" ? 2 : 5, fullDays);
+          const quickStart = addDays(end, -quickDays);
+          const quick = await postHistory(ticker, { interval, start: quickStart, end,
             ...(extendedHours ? { extended_hours: true } : {}) }, ctrl.signal);
+          if (!dead) {
+            setBars(quick);
+            setIsLoading(false);
+          }
+          if (!dead && fullDays > quickDays) {
+            const rest = await postHistory(ticker, { interval, start: addDays(end, -fullDays), end: quickStart,
+              ...(extendedHours ? { extended_hours: true } : {}) }, ctrl.signal);
+            if (!dead) setBars((prev) => (prev ? mergeHistory(prev, rest) : rest));
+          }
+          if (dead) return;
+          // Bars already set above (stage 1 + stage 2); nothing left to do.
         } else {
           const fetchPeriod = MIN_DAILY_PERIOD[period] ?? period;
-          data = await postHistory(ticker, { period: fetchPeriod, ...(interval ? { interval } : {}),
+          const data = await postHistory(ticker, { period: fetchPeriod, ...(interval ? { interval } : {}),
             ...(extendedHours ? { extended_hours: true } : {}) }, ctrl.signal);
-        }
-        if (!dead) {
-          setBars(data);
-          setIsLoading(false);
+          if (!dead) {
+            setBars(data);
+            setIsLoading(false);
+          }
         }
       } catch (e) {
         // DOMException may not exist on Hermes — check the name instead.
