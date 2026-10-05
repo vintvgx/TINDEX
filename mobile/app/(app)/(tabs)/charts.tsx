@@ -62,16 +62,18 @@ const PINNED_TICKERS = ['SPY', 'IWM', 'QQQ'];
 // hardcoded — new toolbar rows can't silently eat the plot anymore.
 
 /**
- * Charts tab — a TradingView-style full-screen chart, reached via its own
- * bottom tab (not a pushed/modal screen, so the docked tab bar — see
- * CustomTabBar.tsx — stays visible below it). Cycles through followed
- * tickers and tickers with an open position; an expandable bar right above
- * the tab bar shows/hides that ticker's open positions (reusing the exact
- * same live-position data/actions as position.tsx and PriceChartFullScreen
- * — LivePositionsSection.tsx — so Edit/Exit here is the real thing, not a
- * separate reimplementation).
+ * Charts — a TradingView-style full-screen chart. Presented as a full-screen
+ * overlay from the Chart tab-bar button (see ChartOverlayContext), and still
+ * reachable as the `charts` route for deep links (?ticker=). Cycles through
+ * followed tickers and tickers with an open position; an expandable bar
+ * shows/hides that ticker's open positions (reusing the exact same
+ * live-position data/actions as position.tsx — so Edit/Exit here is the
+ * real thing, not a separate reimplementation).
+ *
+ * ChartsContent is the route-independent body; the default export is the
+ * thin route wrapper that feeds ?ticker= in as initialTicker.
  */
-export default function ChartsScreen() {
+export function ChartsContent({ initialTicker }: { initialTicker?: string | null }) {
   const colors = useThemeColors();
   const [contractsModalOpen, setContractsModalOpen] = useState(false);
 
@@ -139,11 +141,11 @@ export default function ChartsScreen() {
     setSelectedTicker(up);
   }, []);
   // A tapped zone-alert push lands here with ?ticker= (see
-  // NotificationNavigationService) — open that ticker's chart.
-  const { ticker: tickerParam } = useLocalSearchParams<{ ticker?: string }>();
+  // NotificationNavigationService) — open that ticker's chart. The overlay
+  // passes its ticker in as a prop instead of route params.
   useEffect(() => {
-    if (tickerParam) openTicker(tickerParam);
-  }, [tickerParam, openTicker]);
+    if (initialTicker) openTicker(initialTicker);
+  }, [initialTicker, openTicker]);
 
   // Unfollowed anywhere (this toolbar's star, or the ticker sheet's star in
   // TickerDetailSheet — both refresh userORBFollows) → drop it from the
@@ -804,3 +806,8 @@ export default function ChartsScreen() {
 }
 
 
+/** Route wrapper — feeds ?ticker= deep links into ChartsContent. */
+export default function ChartsScreen() {
+  const { ticker: tickerParam } = useLocalSearchParams<{ ticker?: string }>();
+  return <ChartsContent initialTicker={tickerParam ?? null} />;
+}
