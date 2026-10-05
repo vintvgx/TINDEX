@@ -1,1 +1,269 @@
-aW1wb3J0IFJlYWN0LCB7IHVzZU1lbW8sIHVzZVN0YXRlIH0gZnJvbSAncmVhY3QnOwppbXBvcnQgdHlwZSB7IENoYXJ0RGlzcGxheVNldHRpbmdzLCBDaGFydE1vZGUsIENoYXJ0UmVmZXJlbmNlTGluZSB9IGZyb20gJ0AvY29tbW9uL2NvbXBvbmVudHMvdGlja2VyL0FkdmFuY2VkUHJpY2VDaGFydCc7CmltcG9ydCB0eXBlIHsgQ2hhcnRTZXR0aW5nUm93LCBDaGFydFNldHRpbmdzU2VjdGlvbiB9IGZyb20gJ0AvY29tbW9uL2NvbXBvbmVudHMvdGlja2VyL0NoYXJ0Q29udHJvbFRvZ2dsZXMnOwppbXBvcnQgeyB1c2VDaGFydFRlY2huaWNhbHMsIHRlY2huaWNhbHNSZWZlcmVuY2VMaW5lcywgQ2hhcnRUZWNobmljYWxzSW5mbyB9IGZyb20gJ0AvY29tbW9uL2NvbXBvbmVudHMvdGlja2VyL0NoYXJ0VGVjaG5pY2Fscyc7CmltcG9ydCB7IHVzZVdhdGNoWm9uZXNWaXNpYmlsaXR5IH0gZnJvbSAnQC9ob29rcy91c2VXYXRjaFpvbmVzVmlzaWJpbGl0eSc7CmltcG9ydCB7IHVzZUF1dG9ab25lc1Zpc2liaWxpdHkgfSBmcm9tICdAL2hvb2tzL3VzZUF1dG9ab25lc1Zpc2liaWxpdHknOwppbXBvcnQgeyB1c2VDcm9zc2hhaXJFbmFibGVkIH0gZnJvbSAnQC9ob29rcy91c2VDcm9zc2hhaXJFbmFibGVkJzsKaW1wb3J0IHsgdXNlQ2hhcnREaXNwbGF5UHJlZnMgfSBmcm9tICdAL2hvb2tzL3VzZUNoYXJ0RGlzcGxheVByZWZzJzsKaW1wb3J0IHsgdXNlUG9zaXRpb25pbmcsIHR5cGUgUG9zaXRpb25pbmdSZWFkIH0gZnJvbSAnQC9ob29rcy9xdWVyaWVzL3RpY2tlci91c2VUaWNrZXJCcmllZic7CmltcG9ydCB0eXBlIHsgUHJpY2VQZXJpb2QgfSBmcm9tICdAL2NvbW1vbi90eXBlcy9ibG9nUG9zdHMvdGlja2VyJzsKaW1wb3J0IHsgQUxMT1dFRF9JTlRFUlZBTFMsIERFRkFVTFRfSU5URVJWQUwsIElOVEVSVkFMX0xBQkVMIH0gZnJvbSAnQC9saWIvY2hhcnRJbnRlcnZhbHMnOwppbXBvcnQgeyBQRVJJT0RfU1RPUFMsIGludGVydmFsQ3ljbGVGb3IgfSBmcm9tICdAL2NvbW1vbi9jb21wb25lbnRzL3RpY2tlci9UaW1lZnJhbWVDaGlwcyc7CgovKioKICogRXZlcnl0aGluZyBiZWhpbmQgdGhlIGNoYXJ0J3MgVGVjaG5pY2FscyBhbmQgc2V0dGluZ3MgbW9kYWxzLCBzaGFyZWQgYnkgdGhlIENoYXJ0cyB0YWIKICogYW5kIFByaWNlQ2hhcnRGdWxsU2NyZWVuOiBjaGFydCBzdHlsZSwgdGhlIHRlY2huaWNhbHMgb3ZlcmxheXMgKHNpZ25hbAogKiBzdHJpcCwgVldBUCwgZGFpbHkgRU1BcywgT1JCIGJhbmQpLCBzZXNzaW9uIGxpbmVzLCB3YXRjaCBsZXZlbHMsIGRhdGEKICogcG9pbnRzLCBwbHVzIHRoZSAibWFyayBhIHdhdGNoIGxldmVsIiBhY3Rpb24uIEV2ZXJ5IGRpc3BsYXkgb3B0aW9uCiAqIHBlcnNpc3RzIGFjcm9zcyBsYXVuY2hlczogc3R5bGUvdGVjaG5pY2Fscy9zZXNzaW9uIGxpbmVzIHZpYQogKiB1c2VDaGFydERpc3BsYXlQcmVmcyAoU2VjdXJlU3RvcmUpLCB3YXRjaCBsZXZlbHMgLyBhdXRvIHpvbmVzIC8gRGF0YQogKiBQb2ludHMgdmlhIHRoZWlyIG93biBob29rcy4gT25seSBXYXRjaCBtb2RlIGl0c2VsZiBpcyB0cmFuc2llbnQuCiAqLwppbnRlcmZhY2UgT3B0aW9ucyB7CiAgdGlja2VyOiBzdHJpbmcgfCBudWxsIHwgdW5kZWZpbmVkOwogIHBlcmlvZDogUHJpY2VQZXJpb2Q7CiAgY29sb3JzOiBhbnk7CiAgLyoqIE9ubHkgb2ZmZXIgIk1hcmsgYSB3YXRjaCBsZXZlbCIgd2hlcmUgdGhlIGNoYXJ0IGNhbiBhY3R1YWxseSBzYXZlIG9uZS4gKi8KICBjYW5NYXJrV2F0Y2hMZXZlbDogYm9vbGVhbjsKICAvKiogU2NyZWVuLXNwZWNpZmljIG92ZXJsYXkgcm93cyAoZS5nLiB0aGUgZnVsbC1zY3JlZW4gY2hhcnQncyBTL1IpLiAqLwogIGV4dHJhT3ZlcmxheVJvd3M/OiBDaGFydFNldHRpbmdSb3dbXTsKICAvKiogSGlkZSB0aGUgIlNpZ25hbCAmIFJTSSBzdHJpcCIgcm93IG9uIHNjcmVlbnMgdGhhdCBkb24ndCByZW5kZXIgdGhlCiAgICogIHN0cmlwICh0aGUgQ2hhcnRzIHRhYiBzaG93cyB0aGUgc2lnbmFsIGluIHRoZSB0aWNrZXIgdGFwZSBpbnN0ZWFkKS4gKi8KICBoaWRlU3RyaXBSb3c/OiBib29sZWFuOwogIC8qKiBTaG93IHRoZSAiRGVmYXVsdHMiIHNlY3Rpb24gKGxhdW5jaCBkYXRlIHJhbmdlICsgYmFyIHNpemUpLiAqLwogIHNob3dEZWZhdWx0cz86IGJvb2xlYW47CiAgLyoqIE9mZmVyIHRoZSAiRGF0YSBwb2ludHMiIChjcm9zc2hhaXIpIHRvZ2dsZS4gVGhlIFRWIGNoYXJ0IGFsd2F5cyBzaG93cwogICAqICBpdHMgY3Jvc3NoYWlyIG9uIHByZXNzLWFuZC1ob2xkLCBsaWtlIFRyYWRpbmdWaWV3LCBzbyB0aGUgQ2hhcnRzIHRhYgogICAqICBoaWRlcyB0aGlzIG9uIHRoYXQgZW5naW5lLiAqLwogIHNob3dDcm9zc2hhaXJSb3c/OiBib29sZWFuOwp9CgpleHBvcnQgZnVuY3Rpb24gdXNlQ2hhcnRTZXR0aW5ncyh7CiAgdGlja2VyLCBwZXJpb2QsIGNvbG9ycywgY2FuTWFya1dhdGNoTGV2ZWwsIGV4dHJhT3ZlcmxheVJvd3MgPSBbXSwgaGlkZVN0cmlwUm93ID0gZmFsc2UsIHNob3dEZWZhdWx0cyA9IGZhbHNlLCBzaG93Q3Jvc3NoYWlyUm93ID0gdHJ1ZSwKfTogT3B0aW9ucykgewogIGNvbnN0IHsgcHJlZnMsIHNldFByZWYgfSA9IHVzZUNoYXJ0RGlzcGxheVByZWZzKCk7CiAgY29uc3QgeyBtb2RlLCBzaG93U2Vzc2lvbkxpbmVzLCBzaG93RXh0ZW5kZWRIb3Vycywgc2hvd1N0cmlwLCBzaG93VndhcCwgc2hvd0VtYSwgc2hvd09yYiwgc2hvd1dhbGxzLAogICAgZW1hMjAsIGVtYTUwLCBlbWEyMDAsIGVtYTQwMCwgY2hhcnRFbmdpbmUsIGRlZmF1bHRQZXJpb2QgfSA9IHByZWZzOwogIGNvbnN0IGRlZmF1bHRJbnRlcnZhbE9wdGlvbnMgPSBpbnRlcnZhbEN5Y2xlRm9yKEFMTE9XRURfSU5URVJWQUxTW2RlZmF1bHRQZXJpb2RdKTsKICBjb25zdCBkZWZhdWx0SW50ZXJ2YWwgPSBwcmVmcy5kZWZhdWx0SW50ZXJ2YWwgJiYgZGVmYXVsdEludGVydmFsT3B0aW9ucy5pbmNsdWRlcyhwcmVmcy5kZWZhdWx0SW50ZXJ2YWwpCiAgICA/IHByZWZzLmRlZmF1bHRJbnRlcnZhbAogICAgOiBERUZBVUxUX0lOVEVSVkFMW2RlZmF1bHRQZXJpb2RdOwogIGNvbnN0IHNldE1vZGUgPSAodjogQ2hhcnRNb2RlIHwgbnVsbCkgPT4gc2V0UHJlZignbW9kZScsIHYpOwogIGNvbnN0IHNldFNob3dTZXNzaW9uTGluZXMgPSAodjogYm9vbGVhbikgPT4gc2V0UHJlZignc2hvd1Nlc3Npb25MaW5lcycsIHYpOwogIGNvbnN0IHNldFNob3dFeHRlbmRlZEhvdXJzID0gKHY6IGJvb2xlYW4pID0+IHNldFByZWYoJ3Nob3dFeHRlbmRlZEhvdXJzJywgdik7CiAgY29uc3Qgc2V0U2hvd1N0cmlwID0gKHY6IGJvb2xlYW4pID0+IHNldFByZWYoJ3Nob3dTdHJpcCcsIHYpOwogIGNvbnN0IHNldFNob3dWd2FwID0gKHY6IGJvb2xlYW4pID0+IHNldFByZWYoJ3Nob3dWd2FwJywgdik7CiAgY29uc3Qgc2V0U2hvd0VtYSA9ICh2OiBib29sZWFuKSA9PiBzZXRQcmVmKCdzaG93RW1hJywgdik7CiAgY29uc3Qgc2V0U2hvd09yYiA9ICh2OiBib29sZWFuKSA9PiBzZXRQcmVmKCdzaG93T3JiJywgdik7CiAgY29uc3Qgc2V0U2hvd1dhbGxzID0gKHY6IGJvb2xlYW4pID0+IHNldFByZWYoJ3Nob3dXYWxscycsIHYpOwogIC8vIE9wdGlvbnMgd2FsbHMgYXJlIGFuIGludHJhZGF5IHJlYWQgKDBEVEUgLyBuZWFyLXRlcm0gT0kpIOKAlCBkcmF3biBvbiB0aGUKICAvLyAxRCBhbmQgMVcgdmlld3Mgb25seSwgcmVmcmVzaGVkIG9uIHRoZSBzYW1lIH45MHMgY2FkZW5jZSBhcyB6b25lcy4KICBjb25zdCB3YWxsc0FjdGl2ZSA9IHNob3dXYWxscyAmJiAocGVyaW9kID09PSAnMUQnIHx8IHBlcmlvZCA9PT0gJzFXJyk7CiAgY29uc3QgcG9zaXRpb25pbmcgPSB1c2VQb3NpdGlvbmluZyh0aWNrZXIsICdDQUxMJywgbnVsbCwgd2FsbHNBY3RpdmUpOwogIGNvbnN0IFt3YXRjaE1vZGUsIHNldFdhdGNoTW9kZV0gPSB1c2VTdGF0ZShmYWxzZSk7CiAgY29uc3QgW21vZGFsT3Blbiwgc2V0TW9kYWxPcGVuXSA9IHVzZVN0YXRlKGZhbHNlKTsKICBjb25zdCB7IHZpc2libGU6IHNob3dXYXRjaFpvbmVzLCBzZXRWaXNpYmxlOiBzZXRTaG93V2F0Y2hab25lcyB9ID0gdXNlV2F0Y2hab25lc1Zpc2liaWxpdHkoKTsKICAvLyBVbmxpa2Ugc2hvd1dhdGNoWm9uZXMsIHRoZSBjYWxsZXIgKFByaWNlQ2hhcnRGdWxsU2NyZWVuKSBuZWVkcyB0aGlzCiAgLy8gdmFsdWUgaXRzZWxmIOKAlCBmZXRjaGluZyBab25lRW5naW5lJ3Mgem9uZXMgaXMgYSByZWFsIChpZiA5MHMtY2FjaGVkKQogIC8vIHlmaW5hbmNlIGNhbGwsIGFuZCBzaG91bGQgYmUgZ2F0ZWQgb24gdGhlIHRvZ2dsZSB0aGUgc2FtZSB3YXkgUy9SJ3MKICAvLyBvd24gZmV0Y2ggaXMgZ2F0ZWQgb24gc2hvd1NSLCBzbyBpdCdzIHJldHVybmVkIGJlbG93IHJhdGhlciB0aGFuIGxlZnQKICAvLyBwdXJlbHkgaW50ZXJuYWwgdG8gdGhlIGhvb2svQWR2YW5jZWRQcmljZUNoYXJ0IHBhaXIuCiAgY29uc3QgeyB2aXNpYmxlOiBzaG93QXV0b1pvbmVzLCBzZXRWaXNpYmxlOiBzZXRTaG93QXV0b1pvbmVzIH0gPSB1c2VBdXRvWm9uZXNWaXNpYmlsaXR5KCk7CiAgY29uc3QgeyBlbmFibGVkOiBjcm9zc2hhaXJFbmFibGVkLCBzZXRFbmFibGVkOiBzZXRDcm9zc2hhaXJFbmFibGVkIH0gPSB1c2VDcm9zc2hhaXJFbmFibGVkKCk7CgogIC8vIE9ubHkgcG9sbCB3aGlsZSBzb21ldGhpbmcgYWN0dWFsbHkgdXNlcyB0aGUgZGF0YS4KICBjb25zdCB0ZWNobmljYWxzID0gdXNlQ2hhcnRUZWNobmljYWxzKHRpY2tlciwgc2hvd1N0cmlwIHx8IHNob3dWd2FwIHx8IHNob3dFbWEgfHwgbW9kYWxPcGVuKTsKCiAgY29uc3QgcmVmZXJlbmNlTGluZXM6IENoYXJ0UmVmZXJlbmNlTGluZVtdID0gdXNlTWVtbygKICAgICgpID0+IFsKICAgICAgLi4udGVjaG5pY2Fsc1JlZmVyZW5jZUxpbmVzKHRlY2huaWNhbHMuZGF0YSwgcGVyaW9kLCB7IHZ3YXA6IHNob3dWd2FwLCBlbWE6IHNob3dFbWEgfSksCiAgICAgIC4uLih3YWxsc0FjdGl2ZSA/IG9wdGlvbnNXYWxsTGluZXMocG9zaXRpb25pbmcuZGF0YT8uZGF0YSA/PyBudWxsKSA6IFtdKSwKICAgIF0sCiAgICBbdGVjaG5pY2Fscy5kYXRhLCBwZXJpb2QsIHNob3dWd2FwLCBzaG93RW1hLCB3YWxsc0FjdGl2ZSwgcG9zaXRpb25pbmcuZGF0YV0sCiAgKTsKCiAgY29uc3QgY2hhcnRTZXR0aW5nczogQ2hhcnREaXNwbGF5U2V0dGluZ3MgPSB7IG1vZGUsIHNob3dTZXNzaW9uTGluZXMsIHdhdGNoTW9kZSwgb25XYXRjaE1vZGVDaGFuZ2U6IHNldFdhdGNoTW9kZSB9OwoKICBjb25zdCBkZWZhdWx0TW9kZTogQ2hhcnRNb2RlID0gcGVyaW9kID09PSAnMUQnIHx8IHBlcmlvZCA9PT0gJzFXJyA/ICdjYW5kbGUnIDogJ2xpbmUnOwogIGNvbnN0IHNlY3Rpb25zOiBDaGFydFNldHRpbmdzU2VjdGlvbltdID0gWwogICAgLi4uKHNob3dEZWZhdWx0cyA/IFt7CiAgICAgIHRpdGxlOiAnVGltZWZyYW1lIMK3IGFsc28gdXNlZCBvbiBsYXVuY2gnLAogICAgICByb3dzOiBbCiAgICAgICAgewogICAgICAgICAga2luZDogJ3NlZ21lbnQnIGFzIGNvbnN0LCBrZXk6ICdkZWZhdWx0UGVyaW9kJywgbGFiZWw6ICdEYXRlIHJhbmdlJywKICAgICAgICAgIHZhbHVlOiBkZWZhdWx0UGVyaW9kLAogICAgICAgICAgb3B0aW9uczogUEVSSU9EX1NUT1BTLm1hcChwID0+ICh7IHZhbHVlOiBwLCBsYWJlbDogcCB9KSksCiAgICAgICAgICBvbkNoYW5nZTogKHY6IHN0cmluZykgPT4gewogICAgICAgICAgICBzZXRQcmVmKCdkZWZhdWx0UGVyaW9kJywgdiBhcyBQcmljZVBlcmlvZCk7CiAgICAgICAgICAgIC8vIEtlZXAgdGhlIHNhdmVkIGJhciBzaXplIG9ubHkgaWYgdGhlIG5ldyByYW5nZSBzdXBwb3J0cyBpdC4KICAgICAgICAgICAgaWYgKHByZWZzLmRlZmF1bHRJbnRlcnZhbCAmJiAhQUxMT1dFRF9JTlRFUlZBTFNbdiBhcyBQcmljZVBlcmlvZF0uaW5jbHVkZXMocHJlZnMuZGVmYXVsdEludGVydmFsKSkgewogICAgICAgICAgICAgIHNldFByZWYoJ2RlZmF1bHRJbnRlcnZhbCcsIG51bGwpOwogICAgICAgICAgICB9CiAgICAgICAgICB9LAogICAgICAgIH0sCiAgICAgICAgewogICAgICAgICAga2luZDogJ3NlZ21lbnQnIGFzIGNvbnN0LCBrZXk6ICdkZWZhdWx0SW50ZXJ2YWwnLCBsYWJlbDogJ0JhciBzaXplJywKICAgICAgICAgIHZhbHVlOiBkZWZhdWx0SW50ZXJ2YWwsCiAgICAgICAgICBvcHRpb25zOiBkZWZhdWx0SW50ZXJ2YWxPcHRpb25zLm1hcChpID0+ICh7IHZhbHVlOiBpLCBsYWJlbDogSU5URVJWQUxfTEFCRUxbaV0gPz8gaSB9KSksCiAgICAgICAgICBvbkNoYW5nZTogKHY6IHN0cmluZykgPT4gc2V0UHJlZignZGVmYXVsdEludGVydmFsJywgdiksCiAgICAgICAgfSwKICAgICAgXSwKICAgIH1dIDogW10pLAogICAgewogICAgICB0aXRsZTogJ0NoYXJ0IGVuZ2luZScsCiAgICAgIHJvd3M6IFt7CiAgICAgICAga2luZDogJ3NlZ21lbnQnLCBrZXk6ICdlbmdpbmUnLCBsYWJlbDogJ0VuZ2luZScsCiAgICAgICAgdmFsdWU6IGNoYXJ0RW5naW5lLAogICAgICAgIG9wdGlvbnM6IFsKICAgICAgICAgIHsgdmFsdWU6ICd0dicsIGxhYmVsOiAnVHJhZGluZ1ZpZXcnLCBpY29uOiAnc3RhdHMtY2hhcnQtb3V0bGluZScgfSwKICAgICAgICAgIHsgdmFsdWU6ICdsZWdhY3knLCBsYWJlbDogJ0xlZ2FjeScsIGljb246ICdhbmFseXRpY3Mtb3V0bGluZScgfSwKICAgICAgICBdLAogICAgICAgIG9uQ2hhbmdlOiB2ID0+IHNldFByZWYoJ2NoYXJ0RW5naW5lJywgdiBhcyAndHYnIHwgJ2xlZ2FjeScpLAogICAgICB9XSwKICAgIH0sCiAgICB7CiAgICAgIHRpdGxlOiAnTW92aW5nIGF2ZXJhZ2VzJywKICAgICAgcm93czogKFsKICAgICAgICBbMjAsICcjNEE5RUZGJywgZW1hMjAsICdlbWEyMCddLAogICAgICAgIFs1MCwgJyNGNTlFMEInLCBlbWE1MCwgJ2VtYTUwJ10sCiAgICAgICAgWzIwMCwgJyNCMzg4RkYnLCBlbWEyMDAsICdlbWEyMDAnXSwKICAgICAgICBbNDAwLCAnI0ExODg3RicsIGVtYTQwMCwgJ2VtYTQwMCddLAogICAgICBdIGFzIGNvbnN0KS5tYXAoKFtwZXJpb2QsIGNvbG9yLCB2YWx1ZSwga2V5XSkgPT4gKHsKICAgICAgICBraW5kOiAndG9nZ2xlJyBhcyBjb25zdCwga2V5OiBgZW1hLSR7cGVyaW9kfWAsIGljb246ICd0cmVuZGluZy11cC1vdXRsaW5lJyBhcyBjb25zdCwKICAgICAgICBsYWJlbDogYEVNQSAke3BlcmlvZH1gLAogICAgICAgIGRlc2NyaXB0aW9uOiBgT2YgdGhlIHZpc2libGUgYmFycyR7cGVyaW9kID49IDIwMCA/ICcg4oCUIG5lZWRzIGRlZXAgaGlzdG9yeScgOiAnJ31gLAogICAgICAgIHZhbHVlLCBvbkNoYW5nZTogKHY6IGJvb2xlYW4pID0+IHNldFByZWYoa2V5LCB2KSwKICAgICAgICBjb2xvciwKICAgICAgfSkpLAogICAgfSwKICAgIC4uLihjYW5NYXJrV2F0Y2hMZXZlbCA/IFt7CiAgICAgIHRpdGxlOiAnV2F0Y2gnLAogICAgICByb3dzOiBbewogICAgICAgIGtpbmQ6ICdhY3Rpb24nIGFzIGNvbnN0LCBrZXk6ICdtYXJrJywgaWNvbjogJ2V5ZS1vdXRsaW5lJyBhcyBjb25zdCwgbGFiZWw6ICdNYXJrIGEgd2F0Y2ggbGV2ZWwnLAogICAgICAgIGRlc2NyaXB0aW9uOiAnRHJhZyB1cC9kb3duIG9uIHRoZSBjaGFydCDCtyB0YXAgdGhlIGV5ZSBpbiB0aGUgY2hhcnQgdG9vbGJhciB3aGVuIGRvbmUnLAogICAgICAgIG9uUHJlc3M6ICgpID0+IHsgc2V0U2hvd1dhdGNoWm9uZXModHJ1ZSk7IHNldFdhdGNoTW9kZSh0cnVlKTsgfSwKICAgICAgfV0sCiAgICB9XSA6IFtdKSwKICAgIHsKICAgICAgdGl0bGU6ICdDaGFydCBzdHlsZScsCiAgICAgIHJvd3M6IFt7CiAgICAgICAga2luZDogJ3NlZ21lbnQnLCBrZXk6ICdtb2RlJywgbGFiZWw6ICdTdHlsZScsCiAgICAgICAgdmFsdWU6IG1vZGUgPz8gZGVmYXVsdE1vZGUsCiAgICAgICAgb3B0aW9uczogWwogICAgICAgICAgeyB2YWx1ZTogJ2NhbmRsZScsIGxhYmVsOiAnQ2FuZGxlcycsIGljb246ICdzdGF0cy1jaGFydC1vdXRsaW5lJyB9LAogICAgICAgICAgeyB2YWx1ZTogJ2xpbmUnLCBsYWJlbDogJ0xpbmUnLCBpY29uOiAnYW5hbHl0aWNzLW91dGxpbmUnIH0sCiAgICAgICAgXSwKICAgICAgICBvbkNoYW5nZTogdiA9PiBzZXRNb2RlKHYgYXMgQ2hhcnRNb2RlKSwKICAgICAgfV0sCiAgICB9LAogICAgewogICAgICB0aXRsZTogJ1RlY2huaWNhbHMnLAogICAgICByb3dzOiBbCiAgICAgICAgLi4uKGhpZGVTdHJpcFJvdyA/IFtdIDogW3sga2luZDogJ3RvZ2dsZScgYXMgY29uc3QsIGtleTogJ3N0cmlwJywgaWNvbjogJ3B1bHNlLW91dGxpbmUnIGFzIGNvbnN0LCBsYWJlbDogJ1NpZ25hbCAmIFJTSSBzdHJpcCcsCiAgICAgICAgICBkZXNjcmlwdGlvbjogJ0JVWSBDQUxMIC8gQlVZIFBVVCAvIFdBSVQgcGlsbCB3aXRoIFRyZW5kLCBSU0ksIFZXQVAgYW5kIE9SQiBjaGlwcyBhYm92ZSB0aGUgY2hhcnQnLAogICAgICAgICAgdmFsdWU6IHNob3dTdHJpcCwgb25DaGFuZ2U6IHNldFNob3dTdHJpcCB9XSksCiAgICAgICAgeyBraW5kOiAndG9nZ2xlJywga2V5OiAndndhcCcsIGljb246ICdnaXQtY29tbWl0LW91dGxpbmUnLCBsYWJlbDogJ1ZXQVAgbGluZScsCiAgICAgICAgICBkZXNjcmlwdGlvbjogJ1Nlc3Npb24gVldBUCAoMUQgb25seSknLCB2YWx1ZTogc2hvd1Z3YXAsIG9uQ2hhbmdlOiBzZXRTaG93VndhcCB9LAogICAgICAgIHsga2luZDogJ3RvZ2dsZScsIGtleTogJ2VtYScsIGljb246ICd0cmVuZGluZy11cC1vdXRsaW5lJywgbGFiZWw6ICdUcmVuZDogZGFpbHkgRU1BLTIwIC8gNTAnLAogICAgICAgICAgZGVzY3JpcHRpb246ICdPbiAxRCwgc2hvd24gb25seSB3aGVuIHdpdGhpbiAxLjUlIG9mIHByaWNlJywgdmFsdWU6IHNob3dFbWEsIG9uQ2hhbmdlOiBzZXRTaG93RW1hIH0sCiAgICAgICAgeyBraW5kOiAndG9nZ2xlJywga2V5OiAnb3JiJywgaWNvbjogJ3Jlc2l6ZS1vdXRsaW5lJywgbGFiZWw6ICdPUkIgcmFuZ2UnLAogICAgICAgICAgZGVzY3JpcHRpb246ICdPcGVuaW5nIHJhbmdlIDk6MzDigJM5OjQ1IEVUICgxRCBvbmx5KScsIHZhbHVlOiBzaG93T3JiLCBvbkNoYW5nZTogc2V0U2hvd09yYiB9LAogICAgICBdLAogICAgfSwKICAgIHsKICAgICAgdGl0bGU6ICdPdmVybGF5cycsCiAgICAgIHJvd3M6IFsKICAgICAgICB7IGtpbmQ6ICd0b2dnbGUnLCBrZXk6ICdzZXNzaW9uJywgaWNvbjogJ3BhcnRseS1zdW5ueS1vdXRsaW5lJywgbGFiZWw6ICdQcmUgLyBwb3N0LW1hcmtldCBsaW5lcycsCiAgICAgICAgICBkZXNjcmlwdGlvbjogJ1ByZS1tYXJrZXQsIGNsb3NlLCBwb3N0LW1hcmtldCBhbmQgb3Zlcm5pZ2h0IHByaWNlcyAoMUQgb25seSknLAogICAgICAgICAgdmFsdWU6IHNob3dTZXNzaW9uTGluZXMsIG9uQ2hhbmdlOiBzZXRTaG93U2Vzc2lvbkxpbmVzIH0sCiAgICAgICAgeyBraW5kOiAndG9nZ2xlJywga2V5OiAnZXh0ZW5kZWRIb3VycycsIGljb246ICd0aW1lLW91dGxpbmUnLCBsYWJlbDogJ0V4dGVuZGVkLWhvdXJzIGNhbmRsZXMnLAogICAgICAgICAgZGVzY3JpcHRpb246ICdTaG93IHByZW1hcmtldCBjYW5kbGVzIG9uIDFELCBub3QganVzdCB0aGUgOTozMOKAkzQ6MDAgc2Vzc2lvbicsCiAgICAgICAgICB2YWx1ZTogc2hvd0V4dGVuZGVkSG91cnMsIG9uQ2hhbmdlOiBzZXRTaG93RXh0ZW5kZWRIb3VycyB9LAogICAgICAgIHsga2luZDogJ3RvZ2dsZScsIGtleTogJ3pvbmVzJywgaWNvbjogJ2xheWVycy1vdXRsaW5lJywgbGFiZWw6ICdTaG93IHdhdGNoIGxldmVscycsCiAgICAgICAgICBkZXNjcmlwdGlvbjogJ1Nob3cgb3IgaGlkZSB5b3VyIHNhdmVkIGxldmVscyBvbiB0aGUgY2hhcnQgKHVzZSBNYXJrIGEgd2F0Y2ggbGV2ZWwgYWJvdmUgdG8gYWRkIG9uZSknLCB2YWx1ZTogc2hvd1dhdGNoWm9uZXMsIG9uQ2hhbmdlOiBzZXRTaG93V2F0Y2hab25lcyB9LAogICAgICAgIHsga2luZDogJ3RvZ2dsZScsIGtleTogJ2F1dG9ab25lcycsIGljb246ICdncmlkLW91dGxpbmUnLCBsYWJlbDogJ0F1dG8tZGV0ZWN0ZWQgem9uZXMnLAogICAgICAgICAgZGVzY3JpcHRpb246ICdTdXBwb3J0L3Jlc2lzdGFuY2UgWm9uZUVuZ2luZSBmaW5kcyBhdXRvbWF0aWNhbGx5LCBzY29yZWQgYnkgY29uZmx1ZW5jZSAoc2VwYXJhdGUgZnJvbSB5b3VyIG93biB3YXRjaCBsZXZlbHMpJywKICAgICAgICAgIHZhbHVlOiBzaG93QXV0b1pvbmVzLCBvbkNoYW5nZTogc2V0U2hvd0F1dG9ab25lcyB9LAogICAgICAgIHsga2luZDogJ3RvZ2dsZScsIGtleTogJ3dhbGxzJywgaWNvbjogJ3Jlb3JkZXItZm91ci1vdXRsaW5lJywgbGFiZWw6ICdPcHRpb25zIHdhbGxzJywKICAgICAgICAgIGRlc2NyaXB0aW9uOiAnVG9wIGNhbGwvcHV0IG9wZW4taW50ZXJlc3Qgc3RyaWtlcyAoZG90dGVkKSBhbmQgZXhwaXJ5LWRheSBtYXggcGFpbiDigJQgMUQvMVcsIH4xNSBtaW4gZGVsYXllZCcsCiAgICAgICAgICB2YWx1ZTogc2hvd1dhbGxzLCBvbkNoYW5nZTogc2V0U2hvd1dhbGxzIH0sCiAgICAgICAgLi4uZXh0cmFPdmVybGF5Um93cywKICAgICAgICAuLi4oc2hvd0Nyb3NzaGFpclJvdyA/IFt7IGtpbmQ6ICd0b2dnbGUnIGFzIGNvbnN0LCBrZXk6ICdjcm9zc2hhaXInLCBpY29uOiAnbG9jYXRlLW91dGxpbmUnIGFzIGNvbnN0LCBsYWJlbDogJ0RhdGEgcG9pbnRzJywKICAgICAgICAgIGRlc2NyaXB0aW9uOiAnVGFwLWFuZC1ob2xkIHRoZSBjaGFydCB0byBpbnNwZWN0IGFuIGV4YWN0IHByaWNlL3RpbWUnLAogICAgICAgICAgdmFsdWU6IGNyb3NzaGFpckVuYWJsZWQsIG9uQ2hhbmdlOiBzZXRDcm9zc2hhaXJFbmFibGVkIH1dIDogW10pLAogICAgICBdLAogICAgfSwKICBdOwoKICBjb25zdCB0ZWNobmljYWxzQ29udGVudCA9ICgKICAgIDxDaGFydFRlY2huaWNhbHNJbmZvIGNoZWNrPXt0ZWNobmljYWxzLmRhdGF9IGlzTG9hZGluZz17dGVjaG5pY2Fscy5pc0xvYWRpbmd9IGVycm9yPXt0ZWNobmljYWxzLmVycm9yfSBjb2xvcnM9e2NvbG9yc30gLz4KICApOwoKICAvLyBUaW1lZnJhbWUgRU1BIG92ZXJsYXlzIGZvciB0aGUgVFYgY2hhcnQg4oCUIGNvbXB1dGVkIGluLXBhZ2UgZnJvbSB0aGUKICAvLyBsb2FkZWQgYmFycyAobm8gYmFja2VuZCBjaGFuZ2UpLgogIC8vIE1lbW9pemVkOiBUVkNoYXJ0IHJlLXNlbmRzIChhbmQgdGhlIHBhZ2UgcmVidWlsZHMgZXZlcnkgRU1BIHNlcmllcykgb24KICAvLyBlYWNoIG5ldyBpZGVudGl0eSwgc28gYSBmcmVzaCBhcnJheSBwZXIgcmVuZGVyIG1lYW50IGEgZnVsbCByZWJ1aWxkIG9uCiAgLy8gZXZlcnkgbGl2ZS1wcmljZSB0aWNrLgogIGNvbnN0IGVtYU92ZXJsYXlzID0gdXNlTWVtbygoKSA9PiBbCiAgICB7IHBlcmlvZDogMjAsIGNvbG9yOiAnIzRBOUVGRicsIHZpc2libGU6IGVtYTIwIH0sCiAgICB7IHBlcmlvZDogNTAsIGNvbG9yOiAnI0Y1OUUwQicsIHZpc2libGU6IGVtYTUwIH0sCiAgICB7IHBlcmlvZDogMjAwLCBjb2xvcjogJyNCMzg4RkYnLCB2aXNpYmxlOiBlbWEyMDAgfSwKICAgIHsgcGVyaW9kOiA0MDAsIGNvbG9yOiAnI0ExODg3RicsIHZpc2libGU6IGVtYTQwMCB9LAogIF0sIFtlbWEyMCwgZW1hNTAsIGVtYTIwMCwgZW1hNDAwXSk7CgogIHJldHVybiB7CiAgICB0ZWNobmljYWxzLAogICAgc2hvd1N0cmlwLAogICAgc2hvd09yYiwKICAgIHNob3dBdXRvWm9uZXMsCiAgICByZWZlcmVuY2VMaW5lcywKICAgIGNoYXJ0U2V0dGluZ3MsCiAgICBzZWN0aW9ucywKICAgIHRlY2huaWNhbHNDb250ZW50LAogICAgZW1hT3ZlcmxheXMsCiAgICBjaGFydEVuZ2luZSwKICAgIGNyb3NzaGFpckVuYWJsZWQsCiAgICBkZWZhdWx0UGVyaW9kLAogICAgZGVmYXVsdEludGVydmFsLAogICAgc2hvd0V4dGVuZGVkSG91cnMsCiAgICBvblRlY2huaWNhbHNPcGVuQ2hhbmdlOiBzZXRNb2RhbE9wZW4sCiAgfTsKfQoKLy8gRmFpbnQgZG90dGVkIHdhbGwgbGluZXMg4oCUIGdyYXkgZm9yIGNhbGwgd2FsbHMsIHB1cnBsZSBmb3IgcHV0IHdhbGxzLCBzbwovLyB0aGV5IG5ldmVyIHJlYWQgYXMgem9uZSBiYW5kcyAoc2hhZGVkKSBvciB1c2VyIGxldmVscyAoc29saWQpIOKAlCBwbHVzIGFuCi8vIGFtYmVyIG1heC1wYWluIGxpbmUgb24gdGhlIGZyb250IGV4cGlyeSdzIGV4cGlyYXRpb24gZGF5IG9ubHkuIFdhbGxzIG1vcmUKLy8gdGhhbiBXQUxMX01BWF9ESVNUQU5DRV9QQ1QgZnJvbSBwcmljZSBhcmUgc2tpcHBlZDogZXZlcnkgcmVmZXJlbmNlIGxpbmUgaXMKLy8gZm9sZGVkIGludG8gdGhlIHktYXhpcywgYW5kIGEgZmFyIHN0cmlrZSB3b3VsZCBmbGF0dGVuIHRoZSBjYW5kbGVzLgpjb25zdCBXQUxMX0NBTExfQ09MT1IgPSAnIzhFOEU5Myc7CmNvbnN0IFdBTExfUFVUX0NPTE9SID0gJyNBNzhCRkEnOwpjb25zdCBNQVhfUEFJTl9DT0xPUiA9ICcjRjVBNTI0JzsKY29uc3QgV0FMTF9NQVhfRElTVEFOQ0VfUENUID0gMC4wMzsKCmZ1bmN0aW9uIGZtdE9pKG46IG51bWJlcikgewogIHJldHVybiBuID49IDEwMDAgPyBgJHsobiAvIDEwMDApLnRvRml4ZWQoMSl9a2AgOiBTdHJpbmcobik7Cn0KCmZ1bmN0aW9uIGV0VG9kYXkoKSB7CiAgcmV0dXJuIG5ldyBEYXRlKCkudG9Mb2NhbGVEYXRlU3RyaW5nKCdlbi1DQScsIHsgdGltZVpvbmU6ICdBbWVyaWNhL05ld19Zb3JrJyB9KTsKfQoKZXhwb3J0IGZ1bmN0aW9uIG9wdGlvbnNXYWxsTGluZXMocDogUG9zaXRpb25pbmdSZWFkIHwgbnVsbCk6IENoYXJ0UmVmZXJlbmNlTGluZVtdIHsKICBjb25zdCBzcG90ID0gcD8uaW5wdXRzLnNwb3Q7CiAgaWYgKCFwIHx8ICFzcG90KSByZXR1cm4gW107CiAgY29uc3QgbmVhciA9IChrOiBudW1iZXIpID0+IE1hdGguYWJzKGsgLSBzcG90KSAvIHNwb3QgPD0gV0FMTF9NQVhfRElTVEFOQ0VfUENUOwogIGNvbnN0IGZtdFN0cmlrZSA9IChrOiBudW1iZXIpID0+IGAkJHtrLnRvRml4ZWQoMil9YDsKICBjb25zdCBsaW5lczogQ2hhcnRSZWZlcmVuY2VMaW5lW10gPSBbCiAgICAuLi5wLmlucHV0cy5jYWxsX3dhbGxzLmZpbHRlcih3ID0+IG5lYXIody5zdHJpa2UpKS5tYXAodyA9PiAoewogICAgICBsYWJlbDogYCR7Zm10U3RyaWtlKHcuc3RyaWtlKX0gwrcgJHtmbXRPaSh3Lm9wZW5faW50ZXJlc3QpfWAsIHByaWNlOiB3LnN0cmlrZSwgY29sb3I6IFdBTExfQ0FMTF9DT0xPUiwgZGFzaDogJzIsNCcsCiAgICB9KSksCiAgICAuLi5wLmlucHV0cy5wdXRfd2FsbHMuZmlsdGVyKHcgPT4gbmVhcih3LnN0cmlrZSkpLm1hcCh3ID0+ICh7CiAgICAgIGxhYmVsOiBgJHtmbXRTdHJpa2Uody5zdHJpa2UpfSDCtyAke2ZtdE9pKHcub3Blbl9pbnRlcmVzdCl9YCwgcHJpY2U6IHcuc3RyaWtlLCBjb2xvcjogV0FMTF9QVVRfQ09MT1IsIGRhc2g6ICcyLDQnLAogICAgfSkpLAogIF07CiAgaWYgKHAuaW5wdXRzLm1heF9wYWluICE9IG51bGwgJiYgcC5pbnB1dHMuZnJvbnRfZXhwaXJ5ID09PSBldFRvZGF5KCkgJiYgbmVhcihwLmlucHV0cy5tYXhfcGFpbikpIHsKICAgIGxpbmVzLnB1c2goeyBsYWJlbDogYE1heCBwYWluICR7Zm10U3RyaWtlKHAuaW5wdXRzLm1heF9wYWluKX1gLCBwcmljZTogcC5pbnB1dHMubWF4X3BhaW4sIGNvbG9yOiBNQVhfUEFJTl9DT0xPUiwgZGFzaDogJzIsNCcgfSk7CiAgfQogIHJldHVybiBsaW5lczsKfQo=
+import React, { useMemo, useState } from 'react';
+import type { ChartDisplaySettings, ChartMode, ChartReferenceLine } from '@/common/components/ticker/AdvancedPriceChart';
+import type { ChartSettingRow, ChartSettingsSection } from '@/common/components/ticker/ChartControlToggles';
+import { useChartTechnicals, technicalsReferenceLines, ChartTechnicalsInfo } from '@/common/components/ticker/ChartTechnicals';
+import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
+import { useAutoZonesVisibility } from '@/hooks/useAutoZonesVisibility';
+import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
+import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
+import { usePositioning, type PositioningRead } from '@/hooks/queries/ticker/useTickerBrief';
+import type { PricePeriod } from '@/common/types/blogPosts/ticker';
+import { ALLOWED_INTERVALS, DEFAULT_INTERVAL, INTERVAL_LABEL } from '@/lib/chartIntervals';
+import { PERIOD_STOPS, intervalCycleFor } from '@/common/components/ticker/TimeframeChips';
+
+/**
+ * Everything behind the chart's Technicals and settings modals, shared by the Charts tab
+ * and PriceChartFullScreen: chart style, the technicals overlays (signal
+ * strip, VWAP, daily EMAs, ORB band), session lines, watch levels, data
+ * points, plus the "mark a watch level" action. Every display option
+ * persists across launches: style/technicals/session lines via
+ * useChartDisplayPrefs (SecureStore), watch levels / auto zones / Data
+ * Points via their own hooks. Only Watch mode itself is transient.
+ */
+interface Options {
+  ticker: string | null | undefined;
+  period: PricePeriod;
+  colors: any;
+  /** Only offer "Mark a watch level" where the chart can actually save one. */
+  canMarkWatchLevel: boolean;
+  /** Screen-specific overlay rows (e.g. the full-screen chart's S/R). */
+  extraOverlayRows?: ChartSettingRow[];
+  /** Hide the "Signal & RSI strip" row on screens that don't render the
+   *  strip (the Charts tab shows the signal in the ticker tape instead). */
+  hideStripRow?: boolean;
+  /** Show the "Defaults" section (launch date range + bar size). */
+  showDefaults?: boolean;
+  /** Offer the "Data points" (crosshair) toggle. The TV chart always shows
+   *  its crosshair on press-and-hold, like TradingView, so the Charts tab
+   *  hides this on that engine. */
+  showCrosshairRow?: boolean;
+}
+
+export function useChartSettings({
+  ticker, period, colors, canMarkWatchLevel, extraOverlayRows = [], hideStripRow = false, showDefaults = false, showCrosshairRow = true,
+}: Options) {
+  const { prefs, setPref } = useChartDisplayPrefs();
+  const { mode, showSessionLines, showExtendedHours, showStrip, showVwap, showEma, showOrb, showWalls,
+    ema20, ema50, ema200, ema400, chartEngine, defaultPeriod } = prefs;
+  const defaultIntervalOptions = intervalCycleFor(ALLOWED_INTERVALS[defaultPeriod]);
+  const defaultInterval = prefs.defaultInterval && defaultIntervalOptions.includes(prefs.defaultInterval)
+    ? prefs.defaultInterval
+    : DEFAULT_INTERVAL[defaultPeriod];
+  const setMode = (v: ChartMode | null) => setPref('mode', v);
+  const setShowSessionLines = (v: boolean) => setPref('showSessionLines', v);
+  const setShowExtendedHours = (v: boolean) => setPref('showExtendedHours', v);
+  const setShowStrip = (v: boolean) => setPref('showStrip', v);
+  const setShowVwap = (v: boolean) => setPref('showVwap', v);
+  const setShowEma = (v: boolean) => setPref('showEma', v);
+  const setShowOrb = (v: boolean) => setPref('showOrb', v);
+  const setShowWalls = (v: boolean) => setPref('showWalls', v);
+  // Options walls are an intraday read (0DTE / near-term OI) — drawn on the
+  // 1D and 1W views only, refreshed on the same ~90s cadence as zones.
+  const wallsActive = showWalls && (period === '1D' || period === '1W');
+  const positioning = usePositioning(ticker, 'CALL', null, wallsActive);
+  const [watchMode, setWatchMode] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const { visible: showWatchZones, setVisible: setShowWatchZones } = useWatchZonesVisibility();
+  // Unlike showWatchZones, the caller (PriceChartFullScreen) needs this
+  // value itself — fetching ZoneEngine's zones is a real (if 90s-cached)
+  // yfinance call, and should be gated on the toggle the same way S/R's
+  // own fetch is gated on showSR, so it's returned below rather than left
+  // purely internal to the hook/AdvancedPriceChart pair.
+  const { visible: showAutoZones, setVisible: setShowAutoZones } = useAutoZonesVisibility();
+  const { enabled: crosshairEnabled, setEnabled: setCrosshairEnabled } = useCrosshairEnabled();
+
+  // Only poll while something actually uses the data.
+  const technicals = useChartTechnicals(ticker, showStrip || showVwap || showEma || modalOpen);
+
+  const referenceLines: ChartReferenceLine[] = useMemo(
+    () => [
+      ...technicalsReferenceLines(technicals.data, period, { vwap: showVwap, ema: showEma }),
+      ...(wallsActive ? optionsWallLines(positioning.data?.data ?? null) : []),
+    ],
+    [technicals.data, period, showVwap, showEma, wallsActive, positioning.data],
+  );
+
+  const chartSettings: ChartDisplaySettings = { mode, showSessionLines, watchMode, onWatchModeChange: setWatchMode };
+
+  const defaultMode: ChartMode = period === '1D' || period === '1W' ? 'candle' : 'line';
+  const sections: ChartSettingsSection[] = [
+    ...(showDefaults ? [{
+      title: 'Timeframe · also used on launch',
+      rows: [
+        {
+          kind: 'segment' as const, key: 'defaultPeriod', label: 'Date range',
+          value: defaultPeriod,
+          options: PERIOD_STOPS.map(p => ({ value: p, label: p })),
+          onChange: (v: string) => {
+            setPref('defaultPeriod', v as PricePeriod);
+            // Keep the saved bar size only if the new range supports it.
+            if (prefs.defaultInterval && !ALLOWED_INTERVALS[v as PricePeriod].includes(prefs.defaultInterval)) {
+              setPref('defaultInterval', null);
+            }
+          },
+        },
+        {
+          kind: 'segment' as const, key: 'defaultInterval', label: 'Bar size',
+          value: defaultInterval,
+          options: defaultIntervalOptions.map(i => ({ value: i, label: INTERVAL_LABEL[i] ?? i })),
+          onChange: (v: string) => setPref('defaultInterval', v),
+        },
+      ],
+    }] : []),
+    {
+      title: 'Chart engine',
+      rows: [{
+        kind: 'segment', key: 'engine', label: 'Engine',
+        value: chartEngine,
+        options: [
+          { value: 'tv', label: 'TradingView', icon: 'stats-chart-outline' },
+          { value: 'legacy', label: 'Legacy', icon: 'analytics-outline' },
+        ],
+        onChange: v => setPref('chartEngine', v as 'tv' | 'legacy'),
+      }],
+    },
+    {
+      title: 'Moving averages',
+      rows: ([
+        [20, '#4A9EFF', ema20, 'ema20'],
+        [50, '#F59E0B', ema50, 'ema50'],
+        [200, '#B388FF', ema200, 'ema200'],
+        [400, '#A1887F', ema400, 'ema400'],
+      ] as const).map(([period, color, value, key]) => ({
+        kind: 'toggle' as const, key: `ema-${period}`, icon: 'trending-up-outline' as const,
+        label: `EMA ${period}`,
+        description: `Of the visible bars${period >= 200 ? ' — needs deep history' : ''}`,
+        value, onChange: (v: boolean) => setPref(key, v),
+        color,
+      })),
+    },
+    ...(canMarkWatchLevel ? [{
+      title: 'Watch',
+      rows: [{
+        kind: 'action' as const, key: 'mark', icon: 'eye-outline' as const, label: 'Mark a watch level',
+        description: 'Drag up/down on the chart · tap the eye in the chart toolbar when done',
+        onPress: () => { setShowWatchZones(true); setWatchMode(true); },
+      }],
+    }] : []),
+    {
+      title: 'Chart style',
+      rows: [{
+        kind: 'segment', key: 'mode', label: 'Style',
+        value: mode ?? defaultMode,
+        options: [
+          { value: 'candle', label: 'Candles', icon: 'stats-chart-outline' },
+          { value: 'line', label: 'Line', icon: 'analytics-outline' },
+        ],
+        onChange: v => setMode(v as ChartMode),
+      }],
+    },
+    {
+      title: 'Technicals',
+      rows: [
+        ...(hideStripRow ? [] : [{ kind: 'toggle' as const, key: 'strip', icon: 'pulse-outline' as const, label: 'Signal & RSI strip',
+          description: 'BUY CALL / BUY PUT / WAIT pill with Trend, RSI, VWAP and ORB chips above the chart',
+          value: showStrip, onChange: setShowStrip }]),
+        { kind: 'toggle', key: 'vwap', icon: 'git-commit-outline', label: 'VWAP line',
+          description: 'Session VWAP (1D only)', value: showVwap, onChange: setShowVwap },
+        { kind: 'toggle', key: 'ema', icon: 'trending-up-outline', label: 'Trend: daily EMA-20 / 50',
+          description: 'On 1D, shown only when within 1.5% of price', value: showEma, onChange: setShowEma },
+        { kind: 'toggle', key: 'orb', icon: 'resize-outline', label: 'ORB range',
+          description: 'Opening range 9:30–9:45 ET (1D only)', value: showOrb, onChange: setShowOrb },
+      ],
+    },
+    {
+      title: 'Overlays',
+      rows: [
+        { kind: 'toggle', key: 'session', icon: 'partly-sunny-outline', label: 'Pre / post-market lines',
+          description: 'Pre-market, close, post-market and overnight prices (1D only)',
+          value: showSessionLines, onChange: setShowSessionLines },
+        { kind: 'toggle', key: 'extendedHours', icon: 'time-outline', label: 'Extended-hours candles',
+          description: 'Show premarket candles on 1D, not just the 9:30–4:00 session',
+          value: showExtendedHours, onChange: setShowExtendedHours },
+        { kind: 'toggle', key: 'zones', icon: 'layers-outline', label: 'Show watch levels',
+          description: 'Show or hide your saved levels on the chart (use Mark a watch level above to add one)', value: showWatchZones, onChange: setShowWatchZones },
+        { kind: 'toggle', key: 'autoZones', icon: 'grid-outline', label: 'Auto-detected zones',
+          description: 'Support/resistance ZoneEngine finds automatically, scored by confluence (separate from your own watch levels)',
+          value: showAutoZones, onChange: setShowAutoZones },
+        { kind: 'toggle', key: 'walls', icon: 'reorder-four-outline', label: 'Options walls',
+          description: 'Top call/put open-interest strikes (dotted) and expiry-day max pain — 1D/1W, ~15 min delayed',
+          value: showWalls, onChange: setShowWalls },
+        ...extraOverlayRows,
+        ...(showCrosshairRow ? [{ kind: 'toggle' as const, key: 'crosshair', icon: 'locate-outline' as const, label: 'Data points',
+          description: 'Tap-and-hold the chart to inspect an exact price/time',
+          value: crosshairEnabled, onChange: setCrosshairEnabled }] : []),
+      ],
+    },
+  ];
+
+  const technicalsContent = (
+    <ChartTechnicalsInfo check={technicals.data} isLoading={technicals.isLoading} error={technicals.error} colors={colors} />
+  );
+
+  // Timeframe EMA overlays for the TV chart — computed in-page from the
+  // loaded bars (no backend change).
+  // Memoized: TVChart re-sends (and the page rebuilds every EMA series) on
+  // each new identity, so a fresh array per render meant a full rebuild on
+  // every live-price tick.
+  const emaOverlays = useMemo(() => [
+    { period: 20, color: '#4A9EFF', visible: ema20 },
+    { period: 50, color: '#F59E0B', visible: ema50 },
+    { period: 200, color: '#B388FF', visible: ema200 },
+    { period: 400, color: '#A1887F', visible: ema400 },
+  ], [ema20, ema50, ema200, ema400]);
+
+  return {
+    technicals,
+    showStrip,
+    showOrb,
+    showAutoZones,
+    referenceLines,
+    chartSettings,
+    sections,
+    technicalsContent,
+    emaOverlays,
+    chartEngine,
+    crosshairEnabled,
+    defaultPeriod,
+    defaultInterval,
+    showExtendedHours,
+    onTechnicalsOpenChange: setModalOpen,
+  };
+}
+
+// Faint dotted wall lines — gray for call walls, purple for put walls, so
+// they never read as zone bands (shaded) or user levels (solid) — plus an
+// amber max-pain line on the front expiry's expiration day only. Walls more
+// than WALL_MAX_DISTANCE_PCT from price are skipped: every reference line is
+// folded into the y-axis, and a far strike would flatten the candles.
+const WALL_CALL_COLOR = '#8E8E93';
+const WALL_PUT_COLOR = '#A78BFA';
+const MAX_PAIN_COLOR = '#F5A524';
+const WALL_MAX_DISTANCE_PCT = 0.03;
+
+function fmtOi(n: number) {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+function etToday() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
+export function optionsWallLines(p: PositioningRead | null): ChartReferenceLine[] {
+  const spot = p?.inputs.spot;
+  if (!p || !spot) return [];
+  const near = (k: number) => Math.abs(k - spot) / spot <= WALL_MAX_DISTANCE_PCT;
+  const fmtStrike = (k: number) => `$${k.toFixed(2)}`;
+  const lines: ChartReferenceLine[] = [
+    ...p.inputs.call_walls.filter(w => near(w.strike)).map(w => ({
+      label: `${fmtStrike(w.strike)} · ${fmtOi(w.open_interest)}`, price: w.strike, color: WALL_CALL_COLOR, dash: '2,4',
+    })),
+    ...p.inputs.put_walls.filter(w => near(w.strike)).map(w => ({
+      label: `${fmtStrike(w.strike)} · ${fmtOi(w.open_interest)}`, price: w.strike, color: WALL_PUT_COLOR, dash: '2,4',
+    })),
+  ];
+  if (p.inputs.max_pain != null && p.inputs.front_expiry === etToday() && near(p.inputs.max_pain)) {
+    lines.push({ label: `Max pain ${fmtStrike(p.inputs.max_pain)}`, price: p.inputs.max_pain, color: MAX_PAIN_COLOR, dash: '2,4' });
+  }
+  return lines;
+}
