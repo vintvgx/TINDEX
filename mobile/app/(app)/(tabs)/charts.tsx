@@ -376,6 +376,10 @@ export function ChartsContent({ initialTicker, topInset }: {
     ticker: activeTicker, period, colors,
     canMarkWatchLevel: displayPrefs.chartEngine === 'legacy',
     technicalsGo,
+    // The tape's signal pill reads chart.technicals — with the strip, VWAP
+    // and EMA toggles all off (their defaults) the query never ran and the
+    // pill silently disappeared.
+    needSignal: true,
     hideStripRow: false,
     showDefaults: true,
     showCrosshairRow: displayPrefs.chartEngine === 'legacy',

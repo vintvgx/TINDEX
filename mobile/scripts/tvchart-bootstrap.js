@@ -529,6 +529,20 @@
   var lastLogicalRange = null;
   var lastHistoryRequest = 0;
   var historyExhausted = false;
+  // Initial viewport of the current ticker/range, and whether the user has
+  // touched the chart since it was framed. Until they do, data that lands
+  // after the fit (the staged load's stage-2 backfill) re-applies it.
+  var frameFrom = null;
+  var touchedSinceFit = false;
+
+  function applyFrame(candles) {
+    try { chart.timeScale().fitContent(); } catch (e) {}
+    if (frameFrom && candles.length) {
+      try {
+        chart.timeScale().setVisibleRange({ from: frameFrom, to: candles[candles.length - 1].t + 120 });
+      } catch (e) {}
+    }
+  }
 
   function setData(msg) {
     var candles = msg.candles || [];
@@ -569,25 +583,24 @@
     }));
     if (msg.fit) {
       hidePendingAlert(); // new ticker/range — a pending ⊕ no longer applies
-      try { chart.timeScale().fitContent(); } catch (e) {}
       // The date range is only the initial viewport now — frame it after fit.
-      if (msg.visibleFrom && candles.length) {
-        try {
-          chart.timeScale().setVisibleRange({ from: msg.visibleFrom, to: candles[candles.length - 1].t + 120 });
-        } catch (e) {}
-      }
+      frameFrom = msg.visibleFrom || null;
+      touchedSinceFit = false;
+      applyFrame(candles);
       lastLogicalRange = null;
       lastHistoryRequest = 0;
       historyExhausted = false;
     } else if (msg.preserve && prevCount > 0) {
-      // Backfill prepended bars on the left: shift the visible window right
-      // by the added count so the viewport doesn't jump.
-      var n = candles.length - prevCount;
-      if (n > 0 && lastLogicalRange) {
-        try {
-          chart.timeScale().setVisibleLogicalRange({ from: lastLogicalRange.from + n, to: lastLogicalRange.to + n });
-        } catch (e) {}
-      }
+      // Backfill prepended bars on the left. LWC already keeps the view
+      // anchored to the newest bar (its right offset is unchanged), so the
+      // same bars stay on screen with no help. The old manual shift by the
+      // added count moved it a second time — n bars past the last candle,
+      // leaving a couple of candles pinned to the left edge of an empty
+      // chart after every staged load.
+      // Untouched since the fit: the first stage may have been narrower
+      // than the requested range (1W over a 5-day stage 1) — re-frame now
+      // that the full range is here.
+      if (!touchedSinceFit) applyFrame(candles);
     } else if (atLiveEdge || !savedRange) {
       try { chart.timeScale().scrollToRealTime(); } catch (e) {}
     } else {
@@ -902,6 +915,7 @@
     var crosshairShownThisPress = false;
     var touchStartX = 0, touchStartY = 0;
     chartEl.addEventListener('touchstart', function (e) {
+      touchedSinceFit = true;
       longPressArmed = false;
       lastCrosshairPrice = null;
       crosshairShownThisPress = false;

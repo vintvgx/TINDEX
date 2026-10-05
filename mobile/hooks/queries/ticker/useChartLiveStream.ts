@@ -28,7 +28,10 @@ export function useChartLiveStream(
   ticker: string | undefined,
   enabled: boolean = true,
 ): UseChartLiveStreamResult {
-  const [price, setPrice] = useState<number | null>(null);
+  // Tagged with the socket's ticker: on a ticker switch the previous
+  // ticker's last price would otherwise be returned for a render (until the
+  // effect cleanup nulls it) and seed the new chart's forming candle.
+  const [tick, setTick] = useState<{ url: string; price: number } | null>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -71,7 +74,7 @@ export function useChartLiveStream(
         const msg = JSON.parse(event.data as string);
         if (!mountedRef.current) return;
         if (msg.type === 'price_update' && typeof msg.price === 'number') {
-          setPrice(msg.price);
+          setTick({ url: wsUrl, price: msg.price });
         }
       } catch {
         // ignore malformed frames (e.g. keepalive pings)
@@ -112,7 +115,7 @@ export function useChartLiveStream(
     wsRef.current?.close();
     wsRef.current = null;
     setConnected(false);
-    setPrice(null);
+    setTick(null);
     setError(false);
   }, []);
 
@@ -129,5 +132,6 @@ export function useChartLiveStream(
     // re-runs exactly when the target socket changes (no reconnect storm).
   }, [connect, disconnect, enabled, wsUrl]);
 
+  const price = tick && tick.url === wsUrl ? tick.price : null;
   return { price, connected, error };
 }

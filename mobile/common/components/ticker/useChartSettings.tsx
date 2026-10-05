@@ -40,11 +40,14 @@ interface Options {
   /** Staged loading: backend technicals (gate strip, zones, walls) only
    *  fire after the candles have painted. */
   technicalsGo?: boolean;
+  /** Fetch the technicals check even with every technicals overlay off —
+   *  the Charts tab's ticker tape shows its BUY CALL / BUY PUT signal. */
+  needSignal?: boolean;
 }
 
 export function useChartSettings({
   ticker, period, colors, canMarkWatchLevel, extraOverlayRows = [], hideStripRow = false, showDefaults = false, showCrosshairRow = true,
-  technicalsGo = true,
+  technicalsGo = true, needSignal = false,
 }: Options) {
   const { prefs, setPref } = useChartDisplayPrefs();
   const { mode, showSessionLines, showExtendedHours, showStrip, showVwap, showEma, showOrb, showWalls,
@@ -77,7 +80,7 @@ export function useChartSettings({
   const { enabled: crosshairEnabled, setEnabled: setCrosshairEnabled } = useCrosshairEnabled();
 
   // Only poll while something actually uses the data.
-  const technicals = useChartTechnicals(ticker, technicalsGo && (showStrip || showVwap || showEma || modalOpen));
+  const technicals = useChartTechnicals(ticker, technicalsGo && (needSignal || showStrip || showVwap || showEma || modalOpen));
 
   const referenceLines: ChartReferenceLine[] = useMemo(
     () => [

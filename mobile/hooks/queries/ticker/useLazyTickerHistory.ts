@@ -164,13 +164,17 @@ export function useLazyTickerHistory(opts: {
 }): LazyHistory {
   const { ticker, period, interval, pollMs, enabled = true, extendedHours = false } = opts;
   const [bars, setBars] = useState<TickerHistoryData | null>(null);
+  // Which ticker|period|interval|extendedHours `bars` belong to. Set in the
+  // same commit that clears `bars`, so for the one render between a key
+  // change and the load effect running, the old key's bars are withheld
+  // instead of reaching a freshly mounted chart as the new ticker's data.
+  const [barsKey, setBarsKey] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isError, setIsError] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [exhausted, setExhausted] = useState(false);
   const live = useRef({ bars: null as TickerHistoryData | null, loadingMore: false, exhausted: false });
   live.current = { bars, loadingMore, exhausted };
-  const prevTicker = useRef(ticker);
   // Generation: bumped every time the initial-load effect (re)runs. An
   // in-flight backfill or tail poll from the previous ticker/period/interval
   // must not merge its bars — or its exhausted flag — into the new one.
@@ -182,6 +186,7 @@ export function useLazyTickerHistory(opts: {
   const loadedKey = useRef<string | null>(null);
 
   const intraday = !!interval && INTRADAY.has(interval);
+  const currentKey = `${ticker}|${period}|${interval ?? ""}|${extendedHours}`;
 
   // ── Initial load ──────────────────────────────────────────────────
   useEffect(() => {
@@ -190,17 +195,17 @@ export function useLazyTickerHistory(opts: {
       setIsLoading(false);
       return;
     }
-    const key = `${ticker}|${period}|${interval ?? ""}|${extendedHours}`;
+    const key = currentKey;
     if (loadedKey.current === key && live.current.bars?.dates?.length) return;
     loadedKey.current = null;
-    const tickerChanged = prevTicker.current !== ticker;
-    prevTicker.current = ticker;
     // Bump the generation: any in-flight backfill or tail poll captured the
     // previous value and will discard its result below.
     gen.current += 1;
-    // New ticker → blank chart (never flash the previous ticker's bars);
-    // period/interval switch keeps old bars until the new ones land.
-    if (tickerChanged) setBars(null);
+    // Any key change starts from a clean slate. Keeping the old bars on a
+    // period/interval switch let stage 2 merge the new interval's bars into
+    // the previous interval's series when stage 1 came back empty.
+    setBars(null);
+    setBarsKey(key);
     let dead = false;
     const ctrl = new AbortController();
     setIsLoading(true);
@@ -279,7 +284,7 @@ export function useLazyTickerHistory(opts: {
       dead = true;
       ctrl.abort();
     };
-  }, [enabled, ticker, period, interval, intraday, extendedHours]);
+  }, [enabled, ticker, period, interval, intraday, extendedHours, currentKey]);
 
   // ── Backfill ──────────────────────────────────────────────────────
   const loadMore = useCallback(() => {
@@ -349,5 +354,15 @@ export function useLazyTickerHistory(opts: {
     return () => clearInterval(id);
   }, [enabled, pollMs, ticker, interval, intraday, extendedHours]);
 
-  return { data: bars, isLoading, isError, loadMore, loadingMore, exhausted };
+  const fresh = barsKey === currentKey;
+  return {
+    data: fresh ? bars : null,
+    // Key just changed and the load effect hasn't run yet — report loading
+    // rather than an idle, empty chart.
+    isLoading: isLoading || (enabled && !!ticker && !fresh),
+    isError,
+    loadMore,
+    loadingMore,
+    exhausted,
+  };
 }

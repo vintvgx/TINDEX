@@ -281,8 +281,13 @@ export function TVChart({
   // today's bar once the poll/history has it.
   const barSec = data?.interval ? INTERVAL_SECONDS[data.interval] : undefined;
   const isDailyBars = data?.interval === '1d';
-  const [liveBar, setLiveBar] = useState<TVCandle | null>(null);
-  useEffect(() => { setLiveBar(null); }, [resetKey]);
+  // The forming bar is tied to the series it was seeded from (key +
+  // interval). Before, a bar seeded from the previous ticker's last candle
+  // survived the switch — the new ticker's history then landed on the same
+  // time bucket and inherited its high/low (IWM's candle reaching SPY's
+  // $774), blowing out the price scale.
+  const liveKey = `${resetKey ?? ''}|${data?.interval ?? ''}`;
+  const [liveBar, setLiveBar] = useState<(TVCandle & { k: string }) | null>(null);
   useEffect(() => {
     if (livePrice == null || !isFinite(livePrice) || livePrice <= 0 || !baseCandles?.length) return;
     if (!barSec && !isDailyBars) return;
@@ -301,30 +306,32 @@ export function TVChart({
       bucket = baseLast.t;
     }
     const p = livePrice;
+    const k = liveKey;
     setLiveBar(prev => {
       if (bucket < baseLast.t) return null; // history already past this bar
-      if (prev && prev.t === bucket) {
+      if (prev && prev.k === k && prev.t === bucket) {
         return { ...prev, h: Math.max(prev.h, p), l: Math.min(prev.l, p), c: p };
       }
       if (bucket === baseLast.t) {
-        return { ...baseLast, h: Math.max(baseLast.h, p), l: Math.min(baseLast.l, p), c: p };
+        return { ...baseLast, h: Math.max(baseLast.h, p), l: Math.min(baseLast.l, p), c: p, k };
       }
-      return { t: bucket, o: p, h: p, l: p, c: p, v: 0 };
+      return { t: bucket, o: p, h: p, l: p, c: p, v: 0, k };
     });
-  }, [livePrice, baseCandles, barSec, isDailyBars]);
+  }, [livePrice, baseCandles, barSec, isDailyBars, liveKey]);
 
   // History + the live bar: replaces the matching bar (keeping the poll's
   // volume and the wider of the two high/low) or appends a new one.
   const candles: TVCandle[] | null = useMemo(() => {
-    if (!baseCandles?.length || !liveBar) return baseCandles;
+    if (!baseCandles?.length || !liveBar || liveBar.k !== liveKey) return baseCandles;
     const last = baseCandles[baseCandles.length - 1];
     if (liveBar.t < last.t) return baseCandles;
     if (liveBar.t === last.t) {
       const merged = { ...last, h: Math.max(last.h, liveBar.h), l: Math.min(last.l, liveBar.l), c: liveBar.c };
       return [...baseCandles.slice(0, -1), merged];
     }
-    return [...baseCandles, liveBar];
-  }, [baseCandles, liveBar]);
+    const { k: _k, ...bar } = liveBar;
+    return [...baseCandles, bar];
+  }, [baseCandles, liveBar, liveKey]);
   const ohlc = !!(data?.opens && data?.highs && data?.lows) && mode !== 'line';
 
   // Fit the viewport exactly once per resetKey — on the first setData that
@@ -351,10 +358,21 @@ export function TVChart({
     !!candles?.length && prevFirstT.current != null && candles[0].t < prevFirstT.current;
 
   // The date range is only the initial viewport — frame it on fit.
+  // 1D on intraday bars frames the latest bar's trading day (from its first
+  // bar, premarket included) instead of a rolling 24h that starts in the
+  // middle of yesterday — with a ~30-bar floor so an early-morning chart
+  // isn't three stretched candles.
   const visibleFrom = useMemo(() => {
     if (!visibleSeconds || !candles?.length) return undefined;
-    return candles[candles.length - 1].t - visibleSeconds;
-  }, [visibleSeconds, candles]);
+    const last = candles[candles.length - 1];
+    if (visibleSeconds <= 86_400 && barSec) {
+      const day = etParts(last.t).date;
+      let i = candles.length - 1;
+      while (i > 0 && etParts(candles[i - 1].t).date === day) i--;
+      return Math.min(candles[i].t, last.t - 30 * barSec);
+    }
+    return last.t - visibleSeconds;
+  }, [visibleSeconds, candles, barSec]);
 
   // Full setData only when the history itself changed (load, poll,
   // backfill, ticker/range switch, style). A live tick that only moved the
