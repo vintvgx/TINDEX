@@ -5,6 +5,7 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
 import { SlGraceBadge } from '@/common/components/strategy/SlGraceBadge';
 import type { SlGraceInfo } from '@/common/components/strategy/SlGraceBadge';
+import { AddContractModal } from '@/common/components/strategy/AddContractModal';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
 import { PositionEditSheet } from '../PositionEditSheet';
@@ -85,6 +86,7 @@ function DynamicPositionRow({ pos: p, colors, onEdit }: {
   pos: PositionEntry; colors: any; onEdit: () => void;
 }) {
   const { data: live } = useStrategyLivePrice(p.strategy_id, p.active);
+  const [addOpen, setAddOpen] = useState(false);
 
   const dirColor = p.direction === 'PUT' ? colors.error : colors.success;
   const pnl = live?.pnl ?? p.unrealized_pnl ?? 0;
@@ -119,6 +121,7 @@ function DynamicPositionRow({ pos: p, colors, onEdit }: {
   const tpHitChip = tp2Hit ? 'TP2 ✓' : tp1Hit ? 'TP1 ✓' : null;
 
   return (
+    <>
     <TouchableOpacity
       activeOpacity={0.7}
       onPress={onEdit}
@@ -148,6 +151,16 @@ function DynamicPositionRow({ pos: p, colors, onEdit }: {
           {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
           {pnlPct != null ? ` (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%)` : ''}
         </Text>
+        {/* Add to position — same AddContractModal the chart rows use. */}
+        <TouchableOpacity
+          onPress={(e) => { e.stopPropagation(); setAddOpen(true); }}
+          hitSlop={8}
+          activeOpacity={0.7}
+          style={{ padding: 4, borderRadius: 12, backgroundColor: colors.text + '0F' }}
+          accessibilityLabel={`Add to ${p.ticker} position`}
+        >
+          <Ionicons name="add" size={15} color={colors.textSecondary} />
+        </TouchableOpacity>
         <Ionicons name="chevron-forward" size={13} color={colors.textTertiary} />
       </View>
       {/* contract × qty · entry → now */}
@@ -175,6 +188,19 @@ function DynamicPositionRow({ pos: p, colors, onEdit }: {
           use, so a running stop timer shows here the moment it starts. */}
       <SlGraceBadge live={graceInfo} colors={colors} hideIdle />
     </TouchableOpacity>
+    <AddContractModal
+      visible={addOpen}
+      colors={colors}
+      strategyId={p.strategy_id}
+      ticker={p.ticker}
+      contract={live?.contract ?? p.contract}
+      qtyHeld={qty}
+      entryPremium={live?.entry_premium ?? p.entry_premium}
+      midPrice={curPrice}
+      paperMode={p.paper_mode}
+      onClose={() => setAddOpen(false)}
+    />
+    </>
   );
 }
 
