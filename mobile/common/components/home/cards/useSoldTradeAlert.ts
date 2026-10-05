@@ -20,7 +20,8 @@ function todayISO(): string {
  * contract's PnL and the day's realized PnL. `dismiss` clears it.
  */
 export function useSoldTradeAlert(): { alert: SoldAlert | null; dismiss: () => void } {
-  const { data: trades } = useStrategyTrades({ limit: 15 });
+  // Poll every 15s — the alert must catch a sell within its 90s window.
+  const { data: trades } = useStrategyTrades({ limit: 15, refetchIntervalMs: 15_000 });
   const [alert, setAlert] = useState<SoldAlert | null>(null);
   const seenRef = useRef<Set<string>>(new Set());
   const dismissedRef = useRef<Set<string>>(new Set());
