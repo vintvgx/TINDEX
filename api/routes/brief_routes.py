@@ -54,6 +54,31 @@ def today():
     return jsonify({"success": True, "data": brief})
 
 
+@bp.route("/brief/modes", methods=["GET"])
+def entry_modes():
+    """Per-ticker confirm/auto entry preferences ({ticker: mode})."""
+    return jsonify({"success": True, "data": get_brief_service().io.entry_modes()})
+
+
+@bp.route("/brief/mode", methods=["POST"])
+def set_entry_mode():
+    """Set a ticker's entry-mode preference (used by the Morning Brief digest
+    cards; honored by the 9:00 ET brief build). Body: {ticker, mode}."""
+    body = request.get_json(silent=True) or {}
+    ticker = (body.get("ticker") or "").strip().upper()
+    mode = (body.get("mode") or "").strip().lower()
+    if not ticker:
+        return jsonify({"success": False, "error": "ticker is required"}), 400
+    try:
+        data = get_brief_service().io.set_entry_mode(ticker, mode)
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        logger.error("[brief] set_entry_mode failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": "failed to save entry mode"}), 500
+    return jsonify({"success": True, "data": data})
+
+
 def _action(fn, *args):
     try:
         return jsonify({"success": True, "data": fn(*args)})

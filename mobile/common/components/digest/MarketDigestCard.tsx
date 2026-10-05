@@ -4,79 +4,60 @@ import { Ionicons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketDigest } from '@/hooks/queries/digest/useMarketDigest';
-import { useGenerateMarketDigest } from '@/hooks/mutations/digest/useGenerateMarketDigest';
 import { useSeenMarketDigests } from '@/hooks/useSeenMarketDigests';
 import { isPastMarketDigestTime } from '@/lib/marketHours';
-import { useToast } from '@/common/components/ui/Toast';
-import { DigestGeneratingOverlay } from './DigestGeneratingOverlay';
 
 function todayISO(): string {
   return format(new Date(), 'yyyy-MM-dd');
 }
 
 /**
- * Persistent Home banner for the pre-market Market Digest — the digest
- * normally arrives via its own push notification (see
- * StrategyNotifier.notify_market_digest_ready), but this makes it reachable
- * any time without waiting for or having tapped that notification. Today's
- * digest is usually already sitting in Supabase by the time this renders
- * (cron fires ~8:30 AM ET); if it isn't (weekend testing, cron miss), tapping
- * builds it on-demand, same pattern as Daily Review's "Generate Review".
+ * Persistent Home banner for the pre-market Morning Brief — published by the
+ * 8:00 AM ET job (POST /muse/market-digest/publish), refreshed silently at
+ * 9:00 AM. The deprecated on-demand Claude generation is gone: if no brief
+ * exists yet, the card says when it lands instead of offering to build one.
  */
 export function MarketDigestCard({ onOpen }: { onOpen: (date: string) => void }) {
   const colors = useThemeColors();
-  const toast = useToast();
   const today = todayISO();
   const { data, isLoading } = useMarketDigest(today);
-  const generate = useGenerateMarketDigest();
   const { isSeen } = useSeenMarketDigests();
   const ready = !!data?.data;
 
   if (ready && isSeen(today)) return null;
-  // Cron fires ~8:30 AM ET — before that, there's nothing meaningful for
-  // the digest to report yet, so don't offer the "not generated yet, tap
-  // to build" fallback (it would just build a digest before the market
-  // even has pre-market movers worth reporting on). Once a digest actually
-  // exists (ready), always show it regardless of clock time.
+  // The brief publishes at 8:00 AM ET — before that there's nothing to show.
   if (!ready && !isPastMarketDigestTime()) return null;
 
-  const handlePress = () => {
-    if (ready) { onOpen(today); return; }
-    if (generate.isPending) return;
-    generate.mutate(today, {
-      onSuccess: () => onOpen(today),
-      onError: (e) => toast.error((e as Error).message),
-    });
-  };
+  const accent = ready ? colors.success : colors.textTertiary;
 
   return (
-    <>
-      <TouchableOpacity
-        onPress={handlePress}
-        activeOpacity={0.8}
-        disabled={isLoading}
-        style={{
-          flexDirection: 'row', alignItems: 'center', gap: 10,
-          marginHorizontal: 16, marginTop: 10, marginBottom: 4,
-          paddingVertical: 12, paddingHorizontal: 14, borderRadius: 14,
-          backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
-        }}
-      >
-        <View style={{
-          width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center',
-          backgroundColor: colors.accent + '18',
-        }}>
-          <Ionicons name="sunny-outline" size={18} color={colors.accent} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>Today’s Market Digest</Text>
-          <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 1 }}>
-            {ready ? 'Ready — tap to view' : 'Not generated yet — tap to build'}
-          </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
-      </TouchableOpacity>
-      <DigestGeneratingOverlay visible={generate.isPending} />
-    </>
+    <TouchableOpacity
+      onPress={() => ready && onOpen(today)}
+      activeOpacity={ready ? 0.8 : 1}
+      disabled={isLoading || !ready}
+      style={{
+        flexDirection: 'row', alignItems: 'center', gap: 10,
+        marginHorizontal: 16, marginTop: 10, marginBottom: 4,
+        paddingVertical: 12, paddingHorizontal: 14, borderRadius: 12,
+        backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder,
+        borderLeftWidth: 3, borderLeftColor: accent,
+      }}
+    >
+      <View style={{
+        width: 8, height: 8, borderRadius: 4,
+        backgroundColor: accent, opacity: ready ? 1 : 0.5,
+      }} />
+      <View style={{ flex: 1 }}>
+        <Text style={{ fontFamily: 'monospace', color: colors.text, fontSize: 13, fontWeight: '800', letterSpacing: 1.5 }}>
+          MORNING BRIEF
+        </Text>
+        <Text style={{ fontFamily: 'monospace', color: colors.textTertiary, fontSize: 10.5, marginTop: 2 }}>
+          {ready ? '$ tap to open terminal' : '$ publishes 8:00 AM ET'}
+        </Text>
+      </View>
+      {ready
+        ? <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+        : <Ionicons name="time-outline" size={16} color={colors.textTertiary} />}
+    </TouchableOpacity>
   );
 }
