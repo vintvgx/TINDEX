@@ -3,7 +3,7 @@ import { View, Text, FlatList, StyleSheet, useWindowDimensions } from 'react-nat
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import Svg, { Polyline, Circle, Line, Rect, Text as SvgText } from 'react-native-svg';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
+import { useSparkQuery } from '@/hooks/queries/ticker/useSparkQuery';
 import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
 import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 import { ALLOWED_INTERVALS, DEFAULT_INTERVAL, INTERVAL_LABEL } from '@/lib/chartIntervals';
@@ -149,8 +149,8 @@ function TickerPage({ ticker, height, width, period, interval, onStats }: {
   onStats: (ticker: string, price: number | null, changePct: number | null) => void;
 }) {
   const colors = useThemeColors();
-  const { data } = useTickerHistoryQuery(ticker, period, 60_000, interval);
-  const prices = data?.data?.prices ?? [];
+  const { data } = useSparkQuery(ticker, period, 60_000);
+  const prices = data?.data?.closes ?? [];
   const dates = data?.data?.dates ?? [];
 
   const price = prices.length > 0 ? prices[prices.length - 1] : null;

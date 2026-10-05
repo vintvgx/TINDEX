@@ -37,10 +37,14 @@ interface Options {
    *  its crosshair on press-and-hold, like TradingView, so the Charts tab
    *  hides this on that engine. */
   showCrosshairRow?: boolean;
+  /** Staged loading: backend technicals (gate strip, zones, walls) only
+   *  fire after the candles have painted. */
+  technicalsGo?: boolean;
 }
 
 export function useChartSettings({
   ticker, period, colors, canMarkWatchLevel, extraOverlayRows = [], hideStripRow = false, showDefaults = false, showCrosshairRow = true,
+  technicalsGo = true,
 }: Options) {
   const { prefs, setPref } = useChartDisplayPrefs();
   const { mode, showSessionLines, showExtendedHours, showStrip, showVwap, showEma, showOrb, showWalls,
@@ -73,7 +77,7 @@ export function useChartSettings({
   const { enabled: crosshairEnabled, setEnabled: setCrosshairEnabled } = useCrosshairEnabled();
 
   // Only poll while something actually uses the data.
-  const technicals = useChartTechnicals(ticker, showStrip || showVwap || showEma || modalOpen);
+  const technicals = useChartTechnicals(ticker, technicalsGo && (showStrip || showVwap || showEma || modalOpen));
 
   const referenceLines: ChartReferenceLine[] = useMemo(
     () => [

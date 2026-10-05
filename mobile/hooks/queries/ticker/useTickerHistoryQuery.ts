@@ -18,7 +18,7 @@ import { RAILWAY_BASE_URL } from "@/lib/railway.config";
  *   valid per period. An invalid/mismatched value is silently ignored
  *   server-side, never a failed request.
  */
-export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refetchIntervalMs?: number, interval?: string, extendedHours?: boolean) {
+export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refetchIntervalMs?: number, interval?: string, extendedHours?: boolean, enabled: boolean = true) {
   const { authState: { user, isLoading: authLoading } } = useAuth();
 
   return useQuery({
@@ -54,7 +54,7 @@ export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refet
         throw error instanceof Error ? error : new Error("Failed to fetch ticker history");
       }
     },
-    enabled: !!ticker && !!user?.id && !authLoading,
+    enabled: !!ticker && !!user?.id && !authLoading && enabled,
     // No staleTime — every mount/refetch hits the network so the chart never
     // silently replays an old in-memory series.
     staleTime: 0,
