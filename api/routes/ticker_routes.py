@@ -15,7 +15,7 @@ from services.anthropic.anthropic_service import anthropic_service
 from services.supabase.supabase_service import get_supabase_service
 from services.utils.research_service import get_research_service
 from services.utils.blog_generation_service import get_blog_service
-from services.yfinance.yfinance_service import get_historical_prices, get_historical_window, PERIOD_MAP, ALLOWED_INTERVALS, get_intraday_chart_for_date
+from services.yfinance.yfinance_service import get_historical_prices, get_historical_window, get_spark_prices, PERIOD_MAP, ALLOWED_INTERVALS, get_intraday_chart_for_date
 from utils.cache import TrendingStocksCache
 
 import requests as _requests
@@ -152,7 +152,8 @@ def get_ticker_history(ticker: str):
             return jsonify({"success": True, "data": historical_data,
                             "interval": historical_data.get("interval"),
                             "start": data.get("start"), "end": data.get("end"),
-                            "timestamp": time.time(), "from_cache": False})
+                            "timestamp": time.time(),
+                            "from_cache": historical_data.pop("from_cache", False)})
 
         period = data.get("period", "1M")
         if period not in PERIOD_MAP:
@@ -162,11 +163,38 @@ def get_ticker_history(ticker: str):
         historical_data = get_historical_prices(ticker, period, interval_override=interval,
                                                 extended_hours=extended_hours)
 
-        return jsonify({"success": True, "data": historical_data, "period": period, "timestamp": time.time(), "from_cache": False})
+        return jsonify({"success": True, "data": historical_data, "period": period, "timestamp": time.time(),
+                        "from_cache": historical_data.pop("from_cache", False)})
 
     except Exception as e:
         logger.error("Ticker history fetch failed for ticker '%s': %s", ticker, e, exc_info=True)
         return jsonify({"success": False, "error": f"History fetch failed: {str(e)}"}), 500
+
+
+@bp.route("/ticker/<ticker>/spark", methods=["POST"])
+def get_ticker_spark(ticker: str):
+    """
+    Lightweight closes-only series for sparkline views (home chart deck).
+    Deliberately separate from /history: no OHLC, no volumes, no session
+    lines, no technicals — just dates + closes, cached ~45s server-side.
+    Body: { "period": "1D" } (default "1D").
+    """
+    try:
+        ticker = ticker.strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({"success": False, "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."}), 400
+
+        data = request.get_json() or {}
+        period = data.get("period", "1D")
+        if period not in PERIOD_MAP:
+            return jsonify({"success": False, "error": f"Invalid period. Must be one of: {', '.join(PERIOD_MAP.keys())}"}), 400
+
+        spark = get_spark_prices(ticker, period)
+        return jsonify({"success": True, "data": spark, "period": period,
+                        "timestamp": time.time()})
+    except Exception as e:
+        logger.error("Ticker spark fetch failed for ticker '%s': %s", ticker, e, exc_info=True)
+        return jsonify({"success": False, "error": f"Spark fetch failed: {str(e)}"}), 500
 
 
 @bp.route("/ticker/<ticker>/history-date", methods=["POST"])

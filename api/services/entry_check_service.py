@@ -110,8 +110,16 @@ def _daily_closes(ticker: str):
 
 def _intraday_bars(ticker: str):
     import yfinance as yf
-    return _cached(_intraday_cache, ticker, _INTRADAY_TTL_S,
-                   lambda: yf.Ticker(ticker).history(period="1d", interval="1m", prepost=False))
+    from services.yfinance.yfinance_service import drop_bad_ticks
+
+    def fetch():
+        hist = yf.Ticker(ticker).history(period="1d", interval="1m", prepost=False)
+        if not hist.empty and "Close" in hist.columns:
+            hist = hist.dropna(subset=["Close"])
+            hist = drop_bad_ticks(hist, ticker)
+        return hist
+
+    return _cached(_intraday_cache, ticker, _INTRADAY_TTL_S, fetch)
 
 
 def _day_change_pct(symbol: str) -> Optional[float]:
