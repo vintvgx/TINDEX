@@ -212,7 +212,6 @@ function SrChart({
   colors: ReturnType<typeof useThemeColors>;
 }) {
   const H = 112;
-  const PAD = 34; // right gutter for price labels
   const entries: Array<{ v: number; label: string; color: string; dashed: boolean }> = [];
   if (levels.resistance != null)
     entries.push({ v: levels.resistance, label: `R ${levels.resistance.toFixed(2)}`, color: colors.error, dashed: true });
@@ -223,6 +222,9 @@ function SrChart({
   if (levels.support != null)
     entries.push({ v: levels.support, label: `S ${levels.support.toFixed(2)}`, color: colors.success, dashed: true });
   if (entries.length === 0) return null;
+  // Right gutter sized to the longest label (9px monospace ≈ 5.6px/char)
+  // so "ORH 279.40" sits inside the card instead of running past its edge.
+  const PAD = Math.ceil(Math.max(...entries.map((e) => e.label.length)) * 5.6) + 8;
 
   const vals = entries.map((e) => e.v);
   const lo = Math.min(...vals);
@@ -406,20 +408,18 @@ function TickerCard({
           <Text style={[styles.mono, { fontSize: 10, fontWeight: '800', color: dirColor }]}>{t.direction}</Text>
         </View>
         <View style={{ flex: 1 }} />
-        {!preview && (
-          <>
-            <TouchableOpacity
-              onPress={() => setContractsVisible(true)}
-              style={iconBtn}
-              accessibilityLabel={`${t.ticker} contracts`}
-            >
-              <Ionicons name="layers-outline" size={15} color={colors.textSecondary} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={onOpenChart} style={iconBtn} accessibilityLabel={`${t.ticker} chart`}>
-              <Ionicons name="stats-chart-outline" size={15} color={colors.textSecondary} />
-            </TouchableOpacity>
-          </>
-        )}
+        {/* Contracts + chart — shown in preview too (the preview uses real
+            tickers, so both work). */}
+        <TouchableOpacity
+          onPress={() => setContractsVisible(true)}
+          style={iconBtn}
+          accessibilityLabel={`${t.ticker} contracts`}
+        >
+          <Ionicons name="layers-outline" size={15} color={colors.textSecondary} />
+        </TouchableOpacity>
+        <TouchableOpacity onPress={onOpenChart} style={iconBtn} accessibilityLabel={`${t.ticker} chart`}>
+          <Ionicons name="stats-chart-outline" size={15} color={colors.textSecondary} />
+        </TouchableOpacity>
         <Text style={[styles.mono, { fontSize: 10, color: colors.textTertiary }]}>{t.premium_tier}</Text>
       </View>
 
@@ -602,9 +602,13 @@ function SectorFlow({
         const c = up ? colors.success : colors.error;
         return (
           <View key={s.ticker} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 5, gap: 8 }}>
-            <Text style={[styles.mono, { fontSize: 11, fontWeight: '700', color: colors.text, width: 118 }]} numberOfLines={1}>
-              {s.name}
-            </Text>
+            {/* Symbol first (that's what trades), its sector underneath. */}
+            <View style={{ width: 118 }}>
+              <Text style={[styles.mono, { fontSize: 11, fontWeight: '800', color: colors.text }]}>{s.ticker}</Text>
+              <Text style={[styles.mono, { fontSize: 9, color: colors.textTertiary }]} numberOfLines={1}>
+                {s.name}
+              </Text>
+            </View>
             <View
               style={{
                 flex: 1,
@@ -847,7 +851,6 @@ export function MuseDigestView({
       {/* masthead */}
       <Enter index={0} silent={silent}>
         <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, marginBottom: 2 }}>
-          <Text style={[styles.mono, { fontSize: 11, color: colors.textTertiary }]}>{'~/morning-brief'}</Text>
           <View style={{ flex: 1 }} />
           {preview ? (
             <View style={[styles.badge, { backgroundColor: colors.warning + '1E', borderColor: colors.warning + '55' }]}>
