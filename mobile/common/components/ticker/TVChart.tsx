@@ -85,6 +85,7 @@ type WVOutbound =
   | { type: 'setVwap'; visible: boolean }
   | { type: 'setHistoryExhausted'; exhausted: boolean }
   | { type: 'setOptions'; crosshair: boolean }
+  | { type: 'setCountdown'; barSeconds: number | null }
   | { type: 'applyTheme'; theme: TVTheme };
 type WVInbound =
   | { type: 'loaded' }
@@ -539,6 +540,12 @@ export function TVChart({
     if (!chartReady) return;
     send({ type: 'setEmaOverlays', emas: emas ?? [] });
   }, [chartReady, emas, send]);
+
+  // ── Next-candle countdown (intraday bars only) ─────────────────────
+  useEffect(() => {
+    if (!chartReady) return;
+    send({ type: 'setCountdown', barSeconds: barSec ?? null });
+  }, [chartReady, barSec, send]);
 
   // ── Crosshair ("Data points") ──────────────────────────────────────
   useEffect(() => {

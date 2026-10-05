@@ -92,6 +92,15 @@ function main() {
     font: 500 12px -apple-system, 'SF Pro Text', sans-serif;
   }
   .zpill svg { width: 8px; height: 8px; flex: none; display: block; }
+  /* Next-candle countdown: price + mm:ss in one tag over the axis label. */
+  #countdown {
+    position: absolute; right: 0; height: 30px; z-index: 11; pointer-events: none; display: none;
+    flex-direction: column; align-items: center; justify-content: center;
+    box-sizing: border-box; border-radius: 3px; color: #FFFFFF;
+    font-family: -apple-system, 'SF Pro Text', sans-serif; font-variant-numeric: tabular-nums;
+  }
+  #countdown .cd-price { font-weight: 700; font-size: 11px; line-height: 13px; }
+  #countdown .cd-time { font-weight: 600; font-size: 10px; line-height: 12px; opacity: 0.85; }
 </style>
 </head>
 <body>

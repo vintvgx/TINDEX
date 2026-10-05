@@ -258,7 +258,65 @@
       layoutPills();
       layoutRefLabels();
       layoutPendingAlert();
+      layoutCountdown();
     });
+  }
+
+  // ── Next-candle countdown (legacy chart parity) ─────────────────────
+  // One pill in the price-axis gutter at the last price holding BOTH the
+  // price and a mm:ss countdown to the next bar — drawn over LWC's own
+  // last-value label so it reads as a single tag, like the legacy chart.
+  // Intraday only (RN sends barSeconds = null on daily+). Ticks in-page
+  // once a second; no per-second bridge traffic.
+  var countdownEl = document.createElement('div');
+  countdownEl.id = 'countdown';
+  countdownEl.innerHTML = '<div class="cd-price"></div><div class="cd-time"></div>';
+  document.body.appendChild(countdownEl);
+  var cdPriceEl = countdownEl.firstChild;
+  var cdTimeEl = countdownEl.lastChild;
+  var countdownBarSec = null;
+  var countdownTimer = null;
+  var CD_H = 30;
+
+  function fmtLastPrice(p) {
+    try {
+      if (mainSeries && mainSeries.priceFormatter) return mainSeries.priceFormatter().format(p);
+    } catch (e) {}
+    return p.toFixed(2);
+  }
+
+  function layoutCountdown() {
+    var last = lastCandles.length ? lastCandles[lastCandles.length - 1] : null;
+    if (!countdownBarSec || !chart || !mainSeries || !last) { countdownEl.style.display = 'none'; return; }
+    var secs = Math.round(last.t + countdownBarSec - Date.now() / 1000);
+    // Past a whole extra bar with no new candle = market closed / feed
+    // idle — hide rather than sit on 0:00 all night.
+    if (secs < -countdownBarSec) { countdownEl.style.display = 'none'; return; }
+    secs = Math.max(0, secs);
+    var y = mainSeries.priceToCoordinate(last.c);
+    var H = chartEl.clientHeight;
+    if (y === null || y === undefined || !H) { countdownEl.style.display = 'none'; return; }
+    var axisW = 0;
+    try { axisW = chart.priceScale('right').width(); } catch (e) {}
+    if (!axisW) { countdownEl.style.display = 'none'; return; }
+    var top = Math.round(y - CD_H / 2);
+    top = Math.max(0, Math.min(top, H - TIME_AXIS_H - CD_H));
+    var h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+    var label = (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0');
+    var up = mainSeries._tvKind === 'candle' ? last.c >= last.o : true;
+    countdownEl.style.display = 'flex';
+    countdownEl.style.top = top + 'px';
+    countdownEl.style.width = axisW + 'px';
+    countdownEl.style.background = up ? theme.up : theme.down;
+    cdPriceEl.textContent = fmtLastPrice(last.c);
+    cdTimeEl.textContent = label;
+  }
+
+  function setCountdown(msg) {
+    countdownBarSec = msg.barSeconds > 0 ? msg.barSeconds : null;
+    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+    if (countdownBarSec) countdownTimer = setInterval(layoutCountdown, 1000);
+    layoutCountdown();
   }
 
   // Text-only names for `textLabel` ref lines, left-aligned at the start
@@ -918,6 +976,7 @@
       case 'setRefLines': setRefLines(msg.lines); break;
       case 'setEmaOverlays': setEmaOverlays(msg); break;
       case 'setVwap': setVwap(msg); break;
+      case 'setCountdown': setCountdown(msg); break;
       case 'setHistoryExhausted': historyExhausted = !!msg.exhausted; break;
       case 'setOptions': setOptions(msg); break;
       case 'applyTheme': applyTheme(msg.theme); break;
