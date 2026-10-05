@@ -9,7 +9,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useAlpacaPositionValues } from '@/hooks/queries/strategy/useAlpacaPositionValues';
-import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
+import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
+import { BriefPositionsBody } from '@/common/components/home/BriefPositionsBody';
 import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 
 interface Props {
@@ -113,6 +114,42 @@ export default function PositionScreen({ embedded = false }: Props) {
 
   const toggleMode = () => setMode(m => (m === 'live' ? 'paper' : 'live'));
 
+  const positionsBody = (
+    <BriefPositionsBody
+      data={positionsData}
+      mode={mode}
+      colors={colors}
+      emptySubtitle={mode === 'live'
+        ? 'Active live positions will appear here in real time'
+        : 'Active paper positions will appear here'}
+    />
+  );
+
+  // Embedded on Home (inside the feed's own ScrollView, under the dynamic
+  // card) — no inner ScrollView, the parent scrolls. Standalone keeps its
+  // own scroll container.
+  if (embedded) {
+    return (
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <View style={[styles.embeddedHeader, { borderBottomColor: colors.border }]}>
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity
+            onPress={toggleMode}
+            hitSlop={8}
+            activeOpacity={0.75}
+            style={[styles.activeBadge, { backgroundColor: (mode === 'live' ? '#30D158' : '#FF9F0A') + '22' }]}
+          >
+            <View style={[styles.liveDot, { backgroundColor: mode === 'live' ? '#30D158' : '#FF9F0A' }]} />
+            <Text style={[styles.activeBadgeText, { color: mode === 'live' ? '#30D158' : '#FF9F0A' }]}>
+              {mode === 'live' ? 'LIVE' : 'PAPER'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        <View style={styles.content}>{positionsBody}</View>
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
 
@@ -194,17 +231,10 @@ export default function PositionScreen({ embedded = false }: Props) {
         </ScrollView>
       )}
 
-      {/* ── Scrollable content — LivePositionsBody renders its own
-          hidden-trades banner + position list/empty-state below. ── */}
+      {/* ── Scrollable content — BriefPositionsBody renders its own
+          hidden-trades banner + brief-style position cards below. ── */}
       <ScrollView style={styles.contentScroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        <LivePositionsBody
-          data={positionsData}
-          mode={mode}
-          colors={colors}
-          emptySubtitle={mode === 'live'
-            ? 'Active live positions will appear here in real time'
-            : 'Active paper positions will appear here'}
-        />
+        {positionsBody}
         <View style={{ height: tabBarHeight }} />
       </ScrollView>
     </SafeAreaView>
@@ -241,6 +271,15 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   headerSide:      { width: 36, alignItems: 'flex-start', justifyContent: 'center' },
+  embeddedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexGrow: 0,
+    flexShrink: 0,
+  },
   headerCenter:    { flex: 1, alignItems: 'center', gap: 4 },
   title:           { fontSize: 18, fontWeight: '700' },
   activeBadge:     { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
