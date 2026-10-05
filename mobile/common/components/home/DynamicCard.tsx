@@ -8,8 +8,13 @@ import Animated, {
   runOnJS,
   type SharedValue,
 } from 'react-native-reanimated';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { DynamicChartsView } from './views/DynamicChartsView';
+import { DynamicBriefView } from './views/DynamicBriefView';
+import { DynamicSignalsView } from './views/DynamicSignalsView';
+import { DynamicNewsView } from './views/DynamicNewsView';
+import { DynamicContractsView } from './views/DynamicContractsView';
 import { ConfirmStackCard, usePendingConfirmations } from './cards/ConfirmStackCard';
 import { SoldCard } from './cards/SoldCard';
 import { useSoldTradeAlert } from './cards/useSoldTradeAlert';
@@ -38,22 +43,43 @@ export interface TickerInfo {
   changePct: number | null;
 }
 
+function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export function DynamicCard({
   scrollY,
-  initialView = 'charts',
   onOpenBrief,
 }: {
   scrollY: SharedValue<number>;
-  initialView?: DynamicViewKey;
   onOpenBrief: () => void;
 }) {
   const colors = useThemeColors();
   const { width } = useWindowDimensions();
   const pageWidth = width - 28; // parent horizontal padding
-  const [viewIndex, setViewIndex] = useState(() => Math.max(0, DYNAMIC_VIEWS.indexOf(initialView)));
+  // Morning Brief auto-shows until it's accessed (once per day).
+  const [viewIndex, setViewIndex] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
   const [tickerInfo, setTickerInfo] = useState<TickerInfo>({ ticker: '', price: null, changePct: null });
   const pagerRef = useRef<FlatList<DynamicViewKey>>(null);
+
+  useEffect(() => {
+    AsyncStorage.getItem(`dynamicCard.briefSeen.${todayISO()}`).then((seen) => {
+      if (!seen) {
+        const i = DYNAMIC_VIEWS.indexOf('brief');
+        setViewIndex(i);
+        pagerRef.current?.scrollToIndex({ index: i, animated: false });
+      }
+    }).catch(() => {});
+  }, []);
+
+  const handleOpenBrief = useCallback(async () => {
+    try {
+      await AsyncStorage.setItem(`dynamicCard.briefSeen.${todayISO()}`, '1');
+    } catch {}
+    onOpenBrief();
+  }, [onOpenBrief]);
 
   // Transient states take over the card — sold (12s) beats the confirm
   // stack, which beats the swipe views. Both pin the card expanded.
@@ -93,20 +119,27 @@ export function DynamicCard({
 
   const renderView = useCallback(
     ({ item }: { item: DynamicViewKey }) => {
+      let view: React.ReactNode;
       switch (item) {
         case 'charts':
-          return <DynamicChartsView onActiveTicker={setTickerInfo} height={EXPANDED_H} />;
-        default:
-          return (
-            <View style={[styles.page, { width: pageWidth, justifyContent: 'center', alignItems: 'center' }]}>
-              <Text style={{ color: colors.textTertiary, fontSize: 13 }}>
-                {item} view — coming in the next piece
-              </Text>
-            </View>
-          );
+          view = <DynamicChartsView onActiveTicker={setTickerInfo} height={EXPANDED_H} />;
+          break;
+        case 'brief':
+          view = <DynamicBriefView onOpenBrief={handleOpenBrief} />;
+          break;
+        case 'signals':
+          view = <DynamicSignalsView />;
+          break;
+        case 'news':
+          view = <DynamicNewsView />;
+          break;
+        case 'contracts':
+          view = <DynamicContractsView />;
+          break;
       }
+      return <View style={{ width: pageWidth, height: EXPANDED_H }}>{view}</View>;
     },
-    [pageWidth, colors],
+    [pageWidth, handleOpenBrief],
   );
 
   const changeUp = (tickerInfo.changePct ?? 0) >= 0;
