@@ -31,7 +31,7 @@ import logging
 import threading
 import time as _time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytz
 
@@ -93,12 +93,16 @@ class BriefService:
         scored = self._score_universe(cfg)
         ranked = rank_plays(scored)
         prev_by_ticker = {p["ticker"]: p for p in (prev or {}).get("plays", [])}
+        # Per-ticker entry preferences (set from the Morning Brief digest or the
+        # Brief tab); default is confirm.
+        entry_modes = self.io.entry_modes()
 
         plays = []
         for p in ranked["plays"]:
             old = prev_by_ticker.get(p["ticker"])
             play = {**p,
-                    "mode": (old or {}).get("mode", "confirm"),
+                    "mode": entry_modes.get(p["ticker"],
+                                            (old or {}).get("mode", "confirm")),
                     "status": "watching",
                     "status_reason": None,
                     "history": (old or {}).get("history", []),
@@ -196,6 +200,11 @@ class BriefService:
                 raise ValueError(f"{ticker} is {play['status']} — mode can't change now")
             play["mode"] = mode
             self._save()
+            try:
+                # Keep the digest toggle and the Brief tab on one source of truth.
+                self.io.set_entry_mode(ticker, mode)
+            except Exception as e:
+                logger.warning("[brief] entry_modes persist failed for %s: %s", ticker, e)
             return play
 
     def confirm(self, ticker: str) -> dict:
@@ -672,6 +681,26 @@ class BriefIO:
             from services.brief.config import ConfigStore
             self._config = ConfigStore(self._sb)
         return self._config.get()
+
+    def entry_modes(self) -> dict:
+        """Per-ticker confirm/auto preferences ({ticker: mode}); empty on any
+        failure — callers fall back to 'confirm'."""
+        try:
+            rows = self._sb().table("brief_entry_modes").select("ticker,mode").execute().data or []
+            return {r["ticker"].upper(): r["mode"] for r in rows if r.get("ticker")}
+        except Exception as e:
+            logger.warning("[brief] entry_modes read failed: %s", e)
+            return {}
+
+    def set_entry_mode(self, ticker: str, mode: str) -> dict:
+        if mode not in ("confirm", "auto"):
+            raise ValueError("mode must be confirm or auto")
+        t = ticker.upper()
+        self._sb().table("brief_entry_modes").upsert(
+            {"ticker": t, "mode": mode,
+             "updated_at": datetime.now(timezone.utc).isoformat()},
+            on_conflict="ticker").execute()
+        return {"ticker": t, "mode": mode}
 
     def gate_verdict(self, ticker: str, direction: str) -> "dict | None":
         """Technicals Gate verdict: {decision, factors_agree, factors_total, …}."""
