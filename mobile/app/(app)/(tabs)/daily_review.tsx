@@ -22,9 +22,8 @@ import { useToast } from '@/common/components/ui/Toast';
 import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { MarketDigestModal } from '@/common/components/digest/MarketDigestModal';
-import { DigestGeneratingOverlay } from '@/common/components/digest/DigestGeneratingOverlay';
+import { MUSE_BRIEF_PREVIEW } from '@/common/components/digest/museBriefPreview';
 import { useMarketDigest, useMarketDigestList, fetchMarketDigest } from '@/hooks/queries/digest/useMarketDigest';
-import { useGenerateMarketDigest } from '@/hooks/mutations/digest/useGenerateMarketDigest';
 import type { ReviewNote } from '@/common/types/reviewNotes';
 
 const NOTE_COLOR = '#F59E0B';
@@ -121,15 +120,14 @@ export default function DailyReviewScreen() {
   // digest either already exists or never will (nothing to generate).
   const todayKey = dateKey(today);
   const { data: todayDigest } = useMarketDigest(todayKey);
-  const generateDigest = useGenerateMarketDigest();
   const [digestModalDate, setDigestModalDate] = useState<string | null>(null);
+  const [briefPreviewOpen, setBriefPreviewOpen] = useState(false);
+  // Digest generation moved to the Muse-published morning brief (8:00 AM ET
+  // cron) — the deprecated on-demand Claude generation is gone, so this only
+  // ever opens an already-published brief.
   const handleDigestPress = () => {
     if (todayDigest?.data) { setDigestModalDate(todayKey); return; }
-    if (generateDigest.isPending) return;
-    generateDigest.mutate(todayKey, {
-      onSuccess: () => setDigestModalDate(todayKey),
-      onError: (e) => toast.error((e as Error).message),
-    });
+    toast.info("Today's brief publishes at 8:00 AM ET.");
   };
 
   // Which past days actually have a digest — drives the blue calendar dot.
@@ -251,8 +249,16 @@ export default function DailyReviewScreen() {
           </Text>
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
-          <TouchableOpacity onPress={handleDigestPress} disabled={generateDigest.isPending} hitSlop={10} style={{ padding: 6 }}>
+          <TouchableOpacity onPress={handleDigestPress} hitSlop={10} style={{ padding: 6 }}>
             <Ionicons name="sunny-outline" size={22} color={colors.text} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setBriefPreviewOpen(true)}
+            hitSlop={10}
+            style={{ padding: 6 }}
+            accessibilityLabel="Preview morning brief layout"
+          >
+            <Ionicons name="terminal-outline" size={22} color={colors.textTertiary} />
           </TouchableOpacity>
           <TouchableOpacity onPress={() => router.push('/backlog')} hitSlop={10} style={{ padding: 6 }}>
             <Ionicons name="list-outline" size={22} color={colors.text} />
@@ -631,7 +637,12 @@ export default function DailyReviewScreen() {
         visible={!!digestModalDate}
         onClose={() => setDigestModalDate(null)}
       />
-      <DigestGeneratingOverlay visible={generateDigest.isPending} />
+      <MarketDigestModal
+        date={null}
+        visible={briefPreviewOpen}
+        onClose={() => setBriefPreviewOpen(false)}
+        previewContent={MUSE_BRIEF_PREVIEW}
+      />
     </SafeAreaView>
   );
 }
