@@ -1,1 +1,424 @@
-IiIiClRpY2tlciByZXNlYXJjaCwgYmxvZyBnZW5lcmF0aW9uLCB0aWNrZXIgdXBkYXRlcywgYW5kIHRyZW5kaW5nIHN0b2NrcyByb3V0ZXMuCiIiIgoKaW1wb3J0IHJlCmltcG9ydCB0aW1lCmltcG9ydCBhc3luY2lvCmZyb20gZGF0YWNsYXNzZXMgaW1wb3J0IGRhdGFjbGFzcywgYXNkaWN0CmZyb20gdHlwaW5nIGltcG9ydCBPcHRpb25hbAoKZnJvbSBmbGFzayBpbXBvcnQgQmx1ZXByaW50LCBqc29uaWZ5LCByZXF1ZXN0Cgpmcm9tIGxvZy5sb2dnaW5nX2NvbmZpZyBpbXBvcnQgZ2V0X2xvZ2dlcgpmcm9tIHNlcnZpY2VzLmFudGhyb3BpYy5hbnRocm9waWNfc2VydmljZSBpbXBvcnQgYW50aHJvcGljX3NlcnZpY2UKZnJvbSBzZXJ2aWNlcy5zdXBhYmFzZS5zdXBhYmFzZV9zZXJ2aWNlIGltcG9ydCBnZXRfc3VwYWJhc2Vfc2VydmljZQpmcm9tIHNlcnZpY2VzLnV0aWxzLnJlc2VhcmNoX3NlcnZpY2UgaW1wb3J0IGdldF9yZXNlYXJjaF9zZXJ2aWNlCmZyb20gc2VydmljZXMudXRpbHMuYmxvZ19nZW5lcmF0aW9uX3NlcnZpY2UgaW1wb3J0IGdldF9ibG9nX3NlcnZpY2UKZnJvbSBzZXJ2aWNlcy55ZmluYW5jZS55ZmluYW5jZV9zZXJ2aWNlIGltcG9ydCBnZXRfaGlzdG9yaWNhbF9wcmljZXMsIGdldF9oaXN0b3JpY2FsX3dpbmRvdywgUEVSSU9EX01BUCwgQUxMT1dFRF9JTlRFUlZBTFMsIGdldF9pbnRyYWRheV9jaGFydF9mb3JfZGF0ZQpmcm9tIHV0aWxzLmNhY2hlIGltcG9ydCBUcmVuZGluZ1N0b2Nrc0NhY2hlCgppbXBvcnQgcmVxdWVzdHMgYXMgX3JlcXVlc3RzCmZyb20gYnM0IGltcG9ydCBCZWF1dGlmdWxTb3VwCgpsb2dnZXIgPSBnZXRfbG9nZ2VyKF9fbmFtZV9fKQoKYnAgPSBCbHVlcHJpbnQoInRpY2tlciIsIF9fbmFtZV9fKQoKX3RyZW5kaW5nX2NhY2hlID0gVHJlbmRpbmdTdG9ja3NDYWNoZSgpCl9UUkVORElOR19DQUNIRV9UVEwgPSA5MAoKCiMg4pSA4pSAIERhdGEgY2xhc3NlcyDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKCkBkYXRhY2xhc3MKY2xhc3MgUmVxdWVzdERhdGE6CiAgICB0b3BpYzogc3RyCiAgICB1c2VySWQ6IE9wdGlvbmFsW3N0cl0KICAgIHNhdmVfdG9fZGI6IE9wdGlvbmFsW2Jvb2xdID0gVHJ1ZQogICAgdXNlX2NhY2hlOiBPcHRpb25hbFtib29sXSA9IFRydWUKICAgIHJlc2VhcmNoX2RhdGE6IE9wdGlvbmFsW2RpY3RdID0gTm9uZQogICAgdGFyZ2V0X2xlbmd0aDogT3B0aW9uYWxbaW50XSA9IDgwMAogICAgdGlja2VyOiBPcHRpb25hbFtzdHJdID0gTm9uZQogICAgaW5jbHVkZV9vcHRpb25zOiBPcHRpb25hbFtib29sXSA9IFRydWUKCgpAZGF0YWNsYXNzCmNsYXNzIFJlcXVlc3REYXRhRXJyb3I6CiAgICBzdWNjZXNzOiBib29sCiAgICBlcnJvcjogc3RyCgoKIyDilIDilIAgSGVscGVycyDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKCmRlZiBydW5fYXN5bmMoY29ybyk6CiAgICBsb29wID0gYXN5bmNpby5uZXdfZXZlbnRfbG9vcCgpCiAgICB0cnk6CiAgICAgICAgYXN5bmNpby5zZXRfZXZlbnRfbG9vcChsb29wKQogICAgICAgIHJldHVybiBsb29wLnJ1bl91bnRpbF9jb21wbGV0ZShjb3JvKQogICAgZmluYWxseToKICAgICAgICBsb29wLmNsb3NlKCkKCgpkZWYgdmFsaWRhdGVfYW5kX2NyZWF0ZV90aWNrZXJfcmVxdWVzdF9kYXRhKAogICAgZGF0YTogZGljdCwgdGlja2VyOiBzdHIsIHJlcXVpcmVfdXNlcl9pZDogYm9vbCA9IFRydWUKKSAtPiB0dXBsZVtSZXF1ZXN0RGF0YSB8IE5vbmUsIFJlcXVlc3REYXRhRXJyb3IgfCBOb25lXToKICAgIHRyeToKICAgICAgICByZXF1ZXN0X2RhdGEgPSBSZXF1ZXN0RGF0YSgKICAgICAgICAgICAgdG9waWM9dGlja2VyLAogICAgICAgICAgICB1c2VySWQ9ZGF0YS5nZXQoInVzZXJJZCIpLAogICAgICAgICAgICBzYXZlX3RvX2RiPWRhdGEuZ2V0KCJzYXZlX3RvX2RiIiwgVHJ1ZSksCiAgICAgICAgICAgIHVzZV9jYWNoZT1kYXRhLmdldCgidXNlX2NhY2hlIiwgVHJ1ZSksCiAgICAgICAgICAgIHJlc2VhcmNoX2RhdGE9ZGF0YS5nZXQoInJlc2VhcmNoX2RhdGEiLCB7fSksCiAgICAgICAgICAgIHRhcmdldF9sZW5ndGg9ZGF0YS5nZXQoInRhcmdldF9sZW5ndGgiLCA4MDApLAogICAgICAgICAgICB0aWNrZXI9dGlja2VyLAogICAgICAgICkKICAgICAgICBpZiByZXF1aXJlX3VzZXJfaWQgYW5kIG5vdCByZXF1ZXN0X2RhdGEudXNlcklkOgogICAgICAgICAgICByZXR1cm4gTm9uZSwgUmVxdWVzdERhdGFFcnJvcihzdWNjZXNzPUZhbHNlLCBlcnJvcj0iVXNlciBJRCBtdXN0IGJlIGEgbm9uLWVtcHR5IHN0cmluZyIpCiAgICAgICAgcmV0dXJuIHJlcXVlc3RfZGF0YSwgTm9uZQogICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgIHJldHVybiBOb25lLCBSZXF1ZXN0RGF0YUVycm9yKHN1Y2Nlc3M9RmFsc2UsIGVycm9yPWYiSW52YWxpZCByZXF1ZXN0IGRhdGE6IHtzdHIoZSl9IikKCgpkZWYgbG9nX3JlcXVlc3RfZGF0YShyZXF1ZXN0X2RhdGE6IFJlcXVlc3REYXRhIHwgTm9uZSwgZW5kcG9pbnQ6IHN0cik6CiAgICBpZiByZXF1ZXN0X2RhdGEgaXMgTm9uZToKICAgICAgICBsb2dnZXIuaW5mbygiTm90aGluZyBjb250YWluZWQgaW4gUmVxdWVzdCIpCiAgICBlbHNlOgogICAgICAgIGxvZ2dlci5pbmZvKAogICAgICAgICAgICAiUmVxdWVzdCB0byAlczogdG9waWM9JXMsIHVzZXJJZD0lcywgc2F2ZV90b19kYj0lcywgdXNlX2NhY2hlPSVzIiwKICAgICAgICAgICAgZW5kcG9pbnQsIHJlcXVlc3RfZGF0YS50b3BpYywgcmVxdWVzdF9kYXRhLnVzZXJJZCwKICAgICAgICAgICAgcmVxdWVzdF9kYXRhLnNhdmVfdG9fZGIsIHJlcXVlc3RfZGF0YS51c2VfY2FjaGUsCiAgICAgICAgKQoKCiMg4pSA4pSAIFJvdXRlcyDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKCkBicC5yb3V0ZSgiL3RpY2tlci88dGlja2VyPiIsIG1ldGhvZHM9WyJQT1NUIl0pCmRlZiBnZXRfdGlja2VyX2RhdGEodGlja2VyOiBzdHIpOgogICAgdHJ5OgogICAgICAgIHRpY2tlciA9IHRpY2tlci5zdHJpcCgpLnVwcGVyKCkKICAgICAgICBpZiBub3QgdGlja2VyIG9yIG5vdCByZS5tYXRjaChyIl5bQS1aMC05XXsxLDV9JCIsIHRpY2tlcik6CiAgICAgICAgICAgIHJldHVybiBqc29uaWZ5KHsic3VjY2VzcyI6IEZhbHNlLCAiZXJyb3IiOiAiSW52YWxpZCB0aWNrZXIgc3ltYm9sIGZvcm1hdC4gTXVzdCBiZSAxLTUgYWxwaGFudW1lcmljIGNoYXJhY3RlcnMuIn0pLCA0MDAKCiAgICAgICAgZGF0YSA9IHJlcXVlc3QuZ2V0X2pzb24oKQogICAgICAgIHNlcnZpY2UgPSBnZXRfc3VwYWJhc2Vfc2VydmljZSgpCiAgICAgICAgcmVzZWFyY2hfc2VydmljZSA9IGdldF9yZXNlYXJjaF9zZXJ2aWNlKCkKCiAgICAgICAgcmVxdWVzdF9kYXRhLCBlcnJvcl9yZXNwb25zZSA9IHZhbGlkYXRlX2FuZF9jcmVhdGVfdGlja2VyX3JlcXVlc3RfZGF0YShkYXRhIG9yIHt9LCB0aWNrZXI9dGlja2VyKQogICAgICAgIGlmIGVycm9yX3Jlc3BvbnNlOgogICAgICAgICAgICByZXR1cm4ganNvbmlmeShhc2RpY3QoZXJyb3JfcmVzcG9uc2UpKSwgNDAwCgogICAgICAgIGxvZ19yZXF1ZXN0X2RhdGEocmVxdWVzdF9kYXRhLCAiZ2V0X3RpY2tlcl9kYXRhIikKICAgICAgICBpZiByZXF1ZXN0X2RhdGEgaXMgbm90IE5vbmU6CiAgICAgICAgICAgIHNlcnZpY2UudmVyaWZ5X3VzZXIodXNlcl9pZD1yZXF1ZXN0X2RhdGEudXNlcklkKQogICAgICAgICAgICByZXNlYXJjaF9yZXN1bHQgPSByZXNlYXJjaF9zZXJ2aWNlLmdldF9yZXNlYXJjaF9kYXRhKAogICAgICAgICAgICAgICAgdGlja2VyPXRpY2tlciwKICAgICAgICAgICAgICAgIHVzZV9jYWNoZT1yZXF1ZXN0X2RhdGEudXNlX2NhY2hlLAogICAgICAgICAgICAgICAgc2F2ZV90b19kYj1yZXF1ZXN0X2RhdGEuc2F2ZV90b19kYiwKICAgICAgICAgICAgICAgIGluY2x1ZGVfb3B0aW9ucz1yZXF1ZXN0X2RhdGEuaW5jbHVkZV9vcHRpb25zLAogICAgICAgICAgICApCiAgICAgICAgICAgIGlmIG5vdCByZXNlYXJjaF9yZXN1bHRbInN1Y2Nlc3MiXToKICAgICAgICAgICAgICAgIHJldHVybiBqc29uaWZ5KHJlc2VhcmNoX3Jlc3VsdCksIDQwMAoKICAgICAgICByZXR1cm4ganNvbmlmeShyZXNlYXJjaF9yZXN1bHQpCgogICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgIGxvZ2dlci5lcnJvcigiVGlja2VyIHJlc2VhcmNoIGZhaWxlZCBmb3IgdGlja2VyICclcyc6ICVzIiwgdGlja2VyLCBlLCBleGNfaW5mbz1UcnVlKQogICAgICAgIHJldHVybiBqc29uaWZ5KHsic3VjY2VzcyI6IEZhbHNlLCAiZXJyb3IiOiBmIlJlc2VhcmNoIGZhaWxlZDoge3N0cihlKX0ifSksIDUwMAoKCkBicC5yb3V0ZSgiL3RpY2tlci88dGlja2VyPi9oaXN0b3J5IiwgbWV0aG9kcz1bIlBPU1QiXSkKZGVmIGdldF90aWNrZXJfaGlzdG9yeSh0aWNrZXI6IHN0cik6CiAgICB0cnk6CiAgICAgICAgdGlja2VyID0gdGlja2VyLnN0cmlwKCkudXBwZXIoKQogICAgICAgIGlmIG5vdCB0aWNrZXIgb3Igbm90IHJlLm1hdGNoKHIiXltBLVowLTldezEsNX0kIiwgdGlja2VyKToKICAgICAgICAgICAgcmV0dXJuIGpzb25pZnkoeyJzdWNjZXNzIjogRmFsc2UsICJlcnJvciI6ICJJbnZhbGlkIHRpY2tlciBzeW1ib2wgZm9ybWF0LiBNdXN0IGJlIDEtNSBhbHBoYW51bWVyaWMgY2hhcmFjdGVycy4ifSksIDQwMAoKICAgICAgICBkYXRhID0gcmVxdWVzdC5nZXRfanNvbigpIG9yIHt9CiAgICAgICAgaW50ZXJ2YWwgPSBkYXRhLmdldCgiaW50ZXJ2YWwiKQoKICAgICAgICAjIFdpbmRvd2VkIGJhY2tmaWxsIChjaGFydCBsYXp5LWxvYWQpOiBleHBsaWNpdCBbc3RhcnQsIGVuZCkgd2luZG93IGF0CiAgICAgICAgIyB0aGUgcmVxdWVzdGVkIGludGVydmFsLCBlLmcuIHsiaW50ZXJ2YWwiOiAiNW0iLCAic3RhcnQiOgogICAgICAgICMgIjIwMjYtMDgtMDEiLCAiZW5kIjogIjIwMjYtMDktMDEifS4gU2FtZSBiYXIgcGF5bG9hZCBhcyB0aGUgcGVyaW9kCiAgICAgICAgIyBmZXRjaCBzbyB0aGUgY2xpZW50IGNhbiBtZXJnZSBieSB0aW1lc3RhbXAuCiAgICAgICAgaWYgZGF0YS5nZXQoInN0YXJ0Iikgb3IgZGF0YS5nZXQoImVuZCIpOgogICAgICAgICAgICBpZiBub3QgaW50ZXJ2YWw6CiAgICAgICAgICAgICAgICByZXR1cm4ganNvbmlmeSh7InN1Y2Nlc3MiOiBGYWxzZSwgImVycm9yIjogIldpbmRvd2VkIGZldGNoIHJlcXVpcmVzIGFuIGludGVydmFsIChlLmcuICc1bScpLiJ9KSwgNDAwCiAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgIGhpc3RvcmljYWxfZGF0YSA9IGdldF9oaXN0b3JpY2FsX3dpbmRvdyh0aWNrZXIsIGludGVydmFsLCBkYXRhLmdldCgic3RhcnQiKSwgZGF0YS5nZXQoImVuZCIpLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGV4dGVuZGVkX2hvdXJzPWJvb2woZGF0YS5nZXQoImV4dGVuZGVkX2hvdXJzIiwgRmFsc2UpKSkKICAgICAgICAgICAgZXhjZXB0IFZhbHVlRXJyb3IgYXMgZToKICAgICAgICAgICAgICAgIHJldHVybiBqc29uaWZ5KHsic3VjY2VzcyI6IEZhbHNlLCAiZXJyb3IiOiBzdHIoZSl9KSwgNDAwCiAgICAgICAgICAgIHJldHVybiBqc29uaWZ5KHsic3VjY2VzcyI6IFRydWUsICJkYXRhIjogaGlzdG9yaWNhbF9kYXRhLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgImludGVydmFsIjogaGlzdG9yaWNhbF9kYXRhLmdldCgiaW50ZXJ2YWwiKSwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICJzdGFydCI6IGRhdGEuZ2V0KCJzdGFydCIpLCAiZW5kIjogZGF0YS5nZXQoImVuZCIpLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgInRpbWVzdGFtcCI6IHRpbWUudGltZSgpLCAiZnJvbV9jYWNoZSI6IEZhbHNlfSkKCiAgICAgICAgcGVyaW9kID0gZGF0YS5nZXQoInBlcmlvZCIsICIxTSIpCiAgICAgICAgaWYgcGVyaW9kIG5vdCBpbiBQRVJJT0RfTUFQOgogICAgICAgICAgICByZXR1cm4ganNvbmlmeSh7InN1Y2Nlc3MiOiBGYWxzZSwgImVycm9yIjogZiJJbnZhbGlkIHBlcmlvZC4gTXVzdCBiZSBvbmUgb2Y6IHsnLCAnLmpvaW4oUEVSSU9EX01BUC5rZXlzKCkpfSJ9KSwgNDAwCgogICAgICAgIGV4dGVuZGVkX2hvdXJzID0gYm9vbChkYXRhLmdldCgiZXh0ZW5kZWRfaG91cnMiLCBGYWxzZSkpCiAgICAgICAgaGlzdG9yaWNhbF9kYXRhID0gZ2V0X2hpc3RvcmljYWxfcHJpY2VzKHRpY2tlciwgcGVyaW9kLCBpbnRlcnZhbF9vdmVycmlkZT1pbnRlcnZhbCwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgZXh0ZW5kZWRfaG91cnM9ZXh0ZW5kZWRfaG91cnMpCgogICAgICAgIHJldHVybiBqc29uaWZ5KHsic3VjY2VzcyI6IFRydWUsICJkYXRhIjogaGlzdG9yaWNhbF9kYXRhLCAicGVyaW9kIjogcGVyaW9kLCAidGltZXN0YW1wIjogdGltZS50aW1lKCksICJmcm9tX2NhY2hlIjogRmFsc2V9KQoKICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZToKICAgICAgICBsb2dnZXIuZXJyb3IoIlRpY2tlciBoaXN0b3J5IGZldGNoIGZhaWxlZCBmb3IgdGlja2VyICclcyc6ICVzIiwgdGlja2VyLCBlLCBleGNfaW5mbz1UcnVlKQogICAgICAgIHJldHVybiBqc29uaWZ5KHsic3VjY2VzcyI6IEZhbHNlLCAiZXJyb3IiOiBmIkhpc3RvcnkgZmV0Y2ggZmFpbGVkOiB7c3RyKGUpfSJ9KSwgNTAwCgoKQGJwLnJvdXRlKCIvdGlja2VyLzx0aWNrZXI+L2hpc3RvcnktZGF0ZSIsIG1ldGhvZHM9WyJQT1NUIl0pCmRlZiBnZXRfdGlja2VyX2hpc3RvcnlfZm9yX2RhdGUodGlja2VyOiBzdHIpOgogICAgIiIiCiAgICBJbnRyYWRheSBPSExDViArIFZXQVAgKyBSU0koMTQpIGZvciBvbmUgc3BlY2lmaWMgcGFzdCBjYWxlbmRhciBkYXkg4oCUIHVzZWQKICAgIGJ5IHRoZSBEYWlseSBSZXZpZXcncyBwZXItdHJhZGUgY2hhcnQgKHNlZSBSZXZpZXdUcmFkZUNoYXJ0LnRzeCkgc28gYQogICAgdHJhZGUgY2FyZCBjYW4gc2hvdyB0aGUgYWN0dWFsIHByaWNlL3ZvbHVtZS9SU0kvVldBUCBhY3Rpb24gYXJvdW5kIGl0cwogICAgZW50cnkvZXhpdCwgbm90IGp1c3QgdGhlIGxvZ2dlZCBudW1iZXJzLgoKICAgIHlmaW5hbmNlIG9ubHkgc2VydmVzIGludHJhZGF5IGJhcnMgZm9yIGEgbGltaXRlZCBsb29rYmFjayB3aW5kb3cgKHJvdWdobHkKICAgIDYwIGRheXMgZm9yIDUtbWludXRlIGJhcnMpIOKAlCBhIHJlcXVlc3QgZm9yIGFuIG9sZGVyIGRhdGUgY29tZXMgYmFjayB3aXRoCiAgICAiYXZhaWxhYmxlIjogRmFsc2UgcmF0aGVyIHRoYW4gYW4gZXJyb3I7IHRoZSBjbGllbnQgc2hvd3MgYSBncmFjZWZ1bAogICAgImNoYXJ0IHVuYXZhaWxhYmxlIiBzdGF0ZSBmb3IgdGhvc2UgaW5zdGVhZCBvZiB0cmVhdGluZyBpdCBhcyBhIGZhaWx1cmUuCiAgICAiIiIKICAgIGRhdGVfc3RyID0gIj8iCiAgICB0cnk6CiAgICAgICAgdGlja2VyID0gdGlja2VyLnN0cmlwKCkudXBwZXIoKQogICAgICAgIGlmIG5vdCB0aWNrZXIgb3Igbm90IHJlLm1hdGNoKHIiXltBLVowLTldezEsNX0kIiwgdGlja2VyKToKICAgICAgICAgICAgcmV0dXJuIGpzb25pZnkoeyJzdWNjZXNzIjogRmFsc2UsICJlcnJvciI6ICJJbnZhbGlkIHRpY2tlciBzeW1ib2wgZm9ybWF0LiBNdXN0IGJlIDEtNSBhbHBoYW51bWVyaWMgY2hhcmFjdGVycy4ifSksIDQwMAoKICAgICAgICBkYXRhID0gcmVxdWVzdC5nZXRfanNvbigpIG9yIHt9CiAgICAgICAgZGF0ZV9zdHIgPSBkYXRhLmdldCgiZGF0ZSIsICIiKQogICAgICAgIGlmIG5vdCByZS5tYXRjaChyIl5cZHs0fS1cZHsyfS1cZHsyfSQiLCBkYXRlX3N0cik6CiAgICAgICAgICAgIHJldHVybiBqc29uaWZ5KHsic3VjY2VzcyI6IEZhbHNlLCAiZXJyb3IiOiAiZGF0ZSBtdXN0IGJlIFlZWVktTU0tREQifSksIDQwMAoKICAgICAgICAjIE1hdGNoZXMgd2hhdGV2ZXIgaW50ZXJ2YWwgdGhlIDFEIGNoYXJ0IGlzIGN1cnJlbnRseSBzaG93aW5nIChzZWUKICAgICAgICAjIC90aWNrZXIvPHRpY2tlcj4vaGlzdG9yeSdzIG93biBpbnRlcnZhbCBvdmVycmlkZSkgc28gYSBwYW5uZWQtaW4KICAgICAgICAjIGVhcmxpZXIgZGF5J3MgYmFycyBhcmUgdGhlIHNhbWUgZ3JhbnVsYXJpdHkgYXMgdG9kYXkncywgaW5zdGVhZCBvZgogICAgICAgICMgYWx3YXlzIGRlZmF1bHRpbmcgdG8gNW0gcmVnYXJkbGVzcyBvZiB3aGF0IHRoZSB1c2VyIHBpY2tlZC4gT3RoZXIKICAgICAgICAjIGNhbGxlcnMgKGUuZy4gdGhlIERhaWx5IFJldmlldyBwZXItdHJhZGUgY2hhcnQpIHNpbXBseSBkb24ndCBzZW5kCiAgICAgICAgIyB0aGlzIGFuZCBnZXQgdGhlIHNhbWUgIjVtIiBkZWZhdWx0IGFzIGJlZm9yZS4KICAgICAgICBpbnRlcnZhbCA9IGRhdGEuZ2V0KCJpbnRlcnZhbCIpCiAgICAgICAgaWYgaW50ZXJ2YWwgbm90IGluIEFMTE9XRURfSU5URVJWQUxTWyIxRCJdOgogICAgICAgICAgICBpbnRlcnZhbCA9ICI1bSIKCiAgICAgICAgY2hhcnQgPSBnZXRfaW50cmFkYXlfY2hhcnRfZm9yX2RhdGUodGlja2VyLCBkYXRlX3N0ciwgaW50ZXJ2YWw9aW50ZXJ2YWwpCiAgICAgICAgcmV0dXJuIGpzb25pZnkoeyJzdWNjZXNzIjogVHJ1ZSwgImRhdGEiOiBjaGFydCwgImRhdGUiOiBkYXRlX3N0cn0pCgogICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgIGxvZ2dlci5lcnJvcigiSW50cmFkYXkgY2hhcnQgZmV0Y2ggZmFpbGVkIGZvciB0aWNrZXIgJyVzJyBvbiAlczogJXMiLCB0aWNrZXIsIGRhdGVfc3RyLCBlLCBleGNfaW5mbz1UcnVlKQogICAgICAgIHJldHVybiBqc29uaWZ5KHsic3VjY2VzcyI6IEZhbHNlLCAiZXJyb3IiOiBmIkNoYXJ0IGZldGNoIGZhaWxlZDoge3N0cihlKX0ifSksIDUwMAoKCkBicC5yb3V0ZSgiL3NlYXJjaC88dGlja2VyPiIsIG1ldGhvZHM9WyJQT1NUIl0pCmRlZiBzZWFyY2hfZm9yX3RpY2tlcih0aWNrZXI6IHN0cik6CiAgICB0cnk6CiAgICAgICAgdGlja2VyID0gdGlja2VyLnN0cmlwKCkudXBwZXIoKQogICAgICAgIGlmIG5vdCB0aWNrZXIgb3Igbm90IHJlLm1hdGNoKHIiXltBLVowLTldezEsNX0kIiwgdGlja2VyKToKICAgICAgICAgICAgcmV0dXJuIGpzb25pZnkoeyJzdWNjZXNzIjogRmFsc2UsICJlcnJvciI6ICJUaWNrZXIgZG9lcyBub3QgbWF0Y2ggZm9ybWF0In0pLCA0MDQKICAgICAgICByZXNlYXJjaF9zZXJ2aWNlID0gZ2V0X3Jlc2VhcmNoX3NlcnZpY2UoKQogICAgICAgIHJldHVybiBqc29uaWZ5KHJlc2VhcmNoX3NlcnZpY2UuZ2V0X3RpY2tlcl9zZWFyY2godGlja2VyKSkKICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZToKICAgICAgICBsb2dnZXIuZXJyb3IoIlRpY2tlciByZXNlYXJjaCBmYWlsZWQgZm9yIHRpY2tlciAnJXMnOiAlcyIsIHRpY2tlciwgZSwgZXhjX2luZm89VHJ1ZSkKICAgICAgICByZXR1cm4ganNvbmlmeSh7InN1Y2Nlc3MiOiBGYWxzZSwgImRhdGEiOiBOb25lLCAiZXJyb3IiOiBmIlRpY2tlciBub3QgZm91bmQ6IHtzdHIoZSl9In0pLCA0MDQKCgpAYnAucm91dGUoIi9nZW5lcmF0ZV9wb3N0Lzx0aWNrZXI+IiwgbWV0aG9kcz1bIlBPU1QiXSkKZGVmIGdlbmVyYXRlX3Bvc3QodGlja2VyOiBzdHIpOgogICAgdHJ5OgogICAgICAgIHRpY2tlciA9IHRpY2tlci5zdHJpcCgpLnVwcGVyKCkKICAgICAgICBpZiBub3QgdGlja2VyIG9yIG5vdCByZS5tYXRjaChyIl5bQS1aMC05XXsxLDV9JCIsIHRpY2tlcik6CiAgICAgICAgICAgIHJldHVybiBqc29uaWZ5KHsic3VjY2VzcyI6IEZhbHNlLCAiZXJyb3IiOiAiSW52YWxpZCB0aWNrZXIgc3ltYm9sIGZvcm1hdC4gTXVzdCBiZSAxLTUgYWxwaGFudW1lcmljIGNoYXJhY3RlcnMuIn0pLCA0MDAKCiAgICAgICAgZGF0YSA9IHJlcXVlc3QuZ2V0X2pzb24oKQogICAgICAgIHNlcnZpY2UgPSBnZXRfc3VwYWJhc2Vfc2VydmljZSgpCiAgICAgICAgcmVzZWFyY2hfc2VydmljZSA9IGdldF9yZXNlYXJjaF9zZXJ2aWNlKCkKICAgICAgICBibG9nX3NlcnZpY2UgPSBnZXRfYmxvZ19zZXJ2aWNlKCkKCiAgICAgICAgcmVxdWVzdF9kYXRhLCBlcnJvcl9yZXNwb25zZSA9IHZhbGlkYXRlX2FuZF9jcmVhdGVfdGlja2VyX3JlcXVlc3RfZGF0YShkYXRhIG9yIHt9LCB0aWNrZXI9dGlja2VyKQogICAgICAgIGlmIGVycm9yX3Jlc3BvbnNlOgogICAgICAgICAgICByZXR1cm4ganNvbmlmeShhc2RpY3QoZXJyb3JfcmVzcG9uc2UpKSwgNDAwCgogICAgICAgIGxvZ19yZXF1ZXN0X2RhdGEocmVxdWVzdF9kYXRhLCAiZ2VuZXJhdGVfcG9zdCIpCiAgICAgICAgYXNzZXJ0IHJlcXVlc3RfZGF0YSBpcyBub3QgTm9uZQoKICAgICAgICBzZXJ2aWNlLnZlcmlmeV91c2VyKHVzZXJfaWQ9cmVxdWVzdF9kYXRhLnVzZXJJZCkKCiAgICAgICAgcmVzZWFyY2hfcmVzdWx0ID0gTm9uZQogICAgICAgIHJlc2VhcmNoX2RhdGEgPSBOb25lCiAgICAgICAgcmVzZWFyY2hfaWQgPSBOb25lCiAgICAgICAgdXNlZF9jYWNoZSA9IEZhbHNlCgogICAgICAgIGlmIHJlcXVlc3RfZGF0YS5yZXNlYXJjaF9kYXRhOgogICAgICAgICAgICByZXNlYXJjaF9kYXRhID0gcmVxdWVzdF9kYXRhLnJlc2VhcmNoX2RhdGEKICAgICAgICAgICAgbG9nZ2VyLmluZm8oIlVzaW5nIHByb3ZpZGVkIHJlc2VhcmNoIGRhdGEgZm9yICVzIiwgdGlja2VyKQogICAgICAgIGVsc2U6CiAgICAgICAgICAgIHJlc2VhcmNoX3Jlc3VsdCA9IHJlc2VhcmNoX3NlcnZpY2UuZ2V0X3Jlc2VhcmNoX2RhdGEoCiAgICAgICAgICAgICAgICB0aWNrZXI9dGlja2VyLAogICAgICAgICAgICAgICAgdXNlX2NhY2hlPXJlcXVlc3RfZGF0YS51c2VfY2FjaGUsCiAgICAgICAgICAgICAgICBzYXZlX3RvX2RiPXJlcXVlc3RfZGF0YS5zYXZlX3RvX2RiLAogICAgICAgICAgICApCiAgICAgICAgICAgIGlmIG5vdCByZXNlYXJjaF9yZXN1bHRbInN1Y2Nlc3MiXToKICAgICAgICAgICAgICAgIHJldHVybiBqc29uaWZ5KHJlc2VhcmNoX3Jlc3VsdCksIDQwMAogICAgICAgICAgICByZXNlYXJjaF9kYXRhID0gcmVzZWFyY2hfcmVzdWx0WyJkYXRhIl0KICAgICAgICAgICAgcmVzZWFyY2hfaWQgPSByZXNlYXJjaF9yZXN1bHQuZ2V0KCJyZXNlYXJjaF9pZCIpCiAgICAgICAgICAgIHVzZWRfY2FjaGUgPSByZXNlYXJjaF9yZXN1bHQuZ2V0KCJjYWNoZWQiLCBGYWxzZSkKCiAgICAgICAgYmxvZ19yZXN1bHQgPSBibG9nX3NlcnZpY2UuZ2VuZXJhdGVfYmxvZ19wb3N0KAogICAgICAgICAgICB0aWNrZXI9dGlja2VyLAogICAgICAgICAgICByZXNlYXJjaF9kYXRhPXJlc2VhcmNoX2RhdGEsCiAgICAgICAgICAgIHNhdmVfdG9fZGI9cmVxdWVzdF9kYXRhLnNhdmVfdG9fZGIsCiAgICAgICAgICAgIHJlc2VhcmNoX2lkPXJlc2VhcmNoX2lkLAogICAgICAgICAgICB0YXJnZXRfbGVuZ3RoPXJlcXVlc3RfZGF0YS50YXJnZXRfbGVuZ3RoIG9yIDgwMCwKICAgICAgICApCiAgICAgICAgaWYgbm90IGJsb2dfcmVzdWx0WyJzdWNjZXNzIl06CiAgICAgICAgICAgIHJldHVybiBqc29uaWZ5KGJsb2dfcmVzdWx0KSwgNDAwCgogICAgICAgIHJldHVybiBqc29uaWZ5KHsKICAgICAgICAgICAgInN1Y2Nlc3MiOiBUcnVlLAogICAgICAgICAgICAiZGF0YSI6IGJsb2dfcmVzdWx0WyJkYXRhIl0sCiAgICAgICAgICAgICJibG9nX2lkIjogYmxvZ19yZXN1bHQuZ2V0KCJibG9nX2lkIiksCiAgICAgICAgICAgICJyZXNlYXJjaF9pZCI6IHJlc2VhcmNoX2lkLAogICAgICAgICAgICAicmVzZWFyY2hfY2FjaGVkIjogdXNlZF9jYWNoZSwKICAgICAgICAgICAgImJsb2dfc2F2ZWQiOiBibG9nX3Jlc3VsdC5nZXQoInNhdmVkIiwgRmFsc2UpLAogICAgICAgICAgICAidGltZXN0YW1wIjogdGltZS50aW1lKCksCiAgICAgICAgfSkKCiAgICBleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICAgICAgX3RvcGljID0gbG9jYWxzKCkuZ2V0KCJ0b3BpYyIpIG9yIChsb2NhbHMoKS5nZXQoImRhdGEiKSBvciB7fSkuZ2V0KCJ0b3BpYyIpIG9yICI8dW5rbm93bj4iCiAgICAgICAgbG9nZ2VyLmVycm9yKCJCbG9nIGdlbmVyYXRpb24gZmFpbGVkIGZvciB0b3BpYyAnJXMnOiAlcyIsIF90b3BpYywgZSwgZXhjX2luZm89VHJ1ZSkKICAgICAgICByZXR1cm4ganNvbmlmeSh7InN1Y2Nlc3MiOiBGYWxzZSwgImVycm9yIjogZiJCbG9nIGdlbmVyYXRpb24gZmFpbGVkOiB7c3RyKGUpfSJ9KSwgNTAwCgoKQGJwLnJvdXRlKCIvZ2VuZXJhdGVfdGlja2VyX3VwZGF0ZS88dGlja2VyPiIsIG1ldGhvZHM9WyJQT1NUIl0pCmRlZiBnZW5lcmF0ZV90aWNrZXJfdXBkYXRlKHRpY2tlcjogc3RyKToKICAgIHRyeToKICAgICAgICB0aWNrZXIgPSB0aWNrZXIuc3RyaXAoKS51cHBlcigpCiAgICAgICAgaWYgbm90IHRpY2tlciBvciBub3QgcmUubWF0Y2gociJeW0EtWjAtOV17MSw1fSQiLCB0aWNrZXIpOgogICAgICAgICAgICByZXR1cm4ganNvbmlmeSh7InN1Y2Nlc3MiOiBGYWxzZSwgImVycm9yIjogIkludmFsaWQgdGlja2VyIHN5bWJvbCBmb3JtYXQuIE11c3QgYmUgMS01IGFscGhhbnVtZXJpYyBjaGFyYWN0ZXJzLiJ9KSwgNDAwCgogICAgICAgIHJlcXVlc3RfZGF0YV9yYXcgPSByZXF1ZXN0LmdldF9qc29uKCkgb3Ige30KICAgICAgICB0YXJnZXRfbGVuZ3RoID0gcmVxdWVzdF9kYXRhX3Jhdy5nZXQoInRhcmdldF9sZW5ndGgiLCA1MDApCiAgICAgICAgaWYgbm90IGlzaW5zdGFuY2UodGFyZ2V0X2xlbmd0aCwgaW50KSBvciB0YXJnZXRfbGVuZ3RoIDwgNTAgb3IgdGFyZ2V0X2xlbmd0aCA+IDUwMDoKICAgICAgICAgICAgdGFyZ2V0X2xlbmd0aCA9IDUwMAoKICAgICAgICByZXNlYXJjaF9zZXJ2aWNlID0gZ2V0X3Jlc2VhcmNoX3NlcnZpY2UoKQogICAgICAgIHJlc2VhcmNoX3Jlc3VsdCA9IHJlc2VhcmNoX3NlcnZpY2UuZ2V0X3Jlc2VhcmNoX2RhdGEodGlja2VyPXRpY2tlciwgdXNlX2NhY2hlPUZhbHNlLCBzYXZlX3RvX2RiPVRydWUpCiAgICAgICAgaWYgbm90IHJlc2VhcmNoX3Jlc3VsdC5nZXQoInN1Y2Nlc3MiKToKICAgICAgICAgICAgcmV0dXJuIGpzb25pZnkoeyJzdWNjZXNzIjogRmFsc2UsICJlcnJvciI6IHJlc2VhcmNoX3Jlc3VsdC5nZXQoImVycm9yIiwgIkZhaWxlZCB0byByZXRyaWV2ZSByZXNlYXJjaCBkYXRhIiksICJ0aWNrZXIiOiB0aWNrZXJ9KSwgNTAwCgogICAgICAgIHJlc2VhcmNoX2RhdGEgPSByZXNlYXJjaF9yZXN1bHQKICAgICAgICBsb29wID0gYXN5bmNpby5uZXdfZXZlbnRfbG9vcCgpCiAgICAgICAgYXN5bmNpby5zZXRfZXZlbnRfbG9vcChsb29wKQogICAgICAgIHRyeToKICAgICAgICAgICAgcmVzdWx0ID0gbG9vcC5ydW5fdW50aWxfY29tcGxldGUoCiAgICAgICAgICAgICAgICBhbnRocm9waWNfc2VydmljZS5nZW5lcmF0ZV90aWNrZXJfdXBkYXRlKHJlc2VhcmNoX2RhdGE9cmVzZWFyY2hfZGF0YSwgdGFyZ2V0X2xlbmd0aD10YXJnZXRfbGVuZ3RoLCB0aWNrZXI9dGlja2VyKQogICAgICAgICAgICApCiAgICAgICAgZmluYWxseToKICAgICAgICAgICAgbG9vcC5jbG9zZSgpCgogICAgICAgIGlmIG5vdCByZXN1bHQuZ2V0KCJzdWNjZXNzIiwgVHJ1ZSk6CiAgICAgICAgICAgIGVycm9yX2RldGFpbHMgPSByZXN1bHQuZ2V0KCJlcnJvcl9kZXRhaWxzIiwge30pCiAgICAgICAgICAgIGVycm9yX3R5cGUgPSBlcnJvcl9kZXRhaWxzLmdldCgidHlwZSIsICJ1bmtub3duX2Vycm9yIikKICAgICAgICAgICAgc3RhdHVzX2NvZGUgPSBlcnJvcl9kZXRhaWxzLmdldCgic3RhdHVzX2NvZGUiLCA1MDApCiAgICAgICAgICAgIGlmIGVycm9yX3R5cGUgPT0gIm5vdF9mb3VuZF9lcnJvciIgb3Igc3RhdHVzX2NvZGUgPT0gNDA0OgogICAgICAgICAgICAgICAgaHR0cF9zdGF0dXMgPSA0MDQKICAgICAgICAgICAgZWxpZiBlcnJvcl90eXBlIGluICgiY29ubmVjdGlvbl9lcnJvciIsICJ0aW1lb3V0X2Vycm9yIik6CiAgICAgICAgICAgICAgICBodHRwX3N0YXR1cyA9IDUwMwogICAgICAgICAgICBlbGlmIHN0YXR1c19jb2RlIGluIFs0MDAsIDQwMSwgNDAzLCA0MjldOgogICAgICAgICAgICAgICAgaHR0cF9zdGF0dXMgPSBzdGF0dXNfY29kZQogICAgICAgICAgICBlbHNlOgogICAgICAgICAgICAgICAgaHR0cF9zdGF0dXMgPSA1MDAKICAgICAgICAgICAgbG9nZ2VyLmVycm9yKCJUaWNrZXIgdXBkYXRlIGdlbmVyYXRpb24gZmFpbGVkIGZvciAlczogJXMgKEhUVFAgJXMpIiwgdGlja2VyLCByZXN1bHQuZ2V0KCJlcnJvciIpLCBodHRwX3N0YXR1cykKICAgICAgICAgICAgcmV0dXJuIGpzb25pZnkocmVzdWx0KSwgaHR0cF9zdGF0dXMKCiAgICAgICAgdGlja2VyX3VwZGF0ZV9pZCA9IE5vbmUKICAgICAgICB0cnk6CiAgICAgICAgICAgIHNlcnZpY2UgPSBnZXRfc3VwYWJhc2Vfc2VydmljZSgpCiAgICAgICAgICAgIHN0b2NrX3Jlc2VhcmNoX2lkID0gKAogICAgICAgICAgICAgICAgcmVzZWFyY2hfcmVzdWx0LmdldCgicmVzZWFyY2hfaWQiKQogICAgICAgICAgICAgICAgb3IgcmVzZWFyY2hfZGF0YS5nZXQoInJlc2VhcmNoX2lkIikKICAgICAgICAgICAgICAgIG9yIHJlc2VhcmNoX2RhdGEuZ2V0KCJpZCIpCiAgICAgICAgICAgICkKICAgICAgICAgICAgc2F2ZV9yZXN1bHQgPSBzZXJ2aWNlLnNhdmVfdGlja2VyX3VwZGF0ZSh7CiAgICAgICAgICAgICAgICAidGlja2VyIjogdGlja2VyLAogICAgICAgICAgICAgICAgImNvbnRlbnQiOiByZXN1bHQuZ2V0KCJjb250ZW50IiwgIiIpLAogICAgICAgICAgICAgICAgImNoYXJhY3Rlcl9jb3VudCI6IHJlc3VsdC5nZXQoImNoYXJhY3Rlcl9jb3VudCIsIDApLAogICAgICAgICAgICAgICAgInRhZ3MiOiByZXN1bHQuZ2V0KCJ0YWdzIiwgW10pLAogICAgICAgICAgICAgICAgIm1vZGVsX3VzZWQiOiByZXN1bHQuZ2V0KCJtb2RlbF91c2VkIiwgImNsYXVkZS1oYWlrdS00LTUiKSwKICAgICAgICAgICAgICAgICJ0YXJnZXRfbGVuZ3RoIjogdGFyZ2V0X2xlbmd0aCwKICAgICAgICAgICAgICAgICJzdG9ja19yZXNlYXJjaF9pZCI6IHN0b2NrX3Jlc2VhcmNoX2lkLAogICAgICAgICAgICAgICAgInN0YXR1cyI6ICJwdWJsaXNoZWQiLAogICAgICAgICAgICB9KQogICAgICAgICAgICBpZiBzYXZlX3Jlc3VsdC5nZXQoInN1Y2Nlc3MiKToKICAgICAgICAgICAgICAgIHRpY2tlcl91cGRhdGVfaWQgPSBzYXZlX3Jlc3VsdC5nZXQoImRhdGEiLCB7fSkuZ2V0KCJpZCIpCiAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBzYXZlX2Vycm9yOgogICAgICAgICAgICBsb2dnZXIuZXJyb3IoIkVycm9yIHNhdmluZyB0aWNrZXIgdXBkYXRlIGZvciAlczogJXMiLCB0aWNrZXIsIHNhdmVfZXJyb3IsIGV4Y19pbmZvPVRydWUpCgogICAgICAgIHJlc3BvbnNlID0gcmVzdWx0LmNvcHkoKQogICAgICAgIHJlc3BvbnNlWyJ0aWNrZXJfdXBkYXRlX2lkIl0gPSB0aWNrZXJfdXBkYXRlX2lkCiAgICAgICAgcmVzcG9uc2VbInNhdmVkIl0gPSB0aWNrZXJfdXBkYXRlX2lkIGlzIG5vdCBOb25lCiAgICAgICAgcmV0dXJuIGpzb25pZnkocmVzcG9uc2UpLCAyMDAKCiAgICBleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICAgICAgbG9nZ2VyLmVycm9yKCJUaWNrZXIgdXBkYXRlIGdlbmVyYXRpb24gZmFpbGVkIGZvciAlczogJXMiLCB0aWNrZXIsIGUsIGV4Y19pbmZvPVRydWUpCiAgICAgICAgcmV0dXJuIGpzb25pZnkoeyJzdWNjZXNzIjogRmFsc2UsICJlcnJvciI6IGYiVGlja2VyIHVwZGF0ZSBnZW5lcmF0aW9uIGZhaWxlZDoge3N0cihlKX0iLCAidGlja2VyIjogdGlja2VyfSksIDUwMAoKCkBicC5yb3V0ZSgiL3RyZW5kaW5nLXN0b2Nrcy1zb3J0IiwgbWV0aG9kcz1bIkdFVCIsICJQT1NUIl0pCmRlZiBnZXRfdHJlbmRpbmdfc3RvY2tzX2J5X3BhcmFtKCk6CiAgICB0cnk6CiAgICAgICAgaWYgcmVxdWVzdC5tZXRob2QgPT0gIkdFVCI6CiAgICAgICAgICAgIHNvcnRfYnkgPSByZXF1ZXN0LmFyZ3MuZ2V0KCJzb3J0X2J5IikKICAgICAgICBlbHNlOgogICAgICAgICAgICBzb3J0X2J5ID0gKHJlcXVlc3QuZ2V0X2pzb24oKSBvciB7fSkuZ2V0KCJzb3J0X2J5IikKCiAgICAgICAgaWYgbm90IHNvcnRfYnk6CiAgICAgICAgICAgIHJldHVybiBqc29uaWZ5KHsic3VjY2VzcyI6IEZhbHNlLCAiZXJyb3IiOiAic29ydF9ieSBwYXJhbWV0ZXIgaXMgcmVxdWlyZWQifSksIDQwMAoKICAgICAgICB2YWxpZF9zb3J0X3BhcmFtcyA9IFsidm9sdW1lIiwgImNoYW5nZSIsICJwZSIsICJtYXJrZXRjYXAiXQogICAgICAgIGlmIHNvcnRfYnkgbm90IGluIHZhbGlkX3NvcnRfcGFyYW1zOgogICAgICAgICAgICByZXR1cm4ganNvbmlmeSh7InN1Y2Nlc3MiOiBGYWxzZSwgImVycm9yIjogZidJbnZhbGlkIHNvcnRfYnkgcGFyYW1ldGVyLiBNdXN0IGJlIG9uZSBvZjogeyIsICIuam9pbih2YWxpZF9zb3J0X3BhcmFtcyl9J30pLCA0MDAKCiAgICAgICAgY2FjaGVfa2V5ID0gZiJ0cmVuZGluZ19zdG9ja3Nfe3NvcnRfYnl9IgogICAgICAgIGNhY2hlZF9kYXRhID0gX3RyZW5kaW5nX2NhY2hlLmdldChjYWNoZV9rZXkpCiAgICAgICAgaWYgY2FjaGVkX2RhdGE6CiAgICAgICAgICAgIGxvZ2dlci5pbmZvKCJSZXR1cm5pbmcgY2FjaGVkIHRyZW5kaW5nIHN0b2NrcyBkYXRhIGZvciBzb3J0X2J5OiAlcyIsIHNvcnRfYnkpCiAgICAgICAgICAgIHJldHVybiBqc29uaWZ5KHsqKmNhY2hlZF9kYXRhLCAiZnJvbV9jYWNoZSI6IFRydWV9KQoKICAgICAgICBsb2dnZXIuaW5mbygiRmV0Y2hpbmcgdHJlbmRpbmcgc3RvY2tzIGZyb20gRklOVklaLCBzb3J0ZWQgYnk6ICVzIiwgc29ydF9ieSkKICAgICAgICB1cmwgPSBmImh0dHBzOi8vZmludml6LmNvbS9zY3JlZW5lci5hc2h4P3Y9MTExJm89LXtzb3J0X2J5fSIKICAgICAgICBoZWFkZXJzID0geyJVc2VyLUFnZW50IjogIk1vemlsbGEvNS4wIChXaW5kb3dzIE5UIDEwLjA7IFdpbjY0OyB4NjQpIEFwcGxlV2ViS2l0LzUzNy4zNiAoSFRNTCwgbGlrZSBHZWNrbykgQ2hyb21lLzkxLjAuNDQ3Mi4xMjQgU2FmYXJpLzUzNy4zNiJ9CgogICAgICAgIHJlc3AgPSBfcmVxdWVzdHMuZ2V0KHVybCwgaGVhZGVycz1oZWFkZXJzLCB0aW1lb3V0PTYwKQogICAgICAgIHJlc3AucmFpc2VfZm9yX3N0YXR1cygpCgogICAgICAgIHNvdXAgPSBCZWF1dGlmdWxTb3VwKHJlc3AuY29udGVudCwgImh0bWwucGFyc2VyIikKICAgICAgICBzdG9ja3MgPSBbXQogICAgICAgIHRhYmxlID0gc291cC5maW5kKCJ0YWJsZSIsIHsiY2xhc3MiOiAic2NyZWVuZXJfdGFibGUifSkKICAgICAgICBpZiB0YWJsZToKICAgICAgICAgICAgZm9yIHJvdyBpbiB0YWJsZS5maW5kX2FsbCgidHIiKVsxOl1bOjIwXToKICAgICAgICAgICAgICAgIGNlbGxzID0gcm93LmZpbmRfYWxsKCJ0ZCIpCiAgICAgICAgICAgICAgICBpZiBsZW4oY2VsbHMpID49IDExOgogICAgICAgICAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgICAgICAgICAgc3RvY2tzLmFwcGVuZCh7CiAgICAgICAgICAgICAgICAgICAgICAgICAgICAidGlja2VyIjogY2VsbHNbMV0udGV4dC5zdHJpcCgpLCAiY29tcGFueSI6IGNlbGxzWzJdLnRleHQuc3RyaXAoKSwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICJzZWN0b3IiOiBjZWxsc1szXS50ZXh0LnN0cmlwKCksICJpbmR1c3RyeSI6IGNlbGxzWzRdLnRleHQuc3RyaXAoKSwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICJtYXJrZXRfY2FwIjogY2VsbHNbNl0udGV4dC5zdHJpcCgpLCAicGUiOiBjZWxsc1s3XS50ZXh0LnN0cmlwKCksCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAicHJpY2UiOiBjZWxsc1s4XS50ZXh0LnN0cmlwKCksICJjaGFuZ2UiOiBjZWxsc1s5XS50ZXh0LnN0cmlwKCksCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAidm9sdW1lIjogY2VsbHNbMTBdLnRleHQuc3RyaXAoKSwKICAgICAgICAgICAgICAgICAgICAgICAgfSkKICAgICAgICAgICAgICAgICAgICBleGNlcHQgKEluZGV4RXJyb3IsIEF0dHJpYnV0ZUVycm9yKSBhcyBlOgogICAgICAgICAgICAgICAgICAgICAgICBsb2dnZXIud2FybmluZygiRXJyb3IgcGFyc2luZyBzdG9jayByb3c6ICVzIiwgZSkKCiAgICAgICAgcmVzcG9uc2VfZGF0YSA9IHsic3VjY2VzcyI6IFRydWUsICJzb3J0ZWRfYnkiOiBzb3J0X2J5LCAiZGF0YSI6IHN0b2NrcywgImNvdW50IjogbGVuKHN0b2NrcyksICJzb3VyY2UiOiAiRklOVklaIiwgInRpbWVzdGFtcCI6IGludCh0aW1lLnRpbWUoKSAqIDEwMDApfQogICAgICAgIF90cmVuZGluZ19jYWNoZS5zZXQoY2FjaGVfa2V5LCByZXNwb25zZV9kYXRhLCBfVFJFTkRJTkdfQ0FDSEVfVFRMKQogICAgICAgIHJldHVybiBqc29uaWZ5KHsqKnJlc3BvbnNlX2RhdGEsICJmcm9tX2NhY2hlIjogRmFsc2V9KQoKICAgIGV4Y2VwdCBfcmVxdWVzdHMuUmVxdWVzdEV4Y2VwdGlvbiBhcyBlOgogICAgICAgIGxvZ2dlci5lcnJvcigiUmVxdWVzdCBmYWlsZWQgd2hlbiBmZXRjaGluZyB0cmVuZGluZyBzdG9ja3M6ICVzIiwgZSkKICAgICAgICByZXR1cm4ganNvbmlmeSh7InN1Y2Nlc3MiOiBGYWxzZSwgImVycm9yIjogZiJGYWlsZWQgdG8gZmV0Y2ggZGF0YSBieSB7c29ydF9ieX0sIGZyb20gRklOVklaOiB7c3RyKGUpfSJ9KSwgNTAzCiAgICBleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICAgICAgbG9nZ2VyLmVycm9yKCJUcmVuZGluZyBzdG9ja3MgZmFpbGVkOiAlcyIsIGUsIGV4Y19pbmZvPVRydWUpCiAgICAgICAgcmV0dXJuIGpzb25pZnkoeyJzdWNjZXNzIjogRmFsc2UsICJjb2RlIjogIlVQU1RSRUFNX0ZFVENIX0ZBSUxFRCIsICJlcnJvciI6ICJVbmFibGUgdG8gZmV0Y2ggdHJlbmRpbmcgc3RvY2tzIGF0IHRoaXMgdGltZSJ9KSwgNTAwCg==
+"""
+Ticker research, blog generation, ticker updates, and trending stocks routes.
+"""
+
+import re
+import time
+import asyncio
+from dataclasses import dataclass, asdict
+from typing import Optional
+
+from flask import Blueprint, jsonify, request
+
+from log.logging_config import get_logger
+from services.anthropic.anthropic_service import anthropic_service
+from services.supabase.supabase_service import get_supabase_service
+from services.utils.research_service import get_research_service
+from services.utils.blog_generation_service import get_blog_service
+from services.yfinance.yfinance_service import get_historical_prices, get_historical_window, PERIOD_MAP, ALLOWED_INTERVALS, get_intraday_chart_for_date
+from utils.cache import TrendingStocksCache
+
+import requests as _requests
+from bs4 import BeautifulSoup
+
+logger = get_logger(__name__)
+
+bp = Blueprint("ticker", __name__)
+
+_trending_cache = TrendingStocksCache()
+_TRENDING_CACHE_TTL = 90
+
+
+# ── Data classes ────────────────────────────────────────────────────────────────
+
+@dataclass
+class RequestData:
+    topic: str
+    userId: Optional[str]
+    save_to_db: Optional[bool] = True
+    use_cache: Optional[bool] = True
+    research_data: Optional[dict] = None
+    target_length: Optional[int] = 800
+    ticker: Optional[str] = None
+    include_options: Optional[bool] = True
+
+
+@dataclass
+class RequestDataError:
+    success: bool
+    error: str
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────────
+
+def run_async(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def validate_and_create_ticker_request_data(
+    data: dict, ticker: str, require_user_id: bool = True
+) -> tuple[RequestData | None, RequestDataError | None]:
+    try:
+        request_data = RequestData(
+            topic=ticker,
+            userId=data.get("userId"),
+            save_to_db=data.get("save_to_db", True),
+            use_cache=data.get("use_cache", True),
+            research_data=data.get("research_data", {}),
+            target_length=data.get("target_length", 800),
+            ticker=ticker,
+        )
+        if require_user_id and not request_data.userId:
+            return None, RequestDataError(success=False, error="User ID must be a non-empty string")
+        return request_data, None
+    except Exception as e:
+        return None, RequestDataError(success=False, error=f"Invalid request data: {str(e)}")
+
+
+def log_request_data(request_data: RequestData | None, endpoint: str):
+    if request_data is None:
+        logger.info("Nothing contained in Request")
+    else:
+        logger.info(
+            "Request to %s: topic=%s, userId=%s, save_to_db=%s, use_cache=%s",
+            endpoint, request_data.topic, request_data.userId,
+            request_data.save_to_db, request_data.use_cache,
+        )
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────────
+
+@bp.route("/ticker/<ticker>", methods=["POST"])
+def get_ticker_data(ticker: str):
+    try:
+        ticker = ticker.strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({"success": False, "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."}), 400
+
+        data = request.get_json()
+        service = get_supabase_service()
+        research_service = get_research_service()
+
+        request_data, error_response = validate_and_create_ticker_request_data(data or {}, ticker=ticker)
+        if error_response:
+            return jsonify(asdict(error_response)), 400
+
+        log_request_data(request_data, "get_ticker_data")
+        if request_data is not None:
+            service.verify_user(user_id=request_data.userId)
+            research_result = research_service.get_research_data(
+                ticker=ticker,
+                use_cache=request_data.use_cache,
+                save_to_db=request_data.save_to_db,
+                include_options=request_data.include_options,
+            )
+            if not research_result["success"]:
+                return jsonify(research_result), 400
+
+        return jsonify(research_result)
+
+    except Exception as e:
+        logger.error("Ticker research failed for ticker '%s': %s", ticker, e, exc_info=True)
+        return jsonify({"success": False, "error": f"Research failed: {str(e)}"}), 500
+
+
+@bp.route("/ticker/<ticker>/history", methods=["POST"])
+def get_ticker_history(ticker: str):
+    try:
+        ticker = ticker.strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({"success": False, "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."}), 400
+
+        data = request.get_json() or {}
+        interval = data.get("interval")
+
+        # Windowed backfill (chart lazy-load): explicit [start, end) window at
+        # the requested interval, e.g. {"interval": "5m", "start":
+        # "2026-08-01", "end": "2026-09-01"}. Same bar payload as the period
+        # fetch so the client can merge by timestamp.
+        if data.get("start") or data.get("end"):
+            if not interval:
+                return jsonify({"success": False, "error": "Windowed fetch requires an interval (e.g. '5m')."}), 400
+            try:
+                historical_data = get_historical_window(ticker, interval, data.get("start"), data.get("end"),
+                                                        extended_hours=bool(data.get("extended_hours", False)))
+            except ValueError as e:
+                return jsonify({"success": False, "error": str(e)}), 400
+            return jsonify({"success": True, "data": historical_data,
+                            "interval": historical_data.get("interval"),
+                            "start": data.get("start"), "end": data.get("end"),
+                            "timestamp": time.time(), "from_cache": False})
+
+        period = data.get("period", "1M")
+        if period not in PERIOD_MAP:
+            return jsonify({"success": False, "error": f"Invalid period. Must be one of: {', '.join(PERIOD_MAP.keys())}"}), 400
+
+        extended_hours = bool(data.get("extended_hours", False))
+        historical_data = get_historical_prices(ticker, period, interval_override=interval,
+                                                extended_hours=extended_hours)
+
+        return jsonify({"success": True, "data": historical_data, "period": period, "timestamp": time.time(), "from_cache": False})
+
+    except Exception as e:
+        logger.error("Ticker history fetch failed for ticker '%s': %s", ticker, e, exc_info=True)
+        return jsonify({"success": False, "error": f"History fetch failed: {str(e)}"}), 500
+
+
+@bp.route("/ticker/<ticker>/history-date", methods=["POST"])
+def get_ticker_history_for_date(ticker: str):
+    """
+    Intraday OHLCV + VWAP + RSI(14) for one specific past calendar day — used
+    by the Daily Review's per-trade chart (see ReviewTradeChart.tsx) so a
+    trade card can show the actual price/volume/RSI/VWAP action around its
+    entry/exit, not just the logged numbers.
+
+    yfinance only serves intraday bars for a limited lookback window (roughly
+    60 days for 5-minute bars) — a request for an older date comes back with
+    "available": False rather than an error; the client shows a graceful
+    "chart unavailable" state for those instead of treating it as a failure.
+    """
+    date_str = "?"
+    try:
+        ticker = ticker.strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({"success": False, "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."}), 400
+
+        data = request.get_json() or {}
+        date_str = data.get("date", "")
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
+            return jsonify({"success": False, "error": "date must be YYYY-MM-DD"}), 400
+
+        # Matches whatever interval the 1D chart is currently showing (see
+        # /ticker/<ticker>/history's own interval override) so a panned-in
+        # earlier day's bars are the same granularity as today's, instead of
+        # always defaulting to 5m regardless of what the user picked. Other
+        # callers (e.g. the Daily Review per-trade chart) simply don't send
+        # this and get the same "5m" default as before.
+        interval = data.get("interval")
+        if interval not in ALLOWED_INTERVALS["1D"]:
+            interval = "5m"
+
+        chart = get_intraday_chart_for_date(ticker, date_str, interval=interval)
+        return jsonify({"success": True, "data": chart, "date": date_str})
+
+    except Exception as e:
+        logger.error("Intraday chart fetch failed for ticker '%s' on %s: %s", ticker, date_str, e, exc_info=True)
+        return jsonify({"success": False, "error": f"Chart fetch failed: {str(e)}"}), 500
+
+
+@bp.route("/search/<ticker>", methods=["POST"])
+def search_for_ticker(ticker: str):
+    try:
+        ticker = ticker.strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({"success": False, "error": "Ticker does not match format"}), 404
+        research_service = get_research_service()
+        return jsonify(research_service.get_ticker_search(ticker))
+    except Exception as e:
+        logger.error("Ticker research failed for ticker '%s': %s", ticker, e, exc_info=True)
+        return jsonify({"success": False, "data": None, "error": f"Ticker not found: {str(e)}"}), 404
+
+
+@bp.route("/generate_post/<ticker>", methods=["POST"])
+def generate_post(ticker: str):
+    try:
+        ticker = ticker.strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({"success": False, "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."}), 400
+
+        data = request.get_json()
+        service = get_supabase_service()
+        research_service = get_research_service()
+        blog_service = get_blog_service()
+
+        request_data, error_response = validate_and_create_ticker_request_data(data or {}, ticker=ticker)
+        if error_response:
+            return jsonify(asdict(error_response)), 400
+
+        log_request_data(request_data, "generate_post")
+        assert request_data is not None
+
+        service.verify_user(user_id=request_data.userId)
+
+        research_result = None
+        research_data = None
+        research_id = None
+        used_cache = False
+
+        if request_data.research_data:
+            research_data = request_data.research_data
+            logger.info("Using provided research data for %s", ticker)
+        else:
+            research_result = research_service.get_research_data(
+                ticker=ticker,
+                use_cache=request_data.use_cache,
+                save_to_db=request_data.save_to_db,
+            )
+            if not research_result["success"]:
+                return jsonify(research_result), 400
+            research_data = research_result["data"]
+            research_id = research_result.get("research_id")
+            used_cache = research_result.get("cached", False)
+
+        blog_result = blog_service.generate_blog_post(
+            ticker=ticker,
+            research_data=research_data,
+            save_to_db=request_data.save_to_db,
+            research_id=research_id,
+            target_length=request_data.target_length or 800,
+        )
+        if not blog_result["success"]:
+            return jsonify(blog_result), 400
+
+        return jsonify({
+            "success": True,
+            "data": blog_result["data"],
+            "blog_id": blog_result.get("blog_id"),
+            "research_id": research_id,
+            "research_cached": used_cache,
+            "blog_saved": blog_result.get("saved", False),
+            "timestamp": time.time(),
+        })
+
+    except Exception as e:
+        _topic = locals().get("topic") or (locals().get("data") or {}).get("topic") or "<unknown>"
+        logger.error("Blog generation failed for topic '%s': %s", _topic, e, exc_info=True)
+        return jsonify({"success": False, "error": f"Blog generation failed: {str(e)}"}), 500
+
+
+@bp.route("/generate_ticker_update/<ticker>", methods=["POST"])
+def generate_ticker_update(ticker: str):
+    try:
+        ticker = ticker.strip().upper()
+        if not ticker or not re.match(r"^[A-Z0-9]{1,5}$", ticker):
+            return jsonify({"success": False, "error": "Invalid ticker symbol format. Must be 1-5 alphanumeric characters."}), 400
+
+        request_data_raw = request.get_json() or {}
+        target_length = request_data_raw.get("target_length", 500)
+        if not isinstance(target_length, int) or target_length < 50 or target_length > 500:
+            target_length = 500
+
+        research_service = get_research_service()
+        research_result = research_service.get_research_data(ticker=ticker, use_cache=False, save_to_db=True)
+        if not research_result.get("success"):
+            return jsonify({"success": False, "error": research_result.get("error", "Failed to retrieve research data"), "ticker": ticker}), 500
+
+        research_data = research_result
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(
+                anthropic_service.generate_ticker_update(research_data=research_data, target_length=target_length, ticker=ticker)
+            )
+        finally:
+            loop.close()
+
+        if not result.get("success", True):
+            error_details = result.get("error_details", {})
+            error_type = error_details.get("type", "unknown_error")
+            status_code = error_details.get("status_code", 500)
+            if error_type == "not_found_error" or status_code == 404:
+                http_status = 404
+            elif error_type in ("connection_error", "timeout_error"):
+                http_status = 503
+            elif status_code in [400, 401, 403, 429]:
+                http_status = status_code
+            else:
+                http_status = 500
+            logger.error("Ticker update generation failed for %s: %s (HTTP %s)", ticker, result.get("error"), http_status)
+            return jsonify(result), http_status
+
+        ticker_update_id = None
+        try:
+            service = get_supabase_service()
+            stock_research_id = (
+                research_result.get("research_id")
+                or research_data.get("research_id")
+                or research_data.get("id")
+            )
+            save_result = service.save_ticker_update({
+                "ticker": ticker,
+                "content": result.get("content", ""),
+                "character_count": result.get("character_count", 0),
+                "tags": result.get("tags", []),
+                "model_used": result.get("model_used", "claude-haiku-4-5"),
+                "target_length": target_length,
+                "stock_research_id": stock_research_id,
+                "status": "published",
+            })
+            if save_result.get("success"):
+                ticker_update_id = save_result.get("data", {}).get("id")
+        except Exception as save_error:
+            logger.error("Error saving ticker update for %s: %s", ticker, save_error, exc_info=True)
+
+        response = result.copy()
+        response["ticker_update_id"] = ticker_update_id
+        response["saved"] = ticker_update_id is not None
+        return jsonify(response), 200
+
+    except Exception as e:
+        logger.error("Ticker update generation failed for %s: %s", ticker, e, exc_info=True)
+        return jsonify({"success": False, "error": f"Ticker update generation failed: {str(e)}", "ticker": ticker}), 500
+
+
+@bp.route("/trending-stocks-sort", methods=["GET", "POST"])
+def get_trending_stocks_by_param():
+    try:
+        if request.method == "GET":
+            sort_by = request.args.get("sort_by")
+        else:
+            sort_by = (request.get_json() or {}).get("sort_by")
+
+        if not sort_by:
+            return jsonify({"success": False, "error": "sort_by parameter is required"}), 400
+
+        valid_sort_params = ["volume", "change", "pe", "marketcap"]
+        if sort_by not in valid_sort_params:
+            return jsonify({"success": False, "error": f'Invalid sort_by parameter. Must be one of: {", ".join(valid_sort_params)}'}), 400
+
+        cache_key = f"trending_stocks_{sort_by}"
+        cached_data = _trending_cache.get(cache_key)
+        if cached_data:
+            logger.info("Returning cached trending stocks data for sort_by: %s", sort_by)
+            return jsonify({**cached_data, "from_cache": True})
+
+        logger.info("Fetching trending stocks from FINVIZ, sorted by: %s", sort_by)
+        url = f"https://finviz.com/screener.ashx?v=111&o=-{sort_by}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (HTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+
+        resp = _requests.get(url, headers=headers, timeout=60)
+        resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.content, "html.parser")
+        stocks = []
+        table = soup.find("table", {"class": "screener_table"})
+        if table:
+            for row in table.find_all("tr")[1:][:20]:
+                cells = row.find_all("td")
+                if len(cells) >= 11:
+                    try:
+                        stocks.append({
+                            "ticker": cells[1].text.strip(), "company": cells[2].text.strip(),
+                            "sector": cells[3].text.strip(), "industry": cells[4].text.strip(),
+                            "market_cap": cells[6].text.strip(), "pe": cells[7].text.strip(),
+                            "price": cells[8].text.strip(), "change": cells[9].text.strip(),
+                            "volume": cells[10].text.strip(),
+                        })
+                    except (IndexError, AttributeError) as e:
+                        logger.warning("Error parsing stock row: %s", e)
+
+        response_data = {"success": True, "sorted_by": sort_by, "data": stocks, "count": len(stocks), "source": "FINVIZ", "timestamp": int(time.time() * 1000)}
+        _trending_cache.set(cache_key, response_data, _TRENDING_CACHE_TTL)
+        return jsonify({**response_data, "from_cache": False})
+
+    except _requests.RequestException as e:
+        logger.error("Request failed when fetching trending stocks: %s", e)
+        return jsonify({"success": False, "error": f"Failed to fetch data by {sort_by}, from FINVIZ: {str(e)}"}), 503
+    except Exception as e:
+        logger.error("Trending stocks failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "code": "UPSTREAM_FETCH_FAILED", "error": "Unable to fetch trending stocks at this time"}), 500
