@@ -363,6 +363,21 @@ export function TVChart({
     const historyChanged = !prev.ready || prev.base !== baseCandles || prev.ohlc !== ohlc || prev.key !== resetKey;
     const last = candles[candles.length - 1];
     sentRef.current = { base: baseCandles, ohlc, key: resetKey, ready: true, lastT: last.t };
+    // A 30s tail poll only rewrites the forming bar and appends a few new
+    // ones. Re-sending the whole series for that (~3,000 bars stringified,
+    // bridged, re-set and re-rendered every 30s) was the steady-state cost
+    // while watching a chart — send just the tail as an incremental update.
+    const pb = prev.base;
+    const tailOnly =
+      historyChanged && prev.ready && !!pb?.length && !!baseCandles?.length &&
+      prev.ohlc === ohlc && prev.key === resetKey &&
+      baseCandles[0].t === pb[0].t &&
+      baseCandles.length >= pb.length && baseCandles.length - pb.length <= 30 &&
+      baseCandles[pb.length - 1].t === pb[pb.length - 1].t;
+    if (tailOnly) {
+      send({ type: 'updateBars', bars: candles.slice(pb!.length - 1) });
+      return;
+    }
     if (!historyChanged && baseCandles?.length) {
       // When a new bar just opened, finalize the one before it too (the
       // page can only update the newest bar, so it must go first).

@@ -26,8 +26,8 @@ const MIN_DAILY_PERIOD: Partial<Record<PricePeriod, PricePeriod>> = { "1D": "3M"
 // Backfill chunk sizes in days — at or below the backend's Yahoo caps
 // (5m/15m/30m ~60d, 1m ~7d, 1h ~730d).
 const BACKFILL_DAYS: Record<string, number> = { "1m": 7, "5m": 55, "15m": 55, "30m": 55, "1h": 120 };
-// Live tail poll re-fetches this many days back and merges.
-const TAIL_DAYS = 5;
+// Staged intraday load: pause between painting stage 1 and the backfill.
+const STAGE2_DELAY_MS = 1_200;
 
 class HistoryHttpError extends Error {
   status: number;
@@ -192,21 +192,38 @@ export function useLazyTickerHistory(opts: {
           // paint immediately; the on-chart indicators (EMAs up to 200,
           // session-anchored VWAP) only need this much. Stage 2 backfills
           // the rest for pan-back in the background.
-          const quickDays = Math.min(interval === "1m" ? 2 : 5, fullDays);
+          // Calendar days, so it must span a weekend/holiday: 1m at 2 days
+          // came back EMPTY on Sundays, Monday pre-open and after holidays.
+          const quickDays = Math.min(interval === "1m" ? 4 : 5, fullDays);
           const quickStart = addDays(end, -quickDays);
           const quick = await postHistory(ticker, { interval, start: quickStart, end,
             ...(extendedHours ? { extended_hours: true } : {}) }, ctrl.signal);
-          if (!dead) {
+          if (dead) return;
+          const quickHasBars = !!quick.dates?.length;
+          // An empty quick window (long weekend) keeps the spinner up for
+          // stage 2 instead of painting a blank chart.
+          if (quickHasBars) {
             setBars(quick);
             setIsLoading(false);
           }
-          if (!dead && fullDays > quickDays) {
-            const rest = await postHistory(ticker, { interval, start: addDays(end, -fullDays), end: quickStart,
-              ...(extendedHours ? { extended_hours: true } : {}) }, ctrl.signal);
-            if (!dead) setBars((prev) => (prev ? mergeHistory(prev, rest) : rest));
+          if (fullDays > quickDays) {
+            // Let the WebView finish painting stage 1 before handing it
+            // ~3,000 more bars — they'd otherwise land mid-render.
+            if (quickHasBars) await new Promise((r) => setTimeout(r, STAGE2_DELAY_MS));
+            if (dead) return;
+            try {
+              const rest = await postHistory(ticker, { interval, start: addDays(end, -fullDays), end: quickStart,
+                ...(extendedHours ? { extended_hours: true } : {}) }, ctrl.signal);
+              if (!dead) setBars((prev) => (prev ? mergeHistory(prev, rest) : rest));
+            } catch (e) {
+              // Candles are already up — a failed backfill must not flip the
+              // chart to its error state; pan-back loadMore() retries it.
+              if (!quickHasBars) throw e;
+            }
           }
           if (dead) return;
-          // Bars already set above (stage 1 + stage 2); nothing left to do.
+          if (!quickHasBars && fullDays <= quickDays) setBars(quick);
+          setIsLoading(false);
         } else {
           const fetchPeriod = MIN_DAILY_PERIOD[period] ?? period;
           const data = await postHistory(ticker, { period: fetchPeriod, ...(interval ? { interval } : {}),
@@ -278,8 +295,11 @@ export function useLazyTickerHistory(opts: {
       if (!s.bars?.dates?.length || s.loadingMore) return;
       const myGen = gen.current;
       try {
+        // Only from the newest loaded bar's day (usually today, ~1-80 bars),
+        // not a fixed 5-day window re-downloaded every 30s.
         const end = addDays(etToday(), 1);
-        const data = await postHistory(ticker, { interval, start: addDays(end, -TAIL_DAYS), end,
+        const start = s.bars.dates[s.bars.dates.length - 1].slice(0, 10);
+        const data = await postHistory(ticker, { interval, start: start < end ? start : addDays(end, -1), end,
           ...(extendedHours ? { extended_hours: true } : {}) });
         // A ticker/period/interval switch mid-flight: don't merge the old
         // ticker's tail into the new ticker's chart.
