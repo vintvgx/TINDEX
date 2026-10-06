@@ -70,6 +70,15 @@ def _run_async(coro):
         loop.close()
 
 
+def _side_of(close: float, low: float, high: float) -> str:
+    """Which side of a [low, high] zone a bar close sits on."""
+    if close > high:
+        return "above"
+    if close < low:
+        return "below"
+    return "inside"
+
+
 class KeyLevelWatcher:
     """Process-wide singleton. In-memory watch state is rebuilt from
     watched_price_levels on start() — a redeploy loses no watching levels,
@@ -81,6 +90,10 @@ class KeyLevelWatcher:
         self._watching: dict[str, dict[str, dict]] = {}
         # ticker -> True once we've called OrbDataHub.subscribe_bar for it
         self._subscribed_tickers: set[str] = set()
+        # level_id -> "above" | "inside" | "below": price side at the last
+        # processed bar. A level only confirms on a genuine CROSS — the side
+        # must change into the trigger side. Being already true at arm time
+        # (or after a restart reload) never fires.
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -124,6 +137,7 @@ class KeyLevelWatcher:
             for ticker, levels in self._watching.items():
                 if level_id in levels:
                     del levels[level_id]
+                    self._sides.pop(level_id, None)
                     logger.info("[KeyLevelWatcher] cancelled %s (%s)", level_id, ticker)
                     return
 
@@ -146,7 +160,24 @@ class KeyLevelWatcher:
             direction = level["direction"]
             level_low = float(level["level_low"])
             level_high = float(level["level_high"])
+            level_id = level["id"]
+            curr_side = _side_of(bar.close, level_low, level_high)
 
+            with self._lock:
+                prev_side = self._sides.get(level_id)
+                self._sides[level_id] = curr_side
+            if prev_side is None:
+                # Newly armed (fresh level or restart reload): record the
+                # side, never fire on the arming bar. This fixes the "alert
+                # fires the second you set it" bug — the old code checked
+                # state (close beyond the level), not a crossing.
+                continue
+            if curr_side == prev_side:
+                continue
+
+            # Side changed — confirm only if the NEW side is the trigger
+            # side for this direction. 'either' keeps its first-side-wins
+            # behavior, but the winning side must still be a genuine cross.
             # 'either' watches BOTH sides at once — a two-sided technical
             # setup (e.g. "holds = bullish continuation, breaks = bearish
             # breakdown") shouldn't have to pick just one direction to watch
@@ -154,16 +185,15 @@ class KeyLevelWatcher:
             # the level's stored direction gets overwritten with that
             # concrete outcome once confirmed (see _process_confirmation).
             if direction == "bullish":
-                confirmed, triggered_direction = bar.close > level_high, "bullish"
+                confirmed, triggered_direction = curr_side == "above", "bullish"
             elif direction == "bearish":
-                confirmed, triggered_direction = bar.close < level_low, "bearish"
+                confirmed, triggered_direction = curr_side == "below", "bearish"
+            elif curr_side == "above":
+                confirmed, triggered_direction = True, "bullish"
+            elif curr_side == "below":
+                confirmed, triggered_direction = True, "bearish"
             else:
-                if bar.close > level_high:
-                    confirmed, triggered_direction = True, "bullish"
-                elif bar.close < level_low:
-                    confirmed, triggered_direction = True, "bearish"
-                else:
-                    confirmed, triggered_direction = False, None
+                confirmed, triggered_direction = False, None
             if not confirmed:
                 continue
 
@@ -172,6 +202,7 @@ class KeyLevelWatcher:
             # working through the chain fetch + scoring.
             with self._lock:
                 self._watching.get(ticker, {}).pop(level["id"], None)
+                self._sides.pop(level["id"], None)
 
             logger.info("[KeyLevelWatcher] %s %s level %s confirmed @ %.2f (watch was %s)",
                         ticker, triggered_direction, level["id"], bar.close, direction)
@@ -216,7 +247,6 @@ class KeyLevelWatcher:
                 level_high=float(level["level_high"]),
                 price=confirmed_price,
                 level_id=level["id"],
-                contract_count=len(suggestions),
                 zone_type=level.get("zone_type") or "trade",
             )
         except Exception as e:

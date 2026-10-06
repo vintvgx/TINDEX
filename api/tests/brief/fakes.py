@@ -60,6 +60,13 @@ class FakeIO:
         self.cfg = dict(DEFAULTS)
         self.baseline = 82000.0
         self.entry_result = None
+        self.candidates = [
+            {"symbol": "AMZN261005C00250000", "strike": 250.0, "ask": 0.52, "bid": 0.48, "delta": 0.4,
+             "qty": 3, "profile": "SCALP_30_100", "limit": 0.52, "spread_pct": 8.0, "top_pick": True},
+            {"symbol": "AMZN261005C00252500", "strike": 252.5, "ask": 0.31, "bid": 0.28, "delta": 0.3,
+             "qty": 5, "profile": "SCALP_30_100", "limit": 0.31, "spread_pct": 10.0, "top_pick": False},
+        ]
+        self.entered = []  # [(ticker, chosen_contract, paper_mode)]
 
     def now(self): return self.t
     def config(self): return dict(self.cfg)
@@ -88,8 +95,12 @@ class FakeIO:
         prev = self.signals.get(row["id"], {})
         self.signals[row["id"]] = {**prev, **{k: v for k, v in row.items() if v is not None}}
 
+    def contract_candidates(self, play, limit=3):
+        return [dict(c) for c in self.candidates[:limit]]
+
     def execute_entry(self, play, underlying_price, on_update, cfg=None):
         self.entries.append(play["ticker"])
+        self.entered.append((play["ticker"], play.get("chosen_contract"), play.get("paper_mode", True)))
         on_update("WORKING", {"limit": 0.52, "started_at": 0.0, "timeout": 75})
         return self.entry_result or {"state": "FILLED", "filled_qty": 3, "avg_price": 0.52,
                                      "trade_id": "tr-" + play["ticker"], "profile": "SCALP_30_100"}

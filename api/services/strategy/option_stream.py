@@ -12,14 +12,32 @@ Lifecycle per trade:
   3. ORBEngine._handle_exit_action (full close) → unsubscribe(symbol, cb)
 """
 
+import asyncio
 import os
 import queue
 import threading
 import time
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+
+from services.utils.market_hours import is_market_hours
 
 logger = logging.getLogger(__name__)
+
+# Options only trade 9:30-16:00 ET on weekdays — outside that there are no
+# quotes to receive, so the connection is pure cost (and, when another
+# process holds the account's single options slot, a source of
+# connection-limit errors). The stream only connects inside the session
+# (with a small buffer for the open/close); subscriptions made outside it
+# are remembered and attached at the next open. See _session_gate_loop.
+SESSION_BUFFER = timedelta(minutes=5)
+SESSION_GATE_INTERVAL_SEC = 30
+
+
+def _in_options_session(now: "datetime | None" = None) -> bool:
+    now = now or datetime.now(timezone.utc)
+    return (is_market_hours(now) or is_market_hours(now + SESSION_BUFFER)
+            or is_market_hours(now - SESSION_BUFFER))
 
 # How often the background health-logger dumps the full subscription list to
 # the server log (2026-08-12 — added after a suspicion that subscriptions
@@ -47,6 +65,80 @@ try:
 except ImportError:
     HAS_STREAM = False
     logger.warning("[OptionStream] alpaca.data.live.option not available — streaming disabled")
+
+# Reconnect backoff for a failed connect/auth (see _BackoffOptionDataStream).
+RECONNECT_BACKOFF_START_SEC = 1.0
+RECONNECT_BACKOFF_MAX_SEC = 60.0
+
+if HAS_STREAM:
+    class _BackoffOptionDataStream(OptionDataStream):
+        """
+        OptionDataStream with exponential backoff on a failed connect/auth.
+
+        alpaca-py 0.43.2's _run_forever retries a failed _start_ws() after
+        `asyncio.sleep(0)` — i.e. immediately, forever. Alpaca allows ONE
+        options-data connection per account, so while anything else holds
+        it (a second backend process on the same keys: another Railway
+        environment, the old container during a deploy overlap, a local
+        dev server) every attempt fails with "connection limit exceeded"
+        (or an HTTP 429 once Alpaca starts throttling) and the loop spins
+        tens of times a second — each failure logged with a full traceback.
+        That flooded Railway's log limit and kept Alpaca rate-limiting us
+        (2026-10-05 incident).
+
+        Sleeping here, before the error propagates back into the SDK's
+        loop, turns that into 1s → 2s → 4s … ≤60s retries; a successful
+        connect resets it. The SDK still owns reconnection and resubscribes
+        its own handlers on reconnect — nothing else changes.
+        """
+
+        def __init__(self, *args, on_state=None, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._backoff = RECONNECT_BACKOFF_START_SEC
+            self._failures = 0
+            self._on_state = on_state  # callback(error: str | None, retry_in: float | None)
+
+        async def _start_ws(self) -> None:
+            try:
+                await super()._start_ws()
+            except Exception as ex:
+                self._failures += 1
+                delay = self._backoff
+                self._backoff = min(self._backoff * 2, RECONNECT_BACKOFF_MAX_SEC)
+                msg = str(ex)
+                limited = "connection limit exceeded" in msg or "429" in msg
+                if self._failures == 1 or self._failures % 10 == 0:
+                    if limited:
+                        logger.warning(
+                            "[OptionStream] Alpaca options connection refused (%s) — another "
+                            "process is using these ALPACA_LIVE keys' single options-data "
+                            "connection (other Railway environment, a deploy overlap, or a "
+                            "local server). Retrying in %.0fs (attempt %d).",
+                            msg, delay, self._failures,
+                        )
+                    else:
+                        logger.warning("[OptionStream] connect failed (%s) — retrying in %.0fs (attempt %d)",
+                                       msg, delay, self._failures)
+                if self._on_state:
+                    try:
+                        self._on_state(msg, delay)
+                    except Exception:
+                        pass
+                try:
+                    await self.close()
+                except Exception:
+                    pass
+                await asyncio.sleep(delay)
+                raise
+            if self._failures:
+                logger.info("[OptionStream] connected after %d failed attempt(s)", self._failures)
+            self._failures = 0
+            self._backoff = RECONNECT_BACKOFF_START_SEC
+            if self._on_state:
+                try:
+                    self._on_state(None, None)
+                except Exception:
+                    pass
 
 
 class OptionStreamManager:
@@ -113,6 +205,13 @@ class OptionStreamManager:
         # miss a counter that resets within the same tick it hits 3).
         self._last_reconnect_at: float | None = None
         self._reconnect_count = 0
+        # Last connect/auth failure from the backoff stream (e.g. "connection
+        # limit exceeded"), cleared on a successful connect — surfaced via
+        # get_health() so a stuck-out connection is visible, not just logged.
+        self._connect_error: str | None = None
+        self._connect_error_at: float | None = None
+        self._connect_retry_in: float | None = None
+        self._session_gate_started = False
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -123,7 +222,10 @@ class OptionStreamManager:
         """
         if not HAS_STREAM:
             return
-        self._ensure_started()
+        self._ensure_session_gate()
+        in_session = _in_options_session()
+        if in_session:
+            self._ensure_started()
         is_new = False
         with self._lock:
             if symbol not in self._callbacks:
@@ -131,6 +233,12 @@ class OptionStreamManager:
                 is_new = True
             self._callbacks[symbol].append(callback)
 
+        if is_new and not in_session:
+            # Market closed — remember it; the session gate attaches it at
+            # the next open (no connection, no API traffic until then).
+            logger.info("[OptionStream] %s registered while market closed — "
+                        "will subscribe at the open", symbol)
+            return
         if is_new:
             # alpaca-py's subscribe_quotes() can block (e.g. websocket not yet
             # connected, or the asyncio bridge stalls). Run it off-thread so a
@@ -196,6 +304,10 @@ class OptionStreamManager:
         """
         if not HAS_STREAM:
             logger.warning("[OptionStream] Streaming not available — skipping verify")
+            return False
+        if not _in_options_session():
+            logger.info("[OptionStream] Market closed — not verifying %s (no quotes outside "
+                        "the session)", symbol)
             return False
 
         result_q: queue.Queue = queue.Queue()
@@ -294,6 +406,17 @@ class OptionStreamManager:
                 if last_reconnect_at is not None else None
             ),
             "reconnect_count": reconnect_count,
+            # Non-null while connect/auth is failing (e.g. "connection limit
+            # exceeded" — another process holds the account's one options
+            # connection); retry_in is the current backoff in seconds.
+            "connect_error": self._connect_error,
+            "connect_error_at": (
+                datetime.fromtimestamp(self._connect_error_at, tz=timezone.utc).isoformat()
+                if self._connect_error_at is not None else None
+            ),
+            "connect_retry_in_seconds": self._connect_retry_in,
+            # False outside market hours: disconnected on purpose, not down.
+            "session_open": _in_options_session(),
             "symbols":                 per_symbol,
         }
 
@@ -359,6 +482,8 @@ class OptionStreamManager:
         # (not just the flag) lets a dead stream actually be restarted.
         if self._started and self._thread and self._thread.is_alive():
             return
+        if not _in_options_session():
+            return  # never connect outside market hours — see _session_gate_loop
         with self._start_lock:
             if self._started and self._thread and self._thread.is_alive():
                 return
@@ -367,7 +492,9 @@ class OptionStreamManager:
                 logger.warning("[OptionStream] background thread died — restarting")
             self._started = False
             try:
-                self._stream = OptionDataStream(self._api_key, self._secret)
+                self._stream = _BackoffOptionDataStream(
+                    self._api_key, self._secret, on_state=self._on_connect_state,
+                )
                 self._thread = threading.Thread(
                     target=self._stream.run,
                     daemon=True,
@@ -387,7 +514,13 @@ class OptionStreamManager:
                     name="OptionStream-health-log",
                 ).start()
 
-            if was_running:
+            # A fresh instance has no server-side subscriptions — attach every
+            # symbol already registered: after a thread death (was_running)
+            # AND at the session open, when symbols registered overnight
+            # (e.g. boot-time recovery of a swing position) are waiting.
+            with self._lock:
+                pending = bool(self._callbacks)
+            if was_running or pending:
                 # A brand-new OptionDataStream instance starts with zero
                 # subscriptions of its own — the normal alpaca-py reconnect
                 # loop (_run_forever) re-subscribes automatically on an
@@ -408,6 +541,53 @@ class OptionStreamManager:
                 if symbols:
                     logger.info("[OptionStream] Re-subscribing %d symbol(s) after "
                                 "restart: %s", len(symbols), symbols)
+
+    def _ensure_session_gate(self):
+        if self._session_gate_started:
+            return
+        with self._start_lock:
+            if self._session_gate_started:
+                return
+            self._session_gate_started = True
+            threading.Thread(target=self._session_gate_loop, daemon=True,
+                             name="OptionStream-session-gate").start()
+
+    def _session_gate_loop(self):
+        """Connect at the open (when anything is registered), disconnect at
+        the close. Subscriptions survive the overnight gap in
+        self._callbacks and are re-attached by _ensure_started."""
+        while True:
+            try:
+                in_session = _in_options_session()
+                with self._lock:
+                    has_symbols = bool(self._callbacks)
+                running = bool(self._started and self._thread and self._thread.is_alive())
+                if in_session and has_symbols and not running:
+                    logger.info("[OptionStream] Session open — connecting")
+                    self._ensure_started()
+                elif not in_session and self._started:
+                    logger.info("[OptionStream] Session closed — disconnecting until the next open "
+                                "(%d symbol(s) kept for resubscribe)", len(self._callbacks))
+                    self._close_for_session()
+            except Exception as ex:
+                logger.error("[OptionStream] session gate tick failed: %s", ex)
+            time.sleep(SESSION_GATE_INTERVAL_SEC)
+
+    def _close_for_session(self):
+        with self._start_lock:
+            stream, self._stream = self._stream, None
+            self._started = False
+        if stream:
+            try:
+                stream.stop_ws()
+            except Exception as ex:
+                logger.debug("[OptionStream] stop_ws at session close: %s", ex)
+
+    def _on_connect_state(self, error: "str | None", retry_in: "float | None"):
+        with self._lock:
+            self._connect_error = error
+            self._connect_error_at = time.time() if error else None
+            self._connect_retry_in = retry_in
 
     def _health_log_loop(self):
         """

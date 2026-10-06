@@ -18,11 +18,11 @@ import { RAILWAY_BASE_URL } from "@/lib/railway.config";
  *   valid per period. An invalid/mismatched value is silently ignored
  *   server-side, never a failed request.
  */
-export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refetchIntervalMs?: number, interval?: string) {
+export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refetchIntervalMs?: number, interval?: string, extendedHours?: boolean, enabled: boolean = true) {
   const { authState: { user, isLoading: authLoading } } = useAuth();
 
   return useQuery({
-    queryKey: ["ticker-history", ticker, period, interval],
+    queryKey: ["ticker-history", ticker, period, interval, extendedHours ?? false],
     queryFn: async (): Promise<TickerHistoryResponse> => {
       try {
         // See useTickerQuery.ts for why this needs an explicit abort — same
@@ -33,7 +33,7 @@ export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refet
         const response = await fetch(`${RAILWAY_BASE_URL}/ticker/${ticker}/history`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ period, ...(interval ? { interval } : {}) }),
+          body: JSON.stringify({ period, ...(interval ? { interval } : {}), ...(extendedHours ? { extended_hours: true } : {}) }),
           signal: controller.signal,
         }).finally(() => clearTimeout(timeoutId));
 
@@ -54,7 +54,7 @@ export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refet
         throw error instanceof Error ? error : new Error("Failed to fetch ticker history");
       }
     },
-    enabled: !!ticker && !!user?.id && !authLoading,
+    enabled: !!ticker && !!user?.id && !authLoading && enabled,
     // No staleTime — every mount/refetch hits the network so the chart never
     // silently replays an old in-memory series.
     staleTime: 0,

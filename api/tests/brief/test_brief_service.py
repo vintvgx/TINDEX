@@ -1,6 +1,8 @@
 """End-to-end flow of BriefService against FakeIO: build → lock → live 1m
 bars → guards / gate → confirm or auto entry → signal log."""
+import threading
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,7 +16,12 @@ D2 = (2026, 10, 6)
 
 @pytest.fixture(autouse=True)
 def inline_threads(monkeypatch):
-    monkeypatch.setattr(bs.threading, "Thread", InlineThread)
+    # Swap only brief_service's own `threading` reference. Patching
+    # bs.threading.Thread replaced Thread process-wide — including the
+    # ThreadPoolExecutor in _score_universe, whose worker then ran inline and
+    # looped forever waiting for work, hanging every brief-building test.
+    monkeypatch.setattr(bs, "threading", SimpleNamespace(
+        Thread=InlineThread, Lock=threading.Lock, RLock=threading.RLock))
 
 
 def bar(day, h, m, o, c, v):
@@ -114,6 +121,7 @@ def test_kill_switch_and_orb_overlap_stand_down_and_log():
     io.subs["AMZN"](bar(D1, 9, 30, 247.55, 247.85, 170000))
     assert "kill switch" in status(svc, "AMZN")[1]
     assert io.signals["A-2026-10-05-AMZN"]["fill_status"] == "stood_down"
+    io.losses = 0  # kill switch is checked first — clear it to reach the ORB guard
     io.orb_open = {"META"}
     io.subs["META"](bar(D1, 9, 30, 700.5, 701.5, 170000))
     assert "ORB strategy" in status(svc, "META")[1]
@@ -143,10 +151,60 @@ def test_confirm_enters_skip_and_expiry_are_logged():
 
     io2, svc2 = locked()
     io2.subs["AMZN"](bar(D1, 9, 30, 247.55, 247.85, 170000))
-    io2.t += timedelta(minutes=3, seconds=1)
+    io2.t += timedelta(minutes=5, seconds=1)
     with pytest.raises(ValueError, match="expired"):
         svc2.confirm("AMZN")
     assert io2.signals["A-2026-10-05-AMZN"]["fill_status"] == "expired"
+
+
+# ── confirm card v3 (TODO 548f02a4) ────────────────────────────────────────
+
+def test_confirm_window_is_five_minutes_capped_at_ten():
+    io, svc = locked()
+    io.subs["AMZN"](bar(D1, 9, 30, 247.55, 247.85, 170000))
+    assert svc._play("AMZN")["confirm_expires_at"].startswith("2026-10-05T09:36:00")
+
+    io2, svc2 = locked()
+    io2.t = et(*D1, 9, 57)
+    io2.subs["AMZN"](bar(D1, 9, 57, 247.55, 247.85, 170000))
+    p = svc2._play("AMZN")
+    assert p["status"] == "awaiting_confirmation"
+    assert p["confirm_expires_at"].startswith("2026-10-05T10:00:00")  # capped, not 10:02
+    assert "3:00" in p["status_reason"]
+
+
+def test_trigger_attaches_contract_candidates_top_pick_first():
+    io, svc = locked()
+    io.subs["AMZN"](bar(D1, 9, 30, 247.55, 247.85, 170000))
+    c = svc._play("AMZN")["contract_candidates"]
+    assert [x["symbol"] for x in c] == ["AMZN261005C00250000", "AMZN261005C00252500"]
+    assert c[0]["top_pick"] and not c[1]["top_pick"]
+    assert svc._play("AMZN")["paper_mode"] is True
+
+
+def test_confirm_with_picked_contract_live_flows_to_entry_and_log():
+    io, svc = locked()
+    io.subs["AMZN"](bar(D1, 9, 30, 247.55, 247.85, 170000))
+    svc.confirm("AMZN", "AMZN261005C00252500", False)
+    assert io.entered[-1] == ("AMZN", "AMZN261005C00252500", False)
+    assert status(svc, "AMZN")[0] == "filled"
+    assert io.signals["A-2026-10-05-AMZN"]["paper_mode"] is False
+
+
+def test_confirm_defaults_to_top_pick_on_paper():
+    io, svc = locked()
+    io.subs["AMZN"](bar(D1, 9, 30, 247.55, 247.85, 170000))
+    svc.confirm("AMZN")
+    assert io.entered[-1] == ("AMZN", None, True)
+    assert io.signals["A-2026-10-05-AMZN"]["paper_mode"] is True
+
+
+def test_confirm_rejects_a_contract_that_was_not_offered():
+    io, svc = locked()
+    io.subs["AMZN"](bar(D1, 9, 30, 247.55, 247.85, 170000))
+    with pytest.raises(ValueError, match="offered"):
+        svc.confirm("AMZN", "AMZN261005C00300000", True)
+    assert status(svc, "AMZN")[0] == "awaiting_confirmation"
 
 
 def test_mode_locked_once_triggered():

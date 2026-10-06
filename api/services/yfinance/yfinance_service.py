@@ -1,4 +1,5 @@
 from services.utils.options_analyzer import OptionsAnalyzer
+import time
 import yfinance as yf
 import pandas as pd
 import pytz
@@ -154,7 +155,8 @@ def _regular_session_only(hist: "pd.DataFrame") -> "pd.DataFrame":
     return hist[mask]
 
 
-def get_historical_prices(ticker: str, period_key: str, interval_override: str | None = None) -> dict:
+def get_historical_prices(ticker: str, period_key: str, interval_override: str | None = None,
+                         extended_hours: bool = False) -> dict:
     """
     Fetch a single timeframe's historical price series for the chart.
 
@@ -166,6 +168,12 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
             ALLOWED_INTERVALS[period_key]; anything not in that list
             (including None, or a value left over from a different period)
             silently falls back to PERIOD_MAP's default rather than erroring.
+        extended_hours: 1D only — when True, the response keeps the full
+            extended-hours session (premarket + regular) for the latest date
+            instead of trimming to 09:30-16:00 ET via _regular_session_only().
+            Only applies outside regular trading hours (before 09:30 or at/
+            after 16:00 ET) — during the session the chart is always
+            regular-session-only.
 
     Returns:
         Dict with "dates", "prices" (closes), "volumes", plus "opens"/"highs"/"lows"
@@ -185,6 +193,10 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
     period, default_interval = PERIOD_MAP.get(period_key, PERIOD_MAP["1M"])
     allowed = ALLOWED_INTERVALS.get(period_key, [default_interval])
     interval = interval_override if interval_override in allowed else default_interval
+    cache_key = ("prices", ticker, period_key, interval, extended_hours)
+    cached = _history_cache_get(cache_key, _history_ttl_s(interval))
+    if cached is not None:
+        return cached
     # Extended-hours bars only requested for 1D — that's the only period
     # where session boundaries (and the Pre-Market/Post-Market chart lines)
     # are meaningful; every other period is already daily/weekly closes.
@@ -205,6 +217,8 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
         # mobile JSON.parse, so drop those rows before serializing.
         if not hist.empty and "Close" in hist.columns:
             hist = hist.dropna(subset=["Close"])
+            if interval in INTRADAY_INTERVALS:
+                hist = drop_bad_ticks(hist, ticker)
     except Exception as e:
         logger.warning(f"Failed to get historical prices for {ticker} ({period_key}): {str(e)}")
         hist = pd.DataFrame()
@@ -218,12 +232,17 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
         else None
     )
 
-    # 1D candles are regular-session-only (see _regular_session_only) —
+    # 1D candles are regular-session-only (see _regular_session_only) — UNLESS
+    # the client asked for extended hours (premarket toggle on the chart) AND
+    # we're outside regular trading hours. During the 09:30-16:00 ET session
+    # the chart stays a clean regular-session view; premarket candles only
+    # appear premarket/after-hours.
     # Robinhood never plots pre-market/after-hours candles on its 1D chart,
     # just the 09:30-16:00 ET session, one trading day at a time (panning to
     # an earlier day is a separate request — see /ticker/<ticker>/history-date).
     if period_key == "1D":
-        hist = _regular_session_only(hist)
+        show_extended = extended_hours and not _is_regular_trading_hours()
+        hist = _latest_date_only(hist) if show_extended else _regular_session_only(hist)
 
     def _col(name: str) -> list:
         return hist[name].tolist() if not hist.empty and name in hist.columns else []
@@ -233,6 +252,33 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
     if session_lines:
         result["session_lines"] = session_lines
 
+    _history_cache_put(cache_key, result)
+    result["from_cache"] = False
+    return result
+
+
+# ── Sparkline fetch (home chart deck) ─────────────────────────────────────
+# The home deck's charts are plain price lines — no candles, no technicals,
+# no levels. This is a deliberately separate, minimal call from the chart
+# history endpoint: dates + closes only, cached ~45s per ticker+period so a
+# deck of tickers polling every minute doesn't hammer yfinance.
+_SPARK_CACHE: dict = {}
+_SPARK_TTL_S = 45
+
+
+def get_spark_prices(ticker: str, period_key: str) -> dict:
+    """Minimal closes-only series for lightweight sparkline views."""
+    cache_key = f"{ticker}:{period_key}"
+    now = time.time()
+    hit = _SPARK_CACHE.get(cache_key)
+    if hit and now - hit[0] < _SPARK_TTL_S:
+        return hit[1]
+
+    full = get_historical_prices(ticker, period_key)
+    dates = full.get("dates", []) if isinstance(full, dict) else []
+    closes = full.get("prices", []) if isinstance(full, dict) else []
+    result = {"dates": dates, "closes": closes, "interval": full.get("interval") if isinstance(full, dict) else None}
+    _SPARK_CACHE[cache_key] = (now, result)
     return result
 
 
@@ -258,9 +304,73 @@ def _serialize_history(hist: "pd.DataFrame", interval: str) -> dict:
     }
 
 
+# ── History response cache ────────────────────────────────────────────────
+# The chart polls history every 30s and several views can ask for the same
+# ticker+period at once. Yahoo is the bottleneck, so serialized responses
+# are cached per (ticker, period, interval, extended_hours): 45s for
+# intraday (the poll cadence means every other poll is served from memory;
+# live ticks already keep the forming bar fresh on the client), 5 min for
+# daily+ (those barely move intraday). from_cache is reported honestly so
+# the client can tell a cached read from a live one.
+_HISTORY_CACHE: dict = {}
+_HISTORY_CACHE_MAX = 1000
+
+
+def _history_ttl_s(interval: str) -> int:
+    return 45 if interval in INTRADAY_INTERVALS else 300
+
+
+def _history_cache_get(key: tuple, ttl_s: int) -> dict | None:
+    hit = _HISTORY_CACHE.get(key)
+    if hit and time.time() - hit[0] < ttl_s:
+        result = dict(hit[1])
+        result["from_cache"] = True
+        return result
+    return None
+
+
+def _history_cache_put(key: tuple, result: dict) -> None:
+    if len(_HISTORY_CACHE) >= _HISTORY_CACHE_MAX:
+        _HISTORY_CACHE.clear()
+    stored = dict(result)
+    stored["from_cache"] = False
+    _HISTORY_CACHE[key] = (time.time(), stored)
+
+
 # ── Windowed history fetch (chart lazy-load backfill) ─────────────────────
 
 INTRADAY_INTERVALS = {"1m", "5m", "15m", "30m", "1h"}
+
+
+# A single bad tick from Yahoo (e.g. SPY printing a $57.56 low while trading
+# $770) blows up the chart's y-axis, the client-side ORB box, and every
+# indicator computed from the series. A >12% move from the previous bar's
+# close on an intraday bar is not a real move — faster than the 2010 flash
+# crash's 5-minute pace — so the bar is dropped, not repaired. Judged on the
+# bar's own high/low (a bad print's close usually snaps back on the next
+# bar, which is the signature of a bad tick vs. a real move).
+_BAD_TICK_PCT = 0.12
+
+
+def drop_bad_ticks(hist: "pd.DataFrame", label: str = "") -> "pd.DataFrame":
+    """Drop obvious bad-tick bars from an intraday series (see _BAD_TICK_PCT).
+    The first bar has no predecessor to judge it by and is always kept."""
+    if hist.empty or len(hist) < 2 or not {"High", "Low", "Close"}.issubset(hist.columns):
+        return hist
+    prev_close = hist["Close"].shift(1)
+    bad = (hist["High"] > prev_close * (1 + _BAD_TICK_PCT)) | (
+        hist["Low"] < prev_close * (1 - _BAD_TICK_PCT))
+    bad = bad.fillna(False)
+    bad.iloc[0] = False
+    n_bad = int(bad.sum())
+    if n_bad:
+        try:
+            when = hist.index[bad].tz_convert(ET).strftime("%H:%M").tolist()
+        except Exception:
+            when = []
+        logger.warning("Dropped %d bad-tick bar(s)%s at %s",
+                       n_bad, f" for {label}" if label else "", when)
+    return hist[~bad]
 # Yahoo's real lookback caps for sub-daily bars. The endpoint 400s past these
 # instead of returning silently empty data — an empty backfill looks exactly
 # like "no more history" to the client's pan-back watermark.
@@ -296,14 +406,16 @@ def _parse_window_date(value, name: str):
     raise ValueError(f"{name} must be a YYYY-MM-DD date")
 
 
-def get_historical_window(ticker: str, interval: str, start, end) -> dict:
+def get_historical_window(ticker: str, interval: str, start, end, extended_hours: bool = False) -> dict:
     """OHLCV bars for an explicit [start, end) window — the chart's lazy-load
     backfill path (pan back past the initially loaded data).
 
     Intraday intervals fetch prepost=True and are regular-session-trimmed,
     exactly like the 1D period fetch, so backfilled bars stay consistent
     with the live view (ORB boxes, session VWAP and the EMAs all assume
-    this). Raises ValueError on bad input — the route turns it into a 400.
+    this) — unless extended_hours=True outside regular trading hours, which
+    keeps the full extended session. Raises ValueError on bad input — the
+    route turns it into a 400.
     """
     if interval not in WINDOW_MAX_DAYS:
         raise ValueError(f"Invalid interval. Must be one of: {', '.join(sorted(WINDOW_MAX_DAYS))}")
@@ -327,11 +439,18 @@ def get_historical_window(ticker: str, interval: str, start, end) -> dict:
     if window_days > 3650:
         raise ValueError("window too large (max ~10 years)")
 
+    cache_key = ("window", ticker, interval, start_d.isoformat(), end_d.isoformat(), extended_hours)
+    cached = _history_cache_get(cache_key, _history_ttl_s(interval))
+    if cached is not None:
+        return cached
+
     prepost = interval in INTRADAY_INTERVALS
     try:
         hist = yf.Ticker(ticker).history(start=start_d, end=end_d, interval=interval, prepost=prepost)
         if not hist.empty and "Close" in hist.columns:
             hist = hist.dropna(subset=["Close"])
+            if interval in INTRADAY_INTERVALS:
+                hist = drop_bad_ticks(hist, ticker)
     except Exception as e:
         logger.warning(f"Windowed history fetch failed for {ticker} ({interval} {start_d}..{end_d}): {str(e)}")
         hist = pd.DataFrame()
@@ -347,10 +466,16 @@ def get_historical_window(ticker: str, interval: str, start, end) -> dict:
         else None
     )
     if prepost:
-        hist = _regular_session_all_days(hist)
+        # Extended-hours bars only show outside the regular session — during
+        # 09:30-16:00 ET the chart is regular-session-only even with the
+        # toggle on.
+        show_extended = extended_hours and not _is_regular_trading_hours()
+        hist = hist if show_extended else _regular_session_all_days(hist)
     result = _serialize_history(hist, interval)
     if session_lines:
         result["session_lines"] = session_lines
+    _history_cache_put(cache_key, result)
+    result["from_cache"] = False
     return result
 
 
@@ -392,6 +517,8 @@ def get_intraday_chart_for_date(ticker: str, date_str: str, interval: str = "5m"
         hist = yf.Ticker(ticker).history(start=start, end=end, interval=interval)
         if not hist.empty and "Close" in hist.columns:
             hist = hist.dropna(subset=["Close"])
+            if interval in INTRADAY_INTERVALS:
+                hist = drop_bad_ticks(hist, ticker)
     except Exception as e:
         logger.warning(f"Failed to get intraday chart for {ticker} on {date_str}: {str(e)}")
         hist = pd.DataFrame()

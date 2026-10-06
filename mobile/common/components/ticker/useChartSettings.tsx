@@ -37,13 +37,20 @@ interface Options {
    *  its crosshair on press-and-hold, like TradingView, so the Charts tab
    *  hides this on that engine. */
   showCrosshairRow?: boolean;
+  /** Staged loading: backend technicals (gate strip, zones, walls) only
+   *  fire after the candles have painted. */
+  technicalsGo?: boolean;
+  /** Fetch the technicals check even with every technicals overlay off —
+   *  the Charts tab's ticker tape shows its BUY CALL / BUY PUT signal. */
+  needSignal?: boolean;
 }
 
 export function useChartSettings({
   ticker, period, colors, canMarkWatchLevel, extraOverlayRows = [], hideStripRow = false, showDefaults = false, showCrosshairRow = true,
+  technicalsGo = true, needSignal = false,
 }: Options) {
   const { prefs, setPref } = useChartDisplayPrefs();
-  const { mode, showSessionLines, showStrip, showVwap, showEma, showOrb, showWalls,
+  const { mode, showSessionLines, showExtendedHours, showStrip, showVwap, showEma, showOrb, showWalls,
     ema20, ema50, ema200, ema400, chartEngine, defaultPeriod } = prefs;
   const defaultIntervalOptions = intervalCycleFor(ALLOWED_INTERVALS[defaultPeriod]);
   const defaultInterval = prefs.defaultInterval && defaultIntervalOptions.includes(prefs.defaultInterval)
@@ -51,6 +58,7 @@ export function useChartSettings({
     : DEFAULT_INTERVAL[defaultPeriod];
   const setMode = (v: ChartMode | null) => setPref('mode', v);
   const setShowSessionLines = (v: boolean) => setPref('showSessionLines', v);
+  const setShowExtendedHours = (v: boolean) => setPref('showExtendedHours', v);
   const setShowStrip = (v: boolean) => setPref('showStrip', v);
   const setShowVwap = (v: boolean) => setPref('showVwap', v);
   const setShowEma = (v: boolean) => setPref('showEma', v);
@@ -72,7 +80,7 @@ export function useChartSettings({
   const { enabled: crosshairEnabled, setEnabled: setCrosshairEnabled } = useCrosshairEnabled();
 
   // Only poll while something actually uses the data.
-  const technicals = useChartTechnicals(ticker, showStrip || showVwap || showEma || modalOpen);
+  const technicals = useChartTechnicals(ticker, technicalsGo && (needSignal || showStrip || showVwap || showEma || modalOpen));
 
   const referenceLines: ChartReferenceLine[] = useMemo(
     () => [
@@ -176,6 +184,9 @@ export function useChartSettings({
         { kind: 'toggle', key: 'session', icon: 'partly-sunny-outline', label: 'Pre / post-market lines',
           description: 'Pre-market, close, post-market and overnight prices (1D only)',
           value: showSessionLines, onChange: setShowSessionLines },
+        { kind: 'toggle', key: 'extendedHours', icon: 'time-outline', label: 'Extended-hours candles',
+          description: 'Show premarket candles on 1D, not just the 9:30–4:00 session',
+          value: showExtendedHours, onChange: setShowExtendedHours },
         { kind: 'toggle', key: 'zones', icon: 'layers-outline', label: 'Show watch levels',
           description: 'Show or hide your saved levels on the chart (use Mark a watch level above to add one)', value: showWatchZones, onChange: setShowWatchZones },
         { kind: 'toggle', key: 'autoZones', icon: 'grid-outline', label: 'Auto-detected zones',
@@ -222,6 +233,7 @@ export function useChartSettings({
     crosshairEnabled,
     defaultPeriod,
     defaultInterval,
+    showExtendedHours,
     onTechnicalsOpenChange: setModalOpen,
   };
 }

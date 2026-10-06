@@ -19,7 +19,9 @@ import { useFonts } from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
-import { View, Text } from "react-native";
+import { View, Text, ScrollView, Pressable, useColorScheme } from "react-native";
+import type { ErrorBoundaryProps } from "expo-router";
+import { lightTheme, darkTheme } from "@/styles/index";
 import * as Notifications from "expo-notifications";
 import { router } from 'expo-router';
 
@@ -52,6 +54,46 @@ import { ORBBreakoutNotificationData } from "@/common/components/FEED/modals/ORB
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
+
+// Root error boundary (expo-router picks up this named export). Without it a
+// render-time throw anywhere in the tree unmounts the whole app and leaves a
+// black screen with no clue what broke — this shows the error + a retry.
+// Deliberately dependency-free (no theme context / providers / custom fonts):
+// those sit inside the tree that just crashed.
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  const colors = useColorScheme() === "dark" ? darkTheme : lightTheme;
+
+  useEffect(() => {
+    SplashScreen.hideAsync();
+    console.error("[RootErrorBoundary]", error?.message, error?.stack);
+  }, [error]);
+
+  return (
+    <ScrollView
+      style={{ flex: 1, backgroundColor: colors.background }}
+      contentContainerStyle={{ padding: 24, paddingTop: 80 }}
+    >
+      <Text style={{ color: colors.text, fontSize: 22, fontWeight: "700", marginBottom: 8 }}>
+        Something went wrong
+      </Text>
+      <Text style={{ color: colors.textSecondary, fontSize: 15, marginBottom: 20 }}>
+        The app hit an unexpected error. Try again, and if it keeps happening,
+        send a screenshot of this screen.
+      </Text>
+      <Pressable
+        onPress={retry}
+        style={{ backgroundColor: colors.accent, borderRadius: 12, paddingVertical: 14, alignItems: "center", marginBottom: 24 }}
+      >
+        <Text style={{ color: colors.accentForeground, fontSize: 16, fontWeight: "600" }}>Try again</Text>
+      </Pressable>
+      <Text selectable style={{ color: colors.textTertiary, fontSize: 12, fontFamily: "Courier" }}>
+        {error?.message}
+        {"\n\n"}
+        {error?.stack?.split("\n").slice(0, 12).join("\n")}
+      </Text>
+    </ScrollView>
+  );
+}
 
 
 Notifications.setNotificationHandler({

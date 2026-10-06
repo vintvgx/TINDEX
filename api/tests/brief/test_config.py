@@ -8,7 +8,7 @@ def test_defaults_are_the_agreed_plan():
     assert DEFAULTS["trigger_volume_mult"] == 1.2
     assert DEFAULTS["stale_pct"] == 0.003
     assert DEFAULTS["limit_timeout_seconds"] == 75
-    assert DEFAULTS["confirm_ttl_seconds"] == 180
+    assert DEFAULTS["confirm_ttl_seconds"] == 300
     assert DEFAULTS["max_losses_per_day"] == 2
     assert DEFAULTS["max_open_trades"] == 2
 

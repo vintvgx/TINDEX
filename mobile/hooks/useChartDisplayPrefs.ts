@@ -18,6 +18,9 @@ export interface ChartDisplayPrefs {
   /** null = the timeframe's default (candles on 1D/1W, line otherwise). */
   mode: ChartMode | null;
   showSessionLines: boolean;
+  /** 1D candles include the extended-hours session (premarket + regular),
+   *  not just 09:30–16:00 ET. */
+  showExtendedHours: boolean;
   showStrip: boolean;
   showVwap: boolean;
   showEma: boolean;
@@ -37,11 +40,15 @@ export interface ChartDisplayPrefs {
   defaultPeriod: PricePeriod;
   /** null = that period's own default bar size. */
   defaultInterval: string | null;
+  /** Home dynamic card's chart page (Profile → Home chart timeframe). */
+  homeChartPeriod: PricePeriod;
+  homeChartInterval: string;
 }
 
 export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
   mode: null,
   showSessionLines: false,
+  showExtendedHours: true,
   showStrip: false,
   showVwap: false,
   showEma: false,
@@ -55,6 +62,8 @@ export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
   chartEngine: 'tv',
   defaultPeriod: '1D',
   defaultInterval: null,
+  homeChartPeriod: '1D',
+  homeChartInterval: '15m',
 };
 
 async function loadPrefs(): Promise<ChartDisplayPrefs> {

@@ -43,6 +43,21 @@ export interface BriefOrder {
 
 export interface BriefZone { low: number; high: number; score: number }
 
+/** One contract offered on the confirm card (ranked by the entry rules —
+ *  `top_pick` is what auto-pick would choose). */
+export interface BriefContractCandidate {
+  symbol: string;
+  strike: number;
+  ask: number;
+  bid: number;
+  delta: number | null;
+  qty: number;
+  profile: string;
+  limit: number | null;
+  spread_pct: number;
+  top_pick: boolean;
+}
+
 export interface BriefPlay {
   ticker: string;
   direction: 'CALL' | 'PUT';
@@ -70,6 +85,11 @@ export interface BriefPlay {
   baseline_1m: number | null;
   gate_at_trigger?: string | null;
   confirm_expires_at?: string;
+  /** Attached when the play triggers (confirm mode) — the card's picker. */
+  contract_candidates?: BriefContractCandidate[];
+  /** Paper (default) or live — set at confirm. */
+  paper_mode?: boolean;
+  chosen_contract?: string | null;
   order?: BriefOrder;
   trade_id?: string;
   /** latest underlying price from the live 1m bars (null before 9:30) */

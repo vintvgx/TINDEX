@@ -28,8 +28,11 @@ export function useChartTechnicals(ticker: string | null | undefined, enabled: b
   return useQuery<EntryCheck>({
     queryKey: ['chart-technicals', ticker],
     enabled: !!ticker && enabled,
-    staleTime: 10_000,
-    refetchInterval: enabled ? 15_000 : false,
+    staleTime: 30_000,
+    // The strip is informational, not trading-critical: 60s keeps it fresh
+    // at a quarter of the backend cost (each run fetches 1m bars + 2y of
+    // dailies and re-runs the gate).
+    refetchInterval: enabled ? 60_000 : false,
     // Response carries both directions' verdicts; CALL just picks `verdict`.
     queryFn: () => fetchEntryCheck(ticker!, 'CALL'),
   });

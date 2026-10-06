@@ -7,7 +7,8 @@ import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQuery';
 import { useChartInterval } from '@/hooks/useChartInterval';
 import { useIsFollowingORB, useToggleORBFollow, useToggleAlertStar } from '@/hooks/mutations/ticker/tickerORB';
-import { PriceChart, ScrubPoint } from '@/common/components/ticker/PriceChart';
+import { LinePriceChart, type ScrubPoint } from '@/common/components/ticker/LinePriceChart';
+import { openChartOverlay } from '@/common/components/ui/ChartOverlayContext';
 import { PriceChartFullScreen } from '@/common/components/ticker/PriceChartFullScreen';
 import { OptionsChainPicker } from '@/common/components/strategy/OptionsChainPicker';
 import { TickerBrief } from '@/common/components/ticker/brief/TickerBrief';
@@ -222,21 +223,23 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
 
       {/* Chart */}
       <View style={{ marginBottom: 24 }}>
-        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 4 }}>
-          <Pressable onPress={() => setFullScreenChart(true)} hitSlop={10} style={{ padding: 4 }}>
-            <Ionicons name="expand-outline" size={18} color={colors.textTertiary} />
-          </Pressable>
-        </View>
         {historyIsError && !historyData ? (
           <UnavailableBox message="Chart unable to be fetched" onRetry={() => refetchHistory()} />
         ) : (
-          <PriceChart
-            data={historyData}
+          // Shared with the Home dynamic card (LinePriceChart). Expand closes
+          // this sheet and opens the full chart (charts.tsx) on this ticker.
+          <LinePriceChart
+            dates={historyData?.dates ?? []}
+            prices={historyData?.prices ?? []}
             isLoading={historyLoading}
             period={period}
             onPeriodChange={setPeriod}
             positive={periodPositive}
             onScrub={setScrubPoint}
+            onExpand={() => {
+              onClose();
+              openChartOverlay(ticker);
+            }}
           />
         )}
       </View>

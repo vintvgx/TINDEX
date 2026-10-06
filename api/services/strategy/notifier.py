@@ -490,12 +490,13 @@ class StrategyNotifier:
 
     def notify_level_confirmed(self, ticker: str, direction: str, level_low: float,
                                 level_high: float, price: float, level_id: str,
-                                contract_count: int = 0, zone_type: str = "trade"):
+                                zone_type: str = "trade"):
         """
         A user-watched key level (self-identified or from a Discord flow
         call — see watched_price_levels / KeyLevelWatcher) just had a
-        1-minute bar close through it. Suggested contracts have already
-        been scored and attached to the row by the time this fires.
+        1-minute bar close through it. The push is the cross only — no
+        contract suggestions (Kareem's call 2026-10-06); suggestions are
+        still scored and stored on the row for the app's level UI.
         An investment zone reads as a long-term buy zone, not a trade setup.
         """
         side = "above" if direction == "bullish" else "below"
@@ -505,15 +506,12 @@ class StrategyNotifier:
         )
         if zone_type == "investment":
             emoji, title = "💼", f"{ticker} in Investment Buy Zone"
-            noun = "long-dated suggestion(s)"
         else:
             emoji = "📈" if direction == "bullish" else "📉"
             title = f"{ticker} Key Level Confirmed"
-            noun = "suggestion(s)"
-        suggestion_note = f" · {contract_count} {noun} ready" if contract_count else ""
         self._dispatch(
             title=f"{emoji} {title}",
-            body=f"Closed {side} {level_label} @ ${price:.2f}{suggestion_note}",
+            body=f"Closed {side} {level_label} @ ${price:.2f}",
             data={
                 "screen": "options",
                 "type": "level_confirmed",

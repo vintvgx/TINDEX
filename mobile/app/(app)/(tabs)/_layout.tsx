@@ -1,9 +1,15 @@
+import { useState } from 'react';
 import { Tabs } from 'expo-router';
-import { View } from 'react-native';
+import { View, TouchableOpacity, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaInsetsContext, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useSegments } from 'expo-router';
-import { CustomTabBar } from '@/common/components/ui/CustomTabBar';
+import { Ionicons } from '@expo/vector-icons';
+import { WheelTabBar } from '@/common/components/ui/WheelTabBar';
+import {
+  ChartOverlayProvider,
+  useChartOverlay,
+} from '@/common/components/ui/ChartOverlayContext';
+import { ChartsContent } from './charts';
 import { TickerTape } from '@/common/components/ui/TickerTape';
 import { AppHeader } from '@/common/components/ui/AppHeader';
 import { ChartTapeProvider } from '@/common/components/ui/ChartTapeContext';
@@ -11,40 +17,46 @@ import { OptionsTickerProvider } from '@/lib/optionsTickerContext';
 import { useThemeColors } from '@/lib/useColorScheme';
 
 /**
- * Global app shell: dark ticker tape → app header (logo | bell) → the tab
- * navigator. The tape/header own the top safe-area inset, so we override the
- * inset context to `top: 0` / `bottom: 0` for the navigator subtree —
- * per-screen SafeAreaViews sit flush under the header and above the docked
- * tab bar (CustomTabBar applies the home-indicator inset itself, in its own
- * bottom padding — it's a normal flex sibling now, not a floating overlay,
- * so screens no longer need to guess its height to avoid being hidden
- * under it).
+ * 0.7 redesign app shell: ticker tape → app header → tab navigator →
+ * 3-button wheel tab bar (Home wheel / Chart / Profile).
  *
- * Bottom tabs: Home / ORB / Charts / Accounts / Profile. Home, ORB, and
- * Accounts each page between several sub-screens via SegmentedPager (see
- * feed.tsx, orb.tsx, accounts.tsx) — those sub-screens (position, options,
- * strategy, tradelog, daily_review, etc.) stay registered here with
- * href:null so they're still real routes `router.push` can target directly,
- * but aren't their own tabs. Charts is its own standalone tab (charts.tsx),
- * not a pager. Profile replaces the old Menu list screen (menu.tsx,
- * removed) — its navigable rows (Watchlists/Track Portfolio/Notifications/
- * Run Simulation) and Sign Out moved into profile.tsx, above its Developer
- * section.
+ * The Home button scrubs through Home → Monitor → Daily → Log → Account →
+ * Menu (single tap spins back to Home). The Chart button opens the chart as
+ * a full-screen overlay covering tape, header, and tab bar — only an X
+ * (where the Profile button was) remains to close it. All routes stay
+ * registered so deep links and notifications keep working.
  */
 function Shell() {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
-  const segments = useSegments();
-  // The Charts tab owns its chrome now (ticker wheel + bottom toolbar, TV-
-  // style) — the global AppHeader would just be clutter there. Every other
-  // tab keeps it.
-  const hideAppHeader = segments[segments.length - 1] === 'charts';
 
   return (
-    <ChartTapeProvider>
-    <View style={{ flex: 1, backgroundColor: colors.background }}>
-      <TickerTape />
-      {!hideAppHeader && <AppHeader />}
+    <ChartOverlayProvider>
+      <ChartTapeProvider>
+      <View style={{ flex: 1, backgroundColor: colors.background }}>
+        <ShellContent insets={insets} />
+        <StatusBar style="light" />
+      </View>
+      </ChartTapeProvider>
+    </ChartOverlayProvider>
+  );
+}
+
+function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets> }) {
+  const colors = useThemeColors();
+  const { open: chartOpen, ticker: chartTicker, closeChart } = useChartOverlay();
+  // The chart overlay starts BELOW the ticker tape: charts.tsx has no tape of
+  // its own — it publishes its ticker/price/signal to this global tape via
+  // ChartTapeContext — so covering the tape hid that headline (and its
+  // tap-ticker-to-search / tap-signal-for-contracts shortcuts).
+  const [tapeH, setTapeH] = useState(0);
+
+  return (
+    <View style={{ flex: 1 }}>
+      <View onLayout={(e) => setTapeH(e.nativeEvent.layout.height)}>
+        <TickerTape />
+      </View>
+      <AppHeader />
 
       <View style={{ flex: 1 }}>
         <SafeAreaInsetsContext.Provider
@@ -52,33 +64,29 @@ function Shell() {
         >
           <Tabs
             initialRouteName="feed"
-            screenOptions={{
-              headerShown: false,
-              // No tabBarStyle here — a custom `tabBar` render prop (below)
-              // takes full control of rendering, so React Navigation never
-              // applies this to it. CustomTabBar owns its own styling now.
-            }}
-            tabBar={(props) => <CustomTabBar {...props} />}
+            // Theme background behind every screen — the default scene
+            // color showed through as black around/below shorter content.
+            screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: colors.background } }}
+            tabBar={chartOpen ? () => null : (props) => <WheelTabBar {...props} />}
           >
+            {/* Wheel screens */}
             <Tabs.Screen name="feed" options={{ title: 'Home' }} />
-            <Tabs.Screen name="orb" options={{ title: 'ORB' }} />
-            <Tabs.Screen name="charts" options={{ title: 'Charts' }} />
-            <Tabs.Screen name="accounts" options={{ title: 'Accounts' }} />
+            <Tabs.Screen name="monitor" options={{ title: 'Monitor' }} />
+            <Tabs.Screen name="daily_review" options={{ title: 'Daily' }} />
+            <Tabs.Screen name="tradelog" options={{ title: 'Log' }} />
+            <Tabs.Screen name="accounts" options={{ title: 'Account' }} />
+            <Tabs.Screen name="menu" options={{ title: 'Menu' }} />
             <Tabs.Screen name="profile" options={{ title: 'Profile' }} />
 
-            {/* Sub-pages of the pagers above — not tabs themselves, still
-                real routes (router.push target for deep-linking a section). */}
+            {/* Reachable via Menu / deep links — not in the wheel */}
+            <Tabs.Screen name="orb" options={{ href: null }} />
+            <Tabs.Screen name="charts" options={{ href: null }} />
             <Tabs.Screen name="dashboard" options={{ href: null }} />
-            <Tabs.Screen name="monitor" options={{ href: null }} />
             <Tabs.Screen name="brief" options={{ href: null }} />
             <Tabs.Screen name="strategy" options={{ href: null }} />
-            <Tabs.Screen name="tradelog" options={{ href: null }} />
-            <Tabs.Screen name="daily_review" options={{ href: null }} />
             <Tabs.Screen name="position" options={{ href: null }} />
             <Tabs.Screen name="options" options={{ href: null }} />
             <Tabs.Screen name="accounts_overview" options={{ href: null }} />
-
-            {/* Profile-only destinations */}
             <Tabs.Screen name="track" options={{ href: null }} />
             <Tabs.Screen name="track-legacy" options={{ href: null }} />
             <Tabs.Screen name="notifications" options={{ href: null }} />
@@ -91,11 +99,44 @@ function Shell() {
         </SafeAreaInsetsContext.Provider>
       </View>
 
-      <StatusBar style="light" />
+      {/* Chart overlay — covers the header and tab bar, but not the ticker
+          tape (which carries the chart's headline). Only the X remains. */}
+      {chartOpen && (
+        <View style={[StyleSheet.absoluteFillObject, { top: tapeH, backgroundColor: colors.background, zIndex: 50 }]}>
+          <ChartsContent initialTicker={chartTicker} topInset={0} />
+          <TouchableOpacity
+            onPress={closeChart}
+            activeOpacity={0.7}
+            accessibilityLabel="Close chart"
+            style={[
+              styles.closeBtn,
+              {
+                top: 8,
+                backgroundColor: colors.surfaceSecondary,
+                borderColor: colors.border,
+              },
+            ]}
+          >
+            <Ionicons name="close" size={20} color={colors.text} />
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
-    </ChartTapeProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  closeBtn: {
+    position: 'absolute',
+    right: 14,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
 
 export default function Layout() {
   return (

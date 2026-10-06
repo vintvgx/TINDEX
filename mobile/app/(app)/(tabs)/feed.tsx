@@ -1,68 +1,87 @@
 import React, { useState, useCallback } from 'react';
-import { View } from 'react-native';
+import { View, type LayoutChangeEvent } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import { SegmentedPager } from '@/common/components/ui/SegmentedPager';
-import { MarketDigestCard } from '@/common/components/digest/MarketDigestCard';
+import Animated, { useSharedValue, useAnimatedScrollHandler } from 'react-native-reanimated';
 import { MarketDigestModal } from '@/common/components/digest/MarketDigestModal';
-import DashboardScreen from './dashboard';
+import { DynamicCard, EXPANDED_H, COLLAPSE_RANGE } from '@/common/components/home/DynamicCard';
 import PositionScreen from './position';
-import OptionsScreen from './options';
-
-const ROUTES = [
-  { key: 'dashboard', label: 'Dashboard' },
-  { key: 'positions', label: 'Live Positions' },
-  { key: 'contracts', label: 'Contracts' },
-];
+import { useThemeColors } from '@/lib/useColorScheme';
+import { useWheelTabBarHeight } from '@/common/components/ui/WheelTabBar';
 
 /**
- * Home tab — a persistent Market Digest banner above a swipeable pager:
- * Dashboard | Live Positions | Contracts. Each page reuses the existing
- * standalone screen component directly (dashboard.tsx / position.tsx /
- * options.tsx are still real routes too, still reachable via router.push
- * for deep links / notifications).
+ * 0.7 redesign Home — the dynamic card ("dynamic island") pinned at top,
+ * collapsing on scroll, with live positions below. Dashboard / Contracts
+ * moved to the Menu screen.
  */
-export default function HomeScreen() {
-  const { section, digest_date: digestDateParam } =
-    useLocalSearchParams<{ section?: string; digest_date?: string }>();
-  const [activeKey, setActiveKey] = useState<string | null>(null);
-  const [digestModalDate, setDigestModalDate] = useState<string | null>(null);
+// Space between the header above and the dynamic card.
+const CARD_TOP_GAP = 10;
+// Gap between the (expanded) card and the positions below it.
+const CARD_BOTTOM_GAP = 14;
 
-  // Consume `section`/`digest_date` exactly once, then strip them from the
-  // URL — otherwise they linger in the route's params and every later
-  // refocus (tab switch away and back, or a stray refocus mid-swipe)
-  // re-applies the old deep-link target, fighting the user's own
-  // navigation. A fresh deep link (Menu tap, notification) still resyncs
-  // correctly since it sets the param again from scratch.
+export default function HomeScreen() {
+  const { digest_date: digestDateParam } = useLocalSearchParams<{ digest_date?: string }>();
+  const [digestModalDate, setDigestModalDate] = useState<string | null>(null);
+  const colors = useThemeColors();
+  // The floating tab bar covers the bottom of the list — clear it (+ a gap).
+  const tabBarClearance = useWheelTabBarHeight() + 12;
+  const scrollY = useSharedValue(0);
+  const [viewportH, setViewportH] = useState(0);
+  const onLayout = useCallback((e: LayoutChangeEvent) => setViewportH(e.nativeEvent.layout.height), []);
+
+  const onScroll = useAnimatedScrollHandler({
+    onScroll: (e) => {
+      scrollY.value = e.contentOffset.y;
+    },
+  });
+
+  const openBrief = useCallback(() => {
+    const today = new Date();
+    const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    setDigestModalDate(iso);
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
-      if (section) {
-        setActiveKey(section);
-        router.setParams({ section: undefined });
-      }
       if (digestDateParam) {
         setDigestModalDate(digestDateParam);
         router.setParams({ digest_date: undefined });
       }
-    }, [section, digestDateParam]),
+    }, [digestDateParam]),
   );
 
   return (
-    <View style={{ flex: 1 }}>
-      <MarketDigestCard onOpen={setDigestModalDate} />
-      <View style={{ flex: 1 }}>
-        <SegmentedPager
-          routes={ROUTES}
-          activeKey={activeKey}
-          renderScene={key => {
-            switch (key) {
-              case 'dashboard': return <DashboardScreen />;
-              case 'positions': return <PositionScreen embedded />;
-              case 'contracts': return <OptionsScreen />;
-              default: return null;
-            }
-          }}
-        />
+    <View style={{ flex: 1, backgroundColor: colors.background }} onLayout={onLayout}>
+      {/* The card is an overlay ABOVE the ScrollView, not a (sticky) child:
+          its height animates with scroll, and as a child that changed the
+          content height mid-scroll → scrollY fed back into itself → jitter,
+          and with little content (one position) the scrollable range kept
+          vanishing → bounce. The content instead reserves the expanded
+          card's height and always has room to scroll the full collapse
+          range; snap points settle it fully open or fully collapsed. */}
+      <Animated.ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{
+          paddingTop: CARD_TOP_GAP + EXPANDED_H + CARD_BOTTOM_GAP,
+          paddingBottom: tabBarClearance,
+          minHeight: viewportH > 0 ? viewportH + COLLAPSE_RANGE : undefined,
+        }}
+        showsVerticalScrollIndicator={false}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        snapToOffsets={[0, COLLAPSE_RANGE]}
+        snapToEnd={false}
+      >
+        <PositionScreen embedded />
+      </Animated.ScrollView>
+      {/* Page-colored backing from the header down through the card, so
+          content scrolling under the collapsed card never peeks through
+          the gap above it. */}
+      <View
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, paddingTop: CARD_TOP_GAP, backgroundColor: colors.background }}
+        pointerEvents="box-none"
+      >
+        <DynamicCard scrollY={scrollY} onOpenBrief={openBrief} />
       </View>
       <MarketDigestModal
         date={digestModalDate}

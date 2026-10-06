@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, Pressable, SafeAreaView, LayoutAnimation, Platform, UIManager,
+  View, Text, ScrollView, TouchableOpacity, Pressable, LayoutAnimation, Platform, UIManager,
   LayoutChangeEvent, useWindowDimensions, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -62,16 +63,23 @@ const PINNED_TICKERS = ['SPY', 'IWM', 'QQQ'];
 // hardcoded — new toolbar rows can't silently eat the plot anymore.
 
 /**
- * Charts tab — a TradingView-style full-screen chart, reached via its own
- * bottom tab (not a pushed/modal screen, so the docked tab bar — see
- * CustomTabBar.tsx — stays visible below it). Cycles through followed
- * tickers and tickers with an open position; an expandable bar right above
- * the tab bar shows/hides that ticker's open positions (reusing the exact
- * same live-position data/actions as position.tsx and PriceChartFullScreen
- * — LivePositionsSection.tsx — so Edit/Exit here is the real thing, not a
- * separate reimplementation).
+ * Charts — a TradingView-style full-screen chart. Presented as a full-screen
+ * overlay from the Chart tab-bar button (see ChartOverlayContext), and still
+ * reachable as the `charts` route for deep links (?ticker=). Cycles through
+ * followed tickers and tickers with an open position; an expandable bar
+ * shows/hides that ticker's open positions (reusing the exact same
+ * live-position data/actions as position.tsx — so Edit/Exit here is the
+ * real thing, not a separate reimplementation).
+ *
+ * ChartsContent is the route-independent body; the default export is the
+ * thin route wrapper that feeds ?ticker= in as initialTicker.
  */
-export default function ChartsScreen() {
+export function ChartsContent({ initialTicker, topInset }: {
+  initialTicker?: string | null;
+  /** Override the top safe-area padding — 0 when rendered under the global
+   *  ticker tape (the tape already clears the notch). */
+  topInset?: number;
+}) {
   const colors = useThemeColors();
   const [contractsModalOpen, setContractsModalOpen] = useState(false);
 
@@ -139,11 +147,11 @@ export default function ChartsScreen() {
     setSelectedTicker(up);
   }, []);
   // A tapped zone-alert push lands here with ?ticker= (see
-  // NotificationNavigationService) — open that ticker's chart.
-  const { ticker: tickerParam } = useLocalSearchParams<{ ticker?: string }>();
+  // NotificationNavigationService) — open that ticker's chart. The overlay
+  // passes its ticker in as a prop instead of route params.
   useEffect(() => {
-    if (tickerParam) openTicker(tickerParam);
-  }, [tickerParam, openTicker]);
+    if (initialTicker) openTicker(initialTicker);
+  }, [initialTicker, openTicker]);
 
   // Unfollowed anywhere (this toolbar's star, or the ticker sheet's star in
   // TickerDetailSheet — both refresh userORBFollows) → drop it from the
@@ -186,8 +194,23 @@ export default function ChartsScreen() {
   const { prefs: displayPrefs, loaded: displayPrefsLoaded } = useChartDisplayPrefs();
   const useTVChart = displayPrefs.chartEngine !== 'legacy';
 
+  // Tabs stay mounted when you switch away, so the 30s history poll, 15s
+  // technicals refetch and zone queries would otherwise run forever in the
+  // background, heating the phone. Keep them alive 30s after blur (in case
+  // he's just peeking at another tab), then halt everything until refocus.
+  const tabFocused = useIsFocused();
+  const [chartLive, setChartLive] = useState(true);
+  useEffect(() => {
+    if (tabFocused) {
+      setChartLive(true);
+      return;
+    }
+    const t = setTimeout(() => setChartLive(false), 30_000);
+    return () => clearTimeout(t);
+  }, [tabFocused]);
+
   const { data: legacyHistoryResponse, isLoading: legacyHistoryLoading, isPlaceholderData: legacyHistoryIsStale } = useTickerHistoryQuery(
-    activeTicker, period, period === '1D' ? 30_000 : undefined, chartInterval,
+    activeTicker, period, period === '1D' ? 30_000 : undefined, chartInterval, displayPrefs.showExtendedHours, chartLive,
   );
   const legacyHistoryData = legacyHistoryResponse?.data;
   // Lazy history for the TV chart: the period is only the initial viewport,
@@ -200,11 +223,16 @@ export default function ChartsScreen() {
     // for daily+ bars. Live ticks (streamPrice → TVChart) move the forming
     // candle between polls; the poll brings in real volume/corrections.
     pollMs: 30_000,
-    enabled: useTVChart,
+    enabled: useTVChart && chartLive,
+    extendedHours: displayPrefs.showExtendedHours,
   });
   const historyData = useTVChart ? lazyHistory.data : legacyHistoryData;
   const historyLoading = useTVChart ? lazyHistory.isLoading : legacyHistoryLoading;
   const historyIsStale = useTVChart ? false : legacyHistoryIsStale;
+  // Staged loading: candles paint first, then the backend technicals (gate
+  // strip, zones, walls) fire. One thundering herd on every ticker switch
+  // is what made the chart feel strenuous — this staggers it.
+  const technicalsGo = chartLive && !!historyData;
   // useTickerHistoryQuery's placeholderData:keepPreviousData is meant for a
   // smooth PERIOD switch within the same ticker (shows the prior period's
   // bars while the new one loads) — but the same masking kicks in on a
@@ -347,6 +375,11 @@ export default function ChartsScreen() {
   const chart = useChartSettings({
     ticker: activeTicker, period, colors,
     canMarkWatchLevel: displayPrefs.chartEngine === 'legacy',
+    technicalsGo,
+    // The tape's signal pill reads chart.technicals — with the strip, VWAP
+    // and EMA toggles all off (their defaults) the query never ran and the
+    // pill silently disappeared.
+    needSignal: true,
     hideStripRow: false,
     showDefaults: true,
     showCrosshairRow: displayPrefs.chartEngine === 'legacy',
@@ -382,7 +415,7 @@ export default function ChartsScreen() {
   }, [period]);
   // ZoneEngine's auto-detected support/resistance bands, same as the
   // full-screen chart — fetched only while "Auto-detected zones" is on.
-  const { zones: autoZones, context: zoneContext } = useChartAutoZones(activeTicker, chart.showAutoZones);
+  const { zones: autoZones, context: zoneContext } = useChartAutoZones(activeTicker, chart.showAutoZones && technicalsGo);
   // Today's morning-brief play for this ticker (if any) draws its if/then
   // levels — trigger, target, invalid — alongside the chart's own lines.
   const { data: morningBrief } = useMorningBrief();
@@ -633,8 +666,19 @@ export default function ChartsScreen() {
     return () => setTapeInfo(null);
   }, [isFocused, activeTicker, resolvedLivePrice, liveChange, liveChangePercent, tapeSignal, tickerLoading, stockData, setTapeInfo, openContracts, openSearch]);
 
+  // Top inset as padding; the BOTTOM inset is handed to the last element
+  // (toolbar, or the positions pager when open) as its own padding, so its
+  // background runs to the screen edge — a SafeAreaView left an empty band
+  // under the toolbar, and that height now goes to the chart instead.
+  const safeInsets = useSafeAreaInsets();
+  // Mostly reclaimed: the toolbar sits just above the home indicator
+  // (TradingView-style) instead of leaving the full ~34px inset as an empty
+  // band under it — that height goes to the chart. Keeps ~8px so the
+  // toolbar's content clears the indicator itself.
+  const bottomInset = Math.max(safeInsets.bottom - 26, 2);
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+    <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: topInset ?? safeInsets.top }}>
       {/* Technicals strip — right below the global ticker tape, toggleable
           in Chart settings. */}
       {chart.showStrip && (
@@ -747,6 +791,7 @@ export default function ChartsScreen() {
         activeTicker={activeTicker}
         onSelectTicker={setSelectedTicker}
         onSearchPress={() => setSearchOpen(true)}
+        bottomInset={expanded ? 0 : bottomInset}
         isFollowed={isActiveFollowed}
         onToggleFollow={handleToggleFollow}
         period={period}
@@ -772,11 +817,14 @@ export default function ChartsScreen() {
           chart up (chart keeps its min-height guard). One card per page,
           swipe to paginate, LIVE/PAPER badge per card. */}
       {expanded && (
-        <PositionsPager
-          data={positionsData}
-          ticker={activeTicker}
-          onLiveUpdate={handlePositionLiveUpdate}
-        />
+        <>
+          <PositionsPager
+            data={positionsData}
+            ticker={activeTicker}
+            onLiveUpdate={handlePositionLiveUpdate}
+          />
+          <View style={{ height: bottomInset, backgroundColor: colors.background }} />
+        </>
       )}
 
       <SearchBottomSheet
@@ -799,8 +847,13 @@ export default function ChartsScreen() {
         context={zoneContext}
         onClose={() => setTvZoneSheetZone(null)}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
 
+/** Route wrapper — feeds ?ticker= deep links into ChartsContent. */
+export default function ChartsScreen() {
+  const { ticker: tickerParam } = useLocalSearchParams<{ ticker?: string }>();
+  return <ChartsContent initialTicker={tickerParam ?? null} />;
+}

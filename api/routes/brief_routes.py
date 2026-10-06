@@ -97,7 +97,12 @@ def set_mode(ticker):
 
 @bp.route("/brief/plays/<ticker>/confirm", methods=["POST"])
 def confirm(ticker):
-    return _action(get_brief_service().confirm, ticker)
+    """Body (all optional): {contract_symbol, paper_mode}. Only an explicit
+    `paper_mode: false` enters LIVE — anything else stays paper."""
+    body = request.get_json(silent=True) or {}
+    symbol = (body.get("contract_symbol") or "").strip().upper() or None
+    paper = body.get("paper_mode") is not False
+    return _action(get_brief_service().confirm, ticker, symbol, paper)
 
 
 @bp.route("/brief/plays/<ticker>/skip", methods=["POST"])

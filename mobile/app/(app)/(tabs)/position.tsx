@@ -7,10 +7,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
-import { useAlpacaPositionValues } from '@/hooks/queries/strategy/useAlpacaPositionValues';
-import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
-import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
+import { useLiveEquity } from '@/hooks/queries/strategy/useLiveEquity';
+import { useLivePositionsData, type UseLivePositionsDataResult } from '@/common/components/strategy/LivePositionsSection';
+import { BriefPositionsBody } from '@/common/components/home/BriefPositionsBody';
+import { useWheelTabBarHeight } from '@/common/components/ui/WheelTabBar';
 
 interface Props {
   /**
@@ -25,7 +25,8 @@ interface Props {
 export default function PositionScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
   const [mode, setMode] = useState<'live' | 'paper'>('live');
-  const tabBarHeight = useFloatingTabBarHeight();
+  // The 0.7 tab bar floats over this screen — clear its full height.
+  const tabBarHeight = useWheelTabBarHeight() + 12;
 
   // Deep-link from a notification tap (see NotificationNavigationService) —
   // consume `paper_mode` exactly once, same pattern as orb.tsx's `section`
@@ -40,61 +41,16 @@ export default function PositionScreen({ embedded = false }: Props) {
     }, [paperModeParam]),
   );
 
-  // Both accounts, each built from its own dedicated paper/live TradingClient
-  // (unlike /strategy/account, which resolved to "whichever saved strategy
-  // engine happens to be first" — unrelated to which account an active trade
-  // was actually in, and the reason the balance shown here could silently be
-  // the wrong account's the whole session). Picking by `mode` below means
-  // this always matches what's actually being viewed.
-  const { data: accounts } = useAlpacaBothAccounts();
-  const account = accounts ? (mode === 'live' ? accounts.live : accounts.paper) : undefined;
+  // Live Equity (cash + open positions' market value) comes from the shared
+  // hook so the Home account card shows exactly this figure. The hook picks
+  // the account by `mode`, so this always matches what's actually being
+  // viewed (never "whichever engine happened to be first").
+  const { account, liveDerivedEquity, displayEquity } = useLiveEquity(mode);
 
   const positionsData = useLivePositionsData(mode);
-  const { filteredPositions, liveByStrategy } = positionsData;
+  const { filteredPositions } = positionsData;
   const activeCount = filteredPositions.length;
 
-  // Same REST market-value poll the Accounts screen's own equity figure is
-  // built from (useAccountValueDisplay → useAlpacaPositionValues). Joining
-  // against it here — rather than trusting only the per-row WebSocket ticks
-  // below — is what keeps this screen's "Live Equity" from disagreeing with
-  // Accounts: previously a position whose socket hadn't ticked yet fell
-  // straight to static entry-cost-basis, which drifts from the real mark the
-  // moment price moves, while Accounts was already showing Alpaca's actual
-  // REST value the whole time.
-  const { data: restPositions } = useAlpacaPositionValues(mode, { enabled: filteredPositions.length > 0 });
-  const restMarketValueBySymbol = useMemo(() => {
-    const side = mode === 'live' ? restPositions?.live : restPositions?.paper;
-    const map: Record<string, number> = {};
-    for (const p of side?.positions ?? []) map[p.symbol] = p.market_value;
-    return map;
-  }, [restPositions, mode]);
-
-  // Live-derived equity = cash (stable mid-trade, from the slow account poll)
-  // + the sum of every open position's market value. Prefers the REST value
-  // above (same source Accounts uses); falls back to the WebSocket tick
-  // (lower latency once it's ticked) only when REST doesn't have that
-  // position yet, and to static cost basis (entry_premium * qty * 100) only
-  // as the last resort before either has delivered anything.
-  const liveDerivedEquity = useMemo(() => {
-    if (!account?.available || filteredPositions.length === 0) return null;
-    let sumMarketValue = 0;
-    for (const pos of filteredPositions) {
-      const restValue = pos.contract != null ? restMarketValueBySymbol[pos.contract] : undefined;
-      if (restValue != null) {
-        sumMarketValue += restValue;
-        continue;
-      }
-      const live = liveByStrategy[pos.strategy_id];
-      if (live?.market_value != null) {
-        sumMarketValue += live.market_value;
-      } else if (pos.entry_premium != null && pos.qty_remaining != null) {
-        sumMarketValue += pos.entry_premium * pos.qty_remaining * 100;
-      }
-    }
-    return account.cash + sumMarketValue;
-  }, [account, filteredPositions, liveByStrategy, restMarketValueBySymbol]);
-
-  const displayEquity = liveDerivedEquity ?? account?.equity ?? 0;
   const displayPnlToday =
     liveDerivedEquity != null && account?.last_equity != null
       ? liveDerivedEquity - account.last_equity
@@ -112,6 +68,55 @@ export default function PositionScreen({ embedded = false }: Props) {
   );
 
   const toggleMode = () => setMode(m => (m === 'live' ? 'paper' : 'live'));
+
+  // Home (embedded): live AND paper together — live first — with each card
+  // badged LIVE/PAPER, instead of a toggle between the two lists.
+  const liveSide = useLivePositionsData('live');
+  const paperSide = useLivePositionsData('paper');
+  const combinedData: UseLivePositionsDataResult = useMemo(() => ({
+    isLoading: liveSide.isLoading || paperSide.isLoading,
+    filteredPositions: [...liveSide.filteredPositions, ...paperSide.filteredPositions],
+    displayedPositions: [...liveSide.displayedPositions, ...paperSide.displayedPositions],
+    hiddenCount: liveSide.hiddenCount + paperSide.hiddenCount,
+    showHidden: liveSide.showHidden,
+    setShowHidden: (v) => {
+      liveSide.setShowHidden(v);
+      paperSide.setShowHidden(v);
+    },
+    liveByStrategy: { ...liveSide.liveByStrategy, ...paperSide.liveByStrategy },
+    handleLiveUpdate: (id, d) => {
+      liveSide.handleLiveUpdate(id, d);
+      paperSide.handleLiveUpdate(id, d);
+    },
+  }), [liveSide, paperSide]);
+
+  const positionsBody = (
+    <BriefPositionsBody
+      data={positionsData}
+      mode={mode}
+      colors={colors}
+      emptySubtitle={mode === 'live'
+        ? 'Active live positions will appear here in real time'
+        : 'Active paper positions will appear here'}
+    />
+  );
+
+  // Embedded on Home (inside the feed's own ScrollView, under the dynamic
+  // card) — no inner ScrollView, the parent scrolls. Standalone keeps its
+  // own scroll container.
+  if (embedded) {
+    return (
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <View style={styles.content}>
+          <BriefPositionsBody
+            data={combinedData}
+            colors={colors}
+            emptySubtitle="Live and paper positions will appear here in real time"
+          />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -194,17 +199,10 @@ export default function PositionScreen({ embedded = false }: Props) {
         </ScrollView>
       )}
 
-      {/* ── Scrollable content — LivePositionsBody renders its own
-          hidden-trades banner + position list/empty-state below. ── */}
+      {/* ── Scrollable content — BriefPositionsBody renders its own
+          hidden-trades banner + brief-style position cards below. ── */}
       <ScrollView style={styles.contentScroll} showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        <LivePositionsBody
-          data={positionsData}
-          mode={mode}
-          colors={colors}
-          emptySubtitle={mode === 'live'
-            ? 'Active live positions will appear here in real time'
-            : 'Active paper positions will appear here'}
-        />
+        {positionsBody}
         <View style={{ height: tabBarHeight }} />
       </ScrollView>
     </SafeAreaView>

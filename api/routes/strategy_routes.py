@@ -2014,8 +2014,12 @@ def get_performance():
     """
     Returns a 0-100 performance rating for the overall system and per-strategy/profile.
     Score components: Win Rate (25) · Profit Factor (35) · Reward:Risk (25) · Sample Size (15)
+    ?mode=live|paper restricts every section to that mode's trades; omitted
+    keeps the legacy blended behavior.
     """
-    return jsonify(logger_svc.get_performance())
+    mode = (request.args.get("mode") or "").lower()
+    paper_mode = {"paper": True, "live": False}.get(mode)
+    return jsonify(logger_svc.get_performance(paper_mode=paper_mode))
 
 
 # ── Simulation ─────────────────────────────────────────────────────────────────

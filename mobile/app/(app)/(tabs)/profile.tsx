@@ -15,6 +15,10 @@ import { useNotificationHistory } from '@/hooks/queries/notifications/useNotific
 import { useSearchBarVisibility } from '@/hooks/useSearchBarVisibility';
 import { useCardTintDarkMode } from '@/hooks/useCardTintDarkMode';
 import { useChartPriceSource } from '@/hooks/useChartPriceSource';
+import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
+import { PERIOD_STOPS, intervalCycleFor } from '@/common/components/ticker/TimeframeChips';
+import { ALLOWED_INTERVALS, DEFAULT_INTERVAL, INTERVAL_LABEL } from '@/lib/chartIntervals';
+import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 import { signOut } from '@/common/utils/auth/function';
 
 const ProfileScreen = () => {
@@ -30,6 +34,19 @@ const ProfileScreen = () => {
   const { hidden: searchBarHidden, setHidden: setSearchBarHidden } = useSearchBarVisibility();
   const { enabled: cardTintDarkMode, setEnabled: setCardTintDarkMode } = useCardTintDarkMode();
   const { source: chartPriceSource, setSource: setChartPriceSource } = useChartPriceSource();
+  // Home dynamic card chart timeframe (default 1D · 15m).
+  const { prefs: chartPrefs, setPref: setChartPref } = useChartDisplayPrefs();
+  const homeIntervals = intervalCycleFor(ALLOWED_INTERVALS[chartPrefs.homeChartPeriod]);
+  const homeInterval = homeIntervals.includes(chartPrefs.homeChartInterval)
+    ? chartPrefs.homeChartInterval
+    : DEFAULT_INTERVAL[chartPrefs.homeChartPeriod];
+  const setHomePeriod = (p: PricePeriod) => {
+    setChartPref('homeChartPeriod', p);
+    const allowed = intervalCycleFor(ALLOWED_INTERVALS[p]);
+    if (!allowed.includes(chartPrefs.homeChartInterval)) {
+      setChartPref('homeChartInterval', allowed.includes(DEFAULT_INTERVAL[p]) ? DEFAULT_INTERVAL[p] : allowed[0]);
+    }
+  };
 
   const email = user?.email || 'User';
   const initials = email.substring(0, 2).toUpperCase();
@@ -391,6 +408,66 @@ const ProfileScreen = () => {
                   );
                 })}
               </View>
+            </View>
+            {/* Home chart timeframe — the dynamic card's chart page */}
+            <View
+              style={{
+                paddingHorizontal: 16,
+                paddingVertical: 14,
+                borderTopWidth: 1,
+                borderTopColor: colors.separator,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                <View
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 10,
+                    backgroundColor: colors.iconButton,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginRight: 12,
+                  }}
+                >
+                  <Ionicons name="time-outline" size={17} color={colors.textSecondary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.text, fontSize: 15, fontWeight: '500' }}>
+                    Home chart timeframe
+                  </Text>
+                  <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 1 }}>
+                    Date range and bar size for the charts on Home ({chartPrefs.homeChartPeriod} · {INTERVAL_LABEL[homeInterval] ?? homeInterval})
+                  </Text>
+                </View>
+              </View>
+              {[
+                { options: PERIOD_STOPS as readonly string[], value: chartPrefs.homeChartPeriod as string,
+                  label: (v: string) => v, onPick: (v: string) => setHomePeriod(v as PricePeriod) },
+                { options: homeIntervals, value: homeInterval,
+                  label: (v: string) => INTERVAL_LABEL[v] ?? v, onPick: (v: string) => setChartPref('homeChartInterval', v) },
+              ].map((row, ri) => (
+                <View
+                  key={ri}
+                  style={{ flexDirection: 'row', flexWrap: 'wrap', borderRadius: 10, borderWidth: 1, borderColor: colors.border, padding: 3, backgroundColor: colors.background, marginTop: ri ? 8 : 0 }}
+                >
+                  {row.options.map((opt) => {
+                    const active = row.value === opt;
+                    return (
+                      <TouchableOpacity
+                        key={opt}
+                        onPress={() => row.onPick(opt)}
+                        activeOpacity={0.75}
+                        style={{ flexGrow: 1, alignItems: 'center', paddingVertical: 7, paddingHorizontal: 6, borderRadius: 8, backgroundColor: active ? colors.accent : 'transparent' }}
+                      >
+                        <Text style={{ fontSize: 12.5, fontWeight: '600', color: active ? colors.accentForeground : colors.textSecondary }}>
+                          {row.label(opt)}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ))}
             </View>
           </View>
         </View>

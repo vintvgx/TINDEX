@@ -24,7 +24,7 @@
  * price streaming into the last bar.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet, AppState } from 'react-native';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
@@ -85,6 +85,7 @@ type WVOutbound =
   | { type: 'setVwap'; visible: boolean }
   | { type: 'setHistoryExhausted'; exhausted: boolean }
   | { type: 'setOptions'; crosshair: boolean }
+  | { type: 'setCountdown'; barSeconds: number | null }
   | { type: 'applyTheme'; theme: TVTheme };
 type WVInbound =
   | { type: 'loaded' }
@@ -196,6 +197,9 @@ export function TVChart({
   const queueRef = useRef<WVOutbound[]>([]);
   const [htmlReady, setHtmlReady] = useState(false);
   const [chartReady, setChartReady] = useState(false);
+  // Bumped on every page (re)load so the handshake watchdog re-arms.
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const watchdogReloads = useRef(0);
   const [pageError, setPageError] = useState<string | null>(null);
   const prevResetKey = useRef<string | undefined>(undefined);
   // Long-press price from the page — shows the "set alert here" pill until
@@ -277,8 +281,13 @@ export function TVChart({
   // today's bar once the poll/history has it.
   const barSec = data?.interval ? INTERVAL_SECONDS[data.interval] : undefined;
   const isDailyBars = data?.interval === '1d';
-  const [liveBar, setLiveBar] = useState<TVCandle | null>(null);
-  useEffect(() => { setLiveBar(null); }, [resetKey]);
+  // The forming bar is tied to the series it was seeded from (key +
+  // interval). Before, a bar seeded from the previous ticker's last candle
+  // survived the switch — the new ticker's history then landed on the same
+  // time bucket and inherited its high/low (IWM's candle reaching SPY's
+  // $774), blowing out the price scale.
+  const liveKey = `${resetKey ?? ''}|${data?.interval ?? ''}`;
+  const [liveBar, setLiveBar] = useState<(TVCandle & { k: string }) | null>(null);
   useEffect(() => {
     if (livePrice == null || !isFinite(livePrice) || livePrice <= 0 || !baseCandles?.length) return;
     if (!barSec && !isDailyBars) return;
@@ -297,30 +306,32 @@ export function TVChart({
       bucket = baseLast.t;
     }
     const p = livePrice;
+    const k = liveKey;
     setLiveBar(prev => {
       if (bucket < baseLast.t) return null; // history already past this bar
-      if (prev && prev.t === bucket) {
+      if (prev && prev.k === k && prev.t === bucket) {
         return { ...prev, h: Math.max(prev.h, p), l: Math.min(prev.l, p), c: p };
       }
       if (bucket === baseLast.t) {
-        return { ...baseLast, h: Math.max(baseLast.h, p), l: Math.min(baseLast.l, p), c: p };
+        return { ...baseLast, h: Math.max(baseLast.h, p), l: Math.min(baseLast.l, p), c: p, k };
       }
-      return { t: bucket, o: p, h: p, l: p, c: p, v: 0 };
+      return { t: bucket, o: p, h: p, l: p, c: p, v: 0, k };
     });
-  }, [livePrice, baseCandles, barSec, isDailyBars]);
+  }, [livePrice, baseCandles, barSec, isDailyBars, liveKey]);
 
   // History + the live bar: replaces the matching bar (keeping the poll's
   // volume and the wider of the two high/low) or appends a new one.
   const candles: TVCandle[] | null = useMemo(() => {
-    if (!baseCandles?.length || !liveBar) return baseCandles;
+    if (!baseCandles?.length || !liveBar || liveBar.k !== liveKey) return baseCandles;
     const last = baseCandles[baseCandles.length - 1];
     if (liveBar.t < last.t) return baseCandles;
     if (liveBar.t === last.t) {
       const merged = { ...last, h: Math.max(last.h, liveBar.h), l: Math.min(last.l, liveBar.l), c: liveBar.c };
       return [...baseCandles.slice(0, -1), merged];
     }
-    return [...baseCandles, liveBar];
-  }, [baseCandles, liveBar]);
+    const { k: _k, ...bar } = liveBar;
+    return [...baseCandles, bar];
+  }, [baseCandles, liveBar, liveKey]);
   const ohlc = !!(data?.opens && data?.highs && data?.lows) && mode !== 'line';
 
   // Fit the viewport exactly once per resetKey — on the first setData that
@@ -347,10 +358,21 @@ export function TVChart({
     !!candles?.length && prevFirstT.current != null && candles[0].t < prevFirstT.current;
 
   // The date range is only the initial viewport — frame it on fit.
+  // 1D on intraday bars frames the latest bar's trading day (from its first
+  // bar, premarket included) instead of a rolling 24h that starts in the
+  // middle of yesterday — with a ~30-bar floor so an early-morning chart
+  // isn't three stretched candles.
   const visibleFrom = useMemo(() => {
     if (!visibleSeconds || !candles?.length) return undefined;
-    return candles[candles.length - 1].t - visibleSeconds;
-  }, [visibleSeconds, candles]);
+    const last = candles[candles.length - 1];
+    if (visibleSeconds <= 86_400 && barSec) {
+      const day = etParts(last.t).date;
+      let i = candles.length - 1;
+      while (i > 0 && etParts(candles[i - 1].t).date === day) i--;
+      return Math.min(candles[i].t, last.t - 30 * barSec);
+    }
+    return last.t - visibleSeconds;
+  }, [visibleSeconds, candles, barSec]);
 
   // Full setData only when the history itself changed (load, poll,
   // backfill, ticker/range switch, style). A live tick that only moved the
@@ -363,6 +385,21 @@ export function TVChart({
     const historyChanged = !prev.ready || prev.base !== baseCandles || prev.ohlc !== ohlc || prev.key !== resetKey;
     const last = candles[candles.length - 1];
     sentRef.current = { base: baseCandles, ohlc, key: resetKey, ready: true, lastT: last.t };
+    // A 30s tail poll only rewrites the forming bar and appends a few new
+    // ones. Re-sending the whole series for that (~3,000 bars stringified,
+    // bridged, re-set and re-rendered every 30s) was the steady-state cost
+    // while watching a chart — send just the tail as an incremental update.
+    const pb = prev.base;
+    const tailOnly =
+      historyChanged && prev.ready && !!pb?.length && !!baseCandles?.length &&
+      prev.ohlc === ohlc && prev.key === resetKey &&
+      baseCandles[0].t === pb[0].t &&
+      baseCandles.length >= pb.length && baseCandles.length - pb.length <= 30 &&
+      baseCandles[pb.length - 1].t === pb[pb.length - 1].t;
+    if (tailOnly) {
+      send({ type: 'updateBars', bars: candles.slice(pb!.length - 1) });
+      return;
+    }
     if (!historyChanged && baseCandles?.length) {
       // When a new bar just opened, finalize the one before it too (the
       // page can only update the newest bar, so it must go first).
@@ -522,6 +559,12 @@ export function TVChart({
     send({ type: 'setEmaOverlays', emas: emas ?? [] });
   }, [chartReady, emas, send]);
 
+  // ── Next-candle countdown (intraday bars only) ─────────────────────
+  useEffect(() => {
+    if (!chartReady) return;
+    send({ type: 'setCountdown', barSeconds: barSec ?? null });
+  }, [chartReady, barSec, send]);
+
   // ── Crosshair ("Data points") ──────────────────────────────────────
   useEffect(() => {
     if (!chartReady) return;
@@ -545,6 +588,11 @@ export function TVChart({
       webViewRef.current?.postMessage(JSON.stringify({ type: 'init', theme } as WVOutbound));
       flush();
     } else if (msg.type === 'ready') {
+      // Also (re)opens the outbound channel: if a stray onLoadStart landed
+      // after `loaded`, readyRef would be false here and every setData
+      // would sit in the queue forever behind a "ready" chart.
+      readyRef.current = true;
+      flush();
       setChartReady(true);
       setPageError(null);
     } else if (msg.type === 'log') {
@@ -571,6 +619,26 @@ export function TVChart({
       }
     }
   }, [autoZones, watchZones, onAutoZoneTap, onWatchZoneTap, onRequestMoreHistory, theme, send, flush]);
+
+  // Handshake watchdog: if the page hasn't reported `ready` a few seconds
+  // after (re)loading, or when the app returns to the foreground still not
+  // ready, reload the WebView. Before this, a lost handshake left the
+  // spinner up until iOS happened to recycle the WebView in the background.
+  useEffect(() => {
+    if (chartReady) { watchdogReloads.current = 0; return; }
+    if (!htmlReady) return;
+    // Capped: a WebView parked offscreen may not run JS at all — don't
+    // reload it every 6s forever. Foregrounding still gets a retry.
+    const t = watchdogReloads.current < 3 ? setTimeout(() => {
+      watchdogReloads.current += 1;
+      console.warn('[TVChart] no ready after 6s — reloading WebView');
+      webViewRef.current?.reload();
+    }, 6_000) : undefined;
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'active') webViewRef.current?.reload();
+    });
+    return () => { if (t) clearTimeout(t); sub.remove(); };
+  }, [chartReady, htmlReady, reloadNonce]);
 
   // Tell the page when there's no older history so it stops asking.
   useEffect(() => {
@@ -612,6 +680,7 @@ export function TVChart({
             queueRef.current = [];
             lastSentJson.current = {};
             setChartReady(false);
+            setReloadNonce((n) => n + 1);
           }}
           onContentProcessDidTerminate={() => webViewRef.current?.reload()}
           onLoadEnd={() => console.log('[TVChart] WebView onLoadEnd')}
@@ -624,7 +693,9 @@ export function TVChart({
         <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background, padding: 24 }]}>
           <Text style={{ color: colors.error, fontSize: 13, textAlign: 'center' }}>{pageError}</Text>
         </View>
-      ) : (!chartReady || isLoading) && (
+      ) : (!chartReady || (isLoading && !candles?.length)) && (
+        // Only when there's nothing to draw — a background reload/refetch
+        // must never hide candles that are already on the chart.
         <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }]}>
           <ActivityIndicator size="small" color={colors.textSecondary} />
         </View>

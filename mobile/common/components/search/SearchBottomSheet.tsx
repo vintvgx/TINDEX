@@ -180,6 +180,21 @@ export const SearchBottomSheet: React.FC<SearchBottomSheetProps> = ({ visible, o
                 autoCorrect={false}
                 maxLength={5}
                 returnKeyType="search"
+                onSubmitEditing={() => {
+                  // Hitting Search on the keyboard should act on the typed
+                  // ticker, not sit there — select the loaded result.
+                  if (searchResult?.success && searchResult.data) {
+                    handleSelect({
+                      ticker: searchResult.data.ticker,
+                      company_name: searchResult.data.company_name,
+                      current_price: searchResult.data.current_price,
+                      price_change_percent: searchResult.data.price_change_percent,
+                      logo_url: searchResult.data.logo_url ?? '',
+                      industry: searchResult.data.industry ?? '',
+                      timestamp: Date.now(),
+                    });
+                  }
+                }}
               />
               {searchText.length > 0 && (
                 <TouchableOpacity onPress={() => setSearchText('')} hitSlop={8}>

@@ -258,7 +258,65 @@
       layoutPills();
       layoutRefLabels();
       layoutPendingAlert();
+      layoutCountdown();
     });
+  }
+
+  // ── Next-candle countdown (legacy chart parity) ─────────────────────
+  // One pill in the price-axis gutter at the last price holding BOTH the
+  // price and a mm:ss countdown to the next bar — drawn over LWC's own
+  // last-value label so it reads as a single tag, like the legacy chart.
+  // Intraday only (RN sends barSeconds = null on daily+). Ticks in-page
+  // once a second; no per-second bridge traffic.
+  var countdownEl = document.createElement('div');
+  countdownEl.id = 'countdown';
+  countdownEl.innerHTML = '<div class="cd-price"></div><div class="cd-time"></div>';
+  document.body.appendChild(countdownEl);
+  var cdPriceEl = countdownEl.firstChild;
+  var cdTimeEl = countdownEl.lastChild;
+  var countdownBarSec = null;
+  var countdownTimer = null;
+  var CD_H = 30;
+
+  function fmtLastPrice(p) {
+    try {
+      if (mainSeries && mainSeries.priceFormatter) return mainSeries.priceFormatter().format(p);
+    } catch (e) {}
+    return p.toFixed(2);
+  }
+
+  function layoutCountdown() {
+    var last = lastCandles.length ? lastCandles[lastCandles.length - 1] : null;
+    if (!countdownBarSec || !chart || !mainSeries || !last) { countdownEl.style.display = 'none'; return; }
+    var secs = Math.round(last.t + countdownBarSec - Date.now() / 1000);
+    // Past a whole extra bar with no new candle = market closed / feed
+    // idle — hide rather than sit on 0:00 all night.
+    if (secs < -countdownBarSec) { countdownEl.style.display = 'none'; return; }
+    secs = Math.max(0, secs);
+    var y = mainSeries.priceToCoordinate(last.c);
+    var H = chartEl.clientHeight;
+    if (y === null || y === undefined || !H) { countdownEl.style.display = 'none'; return; }
+    var axisW = 0;
+    try { axisW = chart.priceScale('right').width(); } catch (e) {}
+    if (!axisW) { countdownEl.style.display = 'none'; return; }
+    var top = Math.round(y - CD_H / 2);
+    top = Math.max(0, Math.min(top, H - TIME_AXIS_H - CD_H));
+    var h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+    var label = (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0');
+    var up = mainSeries._tvKind === 'candle' ? last.c >= last.o : true;
+    countdownEl.style.display = 'flex';
+    countdownEl.style.top = top + 'px';
+    countdownEl.style.width = axisW + 'px';
+    countdownEl.style.background = up ? theme.up : theme.down;
+    cdPriceEl.textContent = fmtLastPrice(last.c);
+    cdTimeEl.textContent = label;
+  }
+
+  function setCountdown(msg) {
+    countdownBarSec = msg.barSeconds > 0 ? msg.barSeconds : null;
+    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+    if (countdownBarSec) countdownTimer = setInterval(layoutCountdown, 1000);
+    layoutCountdown();
   }
 
   // Text-only names for `textLabel` ref lines, left-aligned at the start
@@ -471,6 +529,20 @@
   var lastLogicalRange = null;
   var lastHistoryRequest = 0;
   var historyExhausted = false;
+  // Initial viewport of the current ticker/range, and whether the user has
+  // touched the chart since it was framed. Until they do, data that lands
+  // after the fit (the staged load's stage-2 backfill) re-applies it.
+  var frameFrom = null;
+  var touchedSinceFit = false;
+
+  function applyFrame(candles) {
+    try { chart.timeScale().fitContent(); } catch (e) {}
+    if (frameFrom && candles.length) {
+      try {
+        chart.timeScale().setVisibleRange({ from: frameFrom, to: candles[candles.length - 1].t + 120 });
+      } catch (e) {}
+    }
+  }
 
   function setData(msg) {
     var candles = msg.candles || [];
@@ -511,25 +583,24 @@
     }));
     if (msg.fit) {
       hidePendingAlert(); // new ticker/range — a pending ⊕ no longer applies
-      try { chart.timeScale().fitContent(); } catch (e) {}
       // The date range is only the initial viewport now — frame it after fit.
-      if (msg.visibleFrom && candles.length) {
-        try {
-          chart.timeScale().setVisibleRange({ from: msg.visibleFrom, to: candles[candles.length - 1].t + 120 });
-        } catch (e) {}
-      }
+      frameFrom = msg.visibleFrom || null;
+      touchedSinceFit = false;
+      applyFrame(candles);
       lastLogicalRange = null;
       lastHistoryRequest = 0;
       historyExhausted = false;
     } else if (msg.preserve && prevCount > 0) {
-      // Backfill prepended bars on the left: shift the visible window right
-      // by the added count so the viewport doesn't jump.
-      var n = candles.length - prevCount;
-      if (n > 0 && lastLogicalRange) {
-        try {
-          chart.timeScale().setVisibleLogicalRange({ from: lastLogicalRange.from + n, to: lastLogicalRange.to + n });
-        } catch (e) {}
-      }
+      // Backfill prepended bars on the left. LWC already keeps the view
+      // anchored to the newest bar (its right offset is unchanged), so the
+      // same bars stay on screen with no help. The old manual shift by the
+      // added count moved it a second time — n bars past the last candle,
+      // leaving a couple of candles pinned to the left edge of an empty
+      // chart after every staged load.
+      // Untouched since the fit: the first stage may have been narrower
+      // than the requested range (1W over a 5-day stage 1) — re-frame now
+      // that the full range is here.
+      if (!touchedSinceFit) applyFrame(candles);
     } else if (atLiveEdge || !savedRange) {
       try { chart.timeScale().scrollToRealTime(); } catch (e) {}
     } else {
@@ -538,9 +609,16 @@
     }
     lastCloses = candles.map(function (c) { return { t: c.t, c: c.c }; });
     lastCandles = candles.slice();
-    rebuildEmas();
-    rebuildVwap();
-    schedulePills();
+    // Indicators after paint: candles are the priority. EMAs/VWAP/pills
+    // follow on the next tick so the first frame isn't blocked by a full
+    // recompute over hundreds of bars.
+    var myCandles = lastCandles;
+    setTimeout(function () {
+      if (lastCandles !== myCandles) return; // a newer setData superseded this one
+      rebuildEmas();
+      rebuildVwap();
+      schedulePills();
+    }, 0);
   }
 
   // ── Timeframe EMA overlays (computed from the loaded bars) ─────────
@@ -607,6 +685,20 @@
     return new Date(t * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   }
 
+  // ET minutes-since-midnight for a unix timestamp — used to anchor VWAP
+  // at the regular-session open even when extended-hours bars are shown.
+  function etMinutes(t) {
+    var parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hour12: false,
+    }).formatToParts(new Date(t * 1000));
+    var h = 0, m = 0;
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i].type === 'hour') h = (+parts[i].value) % 24;
+      else if (parts[i].type === 'minute') m = +parts[i].value;
+    }
+    return h * 60 + m;
+  }
+
   // ── Live ticks ───────────────────────────────────────────────────────
   // Update the forming bar / append a new one in place (series.update —
   // the chart keeps its viewport and follows the edge only when you're on
@@ -659,6 +751,9 @@
       var c = lastCandles[i];
       var k = etDayKey(c.t);
       if (k !== day) { day = k; pv = 0; v = 0; }
+      // VWAP anchors at the regular-session open (09:30 ET) — extended-hours
+      // bars plot on the chart but never enter the accumulation.
+      if (etMinutes(c.t) < 9 * 60 + 30) continue;
       var tp = (c.h + c.l + c.c) / 3;
       var vol = c.v || 0;
       pv += tp * vol; v += vol;
@@ -820,6 +915,7 @@
     var crosshairShownThisPress = false;
     var touchStartX = 0, touchStartY = 0;
     chartEl.addEventListener('touchstart', function (e) {
+      touchedSinceFit = true;
       longPressArmed = false;
       lastCrosshairPrice = null;
       crosshairShownThisPress = false;
@@ -879,7 +975,13 @@
 
   function handleCommand(msg) {
     if (!msg || !msg.type) return;
-    if (msg.type === 'init') { init(msg); return; }
+    if (msg.type === 'init') {
+      // A repeated init (RN re-sent after a re-posted `loaded`) means RN may
+      // have missed our `ready` — say it again.
+      if (inited) { post({ type: 'ready' }); return; }
+      init(msg);
+      return;
+    }
     if (!inited) { pending.push(msg); return; }
     switch (msg.type) {
       case 'setData': setData(msg); break;
@@ -888,6 +990,7 @@
       case 'setRefLines': setRefLines(msg.lines); break;
       case 'setEmaOverlays': setEmaOverlays(msg); break;
       case 'setVwap': setVwap(msg); break;
+      case 'setCountdown': setCountdown(msg); break;
       case 'setHistoryExhausted': historyExhausted = !!msg.exhausted; break;
       case 'setOptions': setOptions(msg); break;
       case 'applyTheme': applyTheme(msg.theme); break;
@@ -905,5 +1008,13 @@
   // Handshake: tell RN the page script is live so it sends `init`. The
   // page then answers with `ready` once the chart exists. (Without this,
   // RN waits for `ready` and the page waits for `init` — forever spinner.)
+  // Re-announce until `init` arrives: a single `loaded` lost in transit
+  // (or handled before RN's onLoadStart reset) used to strand the chart on
+  // its spinner for good.
   post({ type: 'loaded' });
+  var loadedRetries = 0;
+  var loadedTimer = setInterval(function () {
+    if (inited || ++loadedRetries > 20) { clearInterval(loadedTimer); return; }
+    post({ type: 'loaded' });
+  }, 500);
 })();
