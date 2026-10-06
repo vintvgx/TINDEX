@@ -33,8 +33,23 @@ export function useSetBriefPlayMode() {
     briefRequest(`/brief/plays/${ticker}`, 'PATCH', { mode }));
 }
 
+export interface ConfirmBriefPlayArgs {
+  ticker: string;
+  /** One of the play's contract_candidates; omit to auto-pick at entry. */
+  contractSymbol?: string | null;
+  /** false = enter on the LIVE account. Default paper. */
+  paperMode?: boolean;
+}
+
+/** Accepts a bare ticker (paper, auto-pick) or the confirm card's choices. */
 export function useConfirmBriefPlay() {
-  return usePlayMutation((ticker: string) => briefRequest(`/brief/plays/${ticker}/confirm`, 'POST'));
+  return usePlayMutation((arg: string | ConfirmBriefPlayArgs) => {
+    const a = typeof arg === 'string' ? { ticker: arg } : arg;
+    return briefRequest(`/brief/plays/${a.ticker}/confirm`, 'POST', {
+      ...(a.contractSymbol ? { contract_symbol: a.contractSymbol } : {}),
+      paper_mode: a.paperMode !== false,
+    });
+  });
 }
 
 export function useSkipBriefPlay() {

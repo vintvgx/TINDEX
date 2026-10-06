@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 interface ChartOverlay {
   /** Is the full-screen chart overlay open? */
@@ -11,6 +11,16 @@ interface ChartOverlay {
 
 const Ctx = createContext<ChartOverlay | null>(null);
 
+// Module-level bridge so code OUTSIDE the provider can open the overlay —
+// e.g. the ticker sheet (TickerSheetProvider sits at the app root, above the
+// tabs layout that owns this provider). Same pattern as TickerSheetService.
+let bridgeOpen: ((ticker?: string | null) => void) | null = null;
+
+/** Open the full-screen chart (charts.tsx) on `ticker`, from anywhere. */
+export function openChartOverlay(ticker?: string | null): void {
+  bridgeOpen?.(ticker);
+}
+
 export function ChartOverlayProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [ticker, setTicker] = useState<string | null>(null);
@@ -20,6 +30,13 @@ export function ChartOverlayProvider({ children }: { children: React.ReactNode }
     setOpen(true);
   }, []);
   const closeChart = useCallback(() => setOpen(false), []);
+
+  useEffect(() => {
+    bridgeOpen = openChart;
+    return () => {
+      if (bridgeOpen === openChart) bridgeOpen = null;
+    };
+  }, [openChart]);
 
   const value = useMemo(
     () => ({ open, ticker, openChart, closeChart }),

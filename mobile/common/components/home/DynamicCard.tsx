@@ -20,6 +20,7 @@ import { DynamicAccountView } from './views/DynamicAccountView';
 import { DynamicCollapsedSummary } from './DynamicCollapsedSummary';
 import { ConfirmStackCard, usePendingConfirmations } from './cards/ConfirmStackCard';
 import { SoldCard } from './cards/SoldCard';
+import { EnteredCard, type EnteredInfo } from './cards/EnteredCard';
 import { useSoldTradeAlert } from './cards/useSoldTradeAlert';
 
 /**
@@ -48,6 +49,8 @@ export const COLLAPSED_H = 76;
  *  loses, so its bottom edge tracks the content scrolling under it 1:1
  *  (no gap opening up, no overlap). */
 export const COLLAPSE_RANGE = EXPANDED_H - COLLAPSED_H;
+/** How long the post-confirm "order sent" card shows before the Open page. */
+const ENTERED_CARD_MS = 4000;
 
 export interface TickerInfo {
   ticker: string;
@@ -93,11 +96,24 @@ export function DynamicCard({
     onOpenBrief();
   }, [onOpenBrief]);
 
-  // Transient states take over the card — sold (12s) beats the confirm
-  // stack, which beats the swipe views. Both pin the card expanded.
+  // Transient states take over the card — sold (12s) beats "order sent"
+  // (4s, right after a confirm), which beats the confirm stack, which beats
+  // the swipe views. All pin the card expanded.
   const { alert: soldAlert, dismiss: dismissSold } = useSoldTradeAlert();
   const pending = usePendingConfirmations();
-  const transientActive = soldAlert != null || pending.length > 0;
+  const [entered, setEntered] = useState<EnteredInfo | null>(null);
+  const enteredTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleEntered = useCallback((info: EnteredInfo) => {
+    setEntered(info);
+    if (enteredTimer.current) clearTimeout(enteredTimer.current);
+    enteredTimer.current = setTimeout(() => {
+      setEntered(null);
+      // Then land on the Open page, where the new position shows once filled.
+      setViewIndex(DYNAMIC_VIEWS.indexOf('open'));
+    }, ENTERED_CARD_MS);
+  }, []);
+  useEffect(() => () => { if (enteredTimer.current) clearTimeout(enteredTimer.current); }, []);
+  const transientActive = soldAlert != null || entered != null || pending.length > 0;
 
   // Flip pointer-events + interactivity when the collapse crosses over.
   useAnimatedReaction(
@@ -173,9 +189,13 @@ export function DynamicCard({
         <ScrollView showsVerticalScrollIndicator={false}>
           <SoldCard alert={soldAlert} onDismiss={dismissSold} />
         </ScrollView>
+      ) : entered ? (
+        <View style={{ padding: 14 }}>
+          <EnteredCard info={entered} />
+        </View>
       ) : pending.length > 0 ? (
         <ScrollView showsVerticalScrollIndicator={false}>
-          <ConfirmStackCard />
+          <ConfirmStackCard onEntered={handleEntered} />
         </ScrollView>
       ) : (
         <>
@@ -192,6 +212,10 @@ export function DynamicCard({
               onViewableItemsChanged={onViewableChanged}
               viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
               getItemLayout={(_, index) => ({ length: pageWidth, offset: pageWidth * index, index })}
+              // The pager unmounts during takeovers (sold / entered / confirm)
+              // and remounts after — start on the current page instead of
+              // page 1 (and on Open right after a confirm).
+              initialScrollIndex={viewIndex}
             />
             {/* view dots */}
             <View style={styles.dots}>

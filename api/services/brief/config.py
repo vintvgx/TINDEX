@@ -20,7 +20,7 @@ SCHEMA = {
     "trigger_volume_mult":   (1.2,   1.0,   5.0, float),   # 1m volume vs baseline
     "stale_pct":             (0.003, 0.001, 0.02, float),  # no-chase / drift band (0.3%)
     "limit_timeout_seconds": (75,    30,   180,  int),
-    "confirm_ttl_seconds":   (180,   60,   600,  int),
+    "confirm_ttl_seconds":   (300,   60,   600,  int),   # capped at 10:00 ET
     "max_losses_per_day":    (2,     1,    10,   int),
     "max_open_trades":       (2,     1,    4,    int),
     "earnings_block_days":   (2,     0,    10,   int),

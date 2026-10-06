@@ -207,12 +207,18 @@ class BriefService:
                 logger.warning("[brief] entry_modes persist failed for %s: %s", ticker, e)
             return play
 
-    def confirm(self, ticker: str) -> dict:
+    def confirm(self, ticker: str, contract_symbol: "str | None" = None, paper_mode: bool = True) -> dict:
+        """Confirm an awaiting play. `contract_symbol` picks one of the
+        play's `contract_candidates` (default: the top pick, re-ranked live at
+        entry); `paper_mode=False` enters on the LIVE account."""
         now = self.io.now()
         with self._lock:
             play = self._play(ticker)
             if play["status"] != "awaiting_confirmation":
                 raise ValueError(f"{ticker} is {play['status']}, not awaiting confirmation")
+            candidates = play.get("contract_candidates") or []
+            if contract_symbol and candidates and contract_symbol not in {c["symbol"] for c in candidates}:
+                raise ValueError(f"{contract_symbol} isn't one of {ticker}'s offered contracts")
             if now >= datetime.fromisoformat(play["confirm_expires_at"]):
                 self._set_status(play, "expired", "confirmation window passed", now)
                 self._save()
@@ -230,7 +236,10 @@ class BriefService:
                 self._save()
                 self._log_signal(play, fill_status="stood_down")
                 raise ValueError("price ran past the trigger")
-            self._set_status(play, "working", "confirmed — placing limit order", now)
+            play["chosen_contract"] = contract_symbol or None
+            play["paper_mode"] = bool(paper_mode)
+            self._set_status(play, "working",
+                             f"confirmed ({'paper' if paper_mode else 'LIVE'}) — placing limit order", now)
             self._save()
         self._enter_async(ticker)
         return play
@@ -390,14 +399,22 @@ class BriefService:
                 enter = True
             else:
                 ttl = cfg["confirm_ttl_seconds"]
-                play["confirm_expires_at"] = _now_iso(now + timedelta(seconds=ttl))
+                # Never past the end of the entry window (10:00 ET) — a
+                # 9:57 trigger gets 3 minutes, not the full TTL.
+                window_end = now.replace(hour=rules.ENTRY_WINDOW[1].hour,
+                                         minute=rules.ENTRY_WINDOW[1].minute, second=0, microsecond=0)
+                expires = min(now + timedelta(seconds=ttl), window_end)
+                play["confirm_expires_at"] = _now_iso(expires)
+                left = max(0, int((expires - now).total_seconds()))
+                play["paper_mode"] = True  # default; the confirm card can flip it to live
                 self._set_status(play, "awaiting_confirmation",
-                                 f"triggered at {close:.2f} — confirm within {ttl // 60}:{ttl % 60:02d}", now)
+                                 f"triggered at {close:.2f} — confirm within {left // 60}:{left % 60:02d}", now)
             self._save()
         self._log_signal(play, fill_status="pending")
         if enter:
             self._enter(ticker)
         elif play["status"] == "awaiting_confirmation":
+            self._attach_candidates_async(ticker)
             self.io.push(f"⏳ {ticker} brief play triggered — confirm?",
                          f"{'Long' if play['direction'] == 'CALL' else 'Short'} through {play['trigger']:.2f}, "
                          f"score {play['score']:.0f}, gate ENTER. Paper. Expires in {cfg['confirm_ttl_seconds'] // 60} min.",
@@ -413,6 +430,28 @@ class BriefService:
                 self._log_signal(p, fill_status="expired")
 
     # ── Entry ────────────────────────────────────────────────────────────────
+
+    def _attach_candidates_async(self, ticker):
+        threading.Thread(target=self._attach_candidates, args=(ticker,), daemon=True,
+                         name=f"brief-candidates-{ticker}").start()
+
+    def _attach_candidates(self, ticker):
+        """Top few contracts for the confirm card's picker (first = top
+        pick). Off the bar thread — it's a live chain fetch. A failure just
+        leaves the card without a picker; confirm still auto-picks."""
+        with self._lock:
+            play = dict(self._play(ticker))
+        try:
+            candidates = self.io.contract_candidates(play) or []
+        except Exception as e:
+            logger.warning("[brief] contract candidates failed for %s: %s", ticker, e)
+            return
+        with self._lock:
+            p = self._play(ticker)
+            if p["status"] != "awaiting_confirmation":
+                return
+            p["contract_candidates"] = candidates
+            self._save()
 
     def _enter_async(self, ticker):
         threading.Thread(target=self._enter, args=(ticker,), daemon=True, name=f"brief-entry-{ticker}").start()
@@ -493,7 +532,7 @@ class BriefService:
             "qty": o.get("filled_qty") if fill_status == "filled" else o.get("qty"),
             "profile": o.get("profile"),
             "entry_premium": o.get("avg_price") if fill_status == "filled" else None,
-            "paper_mode": True,
+            "paper_mode": play.get("paper_mode", True),
         }
         def _write():
             try:
@@ -747,18 +786,13 @@ class BriefIO:
         from services.utils.orb_data_hub import get_orb_data_hub
         get_orb_data_hub().subscribe_bar(ticker, cb)
 
-    def execute_entry(self, play: dict, underlying_price, on_update, cfg: "dict | None" = None) -> dict:
-        """Live chain → zone-anchored contract → size tier → spread gate →
-        buying-power check → managed limit buy → paper immediate engine."""
-        from routes.strategy_routes import _get_or_create_immediate_engine
-        from services.brief.limit_entry import run_limit_entry, FILLED
-        from services.strategy.profiles import get_profile
+    def _chain_rows(self, engine, ticker: str, direction: str) -> list:
+        """Today's 0DTE chain for the play's side as plain rows
+        ({symbol, strike, ask, bid, delta|None})."""
         from alpaca.data.requests import OptionChainRequest
         from alpaca.data.enums import OptionsFeed
         from services.strategy.contract_selector import _parse_occ_strike
 
-        ticker, direction = play["ticker"], play["direction"]
-        engine = _get_or_create_immediate_engine(ticker, True)   # paper only
         chain = engine.option_client.get_option_chain(OptionChainRequest(
             underlying_symbol=ticker, expiration_date=self.now().date(),
             type="call" if direction == "CALL" else "put", feed=OptionsFeed.INDICATIVE))
@@ -772,7 +806,46 @@ class BriefIO:
             rows.append({"symbol": symbol, "strike": strike,
                          "ask": float(getattr(q, "ask_price", 0) or 0), "bid": float(getattr(q, "bid_price", 0) or 0),
                          "delta": getattr(g, "delta", None) if g else None})
-        pick = rules.pick_contract(rows, direction, play["trigger"], play["target"])
+        return rows
+
+    def contract_candidates(self, play: dict, limit: int = 3) -> list:
+        """Top `limit` contracts by the entry rules, for the confirm card's
+        picker — first is the top pick (what auto-pick would choose)."""
+        from routes.strategy_routes import _get_or_create_immediate_engine
+
+        engine = _get_or_create_immediate_engine(play["ticker"], True)  # quotes only
+        rows = self._chain_rows(engine, play["ticker"], play["direction"])
+        ranked = rules.rank_contracts(rows, play["direction"], play["trigger"], play["target"])[:limit]
+        return [{
+            "symbol": c["symbol"], "strike": c["strike"], "ask": c["ask"], "bid": c["bid"],
+            "delta": c.get("delta"), "qty": c["tier"]["qty"], "profile": c["tier"]["profile"],
+            "limit": c["gate"]["limit"], "spread_pct": c["gate"]["spread_pct"], "top_pick": i == 0,
+        } for i, c in enumerate(ranked)]
+
+    def execute_entry(self, play: dict, underlying_price, on_update, cfg: "dict | None" = None) -> dict:
+        """Live chain → contract (the one picked on the confirm card, else
+        the zone-anchored top pick) → size tier → spread gate → buying-power
+        check → managed limit buy → immediate engine (paper, or LIVE when the
+        card was flipped to live)."""
+        from routes.strategy_routes import _get_or_create_immediate_engine
+        from services.brief.limit_entry import run_limit_entry, FILLED
+        from services.strategy.profiles import get_profile
+
+        ticker, direction = play["ticker"], play["direction"]
+        paper = play.get("paper_mode", True) is not False
+        engine = _get_or_create_immediate_engine(ticker, paper)
+        rows = self._chain_rows(engine, ticker, direction)
+        chosen = play.get("chosen_contract")
+        if chosen:
+            # Re-check the picked contract against FRESH quotes — the card's
+            # numbers are from the trigger. Don't silently swap contracts.
+            row = next((r for r in rows if r["symbol"] == chosen), None)
+            pick = rules.evaluate_contract(row, direction, play["trigger"], play["target"]) if row else None
+            if not pick:
+                return {"state": "SKIPPED", "reason": f"picked contract {chosen} no longer fits the budget, "
+                                                      "delta and ≤ 30% spread rules"}
+        else:
+            pick = rules.pick_contract(rows, direction, play["trigger"], play["target"])
         if not pick:
             return {"state": "SKIPPED", "reason": "no 0DTE contract fits the budget, delta and ≤ 30% spread rules"}
         gate, tier = pick["gate"], pick["tier"]
@@ -780,7 +853,8 @@ class BriefIO:
 
         acct = engine.get_account_info()
         if acct and qty * gate["limit"] * 100 > acct["options_buying_power"]:
-            return {"state": "SKIPPED", "reason": f"paper buying power ${acct['options_buying_power']:.0f} < "
+            return {"state": "SKIPPED", "reason": f"{'paper' if paper else 'LIVE'} buying power "
+                                                  f"${acct['options_buying_power']:.0f} < "
                                                   f"${qty * gate['limit'] * 100:.0f} needed"}
         on_update("SELECTED", {"symbol": pick["symbol"], "strike": pick["strike"], "qty": qty,
                                "profile": profile_key, "limit": gate["limit"], "limit_basis": gate["action"],

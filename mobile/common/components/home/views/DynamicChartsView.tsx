@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, FlatList, StyleSheet, useWindowDimensions } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
-import Svg, { Polyline, Circle, Line, Rect, Text as SvgText } from 'react-native-svg';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useSparkQuery } from '@/hooks/queries/ticker/useSparkQuery';
 import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
@@ -9,11 +8,14 @@ import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 import { ALLOWED_INTERVALS, DEFAULT_INTERVAL, INTERVAL_LABEL } from '@/lib/chartIntervals';
 import { intervalCycleFor } from '@/common/components/ticker/TimeframeChips';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
+import { LinePriceChart } from '@/common/components/ticker/LinePriceChart';
+import { openChartOverlay } from '@/common/components/ui/ChartOverlayContext';
 import type { TickerInfo } from '../DynamicCard';
 
 /**
- * Dynamic card "charts" view: one line chart per followed ticker with a
- * price (y) axis, a time (x) axis and a current-price tag. Timeframe comes
+ * Dynamic card "charts" view: one line chart per followed ticker — the
+ * shared LinePriceChart (same chart as the ticker sheet): price/time axes,
+ * current-price tag, long-press scrub, and expand → full chart. Timeframe comes
  * from Profile → Home chart timeframe (default 1D · 15m). On 1D the x-axis
  * always spans the full 9:30–4:00 session, so at the open the line starts
  * at the left edge and grows through the day (Robinhood-style). Swipe up/
@@ -21,128 +23,7 @@ import type { TickerInfo } from '../DynamicCard';
  */
 
 const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
-const Y_AXIS_W = 52;
-const X_AXIS_H = 18;
 const COUNTER_VISIBLE_MS = 8000;
-const SESSION_OPEN_MIN = 9 * 60 + 30;
-const SESSION_LEN_MIN = 390; // 9:30 → 16:00
-
-type Colors = ReturnType<typeof useThemeColors>;
-
-/** ET calendar date + minutes since midnight. */
-function etParts(d: Date) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(d);
-  const get = (k: string) => parts.find((p) => p.type === k)?.value ?? '';
-  return {
-    month: Number(get('month')), day: Number(get('day')),
-    mins: (Number(get('hour')) % 24) * 60 + Number(get('minute')),
-  };
-}
-
-function fmtClock(mins: number): string {
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  const h12 = ((h + 11) % 12) + 1;
-  return m === 0 ? `${h12}${h >= 12 ? 'PM' : 'AM'}` : `${h12}:${String(m).padStart(2, '0')}`;
-}
-
-/** ~3-4 round price ticks spanning [min, max]. */
-function niceTicks(min: number, max: number): number[] {
-  const span = max - min || Math.max(Math.abs(max) * 0.01, 0.01);
-  const raw = span / 3;
-  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * pow).find((s) => s >= raw) ?? raw;
-  const out: number[] = [];
-  for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step) out.push(v);
-  return out;
-}
-
-function LineChart({ dates, prices, period, width, height, up, colors }: {
-  dates: string[]; prices: number[]; period: PricePeriod;
-  width: number; height: number; up: boolean; colors: Colors;
-}) {
-  const plotW = width - Y_AXIS_W;
-  const plotH = height - X_AXIS_H;
-
-  const model = useMemo(() => {
-    const n = Math.min(dates.length, prices.length);
-    const ts = dates.slice(0, n).map((d) => new Date(d));
-    const ps = prices.slice(0, n);
-    const min = Math.min(...ps);
-    const max = Math.max(...ps);
-    const pad = (max - min || max * 0.01 || 1) * 0.08;
-    const lo = min - pad;
-    const hi = max + pad;
-    const y = (p: number) => 4 + (1 - (p - lo) / (hi - lo)) * (plotH - 8);
-
-    let x: (i: number) => number;
-    let xLabels: Array<{ x: number; text: string }>;
-    if (period === '1D') {
-      // Fixed 9:30–4:00 session domain — the line occupies only the elapsed
-      // part of the day, starting at the left edge at the open.
-      const minsOf = ts.map((t) => etParts(t).mins);
-      x = (i: number) => Math.max(0, Math.min(1, (minsOf[i] - SESSION_OPEN_MIN) / SESSION_LEN_MIN)) * plotW;
-      xLabels = [SESSION_OPEN_MIN, SESSION_OPEN_MIN + 150, SESSION_OPEN_MIN + 270, SESSION_OPEN_MIN + SESSION_LEN_MIN].map(
-        (m) => ({ x: ((m - SESSION_OPEN_MIN) / SESSION_LEN_MIN) * plotW, text: fmtClock(m) }),
-      );
-    } else {
-      // Even spacing by bar (skips overnight/weekend gaps).
-      x = (i: number) => (n > 1 ? (i / (n - 1)) * plotW : 0);
-      const intraday = period === '1W';
-      xLabels = [0, Math.floor((n - 1) / 2), n - 1].map((i) => {
-        const e = etParts(ts[i]);
-        return { x: x(i), text: intraday ? `${e.month}/${e.day} ${fmtClock(e.mins)}` : `${e.month}/${e.day}` };
-      });
-    }
-    const points = ps.map((p, i) => `${x(i).toFixed(1)},${y(p).toFixed(1)}`).join(' ');
-    const last = { x: x(n - 1), y: y(ps[n - 1]), price: ps[n - 1] };
-    const ticks = niceTicks(min, max).map((v) => ({ v, y: y(v) }));
-    return { points, last, ticks, xLabels };
-  }, [dates, prices, period, plotW, plotH]);
-
-  const stroke = up ? colors.success : colors.error;
-  const tagH = 16;
-  const tagY = Math.max(0, Math.min(plotH - tagH, model.last.y - tagH / 2));
-  return (
-    <Svg width={width} height={height}>
-      {/* horizontal grid + y-axis labels */}
-      {model.ticks.map((t) => (
-        <React.Fragment key={t.v}>
-          <Line x1={0} x2={plotW} y1={t.y} y2={t.y} stroke={colors.textTertiary} strokeOpacity={0.15} strokeWidth={1} />
-          <SvgText x={plotW + 6} y={t.y + 3.5} fontSize={9.5} fontFamily="Menlo" fill={colors.textTertiary}>
-            {t.v.toFixed(2)}
-          </SvgText>
-        </React.Fragment>
-      ))}
-      {/* x-axis baseline + labels */}
-      <Line x1={0} x2={plotW} y1={plotH} y2={plotH} stroke={colors.textTertiary} strokeOpacity={0.3} strokeWidth={1} />
-      {model.xLabels.map((l, i) => (
-        <SvgText
-          key={i}
-          x={l.x}
-          y={plotH + 13}
-          fontSize={9.5}
-          fontFamily="Menlo"
-          fill={colors.textTertiary}
-          textAnchor={i === 0 ? 'start' : i === model.xLabels.length - 1 ? 'end' : 'middle'}
-        >
-          {l.text}
-        </SvgText>
-      ))}
-      {/* price line + current-price marker, dashed guide and axis tag */}
-      <Polyline points={model.points} fill="none" stroke={stroke} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-      <Line x1={model.last.x} x2={plotW} y1={model.last.y} y2={model.last.y} stroke={stroke} strokeOpacity={0.6} strokeDasharray="3,3" />
-      <Circle cx={model.last.x} cy={model.last.y} r={3.5} fill={stroke} />
-      <Rect x={plotW + 2} y={tagY} width={Y_AXIS_W - 2} height={tagH} rx={4} fill={stroke} />
-      <SvgText x={plotW + 2 + (Y_AXIS_W - 2) / 2} y={tagY + 11.5} fontSize={10} fontWeight="700" fontFamily="Menlo" fill="#fff" textAnchor="middle">
-        {model.last.price.toFixed(2)}
-      </SvgText>
-    </Svg>
-  );
-}
 
 function TickerPage({ ticker, height, width, period, interval, onStats }: {
   ticker: string; height: number; width: number; period: PricePeriod; interval: string;
@@ -181,7 +62,14 @@ function TickerPage({ ticker, height, width, period, interval, onStats }: {
       </Text>
       <View style={{ flex: 1, justifyContent: 'center', marginTop: 8 }}>
         {prices.length > 0 ? (
-          <LineChart dates={dates} prices={prices} period={period} width={width - 28} height={height - 96} up={up} colors={colors} />
+          <LinePriceChart
+            dates={dates}
+            prices={prices}
+            period={period}
+            height={height - 96}
+            positive={up}
+            onExpand={() => openChartOverlay(ticker)}
+          />
         ) : (
           <Text style={{ color: colors.textTertiary, fontSize: 13, textAlign: 'center' }}>Loading chart…</Text>
         )}

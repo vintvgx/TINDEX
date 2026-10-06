@@ -78,51 +78,58 @@ def spread_gate(bid: float, ask: float) -> dict:
     return {"action": "skip", "limit": None, "spread_pct": round(spread * 100, 1)}
 
 
-def pick_contract(rows: list, direction: str, trigger: float, target: float) -> "dict | None":
+def evaluate_contract(r: dict, direction: str, trigger: float, target: float) -> "dict | None":
     """
-    Zone-anchored contract choice from live chain rows
-    ({symbol, strike, ask, bid, delta|None}):
+    Score one live chain row ({symbol, strike, ask, bid, delta|None}) for a
+    play, or None if it fails the entry rules:
       - affordable: ask within the largest size tier ($2.50)
       - tradeable spread: ≤ 30% (the gate decides ask vs mid later)
       - delta in 0.20–0.60 when the feed provides it; without delta (the
         indicative feed often omits greeks) the strike must sit between the
         trigger and the target, so it's OTM but not a lottery ticket
-      - best = strike nearest the target zone + delta nearest its target
-        (TP1% × premium / expected move)
-    Returns the row plus its size tier and the selection numbers.
+    Lower `cost` is better: strike nearest the target zone + delta nearest
+    its target (TP1% × premium / expected move). Returns the row plus its
+    size tier, spread gate and the selection numbers.
     """
     move = abs(target - trigger)
     if move <= 0:
         return None
-    long_ = direction == "CALL"
-    best, best_cost = None, None
-    for r in rows:
-        ask, bid = r.get("ask") or 0, r.get("bid") or 0
-        tier = size_tier(ask) if ask > 0 else None
-        if not tier:
-            continue
-        gate = spread_gate(bid, ask)
-        if gate["action"] == "skip":
-            continue
-        strike = r["strike"]
-        delta = r.get("delta")
-        delta_target = max(DELTA_MIN, min(DELTA_MAX, tier["tp1_pct"] * ask / move))
-        if delta:
-            delta = abs(delta)
-            if not DELTA_MIN <= delta <= DELTA_MAX:
-                continue
-            delta_cost = abs(delta - delta_target) / 0.4
-        else:
-            lo, hi = (trigger, target) if long_ else (target, trigger)
-            if not lo <= strike <= hi:
-                continue
-            delta_cost = 0.5   # unknown — neutral penalty
-        strike_cost = abs(strike - target) / move
-        cost = strike_cost + delta_cost
-        if best_cost is None or cost < best_cost:
-            best, best_cost = {**r, "tier": tier, "delta_target": round(delta_target, 2),
-                               "gate": gate, "expected_move": round(move, 2)}, cost
-    return best
+    ask, bid = r.get("ask") or 0, r.get("bid") or 0
+    tier = size_tier(ask) if ask > 0 else None
+    if not tier:
+        return None
+    gate = spread_gate(bid, ask)
+    if gate["action"] == "skip":
+        return None
+    strike = r["strike"]
+    delta = r.get("delta")
+    delta_target = max(DELTA_MIN, min(DELTA_MAX, tier["tp1_pct"] * ask / move))
+    if delta:
+        delta = abs(delta)
+        if not DELTA_MIN <= delta <= DELTA_MAX:
+            return None
+        delta_cost = abs(delta - delta_target) / 0.4
+    else:
+        lo, hi = (trigger, target) if direction == "CALL" else (target, trigger)
+        if not lo <= strike <= hi:
+            return None
+        delta_cost = 0.5   # unknown — neutral penalty
+    strike_cost = abs(strike - target) / move
+    return {**r, "tier": tier, "delta_target": round(delta_target, 2), "gate": gate,
+            "expected_move": round(move, 2), "cost": strike_cost + delta_cost}
+
+
+def rank_contracts(rows: list, direction: str, trigger: float, target: float) -> list:
+    """Every row that passes evaluate_contract, best (lowest cost) first —
+    the confirm card's contract picker shows the top few."""
+    scored = [e for r in rows if (e := evaluate_contract(r, direction, trigger, target))]
+    return sorted(scored, key=lambda e: e["cost"])
+
+
+def pick_contract(rows: list, direction: str, trigger: float, target: float) -> "dict | None":
+    """Zone-anchored contract choice — the top of rank_contracts()."""
+    ranked = rank_contracts(rows, direction, trigger, target)
+    return ranked[0] if ranked else None
 
 
 def play_guard(play: dict, *, brief_losses_today: int, open_brief_trades: int,

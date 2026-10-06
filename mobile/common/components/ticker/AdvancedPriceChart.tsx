@@ -13,7 +13,11 @@ import { useCrosshairEnabled } from '@/hooks/useCrosshairEnabled';
 import { useChartInterval } from '@/hooks/useChartInterval';
 import { ALLOWED_INTERVALS, INTERVAL_LABEL, INTERVAL_MINUTES } from '@/lib/chartIntervals';
 import type { PricePeriod, TickerHistoryData } from '@/common/types/blogPosts/ticker';
-import type { OrbRangeLines } from '@/common/components/ticker/PriceChart';
+/** Today's Opening Range high/low (moved here from the retired PriceChart). */
+export interface OrbRangeLines {
+  high: number;
+  low: number;
+}
 import { AUTO_ZONE_RESISTANCE_COLOR, AUTO_ZONE_SUPPORT_COLOR } from '@/common/components/ticker/autoZoneColors';
 import { ZoneDetailSheet } from '@/common/components/ticker/ZoneDetailSheet';
 
