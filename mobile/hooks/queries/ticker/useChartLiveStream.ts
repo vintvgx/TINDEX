@@ -12,6 +12,12 @@ export interface UseChartLiveStreamResult {
 }
 
 const MAX_RECONNECT_ATTEMPTS_BEFORE_ERROR = 3;
+// The backend forwards every Alpaca trade — dozens a second on a liquid
+// ticker. Each published price re-renders the whole Charts tab and
+// rebuilds the forming candle, so trades are coalesced and the latest one
+// is published at most this often (a pegged JS thread / thermal pressure /
+// iOS cpu_resource kill at trade rate — see the 2026-10-06 analysis).
+const PUBLISH_INTERVAL_MS = 500;
 
 /**
  * Opens a WebSocket to /ws/chart/<ticker>/live and streams real-time
@@ -37,6 +43,12 @@ export function useChartLiveStream(
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Coalescing: newest trade not yet published, the last published one,
+  // and the pending flush.
+  const pendingRef = useRef<{ url: string; price: number } | null>(null);
+  const publishedRef = useRef<{ url: string; price: number } | null>(null);
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastFlushAt = useRef(0);
   const attemptsRef = useRef(0);
   const mountedRef = useRef(true);
   const shouldReconnectRef = useRef(true);
@@ -74,7 +86,23 @@ export function useChartLiveStream(
         const msg = JSON.parse(event.data as string);
         if (!mountedRef.current) return;
         if (msg.type === 'price_update' && typeof msg.price === 'number') {
-          setTick({ url: wsUrl, price: msg.price });
+          pendingRef.current = { url: wsUrl, price: msg.price };
+          if (flushTimer.current) return; // a flush is already scheduled
+          const flush = () => {
+            flushTimer.current = null;
+            const next = pendingRef.current;
+            pendingRef.current = null;
+            lastFlushAt.current = Date.now();
+            if (!next || !mountedRef.current) return;
+            const prev = publishedRef.current;
+            // Same price as what's on screen — nothing to re-render.
+            if (prev && prev.url === next.url && prev.price === next.price) return;
+            publishedRef.current = next;
+            setTick(next);
+          };
+          const wait = PUBLISH_INTERVAL_MS - (Date.now() - lastFlushAt.current);
+          if (wait <= 0) flush();
+          else flushTimer.current = setTimeout(flush, wait);
         }
       } catch {
         // ignore malformed frames (e.g. keepalive pings)
@@ -112,6 +140,12 @@ export function useChartLiveStream(
       openTimer.current = null;
     }
     attemptsRef.current = 0;
+    if (flushTimer.current) {
+      clearTimeout(flushTimer.current);
+      flushTimer.current = null;
+    }
+    pendingRef.current = null;
+    publishedRef.current = null;
     wsRef.current?.close();
     wsRef.current = null;
     setConnected(false);

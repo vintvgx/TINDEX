@@ -160,8 +160,8 @@ const SESSION_OPEN_MIN = 9 * 60 + 30;
 const SESSION_CLOSE_MIN = 16 * 60;
 
 /** ET calendar date + minute-of-day + second-of-day for a unix time.
- *  Cached: the ORB scan runs over every bar on each live tick, and
- *  toLocaleString is far too slow to call thousands of times a second. */
+ *  Cached: the ORB scan runs over every bar on each history change, and
+ *  Intl formatting is far too slow to call thousands of times in a row. */
 const etCache = new Map<number, { date: string; mins: number; secs: number; weekday: string }>();
 function etParts(t: number) {
   const hit = etCache.get(t);
@@ -183,6 +183,56 @@ function etParts(t: number) {
   if (etCache.size > 50_000) etCache.clear();
   etCache.set(t, v);
   return v;
+}
+
+/** History with the live bar folded onto its tail (replacing the bar at the
+ *  same time, or appended). Cold path only — runs on history changes. */
+function withLiveTail(bars: TVCandle[], tail: TVCandle | null): TVCandle[] {
+  if (!tail || !bars.length) return bars;
+  const last = bars[bars.length - 1];
+  if (tail.t < last.t) return bars;
+  if (tail.t === last.t) return [...bars.slice(0, -1), tail];
+  return [...bars, tail];
+}
+
+/** Initial viewport start (unix s) — only computed when a fit is sent.
+ *  1D on intraday bars frames the latest bar's trading day (from its first
+ *  bar, premarket included) instead of a rolling 24h that starts in the
+ *  middle of yesterday — with a ~30-bar floor so an early-morning chart
+ *  isn't three stretched candles. */
+function initialVisibleFrom(candles: TVCandle[], visibleSeconds?: number, barSec?: number): number | undefined {
+  if (!visibleSeconds || !candles.length) return undefined;
+  const last = candles[candles.length - 1];
+  if (visibleSeconds <= 86_400 && barSec) {
+    const day = etParts(last.t).date;
+    let i = candles.length - 1;
+    while (i > 0 && etParts(candles[i - 1].t).date === day) i--;
+    return Math.min(candles[i].t, last.t - 30 * barSec);
+  }
+  return last.t - visibleSeconds;
+}
+
+/** One ET trading day's opening-range stats for the ORB boxes. */
+interface OrbDay {
+  date: string;
+  hi: number;
+  lo: number;
+  /** First bar at/after 09:45 — the box starts here once the range is set. */
+  startT?: number;
+  /** First 09:30–09:45 bar — a still-forming box starts here. */
+  formStartT?: number;
+  lastT: number;
+}
+const newOrbDay = (date: string): OrbDay => ({ date, hi: -Infinity, lo: Infinity, lastT: 0 });
+function foldOrbBar(d: OrbDay, c: TVCandle) {
+  const { mins } = etParts(c.t);
+  if (mins >= 570 && mins < 585) {
+    if (c.h > d.hi) d.hi = c.h;
+    if (c.l < d.lo) d.lo = c.l;
+    if (d.formStartT === undefined) d.formStartT = c.t;
+  }
+  if (mins >= 585 && d.startT === undefined) d.startT = c.t;
+  if (c.t > d.lastT) d.lastT = c.t;
 }
 
 export function TVChart({
@@ -319,19 +369,31 @@ export function TVChart({
     });
   }, [livePrice, baseCandles, barSec, isDailyBars, liveKey]);
 
-  // History + the live bar: replaces the matching bar (keeping the poll's
-  // volume and the wider of the two high/low) or appends a new one.
-  const candles: TVCandle[] | null = useMemo(() => {
-    if (!baseCandles?.length || !liveBar || liveBar.k !== liveKey) return baseCandles;
+  // ── Hot path vs. cold path ─────────────────────────────────────────
+  // Like TradingView, a tick must only move the forming bar. Everything
+  // derived from the full series (the merged candle array, the per-day ORB
+  // scan, the initial viewport) depends on `baseCandles` — history, which
+  // changes on load/poll/backfill — never on the live bar. Deriving them
+  // from history+live rebuilt a ~3,000-bar array and rescanned every bar on
+  // each tick: megabytes/sec of garbage, a pegged JS thread, a hot phone.
+  const liveBarValid = liveBar && liveBar.k === liveKey ? liveBar : null;
+  // The live bar folded onto history's tail — the bar to draw at the right
+  // edge, or null when history is already past it. O(1) per tick.
+  const liveTail: TVCandle | null = useMemo(() => {
+    if (!baseCandles?.length || !liveBarValid) return null;
     const last = baseCandles[baseCandles.length - 1];
-    if (liveBar.t < last.t) return baseCandles;
-    if (liveBar.t === last.t) {
-      const merged = { ...last, h: Math.max(last.h, liveBar.h), l: Math.min(last.l, liveBar.l), c: liveBar.c };
-      return [...baseCandles.slice(0, -1), merged];
+    if (liveBarValid.t < last.t) return null;
+    if (liveBarValid.t === last.t) {
+      // Keep the poll's volume and the wider of the two high/low.
+      return { ...last, h: Math.max(last.h, liveBarValid.h), l: Math.min(last.l, liveBarValid.l), c: liveBarValid.c };
     }
-    const { k: _k, ...bar } = liveBar;
-    return [...baseCandles, bar];
-  }, [baseCandles, liveBar, liveKey]);
+    const { k: _k, ...bar } = liveBarValid;
+    return bar;
+  }, [baseCandles, liveBarValid]);
+  const liveTailRef = useRef(liveTail);
+  liveTailRef.current = liveTail;
+  const baseLast = baseCandles?.length ? baseCandles[baseCandles.length - 1] : null;
+  const lastBar = liveTail ?? baseLast;
   const ohlc = !!(data?.opens && data?.highs && data?.lows) && mode !== 'line';
 
   // Fit the viewport exactly once per resetKey — on the first setData that
@@ -342,84 +404,74 @@ export function TVChart({
   // candles — so the fit request always died before any setData could carry
   // it. The pending flag survives until the setData effect actually sends.
   const fitPending = useRef(true);
-  const candlesAtKeyChange = useRef<TVCandle[] | null>(null);
+  const baseAtKeyChange = useRef<TVCandle[] | null>(null);
   const prevFirstT = useRef<number | null>(null);
   useEffect(() => {
     if (prevResetKey.current !== resetKey) {
       prevResetKey.current = resetKey;
       fitPending.current = true;
-      candlesAtKeyChange.current = candles;
+      baseAtKeyChange.current = baseCandles;
       prevFirstT.current = null;
     }
   });
   // Backfill detection: same key, first candle got older (bars were
   // prepended on the left). A live poll appends on the right instead.
   const isBackfill =
-    !!candles?.length && prevFirstT.current != null && candles[0].t < prevFirstT.current;
-
-  // The date range is only the initial viewport — frame it on fit.
-  // 1D on intraday bars frames the latest bar's trading day (from its first
-  // bar, premarket included) instead of a rolling 24h that starts in the
-  // middle of yesterday — with a ~30-bar floor so an early-morning chart
-  // isn't three stretched candles.
-  const visibleFrom = useMemo(() => {
-    if (!visibleSeconds || !candles?.length) return undefined;
-    const last = candles[candles.length - 1];
-    if (visibleSeconds <= 86_400 && barSec) {
-      const day = etParts(last.t).date;
-      let i = candles.length - 1;
-      while (i > 0 && etParts(candles[i - 1].t).date === day) i--;
-      return Math.min(candles[i].t, last.t - 30 * barSec);
-    }
-    return last.t - visibleSeconds;
-  }, [visibleSeconds, candles, barSec]);
+    !!baseCandles?.length && prevFirstT.current != null && baseCandles[0].t < prevFirstT.current;
 
   // Full setData only when the history itself changed (load, poll,
-  // backfill, ticker/range switch, style). A live tick that only moved the
-  // last bar — or opened one new bar — goes as a tiny 'updateBars' message,
-  // so the page never reloads thousands of bars per second.
-  const sentRef = useRef<{ base: TVCandle[] | null; ohlc: boolean; key?: string; ready: boolean; lastT?: number }>({ base: null, ohlc: false, ready: false });
+  // backfill, ticker/range switch, style); the live bar rides along. Ticks
+  // go through the effect below as a one-bar 'updateBars'.
+  const sentRef = useRef<{ base: TVCandle[] | null; ohlc: boolean; key?: string; ready: boolean; tail?: TVCandle | null }>({ base: null, ohlc: false, ready: false });
   useEffect(() => {
-    if (!chartReady || !candles) return;
+    if (!chartReady || !baseCandles?.length) return;
     const prev = sentRef.current;
     const historyChanged = !prev.ready || prev.base !== baseCandles || prev.ohlc !== ohlc || prev.key !== resetKey;
-    const last = candles[candles.length - 1];
-    sentRef.current = { base: baseCandles, ohlc, key: resetKey, ready: true, lastT: last.t };
+    if (!historyChanged) return;
+    const tail = liveTailRef.current;
+    sentRef.current = { base: baseCandles, ohlc, key: resetKey, ready: true, tail };
     // A 30s tail poll only rewrites the forming bar and appends a few new
     // ones. Re-sending the whole series for that (~3,000 bars stringified,
     // bridged, re-set and re-rendered every 30s) was the steady-state cost
     // while watching a chart — send just the tail as an incremental update.
     const pb = prev.base;
     const tailOnly =
-      historyChanged && prev.ready && !!pb?.length && !!baseCandles?.length &&
+      prev.ready && !!pb?.length &&
       prev.ohlc === ohlc && prev.key === resetKey &&
       baseCandles[0].t === pb[0].t &&
       baseCandles.length >= pb.length && baseCandles.length - pb.length <= 30 &&
       baseCandles[pb.length - 1].t === pb[pb.length - 1].t;
     if (tailOnly) {
-      send({ type: 'updateBars', bars: candles.slice(pb!.length - 1) });
+      send({ type: 'updateBars', bars: withLiveTail(baseCandles.slice(pb!.length - 1), tail) });
       return;
     }
-    if (!historyChanged && baseCandles?.length) {
-      // When a new bar just opened, finalize the one before it too (the
-      // page can only update the newest bar, so it must go first).
-      const opened = prev.lastT !== undefined && last.t > prev.lastT && candles.length >= 2;
-      send({ type: 'updateBars', bars: opened ? [candles[candles.length - 2], last] : [last] });
-      return;
-    }
+    const candles = withLiveTail(baseCandles, tail);
     // First setData carrying this key's own candles → frame it. While the
     // previous key's candles are still on screen (or on a backfill), send
     // without fit so the incoming range — not the outgoing one — gets
     // framed, and backfilled bars shift the view instead of refitting it.
-    const fit = fitPending.current && candles !== candlesAtKeyChange.current;
+    const fit = fitPending.current && baseCandles !== baseAtKeyChange.current;
     if (fit) fitPending.current = false;
-    send({ type: 'setData', candles, ohlc, fit, preserve: !fit && isBackfill, visibleFrom: fit ? visibleFrom : undefined });
-  }, [chartReady, candles, baseCandles, ohlc, isBackfill, visibleFrom, resetKey, send]);
+    send({
+      type: 'setData', candles, ohlc, fit, preserve: !fit && isBackfill,
+      visibleFrom: fit ? initialVisibleFrom(candles, visibleSeconds, barSec) : undefined,
+    });
+  }, [chartReady, baseCandles, ohlc, isBackfill, resetKey, visibleSeconds, barSec, send]);
+
+  // Hot path: a tick moved the forming bar (or opened a new one) — send that
+  // one bar. A history change in the same commit already sent it above.
+  useEffect(() => {
+    if (!chartReady || !liveTail) return;
+    const prev = sentRef.current;
+    if (!prev.ready || prev.base !== baseCandles || prev.tail === liveTail) return;
+    sentRef.current = { ...prev, tail: liveTail };
+    send({ type: 'updateBars', bars: [liveTail] });
+  }, [chartReady, liveTail, baseCandles, send]);
   // A page reload re-sends everything as a full setData.
   useEffect(() => { if (!chartReady) sentRef.current = { base: null, ohlc: false, ready: false }; }, [chartReady]);
 
   useEffect(() => {
-    if (candles?.length) prevFirstT.current = candles[0].t;
+    if (baseCandles?.length) prevFirstT.current = baseCandles[0].t;
   });
 
   // ── Zones → primitive bands ────────────────────────────────────────
@@ -444,52 +496,60 @@ export function TVChart({
   // 09:45 bar to the day's last bar. Today's box prefers the backend's
   // orbRange (1-min precision) when available. On daily+ bars there's no
   // intraday data, so only today's backend box is drawn.
+  // The full scan runs on history only; a tick folds the live bar into
+  // the last day's stats (O(days), not O(bars)).
+  const orbDays = useMemo(() => {
+    if (!showOrbRange || !baseCandles?.length) return null;
+    const intraday = baseCandles.length >= 2 && (baseCandles[1].t - baseCandles[0].t) < 86400;
+    const days: OrbDay[] = [];
+    if (intraday) {
+      for (const c of baseCandles) {
+        const date = etParts(c.t).date;
+        let d = days[days.length - 1];
+        if (!d || d.date !== date) { d = newOrbDay(date); days.push(d); }
+        foldOrbBar(d, c);
+      }
+    }
+    return { intraday, days };
+  }, [showOrbRange, baseCandles]);
+
   const orbBands: TVZoneBand[] = useMemo(() => {
-    if (!showOrbRange || !candles?.length) return [];
-    const intraday = candles.length >= 2 && (candles[1].t - candles[0].t) < 86400;
+    if (!orbDays || !lastBar) return [];
     const box = (id: string, low: number, high: number, startTime: number | undefined, endTime: number | undefined): TVZoneBand => ({
       id, low, high, startTime, endTime,
       color: TV_UP, opacity: 0.18, edgeColor: TV_ORB_EDGE, edgeOpacity: 0.75,
       dashed: false, midline: true,
     });
-    if (!intraday) {
+    if (!orbDays.intraday) {
       if (!orbRange) return [];
-      return [box('__orb__', orbRange.low, orbRange.high, undefined, candles[candles.length - 1].t)];
+      return [box('__orb__', orbRange.low, orbRange.high, undefined, lastBar.t)];
     }
-    const byDay = new Map<string, typeof candles>();
-    for (const c of candles) {
-      const { date } = etParts(c.t);
-      const arr = byDay.get(date);
-      if (arr) arr.push(c); else byDay.set(date, [c]);
+    let days = orbDays.days;
+    if (liveTail) {
+      const date = etParts(liveTail.t).date;
+      const tail = days[days.length - 1];
+      const d = tail && tail.date === date ? { ...tail } : newOrbDay(date);
+      foldOrbBar(d, liveTail);
+      days = tail && tail.date === date ? [...days.slice(0, -1), d] : [...days, d];
     }
-    const todayKey = etParts(candles[candles.length - 1].t).date;
+    const todayKey = etParts(lastBar.t).date;
     const bands: TVZoneBand[] = [];
-    for (const [date, dc] of byDay) {
-      let hi = -Infinity, lo = Infinity, startT: number | undefined, formStartT: number | undefined;
-      for (const c of dc) {
-        const { mins } = etParts(c.t);
-        if (mins >= 570 && mins < 585) {
-          if (c.h > hi) hi = c.h;
-          if (c.l < lo) lo = c.l;
-          if (formStartT === undefined) formStartT = c.t;
-        }
-        if (mins >= 585 && startT === undefined) startT = c.t;
-      }
-      if (hi === -Infinity) continue;
-      if (startT === undefined) {
+    for (const d of days) {
+      if (d.hi === -Infinity) continue;
+      if (d.startT === undefined) {
         // Still forming (09:30-09:45, today only): a box over the bars so
         // far that grows with every tick, like TradingView's live ORB.
-        if (date === todayKey) {
-          bands.push(box(`__orb__${date}`, lo, hi, formStartT, dc[dc.length - 1].t));
+        if (d.date === todayKey) {
+          bands.push(box(`__orb__${d.date}`, d.lo, d.hi, d.formStartT, d.lastT));
         }
         continue;
       }
-      let high = hi, low = lo;
-      if (date === todayKey && orbRange) { high = orbRange.high; low = orbRange.low; }
-      bands.push(box(`__orb__${date}`, low, high, startT, dc[dc.length - 1].t));
+      let high = d.hi, low = d.lo;
+      if (d.date === todayKey && orbRange) { high = orbRange.high; low = orbRange.low; }
+      bands.push(box(`__orb__${d.date}`, low, high, d.startT, d.lastT));
     }
     return bands;
-  }, [showOrbRange, orbRange, candles]);
+  }, [orbDays, orbRange, liveTail, lastBar]);
 
   useEffect(() => {
     if (!chartReady) return;
@@ -497,7 +557,7 @@ export function TVChart({
   }, [chartReady, autoBands, watchBands, orbBands, send]);
 
   // ── Reference lines (ORB edges, session lines) ─────────────────────
-  const lastBarDate = candles?.length ? etParts(candles[candles.length - 1].t).date : null;
+  const lastBarDate = lastBar ? etParts(lastBar.t).date : null;
   const refLines: TVRefLine[] = useMemo(() => {
     const lines: TVRefLine[] = [];
     // ORH/ORL axis tags follow today's box (live while it forms); daily
@@ -676,7 +736,7 @@ export function TVChart({
             // still count as this key's own) so the initial viewport is
             // restored instead of the default full-range view.
             fitPending.current = true;
-            candlesAtKeyChange.current = null;
+            baseAtKeyChange.current = null;
             queueRef.current = [];
             lastSentJson.current = {};
             setChartReady(false);
@@ -693,7 +753,7 @@ export function TVChart({
         <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background, padding: 24 }]}>
           <Text style={{ color: colors.error, fontSize: 13, textAlign: 'center' }}>{pageError}</Text>
         </View>
-      ) : (!chartReady || (isLoading && !candles?.length)) && (
+      ) : (!chartReady || (isLoading && !baseCandles?.length)) && (
         // Only when there's nothing to draw — a background reload/refetch
         // must never hide candles that are already on the chart.
         <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }]}>
