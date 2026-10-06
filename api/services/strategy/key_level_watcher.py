@@ -94,6 +94,7 @@ class KeyLevelWatcher:
         # processed bar. A level only confirms on a genuine CROSS — the side
         # must change into the trigger side. Being already true at arm time
         # (or after a restart reload) never fires.
+        self._sides: dict[str, str] = {}
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
