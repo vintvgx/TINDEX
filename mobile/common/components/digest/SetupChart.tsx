@@ -1,25 +1,23 @@
-import React, { useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Svg, { Circle, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
-import Animated, {
-  useSharedValue,
-  useAnimatedProps,
-  withRepeat,
-  withTiming,
-  Easing,
-} from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useChartLiveStream } from '@/hooks/queries/ticker/useChartLiveStream';
 import { useSetupSessionBars, type SessionBar } from '@/hooks/queries/ticker/useSetupSessionBars';
 import type { MuseBriefTicker } from '@/common/types/marketDigest';
 
 // ---------------------------------------------------------------------------
 // Morning Brief setup chart: yesterday's regular session on the left, today
-// (premarket + live) on the right, one shared price axis. R/S lines span
+// (premarket snapshot) on the right, one shared price axis. R/S lines span
 // both halves, the target is a tinted zone, and two unlabeled dashed arrows
 // project the break (green) and reject (red) paths off the trigger. Drawn in
 // the approved mock's 360×262 viewBox and scaled to the card width.
+//
+// NOTE (2026-10-07 thermal): the digest must NOT live-stream. An earlier
+// revision called useChartLiveStream per card — 8 cards = 8 simultaneous
+// chart websockets, each re-rendering its SVG per tick, pegging the RN
+// thread at 99% CPU (see chart-cpu-thermal-analysis). The digest is a
+// premarket snapshot: "current" price is the last premarket bar close.
 // ---------------------------------------------------------------------------
 
 type Colors = ReturnType<typeof useThemeColors>;
@@ -42,8 +40,6 @@ const MAX_CANDLES = 26;
 
 /** Default target-zone half-height when the payload has no zone bounds. */
 const TARGET_PAD_PCT = 0.0022;
-
-const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 /** Gridline step: span/4 rounded to a 1/2/5 × 10^k value. */
 function niceStep(span: number): number {
@@ -99,18 +95,6 @@ export function setupLevels(t: MuseBriefTicker) {
   return { long, trigger, invalidation, target, zone };
 }
 
-function PulsingDot({ cx, cy }: { cx: number; cy: number }) {
-  const p = useSharedValue(0);
-  useEffect(() => {
-    p.value = withRepeat(withTiming(1, { duration: 800, easing: Easing.inOut(Easing.quad) }), -1, true);
-  }, [p]);
-  const animatedProps = useAnimatedProps(() => ({
-    r: 4.5 + 2.5 * p.value,
-    opacity: 1 - 0.65 * p.value,
-  }));
-  return <AnimatedCircle cx={cx} cy={cy} fill={LIVE_BLUE} animatedProps={animatedProps} />;
-}
-
 export function SetupChart({
   t,
   width,
@@ -122,36 +106,87 @@ export function SetupChart({
   colors: Colors;
   bars: ReturnType<typeof useSetupSessionBars>['data'];
 }) {
-  const { price: streamPrice, connected } = useChartLiveStream(t.ticker);
-  const { trigger, invalidation, target, zone } = setupLevels(t);
-  const res = t.levels.resistance;
-  const sup = t.levels.support;
+  // All chart geometry is derived inside one useMemo: with no live stream,
+  // the inputs (brief payload + session bars) change rarely, so re-renders
+  // from parent state churn stay cheap.
+  const geom = useMemo(() => {
+    const { trigger, invalidation, target, zone } = setupLevels(t);
+    const res = t.levels.resistance;
+    const sup = t.levels.support;
 
-  const yBars = downsample(bars?.yesterday ?? [], MAX_CANDLES);
-  const tBars = downsample(bars?.today ?? [], MAX_CANDLES).slice();
-  const lastClose = tBars.length ? tBars[tBars.length - 1].c : yBars.length ? yBars[yBars.length - 1].c : null;
-  const live = streamPrice ?? lastClose;
-  // The live price extends today's forming candle.
-  if (streamPrice != null && tBars.length) {
-    const b = tBars[tBars.length - 1];
-    tBars[tBars.length - 1] = { ...b, c: streamPrice, h: Math.max(b.h, streamPrice), l: Math.min(b.l, streamPrice) };
-  }
+    const yBars = downsample(bars?.yesterday ?? [], MAX_CANDLES);
+    const tBars = downsample(bars?.today ?? [], MAX_CANDLES);
+    // "Current" price = last premarket bar close (no live stream on digest).
+    const last = tBars.length ? tBars[tBars.length - 1].c : yBars.length ? yBars[yBars.length - 1].c : null;
 
-  // Shared price axis over everything drawn.
-  const vals: number[] = [];
-  for (const b of [...yBars, ...tBars]) vals.push(b.h, b.l);
-  for (const v of [res, sup, live, zone?.low, zone?.high]) if (v != null) vals.push(v);
-  const lo = vals.length ? Math.min(...vals) : 0;
-  const hi = vals.length ? Math.max(...vals) : 1;
-  const span = hi - lo || Math.max(hi * 0.01, 1);
-  const pad = span * 0.06;
-  const y = (v: number) => PLOT_TOP + ((hi + pad - v) / (span + pad * 2)) * (PLOT_BOT - PLOT_TOP);
+    // Shared price axis over everything drawn.
+    const vals: number[] = [];
+    for (const b of [...yBars, ...tBars]) vals.push(b.h, b.l);
+    for (const v of [res, sup, last, zone?.low, zone?.high]) if (v != null) vals.push(v);
+    const lo = vals.length ? Math.min(...vals) : 0;
+    const hi = vals.length ? Math.max(...vals) : 1;
+    const span = hi - lo || Math.max(hi * 0.01, 1);
+    const pad = span * 0.06;
+    const y = (v: number) => PLOT_TOP + ((hi + pad - v) / (span + pad * 2)) * (PLOT_BOT - PLOT_TOP);
 
-  // Candle geometry: yesterday fills its half; today gets slots for at least
-  // 12 candles so a thin premarket doesn't stretch across the whole half.
-  const yStep = yBars.length ? (MID - 8 - 12) / yBars.length : 0;
-  const tSlots = Math.max(tBars.length + 1, 12);
-  const tStep = (X_R - 22 - (MID + 10)) / tSlots;
+    // Candle geometry: yesterday fills its half; today gets slots for at least
+    // 12 candles so a thin premarket doesn't stretch across the whole half.
+    const yStep = yBars.length ? (MID - 8 - 12) / yBars.length : 0;
+    const tSlots = Math.max(tBars.length + 1, 12);
+    const tStep = (X_R - 22 - (MID + 10)) / tSlots;
+    const liveX = Math.min(X_R - 12, MID + 10 + tStep * (tBars.length + 0.5));
+
+    // Projection arrows: break into the target zone, reject back toward the
+    // invalidation level. PUT setups mirror naturally on the price axis.
+    const arrows: { d: string; color: string; head: string }[] = [];
+    if (trigger != null) {
+      const sx = MID + 22;
+      const sy = y(trigger);
+      const mk = (ex: number, ey: number, f1: number, f2: number, color: string) => {
+        const c1x = sx + 38, c1y = sy + (ey - sy) * f1;
+        const c2x = ex - 42, c2y = sy + (ey - sy) * f2;
+        // Arrowhead along the end tangent.
+        const ang = Math.atan2(ey - c2y, ex - c2x);
+        const hx = (a: number) => ex - 7 * Math.cos(ang + a);
+        const hy = (a: number) => ey - 7 * Math.sin(ang + a);
+        arrows.push({
+          d: `M ${sx},${sy} C ${c1x},${c1y} ${c2x},${c2y} ${ex},${ey}`,
+          head: `M ${hx(0.5)},${hy(0.5)} L ${ex},${ey} L ${hx(-0.5)},${hy(-0.5)}`,
+          color,
+        });
+      };
+      if (target != null) mk(X_R - 40, y(target), 0.27, 0.72, colors.success);
+      if (invalidation != null) {
+        const iy = y(invalidation);
+        mk(X_R - 38, iy + (sy < iy ? -3 : 3), 0.4, 0.85, colors.error);
+      }
+    }
+
+    // Price axis: one tag per level at its line's height, plus faint gridline
+    // ticks wherever they don't collide with a tag.
+    const tags = layoutTags(
+      [
+        res != null && { key: 'r', lineY: y(res), text: res.toFixed(2), bg: colors.error, fg: '#fff' },
+        sup != null && { key: 's', lineY: y(sup), text: sup.toFixed(2), bg: colors.success, fg: '#000' },
+        target != null && { key: 'tg', lineY: y(target), text: target.toFixed(2), bg: colors.error + '33', fg: colors.error, border: colors.error },
+        last != null && { key: 'lv', lineY: y(last), text: last.toFixed(2), bg: LIVE_BLUE, fg: '#000' },
+      ].filter(Boolean) as { key: string; lineY: number; text: string; bg: string; fg: string; border?: string }[],
+    );
+    const step = vals.length ? niceStep(span + pad * 2) : 0;
+    const ticks: number[] = [];
+    if (step > 0) {
+      for (let v = Math.ceil((lo - pad) / step) * step; v <= hi + pad; v += step) {
+        if (y(v) > PLOT_TOP - 4 && y(v) < PLOT_BOT + 4) ticks.push(v);
+      }
+    }
+    const tickDecimals = step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
+
+    return { trigger, invalidation, target, zone, res, sup, yBars, tBars, last, y, yStep, tStep, liveX, arrows, tags, ticks, tickDecimals };
+  }, [t, bars, colors]);
+
+  const { target, zone, res, sup, yBars, tBars, last, y, yStep, tStep, liveX, arrows, tags, ticks, tickDecimals } = geom;
+
+  const fmt = (v: number) => v.toFixed(2);
   const candle = (b: SessionBar, x: number, w: number, key: string) => {
     const col = b.c >= b.o ? colors.success : colors.error;
     const top = y(Math.max(b.o, b.c));
@@ -163,54 +198,6 @@ export function SetupChart({
       </React.Fragment>
     );
   };
-  const liveX = Math.min(X_R - 12, MID + 10 + tStep * (tBars.length + 0.5));
-
-  // Projection arrows: break into the target zone, reject back toward the
-  // invalidation level. PUT setups mirror naturally on the price axis.
-  const arrows: { d: string; color: string; head: string }[] = [];
-  if (trigger != null) {
-    const sx = MID + 22;
-    const sy = y(trigger);
-    const mk = (ex: number, ey: number, f1: number, f2: number, color: string) => {
-      const c1x = sx + 38, c1y = sy + (ey - sy) * f1;
-      const c2x = ex - 42, c2y = sy + (ey - sy) * f2;
-      // Arrowhead along the end tangent.
-      const ang = Math.atan2(ey - c2y, ex - c2x);
-      const hx = (a: number) => ex - 7 * Math.cos(ang + a);
-      const hy = (a: number) => ey - 7 * Math.sin(ang + a);
-      arrows.push({
-        d: `M ${sx},${sy} C ${c1x},${c1y} ${c2x},${c2y} ${ex},${ey}`,
-        head: `M ${hx(0.5)},${hy(0.5)} L ${ex},${ey} L ${hx(-0.5)},${hy(-0.5)}`,
-        color,
-      });
-    };
-    if (target != null) mk(X_R - 40, y(target), 0.27, 0.72, colors.success);
-    if (invalidation != null) {
-      const iy = y(invalidation);
-      mk(X_R - 38, iy + (sy < iy ? -3 : 3), 0.4, 0.85, colors.error);
-    }
-  }
-
-  const fmt = (v: number) => v.toFixed(2);
-
-  // Price axis: one tag per level at its line's height, plus faint gridline
-  // ticks wherever they don't collide with a tag.
-  const tags = layoutTags(
-    [
-      res != null && { key: 'r', lineY: y(res), text: fmt(res), bg: colors.error, fg: '#fff' },
-      sup != null && { key: 's', lineY: y(sup), text: fmt(sup), bg: colors.success, fg: '#000' },
-      target != null && { key: 'tg', lineY: y(target), text: fmt(target), bg: colors.error + '33', fg: colors.error, border: colors.error },
-      live != null && { key: 'lv', lineY: y(live), text: fmt(live), bg: LIVE_BLUE, fg: '#000' },
-    ].filter(Boolean) as { key: string; lineY: number; text: string; bg: string; fg: string; border?: string }[],
-  );
-  const step = vals.length ? niceStep(span + pad * 2) : 0;
-  const ticks: number[] = [];
-  if (step > 0) {
-    for (let v = Math.ceil((lo - pad) / step) * step; v <= hi + pad; v += step) {
-      if (y(v) > PLOT_TOP - 4 && y(v) < PLOT_BOT + 4) ticks.push(v);
-    }
-  }
-  const tickDecimals = step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
 
   const height = (width * VB_H) / VB_W;
 
@@ -218,10 +205,6 @@ export function SetupChart({
     <View style={[styles.block, { backgroundColor: colors.background, borderColor: colors.border }]}>
       <View style={styles.head}>
         <Text style={[styles.headText, { color: colors.textTertiary }]}>SETUP CHART</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, opacity: connected ? 1 : 0.45 }}>
-          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: LIVE_BLUE }} />
-          <Text style={[styles.headText, { color: LIVE_BLUE, fontWeight: '700' }]}>LIVE</Text>
-        </View>
       </View>
 
       <Svg width={width} height={height} viewBox={`0 0 ${VB_W} ${VB_H}`}>
@@ -253,8 +236,8 @@ export function SetupChart({
         <SvgText x={10} y={22} fill={colors.textTertiary} fontSize={9} letterSpacing={1.5}>YESTERDAY</SvgText>
         <SvgText x={MID + 9} y={22} fill={colors.textTertiary} fontSize={9} letterSpacing={1.5}>TODAY</SvgText>
 
-        {live != null && (
-          <Line x1={X_L} x2={X_R} y1={y(live)} y2={y(live)} stroke={LIVE_BLUE} strokeWidth={1} strokeDasharray="3 3" opacity={0.3} />
+        {last != null && (
+          <Line x1={X_L} x2={X_R} y1={y(last)} y2={y(last)} stroke={LIVE_BLUE} strokeWidth={1} strokeDasharray="3 3" opacity={0.3} />
         )}
 
         {arrows.map((a, i) => (
@@ -267,11 +250,7 @@ export function SetupChart({
         {yBars.map((b, i) => candle(b, 12 + yStep * (i + 0.5), Math.max(1.5, Math.min(7.5, yStep * 0.65)), `y${i}`))}
         {tBars.map((b, i) => candle(b, MID + 10 + tStep * (i + 0.5), Math.max(2, Math.min(11, tStep * 0.6)), `t${i}`))}
 
-        {live != null && (
-          <>
-            <PulsingDot cx={liveX} cy={y(live)} />
-          </>
-        )}
+        {last != null && <Circle cx={liveX} cy={y(last)} r={4.5} fill={LIVE_BLUE} />}
 
         {/* price axis */}
         <Line x1={X_R} x2={X_R} y1={8} y2={254} stroke={colors.border} strokeWidth={1} />
@@ -313,7 +292,7 @@ export function SetupChart({
             <Text style={[styles.legendText, { color: colors.textTertiary }]}>Target zone</Text>
           </View>
         )}
-        <LegendDot color={LIVE_BLUE} label="Live" colors={colors} />
+        <LegendDot color={LIVE_BLUE} label="Last" colors={colors} />
       </View>
     </View>
   );
