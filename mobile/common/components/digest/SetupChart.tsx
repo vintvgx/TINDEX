@@ -26,21 +26,47 @@ type Colors = ReturnType<typeof useThemeColors>;
 
 const MONO = 'monospace';
 const LIVE_BLUE = '#4DA3FF';
-const LIVE_LABEL = '#8FC2FF';
 const VB_W = 360;
 const VB_H = 262;
-const X_L = 6;
-const X_R = 354;
-const MID = 183;
+const X_L = 4;
+/** Right edge of the plot; everything past it is the price axis. */
+const X_R = 298;
+const MID = 151;
 const PLOT_TOP = 32;
 const PLOT_BOT = 248;
-const LABEL_X = 348;
+/** Price-axis tag geometry (viewBox units). */
+const TAG_X = X_R + 4;
+const TAG_W = VB_W - TAG_X - 2;
+const TAG_H = 13;
 const MAX_CANDLES = 26;
 
 /** Default target-zone half-height when the payload has no zone bounds. */
 const TARGET_PAD_PCT = 0.0022;
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+
+/** Gridline step: span/4 rounded to a 1/2/5 × 10^k value. */
+function niceStep(span: number): number {
+  const raw = span / 4;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const n = raw / mag;
+  return (n < 1.5 ? 1 : n < 3.5 ? 2 : n < 7.5 ? 5 : 10) * mag;
+}
+
+/** Stack axis tags so none overlap: push down from the top, then back up
+ *  if the last one ran off the plot. Each tag keeps its line's y in `lineY`. */
+function layoutTags<T extends { lineY: number }>(tags: T[]): (T & { tagY: number })[] {
+  const out = tags.map((t) => ({ ...t, tagY: t.lineY })).sort((a, b) => a.lineY - b.lineY);
+  for (let i = 0; i < out.length; i++) {
+    const min = i === 0 ? PLOT_TOP - 8 + TAG_H / 2 : out[i - 1].tagY + TAG_H + 1;
+    out[i].tagY = Math.max(out[i].tagY, min);
+  }
+  for (let i = out.length - 1; i >= 0; i--) {
+    const max = i === out.length - 1 ? PLOT_BOT + 6 - TAG_H / 2 : out[i + 1].tagY - TAG_H - 1;
+    out[i].tagY = Math.min(out[i].tagY, max);
+  }
+  return out;
+}
 
 /** Merge consecutive bars so a half never draws more than `max` candles. */
 function downsample(bars: SessionBar[], max: number): SessionBar[] {
@@ -125,7 +151,7 @@ export function SetupChart({
   // 12 candles so a thin premarket doesn't stretch across the whole half.
   const yStep = yBars.length ? (MID - 8 - 12) / yBars.length : 0;
   const tSlots = Math.max(tBars.length + 1, 12);
-  const tStep = (318 - (MID + 10)) / tSlots;
+  const tStep = (X_R - 22 - (MID + 10)) / tSlots;
   const candle = (b: SessionBar, x: number, w: number, key: string) => {
     const col = b.c >= b.o ? colors.success : colors.error;
     const top = y(Math.max(b.o, b.c));
@@ -137,13 +163,13 @@ export function SetupChart({
       </React.Fragment>
     );
   };
-  const liveX = Math.min(326, MID + 10 + tStep * (tBars.length + 0.5));
+  const liveX = Math.min(X_R - 12, MID + 10 + tStep * (tBars.length + 0.5));
 
   // Projection arrows: break into the target zone, reject back toward the
   // invalidation level. PUT setups mirror naturally on the price axis.
   const arrows: { d: string; color: string; head: string }[] = [];
   if (trigger != null) {
-    const sx = MID + 25;
+    const sx = MID + 22;
     const sy = y(trigger);
     const mk = (ex: number, ey: number, f1: number, f2: number, color: string) => {
       const c1x = sx + 38, c1y = sy + (ey - sy) * f1;
@@ -158,20 +184,35 @@ export function SetupChart({
         color,
       });
     };
-    if (target != null) mk(312, y(target), 0.27, 0.72, colors.success);
+    if (target != null) mk(X_R - 40, y(target), 0.27, 0.72, colors.success);
     if (invalidation != null) {
       const iy = y(invalidation);
-      mk(314, iy + (sy < iy ? -3 : 3), 0.4, 0.85, colors.error);
+      mk(X_R - 38, iy + (sy < iy ? -3 : 3), 0.4, 0.85, colors.error);
     }
   }
 
-  // Right-edge labels: keep the live price clear of the R/S labels.
-  const labelYs = [res, sup].filter((v): v is number => v != null).map((v) => y(v) - 5);
-  let liveLabelY = live != null ? y(live) - 4 : 0;
-  if (live != null && labelYs.some((ly) => Math.abs(ly - liveLabelY) < 12)) liveLabelY = y(live) + 13;
+  const fmt = (v: number) => v.toFixed(2);
+
+  // Price axis: one tag per level at its line's height, plus faint gridline
+  // ticks wherever they don't collide with a tag.
+  const tags = layoutTags(
+    [
+      res != null && { key: 'r', lineY: y(res), text: fmt(res), bg: colors.error, fg: '#fff' },
+      sup != null && { key: 's', lineY: y(sup), text: fmt(sup), bg: colors.success, fg: '#000' },
+      target != null && { key: 'tg', lineY: y(target), text: fmt(target), bg: colors.error + '33', fg: colors.error, border: colors.error },
+      live != null && { key: 'lv', lineY: y(live), text: fmt(live), bg: LIVE_BLUE, fg: '#000' },
+    ].filter(Boolean) as { key: string; lineY: number; text: string; bg: string; fg: string; border?: string }[],
+  );
+  const step = vals.length ? niceStep(span + pad * 2) : 0;
+  const ticks: number[] = [];
+  if (step > 0) {
+    for (let v = Math.ceil((lo - pad) / step) * step; v <= hi + pad; v += step) {
+      if (y(v) > PLOT_TOP - 4 && y(v) < PLOT_BOT + 4) ticks.push(v);
+    }
+  }
+  const tickDecimals = step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
 
   const height = (width * VB_H) / VB_W;
-  const fmt = (v: number) => v.toFixed(2);
 
   return (
     <View style={[styles.block, { backgroundColor: colors.background, borderColor: colors.border }]}>
@@ -184,39 +225,32 @@ export function SetupChart({
       </View>
 
       <Svg width={width} height={height} viewBox={`0 0 ${VB_W} ${VB_H}`}>
+        {ticks.map((v) => (
+          <Line key={`g${v}`} x1={X_L} x2={X_R} y1={y(v)} y2={y(v)} stroke={colors.border} strokeWidth={0.6} opacity={0.5} />
+        ))}
         {zone && (
           <>
-            <Rect x={283} y={y(zone.high)} width={X_R - 283} height={Math.max(6, y(zone.low) - y(zone.high))}
+            <Rect x={X_R - 60} y={y(zone.high)} width={60} height={Math.max(6, y(zone.low) - y(zone.high))}
               fill={colors.error} fillOpacity={0.1} />
-            <Line x1={283} x2={X_R} y1={y(zone.high)} y2={y(zone.high)} stroke={colors.error} strokeWidth={1}
+            <Line x1={X_R - 60} x2={X_R} y1={y(zone.high)} y2={y(zone.high)} stroke={colors.error} strokeWidth={1}
               strokeDasharray="4 3" opacity={0.7} />
-            <Line x1={283} x2={X_R} y1={y(zone.low)} y2={y(zone.low)} stroke={colors.error} strokeWidth={1}
+            <Line x1={X_R - 60} x2={X_R} y1={y(zone.low)} y2={y(zone.low)} stroke={colors.error} strokeWidth={1}
               strokeDasharray="4 3" opacity={0.7} />
-            {target != null && (
-              <SvgText x={LABEL_X} y={(y(zone.high) + y(zone.low)) / 2 + 4} fill={colors.error} fontSize={10.5}
-                fontWeight="700" textAnchor="end">{fmt(target)}</SvgText>
-            )}
           </>
         )}
         {res != null && (
           <>
             <Line x1={X_L} x2={X_R} y1={y(res)} y2={y(res)} stroke={colors.error} strokeWidth={1.4} strokeDasharray="6 4" />
-            <SvgText x={LABEL_X} y={y(res) - 5} fill={colors.error} fontSize={10.5} fontWeight="700" textAnchor="end">
-              {`R ${fmt(res)}`}
-            </SvgText>
           </>
         )}
         {sup != null && (
           <>
             <Line x1={X_L} x2={X_R} y1={y(sup)} y2={y(sup)} stroke={colors.success} strokeWidth={1.4} strokeDasharray="6 4" />
-            <SvgText x={LABEL_X} y={y(sup) - 5} fill={colors.success} fontSize={10.5} fontWeight="700" textAnchor="end">
-              {`S ${fmt(sup)}`}
-            </SvgText>
           </>
         )}
 
         <Line x1={MID} x2={MID} y1={8} y2={254} stroke={colors.border} strokeWidth={1} strokeDasharray="3 3" />
-        <SvgText x={14} y={22} fill={colors.textTertiary} fontSize={9} letterSpacing={1.5}>YESTERDAY</SvgText>
+        <SvgText x={10} y={22} fill={colors.textTertiary} fontSize={9} letterSpacing={1.5}>YESTERDAY</SvgText>
         <SvgText x={MID + 9} y={22} fill={colors.textTertiary} fontSize={9} letterSpacing={1.5}>TODAY</SvgText>
 
         {live != null && (
@@ -236,11 +270,32 @@ export function SetupChart({
         {live != null && (
           <>
             <PulsingDot cx={liveX} cy={y(live)} />
-            <SvgText x={350} y={liveLabelY} fill={LIVE_LABEL} fontSize={11} fontWeight="700" textAnchor="end">
-              {fmt(live)}
-            </SvgText>
           </>
         )}
+
+        {/* price axis */}
+        <Line x1={X_R} x2={X_R} y1={8} y2={254} stroke={colors.border} strokeWidth={1} />
+        {ticks.map((v) => (
+          <React.Fragment key={`k${v}`}>
+            {!tags.some((tg) => Math.abs(tg.tagY - y(v)) < TAG_H - 2) && (
+              <SvgText x={TAG_X + 4} y={y(v) + 3.5} fill={colors.textTertiary} fontSize={9}>
+                {v.toFixed(tickDecimals)}
+              </SvgText>
+            )}
+          </React.Fragment>
+        ))}
+        {tags.map((tg) => (
+          <React.Fragment key={tg.key}>
+            {Math.abs(tg.tagY - tg.lineY) > 1 && (
+              <Line x1={X_R} x2={TAG_X} y1={tg.lineY} y2={tg.tagY} stroke={tg.border ?? tg.bg} strokeWidth={1} />
+            )}
+            <Rect x={TAG_X} y={tg.tagY - TAG_H / 2} width={TAG_W} height={TAG_H} rx={3} fill={tg.bg}
+              stroke={tg.border} strokeWidth={tg.border ? 1 : 0} />
+            <SvgText x={TAG_X + TAG_W / 2} y={tg.tagY + 3.5} fill={tg.fg} fontSize={9.5} fontWeight="700" textAnchor="middle">
+              {tg.text}
+            </SvgText>
+          </React.Fragment>
+        ))}
         {!bars && (
           <SvgText x={MID} y={(PLOT_TOP + PLOT_BOT) / 2} fill={colors.textTertiary} fontSize={10} textAnchor="middle">
             loading session…
@@ -305,6 +360,21 @@ function isPremarketNow(): boolean {
     timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(new Date());
   return hhmm >= '04:00' && hhmm < '09:30';
+}
+
+/** The two strongest score components as short labels ("Trend · Zone maxed"),
+ *  for compact rows that can't fit the full why-line. */
+export function topDrivers(t: MuseBriefTicker): string | null {
+  const ranked = COMPONENTS
+    .map((c) => {
+      const v = componentValue(t.components ?? {}, c.keys);
+      return v == null ? null : { label: c.label, ratio: v / c.max };
+    })
+    .filter((c): c is NonNullable<typeof c> => c != null)
+    .sort((a, b) => b.ratio - a.ratio);
+  if (ranked.length < 2) return null;
+  const [a, b] = ranked;
+  return `${a.label} · ${b.label}${a.ratio >= 0.99 && b.ratio >= 0.99 ? ' maxed' : ''}`;
 }
 
 /** One plain-English sentence: the two strongest score components in words,
