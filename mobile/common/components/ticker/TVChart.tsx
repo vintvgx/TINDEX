@@ -250,6 +250,10 @@ export function TVChart({
   // Bumped on every page (re)load so the handshake watchdog re-arms.
   const [reloadNonce, setReloadNonce] = useState(0);
   const watchdogReloads = useRef(0);
+  // The page has posted `loaded` since the last (re)load — it's alive, just
+  // possibly late with `ready`; the watchdog re-sends `init` instead of
+  // reloading it.
+  const loadedSeenRef = useRef(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const prevResetKey = useRef<string | undefined>(undefined);
   // Long-press price from the page — shows the "set alert here" pill until
@@ -339,6 +343,10 @@ export function TVChart({
   const liveKey = `${resetKey ?? ''}|${data?.interval ?? ''}`;
   const [liveBar, setLiveBar] = useState<(TVCandle & { k: string }) | null>(null);
   useEffect(() => {
+    // Not before the chart exists: the forming bar catches up from the next
+    // tick, and ticks during the handshake only compete with it for the JS
+    // thread.
+    if (!chartReady) return;
     if (livePrice == null || !isFinite(livePrice) || livePrice <= 0 || !baseCandles?.length) return;
     if (!barSec && !isDailyBars) return;
     const now = Math.floor(Date.now() / 1000);
@@ -367,7 +375,7 @@ export function TVChart({
       }
       return { t: bucket, o: p, h: p, l: p, c: p, v: 0, k };
     });
-  }, [livePrice, baseCandles, barSec, isDailyBars, liveKey]);
+  }, [chartReady, livePrice, baseCandles, barSec, isDailyBars, liveKey]);
 
   // ── Hot path vs. cold path ─────────────────────────────────────────
   // Like TradingView, a tick must only move the forming bar. Everything
@@ -644,6 +652,7 @@ export function TVChart({
     console.log('[TVChart] ← page:', msg.type);
     if (msg.type === 'loaded') {
       // Page script is live → create the chart. The page replies `ready`.
+      loadedSeenRef.current = true;
       readyRef.current = true;
       webViewRef.current?.postMessage(JSON.stringify({ type: 'init', theme } as WVOutbound));
       flush();
@@ -680,22 +689,40 @@ export function TVChart({
     }
   }, [autoZones, watchZones, onAutoZoneTap, onWatchZoneTap, onRequestMoreHistory, theme, send, flush]);
 
-  // Handshake watchdog: if the page hasn't reported `ready` a few seconds
-  // after (re)loading, or when the app returns to the foreground still not
-  // ready, reload the WebView. Before this, a lost handshake left the
-  // spinner up until iOS happened to recycle the WebView in the background.
+  // Handshake watchdog. "Late" is not "dead": if the page has posted
+  // `loaded` it's alive, so re-send `init` (the page answers `ready` again
+  // even if it already initialised) instead of reloading it — under load a
+  // reload restarted a handshake that was about to finish, and after three
+  // of those the spinner stayed up until the app was foregrounded again.
+  // Only a page that never said `loaded` is reloaded. Retries back off
+  // (6s, 12s, 24s, then every 30s) rather than stopping, so a WebView parked
+  // offscreen isn't hammered but a slow one still recovers on its own.
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
   useEffect(() => {
     if (chartReady) { watchdogReloads.current = 0; return; }
     if (!htmlReady) return;
-    // Capped: a WebView parked offscreen may not run JS at all — don't
-    // reload it every 6s forever. Foregrounding still gets a retry.
-    const t = watchdogReloads.current < 3 ? setTimeout(() => {
-      watchdogReloads.current += 1;
-      console.warn('[TVChart] no ready after 6s — reloading WebView');
-      webViewRef.current?.reload();
-    }, 6_000) : undefined;
+    const kick = (why: string) => {
+      if (loadedSeenRef.current) {
+        console.warn(`[TVChart] ${why} — page alive, re-sending init`);
+        webViewRef.current?.postMessage(JSON.stringify({ type: 'init', theme: themeRef.current } as WVOutbound));
+      } else {
+        console.warn(`[TVChart] ${why} — no 'loaded' yet, reloading WebView`);
+        webViewRef.current?.reload();
+      }
+    };
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => {
+      const delay = Math.min(6_000 * 2 ** watchdogReloads.current, 30_000);
+      t = setTimeout(() => {
+        watchdogReloads.current += 1;
+        kick(`no ready after ${Math.round(delay / 1000)}s`);
+        arm();
+      }, delay);
+    };
+    arm();
     const sub = AppState.addEventListener('change', (st) => {
-      if (st === 'active') webViewRef.current?.reload();
+      if (st === 'active') kick('foregrounded without ready');
     });
     return () => { if (t) clearTimeout(t); sub.remove(); };
   }, [chartReady, htmlReady, reloadNonce]);
@@ -729,6 +756,7 @@ export function TVChart({
           onLoadStart={() => {
             console.log('[TVChart] WebView onLoadStart');
             readyRef.current = false;
+            loadedSeenRef.current = false;
             // A reload (e.g. iOS reclaimed the WebView while backgrounded)
             // starts a blank page — dropping chartReady makes every effect
             // re-send its state once the new page reports `ready`. Re-arm

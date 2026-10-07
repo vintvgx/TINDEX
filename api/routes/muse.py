@@ -1277,6 +1277,11 @@ def _digest_play(p: dict) -> dict:
         "setup": setup,
         "trigger": trigger,
         "target": target,
+        # The target zone's own bounds — the card's setup chart draws the
+        # target as this band, not a line. None when the scorer omits it.
+        "target_zone": ({"low": tz["low"], "high": tz["high"]}
+                        if (tz := p.get("target_zone")) and tz.get("low") is not None
+                        and tz.get("high") is not None else None),
         "if_then": (f"If {t} {verb} {trigger:.2f} on a 1m close with volume > 1.2x baseline, "
                     f"then {d} toward {target:.2f}."),
         "invalidation": (f"A 1m close {inv_verb} {inv:.2f} kills the setup — "

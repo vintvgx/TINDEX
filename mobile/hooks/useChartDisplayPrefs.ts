@@ -43,6 +43,9 @@ export interface ChartDisplayPrefs {
   /** Home dynamic card's chart page (Profile → Home chart timeframe). */
   homeChartPeriod: PricePeriod;
   homeChartInterval: string;
+  /** The ticker the Charts screen was last showing — reopened on return
+   *  (the chart overlay unmounts when closed). null = none yet. */
+  lastChartTicker: string | null;
 }
 
 export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
@@ -64,6 +67,7 @@ export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
   defaultInterval: null,
   homeChartPeriod: '1D',
   homeChartInterval: '15m',
+  lastChartTicker: null,
 };
 
 async function loadPrefs(): Promise<ChartDisplayPrefs> {

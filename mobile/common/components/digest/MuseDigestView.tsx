@@ -1,11 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Circle, Line } from 'react-native-svg';
 import Animated, {
   FadeInDown,
   useSharedValue,
-  useAnimatedProps,
   useAnimatedStyle,
   withTiming,
   withRepeat,
@@ -19,6 +17,8 @@ import { TickerContractsModal } from '@/common/components/ticker/TickerContracts
 import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
 import { useBriefEntryModes } from '@/hooks/queries/brief/useBriefEntryModes';
 import { useSetBriefEntryMode } from '@/hooks/mutations/brief/useSetBriefEntryMode';
+import { useSetupSessionBars } from '@/hooks/queries/ticker/useSetupSessionBars';
+import { SetupChart, WhyThisSetup, ScoreExplainer, whyThisSetup } from './SetupChart';
 import type {
   MuseBriefContent,
   MuseBriefTicker,
@@ -30,7 +30,7 @@ import type {
 // Trading-terminal digest view for muse-brief-v1 content.
 // Single scrolling view: masthead → regime banner → tape → index regime →
 // watchlist → Bandit's picks → footer. Entrance fanfare (staggered fade/slide,
-// count-ups, gauge sweeps) plays on the 8:00 AM publish; the 9:00 AM silent
+// count-ups) plays on the 8:00 AM publish; the 9:00 AM silent
 // refresh renders final values immediately (silent_update = true).
 // ---------------------------------------------------------------------------
 
@@ -42,7 +42,7 @@ function scoreColor(score: number, colors: ReturnType<typeof useThemeColors>): s
   return colors.error;
 }
 
-/** JS count-up for the gauge number (cheap, digest-grade — not 60fps-critical). */
+/** JS count-up for score numbers (cheap, digest-grade — not 60fps-critical). */
 function useCountUp(target: number, animate: boolean, duration = 1000): number {
   const [val, setVal] = useState(animate ? 0 : target);
   useEffect(() => {
@@ -82,75 +82,6 @@ function Enter({
     <Animated.View entering={FadeInDown.delay(Math.min(index, 12) * 70).duration(450)}>
       {children}
     </Animated.View>
-  );
-}
-
-// --- Score gauge ------------------------------------------------------------
-
-const AnimatedCircle = Animated.createAnimatedComponent(Circle);
-
-function Gauge({
-  score,
-  size = 88,
-  animate,
-  colors,
-}: {
-  score: number;
-  size?: number;
-  animate: boolean;
-  colors: ReturnType<typeof useThemeColors>;
-}) {
-  const R = size / 2 - 7;
-  const C = 2 * Math.PI * R;
-  const ARC = 0.75; // 270° sweep, gap at the bottom
-  const color = scoreColor(score, colors);
-  const progress = useSharedValue(animate ? 0 : score / 100);
-
-  useEffect(() => {
-    progress.value = animate
-      ? withTiming(score / 100, { duration: 1100, easing: Easing.out(Easing.cubic) })
-      : score / 100;
-  }, [score, animate, progress]);
-
-  const animatedProps = useAnimatedProps(() => ({
-    strokeDashoffset: C * ARC * (1 - progress.value),
-  }));
-  const display = useCountUp(score, animate);
-  const c = size / 2;
-
-  return (
-    <View style={{ width: size, height: size }}>
-      <Svg width={size} height={size}>
-        <Circle
-          cx={c}
-          cy={c}
-          r={R}
-          stroke={colors.textTertiary + '30'}
-          strokeWidth={7}
-          fill="none"
-          strokeDasharray={`${C * ARC} ${C}`}
-          strokeLinecap="round"
-          transform={`rotate(135 ${c} ${c})`}
-        />
-        <AnimatedCircle
-          cx={c}
-          cy={c}
-          r={R}
-          stroke={color}
-          strokeWidth={7}
-          fill="none"
-          strokeDasharray={`${C * ARC} ${C}`}
-          strokeLinecap="round"
-          transform={`rotate(135 ${c} ${c})`}
-          animatedProps={animatedProps}
-        />
-      </Svg>
-      <View style={[StyleSheet.absoluteFillObject, { alignItems: 'center', justifyContent: 'center' }]}>
-        <Text style={{ fontFamily: MONO, fontSize: size * 0.26, fontWeight: '700', color }}>
-          {fmtScore(display)}
-        </Text>
-      </View>
-    </View>
   );
 }
 
@@ -200,168 +131,6 @@ function Tape({ items, colors }: { items: TapeItem[]; colors: ReturnType<typeof 
   );
 }
 
-// --- Support/resistance mini chart -------------------------------------------
-
-function SrChart({
-  levels,
-  width,
-  colors,
-}: {
-  levels: MuseBriefTicker['levels'];
-  width: number;
-  colors: ReturnType<typeof useThemeColors>;
-}) {
-  const H = 112;
-  const entries: Array<{ v: number; label: string; color: string; dashed: boolean }> = [];
-  if (levels.resistance != null)
-    entries.push({ v: levels.resistance, label: `R ${levels.resistance.toFixed(2)}`, color: colors.error, dashed: true });
-  if (levels.orh != null)
-    entries.push({ v: levels.orh, label: `ORH ${levels.orh.toFixed(2)}`, color: colors.warning, dashed: false });
-  if (levels.orl != null)
-    entries.push({ v: levels.orl, label: `ORL ${levels.orl.toFixed(2)}`, color: colors.warning, dashed: false });
-  if (levels.support != null)
-    entries.push({ v: levels.support, label: `S ${levels.support.toFixed(2)}`, color: colors.success, dashed: true });
-  if (entries.length === 0) return null;
-  // Right gutter sized to the longest label (9px monospace ≈ 5.6px/char)
-  // so "ORH 279.40" sits inside the card instead of running past its edge.
-  const PAD = Math.ceil(Math.max(...entries.map((e) => e.label.length)) * 5.6) + 8;
-
-  const vals = entries.map((e) => e.v);
-  const lo = Math.min(...vals);
-  const hi = Math.max(...vals);
-  const span = hi - lo || 1;
-  const padV = span * 0.22;
-  const y = (v: number) => 8 + (1 - (v - (lo - padV)) / (span + padV * 2)) * (H - 16);
-  const chartW = width - PAD;
-
-  return (
-    <View style={{ marginTop: 10 }}>
-      <Svg width={width} height={H}>
-        {entries.map((e, i) => (
-          <React.Fragment key={i}>
-            <Line
-              x1={0}
-              x2={chartW}
-              y1={y(e.v)}
-              y2={y(e.v)}
-              stroke={e.color}
-              strokeWidth={e.dashed ? 1.5 : 1}
-              strokeDasharray={e.dashed ? '6 4' : undefined}
-              opacity={0.9}
-            />
-          </React.Fragment>
-        ))}
-      </Svg>
-      {/* Labels overlaid at the right gutter, positioned by the same y() math */}
-      <View style={[StyleSheet.absoluteFillObject, { height: H }]}>
-        {entries.map((e, i) => (
-          <Text
-            key={i}
-            style={{
-              position: 'absolute',
-              left: chartW + 4,
-              top: Math.max(0, Math.min(H - 14, y(e.v) - 7)),
-              fontFamily: MONO,
-              fontSize: 9,
-              color: e.color,
-            }}
-          >
-            {e.label}
-          </Text>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-// --- Score component bars ------------------------------------------------------
-
-const COMPONENT_LABELS: Record<string, string> = {
-  zone: 'Zone',
-  proximity: 'Proximity',
-  reward_risk: 'R:R',
-  trend: 'Trend',
-  rsi: 'RSI',
-  premarket: 'Premkt',
-  prior_day: 'Prior day',
-};
-
-function ComponentBarRow({
-  label,
-  value,
-  share,
-  width,
-  colors,
-}: {
-  label: string;
-  value: number;
-  share: number;
-  width: Animated.SharedValue<number>;
-  colors: ReturnType<typeof useThemeColors>;
-}) {
-  const barStyle = useAnimatedStyle(() => ({
-    width: `${Math.max(2, Math.min(100, share * 100 * width.value))}%` as const,
-  }));
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-      <Text style={[styles.mono, { width: 64, fontSize: 10, color: colors.textTertiary }]}>{label}</Text>
-      <View
-        style={{
-          flex: 1,
-          height: 5,
-          borderRadius: 3,
-          backgroundColor: colors.textTertiary + '22',
-          overflow: 'hidden',
-        }}
-      >
-        <Animated.View
-          style={[
-            { height: '100%', borderRadius: 3, backgroundColor: colors.success + 'CC' },
-            barStyle,
-          ]}
-        />
-      </View>
-      <Text style={[styles.mono, { width: 36, fontSize: 10, textAlign: 'right', color: colors.textSecondary }]}>
-        {fmtScore(value)}
-      </Text>
-    </View>
-  );
-}
-
-function ComponentBars({
-  components,
-  score,
-  animate,
-  colors,
-}: {
-  components: Record<string, number>;
-  score: number;
-  animate: boolean;
-  colors: ReturnType<typeof useThemeColors>;
-}) {
-  const entries = Object.entries(components);
-  const width = useSharedValue(animate ? 0 : 1);
-  useEffect(() => {
-    width.value = animate ? withTiming(1, { duration: 900, easing: Easing.out(Easing.cubic) }) : 1;
-  }, [animate, width]);
-
-  if (entries.length === 0) return null;
-  return (
-    <View style={{ marginTop: 10, gap: 5 }}>
-      {entries.map(([key, value]) => (
-        <ComponentBarRow
-          key={key}
-          label={COMPONENT_LABELS[key] ?? key.replace(/_/g, ' ')}
-          value={value}
-          share={score > 0 ? value / score : 0}
-          width={width}
-          colors={colors}
-        />
-      ))}
-    </View>
-  );
-}
-
 // --- Ticker card ---------------------------------------------------------------
 
 function TickerCard({
@@ -389,6 +158,7 @@ function TickerCard({
   const dirUp = t.direction === 'CALL';
   const dirColor = dirUp ? colors.success : colors.error;
   const [contractsVisible, setContractsVisible] = useState(false);
+  const { data: sessionBars } = useSetupSessionBars(t.ticker);
   const iconBtn = {
     width: 30,
     height: 30,
@@ -406,6 +176,14 @@ function TickerCard({
         </Text>
         <View style={[styles.badge, { backgroundColor: dirColor + '22', borderColor: dirColor + '55' }]}>
           <Text style={[styles.mono, { fontSize: 10, fontWeight: '800', color: dirColor }]}>{t.direction}</Text>
+        </View>
+        <View
+          style={[styles.badge, { backgroundColor: colors.warning + '1F', borderColor: colors.warning + '66' }]}
+          accessibilityLabel={`Breakout score ${fmtScore(t.score)}`}
+        >
+          <Text style={[styles.mono, { fontSize: 10, fontWeight: '800', color: colors.warning }]}>
+            {fmtScore(t.score)}
+          </Text>
         </View>
         <View style={{ flex: 1 }} />
         {/* Contracts + chart — shown in preview too (the preview uses real
@@ -478,18 +256,16 @@ function TickerCard({
         onClose={() => setContractsVisible(false)}
       />
 
-      <View style={{ flexDirection: 'row', gap: 12, marginTop: 10 }}>
-        <Gauge score={t.score} animate={animate} colors={colors} />
-        <View style={{ flex: 1, justifyContent: 'center', gap: 6 }}>
-          <Text style={{ fontSize: 12.5, fontWeight: '700', color: colors.text }}>{t.setup}</Text>
-          {bandit && t.thesis ? (
-            <Text style={{ fontSize: 12, color: colors.textSecondary, lineHeight: 17 }}>{t.thesis}</Text>
-          ) : null}
-        </View>
+      {/* setup label (+ Bandit's thesis on picks) */}
+      <View style={{ marginTop: 10, gap: 4 }}>
+        <Text style={{ fontSize: 12.5, fontWeight: '700', color: colors.text }}>{t.setup}</Text>
+        {bandit && t.thesis ? (
+          <Text style={{ fontSize: 12, color: colors.textSecondary, lineHeight: 17 }}>{t.thesis}</Text>
+        ) : null}
       </View>
 
-      <ComponentBars components={t.components} score={t.score} animate={animate} colors={colors} />
-      <SrChart levels={t.levels} width={chartWidth} colors={colors} />
+      <SetupChart t={t} width={chartWidth - 16} colors={colors} bars={sessionBars} />
+      <WhyThisSetup text={whyThisSetup(t, sessionBars?.priorHigh, sessionBars?.priorLow)} colors={colors} />
 
       {/* if / then plan */}
       <View style={[styles.planBox, { backgroundColor: colors.surfaceSecondary, borderColor: colors.border }]}>
@@ -505,6 +281,8 @@ function TickerCard({
           </Text>
         </View>
       </View>
+
+      <ScoreExplainer t={t} colors={colors} />
     </View>
   );
 }
