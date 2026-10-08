@@ -1,11 +1,12 @@
-import React from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketDigest } from '@/hooks/queries/digest/useMarketDigest';
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { isMuseBriefContent, type MuseBriefContent, type MuseBriefTicker } from '@/common/types/marketDigest';
-import { setupLevels, topDrivers } from '@/common/components/digest/SetupChart';
+import { setupLevels, topDrivers, triggerDistancePct } from '@/common/components/digest/SetupChart';
+import { PickDetailSheet } from '@/common/components/digest/PickDetailSheet';
 
 type Colors = ReturnType<typeof useThemeColors>;
 
@@ -21,14 +22,14 @@ function todayISO(): string {
  */
 function PickRow({ t, price, colors, onPress }: { t: MuseBriefTicker; price?: number; colors: Colors; onPress: () => void }) {
   const dirColor = t.direction === 'CALL' ? colors.success : colors.error;
-  const { long, trigger, invalidation, target } = setupLevels(t);
+  const { trigger, invalidation, target } = setupLevels(t);
   const rr =
     trigger != null && target != null && invalidation != null && trigger !== invalidation
       ? Math.abs(target - trigger) / Math.abs(trigger - invalidation)
       : null;
   // Signed distance still to travel to the trigger, in the play's direction:
   // positive = not there yet, ≤ 0 = through it.
-  const toTrigger = price != null && trigger != null ? ((long ? trigger - price : price - trigger) / price) * 100 : null;
+  const toTrigger = triggerDistancePct(t, price);
   const through = toTrigger != null && toTrigger <= 0;
   const near = toTrigger != null && !through && toTrigger <= 0.3;
   const distColor = through ? dirColor : near ? colors.warning : colors.textTertiary;
@@ -142,7 +143,8 @@ function MarketStrip({ brief, vix, colors }: { brief: MuseBriefContent; vix: num
 /**
  * Dynamic card "brief" view: today's Morning Brief at a glance — regime,
  * top 4 TINDEX plays + top 4 Muse picks as compact brief-style rows.
- * Tap opens the full brief modal.
+ * Tapping a play opens its Pick Detail Sheet; "Open full" or a tap on the
+ * background around the cards opens the full brief modal.
  */
 export function DynamicBriefView({ onOpenBrief }: { onOpenBrief: () => void }) {
   const colors = useThemeColors();
@@ -152,6 +154,9 @@ export function DynamicBriefView({ onOpenBrief }: { onOpenBrief: () => void }) {
   // Live prices off the app-wide /ws/prices socket — no extra connections.
   const tickers = brief ? [...brief.watchlist.slice(0, 4), ...brief.muse_picks.slice(0, 4)].map((t) => t.ticker) : [];
   const { livePrices, vix } = useMarketStream(tickers, { enabled: tickers.length > 0 });
+  // Tapping a pick opens its detail sheet; "Open full" and taps on the
+  // background around the cards still open the full brief.
+  const [selected, setSelected] = useState<MuseBriefTicker | null>(null);
 
   const regimeColor =
     brief?.market.regime === 'risk-on'
@@ -161,12 +166,14 @@ export function DynamicBriefView({ onOpenBrief }: { onOpenBrief: () => void }) {
         : colors.warning;
 
   return (
+    <>
     <ScrollView
       style={{ flex: 1 }}
-      contentContainerStyle={{ padding: 14, paddingBottom: 26 }}
+      contentContainerStyle={{ flexGrow: 1 }}
       showsVerticalScrollIndicator={false}
       nestedScrollEnabled
     >
+      <Pressable onPress={onOpenBrief} style={{ flexGrow: 1, padding: 14, paddingBottom: 26 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Text style={[styles.mono, { fontSize: 10, letterSpacing: 2, color: colors.textTertiary }]}>
           MORNING BRIEF
@@ -203,7 +210,7 @@ export function DynamicBriefView({ onOpenBrief }: { onOpenBrief: () => void }) {
             TOP TINDEX PLAYS
           </Text>
           {brief.watchlist.slice(0, 4).map((t) => (
-            <PickRow key={t.ticker} t={t} price={livePrices[t.ticker]} colors={colors} onPress={onOpenBrief} />
+            <PickRow key={t.ticker} t={t} price={livePrices[t.ticker]} colors={colors} onPress={() => setSelected(t)} />
           ))}
 
           {brief.muse_picks.length > 0 && (
@@ -212,13 +219,16 @@ export function DynamicBriefView({ onOpenBrief }: { onOpenBrief: () => void }) {
                 MUSE PICKS
               </Text>
               {brief.muse_picks.slice(0, 4).map((t) => (
-                <PickRow key={t.ticker} t={t} price={livePrices[t.ticker]} colors={colors} onPress={onOpenBrief} />
+                <PickRow key={t.ticker} t={t} price={livePrices[t.ticker]} colors={colors} onPress={() => setSelected(t)} />
               ))}
             </>
           )}
         </>
       )}
+      </Pressable>
     </ScrollView>
+    <PickDetailSheet pick={selected} onClose={() => setSelected(null)} />
+    </>
   );
 }
 

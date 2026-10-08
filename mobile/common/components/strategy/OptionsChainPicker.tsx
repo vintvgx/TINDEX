@@ -51,6 +51,10 @@ interface Props {
   onChangePaperMode: (paper: boolean) => void;
   /** Called after a trade submission resolves (success or failure) — a toast has already been shown. */
   onSubmitted?: () => void;
+  /** Open straight onto this contract (side + expiration preselected, its
+   *  detail/Review sheet opened once the chain loads) — e.g. the Pick
+   *  Detail Sheet's "Review $140P". Applied once per mount. */
+  initialContract?: { symbol: string; side: OptionSide; expiration: string };
 }
 
 // ── Expiration range ──────────────────────────────────────────────────────────
@@ -153,9 +157,9 @@ const asOpportunity = (c: OptionsContract): OptionsOpportunity => ({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChangePaperMode, onSubmitted }: Props) {
+export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChangePaperMode, onSubmitted, initialContract }: Props) {
   const toast = useToast();
-  const [side, setSide]                 = useState<OptionSide>('CALL');
+  const [side, setSide]                 = useState<OptionSide>(initialContract?.side ?? 'CALL');
   const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
   const [selected, setSelected]         = useState<OptionsContract | null>(null);
   const [qty, setQty]                   = useState(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], 0));
@@ -211,7 +215,9 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
 
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
 
-  const [expirationRange, setExpirationRange] = useState<ExpirationRange>('2W');
+  const [expirationRange, setExpirationRange] = useState<ExpirationRange>(
+    initialContract && initialContract.expiration > addDays(today, RANGE_WINDOW_DAYS['2W'].lte) ? '3M' : '2W',
+  );
   const rangeWindow = RANGE_WINDOW_DAYS[expirationRange];
   const rangeGte = useMemo(() => addDays(today, rangeWindow.gte), [today, rangeWindow.gte]);
   const rangeLte = useMemo(() => addDays(today, rangeWindow.lte), [today, rangeWindow.lte]);
@@ -244,6 +250,14 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   useEffect(() => {
     setManualExpiration(null);
   }, [ticker, expirationRange]);
+
+  // initialContract: pin its expiration. Declared after the reset above so
+  // the mount-time reset runs first and this wins.
+  const initialApplied = useRef(false);
+  useEffect(() => {
+    if (initialContract) setManualExpiration(initialContract.expiration);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const targetExpiration = useMemo(() => {
     if (manualExpiration && availableExpirations.includes(manualExpiration)) {
@@ -304,6 +318,17 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
 
   const chain        = data?.success ? data.data : null;
   const currentPrice = chain?.current_price ?? 0;
+
+  // initialContract: open its detail sheet once the chain has it.
+  useEffect(() => {
+    if (!initialContract || initialApplied.current || !chain) return;
+    const list = initialContract.side === 'CALL' ? chain.calls : chain.puts;
+    const match = list.find(c => c.symbol === initialContract.symbol);
+    if (match) {
+      initialApplied.current = true;
+      setSelected(match);
+    }
+  }, [chain, initialContract]);
 
   const sideContracts = useMemo(() => {
     if (!chain) return [];

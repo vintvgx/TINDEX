@@ -26,6 +26,8 @@ const MONO = 'monospace';
 const LIVE_BLUE = '#4DA3FF';
 const VB_W = 360;
 const VB_H = 262;
+/** Pick Detail Sheet variant — ~190px tall at phone width. */
+const SHEET_VB_H = 196;
 const X_L = 4;
 /** Right edge of the plot; everything past it is the price axis. */
 const X_R = 298;
@@ -95,17 +97,39 @@ export function setupLevels(t: MuseBriefTicker) {
   return { long, trigger, invalidation, target, zone };
 }
 
+/**
+ * Distance still to travel to the trigger, as % of the trigger, signed in the
+ * play's direction: > 0 = not there yet, ≤ 0 = through it. Shared by the
+ * digest card and the Pick Detail Sheet so both always agree on the status.
+ */
+export function triggerDistancePct(t: MuseBriefTicker, price: number | null | undefined): number | null {
+  const { long, trigger } = setupLevels(t);
+  if (price == null || trigger == null || trigger <= 0) return null;
+  return ((long ? trigger - price : price - trigger) / trigger) * 100;
+}
+
 export function SetupChart({
   t,
   width,
   colors,
   bars,
+  livePrice,
+  variant = 'digest',
 }: {
   t: MuseBriefTicker;
   width: number;
   colors: Colors;
   bars: ReturnType<typeof useSetupSessionBars>['data'];
+  /** Streamed price — drives the live dot/tag instead of the last bar close. */
+  livePrice?: number | null;
+  /** 'sheet' (Pick Detail Sheet): shorter plot, faded yesterday, dashed amber
+   *  trigger line, no header/legend — the caller overlays its own tag. */
+  variant?: 'digest' | 'sheet';
 }) {
+  const sheet = variant === 'sheet';
+  const vbH = sheet ? SHEET_VB_H : VB_H;
+  const plotBot = vbH - (VB_H - PLOT_BOT);
+  const railBot = vbH - (VB_H - 254);
   // All chart geometry is derived inside one useMemo: with no live stream,
   // the inputs (brief payload + session bars) change rarely, so re-renders
   // from parent state churn stay cheap.
@@ -116,18 +140,19 @@ export function SetupChart({
 
     const yBars = downsample(bars?.yesterday ?? [], MAX_CANDLES);
     const tBars = downsample(bars?.today ?? [], MAX_CANDLES);
-    // "Current" price = last premarket bar close (no live stream on digest).
-    const last = tBars.length ? tBars[tBars.length - 1].c : yBars.length ? yBars[yBars.length - 1].c : null;
+    // "Current" price = the streamed price when given, else the last bar close.
+    const last =
+      livePrice ?? (tBars.length ? tBars[tBars.length - 1].c : yBars.length ? yBars[yBars.length - 1].c : null);
 
     // Shared price axis over everything drawn.
     const vals: number[] = [];
     for (const b of [...yBars, ...tBars]) vals.push(b.h, b.l);
-    for (const v of [res, sup, last, zone?.low, zone?.high]) if (v != null) vals.push(v);
+    for (const v of [res, sup, last, zone?.low, zone?.high, sheet ? trigger : null]) if (v != null) vals.push(v);
     const lo = vals.length ? Math.min(...vals) : 0;
     const hi = vals.length ? Math.max(...vals) : 1;
     const span = hi - lo || Math.max(hi * 0.01, 1);
     const pad = span * 0.06;
-    const y = (v: number) => PLOT_TOP + ((hi + pad - v) / (span + pad * 2)) * (PLOT_BOT - PLOT_TOP);
+    const y = (v: number) => PLOT_TOP + ((hi + pad - v) / (span + pad * 2)) * (plotBot - PLOT_TOP);
 
     // Candle geometry: yesterday fills its half; today gets slots for at least
     // 12 candles so a thin premarket doesn't stretch across the whole half.
@@ -176,38 +201,33 @@ export function SetupChart({
     const ticks: number[] = [];
     if (step > 0) {
       for (let v = Math.ceil((lo - pad) / step) * step; v <= hi + pad; v += step) {
-        if (y(v) > PLOT_TOP - 4 && y(v) < PLOT_BOT + 4) ticks.push(v);
+        if (y(v) > PLOT_TOP - 4 && y(v) < plotBot + 4) ticks.push(v);
       }
     }
     const tickDecimals = step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
 
     return { trigger, invalidation, target, zone, res, sup, yBars, tBars, last, y, yStep, tStep, liveX, arrows, tags, ticks, tickDecimals };
-  }, [t, bars, colors]);
+  }, [t, bars, colors, livePrice, sheet, plotBot]);
 
-  const { target, zone, res, sup, yBars, tBars, last, y, yStep, tStep, liveX, arrows, tags, ticks, tickDecimals } = geom;
+  const { trigger, target, zone, res, sup, yBars, tBars, last, y, yStep, tStep, liveX, arrows, tags, ticks, tickDecimals } = geom;
 
   const fmt = (v: number) => v.toFixed(2);
-  const candle = (b: SessionBar, x: number, w: number, key: string) => {
+  const candle = (b: SessionBar, x: number, w: number, key: string, opacity = 1) => {
     const col = b.c >= b.o ? colors.success : colors.error;
     const top = y(Math.max(b.o, b.c));
     const bot = y(Math.min(b.o, b.c));
     return (
       <React.Fragment key={key}>
-        <Line x1={x} x2={x} y1={y(b.h)} y2={y(b.l)} stroke={col} strokeWidth={1.2} />
-        <Rect x={x - w / 2} y={top} width={w} height={Math.max(1.5, bot - top)} rx={1} fill={col} />
+        <Line x1={x} x2={x} y1={y(b.h)} y2={y(b.l)} stroke={col} strokeWidth={1.2} opacity={opacity} />
+        <Rect x={x - w / 2} y={top} width={w} height={Math.max(1.5, bot - top)} rx={1} fill={col} opacity={opacity} />
       </React.Fragment>
     );
   };
 
-  const height = (width * VB_H) / VB_W;
+  const height = (width * vbH) / VB_W;
 
-  return (
-    <View style={[styles.block, { backgroundColor: colors.background, borderColor: colors.border }]}>
-      <View style={styles.head}>
-        <Text style={[styles.headText, { color: colors.textTertiary }]}>SETUP CHART</Text>
-      </View>
-
-      <Svg width={width} height={height} viewBox={`0 0 ${VB_W} ${VB_H}`}>
+  const svg = (
+      <Svg width={width} height={height} viewBox={`0 0 ${VB_W} ${vbH}`}>
         {ticks.map((v) => (
           <Line key={`g${v}`} x1={X_L} x2={X_R} y1={y(v)} y2={y(v)} stroke={colors.border} strokeWidth={0.6} opacity={0.5} />
         ))}
@@ -232,9 +252,16 @@ export function SetupChart({
           </>
         )}
 
-        <Line x1={MID} x2={MID} y1={8} y2={254} stroke={colors.border} strokeWidth={1} strokeDasharray="3 3" />
-        <SvgText x={10} y={22} fill={colors.textTertiary} fontSize={9} letterSpacing={1.5}>YESTERDAY</SvgText>
-        <SvgText x={MID + 9} y={22} fill={colors.textTertiary} fontSize={9} letterSpacing={1.5}>TODAY</SvgText>
+        <Line x1={MID} x2={MID} y1={8} y2={railBot} stroke={colors.border} strokeWidth={1} strokeDasharray="3 3" />
+        {!sheet && (
+          <>
+            <SvgText x={10} y={22} fill={colors.textTertiary} fontSize={9} letterSpacing={1.5}>YESTERDAY</SvgText>
+            <SvgText x={MID + 9} y={22} fill={colors.textTertiary} fontSize={9} letterSpacing={1.5}>TODAY</SvgText>
+          </>
+        )}
+        {sheet && trigger != null && (
+          <Line x1={X_L} x2={X_R} y1={y(trigger)} y2={y(trigger)} stroke={colors.warning} strokeWidth={1.3} strokeDasharray="5 4" />
+        )}
 
         {last != null && (
           <Line x1={X_L} x2={X_R} y1={y(last)} y2={y(last)} stroke={LIVE_BLUE} strokeWidth={1} strokeDasharray="3 3" opacity={0.3} />
@@ -247,13 +274,13 @@ export function SetupChart({
           </React.Fragment>
         ))}
 
-        {yBars.map((b, i) => candle(b, 12 + yStep * (i + 0.5), Math.max(1.5, Math.min(7.5, yStep * 0.65)), `y${i}`))}
+        {yBars.map((b, i) => candle(b, 12 + yStep * (i + 0.5), Math.max(1.5, Math.min(7.5, yStep * 0.65)), `y${i}`, sheet ? 0.4 : 1))}
         {tBars.map((b, i) => candle(b, MID + 10 + tStep * (i + 0.5), Math.max(2, Math.min(11, tStep * 0.6)), `t${i}`))}
 
         {last != null && <Circle cx={liveX} cy={y(last)} r={4.5} fill={LIVE_BLUE} />}
 
         {/* price axis */}
-        <Line x1={X_R} x2={X_R} y1={8} y2={254} stroke={colors.border} strokeWidth={1} />
+        <Line x1={X_R} x2={X_R} y1={8} y2={railBot} stroke={colors.border} strokeWidth={1} />
         {ticks.map((v) => (
           <React.Fragment key={`k${v}`}>
             {!tags.some((tg) => Math.abs(tg.tagY - y(v)) < TAG_H - 2) && (
@@ -276,11 +303,22 @@ export function SetupChart({
           </React.Fragment>
         ))}
         {!bars && (
-          <SvgText x={MID} y={(PLOT_TOP + PLOT_BOT) / 2} fill={colors.textTertiary} fontSize={10} textAnchor="middle">
+          <SvgText x={MID} y={(PLOT_TOP + plotBot) / 2} fill={colors.textTertiary} fontSize={10} textAnchor="middle">
             loading session…
           </SvgText>
         )}
       </Svg>
+  );
+
+  if (sheet) return svg;
+
+  return (
+    <View style={[styles.block, { backgroundColor: colors.background, borderColor: colors.border }]}>
+      <View style={styles.head}>
+        <Text style={[styles.headText, { color: colors.textTertiary }]}>SETUP CHART</Text>
+      </View>
+
+      {svg}
 
       <View style={styles.legend}>
         <LegendDot color={colors.textTertiary + '66'} label="Yesterday" colors={colors} />

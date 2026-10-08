@@ -18,6 +18,8 @@ export interface SessionBar {
   h: number;
   l: number;
   c: number;
+  /** Bar start, ET "HH:MM" — kept on today's bars only. */
+  hhmm?: string;
 }
 
 export interface SetupSessionBars {
@@ -27,7 +29,7 @@ export interface SetupSessionBars {
   priorLow: number | null;
 }
 
-const INTERVAL = "15m";
+export const SETUP_BARS_INTERVAL = "15m";
 
 function etToday(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
@@ -58,7 +60,7 @@ export function splitSessions(d: TickerHistoryData, today: string): SetupSession
   const yesterday = bars
     .filter((b) => b.day === priorDay && b.hhmm >= "09:30" && b.hhmm < "16:00")
     .map(strip);
-  const todayBars = bars.filter((b) => b.day === today).map(strip);
+  const todayBars = bars.filter((b) => b.day === today).map((b) => ({ ...strip(b), hhmm: b.hhmm }));
   return {
     yesterday,
     today: todayBars,
@@ -80,7 +82,7 @@ export function useSetupSessionBars(ticker: string, enabled = true) {
         // Backend window is [start, end) — end tomorrow to include today.
         // A week back always reaches the prior session across weekends and
         // holidays.
-        body: JSON.stringify({ interval: INTERVAL, start: addDays(today, -7), end: addDays(today, 1), extended_hours: true }),
+        body: JSON.stringify({ interval: SETUP_BARS_INTERVAL, start: addDays(today, -7), end: addDays(today, 1), extended_hours: true }),
         signal: controller.signal,
       }).finally(() => clearTimeout(timeoutId));
       if (!res.ok) throw new Error(`setup bars ${res.status}`);

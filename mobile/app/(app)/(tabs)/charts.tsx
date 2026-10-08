@@ -28,6 +28,7 @@ import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQu
 import { useLazyTickerHistory } from '@/hooks/queries/ticker/useLazyTickerHistory';
 import { useChartInterval, useSetChartIntervalFor } from '@/hooks/useChartInterval';
 import type { TickerStatus } from '@/common/components/ticker/TickerWheel';
+import { LiveAccountStrip } from '@/common/components/ticker/LiveAccountStrip';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
 import { useMarketStream } from '@/hooks/useMarketStream';
@@ -648,10 +649,10 @@ export function ChartsContent({ initialTicker, topInset }: {
   // background runs to the screen edge — a SafeAreaView left an empty band
   // under the toolbar, and that height now goes to the chart instead.
   const safeInsets = useSafeAreaInsets();
-  // Mostly reclaimed: the toolbar sits just above the home indicator
-  // (TradingView-style) instead of leaving the full ~34px inset as an empty
-  // band under it — that height goes to the chart. Keeps ~8px so the
-  // toolbar's content clears the indicator itself.
+  // Mostly reclaimed: the bottom-most element (the live account strip) sits
+  // just above the home indicator instead of leaving the full ~34px inset as
+  // an empty band. The strip itself gives the ticker wheel thumb room above
+  // the screen edge so vertical drags don't slide off.
   const bottomInset = Math.max(safeInsets.bottom - 26, 2);
 
   return (
@@ -780,7 +781,6 @@ export function ChartsContent({ initialTicker, topInset }: {
         activeTicker={activeTicker}
         onSelectTicker={setSelectedTicker}
         onSearchPress={() => setSearchOpen(true)}
-        bottomInset={expanded ? 0 : bottomInset}
         isFollowed={isActiveFollowed}
         onToggleFollow={handleToggleFollow}
         period={period}
@@ -812,9 +812,11 @@ export function ChartsContent({ initialTicker, topInset }: {
             ticker={activeTicker}
             onLiveUpdate={handlePositionLiveUpdate}
           />
-          <View style={{ height: bottomInset, backgroundColor: colors.background }} />
         </>
       )}
+
+      {/* Live account summary — always the bottom-most element. */}
+      <LiveAccountStrip bottomInset={bottomInset} />
 
       <SearchBottomSheet
         visible={searchOpen}
