@@ -88,7 +88,7 @@ function attributeSource(stack: string | undefined): string {
     const m = f.match(/at ([A-Za-z_$][\w$]*)/);
     if (!m) continue;
     const name = m[1];
-    if (name === 'attributeSource' || name === 'patchedFetch' || name === 'recordEntry') continue;
+    if (name === 'attributeSource' || name === 'patchedFetch' || name === 'recordEntry' || name === 'TrackedWebSocket') continue;
     if (/^(Object|Array|Promise|React|__)/.test(name)) continue;
     if (/^use[A-Z]/.test(name)) return name; // hook — most precise
     if (/^[A-Z]/.test(name)) return name; // component
