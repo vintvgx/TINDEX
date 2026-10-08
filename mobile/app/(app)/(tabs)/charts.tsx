@@ -227,8 +227,13 @@ export function ChartsContent({ initialTicker, topInset }: {
     return () => clearTimeout(t);
   }, [tabFocused]);
 
+  // Legacy engine's data — only when the legacy engine is actually showing.
+  // Gated on chartLive alone, it fetched full history (and re-polled every
+  // 30s on 1D) behind TVChart's back and threw it away: two /history calls
+  // per Charts view (polling audit 2026-10-07, §3.7).
   const { data: legacyHistoryResponse, isLoading: legacyHistoryLoading, isPlaceholderData: legacyHistoryIsStale } = useTickerHistoryQuery(
-    activeTicker, period, period === '1D' ? 30_000 : undefined, chartInterval, displayPrefs.showExtendedHours, chartLive,
+    activeTicker, period, period === '1D' ? 30_000 : undefined, chartInterval, displayPrefs.showExtendedHours,
+    chartLive && !useTVChart,
   );
   const legacyHistoryData = legacyHistoryResponse?.data;
   // Lazy history for the TV chart: the period is only the initial viewport,

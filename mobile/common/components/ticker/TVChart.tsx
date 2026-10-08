@@ -157,6 +157,8 @@ const TV_ORB_EDGE = '#B2B5BE';
 /** Bar length per history interval — drives live-candle bucketing. */
 const INTERVAL_SECONDS: Record<string, number> = { '1m': 60, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600 };
 const SESSION_OPEN_MIN = 9 * 60 + 30;
+/** Live ticks are coalesced to at most one per this many ms (see tickPrice). */
+const TICK_MIN_MS = 500;
 const SESSION_CLOSE_MIN = 16 * 60;
 
 /** ET calendar date + minute-of-day + second-of-day for a unix time.
@@ -342,12 +344,40 @@ export function TVChart({
   // $774), blowing out the price scale.
   const liveKey = `${resetKey ?? ''}|${data?.interval ?? ''}`;
   const [liveBar, setLiveBar] = useState<(TVCandle & { k: string }) | null>(null);
+
+  // Ticks are coalesced to at most one per TICK_MIN_MS (trailing value
+  // kept): the stream can deliver ~4/s, but a candle moving 2×/s reads as
+  // live, and every processed tick re-runs the bar/ORB/overlay chain on the
+  // JS thread (polling audit 2026-10-07, phone thermal).
+  const [tickPrice, setTickPrice] = useState<number | null | undefined>(livePrice);
+  const lastTickAt = useRef(0);
+  const pendingTick = useRef<number | null | undefined>(undefined);
+  const tickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const now = Date.now();
+    const wait = lastTickAt.current + TICK_MIN_MS - now;
+    if (wait <= 0) {
+      lastTickAt.current = now;
+      setTickPrice(livePrice);
+      return;
+    }
+    pendingTick.current = livePrice;
+    if (!tickTimer.current) {
+      tickTimer.current = setTimeout(() => {
+        tickTimer.current = null;
+        lastTickAt.current = Date.now();
+        setTickPrice(pendingTick.current);
+      }, wait);
+    }
+  }, [livePrice]);
+  useEffect(() => () => { if (tickTimer.current) clearTimeout(tickTimer.current); }, []);
+
   useEffect(() => {
     // Not before the chart exists: the forming bar catches up from the next
     // tick, and ticks during the handshake only compete with it for the JS
     // thread.
     if (!chartReady) return;
-    if (livePrice == null || !isFinite(livePrice) || livePrice <= 0 || !baseCandles?.length) return;
+    if (tickPrice == null || !isFinite(tickPrice) || tickPrice <= 0 || !baseCandles?.length) return;
     if (!barSec && !isDailyBars) return;
     const now = Math.floor(Date.now() / 1000);
     const et = etParts(now);
@@ -363,7 +393,7 @@ export function TVChart({
       if (etParts(baseLast.t).date !== et.date) return;
       bucket = baseLast.t;
     }
-    const p = livePrice;
+    const p = tickPrice;
     const k = liveKey;
     setLiveBar(prev => {
       if (bucket < baseLast.t) return null; // history already past this bar
@@ -375,7 +405,7 @@ export function TVChart({
       }
       return { t: bucket, o: p, h: p, l: p, c: p, v: 0, k };
     });
-  }, [chartReady, livePrice, baseCandles, barSec, isDailyBars, liveKey]);
+  }, [chartReady, tickPrice, baseCandles, barSec, isDailyBars, liveKey]);
 
   // ── Hot path vs. cold path ─────────────────────────────────────────
   // Like TradingView, a tick must only move the forming bar. Everything
@@ -521,8 +551,22 @@ export function TVChart({
     return { intraday, days };
   }, [showOrbRange, baseCandles]);
 
+  // A tick can only change the ORB boxes by opening a new bar (today's box
+  // end moves) or, during 09:30–09:45, by moving the forming range's
+  // high/low. Key on exactly that, so most ticks don't rebuild every day's
+  // box (and the ref lines that read them) just to send nothing.
+  const orbTailKey = (() => {
+    if (!liveTail) return '';
+    const mins = etParts(liveTail.t).mins;
+    const forming = mins >= 570 && mins < 585;
+    return forming ? `${liveTail.t}|${liveTail.h}|${liveTail.l}` : `${liveTail.t}`;
+  })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const orbTail = useMemo(() => liveTail, [orbTailKey]);
+  const lastBarT = lastBar?.t ?? null;
+
   const orbBands: TVZoneBand[] = useMemo(() => {
-    if (!orbDays || !lastBar) return [];
+    if (!orbDays || lastBarT == null) return [];
     const box = (id: string, low: number, high: number, startTime: number | undefined, endTime: number | undefined): TVZoneBand => ({
       id, low, high, startTime, endTime,
       color: TV_UP, opacity: 0.18, edgeColor: TV_ORB_EDGE, edgeOpacity: 0.75,
@@ -530,17 +574,17 @@ export function TVChart({
     });
     if (!orbDays.intraday) {
       if (!orbRange) return [];
-      return [box('__orb__', orbRange.low, orbRange.high, undefined, lastBar.t)];
+      return [box('__orb__', orbRange.low, orbRange.high, undefined, lastBarT)];
     }
     let days = orbDays.days;
-    if (liveTail) {
-      const date = etParts(liveTail.t).date;
+    if (orbTail) {
+      const date = etParts(orbTail.t).date;
       const tail = days[days.length - 1];
       const d = tail && tail.date === date ? { ...tail } : newOrbDay(date);
-      foldOrbBar(d, liveTail);
+      foldOrbBar(d, orbTail);
       days = tail && tail.date === date ? [...days.slice(0, -1), d] : [...days, d];
     }
-    const todayKey = etParts(lastBar.t).date;
+    const todayKey = etParts(lastBarT).date;
     const bands: TVZoneBand[] = [];
     for (const d of days) {
       if (d.hi === -Infinity) continue;
@@ -557,7 +601,7 @@ export function TVChart({
       bands.push(box(`__orb__${d.date}`, low, high, d.startT, d.lastT));
     }
     return bands;
-  }, [orbDays, orbRange, liveTail, lastBar]);
+  }, [orbDays, orbRange, orbTail, lastBarT]);
 
   useEffect(() => {
     if (!chartReady) return;
@@ -565,7 +609,7 @@ export function TVChart({
   }, [chartReady, autoBands, watchBands, orbBands, send]);
 
   // ── Reference lines (ORB edges, session lines) ─────────────────────
-  const lastBarDate = lastBar ? etParts(lastBar.t).date : null;
+  const lastBarDate = lastBarT != null ? etParts(lastBarT).date : null;
   const refLines: TVRefLine[] = useMemo(() => {
     const lines: TVRefLine[] = [];
     // ORH/ORL axis tags follow today's box (live while it forms); daily
