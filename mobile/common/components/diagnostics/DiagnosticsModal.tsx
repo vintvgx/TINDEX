@@ -9,7 +9,7 @@ import {
   Share,
   Alert,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import {
@@ -132,7 +132,6 @@ function SocketRow({ socket, colors }: { socket: DiagSocket; colors: ReturnType<
 
 export function DiagnosticsModal({ visible, onClose }: DiagnosticsModalProps) {
   const colors = useThemeColors();
-  const insets = useSafeAreaInsets();
   const [filter, setFilter] = useState<Filter>('all');
   const [paused, setPaused] = useState(false);
   const [tab, setTab] = useState<'calls' | 'sockets'>('calls');
@@ -186,7 +185,10 @@ export function DiagnosticsModal({ visible, onClose }: DiagnosticsModalProps) {
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
       <StatusBar barStyle="light-content" />
-      <View style={{ flex: 1, backgroundColor: '#0A0B0F', paddingTop: insets.top }}>
+      {/* Modal renders in its own native window, so it needs its own provider
+          for insets to resolve — otherwise the header sits under the notch. */}
+      <SafeAreaProvider>
+      <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={{ flex: 1, backgroundColor: '#0A0B0F' }}>
         {/* header */}
         <View
           style={{
@@ -304,7 +306,6 @@ export function DiagnosticsModal({ visible, onClose }: DiagnosticsModalProps) {
             flexDirection: 'row',
             paddingHorizontal: 14,
             paddingVertical: 10,
-            paddingBottom: Math.max(10, insets.bottom),
             borderTopWidth: 1,
             borderTopColor: '#1f1f23',
             gap: 8,
@@ -329,7 +330,8 @@ export function DiagnosticsModal({ visible, onClose }: DiagnosticsModalProps) {
             <Text style={{ color: '#4ade80', fontSize: 12, fontFamily: 'monospace' }}>⤴ export</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   );
 }
