@@ -951,6 +951,16 @@
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 4,
+        // lightweight-charts v5 renders axis ticks in UTC — override so the
+        // axis matches the ET session data (America/New_York).
+        tickMarkFormatter: function (time, tickMarkType) {
+          if (typeof time === 'object' && time !== null) {
+            return time.month + '/' + time.day; // BusinessDay (daily bars)
+          }
+          var d = new Date(time * 1000);
+          if (tickMarkType === 3 || tickMarkType === 4) return etMinFmt.format(d);
+          return d.toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'numeric', day: 'numeric' });
+        },
       },
       crosshair: {
         mode: LWC.CrosshairMode.Normal,
