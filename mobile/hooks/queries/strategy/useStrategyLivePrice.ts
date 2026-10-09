@@ -128,6 +128,8 @@ export function useStrategyLivePrice(
   // Keep callback in a ref so changing it doesn't rebuild the WebSocket
   const onPositionClosedRef       = useRef(onPositionClosed);
   onPositionClosedRef.current     = onPositionClosed;
+  // Last few price updates, for display smoothing (see onmessage).
+  const recentRef                 = useRef<LivePriceData[]>([]);
 
   const wsUrl = strategyId
     ? RAILWAY_BASE_URL.replace(/^https?/, (s) => (s === 'https' ? 'wss' : 'ws'))
@@ -160,10 +162,31 @@ export function useStrategyLivePrice(
         const msg = JSON.parse(event.data as string);
         if (!mountedRef.current) return;
         if (msg.type === 'price_update') {
-          setData(msg as LivePriceData);
+          // Display smoothing: the price-derived fields come from the update
+          // whose mid is the MEDIAN of the last 3, so a one-tick spread blip
+          // ($0.30 → $0.36 → $0.30 on a 0DTE) doesn't flash the P&L; a real
+          // move shows by the second update. Everything else (tp1_hit, qty,
+          // stops, timers…) is always the newest. The server already
+          // coalesces to ≤3/s (polling audit A3).
+          const next = msg as LivePriceData;
+          const buf = [...recentRef.current, next].slice(-3);
+          recentRef.current = buf;
+          if (buf.length < 3) {
+            setData(next);
+          } else {
+            const med = [...buf].sort((a, b) => a.mid_price - b.mid_price)[1];
+            setData({
+              ...next,
+              mid_price: med.mid_price,
+              pnl: med.pnl,
+              pnl_pct: med.pnl_pct,
+              market_value: med.market_value,
+            });
+          }
         } else if (msg.type === 'pending_price_update') {
           setPendingPriceData(msg as PendingPriceUpdate);
         } else if (msg.type === 'position_closed') {
+          recentRef.current = [];
           setData(null);
           onPositionClosedRef.current?.();
         }
@@ -203,6 +226,7 @@ export function useStrategyLivePrice(
     attemptsRef.current = 0;
     wsRef.current?.close();
     wsRef.current = null;
+    recentRef.current = [];
     setConnected(false);
     setData(null);
     setPendingPriceData(null);

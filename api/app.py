@@ -41,7 +41,7 @@ price_stream.start()
 # market-data connection cap is per-USER, not per paper/live sub-account, so
 # the original paper key silently shared (and lost the race for) the same
 # account-wide slot OrbService's stream already held.
-from services.websocket.stock_chart_stream import chart_stream
+from services.websocket.stock_chart_stream import chart_stream, LatestPriceMailbox
 
 # Single shared Alpaca option-data-stream connection for the whole process.
 # Constructed here (module scope, before the ORB engine's try/except below)
@@ -189,25 +189,20 @@ def ws_chart_live(ws, ticker: str):
     specifically so it can never contend with that one for the account-wide
     market-data connection slot (see the import comment above).
     """
-    import queue as _queue
-
     symbol = ticker.upper()
-    client_q: _queue.Queue = _queue.Queue(maxsize=20)
-
-    def _on_price(price: float):
-        try:
-            client_q.put_nowait(json.dumps({"type": "price_update", "price": price}))
-        except _queue.Full:
-            pass
+    # Latest-price slot, sent at most 4x/s — not one message per trade (see
+    # LatestPriceMailbox).
+    mailbox = LatestPriceMailbox(min_interval=0.25)
+    _on_price = mailbox.put
 
     chart_stream.subscribe(symbol, _on_price)
     try:
         while True:
-            try:
-                payload = client_q.get(timeout=30)
-                ws.send(payload)
-            except _queue.Empty:
+            price = mailbox.next(timeout=30)
+            if price is None:
                 ws.send(json.dumps({"type": "ping"}))
+            else:
+                ws.send(json.dumps({"type": "price_update", "price": price}))
     except Exception as exc:
         logger.debug("[WS/chart] client disconnected: %s", exc)
     finally:

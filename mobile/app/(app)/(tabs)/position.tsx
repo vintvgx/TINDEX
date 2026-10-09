@@ -73,22 +73,29 @@ export default function PositionScreen({ embedded = false }: Props) {
   // badged LIVE/PAPER, instead of a toggle between the two lists.
   const liveSide = useLivePositionsData('live');
   const paperSide = useLivePositionsData('paper');
+  // The hook returns a fresh object every render, so fan-out callbacks must
+  // depend on its (stable) inner callbacks — otherwise each card's
+  // onLiveUpdate effect refires every render and setStates in a loop.
+  const { handleLiveUpdate: liveHandleLiveUpdate, setShowHidden: liveSetShowHidden } = liveSide;
+  const { handleLiveUpdate: paperHandleLiveUpdate, setShowHidden: paperSetShowHidden } = paperSide;
+  const combinedHandleLiveUpdate = useCallback<UseLivePositionsDataResult['handleLiveUpdate']>((id, d) => {
+    liveHandleLiveUpdate(id, d);
+    paperHandleLiveUpdate(id, d);
+  }, [liveHandleLiveUpdate, paperHandleLiveUpdate]);
+  const combinedSetShowHidden = useCallback<UseLivePositionsDataResult['setShowHidden']>((v) => {
+    liveSetShowHidden(v);
+    paperSetShowHidden(v);
+  }, [liveSetShowHidden, paperSetShowHidden]);
   const combinedData: UseLivePositionsDataResult = useMemo(() => ({
     isLoading: liveSide.isLoading || paperSide.isLoading,
     filteredPositions: [...liveSide.filteredPositions, ...paperSide.filteredPositions],
     displayedPositions: [...liveSide.displayedPositions, ...paperSide.displayedPositions],
     hiddenCount: liveSide.hiddenCount + paperSide.hiddenCount,
     showHidden: liveSide.showHidden,
-    setShowHidden: (v) => {
-      liveSide.setShowHidden(v);
-      paperSide.setShowHidden(v);
-    },
+    setShowHidden: combinedSetShowHidden,
     liveByStrategy: { ...liveSide.liveByStrategy, ...paperSide.liveByStrategy },
-    handleLiveUpdate: (id, d) => {
-      liveSide.handleLiveUpdate(id, d);
-      paperSide.handleLiveUpdate(id, d);
-    },
-  }), [liveSide, paperSide]);
+    handleLiveUpdate: combinedHandleLiveUpdate,
+  }), [liveSide, paperSide, combinedSetShowHidden, combinedHandleLiveUpdate]);
 
   const positionsBody = (
     <BriefPositionsBody

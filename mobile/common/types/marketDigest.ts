@@ -148,9 +148,15 @@ export interface MuseBriefLevels {
 export interface MuseBriefTicker {
   ticker: string;
   score: number;
-  /** Flat { component: points } — bars render each component's share of score. */
+  /** Flat { component: points } — the card's "What goes into the score?"
+   *  explainer and "Why this setup" line read these. */
   components: Record<string, number>;
   direction: 'CALL' | 'PUT';
+  /** Trigger / target prices (published briefs; absent on older ones). */
+  trigger?: number;
+  target?: number;
+  /** Target zone bounds — the setup chart's target band. */
+  target_zone?: { low: number; high: number } | null;
   setup: string;
   if_then: string;
   invalidation: string;

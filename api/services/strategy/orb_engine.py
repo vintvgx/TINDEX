@@ -37,6 +37,13 @@ ET = pytz.timezone("America/New_York")
 # Technicals gate runs on its own small pool so ORBEngine._check_technicals_gate
 # can cap how long an entry (evaluated under _tick_lock) waits on market data.
 TECHNICALS_GATE_TIMEOUT_S = 4.0
+
+# /ws/strategy/<id>/live fan-out: at most one price message per kind per
+# this interval (trailing edge — the latest price after a burst is always
+# delivered), and identical payloads are skipped. Option quotes arrive
+# dozens/sec on 0DTE; forwarding each one strobed the app's P&L and pegged
+# the phone (polling audit 2026-10-07, A3). Exit logic still sees every tick.
+LIVE_PUSH_MIN_INTERVAL_S = 1 / 3
 _GATE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="tech-gate")
 
 # Every constructed ORBEngine self-registers here (see _apply_config), keyed
@@ -296,6 +303,9 @@ class ORBEngine:
         # Fan-out queues for /ws/strategy/<id>/live WebSocket clients
         self._live_clients: list     = []
         self._live_clients_lock      = __import__("threading").Lock()
+        # Throttle state per message kind — see _publish_live.
+        self._live_push: dict        = {}
+        self._live_push_lock         = threading.Lock()
         # ── Session-level risk management ─────────────────────────────────────────
         # Cumulative realized P&L for this trading day across all trades.
         self._session_realized_pnl:   float = 0.0
@@ -2138,13 +2148,21 @@ class ORBEngine:
         appends without de-duplication, which would otherwise fire every tick
         twice once _execute_entry does its own normal post-entry subscribe.
         """
-        import json as _json
-        pc = self._pending_confirmation
-        if not pc:
+        if not self._pending_confirmation:
             return
         self._pending_last_price = mid
+        self._publish_live("pending_price_update", self._build_pending_payload)
+
+    def _build_pending_payload(self) -> "str | None":
+        """pending_price_update JSON from the CURRENT pending state (built at
+        send time, so a throttled/trailing send never carries a stale price)."""
+        import json as _json
+        pc = self._pending_confirmation
+        mid = self._pending_last_price
+        if not pc or mid is None:
+            return None
         hard_stop, tp1, tp2 = compute_exit_levels(mid, pc["_effective_profile"])
-        payload = _json.dumps({
+        return _json.dumps({
             "type":              "pending_price_update",
             "pending_id":        pc["id"],
             "contract":          pc["contract_symbol"],
@@ -2153,12 +2171,62 @@ class ORBEngine:
             "tp1_preview":       round(tp1, 4),
             "tp2_preview":       round(tp2, 4) if tp2 is not None else None,
         })
+
+    # ── Live WebSocket fan-out (throttled) ─────────────────────────────────────
+
+    def _fanout_live(self, payload: str) -> None:
         with self._live_clients_lock:
             for q in list(self._live_clients):
                 try:
                     q.put_nowait(payload)
                 except Exception:
                     pass
+
+    def _publish_live(self, kind: str, build) -> None:
+        """
+        Throttled fan-out of a coalescible message `kind` (price/pending
+        updates): at most one per LIVE_PUSH_MIN_INTERVAL_S; ticks inside the
+        window schedule ONE trailing send, which builds from the state current
+        at send time. Nothing is built when nobody is listening.
+        """
+        if not self._live_clients:
+            return
+        now = time.monotonic()
+        with self._live_push_lock:
+            st = self._live_push.setdefault(kind, {"at": float("-inf"), "last": None, "timer": None})
+            wait = st["at"] + LIVE_PUSH_MIN_INTERVAL_S - now
+            if wait > 0:
+                if st["timer"] is None:
+                    t = threading.Timer(wait, self._flush_live, args=(kind, build))
+                    t.daemon = True
+                    st["timer"] = t
+                    t.start()
+                return
+            st["at"] = now
+        self._send_live(kind, build)
+
+    def _flush_live(self, kind: str, build) -> None:
+        with self._live_push_lock:
+            st = self._live_push.get(kind)
+            if st is not None:
+                st["timer"] = None
+                st["at"] = time.monotonic()
+        self._send_live(kind, build)
+
+    def _send_live(self, kind: str, build) -> None:
+        try:
+            payload = build()
+        except Exception as ex:
+            logger.debug("[ORBEngine] live %s build failed: %s", kind, ex)
+            return
+        if payload is None:
+            return
+        with self._live_push_lock:
+            st = self._live_push.setdefault(kind, {"at": time.monotonic(), "last": None, "timer": None})
+            if payload == st["last"]:
+                return  # unchanged — nothing new to show
+            st["last"] = payload
+        self._fanout_live(payload)
 
     # ── Manual / conviction entry ───────────────────────────────────────────────
 
@@ -3038,7 +3106,6 @@ class ORBEngine:
         NOTE: Called from the OptionDataStream background thread — must be
         thread-safe and non-blocking.
         """
-        import json as _json
         self._current_option_price = mid
 
         # Drive exit logic — pass None for underlying if not yet polled.
@@ -3046,9 +3113,19 @@ class ORBEngine:
         # consolidation exits caused by stable option prices right after entry.
         self.on_price_tick(current_price=self._last_underlying_price, current_option_price=mid)
 
-        # Push live P&L to any connected WebSocket clients
+        # Push live P&L to connected /live WebSocket clients — throttled
+        # (see _publish_live); exit logic above still ran on this tick.
         if not self.trade_taken or not self.exit_manager:
             return
+        self._publish_live("price_update", self._build_price_payload)
+
+    def _build_price_payload(self) -> "str | None":
+        """price_update JSON from the CURRENT position state — built at send
+        time so a trailing (throttled) send carries the newest price."""
+        import json as _json
+        mid = self._current_option_price
+        if not self.trade_taken or not self.exit_manager or mid is None:
+            return None
         em = self.exit_manager
         entry_p = em.entry_premium or 0
         pnl          = (mid - entry_p) * em.qty_remaining * 100
@@ -3116,12 +3193,7 @@ class ORBEngine:
             "runner_mode":          em_state.get("runner_mode", "trail"),
             "cascade_enabled":      em_state.get("cascade_enabled", True),
         })
-        with self._live_clients_lock:
-            for q in list(self._live_clients):
-                try:
-                    q.put_nowait(payload)
-                except Exception:
-                    pass
+        return payload
 
     def _skip(self, reason: str):
         """

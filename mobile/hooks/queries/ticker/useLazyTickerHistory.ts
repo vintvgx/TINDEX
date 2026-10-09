@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RAILWAY_BASE_URL } from "@/lib/railway.config";
 import { PricePeriod, TickerHistoryData } from "@/common/types/blogPosts/ticker";
+import { DEFAULT_INTERVAL } from "@/lib/chartIntervals";
 
 /**
  * Lazy-loading chart history for the TradingView chart.
@@ -9,7 +10,8 @@ import { PricePeriod, TickerHistoryData } from "@/common/types/blogPosts/ticker"
  * bounded by it. For intraday intervals the initial fetch is a ~3-month
  * windowed call (or as much as Yahoo serves for that bar size) (POST /ticker/<ticker>/history {interval, start, end}),
  * and `loadMore()` backfills older windows as the user pans left. Daily+
- * intervals keep the existing period fetch (they already span years).
+ * bars load one range "tier" above the selected period (1M → 1Y, 1Y → 5Y,
+ * …) through the same windowed call, and backfill on pan the same way.
  *
  * Bars merge by timestamp (dedupe + ascending sort), so the tail poll,
  * backfills and the initial load all fold into one growing array that the
@@ -20,12 +22,21 @@ const INTRADAY = new Set(["1m", "5m", "15m", "30m", "1h"]);
 // Initial load sizes in days: ~3 months where Yahoo has it. 5m/15m/30m
 // only exist for the last ~60 days and 1m for ~7 (backend caps match), so
 // those load everything available.
-const INITIAL_DAYS: Record<string, number> = { "1m": 7, "5m": 60, "15m": 60, "30m": 60, "1h": 92 };
-// Daily+ bars load by period — never less than 3 months up front.
-const MIN_DAILY_PERIOD: Partial<Record<PricePeriod, PricePeriod>> = { "1D": "3M", "1W": "3M", "1M": "3M" };
-// Backfill chunk sizes in days — at or below the backend's Yahoo caps
-// (5m/15m/30m ~60d, 1m ~7d, 1h ~730d).
-const BACKFILL_DAYS: Record<string, number> = { "1m": 7, "5m": 55, "15m": 55, "30m": 55, "1h": 120 };
+// 1h loads a full year (the 1M range's "one tier up"); Yahoo serves ~730d.
+const INITIAL_DAYS: Record<string, number> = { "1m": 7, "5m": 60, "15m": 60, "30m": 60, "1h": 365 };
+// Daily+ bars: the initial window is one range tier above the selected
+// period, so there's context to the left from the first paint — and pan-
+// back keeps loading older windows after that.
+const DAILY_INITIAL_DAYS: Partial<Record<PricePeriod, number>> = {
+  "1M": 365, "3M": 365, YTD: 365, "1Y": 5 * 365, "5Y": 10 * 365,
+};
+// Backfill chunk sizes in days — at or below the backend's per-window caps
+// (5m/15m/30m ~60d, 1m ~7d, 1h ~730d, daily+ ~3650d).
+const BACKFILL_DAYS: Record<string, number> = {
+  "1m": 7, "5m": 55, "15m": 55, "30m": 55, "1h": 120,
+  "1d": 730, "1wk": 5 * 365, "1mo": 3650,
+};
+const WINDOW_CAP_DAYS: Record<string, number> = { "1d": 3650, "1wk": 3650, "1mo": 3650 };
 // Staged intraday load: pause between painting stage 1 and the backfill.
 const STAGE2_DELAY_MS = 1_200;
 
@@ -101,6 +112,51 @@ function mergeHistory(
   incoming: TickerHistoryData,
   sessionFromIncoming = false,
 ): TickerHistoryData {
+  // Fast path — the 30s tail poll: incoming only covers the newest day(s).
+  // Keep the untouched head as-is and full-merge just the overlapping tail,
+  // instead of de-duping and re-sorting all ~3,000 bars every poll.
+  const cd = current.dates;
+  if (cd.length > 1 && incoming.dates.length && incoming.dates[0] > cd[0]) {
+    let lo = 0, hi = cd.length; // first index with date >= incoming.dates[0]
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cd[mid] < incoming.dates[0]) lo = mid + 1; else hi = mid;
+    }
+    if (lo > 0) {
+      const tail = mergeFull(sliceHistory(current, lo), incoming, sessionFromIncoming);
+      return {
+        dates: cd.slice(0, lo).concat(tail.dates),
+        prices: current.prices.slice(0, lo).concat(tail.prices),
+        volumes: (current.volumes ?? []).slice(0, lo).concat(tail.volumes),
+        opens: (current.opens ?? current.prices).slice(0, lo).concat(tail.opens ?? []),
+        highs: (current.highs ?? current.prices).slice(0, lo).concat(tail.highs ?? []),
+        lows: (current.lows ?? current.prices).slice(0, lo).concat(tail.lows ?? []),
+        interval: current.interval ?? incoming.interval,
+        session_lines: tail.session_lines,
+      };
+    }
+  }
+  return mergeFull(current, incoming, sessionFromIncoming);
+}
+
+/** Bars [from, end) of `d` (same shape). */
+function sliceHistory(d: TickerHistoryData, from: number): TickerHistoryData {
+  return {
+    ...d,
+    dates: d.dates.slice(from),
+    prices: d.prices.slice(from),
+    volumes: (d.volumes ?? []).slice(from),
+    opens: d.opens?.slice(from),
+    highs: d.highs?.slice(from),
+    lows: d.lows?.slice(from),
+  };
+}
+
+function mergeFull(
+  current: TickerHistoryData,
+  incoming: TickerHistoryData,
+  sessionFromIncoming = false,
+): TickerHistoryData {
   const a = incoming;
   const b = current;
   const seen = new Set<string>();
@@ -145,7 +201,7 @@ export interface LazyHistory {
   data: TickerHistoryData | null;
   isLoading: boolean;
   isError: boolean;
-  /** Backfill the next older window. No-op when not intraday, already
+  /** Backfill the next older window. No-op when already
    *  loading, or history is exhausted. */
   loadMore: () => void;
   loadingMore: boolean;
@@ -260,9 +316,12 @@ export function useLazyTickerHistory(opts: {
           setIsLoading(false);
           loadedKey.current = key;
         } else {
-          const fetchPeriod = MIN_DAILY_PERIOD[period] ?? period;
-          const data = await postHistoryRetry(ticker, { period: fetchPeriod, ...(interval ? { interval } : {}),
-            ...(extendedHours ? { extended_hours: true } : {}) }, ctrl.signal);
+          // Daily+ bars: a windowed fetch one range tier up (see
+          // DAILY_INITIAL_DAYS), which loadMore() then extends to the left.
+          const iv = interval ?? DEFAULT_INTERVAL[period];
+          const end = addDays(etToday(), 1);
+          const days = Math.min(DAILY_INITIAL_DAYS[period] ?? 365, WINDOW_CAP_DAYS[iv] ?? 3650);
+          const data = await postHistoryRetry(ticker, { interval: iv, start: addDays(end, -days), end }, ctrl.signal);
           if (!dead) {
             setBars(data);
             setIsLoading(false);
@@ -289,18 +348,18 @@ export function useLazyTickerHistory(opts: {
   // ── Backfill ──────────────────────────────────────────────────────
   const loadMore = useCallback(() => {
     const s = live.current;
-    if (!enabled || !intraday || s.loadingMore || s.exhausted || !s.bars?.dates?.length) return;
+    if (!enabled || !interval || s.loadingMore || s.exhausted || !s.bars?.dates?.length) return;
     const myGen = gen.current;
     setLoadingMore(true);
     (async () => {
       try {
         const oldest = s.bars!.dates[0].slice(0, 10);
-        const chunk = BACKFILL_DAYS[interval!] ?? 55;
+        const chunk = BACKFILL_DAYS[interval] ?? 55;
         const data = await postHistory(ticker, {
           interval,
           start: addDays(oldest, -chunk),
           end: oldest,
-          ...(extendedHours ? { extended_hours: true } : {}),
+          ...(intraday && extendedHours ? { extended_hours: true } : {}),
         });
         // Ticker/period/interval moved on mid-flight: this window belongs to
         // the old one. Drop it — a 400 here must not mark the NEW ticker
