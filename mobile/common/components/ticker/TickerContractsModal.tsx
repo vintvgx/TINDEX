@@ -14,6 +14,8 @@ interface Props {
    *  treated as "assume yes" so the chain isn't hidden behind a flash of the
    *  empty state on every open. */
   hasOptions?: boolean;
+  /** Open straight onto this contract's detail/Review sheet. */
+  initialContract?: { symbol: string; side: 'CALL' | 'PUT'; expiration: string };
 }
 
 /**
@@ -24,20 +26,20 @@ interface Props {
  * callers that aren't already inside a ticker detail sheet, e.g. the Charts
  * tab's "Contracts" button.
  */
-export function TickerContractsModal({ ticker, visible, onClose, hasOptions }: Props) {
+export function TickerContractsModal({ ticker, visible, onClose, hasOptions, initialContract }: Props) {
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="pageSheet">
       {/* Nested SafeAreaProvider — a bare RN Modal is a separate native view
           hierarchy that the outer SafeAreaProvider can't measure, so insets
           would otherwise silently come back as 0 (see MarketDigestModal). */}
       <SafeAreaProvider>
-        <ContractsModalContent ticker={ticker} onClose={onClose} hasOptions={hasOptions} />
+        <ContractsModalContent ticker={ticker} onClose={onClose} hasOptions={hasOptions} initialContract={initialContract} />
       </SafeAreaProvider>
     </Modal>
   );
 }
 
-function ContractsModalContent({ ticker, onClose, hasOptions }: Omit<Props, 'visible'>) {
+function ContractsModalContent({ ticker, onClose, hasOptions, initialContract }: Omit<Props, 'visible'>) {
   const colors = useThemeColors();
   const insets = useSafeAreaInsets();
   const [paperMode, setPaperMode] = useState(true);
@@ -96,6 +98,7 @@ function ContractsModalContent({ ticker, onClose, hasOptions }: Omit<Props, 'vis
             paperMode={paperMode}
             onChangePaperMode={setPaperMode}
             onSubmitted={onClose}
+            initialContract={initialContract}
           />
         </>
       )}

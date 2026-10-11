@@ -31,7 +31,14 @@ import "@/global.css";
 // Initialize log service early to capture all console logs
 import "@/common/services/LogService";
 
+// Install network/socket diagnostics (fetch + WebSocket patching)
+import "@/common/services/NetworkDiagnosticsService";
+import { networkDiagnostics } from "@/common/services/NetworkDiagnosticsService";
+// Activate fetch/WebSocket interception for the Diagnostics screen.
+networkDiagnostics.install();
+
 import LoadingScreen from "@/common/components/LoadingScreen";
+import { DiagnosticsScreenTracker } from "@/common/components/diagnostics/DiagnosticsScreenTracker";
 import { ToastProvider } from "@/common/components/ui/Toast";
 import { PendingConfirmationProvider } from "@/common/components/strategy/PendingConfirmationProvider";
 import { TickerSheetProvider } from "@/common/utils/context/ticker/TickerSheetProvider";
@@ -278,6 +285,7 @@ function AppContent() {
                 app immediately with "useMarketStream must be used within a
                 MarketStreamProvider". */}
             <TickerSheetProvider>
+              <DiagnosticsScreenTracker />
               {/* <Slot/> must always mount as soon as auth resolves — AuthContext's
                   own navigation effect calls router.replace() the instant
                   authState.isAuthenticated flips true, independent of

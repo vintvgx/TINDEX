@@ -85,9 +85,9 @@ _TOL_ATR_MULT = 0.25
 _TOUCH_MAX = 10
 _TOUCH_WEIGHT = 30.0               # 30 * sqrt(min(touches, 10) / 10): 1 ≈ 9.5, 5 ≈ 21.2, 10 = 30
 _RECENCY_WEIGHT = 20.0
-_RECENCY_HALF_LIFE_DAYS = 5.0     # a touch 5 days old scores half of "just now"; 55 days old ~= 1/1024
+_RECENCY_HALF_LIFE_DAYS = 3.0     # a touch 3 days old scores half of "just now"; 33 days old ~= 1/1024
 _VOLUME_WEIGHT = 15.0
-_VOLUME_HEADROOM_MULT = 3.0        # zone volume at 3x the naive per-touch expectation maxes this term
+_VOLUME_HEADROOM_MULT = 8.0        # zone volume density at 8x the naive per-touch expectation maxes this term
 # Bonus per extra distinct source category beyond the first: +12, +8, then
 # +5 each, capped at 5 extra (+35 max). Each extra method agreeing still
 # adds conviction, just less than the one before it.
@@ -401,8 +401,11 @@ def _dedupe_cluster(cluster: list) -> list:
     return list(seen.values())
 
 
-def _score_cluster(cluster: list, intraday_5d, tolerance_abs: float) -> dict:
+def _score_cluster(cluster: list, intraday_5d, tolerance_abs: float,
+                  today_iso: str | None = None) -> dict:
     cluster = _dedupe_cluster(cluster)
+    if today_iso is None:
+        today_iso = datetime.now(ET).date().isoformat()
     center = sum(p["price"] for p in cluster) / len(cluster)
     low = min(p["price"] for p in cluster)
     high = max(p["price"] for p in cluster)
@@ -410,18 +413,38 @@ def _score_cluster(cluster: list, intraday_5d, tolerance_abs: float) -> dict:
     low, high = center - half_width, center + half_width
 
     touches = len(cluster)
-    # Recency: the single freshest touch represents the zone — a level
+    # Recency: the freshest *prior-session* touch represents the zone — a level
     # tested both 2 days ago and 50 days ago reads as "tested 2 days ago"
     # for recency purposes; touch count already rewards the repeat separately.
-    freshest_age = min(p["age_days"] for p in cluster)
+    # Prior-session is decided by ET calendar date, not elapsed hours: a swing
+    # from yesterday evening (< 24h old) is still a prior-session touch.
+    # Same-day points (premarket/session/round levels) don't earn freshness:
+    # a level only proven by today's tape hasn't earned it yet. Falls back to
+    # the overall freshest touch when the zone is entirely same-day.
+    prior_ages = [p["age_days"] for p in cluster if p.get("date", today_iso) < today_iso]
+    freshest_age = min(prior_ages) if prior_ages else min(p["age_days"] for p in cluster)
 
     volume_ratio = 0.0
     if intraday_5d is not None and not intraday_5d.empty:
         overlap = intraday_5d[(intraday_5d["High"] >= low) & (intraday_5d["Low"] <= high)]
+        # Pro-rate each bar's volume by the fraction of its range actually
+        # inside the zone — a narrow zone only earns the volume traded within
+        # it, not the full bar volume.
+        ov_top = overlap["High"].clip(upper=high)
+        ov_bottom = overlap["Low"].clip(lower=low)
+        bar_range = (overlap["High"] - overlap["Low"]).clip(lower=1e-9)
+        in_zone_frac = ((ov_top - ov_bottom).clip(lower=0.0) / bar_range).clip(upper=1.0)
+        zone_volume = float((overlap["Volume"] * in_zone_frac).sum())
         avg_bar_vol = float(intraday_5d["Volume"].mean() or 0.0)
-        expected = avg_bar_vol * max(touches, 1) * _VOLUME_HEADROOM_MULT
-        if expected > 0:
-            volume_ratio = float(overlap["Volume"].sum()) / expected
+        avg_bar_range = float((intraday_5d["High"] - intraday_5d["Low"]).mean() or 0.0)
+        zone_width = max(high - low, tolerance_abs)
+        # Density comparison: overlapping volume per $1 of zone width vs the
+        # naive per-touch expectation spread over a typical bar range. Wide
+        # zones no longer score on width alone — only genuine volume
+        # concentration maxes the term.
+        if avg_bar_vol > 0 and avg_bar_range > 0 and zone_width > 0:
+            expected_density = (avg_bar_vol / avg_bar_range) * max(touches, 1) * _VOLUME_HEADROOM_MULT
+            volume_ratio = float(zone_volume / zone_width) / expected_density
 
     categories = {_category(p["source"]) for p in cluster}
     terms = score_terms(touches, freshest_age, volume_ratio, len(categories))

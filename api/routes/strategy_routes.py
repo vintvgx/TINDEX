@@ -754,6 +754,7 @@ def force_close_strategy(strategy_id: str):
             strategy_id=engine.strategy_id,
             trading_client=engine.trading_client,
             trade_id=engine.active_trade_id,
+            armed_levels=engine._armed_levels_snapshot(),
         )
         engine.notifier.notify_exit(
             ticker=engine.ticker,
@@ -970,6 +971,13 @@ def update_strategy_exits(strategy_id: str):
             )
 
     logger.info("[strategy] Updated exits for %s: %s", strategy_id, changed)
+    # Timestamped trail of the edit for future debugging (2026-10-09: the
+    # AAPL SL→$0.90/TP1→$1.00 edit left no trail, so "when did he set it"
+    # couldn't be answered). Visible on the mobile Debug tab.
+    try:
+        engine.debug.emit("INFO", f"Exit levels edited: {changed}")
+    except Exception:
+        pass
     return jsonify({
         "status": "ok",
         "updated": changed,
@@ -1554,13 +1562,12 @@ def get_account():
 def get_both_accounts():
     """Returns paper and live Alpaca account data in a single call."""
     import os
-    from alpaca.trading.client import TradingClient
+    from services.alpaca.shared_clients import get_trading_client
 
     def _fetch(paper: bool) -> dict | None:
         try:
-            key    = os.getenv("ALPACA_PAPER_API_KEY" if paper else "ALPACA_LIVE_API_KEY")
-            secret = os.getenv("ALPACA_PAPER_SECRET_KEY" if paper else "ALPACA_LIVE_SECRET_KEY")
-            client = TradingClient(key, secret, paper=paper)
+            # Shared, pooled client — not a new connection per poll (audit A4).
+            client = get_trading_client(paper)
             acct = client.get_account()
             equity      = float(acct.equity)
             last_equity = float(acct.last_equity)
@@ -1618,12 +1625,10 @@ def get_account_transfers():
     so the retail Activities endpoint is reached directly through that.
     """
     import os
-    from alpaca.trading.client import TradingClient
+    from services.alpaca.shared_clients import get_trading_client
 
     try:
-        key    = os.getenv("ALPACA_LIVE_API_KEY")
-        secret = os.getenv("ALPACA_LIVE_SECRET_KEY")
-        client = TradingClient(key, secret, paper=False)
+        client = get_trading_client(False)  # shared, pooled (audit A4)
 
         raw = client.get("/account/activities", {"activity_types": "CSD,CSW"})
         transfers = []
@@ -1666,7 +1671,7 @@ def get_accounts_history():
     """
     import os
     from datetime import date as _date
-    from alpaca.trading.client import TradingClient
+    from services.alpaca.shared_clients import get_trading_client
     from alpaca.trading.requests import GetPortfolioHistoryRequest
 
     def _nearest_index_on_or_before(timestamps: list, target_ts: float) -> int:
@@ -1710,9 +1715,8 @@ def get_accounts_history():
 
     def _fetch_with_history(paper: bool) -> dict:
         try:
-            key    = os.getenv("ALPACA_PAPER_API_KEY" if paper else "ALPACA_LIVE_API_KEY")
-            secret = os.getenv("ALPACA_PAPER_SECRET_KEY" if paper else "ALPACA_LIVE_SECRET_KEY")
-            client = TradingClient(key, secret, paper=paper)
+            # Shared, pooled client — not a new connection per poll (audit A4).
+            client = get_trading_client(paper)
 
             acct        = client.get_account()
             equity      = float(acct.equity)
@@ -1820,15 +1824,14 @@ def get_alpaca_positions():
     ?mode=paper | live | both  (default: both)
     """
     import os
-    from alpaca.trading.client import TradingClient
+    from services.alpaca.shared_clients import get_trading_client
 
     mode = request.args.get("mode", "both")
 
     def _fetch(paper: bool) -> dict:
         try:
-            key    = os.getenv("ALPACA_PAPER_API_KEY" if paper else "ALPACA_LIVE_API_KEY")
-            secret = os.getenv("ALPACA_PAPER_SECRET_KEY" if paper else "ALPACA_LIVE_SECRET_KEY")
-            client = TradingClient(key, secret, paper=paper)
+            # Shared, pooled client — not a new connection per poll (audit A4).
+            client = get_trading_client(paper)
             raw    = client.get_all_positions()
             positions = [
                 {

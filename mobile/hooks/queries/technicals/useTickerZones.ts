@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import type { ChartAutoZone, ChartZoneContext } from '@/common/components/ticker/AdvancedPriceChart';
@@ -107,14 +108,18 @@ export function useChartAutoZones(
   enabled: boolean,
 ): { zones: ChartAutoZone[] | null; context: ChartZoneContext | null } {
   const { data } = useTickerZones(enabled ? ticker : null);
-  if (!enabled || !data) return { zones: null, context: null };
-  return {
-    zones: toChartAutoZones(data),
-    context: {
-      currentPrice: data.current_price ?? null,
-      atr: data.atr ?? null,
-      priorDay: data.prior_day ?? null,
-      timeframe: data.timeframe ?? null,
-    },
-  };
+  // Memoized on the query data: a fresh array every render made the TV
+  // chart rebuild (and re-stringify) its zone bands on every live tick.
+  return useMemo(() => {
+    if (!enabled || !data) return { zones: null, context: null };
+    return {
+      zones: toChartAutoZones(data),
+      context: {
+        currentPrice: data.current_price ?? null,
+        atr: data.atr ?? null,
+        priorDay: data.prior_day ?? null,
+        timeframe: data.timeframe ?? null,
+      },
+    };
+  }, [enabled, data]);
 }

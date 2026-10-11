@@ -5,6 +5,7 @@ import { router } from 'expo-router';
 import { ORBAdminModal } from '@/common/components/admin/ORBAdminModal';
 import { ServiceStatusModal } from '@/common/components/admin/ServiceStatusModal';
 import { LogViewerModal } from '@/common/components/orb/LogViewerModal';
+import { DiagnosticsModal } from '@/common/components/diagnostics/DiagnosticsModal';
 import { AgentModal } from '@/common/components/agent/AgentModal';
 import { ChartLibraryPreviewModal } from '@/common/components/profile/ChartLibraryPreviewModal';
 import { ThemeToggle } from '@/common/components/ThemeToggle';
@@ -26,6 +27,7 @@ const ProfileScreen = () => {
   const colors = useThemeColors();
   const [adminModalVisible, setAdminModalVisible] = useState(false);
   const [logViewerVisible, setLogViewerVisible] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [serviceStatusVisible, setServiceStatusVisible] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
   const [chartPreviewOpen, setChartPreviewOpen] = useState(false);
@@ -90,6 +92,7 @@ const ProfileScreen = () => {
     { icon: 'pulse-outline' as const, label: 'Service Status', onPress: () => setServiceStatusVisible(true) },
     { icon: 'shield-outline' as const, label: 'Admin Panel', onPress: () => setAdminModalVisible(true) },
     { icon: 'document-text-outline' as const, label: 'View Logs', onPress: () => setLogViewerVisible(true) },
+    { icon: 'terminal-outline' as const, label: 'Diagnostics', onPress: () => setDiagnosticsOpen(true) },
     // Moved from the "..." button in monitor.tsx's own header (2026-08-04) —
     // deep-links there and opens the same ORBMenu modal in place, rather than
     // duplicating its state (grid layout, mock-data toggles, service status)
@@ -623,6 +626,10 @@ const ProfileScreen = () => {
       <LogViewerModal
         visible={logViewerVisible}
         onClose={() => setLogViewerVisible(false)}
+      />
+      <DiagnosticsModal
+        visible={diagnosticsOpen}
+        onClose={() => setDiagnosticsOpen(false)}
       />
       <ServiceStatusModal
         visible={serviceStatusVisible}

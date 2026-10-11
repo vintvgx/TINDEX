@@ -165,6 +165,7 @@ def _eod_reset(engine):
                 strategy_id=engine.strategy_id,
                 trading_client=engine.trading_client,
                 trade_id=engine.active_trade_id,
+                armed_levels=engine._armed_levels_snapshot(),
             )
             engine.notifier.notify_exit(
                 ticker=engine.ticker,

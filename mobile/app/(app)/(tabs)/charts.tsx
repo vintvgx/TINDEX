@@ -20,6 +20,7 @@ import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals
 import { OptionsPositioningPanel } from '@/common/components/ticker/brief/TickerBrief';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
 import { useChartTape } from '@/common/components/ui/ChartTapeContext';
+import type { ChartTapeInfo } from '@/common/components/ui/ChartTapeContext';
 import { useChartAutoZones } from '@/hooks/queries/technicals/useTickerZones';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
@@ -27,6 +28,7 @@ import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQu
 import { useLazyTickerHistory } from '@/hooks/queries/ticker/useLazyTickerHistory';
 import { useChartInterval, useSetChartIntervalFor } from '@/hooks/useChartInterval';
 import type { TickerStatus } from '@/common/components/ticker/TickerWheel';
+import { LiveAccountStrip } from '@/common/components/ticker/LiveAccountStrip';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
 import { useMarketStream } from '@/hooks/useMarketStream';
@@ -153,6 +155,23 @@ export function ChartsContent({ initialTicker, topInset }: {
     if (initialTicker) openTicker(initialTicker);
   }, [initialTicker, openTicker]);
 
+  // Last-viewed ticker, persisted (useChartDisplayPrefs.lastChartTicker):
+  // the overlay unmounts on close, so without this every reopen fell back
+  // to the top of the list. An explicit ticker (deep link / openChart(t))
+  // wins over the stored one. Saving starts only after the restore ran, so
+  // the first render's default (list[0]) never overwrites it.
+  const { prefs: tickerPrefs, setPref: setTickerPref, loaded: tickerPrefsLoaded } = useChartDisplayPrefs();
+  const restoredTicker = useRef(false);
+  useEffect(() => {
+    if (!tickerPrefsLoaded || restoredTicker.current) return;
+    restoredTicker.current = true;
+    if (!initialTicker && tickerPrefs.lastChartTicker) openTicker(tickerPrefs.lastChartTicker);
+  }, [tickerPrefsLoaded, initialTicker, tickerPrefs.lastChartTicker, openTicker]);
+  useEffect(() => {
+    if (!restoredTicker.current || !selectedTicker) return;
+    if (selectedTicker !== tickerPrefs.lastChartTicker) setTickerPref('lastChartTicker', selectedTicker);
+  }, [selectedTicker, tickerPrefs.lastChartTicker, setTickerPref]);
+
   // Unfollowed anywhere (this toolbar's star, or the ticker sheet's star in
   // TickerDetailSheet — both refresh userORBFollows) → drop it from the
   // ad-hoc slot too, so it actually leaves the list.
@@ -209,8 +228,13 @@ export function ChartsContent({ initialTicker, topInset }: {
     return () => clearTimeout(t);
   }, [tabFocused]);
 
+  // Legacy engine's data — only when the legacy engine is actually showing.
+  // Gated on chartLive alone, it fetched full history (and re-polled every
+  // 30s on 1D) behind TVChart's back and threw it away: two /history calls
+  // per Charts view (polling audit 2026-10-07, §3.7).
   const { data: legacyHistoryResponse, isLoading: legacyHistoryLoading, isPlaceholderData: legacyHistoryIsStale } = useTickerHistoryQuery(
-    activeTicker, period, period === '1D' ? 30_000 : undefined, chartInterval, displayPrefs.showExtendedHours, chartLive,
+    activeTicker, period, period === '1D' ? 30_000 : undefined, chartInterval, displayPrefs.showExtendedHours,
+    chartLive && !useTVChart,
   );
   const legacyHistoryData = legacyHistoryResponse?.data;
   // Lazy history for the TV chart: the period is only the initial viewport,
@@ -254,27 +278,6 @@ export function ChartsContent({ initialTicker, topInset }: {
       ? { high: fallbackOrb.orb_high, low: fallbackOrb.orb_low }
       : null;
 
-  // Live price — the real-time per-ticker Alpaca stream when selected in
-  // Profile (see useChartPriceSource; same wiring as PriceChartFullScreen),
-  // falling back to the shared /ws/prices yfinance poll (useMarketStream —
-  // stays subscribed regardless of source, same rationale as
-  // PriceChartFullScreen: a bad Alpaca connection falls back instantly
-  // instead of needing a fresh subscribe) or the last REST snapshot.
-  const { source: chartPriceSource } = useChartPriceSource();
-  const useAlpacaStream = chartPriceSource === 'alpaca';
-  const chartStream = useChartLiveStream(activeTicker, useAlpacaStream);
-  const { livePrices } = useMarketStream([activeTicker], { enabled: true });
-  const alpacaUsable = useAlpacaStream && !chartStream.error && chartStream.price != null;
-  const resolvedLivePrice = alpacaUsable ? chartStream.price! : livePrices[activeTicker] ?? stockData?.current_price;
-  // Streamed prices only (Alpaca, else the /ws/prices feed) — never the REST
-  // snapshot, which can be minutes old and would paint a stale price into
-  // the forming candle.
-  const streamPrice = alpacaUsable ? chartStream.price! : livePrices[activeTicker] ?? null;
-
-  const dayRefPrice = (stockData?.current_price != null && stockData?.price_change != null)
-    ? stockData.current_price - stockData.price_change
-    : undefined;
-
   // Extended-hours session boundary lines (Pre-Market/Market Close/
   // Post-Market/Overnight) — 1D only, only once each session has actually
   // concluded (see yfinance_service._session_boundary_lines). Reuses the
@@ -299,13 +302,6 @@ export function ChartsContent({ initialTicker, topInset }: {
     }
     return lines.length ? lines : null;
   }, [period, historyData?.session_lines, colors.textSecondary, colors.text, colors.accent]);
-  const liveChange = (resolvedLivePrice != null && dayRefPrice != null)
-    ? resolvedLivePrice - dayRefPrice
-    : stockData?.price_change;
-  const liveChangePercent = dayRefPrice
-    ? ((liveChange ?? 0) / dayRefPrice) * 100
-    : stockData?.price_change_percent;
-  const displayPositive = (liveChange ?? 0) >= 0;
 
   // ── Positions panel — collapsed by default, expands on tap. No more
   // Paper/Live toggle: both are always shown together for this ticker, live
@@ -644,37 +640,19 @@ export function ChartsContent({ initialTicker, topInset }: {
   const tapeSignal = chart.technicals.data?.signal ?? null;
   const openContracts = useCallback(() => setContractsModalOpen(true), []);
   const openSearch = useCallback(() => setSearchOpen(true), []);
-  // Tabs stay mounted when you switch away, so unmount cleanup alone never
-  // ran — the tape kept showing this chart's ticker on every other screen.
-  // Publish only while this tab is focused; clear the moment it blurs.
+  // The tape itself is published by ChartLivePane (it needs the live
+  // price); this only feeds it the non-price fields.
   const isFocused = useIsFocused();
-  useEffect(() => {
-    if (!isFocused) {
-      setTapeInfo(null);
-      return;
-    }
-    setTapeInfo({
-      ticker: activeTicker,
-      price: resolvedLivePrice ?? null,
-      change: liveChange ?? null,
-      changePct: liveChangePercent ?? null,
-      signal: tapeSignal,
-      loading: tickerLoading && !stockData,
-      onSignalPress: openContracts,
-      onTickerPress: openSearch,
-    });
-    return () => setTapeInfo(null);
-  }, [isFocused, activeTicker, resolvedLivePrice, liveChange, liveChangePercent, tapeSignal, tickerLoading, stockData, setTapeInfo, openContracts, openSearch]);
 
   // Top inset as padding; the BOTTOM inset is handed to the last element
   // (toolbar, or the positions pager when open) as its own padding, so its
   // background runs to the screen edge — a SafeAreaView left an empty band
   // under the toolbar, and that height now goes to the chart instead.
   const safeInsets = useSafeAreaInsets();
-  // Mostly reclaimed: the toolbar sits just above the home indicator
-  // (TradingView-style) instead of leaving the full ~34px inset as an empty
-  // band under it — that height goes to the chart. Keeps ~8px so the
-  // toolbar's content clears the indicator itself.
+  // Mostly reclaimed: the bottom-most element (the live account strip) sits
+  // just above the home indicator instead of leaving the full ~34px inset as
+  // an empty band. The strip itself gives the ticker wheel thumb room above
+  // the screen edge so vertical drags don't slide off.
   const bottomInset = Math.max(safeInsets.bottom - 26, 2);
 
   return (
@@ -695,60 +673,72 @@ export function ChartsContent({ initialTicker, topInset }: {
           ticker so switching fully remounts it (see the old comment). */}
       <View style={{ flex: 1, minHeight: screenH * 0.5, paddingHorizontal: 12, paddingTop: 8 }} onLayout={onChartAreaLayout}>
         {chartAreaHeight > 0 && (
-          useTVChart ? (
-            <TVChart
-              key={activeTicker}
-              style={{ flex: 1 }}
-              data={historyData}
-              isLoading={historyLoading || historyIsStale}
-              autoZones={autoZones}
-              watchZones={chartWatchZones}
-              orbRange={effectiveOrb}
-              showOrbRange={chart.showOrb && (period === '1D' || period === '1W')}
-              sessionReferenceLines={sessionReferenceLines}
-              showSessionLines={chart.chartSettings.showSessionLines}
-              // Includes today's morning-brief play levels for this ticker.
-              referenceLines={chartReferenceLines}
-              livePrice={streamPrice}
-              onAutoZoneTap={handleTVAutoZoneTap}
-              onWatchZoneTap={handleTVWatchZoneTap}
-              resetKey={`${activeTicker}:${period}:${chartInterval}`}
-              emas={chart.emaOverlays}
-              mode={tvMode}
-              // Always on, like TradingView: press-and-hold shows the
-              // crosshair with its price + date/time labels. ("Data points"
-              // only applies to the legacy engine.)
-              crosshair
-              visibleSeconds={tvVisibleSeconds}
-              onRequestMoreHistory={lazyHistory.loadMore}
-              historyExhausted={lazyHistory.exhausted}
-              onAddAlertAtPrice={handleAddAlertAtPrice}
-            />
-          ) : (
-            <AdvancedPriceChart
-              key={activeTicker}
-              data={historyData ?? undefined}
-              isLoading={historyLoading || historyIsStale}
-              period={period}
-              onPeriodChange={setPeriod}
-              positive={displayPositive}
-              height={Math.max(220, chartAreaHeight)}
-              orbRange={effectiveOrb}
-              showOrbRange={chart.showOrb}
-              livePrice={resolvedLivePrice ?? null}
-              watchZones={chartWatchZones}
-              autoZones={autoZones}
-              zoneContext={zoneContext}
-              onWatchConfirm={handleWatchConfirm}
-              onDeleteWatchZone={handleDeleteWatchZone}
-              onUpdateWatchZone={handleUpdateWatchZone}
-              resetKey={activeTicker}
-              sessionReferenceLines={sessionReferenceLines}
-              // Includes today's morning-brief play levels for this ticker.
-              referenceLines={chartReferenceLines}
-              settings={chart.chartSettings}
-            />
-          )
+          <ChartLivePane
+            ticker={activeTicker}
+            stockData={stockData}
+            tapeActive={isFocused}
+            tapeSignal={tapeSignal}
+            tapeLoading={tickerLoading && !stockData}
+            onSignalPress={openContracts}
+            onTickerPress={openSearch}
+            setTapeInfo={setTapeInfo}
+            renderChart={({ streamPrice, resolvedLivePrice, displayPositive }) => (
+              useTVChart ? (
+                <TVChart
+                  key={activeTicker}
+                  style={{ flex: 1 }}
+                  data={historyData}
+                  isLoading={historyLoading || historyIsStale}
+                  autoZones={autoZones}
+                  watchZones={chartWatchZones}
+                  orbRange={effectiveOrb}
+                  showOrbRange={chart.showOrb && (period === '1D' || period === '1W')}
+                  sessionReferenceLines={sessionReferenceLines}
+                  showSessionLines={chart.chartSettings.showSessionLines}
+                  // Includes today's morning-brief play levels for this ticker.
+                  referenceLines={chartReferenceLines}
+                  livePrice={streamPrice}
+                  onAutoZoneTap={handleTVAutoZoneTap}
+                  onWatchZoneTap={handleTVWatchZoneTap}
+                  resetKey={`${activeTicker}:${period}:${chartInterval}`}
+                  emas={chart.emaOverlays}
+                  mode={tvMode}
+                  // Always on, like TradingView: press-and-hold shows the
+                  // crosshair with its price + date/time labels. ("Data points"
+                  // only applies to the legacy engine.)
+                  crosshair
+                  visibleSeconds={tvVisibleSeconds}
+                  onRequestMoreHistory={lazyHistory.loadMore}
+                  historyExhausted={lazyHistory.exhausted}
+                  onAddAlertAtPrice={handleAddAlertAtPrice}
+                />
+              ) : (
+                <AdvancedPriceChart
+                  key={activeTicker}
+                  data={historyData ?? undefined}
+                  isLoading={historyLoading || historyIsStale}
+                  period={period}
+                  onPeriodChange={setPeriod}
+                  positive={displayPositive}
+                  height={Math.max(220, chartAreaHeight)}
+                  orbRange={effectiveOrb}
+                  showOrbRange={chart.showOrb}
+                  livePrice={resolvedLivePrice ?? null}
+                  watchZones={chartWatchZones}
+                  autoZones={autoZones}
+                  zoneContext={zoneContext}
+                  onWatchConfirm={handleWatchConfirm}
+                  onDeleteWatchZone={handleDeleteWatchZone}
+                  onUpdateWatchZone={handleUpdateWatchZone}
+                  resetKey={activeTicker}
+                  sessionReferenceLines={sessionReferenceLines}
+                  // Includes today's morning-brief play levels for this ticker.
+                  referenceLines={chartReferenceLines}
+                  settings={chart.chartSettings}
+                />
+              )
+            )}
+          />
         )}
         {/* Tapped alert line → TradingView-style pill with delete. */}
         {tappedAlert && (
@@ -791,7 +781,6 @@ export function ChartsContent({ initialTicker, topInset }: {
         activeTicker={activeTicker}
         onSelectTicker={setSelectedTicker}
         onSearchPress={() => setSearchOpen(true)}
-        bottomInset={expanded ? 0 : bottomInset}
         isFollowed={isActiveFollowed}
         onToggleFollow={handleToggleFollow}
         period={period}
@@ -823,9 +812,11 @@ export function ChartsContent({ initialTicker, topInset }: {
             ticker={activeTicker}
             onLiveUpdate={handlePositionLiveUpdate}
           />
-          <View style={{ height: bottomInset, backgroundColor: colors.background }} />
         </>
       )}
+
+      {/* Live account summary — always the bottom-most element. */}
+      <LiveAccountStrip bottomInset={bottomInset} />
 
       <SearchBottomSheet
         visible={searchOpen}
@@ -851,6 +842,104 @@ export function ChartsContent({ initialTicker, topInset }: {
   );
 }
 
+
+/** Live values the chart engine needs — see ChartLivePane. */
+interface ChartLiveValues {
+  /** Streamed only (Alpaca, else /ws/prices) — never the REST snapshot,
+   *  which can be minutes old and would paint a stale forming candle. */
+  streamPrice: number | null;
+  /** Streamed, else the REST snapshot (legacy engine + tape). */
+  resolvedLivePrice: number | null;
+  displayPositive: boolean;
+}
+
+const TAPE_PUBLISH_MS = 1_000;
+
+/**
+ * Owns the live price for the active ticker and renders the chart engine
+ * through `renderChart`. Kept out of ChartsContent so a price update re-
+ * renders only this pane and the engine — not the whole screen (toolbar,
+ * positions, settings sections). Also publishes the global ticker tape,
+ * with the price throttled to once a second.
+ *
+ * Price source: the real-time per-ticker Alpaca stream when selected in
+ * Profile (useChartPriceSource), falling back to the shared /ws/prices feed
+ * (useMarketStream — stays subscribed regardless of source, so a bad
+ * Alpaca connection falls back instantly) or the last REST snapshot.
+ */
+function ChartLivePane({
+  ticker, stockData, tapeActive, tapeSignal, tapeLoading, onSignalPress, onTickerPress, setTapeInfo, renderChart,
+}: {
+  ticker: string;
+  stockData: { current_price?: number | null; price_change?: number | null; price_change_percent?: number | null } | undefined;
+  tapeActive: boolean;
+  tapeSignal: ChartTapeInfo['signal'];
+  tapeLoading: boolean;
+  onSignalPress: () => void;
+  onTickerPress: () => void;
+  setTapeInfo: (info: ChartTapeInfo | null) => void;
+  renderChart: (live: ChartLiveValues) => React.ReactNode;
+}) {
+  const { source: chartPriceSource } = useChartPriceSource();
+  const useAlpacaStream = chartPriceSource === 'alpaca';
+  const chartStream = useChartLiveStream(ticker, useAlpacaStream);
+  const { livePrices } = useMarketStream([ticker], { enabled: true });
+  const alpacaUsable = useAlpacaStream && !chartStream.error && chartStream.price != null;
+  const streamPrice = alpacaUsable ? chartStream.price! : livePrices[ticker] ?? null;
+  const resolvedLivePrice = streamPrice ?? stockData?.current_price ?? null;
+
+  const dayRefPrice = (stockData?.current_price != null && stockData?.price_change != null)
+    ? stockData.current_price - stockData.price_change
+    : undefined;
+  const liveChange = (resolvedLivePrice != null && dayRefPrice != null)
+    ? resolvedLivePrice - dayRefPrice
+    : stockData?.price_change ?? null;
+  const liveChangePercent = dayRefPrice
+    ? ((liveChange ?? 0) / dayRefPrice) * 100
+    : stockData?.price_change_percent ?? null;
+  const displayPositive = (liveChange ?? 0) >= 0;
+
+  // Tape price, throttled: the tape re-renders app-wide, so it gets at most
+  // one price a second (trailing edge — the latest price always lands).
+  const [tapePrice, setTapePrice] = useState<{ price: number | null; change: number | null; pct: number | null }>(
+    { price: resolvedLivePrice, change: liveChange, pct: liveChangePercent },
+  );
+  const lastTapeAt = useRef(0);
+  useEffect(() => {
+    const next = { price: resolvedLivePrice, change: liveChange, pct: liveChangePercent };
+    const wait = TAPE_PUBLISH_MS - (Date.now() - lastTapeAt.current);
+    if (wait <= 0) {
+      lastTapeAt.current = Date.now();
+      setTapePrice(next);
+      return;
+    }
+    const t = setTimeout(() => { lastTapeAt.current = Date.now(); setTapePrice(next); }, wait);
+    return () => clearTimeout(t);
+  }, [resolvedLivePrice, liveChange, liveChangePercent]);
+
+  // Tabs stay mounted when you switch away, so unmount cleanup alone never
+  // ran — the tape kept showing this chart's ticker on every other screen.
+  // Publish only while focused; clear the moment it blurs.
+  useEffect(() => {
+    if (!tapeActive) {
+      setTapeInfo(null);
+      return;
+    }
+    setTapeInfo({
+      ticker,
+      price: tapePrice.price,
+      change: tapePrice.change,
+      changePct: tapePrice.pct,
+      signal: tapeSignal,
+      loading: tapeLoading,
+      onSignalPress,
+      onTickerPress,
+    });
+    return () => setTapeInfo(null);
+  }, [tapeActive, ticker, tapePrice, tapeSignal, tapeLoading, onSignalPress, onTickerPress, setTapeInfo]);
+
+  return <>{renderChart({ streamPrice, resolvedLivePrice, displayPositive })}</>;
+}
 
 /** Route wrapper — feeds ?ticker= deep links into ChartsContent. */
 export default function ChartsScreen() {

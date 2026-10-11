@@ -23,8 +23,11 @@ this is no longer "reusing the paper trading client's entitlement" — it's
 an account that exists solely to hold this stream's connection slot.
 """
 
+from __future__ import annotations
+
 import os
 import threading
+import time
 import logging
 
 logger = logging.getLogger(__name__)
@@ -188,6 +191,59 @@ class ChartStreamManager:
                 except Exception as ex:
                     logger.error("[ChartStream] callback error for %s: %s", symbol, ex)
         return _handler
+
+
+class LatestPriceMailbox:
+    """
+    Per-client hand-off between the Alpaca trade handler and one
+    /ws/chart/<ticker>/live socket, throttled to what a chart can use.
+
+    Alpaca reports every trade — dozens a second on a liquid ticker — and the
+    route used to forward each one. On the phone every message re-rendered the
+    chart, which pegged the JS thread and got the app flagged by iOS for CPU
+    use (docs: chart-cpu-thermal-analysis-2026-10-06). Here only the newest
+    price is kept (older unsent ones are simply overwritten), at most one
+    message goes out per `min_interval` (trailing edge, so the last price of a
+    burst is always delivered), and a price equal to the last one sent is
+    skipped. The old bounded queue also dropped the NEWEST trades once full,
+    so a busy tape could leave a client on a stale price.
+    """
+
+    def __init__(self, min_interval: float = 0.25):
+        self._min_interval = min_interval
+        self._cond = threading.Condition()
+        self._pending: float | None = None
+        self._last_sent: float | None = None
+        self._last_sent_at = float("-inf")  # first price goes out at once
+
+    def put(self, price: float):
+        """Called from the trade handler — never blocks on the client."""
+        with self._cond:
+            self._pending = price
+            self._cond.notify()
+
+    def next(self, timeout: float) -> float | None:
+        """Block until a new price is due to send, or `timeout` passes with
+        nothing to send (None — the caller sends a keepalive)."""
+        deadline = time.monotonic() + timeout
+        with self._cond:
+            while True:
+                now = time.monotonic()
+                if self._pending is not None and self._pending == self._last_sent:
+                    self._pending = None  # unchanged price — nothing to send
+                if self._pending is not None:
+                    wait = self._last_sent_at + self._min_interval - now
+                    if wait <= 0:
+                        price, self._pending = self._pending, None
+                        self._last_sent, self._last_sent_at = price, now
+                        return price
+                    # Throttled: wait out the interval (<= min_interval);
+                    # newer trades that land meanwhile replace _pending.
+                    self._cond.wait(wait)
+                    continue
+                if now >= deadline:
+                    return None
+                self._cond.wait(deadline - now)
 
 
 chart_stream = ChartStreamManager()

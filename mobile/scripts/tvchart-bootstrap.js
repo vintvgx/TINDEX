@@ -624,6 +624,9 @@
   // ── Timeframe EMA overlays (computed from the loaded bars) ─────────
   var emaConfig = [];
   var emaSeriesMap = {};
+  // Per period: the EMA value at every bar, aligned with lastCloses — lets a
+  // live tick extend/replace just the last value (see stepIndicators).
+  var emaValsMap = {};
   var lastCloses = [];
 
   function emaValues(closes, period) {
@@ -647,10 +650,12 @@
       try { chart.removeSeries(emaSeriesMap[p]); } catch (e) {}
     }
     emaSeriesMap = {};
+    emaValsMap = {};
     if (!lastCloses.length) return;
     emaConfig.forEach(function (cfg) {
       if (!cfg.visible) return;
       var vals = emaValues(lastCloses, cfg.period);
+      emaValsMap[cfg.period] = vals;
       var data = [];
       for (var i = 0; i < vals.length; i++) {
         if (vals[i] != null) data.push({ time: lastCloses[i].t, value: vals[i] });
@@ -681,22 +686,36 @@
   var vwapSeries = null;
   var lastCandles = [];
 
+  // ET day key / minutes for a unix time, cached by timestamp: a VWAP
+  // rebuild asks for both on every bar, and Intl formatting is slow — the
+  // uncached version made thousands of Intl calls per rebuild.
+  var etDayCache = {}, etMinCache = {}, etCacheSize = 0;
+  var etMinFmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hour12: false,
+  });
+  function etCacheGuard() {
+    if (++etCacheSize > 40000) { etDayCache = {}; etMinCache = {}; etCacheSize = 0; }
+  }
   function etDayKey(t) {
-    return new Date(t * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    var hit = etDayCache[t];
+    if (hit !== undefined) return hit;
+    etCacheGuard();
+    return (etDayCache[t] = new Date(t * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }));
   }
 
   // ET minutes-since-midnight for a unix timestamp — used to anchor VWAP
   // at the regular-session open even when extended-hours bars are shown.
   function etMinutes(t) {
-    var parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hour12: false,
-    }).formatToParts(new Date(t * 1000));
+    var hit = etMinCache[t];
+    if (hit !== undefined) return hit;
+    etCacheGuard();
+    var parts = etMinFmt.formatToParts(new Date(t * 1000));
     var h = 0, m = 0;
     for (var i = 0; i < parts.length; i++) {
       if (parts[i].type === 'hour') h = (+parts[i].value) % 24;
       else if (parts[i].type === 'minute') m = +parts[i].value;
     }
-    return h * 60 + m;
+    return (etMinCache[t] = h * 60 + m);
   }
 
   // ── Live ticks ───────────────────────────────────────────────────────
@@ -715,6 +734,7 @@
   function updateBars(msg) {
     if (!mainSeries || !lastCandles.length) return;
     var bars = msg.bars || [];
+    var steps = [];
     for (var i = 0; i < bars.length; i++) {
       var c = bars[i];
       var last = lastCandles[lastCandles.length - 1];
@@ -732,18 +752,84 @@
       if (c.t === last.t) {
         lastCandles[lastCandles.length - 1] = c;
         lastCloses[lastCloses.length - 1] = { t: c.t, c: c.c };
+        steps.push({ append: false, bar: c, prev: null });
       } else {
         lastCandles.push(c);
         lastCloses.push({ t: c.t, c: c.c });
+        steps.push({ append: true, bar: c, prev: last });
       }
     }
-    scheduleIndicators();
+    // A tick moves one bar: extend the indicators by that bar instead of
+    // recomputing them over the whole history. Anything stepIndicators
+    // can't do exactly (a new session, several new bars, state out of
+    // sync) falls back to the throttled full rebuild.
+    if (steps.length && !stepIndicators(steps)) scheduleIndicators();
     schedulePills();
   }
+
+  // Incremental EMA/VWAP for the bars updateBars just applied, in order —
+  // each step either replaced the newest bar or appended one. Returns false
+  // when a full rebuild is needed instead (it's then exact by construction).
+  function stepIndicators(steps) {
+    if (indicatorTimer) return false; // a full rebuild is already queued
+    var appends = 0;
+    for (var s = 0; s < steps.length; s++) {
+      var st0 = steps[s];
+      if (!st0.append) continue;
+      appends++;
+      if (etDayKey(st0.bar.t) !== etDayKey(st0.prev.t)) return false; // new session
+    }
+    if (appends > 1) return false;
+    // State must line up with the bars as they were before these steps.
+    var nBefore = lastCloses.length - appends;
+    for (var p0 in emaSeriesMap) {
+      if (!emaValsMap[p0] || emaValsMap[p0].length !== nBefore) return false;
+    }
+    if (vwapVisible && vwapSeries && !vwapTail) return false;
+
+    for (var j = 0; j < steps.length; j++) {
+      var st = steps[j];
+      var bar = st.bar;
+      // EMAs — exact recurrence: ema[i] = c·k + ema[i-1]·(1−k).
+      for (var p in emaSeriesMap) {
+        var vals = emaValsMap[p];
+        var k = 2 / (+p + 1);
+        var idx = st.append ? vals.length : vals.length - 1;
+        var prevEma = idx >= 1 ? vals[idx - 1] : bar.c;
+        vals[idx] = bar.c * k + prevEma * (1 - k);
+        try { emaSeriesMap[p].update({ time: bar.t, value: vals[idx] }); } catch (e) { return false; }
+      }
+      // VWAP — running session sums up to (not including) the newest bar.
+      if (vwapVisible && vwapSeries) {
+        if (st.append) {
+          var fin = st.prev; // the bar that just closed joins the sums
+          if (etDayKey(fin.t) !== vwapTail.day) return false;
+          if (etMinutes(fin.t) >= 9 * 60 + 30) {
+            var ftp = (fin.h + fin.l + fin.c) / 3, fv = fin.v || 0;
+            vwapTail.pv += ftp * fv; vwapTail.v += fv;
+            vwapTail.val = vwapTail.v > 0 ? vwapTail.pv / vwapTail.v : (vwapTail.val == null ? ftp : vwapTail.val);
+          }
+        }
+        if (etDayKey(bar.t) !== vwapTail.day) return false;
+        if (etMinutes(bar.t) >= 9 * 60 + 30) {
+          var tp = (bar.h + bar.l + bar.c) / 3, vol = bar.v || 0;
+          var pv = vwapTail.pv + tp * vol, vv = vwapTail.v + vol;
+          var val = vv > 0 ? pv / vv : (vwapTail.val == null ? tp : vwapTail.val);
+          try { vwapSeries.update({ time: bar.t, value: val }); } catch (e) { return false; }
+        }
+      }
+    }
+    return true;
+  }
+
+  // Session sums for the newest day, EXCLUDING its last bar — what
+  // stepIndicators extends on a live tick. Set by rebuildVwap.
+  var vwapTail = null;
 
   function rebuildVwap() {
     if (!chart || !inited) return;
     if (vwapSeries) { try { chart.removeSeries(vwapSeries); } catch (e) {} vwapSeries = null; }
+    vwapTail = null;
     if (!vwapVisible || !lastCandles.length) return;
     var data = [];
     var pv = 0, v = 0, day = null, lastVal = null;
@@ -751,6 +837,7 @@
       var c = lastCandles[i];
       var k = etDayKey(c.t);
       if (k !== day) { day = k; pv = 0; v = 0; }
+      if (i === lastCandles.length - 1) vwapTail = { day: k, pv: pv, v: v, val: lastVal };
       // VWAP anchors at the regular-session open (09:30 ET) — extended-hours
       // bars plot on the chart but never enter the accumulation.
       if (etMinutes(c.t) < 9 * 60 + 30) continue;
@@ -864,6 +951,16 @@
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 4,
+        // lightweight-charts v5 renders axis ticks in UTC — override so the
+        // axis matches the ET session data (America/New_York).
+        tickMarkFormatter: function (time, tickMarkType) {
+          if (typeof time === 'object' && time !== null) {
+            return time.month + '/' + time.day; // BusinessDay (daily bars)
+          }
+          var d = new Date(time * 1000);
+          if (tickMarkType === 3 || tickMarkType === 4) return etMinFmt.format(d);
+          return d.toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'numeric', day: 'numeric' });
+        },
       },
       crosshair: {
         mode: LWC.CrosshairMode.Normal,
