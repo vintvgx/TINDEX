@@ -22,6 +22,42 @@ logger = logging.getLogger(__name__)
 
 strategy_bp = Blueprint("strategy", __name__, url_prefix="/strategy")
 
+# Shared short cache for the polled position endpoints (/accounts/positions,
+# /immediate-positions): every caller inside the window shares one Alpaca
+# fetch (polling audit A5). Kept under the app's 5s poll so one client never
+# sees data older than about one poll.
+from services.utils.short_cache import ShortCache  # noqa: E402
+_positions_cache = ShortCache(ttl=4.0)
+
+# A fill/cancel on either account (Alpaca trade_updates stream, audit C1)
+# drops the cache too, so the next poll shows the change instead of a copy
+# up to 4s old.
+from services.alpaca.trade_events import get_trade_event_hub, POSITION_EVENTS  # noqa: E402
+
+
+def _clear_positions_on_trade_event(event: dict) -> None:
+    if event.get("event") in POSITION_EVENTS:
+        _positions_cache.clear()
+
+
+get_trade_event_hub().subscribe(_clear_positions_on_trade_event)
+
+# Exit-edit persistence runs off the request (polling audit B1): the
+# in-memory ExitManager edit is what protects the position; the Supabase
+# write only matters for a later restart. ONE worker so edits persist in
+# the order they were made — an older edit can never land after a newer one.
+_EXIT_PERSIST_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="exit-persist")
+
+
+@strategy_bp.after_request
+def _invalidate_positions_cache(response):
+    """Any write on these routes (sell, close, entry, approve, exit edits…)
+    may change positions — drop the cache so the very next poll is fresh
+    instead of showing a just-closed position for up to the TTL."""
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        _positions_cache.clear()
+    return response
+
 logger_svc    = TradeLogger()
 _engines:      dict[str, ORBEngine] = {}   # strategy_id -> ORBEngine
 _stream_manager = None                     # OptionStreamManager — set by init_routes
@@ -799,9 +835,32 @@ def sell_position(strategy_id: str):
         limit_price = float(limit_price) if limit_price is not None else None
     except (TypeError, ValueError):
         return jsonify({"status": "error", "message": "limit_price must be a number"}), 400
-    result = engine.submit_manual_exit(int(qty) if qty is not None else None, limit_price)
+    qty = int(qty) if qty is not None else None
+    if data.get("async"):
+        # B2: reserve now, sell in the background — the request returns at
+        # once instead of holding a server thread for the ~10s price-seek.
+        # The client polls GET .../sell/<sell_id> for the same result dict
+        # the sync path returns. Clients that don't send `async` keep the
+        # old synchronous behaviour.
+        result = engine.start_manual_exit(qty, limit_price)
+        code = 202 if result.get("status") == "accepted" else 409
+        return jsonify(result), code
+    result = engine.submit_manual_exit(qty, limit_price)
     code = 200 if result.get("status") == "ok" else 409
     return jsonify(result), code
+
+
+@strategy_bp.route("/positions/<strategy_id>/sell/<sell_id>", methods=["GET"])
+def sell_status(strategy_id: str, sell_id: str):
+    """Outcome of an async sell (see sell_position): {"status": "pending"}
+    while it runs, then the same dict a synchronous sell returns."""
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        return jsonify({"status": "error", "message": "Position not found"}), 404
+    result = engine.get_manual_exit_result(sell_id)
+    if result is None:
+        return jsonify({"status": "error", "message": "Unknown sell id"}), 404
+    return jsonify(result)
 
 
 @strategy_bp.route("/positions/<strategy_id>/add", methods=["POST"])
@@ -947,28 +1006,35 @@ def update_strategy_exits(strategy_id: str):
     # to 5 reverted to 1.21 after a routine redeploy). Best-effort — a failed
     # persist here doesn't undo the in-memory edit, only a later restart
     # would be affected, so this logs rather than fails the request.
+    # Queued (B1): the response no longer waits on Supabase — everything the
+    # write needs is captured now, at request time.
     if engine.active_trade_id:
-        try:
-            persisted = logger_svc.update_exit_levels(
-                trade_id=engine.active_trade_id,
-                hard_stop_price=changed.get("hard_stop"),
-                tp1_price=changed.get("tp1"),
-                tp2_price=changed.get("tp2"),
-                runner_mode=changed.get("runner_mode"),
-                cascade_enabled=changed.get("cascade_enabled"),
-                exit_overrides_patch=exit_overrides_patch or None,
-            )
-            if not persisted:
+        trade_id = engine.active_trade_id
+        persist_kwargs = dict(
+            trade_id=trade_id,
+            hard_stop_price=changed.get("hard_stop"),
+            tp1_price=changed.get("tp1"),
+            tp2_price=changed.get("tp2"),
+            runner_mode=changed.get("runner_mode"),
+            cascade_enabled=changed.get("cascade_enabled"),
+            exit_overrides_patch=exit_overrides_patch or None,
+        )
+
+        def _persist():
+            try:
+                if not logger_svc.update_exit_levels(**persist_kwargs):
+                    logger.error(
+                        "[strategy] Exit-level edit for %s applied in-memory but FAILED to persist "
+                        "(trade_id=%s) — will revert to entry-time levels on the next restart",
+                        strategy_id, trade_id,
+                    )
+            except Exception as e:
                 logger.error(
-                    "[strategy] Exit-level edit for %s applied in-memory but FAILED to persist "
-                    "(trade_id=%s) — will revert to entry-time levels on the next restart",
-                    strategy_id, engine.active_trade_id,
+                    "[strategy] Failed to persist exit-level edit for trade %s: %s",
+                    trade_id, e, exc_info=True,
                 )
-        except Exception as e:
-            logger.error(
-                "[strategy] Failed to persist exit-level edit for trade %s: %s",
-                engine.active_trade_id, e, exc_info=True,
-            )
+
+        _EXIT_PERSIST_POOL.submit(_persist)
 
     logger.info("[strategy] Updated exits for %s: %s", strategy_id, changed)
     # Timestamped trail of the edit for future debugging (2026-10-09: the
@@ -1501,8 +1567,12 @@ def immediate_positions():
     current_price for the existing "Immediate Trades" dashboard card, which
     reads the old field names.
     """
+    return jsonify({"positions": _positions_cache.get_or_compute("immediate", _immediate_positions_list)})
+
+
+def _immediate_positions_list() -> list:
     out = []
-    for eng in _immediate_engines.values():
+    for eng in list(_immediate_engines.values()):
         if not eng.trade_taken or not eng.contract_symbol:
             continue
         try:
@@ -1515,7 +1585,7 @@ def immediate_positions():
         pos["pnl_pct"]       = pos.get("unrealized_pnl_pct")
         pos["mid_price"]     = pos.get("current_price")
         out.append(pos)
-    return jsonify({"positions": out})
+    return out
 
 
 # ── All positions ─────────────────────────────────────────────────────────────
@@ -1959,11 +2029,19 @@ def get_alpaca_positions():
             logger.warning("[accounts/positions] paper=%s %s", paper, e)
             return {"available": False, "positions": [], "total_market_value": 0, "total_unrealized_pl": 0, "error": str(e)}
 
+    def _cached(paper: bool) -> dict:
+        # Per account, so mode=paper / live / both share fetches. Errors
+        # aren't cached — the next poll retries.
+        return _positions_cache.get_or_compute(
+            ("accounts_positions", paper), lambda: _fetch(paper),
+            cacheable=lambda r: r.get("available", False),
+        )
+
     result: dict = {"success": True}
     if mode in ("paper", "both"):
-        result["paper"] = _fetch(True)
+        result["paper"] = _cached(True)
     if mode in ("live", "both"):
-        result["live"] = _fetch(False)
+        result["live"] = _cached(False)
     return jsonify(result)
 
 

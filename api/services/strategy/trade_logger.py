@@ -76,6 +76,16 @@ def enrich_open_trades_with_live_pnl(trades: list) -> list:
     return trades
 
 
+def _notify_pending() -> None:
+    """Tell connected phones the pending-confirmation list changed (/ws/app,
+    polling audit C2) — they refetch instead of polling every 5s."""
+    try:
+        from services.websocket.app_events import notify_app
+        notify_app("pending")
+    except Exception:
+        pass
+
+
 class TradeLogger:
     def __init__(self):
         url = os.getenv("SUPABASE_URL")
@@ -174,6 +184,7 @@ class TradeLogger:
         try:
             row = {**row, "id": row.get("id") or str(uuid.uuid4())}
             res = self.client.table("orb_pending_confirmations").insert(row).execute()
+            _notify_pending()
             return res.data[0] if res.data else None
         except Exception as e:
             logger.error("[TradeLogger] create_pending_confirmation failed: %s", e)
@@ -208,6 +219,7 @@ class TradeLogger:
                 self.client.table("orb_pending_confirmations")
                 .update(patch).eq("id", pending_id).execute()
             )
+            _notify_pending()
             return res.data[0] if res.data else None
         except Exception as e:
             logger.error("[TradeLogger] update_pending_confirmation failed: %s", e)
@@ -230,6 +242,8 @@ class TradeLogger:
                 .lt("expires_at", now_iso)
                 .execute()
             )
+            if res.data:
+                _notify_pending()
             return len(res.data or [])
         except Exception as e:
             logger.error("[TradeLogger] expire_stale_pending_confirmations failed: %s", e)

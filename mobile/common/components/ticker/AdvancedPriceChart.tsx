@@ -20,6 +20,7 @@ export interface OrbRangeLines {
 }
 import { AUTO_ZONE_RESISTANCE_COLOR, AUTO_ZONE_SUPPORT_COLOR } from '@/common/components/ticker/autoZoneColors';
 import { ZoneDetailSheet } from '@/common/components/ticker/ZoneDetailSheet';
+import { ChartSkeleton } from './ChartSkeleton';
 
 const PERIODS: PricePeriod[] = ['1D', '1W', '1M', '3M', 'YTD', '1Y', '5Y'];
 
@@ -1666,12 +1667,10 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               </Text>
             </View>
           ) : (
-            // Same background as the loaded chart sits on (colors.background,
-            // not the lighter surfaceSecondary) — a plain centered spinner
-            // over a matching backdrop, not a differently-colored placeholder
-            // block, so nothing visibly "pops" when the real chart swaps in.
-            <View style={{ flex: 1, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>
-              <ActivityIndicator size="large" color={colors.accent} />
+            // Chart-shaped skeleton on the same background the loaded chart
+            // sits on, so nothing "pops" when the real chart swaps in (B5).
+            <View style={{ flex: 1 }}>
+              <ChartSkeleton rounded />
             </View>
           )
         ) : (

@@ -26,15 +26,20 @@ def test_burst_is_coalesced_and_last_price_delivered():
     t.start()
     # ~1s of trades at 200/s with a changing price.
     prices = [600 + i / 100 for i in range(200)]
+    t0 = time.monotonic()
     for p in prices:
         mb.put(p)
         time.sleep(0.005)
+    burst_s = time.monotonic() - t0
     time.sleep(0.25)
     stop.set()
     t.join(1)
 
-    # 200 trades over ~1s at a 100ms cap -> ~11 messages, not 200.
-    assert 5 <= len(sent) <= 15, len(sent)
+    # 200 trades at a 100ms cap -> about one message per 100ms of burst, not
+    # 200. Bounded by the burst's MEASURED length: sleep(0.005) overshoots
+    # (1.2–1.5s for the loop on macOS / a loaded CI box), so a fixed "~1s"
+    # bound flaked whenever the burst simply ran long.
+    assert 5 <= len(sent) <= burst_s / 0.1 + 3, (len(sent), burst_s)
     # Trailing edge: the burst's final price always goes out.
     assert sent[-1][1] == prices[-1]
     # Never faster than the interval (small scheduler slack).

@@ -60,7 +60,13 @@ export function useTickerHistoryQuery(ticker: string, period: PricePeriod, refet
     staleTime: 0,
     retry: 1,
     retryDelay: 1000,
-    refetchInterval: refetchIntervalMs ?? false,
+    // A `stale` reply was served instantly from the server's expired copy
+    // while it refreshes from Yahoo in the background (audit B4) — re-ask
+    // in 3s to pick up the fresh one, then fall back to the normal cadence.
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      return d?.success && d.stale ? 3_000 : refetchIntervalMs ?? false;
+    },
     // Switching timeframes changes the query key (ticker-history includes
     // period) — without this, the chart would drop back to a loading state
     // on every tab tap. Keeping the previous period's data displayed while

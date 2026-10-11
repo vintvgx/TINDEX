@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { boostPositionPolling } from '@/lib/positionPolling';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import { getAuthHeaders } from '@/common/utils/api/getAuthHeaders';
 import type { BriefPlay, BriefPlayMode, MorningBrief } from '@/common/types/morningBrief';
@@ -43,11 +44,15 @@ export interface ConfirmBriefPlayArgs {
 
 /** Accepts a bare ticker (paper, auto-pick) or the confirm card's choices. */
 export function useConfirmBriefPlay() {
+  const qc = useQueryClient();
   return usePlayMutation((arg: string | ConfirmBriefPlayArgs) => {
     const a = typeof arg === 'string' ? { ticker: arg } : arg;
     return briefRequest(`/brief/plays/${a.ticker}/confirm`, 'POST', {
       ...(a.contractSymbol ? { contract_symbol: a.contractSymbol } : {}),
       paper_mode: a.paperMode !== false,
+    }).then((play) => {
+      boostPositionPolling(qc); // catch the fill fast (audit A6)
+      return play;
     });
   });
 }

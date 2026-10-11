@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { boostPositionPolling } from '@/lib/positionPolling';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 
 interface EnterCandidateTradeRequest {
@@ -55,6 +56,7 @@ export function useEnterCandidateTrade() {
       }
     },
     onSuccess: () => {
+      boostPositionPolling(queryClient); // catch the fill fast (audit A6)
       queryClient.invalidateQueries({ queryKey: ['strategy-positions'] });
       queryClient.invalidateQueries({ queryKey: ['strategy-configs'] });
     },

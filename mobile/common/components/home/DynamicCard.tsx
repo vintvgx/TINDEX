@@ -44,6 +44,10 @@ export const DYNAMIC_VIEWS = ['charts', 'account', 'brief', 'open', 'watched', '
 export type DynamicViewKey = (typeof DYNAMIC_VIEWS)[number];
 
 export const EXPANDED_H = 380;
+/** Pages further than this from the visible one render as empty placeholders
+ *  (unmounted — their queries, polls and sockets stop). 1 = the visible page
+ *  plus one neighbor each side, so a swipe never lands on a blank page. */
+const MOUNT_RADIUS = 1;
 export const COLLAPSED_H = 76;
 /** Scroll distance over which the card collapses — exactly the height it
  *  loses, so its bottom edge tracks the content scrolling under it 1:1
@@ -145,8 +149,16 @@ export function DynamicCard({
     if (i != null) setViewIndex(i);
   }, []);
 
+  // Only the visible page and its neighbors are mounted (polling audit A0).
+  // All 7 used to mount at once — each running its own queries, polls and
+  // live sockets while you looked at one — the main reason the 0.7 Home
+  // screen loads the backend far more than 0.5 did. Revisiting a page
+  // re-mounts it from the React Query cache, so it shows instantly.
   const renderView = useCallback(
-    ({ item }: { item: DynamicViewKey }) => {
+    ({ item, index }: { item: DynamicViewKey; index: number }) => {
+      if (Math.abs(index - viewIndex) > MOUNT_RADIUS) {
+        return <View style={{ width: pageWidth, height: EXPANDED_H }} />;
+      }
       let view: React.ReactNode;
       switch (item) {
         case 'charts':
@@ -173,7 +185,7 @@ export function DynamicCard({
       }
       return <View style={{ width: pageWidth, height: EXPANDED_H }}>{view}</View>;
     },
-    [pageWidth, handleOpenBrief],
+    [pageWidth, handleOpenBrief, viewIndex],
   );
 
 
@@ -209,6 +221,7 @@ export function DynamicCard({
               pagingEnabled
               showsHorizontalScrollIndicator={false}
               renderItem={renderView}
+              extraData={viewIndex}
               onViewableItemsChanged={onViewableChanged}
               viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
               getItemLayout={(_, index) => ({ length: pageWidth, offset: pageWidth * index, index })}

@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { boostPositionPolling } from '@/lib/positionPolling';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import { getAuthHeaders } from '@/common/utils/api/getAuthHeaders';
 
@@ -28,6 +29,7 @@ export function useApprovePendingEntry() {
       return json;
     },
     onSuccess: () => {
+      boostPositionPolling(qc); // catch the fill fast (audit A6)
       qc.invalidateQueries({ queryKey: ['pending-confirmations'] });
       qc.invalidateQueries({ queryKey: ['strategy-configs'] });
       qc.invalidateQueries({ queryKey: ['strategy-positions'] });

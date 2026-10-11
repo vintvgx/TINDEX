@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
+import { positionPollMs } from '@/lib/positionPolling';
 
 export interface AlpacaPosition {
   symbol: string;
@@ -40,7 +41,7 @@ export function useAlpacaPositionValues(
   mode: 'paper' | 'live' | 'both' = 'both',
   options?: { enabled?: boolean; refetchIntervalMs?: number },
 ) {
-  const { enabled = true, refetchIntervalMs = 5_000 } = options ?? {};
+  const { enabled = true, refetchIntervalMs } = options ?? {};
 
   return useQuery<AlpacaPositionsResponse>({
     queryKey: ['alpaca-position-values', mode],
@@ -51,8 +52,16 @@ export function useAlpacaPositionValues(
       return json as AlpacaPositionsResponse;
     },
     enabled,
-    refetchInterval: enabled ? refetchIntervalMs : false,
-    staleTime:       Math.floor(refetchIntervalMs * 0.6),
+    // Explicit interval if given; otherwise 5s while positions are open
+    // (equity moves), 30s when flat, off outside market hours (audit A6).
+    refetchInterval: (query) => {
+      if (!enabled) return false;
+      if (refetchIntervalMs != null) return refetchIntervalMs;
+      const d = query.state.data;
+      const open = (d?.paper?.positions?.length ?? 0) + (d?.live?.positions?.length ?? 0) > 0;
+      return positionPollMs({ fast: open });
+    },
+    staleTime:       3_000,
     retry: 1,
   });
 }

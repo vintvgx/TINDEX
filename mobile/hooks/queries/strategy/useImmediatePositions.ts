@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import type { ImmediatePosition } from '@/common/types/strategy';
+import { positionPollMs } from '@/lib/positionPolling';
 
 interface ImmediatePositionsResponse {
   positions: ImmediatePosition[];
@@ -8,8 +9,10 @@ interface ImmediatePositionsResponse {
 
 /**
  * Open positions from ad-hoc immediate trades (any ticker). Polled so the
- * "Immediate Trades" section stays current; per-position live P&L is also
- * streamed over the WS via useStrategyLivePrice(strategy_id).
+ * "Immediate Trades" section stays current; per-position live P&L is
+ * streamed over the WS via useStrategyLivePrice(strategy_id), so this only
+ * has to catch opens/closes — 30s, 5s right after a trade, off outside
+ * market hours (see positionPollMs).
  */
 export function useImmediatePositions(enabled: boolean = true) {
   return useQuery<ImmediatePosition[]>({
@@ -21,7 +24,7 @@ export function useImmediatePositions(enabled: boolean = true) {
       return json.positions ?? [];
     },
     enabled,
-    refetchInterval: 5000,
+    refetchInterval: () => positionPollMs(),
     staleTime: 2000,
   });
 }

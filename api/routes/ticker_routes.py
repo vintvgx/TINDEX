@@ -164,7 +164,10 @@ def get_ticker_history(ticker: str):
                                                 extended_hours=extended_hours)
 
         return jsonify({"success": True, "data": historical_data, "period": period, "timestamp": time.time(),
-                        "from_cache": historical_data.pop("from_cache", False)})
+                        "from_cache": historical_data.pop("from_cache", False),
+                        # Served instantly from an expired copy while a
+                        # background refresh runs — the app re-asks shortly.
+                        "stale": historical_data.pop("stale", False)})
 
     except Exception as e:
         logger.error("Ticker history fetch failed for ticker '%s': %s", ticker, e, exc_info=True)
