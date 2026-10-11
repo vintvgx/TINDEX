@@ -14,7 +14,7 @@ import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft
 import { TVChart } from '@/common/components/ticker/TVChart';
 import { ZoneDetailSheet } from '@/common/components/ticker/ZoneDetailSheet';
 import { ChartBottomToolbar } from '@/common/components/ticker/ChartBottomToolbar';
-import { PositionsPager } from '@/common/components/ticker/PositionsPager';
+import { ChartPositionStrip } from '@/common/components/ticker/ChartPositionStrip';
 import { TechnicalsSheet } from '@/common/components/ticker/TechnicalsSheet';
 import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals';
 import { OptionsPositioningPanel } from '@/common/components/ticker/brief/TickerBrief';
@@ -28,7 +28,6 @@ import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQu
 import { useLazyTickerHistory } from '@/hooks/queries/ticker/useLazyTickerHistory';
 import { useChartInterval, useSetChartIntervalFor } from '@/hooks/useChartInterval';
 import type { TickerStatus } from '@/common/components/ticker/TickerWheel';
-import { LiveAccountStrip } from '@/common/components/ticker/LiveAccountStrip';
 import { useTickerORBRange } from '@/hooks/queries/orb/useTickerORBRange';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
 import { useMarketStream } from '@/hooks/useMarketStream';
@@ -802,21 +801,19 @@ export function ChartsContent({ initialTicker, topInset }: {
         tickerStatus={tickerStatus}
       />
 
-      {/* Positions docked panel — expands below the toolbar, pushing the
-          chart up (chart keeps its min-height guard). One card per page,
-          swipe to paginate, LIVE/PAPER badge per card. */}
-      {expanded && (
-        <>
-          <PositionsPager
-            data={positionsData}
-            ticker={activeTicker}
-            onLiveUpdate={handlePositionLiveUpdate}
-          />
-        </>
-      )}
-
-      {/* Live account summary — always the bottom-most element. */}
-      <LiveAccountStrip bottomInset={bottomInset} />
+      {/* Bottom slot, position-aware: the live account summary when this
+          ticker has no open position (not tappable), else a compact
+          position strip pager that expands in place into the full cards
+          (pushing the chart up — it keeps its min-height guard). The
+          toolbar's positions button drives the same expanded state. */}
+      <ChartPositionStrip
+        data={positionsData}
+        ticker={activeTicker}
+        expanded={expanded}
+        onExpandedChange={setExpanded}
+        onLiveUpdate={handlePositionLiveUpdate}
+        bottomInset={bottomInset}
+      />
 
       <SearchBottomSheet
         visible={searchOpen}

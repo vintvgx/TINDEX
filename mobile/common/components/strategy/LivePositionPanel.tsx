@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, Platform, UIManager } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
+import { ThetaReadout } from '@/common/components/strategy/ThetaReadout';
 import { formatContractSymbolShort, getTradeHorizon } from '@/lib/formatContract';
 import { isMarketHours } from '@/lib/marketHours';
 import { useCardTintDarkMode } from '@/hooks/useCardTintDarkMode';
@@ -314,6 +315,13 @@ export function LivePositionPanel({
                 </View>
               )}
             </View>
+            <ThetaReadout
+              ticker={ticker}
+              contract={display.contract}
+              premium={display.mid_price}
+              colors={colors}
+              style={{ fontSize: 10.5, marginTop: 2 }}
+            />
 
             {/* Meta row: Qty, then the initial-stop grace and the worst-case
                 floor as icon + value side by side (was two extra full-width

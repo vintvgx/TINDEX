@@ -15,6 +15,7 @@ import { AppHeader } from '@/common/components/ui/AppHeader';
 import { ChartTapeProvider } from '@/common/components/ui/ChartTapeContext';
 import { OptionsTickerProvider } from '@/lib/optionsTickerContext';
 import { useThemeColors } from '@/lib/useColorScheme';
+import { TradeEntryNavigator } from '@/common/components/trade/TradeEntryNavigator';
 
 /**
  * 0.7 redesign app shell: ticker tape → app header → tab navigator →
@@ -57,6 +58,8 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
         <TickerTape />
       </View>
       <AppHeader />
+      {/* Lands a just-entered trade on Home (see TradeEntryNavigator). */}
+      <TradeEntryNavigator />
 
       <View style={{ flex: 1 }}>
         <SafeAreaInsetsContext.Provider

@@ -218,8 +218,6 @@ def _slim_contract(c: dict, spot: float | None = None) -> dict:
 
 def _build_account() -> dict:
     """Live Alpaca account only — balances plus period P&L."""
-    from alpaca.trading.requests import GetPortfolioHistoryRequest
-
     client = _alpaca_client(paper=False)
     acct = client.get_account()
     equity = float(acct.equity)
@@ -243,31 +241,27 @@ def _build_account() -> dict:
         "pnl_all_time": None,
     }
 
-    # Same approach as /strategy/accounts/history: Alpaca's profit_loss series
-    # already excludes deposits/withdrawals, so deltas of it are real trading P&L.
+    # Period P&L from the unified summary (orb_trades, net of estimated fees,
+    # plus live unrealized) — the same numbers Home and the Trade Log show.
+    # Replaced the Alpaca profit_loss-series copy (2026-10-11), which
+    # subtracted two daily bars instead of summing the window.
     try:
-        hist = client.get_portfolio_history(GetPortfolioHistoryRequest(period="all", timeframe="1D"))
-        stamps = list(hist.timestamp or [])
-        pls = [float(p) if p is not None else None for p in (hist.profit_loss or [])]
-        latest = next((p for p in reversed(pls) if p is not None), None)
-        if stamps and latest is not None:
-            def _since(ts: float):
-                idx = 0
-                for i, t in enumerate(stamps):
-                    if t <= ts:
-                        idx = i
-                    else:
-                        break
-                return round(latest - pls[idx], 2) if pls[idx] is not None else None
+        from routes.strategy_routes import logger_svc
+        from services.strategy.pnl_summary import get_summary
 
-            now_ts = stamps[-1]
-            jan1 = datetime(datetime.now(ET).year, 1, 1, tzinfo=timezone.utc).timestamp()
-            out["pnl_week"] = _since(now_ts - 7 * 86400)
-            out["pnl_month"] = _since(now_ts - 30 * 86400)
-            out["pnl_ytd"] = _since(jan1)
-            out["pnl_all_time"] = round(latest - pls[0], 2) if pls[0] is not None else None
+        summary = get_summary(logger_svc.client, paper=False)
+        # Today too, so Muse quotes what Home shows; the raw equity move
+        # (includes anything outside the app's trades) stays alongside.
+        out["equity_change_today"] = out["pnl_today"]
+        out["pnl_today"] = summary["today"]["total"]
+        out["pnl_week"] = summary["week"]["total"]
+        out["pnl_month"] = summary["month"]["total"]
+        out["pnl_ytd"] = summary["ytd"]["total"]
+        out["pnl_all_time"] = summary["all_time"]["total"]
+        out["pnl_realized_today"] = summary["today"]["realized_net"]
+        out["est_fees_today"] = summary["today"]["fees"]
     except Exception as e:
-        logger.warning("[muse] portfolio history failed: %s", e)
+        logger.warning("[muse] pnl summary failed: %s", e)
 
     return out
 
@@ -1256,6 +1250,58 @@ def publish_market_digest():
         return _err(f"Failed to publish digest: {e}", 500)
 
 
+# ── Investing theses (Bandit writes them; this is queue + storage + push) ─────
+
+@bp.route("/thesis/requests", methods=["GET"])
+def thesis_requests():
+    """Pending Generate-Thesis requests from the app, oldest first."""
+    from services.thesis.thesis_queue import list_pending
+    limit = min(max(request.args.get("limit", 20, type=int), 1), 100)
+    try:
+        return _ok(list_pending(get_supabase_service().client, limit))
+    except Exception as e:
+        logger.error("[muse/thesis/requests] %s", e)
+        return _err(f"Failed to list thesis requests: {e}", 500)
+
+
+@bp.route("/thesis/publish", methods=["POST"])
+def thesis_publish():
+    """
+    Publish the thesis Bandit wrote. Body:
+      { "request_id": "<uuid>"  (or "ticker" + "user_id"),
+        "thesis": { verdict, summary, conviction?, horizon?, for_you?[],
+                    bull?[], bear?[], what_changes? } }
+    Stores it in ticker_theses, closes the request, pushes the requester.
+    To report a failure instead: { "request_id": ..., "error": "..." }.
+    """
+    from services.thesis.thesis_queue import clean_ticker, mark_failed, publish, validate_thesis
+    body = request.get_json(silent=True) or {}
+    sb = get_supabase_service().client
+    request_id = body.get("request_id")
+    if body.get("error") and request_id:
+        try:
+            mark_failed(sb, request_id, str(body["error"]))
+            return _ok({"request_id": request_id, "status": "failed"})
+        except Exception as e:
+            return _err(f"Failed to mark request failed: {e}", 500)
+    thesis = body.get("thesis")
+    problem = validate_thesis(thesis)
+    if problem:
+        return _err(problem)
+    ticker = clean_ticker(body.get("ticker")) if body.get("ticker") else None
+    try:
+        out = publish(sb, thesis, request_id=request_id, ticker=ticker,
+                      user_id=body.get("user_id") or (None if request_id else _muse_user_id()))
+        return _ok(out)
+    except LookupError as e:
+        return _err(str(e), 404)
+    except ValueError as e:
+        return _err(str(e))
+    except Exception as e:
+        logger.error("[muse/thesis/publish] %s", e, exc_info=True)
+        return _err(f"Failed to publish thesis: {e}", 500)
+
+
 def _digest_play(p: dict) -> dict:
     """Map one score_ticker() result onto the muse-brief-v1 ticker shape."""
     d = p["direction"]
@@ -1667,6 +1713,27 @@ _OPENAPI = {
                 "silent": {"type": "boolean",
                            "description": "Skip the push notification"},
             }, ["content"]))},
+        "/muse/thesis/requests": {"get": _op(
+            "listThesisRequests", "Pending thesis requests",
+            "Generate-Thesis requests the user queued from the app's Invest tab, oldest first. "
+            "Each has id, ticker, user_id, created_at, price_at_request, next_earnings_at_request. "
+            "Write the thesis (investing horizon — never contradict the trading verdict's lane) "
+            "and POST it to /muse/thesis/publish.",
+            [_q("limit", "Max rows (default 20)", required=False)])},
+        "/muse/thesis/publish": {"post": _op(
+            "publishThesis", "Publish a thesis",
+            "Store the thesis for a request, mark it complete and push the user "
+            "\"Your <TICKER> thesis is ready\". Send {request_id, error} instead to mark it failed.",
+            body=_body({
+                "request_id": {"type": "string", "description": "From /muse/thesis/requests"},
+                "ticker": {"type": "string", "description": "Instead of request_id (owner's thesis)"},
+                "user_id": {"type": "string", "description": "With ticker; defaults to the owner"},
+                "error": {"type": "string", "description": "Mark the request failed instead"},
+                "thesis": {"type": "object", "description": (
+                    "{verdict (e.g. 'HOLD / ADD ON DIPS'), summary, conviction 1-10, horizon "
+                    "(e.g. '12–24 mo'), for_you [str], bull [str], bear [str], what_changes str}. "
+                    "verdict and summary are required.")},
+            }, []))},
         "/muse/digest/compose": {"get": _op(
             "composeDigest", "Compose digest inputs",
             "Score the morning-brief universe (or ?tickers= override) with the brief "

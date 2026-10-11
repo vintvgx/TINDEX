@@ -17,6 +17,8 @@ Routes:
   GET  /ticker/<sym>/institutional   top holders + top-holder ownership trend
   GET  /ticker/<sym>/linked          LLM + web search, 30-day cache
   GET  /ticker/<sym>/catalysts       next earnings + momentum + ≤2 news events
+  GET  /ticker/<sym>/fundamentals    Invest tab: valuation/profitability/growth/risk,
+                                     consensus, revenue actuals + estimates
   POST /ticker/<sym>/explain         ≤35-word explanation of a gate verdict
 """
 
@@ -154,3 +156,9 @@ def explain(sym):
         text, fetched_at = llm.explain_gate(symbol, gate)
         return {"text": text}, llm.TTL_EXPLAIN, fetched_at
     return _section("explain", sym, _builder)
+
+
+@bp.route("/ticker/<sym>/fundamentals", methods=["GET"])
+def fundamentals(sym):
+    from services.ticker_brief.fundamentals import build_fundamentals
+    return _section("fundamentals", sym, build_fundamentals, stale_key="fundamentals:{sym}")

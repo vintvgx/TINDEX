@@ -206,6 +206,40 @@ def agent_chat():
     )
 
 
+# ── Generate Thesis (queue only — Bandit writes it; see services/thesis) ──────
+
+@bp.route("/api/agent/thesis", methods=["POST"])
+def agent_thesis_request():
+    """Queue a thesis for Bandit. Body {ticker, user_id} → 202 {status: queued}."""
+    from services.thesis.thesis_queue import clean_ticker, queue_request
+
+    body = request.get_json(silent=True) or {}
+    ticker, user_id = clean_ticker(body.get("ticker")), body.get("user_id")
+    if not ticker or not user_id:
+        return jsonify({"error": "ticker and user_id are required"}), 400
+    try:
+        row = queue_request(get_supabase_service().client, ticker, user_id)
+    except Exception as e:
+        logger.error("[agent/thesis] queue failed for %s: %s", ticker, e)
+        return jsonify({"error": "Could not queue the thesis"}), 500
+    return jsonify({"status": "queued", "request_id": row["id"], "ticker": ticker}), 202
+
+
+@bp.route("/api/agent/thesis/<ticker>", methods=["GET"])
+def agent_thesis_get(ticker):
+    """Latest thesis for ?user_id= — polled by the app while one is queued."""
+    from services.thesis.thesis_queue import clean_ticker, latest
+
+    sym, user_id = clean_ticker(ticker), request.args.get("user_id")
+    if not sym or not user_id:
+        return jsonify({"error": "ticker and user_id are required"}), 400
+    try:
+        return jsonify(latest(get_supabase_service().client, sym, user_id))
+    except Exception as e:
+        logger.error("[agent/thesis] read failed for %s: %s", sym, e)
+        return jsonify({"error": "Could not load the thesis"}), 500
+
+
 @bp.route("/api/agent/parse-screenshot", methods=["POST"])
 def agent_parse_screenshot():
     """

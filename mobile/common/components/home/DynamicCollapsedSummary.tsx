@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useAlpacaBothAccounts, useAlpacaAccountsHistory } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { usePnlSummary } from '@/hooks/queries/strategy/usePnlSummary';
 import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
 import { useTrackedContracts } from '@/hooks/queries/track/useTrackedContracts';
 import { useSocialSignalContracts } from '@/hooks/queries/social/useSocialSignalContracts';
@@ -67,9 +68,10 @@ function ChartsStrip({ info, colors }: { info: TickerInfo; colors: Colors }) {
 
 function AccountStrip({ colors }: { colors: Colors }) {
   const { data: accounts } = useAlpacaBothAccounts();
-  const { data: history } = useAlpacaAccountsHistory();
+  // Same unified figure as the expanded account view's TODAY cell.
+  const { data: pnl } = usePnlSummary('live');
   const avail = accountAvailableFunds(accounts?.live);
-  const today = history?.live?.pnl_today ?? accounts?.live?.pnl_today;
+  const today = pnl?.today.total;
   return (
     <Strip
       title="LIVE ACCOUNT"

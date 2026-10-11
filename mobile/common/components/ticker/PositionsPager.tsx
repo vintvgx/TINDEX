@@ -19,21 +19,29 @@ export function PositionsPager({
   ticker,
   onLiveUpdate,
   onPageChange,
+  initialIndex = 0,
 }: {
   data: UseLivePositionsDataResult;
   ticker: string;
   onLiveUpdate: (strategyId: string, data: LivePriceData | null) => void;
   onPageChange?: (index: number) => void;
+  /** Page to open on — the chart strip passes the strip it was expanded from. */
+  initialIndex?: number;
 }) {
   const colors = useThemeColors();
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(initialIndex);
   const [pageWidth, setPageWidth] = useState(Dimensions.get('window').width);
   const listRef = useRef<FlatList>(null);
 
   const positions = data.displayedPositions;
 
   // Reset to the first card when the ticker (or list) changes.
+  const first = useRef(true);
   useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
     setIndex(0);
     listRef.current?.scrollToOffset({ offset: 0, animated: false });
   }, [ticker, positions.length]);
@@ -70,6 +78,7 @@ export function PositionsPager({
         bounces={false}
         keyExtractor={(p) => p.strategy_id}
         getItemLayout={(_, i) => ({ length: pageWidth, offset: pageWidth * i, index: i })}
+        initialScrollIndex={Math.min(initialIndex, Math.max(0, positions.length - 1))}
         onMomentumScrollEnd={(e) => {
           const i = Math.round(e.nativeEvent.contentOffset.x / pageWidth);
           setIndex(i);
@@ -108,7 +117,8 @@ const s = StyleSheet.create({
   panel: {
     // One card + dots; was 264 with the LIVE/PAPER badge row, 236 before
     // the card's grace/floor lines merged into its Qty meta row.
-    height: 218,
+    // +16 for the card's theta-estimate line (0DTE / short-dated only).
+    height: 234,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   page: {

@@ -246,6 +246,9 @@ export interface ImmediateTradeByTickerRequest {
   sl_outer_floor_pct?: number;
   /** Post-TP1 breakeven grace in seconds (0 = off, max 120). */
   be_grace_seconds?: number;
+  /** Trade sheet v2 exit ladder, layered onto the SCALPER profile — see
+   *  ExitLadder.tsx and the route's _ladder_fields. */
+  ladder?: { tp2_mult?: number; tp1_close_pct?: number; tp2_close_pct?: number };
 }
 
 /** An open position from a ticker-based immediate trade engine. */

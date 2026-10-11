@@ -652,6 +652,9 @@ class TradeLogger:
                                "retrying without them (run Supabase migration to fix)")
                 self.client.table("orb_trades").update(stripped).eq("id", row["id"]).execute()
 
+            # Unified P&L cache: any exit (partial or full) changes realized P&L.
+            self._invalidate_pnl_summary()
+
             q = self.client.table("orb_session").update({"trade_taken": True}).eq(
                 "session_date", str(date.today())
             )
@@ -662,6 +665,15 @@ class TradeLogger:
         except Exception as e:
             logger.error("[TradeLogger] log_exit failed: %s", e)
             return False
+
+    def _invalidate_pnl_summary(self):
+        """Clear the account_pnl_summary cache (both modes — the exit row's
+        mode isn't on hand here, and the next read recomputes cheaply)."""
+        try:
+            from services.strategy.pnl_summary import invalidate
+            invalidate(self.client)
+        except Exception as e:
+            logger.warning("[TradeLogger] pnl summary invalidate failed: %s", e)
 
     # ── Reads ───────────────────────────────────────────────────────────────────
 
@@ -786,6 +798,7 @@ class TradeLogger:
                     row.get("contract_symbol"), row["id"], loss,
                 )
             logger.info("[TradeLogger] Reconciled %d orphaned trade(s)", len(rows))
+            self._invalidate_pnl_summary()
         except Exception as e:
             logger.error("[TradeLogger] reconcile_orphaned_trades failed: %s", e)
 

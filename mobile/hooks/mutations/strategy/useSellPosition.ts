@@ -67,6 +67,7 @@ export function useSellPosition() {
       queryClient.invalidateQueries({ queryKey: ['strategy-positions'] });
       queryClient.invalidateQueries({ queryKey: ['strategy-configs'] });
       queryClient.invalidateQueries({ queryKey: ['strategy-trades'] });
+      queryClient.invalidateQueries({ queryKey: ['pnl-summary'] });
       queryClient.invalidateQueries({ queryKey: ['immediate-positions'] });
     },
   });

@@ -646,6 +646,20 @@ class StrategyNotifier:
             priority=P_INFO,
         )
 
+    def notify_thesis_ready(self, ticker: str, user_id: str):
+        """
+        Bandit published the investing thesis this user asked for (Invest
+        tab → Generate Thesis; see services/thesis/thesis_queue.py). Only to
+        the requester. Tapping opens the ticker sheet on the thesis.
+        """
+        self._dispatch(
+            title=f"Your {ticker} thesis is ready",
+            body="Bandit wrote it for you — tap to read.",
+            data={"screen": "ticker_thesis", "ticker": ticker},
+            priority=P_INFO,
+            user_ids=[user_id],
+        )
+
     def notify_test(self, title: str, body: str):
         """
         Free-form push with no domain fields — used only by the Profile >

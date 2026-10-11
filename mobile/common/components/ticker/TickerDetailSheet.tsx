@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View, Text, ScrollView, Pressable, RefreshControl, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -14,6 +14,7 @@ import { OptionsChainPicker } from '@/common/components/strategy/OptionsChainPic
 import { TickerBrief } from '@/common/components/ticker/brief/TickerBrief';
 import { Skeleton } from '@/common/components/ui/Skeleton';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
+import { InvestTab } from '@/common/components/ticker/invest/InvestTab';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 
 interface TickerDetailSheetProps {
@@ -22,14 +23,21 @@ interface TickerDetailSheetProps {
   /** Opens straight into the full-screen chart (e.g. the "Open Chart" button
    *  on a live position card) instead of the default sheet overview. */
   initialFullScreenChart?: boolean;
+  /** Open on the Invest tab with the thesis sheet up (thesis-ready push). */
+  openThesis?: boolean;
 }
 
 // The insights/financials/updates sub-screens were replaced by the inline
 // trading brief (TickerBrief); Contracts is the only sub-screen left.
 type SubScreen = 'contracts' | null;
 
-export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, onClose, initialFullScreenChart = false }) => {
+export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, onClose, initialFullScreenChart = false, openThesis = false }) => {
   const colors = useThemeColors();
+  // Trade | Invest (handoff spec 6): the lower section below the chart.
+  const [lane, setLane] = useState<'trade' | 'invest'>(openThesis ? 'invest' : 'trade');
+  useEffect(() => {
+    setLane(openThesis ? 'invest' : 'trade');
+  }, [ticker, openThesis]);
 
   const [period, setPeriod] = useState<PricePeriod>('1D');
   const [subScreen, setSubScreen] = useState<SubScreen>(null);
@@ -269,40 +277,66 @@ export const TickerDetailSheet: React.FC<TickerDetailSheetProps> = ({ ticker, on
         periodPositive={periodPositive}
       />
 
-      {/* Contracts — primary CTA */}
-      <Pressable
-        onPress={() => contractsReady && setSubScreen('contracts')}
-        disabled={!contractsReady}
-        style={{
-          backgroundColor: colors.accent,
-          borderRadius: 16,
-          paddingVertical: 16,
-          paddingHorizontal: 18,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: 20,
-          opacity: contractsReady ? 1 : 0.6,
-        }}
-      >
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <Ionicons name="documents-outline" size={20} color={colors.accentForeground} />
-          <View>
-            <Text style={{ color: colors.accentForeground, fontSize: 16, fontWeight: '700' }}>Contracts</Text>
-            <Text style={{ color: colors.accentForeground, fontSize: 12, opacity: 0.7 }}>
-              {contractsReady ? 'View options chain' : 'Loading…'}
-            </Text>
-          </View>
-        </View>
-        {!contractsReady ? (
-          <ActivityIndicator size="small" color={colors.accentForeground} />
-        ) : (
-          <Ionicons name="chevron-forward" size={18} color={colors.accentForeground} />
-        )}
-      </Pressable>
+      {/* Trade | Invest — trading brief vs. the investing view */}
+      <View style={{ flexDirection: 'row', backgroundColor: colors.card, borderRadius: 12, padding: 3, marginBottom: 14 }}>
+        {(['trade', 'invest'] as const).map((k) => {
+          const on = lane === k;
+          return (
+            <Pressable
+              key={k}
+              onPress={() => setLane(k)}
+              style={{ flex: 1, paddingVertical: 9, borderRadius: 9, alignItems: 'center', backgroundColor: on ? colors.surfaceSecondary ?? colors.border : 'transparent' }}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: on }}
+            >
+              <Text style={{ fontSize: 14, fontWeight: '700', color: on ? colors.text : colors.textSecondary }}>
+                {k === 'trade' ? 'Trade' : 'Invest'}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
 
-      {/* Trading brief — each section loads and fails independently */}
-      <TickerBrief ticker={ticker} />
+      {lane === 'invest' ? (
+        <InvestTab ticker={ticker} livePrice={stockData?.current_price} openThesisOnMount={openThesis} />
+      ) : (
+        <>
+        {/* Contracts — primary CTA */}
+        <Pressable
+          onPress={() => contractsReady && setSubScreen('contracts')}
+          disabled={!contractsReady}
+          style={{
+            backgroundColor: colors.accent,
+            borderRadius: 16,
+            paddingVertical: 16,
+            paddingHorizontal: 18,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 20,
+            opacity: contractsReady ? 1 : 0.6,
+          }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <Ionicons name="documents-outline" size={20} color={colors.accentForeground} />
+            <View>
+              <Text style={{ color: colors.accentForeground, fontSize: 16, fontWeight: '700' }}>Contracts</Text>
+              <Text style={{ color: colors.accentForeground, fontSize: 12, opacity: 0.7 }}>
+                {contractsReady ? 'View options chain' : 'Loading…'}
+              </Text>
+            </View>
+          </View>
+          {!contractsReady ? (
+            <ActivityIndicator size="small" color={colors.accentForeground} />
+          ) : (
+            <Ionicons name="chevron-forward" size={18} color={colors.accentForeground} />
+          )}
+        </Pressable>
+
+        {/* Trading brief — each section loads and fails independently */}
+        <TickerBrief ticker={ticker} />
+        </>
+      )}
     </ScrollView>
   );
 };

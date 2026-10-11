@@ -1326,6 +1326,32 @@ def _entry_exit_fields(data: dict, exit_overrides: dict):
     return None
 
 
+def _ladder_fields(data: dict, exit_overrides: dict):
+    """Exit ladder from the v2 trade sheet (2026-10-11): `ladder` =
+    {tp2_mult?, tp1_close_pct?, tp2_close_pct?}. Layered onto the chosen
+    profile (SCALPER) — whose TP1 +30% / SL -30% / qty>2-only TP2 already
+    give the 1 · 1+runner · 1-1-1 splits; the ladder only picks C2's target
+    (Standard +100% / Risky +60%) and the qty>=4 close fractions.
+    Returns an error message for bad input, else None."""
+    ladder = data.get("ladder")
+    if ladder is None:
+        return None
+    if not isinstance(ladder, dict):
+        return "ladder must be an object"
+    bounds = {"tp2_mult": (1.05, 5.0), "tp1_close_pct": (0.01, 1.0), "tp2_close_pct": (0.01, 1.0)}
+    for key, (lo, hi) in bounds.items():
+        if ladder.get(key) is None:
+            continue
+        try:
+            val = float(ladder[key])
+        except (TypeError, ValueError):
+            return f"ladder.{key} must be a number between {lo} and {hi}"
+        if not lo <= val <= hi:
+            return f"ladder.{key} must be between {lo} and {hi}"
+        exit_overrides[key] = val
+    return None
+
+
 @strategy_bp.route("/configs/<strategy_id>/immediate-trade", methods=["POST"])
 def immediate_trade(strategy_id: str):
     """
@@ -1420,7 +1446,7 @@ def immediate_trade_by_ticker():
                 exit_overrides.update(grace_fields_for_minutes(int(raw) if raw is not None else None))
             except ValueError as e:
                 return jsonify({"status": "error", "message": str(e)}), 400
-        err = _entry_exit_fields(data, exit_overrides)
+        err = _entry_exit_fields(data, exit_overrides) or _ladder_fields(data, exit_overrides)
         if err:
             return jsonify({"status": "error", "message": err}), 400
 
@@ -1749,16 +1775,22 @@ def get_accounts_history():
                     now_ts = timestamps[-1]
                     latest_pl = next((p for p in reversed(pls) if p is not None), None)
 
+                    # DEMOTED (unified P&L, 2026-10-11): the app's period
+                    # P&L now comes from /accounts/pnl-summary. These fields
+                    # are kept only for app builds already in the field and
+                    # as the Alpaca-side reconciliation figure. profit_loss
+                    # is a per-day series, so a period is the SUM of the days
+                    # after its base bar — the old `latest − base` subtracted
+                    # two single days (debug-2026-10-09-today-metric).
                     def _period_pnl(days_ago: int | None, boundary_ts: float | None = None):
                         if latest_pl is None:
                             return None, None
                         target = boundary_ts if boundary_ts is not None else now_ts - days_ago * 86400
                         idx = _nearest_index_on_or_before(timestamps, target)
-                        base_pl     = pls[idx]
                         base_equity = equities[idx]
-                        if base_pl is None or base_equity is None or base_equity <= 0:
+                        if base_equity is None or base_equity <= 0:
                             return None, None
-                        delta = round(latest_pl - base_pl, 2)
+                        delta = round(sum(p for p in pls[idx + 1:] if p is not None), 2)
                         pct   = round(delta / base_equity * 100, 3)
                         return delta, pct
 
@@ -1772,8 +1804,8 @@ def get_accounts_history():
                     # All-time: delta from the very first recorded day (index 0)
                     # — this is "P&L since the account started", excluding every
                     # deposit/withdrawal along the way.
-                    if pls[0] is not None and equities[0] and equities[0] > 0:
-                        pnl_all_time = round(latest_pl - pls[0], 2)
+                    if equities[0] and equities[0] > 0:
+                        pnl_all_time = round(sum(p for p in pls[1:] if p is not None), 2)
                     # % on total capital actually contributed, not on a fluctuating
                     # equity base — matches how a user thinks about "my return":
                     # gained/lost X% of the money I actually put in.
@@ -1808,6 +1840,77 @@ def get_accounts_history():
         "paper":   _fetch_with_history(True),
         "live":    _fetch_with_history(False),
     })
+
+
+_pnl_reconcile_last: dict[str, float] = {}
+_PNL_RECONCILE_EVERY_S = 600
+
+
+def _reconcile_pnl_summary_async(paper: bool, summary: dict) -> None:
+    """Log-only cross-check of the DB-derived summary against Alpaca's
+    portfolio-history series, at most every 10 min per mode, off-thread."""
+    import threading
+    import time as _time
+
+    mode = "paper" if paper else "live"
+    now = _time.time()
+    if now - _pnl_reconcile_last.get(mode, 0) < _PNL_RECONCILE_EVERY_S:
+        return
+    _pnl_reconcile_last[mode] = now
+
+    def _run():
+        try:
+            from services.alpaca.shared_clients import get_trading_client
+            from alpaca.trading.requests import GetPortfolioHistoryRequest
+            from services.strategy.pnl_summary import period_starts, reconcile_with_alpaca_series
+
+            hist = get_trading_client(paper).get_portfolio_history(
+                GetPortfolioHistoryRequest(period="all", timeframe="1D")
+            )
+            stamps = list(hist.timestamp or [])
+            pls = [float(p) if p is not None else None for p in (hist.profit_loss or [])]
+            if not stamps:
+                return
+            series = {}
+            for period, start in period_starts().items():
+                if period == "today":
+                    continue  # intraday — the daily series lags it
+                cutoff = start.timestamp() if start else None
+                series[period] = round(sum(
+                    p for t, p in zip(stamps, pls)
+                    if p is not None and (cutoff is None or t >= cutoff)
+                ), 2)
+            reconcile_with_alpaca_series(mode, summary, series)
+        except Exception as e:
+            logger.info("[pnl-summary] Alpaca reconcile skipped (%s): %s", mode, e)
+
+    threading.Thread(target=_run, daemon=True, name=f"pnl-reconcile-{mode}").start()
+
+
+@strategy_bp.route("/accounts/pnl-summary", methods=["GET"])
+def get_pnl_summary():
+    """
+    Unified P&L — the single source both Home's account card and the Trade
+    Log read (see services/strategy/pnl_summary.py for the rules).
+
+    ?mode=live|paper (default live) →
+      { success, mode, today|week|month|ytd|all_time: {
+          realized_gross, fees, realized_net, unrealized, total, trades_closed },
+        as_of, cached, open_positions }
+    """
+    from services.strategy.pnl_summary import get_summary
+
+    mode = (request.args.get("mode") or "live").lower()
+    if mode not in ("live", "paper"):
+        return jsonify({"success": False, "error": "mode must be live or paper"}), 400
+    paper = mode == "paper"
+    try:
+        summary = get_summary(logger_svc.client, paper)
+    except Exception as e:
+        logger.error("[pnl-summary] %s failed: %s", mode, e)
+        return jsonify({"success": False, "mode": mode, "error": str(e)}), 500
+    _reconcile_pnl_summary_async(paper, summary)
+    return jsonify({"success": True, "mode": mode, **summary})
 
 
 @strategy_bp.route("/accounts/positions", methods=["GET"])

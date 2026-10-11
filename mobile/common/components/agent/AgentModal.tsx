@@ -27,6 +27,7 @@ import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { ChecklistCard, type ChecklistStatus } from '@/common/components/agent/ChecklistCard';
 import { TradeContractQuickCard } from '@/common/components/ticker/TradeContractSheet';
+import { subscribeTradeEntered } from '@/common/services/tradeEntryEvents';
 import type { AgentConversation, FlowChecklist } from '@/common/types/agent';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 
@@ -248,7 +249,7 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [pendingImage, setPendingImage] = useState<PendingImage | null>(null);
 
-  // Trade-entry overlay, opened by long-pressing a contract in a checklist —
+  // Trade-entry overlay, opened by tapping a contract in a checklist —
   // TradeContractQuickCard (same profile/quantity/paper-live form as
   // TradeContractSheet, rendered as an animated overlay inside THIS modal
   // instead of a second native Modal — see TradeContractSheet.tsx). Reset
@@ -279,6 +280,16 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
   const { data: savedMessages = [] } = useAgentMessages(activeConversationId);
   const { mutate: deleteConversation, isPending: isDeletingConvo, variables: deletingConvoId } = useDeleteAgentConversation();
   const { mutate: persistChecklistStatus } = useUpdateChecklistStatus();
+
+  // A trade entered from a checklist hands off to Home (see
+  // TradeEntryNavigator) — this modal has to be out of the way first.
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => subscribeTradeEntered(() => {
+    if (visibleRef.current) onCloseRef.current();
+  }), []);
 
   // Reset state when modal closes
   useEffect(() => {
@@ -334,7 +345,7 @@ export const AgentModal: React.FC<Props> = ({ visible, onClose, ticker, onError 
     }
   }, [persistChecklistStatus]);
 
-  // Long-pressing a contract in a checklist opens TradeContractQuickCard —
+  // Tapping a contract in a checklist opens TradeContractQuickCard —
   // an animated overlay INSIDE this same Modal (see TradeContractSheet.tsx),
   // not a second native Modal. This assistant modal never closes for the
   // handoff, so its conversation/checklist state is never lost and there's

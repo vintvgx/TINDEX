@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useAlpacaBothAccounts, useAlpacaAccountsHistory } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { usePnlSummary, type PnlPeriod } from '@/hooks/queries/strategy/usePnlSummary';
 import { useStrategyPerformance } from '@/hooks/queries/strategy/useStrategyStats';
 import { useLiveEquity } from '@/hooks/queries/strategy/useLiveEquity';
 
@@ -22,28 +23,39 @@ export function accountAvailableFunds(acct: { options_buying_power?: number; ava
  * Positions screen shows — cash + open positions' market value), available
  * funds beside it, mode-pure P&L by period, and mode-pure strategy
  * performance. The LIVE/PAPER toggle flips every number on the card.
+ *
+ * Period P&L is the unified summary's `total` (realized net of fees + open
+ * positions live) — the same endpoint the Trade Log reads, so the two can't
+ * disagree. The broker's equity − last_equity is only a dev-log cross-check.
  */
 export function DynamicAccountView() {
   const colors = useThemeColors();
   const [mode, setMode] = useState<'live' | 'paper'>('live');
 
   const { data: accounts, isLoading } = useAlpacaBothAccounts();
-  const { data: history } = useAlpacaAccountsHistory();
+  const { data: pnl } = usePnlSummary(mode);
   const { data: perf } = useStrategyPerformance(mode);
   const { account, displayEquity, positionCount } = useLiveEquity(mode);
 
-  const hist = mode === 'live' ? history?.live : history?.paper;
   const overall = perf?.overall;
   const available = accountAvailableFunds(account);
   const tone = (v: number | null | undefined) =>
     v == null ? colors.textSecondary : v >= 0 ? colors.success : colors.error;
 
-  const periods: Array<[string, number | null | undefined]> = [
-    ['TODAY', hist?.pnl_today ?? account?.pnl_today],
-    ['WEEK', hist?.pnl_week],
-    ['MONTH', hist?.pnl_month],
-    ['YTD', hist?.pnl_ytd],
+  const periods: Array<[string, PnlPeriod]> = [
+    ['TODAY', 'today'],
+    ['WEEK', 'week'],
+    ['MONTH', 'month'],
+    ['YTD', 'ytd'],
   ];
+
+  useEffect(() => {
+    if (!__DEV__ || !pnl || account?.pnl_today == null) return;
+    const drift = account.pnl_today - pnl.today.total;
+    if (Math.abs(drift) > 25) {
+      console.log(`[pnl] ${mode} today: summary ${pnl.today.total.toFixed(2)} vs equity Δ ${account.pnl_today.toFixed(2)}`);
+    }
+  }, [pnl, account?.pnl_today, mode]);
 
   const modeColor = mode === 'live' ? colors.success : colors.warning;
 
@@ -117,15 +129,23 @@ export function DynamicAccountView() {
 
       {/* Mode-pure P&L by period */}
       <View style={[styles.grid, { borderColor: colors.border }]}>
-        {periods.map(([label, v]) => (
-          <View key={label} style={styles.cell}>
-            <Text style={[styles.mono, { fontSize: 9, letterSpacing: 1.2, color: colors.textTertiary }]}>{label}</Text>
-            <Text style={[styles.mono, { fontSize: 13, fontWeight: '800', color: tone(v), marginTop: 3 }]}>
-              {signedMoney(v)}
-            </Text>
-          </View>
-        ))}
+        {periods.map(([label, key]) => {
+          const v = pnl?.[key].total;
+          return (
+            <View key={label} style={styles.cell}>
+              <Text style={[styles.mono, { fontSize: 9, letterSpacing: 1.2, color: colors.textTertiary }]}>{label}</Text>
+              <Text style={[styles.mono, { fontSize: 13, fontWeight: '800', color: tone(v), marginTop: 3 }]}>
+                {signedMoney(v)}
+              </Text>
+            </View>
+          );
+        })}
       </View>
+      {pnl ? (
+        <Text style={[styles.mono, { fontSize: 10.5, color: colors.textTertiary, marginTop: 8 }]}>
+          Today {signedMoney(pnl.today.realized_net)} realized · {signedMoney(pnl.today.unrealized)} open · est. fees {money(pnl.today.fees)}
+        </Text>
+      ) : null}
 
       {/* Mode-pure strategy performance */}
       <Text style={[styles.mono, { fontSize: 10, letterSpacing: 2, color: colors.textTertiary, marginTop: 16 }]}>

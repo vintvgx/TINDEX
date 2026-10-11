@@ -80,6 +80,7 @@ export const TickerSheetProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 ticker={ticker}
                 onClose={handleClose}
                 initialFullScreenChart={openOptions.fullScreenChart}
+                openThesis={openOptions.thesis}
               />
             )}
           </SafeAreaView>

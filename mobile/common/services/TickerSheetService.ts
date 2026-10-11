@@ -12,6 +12,9 @@ export interface TickerSheetOpenOptions {
   /** Opens straight into the full-screen chart view (e.g. the "Open Chart"
    *  button on a live position card) instead of the default sheet overview. */
   fullScreenChart?: boolean;
+  /** Opens on the Invest tab with Bandit's thesis sheet up — the
+   *  "Your NVDA thesis is ready" push tap. */
+  thesis?: boolean;
 }
 
 type Listener = (ticker: string | null, options: TickerSheetOpenOptions) => void;
