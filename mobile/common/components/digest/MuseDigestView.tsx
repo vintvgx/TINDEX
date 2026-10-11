@@ -158,7 +158,7 @@ function TickerCard({
   const dirUp = t.direction === 'CALL';
   const dirColor = dirUp ? colors.success : colors.error;
   const [contractsVisible, setContractsVisible] = useState(false);
-  const { data: sessionBars } = useSetupSessionBars(t.ticker);
+  const { data: sessionBars, isError: sessionBarsError } = useSetupSessionBars(t.ticker);
   const iconBtn = {
     width: 30,
     height: 30,
@@ -264,7 +264,7 @@ function TickerCard({
         ) : null}
       </View>
 
-      <SetupChart t={t} width={chartWidth - 16} colors={colors} bars={sessionBars} />
+      <SetupChart t={t} width={chartWidth - 16} colors={colors} bars={sessionBars} barsError={sessionBarsError} />
       <WhyThisSetup text={whyThisSetup(t, sessionBars?.priorHigh, sessionBars?.priorLow)} colors={colors} />
 
       {/* if / then plan */}

@@ -113,6 +113,7 @@ export function SetupChart({
   width,
   colors,
   bars,
+  barsError,
   livePrice,
   variant = 'digest',
 }: {
@@ -120,6 +121,9 @@ export function SetupChart({
   width: number;
   colors: Colors;
   bars: ReturnType<typeof useSetupSessionBars>['data'];
+  /** True when the session-bars query settled with an error — the chart shows
+   *  "session unavailable" instead of spinning on "loading session…" forever. */
+  barsError?: boolean;
   /** Streamed price — drives the live dot/tag instead of the last bar close. */
   livePrice?: number | null;
   /** 'sheet' (Pick Detail Sheet): shorter plot, faded yesterday, dashed amber
@@ -304,7 +308,7 @@ export function SetupChart({
         ))}
         {!bars && (
           <SvgText x={MID} y={(PLOT_TOP + plotBot) / 2} fill={colors.textTertiary} fontSize={10} textAnchor="middle">
-            loading session…
+            {barsError ? 'session unavailable' : 'loading session…'}
           </SvgText>
         )}
       </Svg>

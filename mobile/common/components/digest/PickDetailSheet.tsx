@@ -224,7 +224,7 @@ function SheetBody({
   // Live price off the shared app-wide /ws/prices socket — the digest is
   // already streaming this ticker, so this adds no connection.
   const { livePrices } = useMarketStream([t.ticker]);
-  const { data: bars } = useSetupSessionBars(t.ticker);
+  const { data: bars, isError: barsError } = useSetupSessionBars(t.ticker);
   const lastBar = bars?.today.at(-1)?.c ?? bars?.yesterday.at(-1)?.c ?? null;
   const price = livePrices[t.ticker] ?? lastBar;
 
@@ -283,7 +283,9 @@ function SheetBody({
   const chartW = SCREEN_W - PAD_X * 2 - 2;
   const tone = (k: Tone) =>
     k === 'neg' ? colors.error : k === 'pos' ? colors.success : k === 'warn' ? colors.warning : colors.textSecondary;
-  const heroColor = through ? colors.error : colors.warning;
+  // Through-trigger is the setup firing, not failing: tint the hero with the
+  // direction color (CALL = green, PUT = red) to match DynamicBriefView.
+  const heroColor = through ? dirColor : colors.warning;
   const pickLabel = systemPick ? `$${fmtStrike(systemPick.contract.strike)}${long ? 'C' : 'P'}` : null;
 
   return (
@@ -346,7 +348,7 @@ function SheetBody({
 
         {/* 4d setup chart */}
         <View style={[styles.chartWrap, { borderColor: colors.border, backgroundColor: colors.card }]}>
-          <SetupChart t={t} width={chartW} colors={colors} bars={bars} livePrice={price} variant="sheet" />
+          <SetupChart t={t} width={chartW} colors={colors} bars={bars} barsError={barsError} livePrice={price} variant="sheet" />
           <Text style={[styles.chartTag, { color: colors.textTertiary, backgroundColor: colors.background + 'CC' }]}>
             YESTERDAY · TODAY {SETUP_BARS_INTERVAL.toUpperCase()}
           </Text>
