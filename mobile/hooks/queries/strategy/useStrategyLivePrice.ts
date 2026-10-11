@@ -154,6 +154,9 @@ export function useStrategyLivePrice(
     ws.onopen = () => {
       if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
       attemptsRef.current = 0;            // reset backoff on a healthy connection
+      // Fresh connection, fresh tape: pre-gap ticks in the smoothing buffer
+      // would drag the median (and the displayed P&L) for two updates.
+      recentRef.current = [];
       if (mountedRef.current) setConnected(true);
     };
 

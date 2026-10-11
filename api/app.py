@@ -389,8 +389,7 @@ try:
             return
 
         client_q = _queue.Queue(maxsize=50)
-        with engine._live_clients_lock:
-            engine._live_clients.append(client_q)
+        engine._register_live_client(client_q)
 
         try:
             while True:
