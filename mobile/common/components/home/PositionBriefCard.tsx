@@ -8,6 +8,9 @@ import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { PositionEditSheet } from './PositionEditSheet';
 import { ThetaReadout } from '@/common/components/strategy/ThetaReadout';
+import { LimitSellSheet } from '@/common/components/strategy/LimitSellSheet';
+import { WorkingLimitOrders } from '@/common/components/strategy/WorkingLimitOrders';
+import { isSimId } from '@/lib/devSim/simPositions';
 
 /**
  * 0.7 redesign position card — the "Watchlist · Tindex" brief-card treatment
@@ -46,6 +49,7 @@ export function PositionBriefCard({
   const { data: live, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
   const [exitOpen, setExitOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [ladderOpen, setLadderOpen] = useState(false);
 
   // Keep the parent's account-bar equity in sync with live ticks.
   useEffect(() => {
@@ -67,6 +71,9 @@ export function PositionBriefCard({
   const pnlColor = pnlUp ? colors.success : colors.error;
   const hardStop = live?.hard_stop ?? pos.hard_stop;
   const marketValue = live?.market_value ?? (nowPremium != null ? nowPremium * qty * 100 : null);
+  // Limit sell ladder: contracts resting in working limit sells aren't free to sell.
+  const qtyWorking = live?.qty_working ?? pos.qty_working ?? 0;
+  const qtyAvailable = live?.qty_available ?? pos.qty_available ?? Math.max(0, qty - qtyWorking);
 
   return (
     <TouchableOpacity
@@ -108,6 +115,7 @@ export function PositionBriefCard({
         <View style={{ flex: 1 }} />
         <Text style={[styles.mono, { fontSize: 10, color: colors.textTertiary }]}>
           {qty > 0 ? `${qty} × ` : ''}{pos.contract ? shortContract(pos.contract) : 'shares'}
+          {qtyWorking > 0 ? ` · ${qtyWorking} working` : ''}
         </Text>
         <TouchableOpacity
           onPress={() => setExitOpen(true)}
@@ -146,13 +154,16 @@ export function PositionBriefCard({
           {nowPremium != null ? `$${nowPremium.toFixed(2)}` : '—'}
         </Text>
       </View>
-      <ThetaReadout
-        ticker={pos.ticker}
-        contract={live?.contract ?? pos.contract}
-        premium={nowPremium}
-        colors={colors}
-        style={{ marginTop: 4 }}
-      />
+      {/* Needs the real underlying's stream — skipped for a dev sim position. */}
+      {!isSimId(pos.strategy_id) && (
+        <ThetaReadout
+          ticker={pos.ticker}
+          contract={live?.contract ?? pos.contract}
+          premium={nowPremium}
+          colors={colors}
+          style={{ marginTop: 4 }}
+        />
+      )}
 
       {/* invalidation */}
       {hardStop != null && (
@@ -164,6 +175,37 @@ export function PositionBriefCard({
           </Text>
         </View>
       )}
+
+      {/* Resting limit sells + the passive scale-out entry point */}
+      <WorkingLimitOrders strategyId={pos.strategy_id} />
+      {pos.contract && qty > 0 && (
+        <TouchableOpacity
+          onPress={() => setLadderOpen(true)}
+          activeOpacity={0.8}
+          style={[styles.scaleBtn, { borderColor: colors.border }]}
+          accessibilityLabel={`Sell ${pos.ticker}`}
+        >
+          <Ionicons name="layers-outline" size={14} color={colors.text} />
+          <Text style={{ fontSize: 13, fontWeight: '700', color: colors.text }}>Sell</Text>
+          {qtyAvailable < qty && (
+            <Text style={[styles.mono, { fontSize: 11, color: colors.textTertiary }]}>{qtyAvailable} free</Text>
+          )}
+        </TouchableOpacity>
+      )}
+
+      <LimitSellSheet
+        visible={ladderOpen}
+        strategyId={pos.strategy_id}
+        ticker={pos.ticker}
+        contract={live?.contract ?? pos.contract}
+        paperMode={pos.paper_mode}
+        qtyHeld={qty}
+        qtyAvailable={qtyAvailable}
+        bid={live?.bid}
+        ask={live?.ask}
+        mid={nowPremium}
+        onClose={() => setLadderOpen(false)}
+      />
 
       <PositionEditSheet
         pos={pos}
@@ -179,7 +221,7 @@ export function PositionBriefCard({
         strategyId={pos.strategy_id}
         ticker={pos.ticker}
         contract={live?.contract ?? pos.contract}
-        qtyRemaining={live?.qty_remaining ?? pos.qty_remaining ?? 1}
+        qtyRemaining={qtyAvailable || 1}
         paperMode={pos.paper_mode}
         onClose={() => setExitOpen(false)}
       />
@@ -214,6 +256,16 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 6,
     borderWidth: 1,
+  },
+  scaleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 9,
+    marginTop: 12,
   },
   closeBtn: {
     width: 28,

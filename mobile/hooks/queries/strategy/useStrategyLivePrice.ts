@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import type { PendingPriceUpdate } from '@/common/types/strategy';
+import { isSimId, useSimLive } from '@/lib/devSim/simPositions';
 
 export interface LivePriceData {
   contract:      string;
@@ -68,6 +69,12 @@ export interface LivePriceData {
    *  pre-select the toggle to what's actually in effect right now. */
   runner_mode?: 'trail' | 'be_hold' | 'none';
   cascade_enabled?: boolean;
+  /** Limit sell ladder: latest option bid/ask (either side may be null on a
+   *  one-sided quote) and contracts resting in limit sells vs still free. */
+  bid?: number | null;
+  ask?: number | null;
+  qty_working?: number;
+  qty_available?: number;
   // ── Simulation-only fields (all optional — absent on a real live position) ──
   sim?:               boolean;
   sim_tick?:          number;
@@ -131,7 +138,12 @@ export function useStrategyLivePrice(
   // Last few price updates, for display smoothing (see onmessage).
   const recentRef                 = useRef<LivePriceData[]>([]);
 
-  const wsUrl = strategyId
+  // Dev simulated position: its ticks come from the in-app simulator — no socket.
+  const sim = isSimId(strategyId);
+  const simLive = useSimLive(strategyId);
+  const [simPatch, setSimPatch] = useState<Partial<LivePriceData>>({});
+
+  const wsUrl = strategyId && !sim
     ? RAILWAY_BASE_URL.replace(/^https?/, (s) => (s === 'https' ? 'wss' : 'ws'))
         + `/ws/strategy/${strategyId}/live`
     : null;
@@ -252,5 +264,19 @@ export function useStrategyLivePrice(
     setData(prev => (prev ? { ...prev, ...patch } : prev));
   }, []);
 
+  const simPatchData = useCallback((patch: Partial<LivePriceData>) => {
+    setSimPatch((prev) => ({ ...prev, ...patch }));
+  }, []);
+  if (sim) {
+    return {
+      data: simLive ? { ...simLive, ...simPatch, mid_price: simLive.mid_price, pnl: simLive.pnl,
+                        pnl_pct: simLive.pnl_pct, market_value: simLive.market_value,
+                        qty_remaining: simLive.qty_remaining } : null,
+      pendingPriceData: null,
+      connected: !!simLive,
+      disconnect,
+      patchData: simPatchData,
+    };
+  }
   return { data, pendingPriceData, connected, disconnect, patchData };
 }

@@ -249,6 +249,39 @@ class TradeLogger:
             logger.error("[TradeLogger] expire_stale_pending_confirmations failed: %s", e)
             return 0
 
+    # ── Limit sell ladder (working_limit_orders) ────────────────────────────────
+
+    def insert_limit_order(self, row: dict) -> bool:
+        try:
+            self.client.table("working_limit_orders").insert(row).execute()
+            return True
+        except Exception as e:
+            logger.error("[TradeLogger] insert_limit_order failed: %s", e)
+            return False
+
+    def update_limit_order(self, order_id: str, patch: dict) -> bool:
+        try:
+            patch = {**patch, "updated_at": datetime.utcnow().isoformat()}
+            self.client.table("working_limit_orders").update(patch).eq("order_id", order_id).execute()
+            return True
+        except Exception as e:
+            logger.error("[TradeLogger] update_limit_order failed: %s", e)
+            return False
+
+    def list_open_limit_orders(self, trade_id: str) -> list[dict]:
+        """Rows still working (or partially filled) for one position."""
+        try:
+            res = (
+                self.client.table("working_limit_orders").select("*")
+                .eq("trade_id", trade_id)
+                .in_("status", ["working", "partially_filled"])
+                .order("placed_at").execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logger.error("[TradeLogger] list_open_limit_orders failed: %s", e)
+            return []
+
     # ── Session logging ─────────────────────────────────────────────────────────
 
     def log_session(self, ticker: str, session_date, orh: float, orl: float,

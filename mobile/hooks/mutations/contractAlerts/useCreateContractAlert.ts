@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { RAILWAY_BASE_URL } from "@/lib/railway.config";
 import { ContractPriceAlert, CreateContractAlertRequest } from "@/common/types/contractAlerts";
+import { isSimId } from '@/lib/devSim/simPositions';
 
 interface CreateContractAlertResponse {
   success: boolean;
@@ -15,6 +16,7 @@ export function useCreateContractAlert(strategyId: string) {
 
   return useMutation({
     mutationFn: async (request: CreateContractAlertRequest): Promise<ContractPriceAlert> => {
+      if (isSimId(strategyId)) throw new Error('Price alerts aren\'t available on a simulated position');
       if (!user?.id) {
         throw new Error("User must be authenticated to add a price alert");
       }

@@ -16,6 +16,7 @@ import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 import { LinePriceChart } from '@/common/components/ticker/LinePriceChart';
 import { openChartOverlay } from '@/common/components/ui/ChartOverlayContext';
 import type { TickerInfo } from '../DynamicCard';
+import { isSimId } from '@/lib/devSim/simPositions';
 
 /**
  * Dynamic card "charts" view: one line chart per followed ticker — the
@@ -116,8 +117,9 @@ export function DynamicChartsView({ onActiveTicker, height }: {
         if (!seen.has(t)) { seen.add(t); out.push(t); }
       }
     };
-    add(allLive.filteredPositions.map((p) => p.ticker).sort());
-    add(allPaper.filteredPositions.map((p) => p.ticker).sort());
+    // Dev sim positions don't add chart pages (they'd fetch real charts).
+    add(allLive.filteredPositions.filter((p) => !isSimId(p.strategy_id)).map((p) => p.ticker).sort());
+    add(allPaper.filteredPositions.filter((p) => !isSimId(p.strategy_id)).map((p) => p.ticker).sort());
     add((brief?.plays ?? []).map((p) => p.ticker));
     add((keyLevels ?? [])
       .filter((l) => l.status === 'watching' || l.status === 'confirmed')

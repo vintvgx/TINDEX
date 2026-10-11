@@ -8,6 +8,7 @@ import { LogViewerModal } from '@/common/components/orb/LogViewerModal';
 import { DiagnosticsModal } from '@/common/components/diagnostics/DiagnosticsModal';
 import { AgentModal } from '@/common/components/agent/AgentModal';
 import { ChartLibraryPreviewModal } from '@/common/components/profile/ChartLibraryPreviewModal';
+import { SimPositionModal } from '@/common/components/profile/SimPositionModal';
 import { ThemeToggle } from '@/common/components/ThemeToggle';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,6 +29,7 @@ const ProfileScreen = () => {
   const [adminModalVisible, setAdminModalVisible] = useState(false);
   const [logViewerVisible, setLogViewerVisible] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [simOpen, setSimOpen] = useState(false);
   const [serviceStatusVisible, setServiceStatusVisible] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
   const [chartPreviewOpen, setChartPreviewOpen] = useState(false);
@@ -98,6 +100,9 @@ const ProfileScreen = () => {
     // duplicating its state (grid layout, mock-data toggles, service status)
     // here as a second copy.
     { icon: 'ellipsis-horizontal-outline' as const, label: 'ORB Menu', onPress: () => go('/(app)/(tabs)/orb?section=monitor&openMenu=true') },
+    // Client-only fake open position for previewing position cards, exits
+    // and the limit sell ladder without a real trade (lib/devSim).
+    { icon: 'flask-outline' as const, label: 'Simulated Position', onPress: () => setSimOpen(true) },
   ];
 
   const toastItems: Array<{
@@ -640,6 +645,7 @@ const ProfileScreen = () => {
         onClose={() => setAgentOpen(false)}
         onError={(msg) => toast.error(msg)}
       />
+      <SimPositionModal visible={simOpen} onClose={() => setSimOpen(false)} />
       <ChartLibraryPreviewModal
         visible={chartPreviewOpen}
         onClose={() => setChartPreviewOpen(false)}

@@ -11,6 +11,7 @@ import { useTickerHistoryQuery } from '@/hooks/queries/ticker/useTickerHistoryQu
 import { getOrbStatus } from '@/common/utils/orb/getOrbStatus';
 import { computeOrbRangeFromHistory } from '@/common/utils/orb/computeOrbRangeFromHistory';
 import { Skeleton } from '@/common/components/ui/Skeleton';
+import { isSimId } from '@/lib/devSim/simPositions';
 
 // Same PAPER tint used everywhere else a live/paper trade needs to be told
 // apart at a glance (PositionCard, PendingConfirmationCard/Modal).
@@ -121,8 +122,9 @@ export function LiveTradesTickerTape({ colors }: { colors: any }) {
   const paper = useLivePositionsData('paper');
 
   const entries = useMemo<ModeEntry[]>(() => {
-    const liveTickers = Array.from(new Set(live.filteredPositions.map(p => p.ticker.toUpperCase())));
-    const paperTickers = Array.from(new Set(paper.filteredPositions.map(p => p.ticker.toUpperCase())));
+    // Dev sim positions are skipped — they'd trigger real history fetches.
+    const liveTickers = Array.from(new Set(live.filteredPositions.filter(p => !isSimId(p.strategy_id)).map(p => p.ticker.toUpperCase())));
+    const paperTickers = Array.from(new Set(paper.filteredPositions.filter(p => !isSimId(p.strategy_id)).map(p => p.ticker.toUpperCase())));
     return [
       ...liveTickers.map(ticker => ({ ticker, mode: 'live' as const })),
       ...paperTickers.map(ticker => ({ ticker, mode: 'paper' as const })),

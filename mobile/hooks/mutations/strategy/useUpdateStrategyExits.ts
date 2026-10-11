@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import { getAuthHeaders } from '@/common/utils/api/getAuthHeaders';
+import { isSimId, simUpdateExits } from '@/lib/devSim/simPositions';
 
 interface UpdateStrategyExitsPayload {
   strategy_id: string;
@@ -54,6 +55,7 @@ export function useUpdateStrategyExits() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ strategy_id, ...body }: UpdateStrategyExitsPayload) => {
+      if (isSimId(strategy_id)) return simUpdateExits(strategy_id, body as Record<string, unknown>);  // dev simulator
       const resp = await fetch(`${RAILWAY_BASE_URL}/strategy/configs/${strategy_id}/exits`, {
         method: 'PATCH',
         headers: await getAuthHeaders(),
