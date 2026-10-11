@@ -16,6 +16,7 @@ import { ChartTapeProvider } from '@/common/components/ui/ChartTapeContext';
 import { OptionsTickerProvider } from '@/lib/optionsTickerContext';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { TradeEntryNavigator } from '@/common/components/trade/TradeEntryNavigator';
+import { AppSocketBridge } from '@/common/services/appSocket';
 
 /**
  * 0.7 redesign app shell: ticker tape → app header → tab navigator →
@@ -60,6 +61,8 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
       <AppHeader />
       {/* Lands a just-entered trade on Home (see TradeEntryNavigator). */}
       <TradeEntryNavigator />
+      {/* The app's push socket — "positions/pending changed" notices (C2). */}
+      <AppSocketBridge />
 
       <View style={{ flex: 1 }}>
         <SafeAreaInsetsContext.Provider

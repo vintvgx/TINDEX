@@ -54,8 +54,9 @@ export function useAccountValueDisplay(): AccountValueDisplay {
   // depend on it for live equity when positions are open.
   const { data: accountData, refetch: refetchAccount } = useAlpacaBothAccounts();
 
-  // Fast: position market values. Always enabled; Alpaca returns [] quickly when empty.
-  const { data: posData } = useAlpacaPositionValues('both', { refetchIntervalMs: 5_000 });
+  // Fast: position market values — 5s while positions are open, 30s when
+  // flat, off outside market hours (positionPollMs, audit A6).
+  const { data: posData } = useAlpacaPositionValues('both');
 
   // Re-sync cash immediately when a position is opened or closed, so the
   // cash + market_value formula doesn't show a stale equity during the transition.

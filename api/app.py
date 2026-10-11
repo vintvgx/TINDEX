@@ -210,6 +210,45 @@ def ws_chart_live(ws, ticker: str):
         logger.info("[WS] client cleanup done")
 
 
+# ── App push channel (polling audit C2) ────────────────────────────────────────
+# One socket per phone: "positions/account/pending changed" notices + Alpaca
+# trade updates. The app refetches what changed instead of polling it all.
+from services.websocket.app_events import get_app_event_bus  # noqa: E402
+from services.alpaca.trade_events import get_trade_event_hub, POSITION_EVENTS  # noqa: E402
+
+
+def _forward_trade_event(event: dict) -> None:
+    if event.get("event") in POSITION_EVENTS:
+        bus = get_app_event_bus()
+        bus.publish_event(event)
+        bus.notify("positions", "account")
+
+
+get_trade_event_hub().subscribe(_forward_trade_event)
+
+
+@sock.route("/ws/app")
+def ws_app(ws):
+    bus = get_app_event_bus()
+    box = bus.register()
+    try:
+        ws.send(json.dumps({"type": "hello", "topics": ["positions", "account", "pending"]}))
+        while True:
+            batch = box.next(timeout=25)
+            if batch is None:
+                ws.send(json.dumps({"type": "ping"}))
+                continue
+            topics, events = batch
+            for ev in events:
+                ws.send(json.dumps(ev))
+            if topics:
+                ws.send(json.dumps({"type": "invalidate", "topics": topics}))
+    except Exception as exc:
+        logger.debug("[WS/app] client disconnected: %s", exc)
+    finally:
+        bus.unregister(box)
+
+
 # ── ORB Strategy Engine ────────────────────────────────────────────────────────
 
 try:
@@ -377,6 +416,22 @@ try:
         logger.info("[App] Expiry reminder job scheduled at boot")
     except Exception as _expiry_boot_err:
         logger.warning("[App] Expiry reminder job scheduling failed: %s", _expiry_boot_err)
+
+    # Chart-history warm-up (polling audit B4): the history cache is
+    # in-process, so refill it after a deploy and before each open.
+    try:
+        from services.yfinance.history_warmup import schedule_history_warmup as _schedule_history_warmup
+        _schedule_history_warmup()
+    except Exception as _warmup_boot_err:
+        logger.warning("[App] History warm-up scheduling failed: %s", _warmup_boot_err)
+
+    # Alpaca trade_updates streams (paper + live) — fills/cancels as events
+    # (polling audit C1). Session-gated: connects only around market hours.
+    try:
+        from services.alpaca.trade_events import start_trade_events as _start_trade_events
+        _start_trade_events()
+    except Exception as _trade_events_boot_err:
+        logger.warning("[App] Trade events start failed: %s", _trade_events_boot_err)
 
     @sock.route("/ws/strategy/<strategy_id>/live")
     def ws_strategy_live(ws, strategy_id: str):

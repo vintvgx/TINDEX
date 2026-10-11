@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { boostPositionPolling } from '@/lib/positionPolling';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import type { ImmediateTradeByTickerRequest } from '@/common/types/strategy';
 
@@ -73,6 +74,7 @@ export function useImmediateTradeByTicker() {
       }
     },
     onSuccess: () => {
+      boostPositionPolling(queryClient); // catch the fill fast (audit A6)
       queryClient.invalidateQueries({ queryKey: ['immediate-positions'] });
     },
   });

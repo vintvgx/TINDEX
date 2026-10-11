@@ -35,6 +35,8 @@ import type { TickerInfo } from '../DynamicCard';
 
 const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
 const COUNTER_VISIBLE_MS = 8000;
+/** Last ticker shown — survives this page unmounting (see activeTicker). */
+let lastActiveTicker: string | null = null;
 
 function TickerPage({ ticker, height, width, period, interval, onStats }: {
   ticker: string; height: number; width: number; period: PricePeriod; interval: string;
@@ -127,7 +129,14 @@ export function DynamicChartsView({ onActiveTicker, height }: {
 
   // Tracked by ticker, not index, so a reorder (a position opens, the brief
   // lands) keeps you on the same chart.
-  const [activeTicker, setActiveTicker] = useState<string | null>(null);
+  // Seeded from the last one shown: the Home pager unmounts this page when
+  // you swipe two pages away (A0), and coming back should land on the same
+  // chart, not the first.
+  const [activeTicker, setActiveTickerState] = useState<string | null>(() => lastActiveTicker);
+  const setActiveTicker = useCallback((t: string | null) => {
+    lastActiveTicker = t;
+    setActiveTickerState(t);
+  }, []);
   const n = tickers.length;
   const realIndex = Math.max(0, activeTicker ? tickers.indexOf(activeTicker) : 0);
   const current = tickers[realIndex] ?? '';
@@ -180,7 +189,7 @@ export function DynamicChartsView({ onActiveTicker, height }: {
     if (loop && (i < n || i >= 2 * n)) {
       listRef.current?.scrollToOffset({ offset: middleOffset(real), animated: false });
     }
-  }, [loop, n, pageH, tickers, middleOffset]);
+  }, [loop, n, pageH, tickers, middleOffset, setActiveTicker]);
 
   return (
     <View style={{ width: pageWidth }}>

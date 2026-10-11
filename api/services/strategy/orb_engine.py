@@ -44,6 +44,17 @@ TECHNICALS_GATE_TIMEOUT_S = 4.0
 # dozens/sec on 0DTE; forwarding each one strobed the app's P&L and pegged
 # the phone (polling audit 2026-10-07, A3). Exit logic still sees every tick.
 LIVE_PUSH_MIN_INTERVAL_S = 1 / 3
+
+# Stream-dead exit-evaluation fast path (2026-10-11): when the option stream
+# stops delivering ticks for a held contract, the 1-minute bar cadence is too
+# slow for 0DTE exits (2026-10-09 AAPL: SL/TP never fired because the stream
+# never ticked). While a position is open with armed exits and no tick has
+# arrived for STREAM_DEAD_AFTER_S, poll the REST quote every STREAM_DEAD_POLL_S
+# and feed it through the normal tick path (serialized by _tick_lock, same as
+# bars and stream ticks). The REST quote is the same rung the manual-exit path
+# uses — proven to work for the contract on 2026-10-09.
+STREAM_DEAD_AFTER_S = 30
+STREAM_DEAD_POLL_S  = 12
 _GATE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="tech-gate")
 
 # Every constructed ORBEngine self-registers here (see _apply_config), keyed
@@ -143,6 +154,13 @@ class ORBEngine:
         self.debug = DebugLogBuffer(lambda: self.debug_enabled)
         self._apply_config()
         self._reset_session_state()
+        # Stream-dead fast-path monitor: daemon thread, sleeps between checks,
+        # only acts while a position is open with a dead stream (see
+        # _stream_dead_poll_loop). Started per engine; negligible when idle.
+        self._stream_dead_poll_active = False
+        threading.Thread(target=self._stream_dead_poll_loop,
+                         daemon=True,
+                         name=f"StreamDeadPoll-{self.ticker}").start()
 
     def _apply_config(self):
         self.ticker         = self.config["ticker"]
@@ -262,6 +280,7 @@ class ORBEngine:
         self.timer_notified          = False  # ensures the 30-min update fires only once
         self.macro_today             = False  # True when a high-impact macro event is scheduled today
         self._current_option_price   = None   # latest mid-price from WebSocket stream
+        self._last_stream_tick_ts    = None   # monotonic() of last _on_stream_quote
         # Set once _get_option_price() genuinely has nothing (stream, REST
         # quote, AND position-mark fallback all empty) — lets _process_tick
         # log that ONCE per occurrence instead of once per tick for as long
@@ -306,6 +325,13 @@ class ORBEngine:
         # Throttle state per message kind — see _publish_live.
         self._live_push: dict        = {}
         self._live_push_lock         = threading.Lock()
+        # Async manual-sell outcomes by sell_id (start_manual_exit, B2).
+        self._manual_exits: dict     = {}
+        self._manual_exits_lock      = threading.Lock()
+        # Bumped whenever the tracked position closes; _send_live drops a
+        # payload built before the bump so a stale update can never land
+        # after `position_closed`.
+        self._position_gen           = 0
         # ── Session-level risk management ─────────────────────────────────────────
         # Cumulative realized P&L for this trading day across all trades.
         self._session_realized_pnl:   float = 0.0
@@ -2174,13 +2200,20 @@ class ORBEngine:
 
     # ── Live WebSocket fan-out (throttled) ─────────────────────────────────────
 
-    def _fanout_live(self, payload: str) -> None:
-        with self._live_clients_lock:
-            for q in list(self._live_clients):
-                try:
-                    q.put_nowait(payload)
-                except Exception:
-                    pass
+    def _register_live_client(self, q) -> None:
+        """Append a WS client queue and seed it with the latest cached payload
+        per throttled kind, so a client connecting mid-session doesn't sit
+        silent until the next price change. Lock order (_live_push_lock →
+        _live_clients_lock) matches _send_live; never nest the reverse."""
+        with self._live_push_lock:
+            cached = [st.get("last") for st in self._live_push.values() if st.get("last")]
+            with self._live_clients_lock:
+                self._live_clients.append(q)
+                for payload in cached:
+                    try:
+                        q.put_nowait(payload)
+                    except Exception:
+                        pass
 
     def _publish_live(self, kind: str, build) -> None:
         """
@@ -2202,7 +2235,13 @@ class ORBEngine:
                     st["timer"] = t
                     t.start()
                 return
+            # Immediate send: claim and cancel any outstanding trailing timer
+            # first, so it can't fire a duplicate milliseconds later.
+            timer = st["timer"]
+            st["timer"] = None
             st["at"] = now
+        if timer is not None:
+            timer.cancel()
         self._send_live(kind, build)
 
     def _flush_live(self, kind: str, build) -> None:
@@ -2214,6 +2253,11 @@ class ORBEngine:
         self._send_live(kind, build)
 
     def _send_live(self, kind: str, build) -> None:
+        # Capture the position generation before building: if the position
+        # closes while the payload is being built, the stale update is dropped
+        # below instead of landing after `position_closed`. getattr guards
+        # engines constructed without __init__ (tests).
+        gen = getattr(self, "_position_gen", 0)
         try:
             payload = build()
         except Exception as ex:
@@ -2222,11 +2266,18 @@ class ORBEngine:
         if payload is None:
             return
         with self._live_push_lock:
-            st = self._live_push.setdefault(kind, {"at": time.monotonic(), "last": None, "timer": None})
-            if payload == st["last"]:
-                return  # unchanged — nothing new to show
-            st["last"] = payload
-        self._fanout_live(payload)
+            with self._live_clients_lock:
+                if gen != getattr(self, "_position_gen", 0):
+                    return  # position closed mid-build — drop the stale update
+                st = self._live_push.setdefault(kind, {"at": time.monotonic(), "last": None, "timer": None})
+                if payload == st["last"]:
+                    return  # unchanged — nothing new to show
+                st["last"] = payload
+                for q in list(self._live_clients):
+                    try:
+                        q.put_nowait(payload)
+                    except Exception:
+                        pass
 
     # ── Manual / conviction entry ───────────────────────────────────────────────
 
@@ -2605,6 +2656,10 @@ class ORBEngine:
             import json as _json
             _closed_msg = _json.dumps({"type": "position_closed"})
             with self._live_clients_lock:
+                # Bump the position generation while holding the clients lock:
+                # any _send_live that built its payload before this point sees
+                # the mismatch and drops it instead of enqueueing after close.
+                self._position_gen = getattr(self, "_position_gen", 0) + 1
                 for _q in list(self._live_clients):
                     try:
                         _q.put_nowait(_closed_msg)
@@ -2864,6 +2919,7 @@ class ORBEngine:
                 underlying_price_exit=current_price,
                 trading_client=self.trading_client,
                 trade_id=self.active_trade_id,
+                armed_levels=self._armed_levels_snapshot(),
             )
             self.notifier.notify_exit(
                 ticker=self.ticker,
@@ -2905,13 +2961,64 @@ class ORBEngine:
         {"status": "ok"|"error", "message", "qty_sold"?, "qty_remaining"?,
         "avg_fill_price"?, "pnl"?}.
         """
+        reserved = self._reserve_manual_exit(qty, limit_price)
+        if "error" in reserved:
+            return reserved["error"]
+        return self._complete_manual_exit(**reserved["ctx"])
+
+    def start_manual_exit(self, qty: int | None = None, limit_price: float | None = None) -> dict:
+        """
+        Async variant of submit_manual_exit (polling audit B2): validates and
+        reserves the contracts NOW (same locked step), then runs the same
+        price-seeking + finalize code on a background thread, so the HTTP
+        request returns at once instead of holding a server thread ~10s.
+
+        Returns {"status": "accepted", "sell_id", "qty", "contract"} or the
+        same {"status": "error", ...} the sync path would. Poll the outcome
+        with get_manual_exit_result(sell_id) — the final dict is identical
+        to submit_manual_exit's.
+        """
+        reserved = self._reserve_manual_exit(qty, limit_price)
+        if "error" in reserved:
+            return reserved["error"]
+        ctx = reserved["ctx"]
+        sell_id = str(_uuid.uuid4())
+        with self._manual_exits_lock:
+            self._manual_exits[sell_id] = {"status": "pending"}
+            # Bounded: keep the newest 50 outcomes.
+            while len(self._manual_exits) > 50:
+                self._manual_exits.pop(next(iter(self._manual_exits)))
+
+        def run():
+            try:
+                outcome = self._complete_manual_exit(**ctx)
+            except Exception as ex:
+                logger.error("[ORBEngine] async manual exit %s failed: %s", sell_id, ex, exc_info=True)
+                self.debug.emit("ERROR", f"Manual exit failed: {ex}")
+                outcome = {"status": "error", "message": "Sell order failed — check server logs"}
+            with self._manual_exits_lock:
+                self._manual_exits[sell_id] = outcome
+
+        threading.Thread(target=run, daemon=True, name=f"ManualExit-{self.ticker}").start()
+        return {"status": "accepted", "sell_id": sell_id, "qty": ctx["want"], "contract": ctx["contract"]}
+
+    def get_manual_exit_result(self, sell_id: str) -> dict | None:
+        """{"status": "pending"} while running, then submit_manual_exit's
+        result dict; None for an unknown id."""
+        with self._manual_exits_lock:
+            res = self._manual_exits.get(sell_id)
+            return dict(res) if res is not None else None
+
+    def _reserve_manual_exit(self, qty: int | None, limit_price: float | None) -> dict:
+        """The locked validate + reserve step shared by both sell paths.
+        Returns {"error": result} or {"ctx": kwargs for _complete_manual_exit}."""
         with self._tick_lock:
             if not self.trade_taken or not self.contract_symbol or not self.exit_manager:
-                return {"status": "error", "message": "No active position to sell"}
+                return {"error": {"status": "error", "message": "No active position to sell"}}
 
             remaining_before = self.exit_manager.qty_remaining
             if remaining_before <= 0:
-                return {"status": "error", "message": "Position is already closed"}
+                return {"error": {"status": "error", "message": "Position is already closed"}}
 
             want = remaining_before if qty is None else int(qty)
             want = max(1, min(want, remaining_before))
@@ -2926,7 +3033,17 @@ class ORBEngine:
 
             self._reserve_exit_qty(closing_all, contract, want)
 
-        # Outside the lock — up to ~10s. See docstring.
+        return {"ctx": {
+            "want": want, "contract": contract, "limit_price": limit_price,
+            "closing_all": closing_all, "direction_snapshot": direction_snapshot,
+            "entry_p": entry_p,
+        }}
+
+    def _complete_manual_exit(self, want: int, contract: str, limit_price: float | None,
+                              closing_all: bool, direction_snapshot, entry_p: float) -> dict:
+        """Price-seek, reconcile and finalize — everything after the
+        reservation. Runs outside _tick_lock (see submit_manual_exit)."""
+        # Outside the lock — up to ~10s. See submit_manual_exit's docstring.
         result = self._execute_priced_exit(want, contract, limit_price)
 
         shortfall = want - result["filled_qty"]
@@ -3107,6 +3224,7 @@ class ORBEngine:
         thread-safe and non-blocking.
         """
         self._current_option_price = mid
+        self._last_stream_tick_ts = time.monotonic()
 
         # Drive exit logic — pass None for underlying if not yet polled.
         # ExitManager skips the consolidation buffer on None, preventing false
@@ -3119,12 +3237,79 @@ class ORBEngine:
             return
         self._publish_live("price_update", self._build_price_payload)
 
+    def _stream_is_live(self) -> bool:
+        """True if the option stream delivered a tick within STREAM_DEAD_AFTER_S."""
+        ts = getattr(self, "_last_stream_tick_ts", None)
+        return ts is not None and (time.monotonic() - ts) < STREAM_DEAD_AFTER_S
+
+    def _stream_dead_poll_loop(self) -> None:
+        """Exit-evaluation fast path for a dead option stream.
+
+        Runs forever as a daemon; each round is cheap (one sleep + a few
+        attribute checks) and it only hits the network while a position is
+        open with armed exits AND no stream tick for STREAM_DEAD_AFTER_S.
+        The polled price goes through on_price_tick → _tick_lock, exactly
+        like a bar or a stream tick, so evaluation semantics (confirm ticks,
+        grace windows) are unchanged — only the cadence improves.
+        Transition-only debug lines: no per-poll spam.
+        """
+        while True:
+            try:
+                time.sleep(STREAM_DEAD_POLL_S)
+                if not (self.trade_taken and self.exit_manager and self.contract_symbol):
+                    self._stream_dead_poll_active = False
+                    continue
+                if self._stream_is_live():
+                    if self._stream_dead_poll_active:
+                        self._stream_dead_poll_active = False
+                        self.debug.emit("INFO",
+                            f"Option stream recovered for {self.contract_symbol} — "
+                            f"back to tick-driven exit evaluation")
+                    continue
+                price = self._get_option_price()
+                if price is None:
+                    continue
+                if not self._stream_dead_poll_active:
+                    self._stream_dead_poll_active = True
+                    self.debug.emit("WARN",
+                        f"Option stream dead for {self.contract_symbol} "
+                        f"(no tick in {STREAM_DEAD_AFTER_S}s) — evaluating exits "
+                        f"via REST poll every {STREAM_DEAD_POLL_S}s until it recovers")
+                self.on_price_tick(
+                    current_price=self._last_underlying_price,
+                    current_option_price=price,
+                )
+            except Exception as ex:
+                logger.debug("[ORBEngine] stream-dead poll failed: %s", ex)
+
+    def _armed_levels_snapshot(self) -> dict | None:
+        """Snapshot of the currently armed exit levels, persisted with every
+        exit (see TradeLogger.log_exit) so a future "why didn't the stop
+        fire / what was the stop" investigation has the levels as they were
+        at exit time — not just at entry. Returns None when no exit manager
+        is active (e.g. reconcile paths)."""
+        em = self.exit_manager
+        if not em:
+            return None
+        def _r(v):
+            return round(v, 4) if v is not None else None
+        return {
+            "entry_premium": _r(em.entry_premium),
+            "hard_stop":     _r(em.hard_stop),
+            "tp1":           _r(em.tp1),
+            "tp2":           _r(em.tp2),
+        }
+
     def _build_price_payload(self) -> "str | None":
         """price_update JSON from the CURRENT position state — built at send
         time so a trailing (throttled) send carries the newest price."""
         import json as _json
         mid = self._current_option_price
         if not self.trade_taken or not self.exit_manager or mid is None:
+            return None
+        if not self._stream_is_live():
+            # The stream died after this tick — don't fan out a frozen price
+            # as if it were live. Exit evaluation has its own fallback path.
             return None
         em = self.exit_manager
         entry_p = em.entry_premium or 0
@@ -3426,8 +3611,13 @@ class ORBEngine:
         fixes: a SPY put's stop-loss never fired because of exactly this.
 
         None only once all three have genuinely failed.
+
+        Rung 1 additionally requires the stream to be *live* (a tick within
+        STREAM_DEAD_AFTER_S): without this, a stream that dies mid-trade
+        would keep serving its last tick forever and exits would evaluate
+        against a frozen price.
         """
-        if self._current_option_price is not None:
+        if self._current_option_price is not None and self._stream_is_live():
             return self._current_option_price
         if not self.contract_symbol:
             return None

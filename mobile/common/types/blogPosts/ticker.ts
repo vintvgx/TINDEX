@@ -246,7 +246,12 @@ export interface TickerHistoryData {
 }
 
 export type TickerHistoryResponse =
-  | { success: true; data: TickerHistoryData; period: PricePeriod; timestamp: number }
+  | {
+      success: true; data: TickerHistoryData; period: PricePeriod; timestamp: number;
+      /** Served from the server's expired cache while it refreshes in the
+       *  background — the query re-asks shortly (useTickerHistoryQuery). */
+      stale?: boolean;
+    }
   | { success: false; error: string; timestamp: number; data?: undefined };
 
 /**

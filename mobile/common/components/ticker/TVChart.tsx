@@ -24,7 +24,8 @@
  * price streaming into the last bar.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet, AppState } from 'react-native';
+import { View, Text, StyleSheet, AppState } from 'react-native';
+import { ChartSkeleton } from './ChartSkeleton';
 import { WebView, WebViewMessageEvent } from 'react-native-webview';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useWatchZonesVisibility } from '@/hooks/useWatchZonesVisibility';
@@ -827,10 +828,9 @@ export function TVChart({
         </View>
       ) : (!chartReady || (isLoading && !baseCandles?.length)) && (
         // Only when there's nothing to draw — a background reload/refetch
-        // must never hide candles that are already on the chart.
-        <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }]}>
-          <ActivityIndicator size="small" color={colors.textSecondary} />
-        </View>
+        // must never hide candles that are already on the chart. A chart-
+        // shaped skeleton, not a spinner on black (audit B5).
+        <ChartSkeleton />
       )}
     </View>
   );

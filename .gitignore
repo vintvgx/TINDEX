@@ -43,8 +43,12 @@ Thumbs.db
 #supabase files
 SUPABASE.md
 
-# github workflow (needs to be updated before merging)
-.github/
+# github workflows: only the backend CI is tracked; the Jira
+# auto_create_issue.yml still needs to be updated before merging.
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/backend-ci.yml
 
 /docs
 # Python bytecode

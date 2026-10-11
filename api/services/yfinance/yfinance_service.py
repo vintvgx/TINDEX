@@ -1,5 +1,7 @@
 from services.utils.options_analyzer import OptionsAnalyzer
 import time
+import threading
+import concurrent.futures
 import yfinance as yf
 import pandas as pd
 import pytz
@@ -197,6 +199,25 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
     cached = _history_cache_get(cache_key, _history_ttl_s(interval))
     if cached is not None:
         return cached
+    # Stale-while-revalidate (polling audit B4): an expired-but-recent copy
+    # is returned at once (flagged stale=True) and refreshed from Yahoo in
+    # the background — a cold chart open never waits on Yahoo when we've
+    # served that chart before. The app re-asks shortly after a stale reply.
+    stale = _history_cache_get(cache_key, _history_max_stale_s(interval))
+    if stale is not None:
+        _schedule_history_refresh(
+            cache_key,
+            lambda: _fetch_historical_prices(ticker, period_key, interval, extended_hours, cache_key),
+        )
+        stale["stale"] = True
+        return stale
+    return _fetch_historical_prices(ticker, period_key, interval, extended_hours, cache_key)
+
+
+def _fetch_historical_prices(ticker: str, period_key: str, interval: str,
+                             extended_hours: bool, cache_key: tuple) -> dict:
+    """The Yahoo fetch + shaping behind get_historical_prices (uncached)."""
+    period, _default_interval = PERIOD_MAP.get(period_key, PERIOD_MAP["1M"])
     # Extended-hours bars only requested for 1D — that's the only period
     # where session boundaries (and the Pre-Market/Post-Market chart lines)
     # are meaningful; every other period is already daily/weekly closes.
@@ -252,7 +273,16 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
     if session_lines:
         result["session_lines"] = session_lines
 
-    _history_cache_put(cache_key, result)
+    # A failed/empty Yahoo fetch must not overwrite a good cached copy (it
+    # would blank a chart that a background refresh was only meant to update).
+    prev = _HISTORY_CACHE.get(cache_key)
+    if result.get("dates") or not (prev and prev[1].get("dates")):
+        _history_cache_put(cache_key, result)
+    else:
+        # Keep the good copy and re-stamp it, so it's served as fresh for one
+        # TTL — retries back off to once per TTL instead of every request.
+        _history_cache_put(cache_key, prev[1])
+        return dict(prev[1])
     result["from_cache"] = False
     return result
 
@@ -318,6 +348,56 @@ _HISTORY_CACHE_MAX = 1000
 
 def _history_ttl_s(interval: str) -> int:
     return 45 if interval in INTRADAY_INTERVALS else 300
+
+
+def _history_max_stale_s(interval: str) -> int:
+    """How old a cached copy may be and still be served instantly (with a
+    background refresh) — covers "opened the app the next morning"."""
+    return 24 * 3600 if interval in INTRADAY_INTERVALS else 7 * 24 * 3600
+
+
+# Background refreshes run on their own small pool — never on a gunicorn
+# request thread — and at most one per cache key at a time.
+_REFRESH_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="hist-refresh")
+_REFRESHING: set = set()
+_REFRESHING_LOCK = threading.Lock()
+
+
+def _schedule_history_refresh(key: tuple, fetch) -> bool:
+    """Queue `fetch` (which stores its own result) unless one for `key` is
+    already queued/running. Returns True if queued."""
+    with _REFRESHING_LOCK:
+        if key in _REFRESHING:
+            return False
+        _REFRESHING.add(key)
+
+    def run():
+        try:
+            fetch()
+        except Exception as e:
+            logger.warning(f"Background history refresh failed for {key}: {e}")
+        finally:
+            with _REFRESHING_LOCK:
+                _REFRESHING.discard(key)
+
+    _REFRESH_POOL.submit(run)
+    return True
+
+
+def warm_history(tickers, combos=(("1D", None, True), ("1D", None, False)), pause_s: float = 0.4) -> int:
+    """Pre-load chart history so first opens are served from memory (B4):
+    after a deploy (the cache is in-process) and before the open. Sequential
+    with a short pause so it never bursts Yahoo. Returns fetches made."""
+    n = 0
+    for t in tickers:
+        for period_key, interval, ext in combos:
+            try:
+                get_historical_prices(t, period_key, interval, ext)
+                n += 1
+            except Exception as e:
+                logger.debug(f"warm_history {t} {period_key}: {e}")
+            time.sleep(pause_s)
+    return n
 
 
 def _history_cache_get(key: tuple, ttl_s: int) -> dict | None:
