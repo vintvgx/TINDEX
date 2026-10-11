@@ -15,6 +15,7 @@ import {
 } from '@/common/components/strategy/TradeAnalytics';
 import { useStrategySessionState } from '@/hooks/queries/strategy/useStrategySessionState';
 import { useAlpacaAccountsHistory } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { usePnlSummary } from '@/hooks/queries/strategy/usePnlSummary';
 import { useReconcileTrades } from '@/hooks/mutations/strategy/useReconcileTrades';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import type { ORBTrade, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel, ExitStage } from '@/common/types/strategy';
@@ -91,6 +92,7 @@ export default function TradeLogScreen({ embedded = false }: Props) {
   const { data: performance }                       = useStrategyPerformance();
   const { data: sessionStates }                     = useStrategySessionState();
   const { data: acctHistory }                       = useAlpacaAccountsHistory();
+  const { data: pnlSummary, refetch: refetchPnl }   = usePnlSummary(mode);
   const reconcileTrades                             = useReconcileTrades();
 
   // Pull-to-refresh doesn't just refetch — it cross-references every still-
@@ -114,6 +116,7 @@ export default function TradeLogScreen({ embedded = false }: Props) {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Reconcile failed');
     } finally {
+      refetchPnl();
       setRefreshing(false);
     }
   };
@@ -232,7 +235,7 @@ export default function TradeLogScreen({ embedded = false }: Props) {
               ) : (
                 <>
                   {/* P&L story first: hero summary + equity curve */}
-                  <PnlSummaryCard trades={rangeTrades} colors={colors} />
+                  <PnlSummaryCard trades={rangeTrades} colors={colors} summary={pnlSummary} range={range} />
 
                   {/* Trades grouped by session day with a per-day net */}
                   {dayGroups.map(group => (
@@ -264,7 +267,7 @@ export default function TradeLogScreen({ embedded = false }: Props) {
             </Text>
           ) : (
             <>
-              <StatsHero trades={rangeTrades} colors={colors} />
+              <StatsHero trades={rangeTrades} colors={colors} summary={pnlSummary} range={range} />
               <DailyPnlChart trades={rangeTrades} colors={colors} />
               <KeyMetricsGrid trades={rangeTrades} colors={colors} />
               <ExitQualityCard trades={rangeTrades} colors={colors} />

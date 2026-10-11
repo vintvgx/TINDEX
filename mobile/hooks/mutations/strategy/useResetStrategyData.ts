@@ -34,6 +34,7 @@ export function useResetStrategyData() {
     onSuccess: () => {
       // Invalidate every query that shows trade/session/review data
       queryClient.invalidateQueries({ queryKey: ['strategy-trades'] });
+      queryClient.invalidateQueries({ queryKey: ['pnl-summary'] });
       queryClient.invalidateQueries({ queryKey: ['strategy-stats'] });
       queryClient.invalidateQueries({ queryKey: ['strategy-performance'] });
       queryClient.invalidateQueries({ queryKey: ['orb-session'] });

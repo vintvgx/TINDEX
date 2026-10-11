@@ -1,4 +1,5 @@
 import { router } from 'expo-router';
+import TickerSheetService from '@/common/services/TickerSheetService';
 
 type NotificationData = Record<string, any>;
 
@@ -48,6 +49,11 @@ export function navigateFromNotification(data: NotificationData | undefined | nu
 
   const screen = data.screen as string | undefined;
   if (!screen) return;
+  // "Your NVDA thesis is ready" — the ticker sheet isn't a route.
+  if (screen === 'ticker_thesis' && data.ticker) {
+    TickerSheetService.getInstance().open(String(data.ticker), { thesis: true });
+    return;
+  }
   const path = ROUTE_BY_SCREEN[screen];
   if (!path) return;
 

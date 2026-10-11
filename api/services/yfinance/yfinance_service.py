@@ -646,6 +646,22 @@ def perform_yfinance_research(topic: str, expires_seconds: int = 60, include_opt
             "profit_margins": info.get("profitMargins"),
             "revenue_growth": info.get("revenueGrowth"),
             "earnings_growth": info.get("earningsGrowth"),
+            # Invest tab expansion (2026-10-11) — all null-safe .get()s.
+            # Note: stock_research's cache only round-trips the columns it
+            # has; the Invest tab reads /ticker/<sym>/fundamentals instead.
+            "forward_pe": info.get("forwardPE"),
+            "peg_ratio": info.get("pegRatio") or info.get("trailingPegRatio"),
+            "price_to_sales": info.get("priceToSalesTrailing12Months"),
+            "ev_to_ebitda": info.get("enterpriseToEbitda"),
+            "target_mean_price": info.get("targetMeanPrice"),
+            "target_high_price": info.get("targetHighPrice"),
+            "target_low_price": info.get("targetLowPrice"),
+            "analyst_count": info.get("numberOfAnalystOpinions"),
+            "recommendation_key": info.get("recommendationKey"),
+            "earnings_date": info.get("earningsTimestamp"),
+            "ex_dividend_date": info.get("exDividendDate"),
+            "free_cashflow": info.get("freeCashflow"),
+            "operating_margins": info.get("operatingMargins"),
             # Company Info
             "sector": info.get("sector"),
             "industry": info.get("industry"),

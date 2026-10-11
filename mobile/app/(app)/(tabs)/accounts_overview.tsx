@@ -8,6 +8,7 @@ import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useAlpacaAccountsHistory, useAlpacaTransfers } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import type { AccountHistoryEntry, AccountTransfer } from '@/hooks/queries/strategy/useAlpacaAccounts';
+import { usePnlSummary, type PnlSummary, type PnlPeriod } from '@/hooks/queries/strategy/usePnlSummary';
 import { useAccountValueDisplay } from '@/hooks/queries/strategy/useAccountValueDisplay';
 import { StatPill } from '@/common/components/ui/StatPill';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
@@ -24,14 +25,17 @@ const PERIOD_LABELS: Record<Period, string> = {
   all:   'All Time',
 };
 
-function getPnl(entry: AccountHistoryEntry | undefined, period: Period): { value: number; pct: number } | null {
-  if (!entry?.available) return null;
-  if (period === 'today')  return { value: entry.pnl_today ?? 0, pct: entry.pnl_today_pct ?? 0 };
-  if (period === 'week')   return entry.pnl_week      != null ? { value: entry.pnl_week,      pct: entry.pnl_week_pct      ?? 0 } : null;
-  if (period === 'month')  return entry.pnl_month     != null ? { value: entry.pnl_month,     pct: entry.pnl_month_pct     ?? 0 } : null;
-  if (period === 'ytd')    return entry.pnl_ytd       != null ? { value: entry.pnl_ytd,       pct: entry.pnl_ytd_pct       ?? 0 } : null;
-  if (period === 'all')    return entry.pnl_all_time  != null ? { value: entry.pnl_all_time,  pct: entry.pnl_all_time_pct  ?? 0 } : null;
-  return null;
+const PERIOD_KEY: Record<Period, PnlPeriod> = {
+  today: 'today', week: 'week', month: 'month', ytd: 'ytd', all: 'all_time',
+};
+
+/** Period P&L from the unified summary (same numbers as Home and the Trade
+ *  Log). The % is against the equity the period started from. */
+function getPnl(summary: PnlSummary | undefined, equity: number | undefined, period: Period): { value: number; pct: number | null } | null {
+  const p = summary?.[PERIOD_KEY[period]];
+  if (!p) return null;
+  const base = equity != null ? equity - p.total : 0;
+  return { value: p.total, pct: base > 0 ? (p.total / base) * 100 : null };
 }
 
 interface Props {
@@ -55,15 +59,17 @@ export default function AccountsScreen({ embedded = false }: Props) {
 
   const { paper: paperDisplay, live: liveDisplay, has_open_positions } = useAccountValueDisplay();
   const { data: history, isLoading: histLoading, refetch: refetchHistory } = useAlpacaAccountsHistory();
+  const { data: paperPnl, refetch: refetchPaperPnl } = usePnlSummary('paper');
+  const { data: livePnl, refetch: refetchLivePnl } = usePnlSummary('live');
   const tabBarHeight = useFloatingTabBarHeight();
 
   const isLoading = histLoading && !paperDisplay && !liveDisplay;
 
   const handlePullRefresh = useCallback(async () => {
     setManualRefreshing(true);
-    await refetchHistory();
+    await Promise.all([refetchHistory(), refetchPaperPnl(), refetchLivePnl()]);
     setManualRefreshing(false);
-  }, [refetchHistory]);
+  }, [refetchHistory, refetchPaperPnl, refetchLivePnl]);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -131,6 +137,7 @@ export default function AccountsScreen({ embedded = false }: Props) {
               accentColor="#FF9F0A"
               account={paperDisplay}
               history={history?.paper}
+              pnlSummary={paperPnl}
               period={period}
               colors={colors}
             />
@@ -142,6 +149,7 @@ export default function AccountsScreen({ embedded = false }: Props) {
               accentColor={colors.success}
               account={liveDisplay}
               history={history?.live}
+              pnlSummary={livePnl}
               period={period}
               colors={colors}
             />
@@ -183,7 +191,7 @@ export default function AccountsScreen({ embedded = false }: Props) {
 
             {period !== 'today' && (
               <Text style={[styles.disclaimer, { color: colors.tabBarInactive }]}>
-                Pull down to refresh period data. Week and month P&L are based on Alpaca portfolio history.
+                Pull down to refresh. Period P&L is closed trades net of estimated fees plus open positions.
               </Text>
             )}
 
@@ -239,17 +247,19 @@ interface AccountCardProps {
     error?: string;
   } | null;
   history?: AccountHistoryEntry;
+  pnlSummary?: PnlSummary;
   period: Period;
   colors: any;
 }
 
 const AccountCard: React.FC<AccountCardProps> = ({
-  label, subtitle, accentColor, account, history, period, colors,
+  label, subtitle, accentColor, account, history, pnlSummary, period, colors,
 }) => {
   const unavailable = !account?.available;
-  const pnlData = getPnl(history ?? (account as any), period);
+  const pnlData = getPnl(pnlSummary, account?.equity, period);
   const pnl    = pnlData?.value ?? 0;
-  const pnlPct = pnlData?.pct ?? 0;
+  const pnlPct = pnlData?.pct;
+  const allTime = pnlSummary?.all_time.total;
   const pnlColor = pnl >= 0 ? colors.success : colors.error;
   const hasHistoryData = pnlData !== null;
 
@@ -310,11 +320,13 @@ const AccountCard: React.FC<AccountCardProps> = ({
                   color={pnlColor}
                 />
                 <Text style={[styles.pnlValue, { color: pnlColor }]}>
-                  {pnl >= 0 ? '+' : ''}${Math.abs(pnl).toFixed(2)}
+                  {pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toFixed(2)}
                 </Text>
-                <Text style={[styles.pnlPct, { color: pnlColor }]}>
-                  ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
-                </Text>
+                {pnlPct != null && (
+                  <Text style={[styles.pnlPct, { color: pnlColor }]}>
+                    ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+                  </Text>
+                )}
               </View>
             </View>
           ) : (
@@ -350,11 +362,11 @@ const AccountCard: React.FC<AccountCardProps> = ({
               {(history.total_withdrawn ?? 0) > 0 && (
                 <CapitalStat label="Withdrawn" value={`$${(history.total_withdrawn ?? 0).toFixed(2)}`} colors={colors} />
               )}
-              {history.pnl_all_time != null && (
+              {allTime != null && (
                 <CapitalStat
                   label="All-Time P&L"
-                  value={`${history.pnl_all_time >= 0 ? '+' : ''}$${history.pnl_all_time.toFixed(2)}`}
-                  valueColor={history.pnl_all_time >= 0 ? colors.success : colors.error}
+                  value={`${allTime >= 0 ? '+' : '-'}$${Math.abs(allTime).toFixed(2)}`}
+                  valueColor={allTime >= 0 ? colors.success : colors.error}
                   colors={colors}
                 />
               )}

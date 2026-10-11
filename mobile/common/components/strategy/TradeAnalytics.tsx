@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import Svg, { Path, Line, Rect } from 'react-native-svg';
 import type { ORBTrade } from '@/common/types/strategy';
+import type { PnlSummary, PnlPeriod } from '@/hooks/queries/strategy/usePnlSummary';
 
 /**
  * P&L-first analytics for the Trade Log — every number here is computed
@@ -9,7 +10,21 @@ import type { ORBTrade } from '@/common/types/strategy';
  * list rather than the /strategy/stats endpoint, which blends both accounts'
  * money into one figure. Filtering first and computing second is what makes
  * the paper/live toggle actually mean something on the Stats tab.
+ *
+ * Exception — the headline P&L figures (net, Today, 7 Days) are NOT computed
+ * here: they come from the unified /strategy/accounts/pnl-summary (net of
+ * estimated fees, bucketed by close date), the same numbers Home shows. The
+ * per-trade rows, day groups and win/loss stats stay client-side — they're
+ * the detail behind the number.
  */
+
+/** Trade Log range → unified-summary period. */
+export const RANGE_PERIOD: Record<TimeRange, PnlPeriod> = {
+  TODAY: 'today',
+  '1W': 'week',
+  '1M': 'month',
+  ALL: 'all_time',
+};
 
 // ET calendar date — matches trade_date's server-side stamping (see tradelog.tsx).
 export const todayEt = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -91,8 +106,6 @@ export function groupTradesByDay(trades: ORBTrade[]): DayGroup[] {
 
 export interface TradeStatsSummary {
   netPnl: number;
-  todayPnl: number;
-  weekPnl: number;
   closedCount: number;
   wins: number;
   losses: number;
@@ -117,9 +130,6 @@ export function computeTradeStats(trades: ORBTrade[]): TradeStatsSummary {
   const grossWin  = winners.reduce((s, t) => s + (t.pnl ?? 0), 0);
   const grossLoss = losers.reduce((s, t) => s + (t.pnl ?? 0), 0); // negative
 
-  const today = todayEt();
-  const weekCutoff = daysAgoEt(7);
-
   let streak: TradeStatsSummary['streak'] = null;
   for (let i = closed.length - 1; i >= 0; i--) {
     const p = closed[i].pnl ?? 0;
@@ -139,8 +149,6 @@ export function computeTradeStats(trades: ORBTrade[]): TradeStatsSummary {
 
   return {
     netPnl: pnls.reduce((s, p) => s + p, 0),
-    todayPnl: closed.filter(t => t.trade_date?.slice(0, 10) === today).reduce((s, t) => s + (t.pnl ?? 0), 0),
-    weekPnl:  closed.filter(t => (t.trade_date?.slice(0, 10) ?? '') >= weekCutoff).reduce((s, t) => s + (t.pnl ?? 0), 0),
     closedCount: closed.length,
     wins: winners.length,
     losses: losers.length,
@@ -214,16 +222,28 @@ export function EquitySparkline({ trades, colors, height = 64 }: {
 
 // ── PnlSummaryCard (Trade Log header) ─────────────────────────────────────────
 
-export function PnlSummaryCard({ trades, colors }: { trades: ORBTrade[]; colors: any }) {
+export function PnlSummaryCard({ trades, colors, summary, range }: {
+  trades: ORBTrade[]; colors: any; summary?: PnlSummary; range: TimeRange;
+}) {
   const s = useMemo(() => computeTradeStats(trades), [trades]);
-  const heroColor = s.netPnl >= 0 ? colors.success : colors.error;
+  const head = summary?.[RANGE_PERIOD[range]];
+  const tone = (v: number | undefined) => (v == null ? colors.text : v >= 0 ? colors.success : colors.error);
+  const money = (v: number | undefined, d = 0) => (v == null ? '—' : fmtMoney(v, d));
 
   return (
     <View style={[a.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <View style={a.heroRow}>
         <View>
-          <Text style={[a.heroLabel, { color: colors.tabBarInactive }]}>NET P&L · {s.closedCount} CLOSED</Text>
-          <Text style={[a.heroValue, { color: heroColor }]}>{fmtMoney(s.netPnl, 2)}</Text>
+          <Text style={[a.heroLabel, { color: colors.tabBarInactive }]}>
+            NET P&L · {head ? head.trades_closed : s.closedCount} CLOSED
+          </Text>
+          <Text style={[a.heroValue, { color: tone(head?.realized_net) }]}>{money(head?.realized_net, 2)}</Text>
+          {head ? (
+            <Text style={[a.heroLabel, { color: colors.tabBarInactive, letterSpacing: 0, marginTop: 2 }]}>
+              after est. fees {fmtMoney(-head.fees, 2)}
+              {head.unrealized !== 0 ? ` · ${fmtMoney(head.unrealized, 2)} open` : ''}
+            </Text>
+          ) : null}
         </View>
         {s.winRate != null && (
           <View style={a.heroRight}>
@@ -236,8 +256,8 @@ export function PnlSummaryCard({ trades, colors }: { trades: ORBTrade[]; colors:
       <EquitySparkline trades={trades} colors={colors} />
 
       <View style={[a.subRow, { borderTopColor: colors.border }]}>
-        <SubStat label="Today"     value={fmtMoney(s.todayPnl)} color={s.todayPnl >= 0 ? colors.success : colors.error} colors={colors} />
-        <SubStat label="7 Days"    value={fmtMoney(s.weekPnl)}  color={s.weekPnl >= 0 ? colors.success : colors.error}  colors={colors} />
+        <SubStat label="Today"  value={money(summary?.today.realized_net)} color={tone(summary?.today.realized_net)} colors={colors} />
+        <SubStat label="7 Days" value={money(summary?.week.realized_net)}  color={tone(summary?.week.realized_net)}  colors={colors} />
         <SubStat label="W / L"     value={`${s.wins} / ${s.losses}`} colors={colors} />
         <SubStat
           label="Streak"
@@ -281,15 +301,18 @@ export function DayHeader({ group, colors }: { group: DayGroup; colors: any }) {
 
 // ── StatsHero (Stats tab) ─────────────────────────────────────────────────────
 
-export function StatsHero({ trades, colors }: { trades: ORBTrade[]; colors: any }) {
+export function StatsHero({ trades, colors, summary, range }: {
+  trades: ORBTrade[]; colors: any; summary?: PnlSummary; range: TimeRange;
+}) {
   const s = useMemo(() => computeTradeStats(trades), [trades]);
-  const heroColor = s.netPnl >= 0 ? colors.success : colors.error;
+  const net = summary?.[RANGE_PERIOD[range]].realized_net;
+  const heroColor = net == null ? colors.text : net >= 0 ? colors.success : colors.error;
   const pf = s.profitFactor;
 
   return (
     <View style={[a.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <Text style={[a.heroLabel, { color: colors.tabBarInactive }]}>NET REALIZED P&L</Text>
-      <Text style={[a.heroValueXl, { color: heroColor }]}>{fmtMoney(s.netPnl, 2)}</Text>
+      <Text style={[a.heroValueXl, { color: heroColor }]}>{net == null ? '—' : fmtMoney(net, 2)}</Text>
       <View style={[a.subRow, { borderTopColor: colors.border }]}>
         <SubStat label="Win Rate" value={s.winRate != null ? `${s.winRate.toFixed(0)}%` : '—'}
                  color={s.winRate != null && s.winRate >= 55 ? colors.success : undefined} colors={colors} />

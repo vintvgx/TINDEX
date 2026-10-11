@@ -46,6 +46,7 @@ export function useReconcileTrades() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['strategy-trades'] });
+      queryClient.invalidateQueries({ queryKey: ['pnl-summary'] });
     },
   });
 }
