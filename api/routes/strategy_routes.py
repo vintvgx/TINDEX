@@ -754,6 +754,7 @@ def force_close_strategy(strategy_id: str):
             strategy_id=engine.strategy_id,
             trading_client=engine.trading_client,
             trade_id=engine.active_trade_id,
+            armed_levels=engine._armed_levels_snapshot(),
         )
         engine.notifier.notify_exit(
             ticker=engine.ticker,
@@ -970,6 +971,13 @@ def update_strategy_exits(strategy_id: str):
             )
 
     logger.info("[strategy] Updated exits for %s: %s", strategy_id, changed)
+    # Timestamped trail of the edit for future debugging (2026-10-09: the
+    # AAPL SL→$0.90/TP1→$1.00 edit left no trail, so "when did he set it"
+    # couldn't be answered). Visible on the mobile Debug tab.
+    try:
+        engine.debug.emit("INFO", f"Exit levels edited: {changed}")
+    except Exception:
+        pass
     return jsonify({
         "status": "ok",
         "updated": changed,
