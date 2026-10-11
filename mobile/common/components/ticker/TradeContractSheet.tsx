@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal,
-  Animated, Easing, Pressable, Dimensions,
+  Animated, Easing, Pressable, Dimensions, AppState,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -9,7 +9,7 @@ import { useToast } from '@/common/components/ui/Toast';
 import { useImmediateTradeByTicker, StreamUnavailableError } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
 import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
 import {
-  IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX, defaultQtyFor,
+  IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX, defaultQtyFor, scalperSmartQty,
   getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
 } from '@/common/components/strategy/ImmediateProfilePicker';
 import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
@@ -24,6 +24,11 @@ import { AccountModeBanner, AccountModeTint } from '@/common/components/trade/Ac
 import { OrderReviewSheet, type ReviewOrder } from '@/common/components/trade/OrderReviewSheet';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 import type { ImmediateTradeByTickerRequest } from '@/common/types/strategy';
+import { emitTradeEntered } from '@/common/services/tradeEntryEvents';
+import {
+  ExitLadder, ladderRequest, ladderRungs, LADDER_TP1_PCT, LADDER_TP2_PCT, type LadderSetup,
+} from '@/common/components/trade/ExitLadder';
+import { useTradeSheetPrefs } from '@/hooks/useTradeSheetPrefs';
 
 interface Props {
   visible: boolean;
@@ -46,9 +51,12 @@ interface Props {
 }
 
 /**
- * The actual form — pricing, technicals gate, account toggle, profile, qty,
- * exit controls, Review → swipe-to-submit —
- * shared by both TradeContractSheet (a full native Modal, used from the
+ * The actual form — trade sheet v2 (2026-10-11): compact contract header,
+ * Paper/Live, one-line market + market value, CONTRACTS chips + stepper,
+ * TECHNICALS (gate panel untouched), EXIT LADDER, then collapsed Contract
+ * info / Exit details / All profiles, and a sticky Review CTA → the Review
+ * sheet (unchanged, the last gate) → success → Home.
+ * Shared by both TradeContractSheet (a full native Modal, used from the
  * Contracts tab / contract detail modal) and TradeContractQuickCard (an
  * inline animated overlay, used from AgentModal so the AI Assistant chat
  * never has to close to enter a trade). Neither wrapper duplicates any of
@@ -57,28 +65,40 @@ interface Props {
 function TradeContractForm({ visible, onClose, colors, ticker, contract, currentPrice, alertEntryPrice, alertStopLoss }: Omit<Props, 'contract'> & { contract: OptionsContract }) {
   const toast = useToast();
   const [paperMode, setPaperMode]       = useState(true);
-  const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
-  const [qty, setQty]                   = useState(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], contract.ask));
-  const [stopType, setStopType]         = useState<StopType>(5);
-  // Floor + breakeven grace chosen at entry (sent with the order).
-  const [floorPct, setFloorPct] = useState<number | null>(null);
-  const [beGrace, setBeGrace] = useState<number>(BE_GRACE_DEFAULT);
-  const [volumeExit, setVolumeExit]     = useState(false);
+  // The ladder runs on SCALPER; picking another profile under "All
+  // profiles" switches the ladder off and uses that profile as before.
+  const [profileIndex, setProfileIndex] = useState(LADDER_PROFILE_INDEX);
+  const [qty, setQty]                   = useState(scalperSmartQty(contract.ask));
+  const [ladderSetup, setLadderSetup]   = useState<LadderSetup>('standard');
+  // Exit details — remembered across opens (see useTradeSheetPrefs).
+  const { prefs, loaded: prefsLoaded, remember } = useTradeSheetPrefs();
+  const [stopType, setStopTypeState]    = useState<StopType>(5);
+  const [floorPct, setFloorPctState]    = useState<number | null>(null);
+  const [beGrace, setBeGraceState]      = useState<number>(BE_GRACE_DEFAULT);
+  const [volumeExit, setVolumeExitState] = useState(false);
+  const setStopType   = (v: StopType)      => { setStopTypeState(v); remember({ stopType: v }); };
+  const setFloorPct   = (v: number | null) => { setFloorPctState(v); remember({ floorPct: v }); };
+  const setBeGrace    = (v: number)        => { setBeGraceState(v); remember({ beGrace: v }); };
+  const setVolumeExit = (v: boolean)       => { setVolumeExitState(v); remember({ volumeExit: v }); };
+  const chooseLadderSetup = (v: LadderSetup) => { setLadderSetup(v); remember({ ladderSetup: v }); };
   const [manualSlPct, setManualSlPct]   = useState(30);
   // Defaults ON whenever the checklist's parsed contract had both an alert
   // entry and stop — user can still turn it off to fall back to the
-  // profile's own default stop (or the manual slider, if MANUAL).
+  // ladder/profile's own default stop (or the manual slider, if MANUAL).
   const [useAlertStop, setUseAlertStop] = useState(true);
-  // SL/TP enable — on by default for every profile; turning either off lets
-  // a runner run its course (or hold into close) instead of auto-exiting.
+  // SL/TP enable — on by default; turning either off lets a runner run its
+  // course (or hold into close) instead of auto-exiting.
   const [slEnabled, setSlEnabled] = useState(true);
   const [tpEnabled, setTpEnabled] = useState(true);
+  const [openSection, setOpenSection] = useState<'info' | 'exit' | 'profiles' | null>(null);
+  const toggleSection = (k: 'info' | 'exit' | 'profiles') => setOpenSection(o => (o === k ? null : k));
 
   const profile      = IMMEDIATE_PROFILES[profileIndex];
+  const ladderOn     = profileIndex === LADDER_PROFILE_INDEX;
   const isManual     = profile.isManual === true;
   const isNoStopLoss = profile.isNoStopLoss === true;
   // No stop loss in effect — either from a (legacy) NO_STOP_LOSS profile or
-  // the user unchecking Stop Loss directly.
+  // the user disarming Stop Loss directly.
   const noSL = isNoStopLoss || !slEnabled;
 
   // Preserve the alert's entry→stop DOLLAR differential against the live
@@ -100,9 +120,22 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
   // Explicit two-tap override of a DON'T ENTER verdict (see GatedBuyButton).
   const [overridden, setOverridden] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
-  // Set on a successful order placed from the Review sheet — it plays the
-  // confirmation animation, then finishSuccess closes everything.
+  // Set on a successful order — the Review sheet plays its success state,
+  // then finishSuccess closes everything and hands off to Home.
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  // The order the success state is for — read when handing off to Home.
+  const entered = useRef<{ strategyId?: string; body: ImmediateTradeByTickerRequest } | null>(null);
+  // Backgrounded while the success state was up → don't yank the user to
+  // Home when they come back; just close the sheet.
+  const backgroundedDuringSuccess = useRef(false);
+  useEffect(() => {
+    if (!successMessage) return;
+    backgroundedDuringSuccess.current = false;
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st !== 'active') backgroundedDuringSuccess.current = true;
+    });
+    return () => sub.remove();
+  }, [successMessage]);
 
   const { mutate: submit, isPending } = useImmediateTradeByTicker();
   // Overtrading guard — surfaces how many OTHER live positions are already
@@ -119,15 +152,19 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     lastPrice: number;
   } | null>(null);
 
-  // Reset to defaults + auto-suggest a grace stop-type for any sub-$0.50
-  // contract every time a new contract is opened, mirroring ImmediateTradePanel.
+  // Reset to defaults every time a new contract is opened — exit details
+  // from the remembered prefs (once loaded), else a grace stop-type auto-
+  // suggested for any sub-$0.50 contract, mirroring ImmediateTradePanel.
   const autoGraceMinutes = contract ? getCheapContractAutoGraceMinutes(contract.ask) : null;
   useEffect(() => {
-    if (!visible || !contract) return;
-    setProfileIndex(DEFAULT_PROFILE_INDEX);
-    setQty(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], contract.ask));
-    setStopType(getCheapContractAutoGraceMinutes(contract.ask) ?? 'HARD');
-    setVolumeExit(false);
+    if (!visible || !contract || !prefsLoaded) return;
+    setProfileIndex(LADDER_PROFILE_INDEX);
+    setQty(scalperSmartQty(contract.ask));
+    setLadderSetup(prefs.ladderSetup ?? 'standard');
+    setStopTypeState(prefs.stopType ?? getCheapContractAutoGraceMinutes(contract.ask) ?? 'HARD');
+    setVolumeExitState(prefs.volumeExit ?? false);
+    setFloorPctState(prefs.floorPct !== undefined ? prefs.floorPct : null);
+    setBeGraceState(prefs.beGrace ?? BE_GRACE_DEFAULT);
     setManualSlPct(30);
     setPaperMode(true);
     setBlindEntry(null);
@@ -137,13 +174,11 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     setOverridden(false);
     setReviewOpen(false);
     setSuccessMessage(null);
-    // Entry-safety choices are per-contract — a new sheet must not inherit
-    // the previous trade's floor/grace.
-    setFloorPct(null);
-    setBeGrace(BE_GRACE_DEFAULT);
-  // Only re-run when a different contract is opened, not on every render.
+    setOpenSection(null);
+  // Only re-run when a different contract is opened (or prefs first land),
+  // not on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, contract?.symbol]);
+  }, [visible, contract?.symbol, prefsLoaded]);
 
   const handleProfileSelect = (idx: number) => {
     setProfileIndex(idx);
@@ -155,14 +190,12 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     submit(body, {
       onSuccess: (r) => {
         setBlindEntry(null);
-        // From the Review sheet: let its success animation play first.
-        // A Blind Entry retry has no Review sheet open — toast and close.
-        if (reviewOpen) {
-          setSuccessMessage(r.message || `${ticker} entered`);
-          return;
-        }
-        toast.success(r.message || `${ticker} entered`);
-        onClose();
+        // Every success — Review submit or the Blind Entry retry (which has
+        // no Review sheet open, so re-present it) — plays the full-sheet
+        // success state; finishSuccess then hands off to Home.
+        entered.current = { strategyId: r.strategy_id, body };
+        setReviewOpen(true);
+        setSuccessMessage(r.message || `${ticker} entered`);
       },
       onError: (e) => {
         if (e instanceof StreamUnavailableError) {
@@ -196,6 +229,7 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
       ...(slEnabled && !noSL && floorPct != null ? { sl_outer_floor_pct: floorPct } : {}),
       be_grace_seconds: beGrace,
       tp_enabled: tpEnabled,
+      ...(ladderOn ? { ladder: ladderRequest(qty, ladderSetup) } : {}),
       // Alert-matched stop takes priority over both the profile default and
       // the manual slider whenever it's on and available — matches the
       // "should be set to that price" request regardless of which profile
@@ -228,7 +262,7 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     ...(!paperMode && openLiveCount > 0 ? [`You already have ${openLiveCount} other live position${openLiveCount > 1 ? 's' : ''} open.`] : []),
   ];
 
-  // Exit profile translated to dollars for the Review sheet, using the same
+  // Exit plan translated to dollars for the Review sheet, using the same
   // stop precedence doSubmit sends (alert-matched → manual → profile).
   const stopPct = noSL ? null
     : (useAlertStop && alertMaxLossPct != null) ? alertMaxLossPct
@@ -242,6 +276,8 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
   // from the contract symbol regardless of what the client thinks.
   const isZeroDteContract = contract?.expiration?.slice(0, 10) === new Date().toISOString().slice(0, 10);
 
+  const tp1Pct = ladderOn ? LADDER_TP1_PCT : profile.tp1;
+  const tp2Pct = ladderOn ? (qty >= 3 ? LADDER_TP2_PCT[ladderSetup] : 0) : profile.tp2;
   const reviewOrder: ReviewOrder = {
     ticker,
     optionType: contract.option_type,
@@ -249,76 +285,141 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     expiration: contract.expiration,
     premium: contract.ask,
     qty,
-    profileLabel: `${profile.emoji} ${profile.name}`,
+    profileLabel: ladderOn
+      ? `Ladder · ${ladderRungs(qty, ladderSetup).map(r => (r.pct != null ? `+${r.pct}%` : 'runner')).join(' / ')}`
+      : `${profile.emoji} ${profile.name}`,
     stopPrice: stopPct == null ? null : contract.ask * (1 - stopPct),
     stopLabel: stopPct == null ? 'Off' : stopType === 'HARD' ? 'Hard stop' : `${stopType}-min SL timer`,
-    tp1Price: tpEnabled && !isManual && profile.tp1 > 0 ? contract.ask * (1 + profile.tp1 / 100) : null,
-    tp2Price: tpEnabled && !isManual && profile.tp2 > 0 ? contract.ask * (1 + profile.tp2 / 100) : null,
+    tp1Price: tpEnabled && !isManual && tp1Pct > 0 ? contract.ask * (1 + tp1Pct / 100) : null,
+    tp2Price: tpEnabled && !isManual && tp2Pct > 0 ? contract.ask * (1 + tp2Pct / 100) : null,
     floorPrice: (() => { const f = stopPct == null ? null : effectiveFloorPct(floorPct, stopType !== 'HARD'); return f == null ? null : contract.ask * (1 - f); })(),
     floorIsDefault: floorPct == null,
     beGraceSeconds: tpEnabled && !isManual ? beGrace : 0,
   };
-  const mid = contract.bid > 0 && contract.ask > 0 ? (contract.bid + contract.ask) / 2 : null;
+
+  // Success state done: close this sheet, then (unless the app went to the
+  // background meanwhile) hand off to TradeEntryNavigator, which closes any
+  // hosting modal and lands on Home with the new position highlighted.
+  const finishSuccess = () => {
+    setSuccessMessage(null);
+    setReviewOpen(false);
+    onClose();
+    const e = entered.current;
+    entered.current = null;
+    if (!e || backgroundedDuringSuccess.current) return;
+    emitTradeEntered({
+      ticker,
+      contractSymbol: e.body.contract_symbol,
+      strategyId: e.strategyId,
+      label: `${ticker} ${strikeLabel}${contract.option_type === 'CALL' ? 'C' : 'P'} ×${e.body.qty ?? qty}`,
+      paperMode: e.body.paper_mode,
+    });
+  };
+
   const muted = colors.textSecondary ?? colors.tabBarInactive;
+  const faint = colors.textTertiary ?? colors.tabBarInactive;
+  const mid = contract.bid > 0 && contract.ask > 0 ? (contract.bid + contract.ask) / 2 : null;
+  const spreadPct = mid ? ((contract.ask - contract.bid) / mid) * 100 : null;
+  const strikeLabel = contract.strike % 1 === 0 ? contract.strike.toFixed(0) : contract.strike.toFixed(2);
+  const marketValue = qty * contract.ask * 100;
+  const underlying = entryCheck.data?.price ?? (currentPrice > 0 ? currentPrice : null);
+  const hasGreeks = [contract.delta, contract.gamma, contract.theta, contract.vega, contract.implied_volatility].some(v => v != null);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <AccountModeTint paperMode={paperMode} colors={colors} />
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
+        {/* Compact contract header */}
         <View style={[s.header, { borderBottomColor: colors.separator ?? colors.border }]}>
           <View style={{ flex: 1 }}>
-            <Text style={[s.title, { color: colors.text }]}>Trade {ticker}</Text>
-            <Text style={[s.subhead, { color: colors.textSecondary ?? colors.tabBarInactive }]} numberOfLines={1}>
-              {contract.symbol} · ${contract.ask.toFixed(2)} ask
+            <Text style={[s.title, { color: colors.text }]}>
+              {ticker} ${strikeLabel}{contract.option_type === 'CALL' ? 'C' : 'P'}
+            </Text>
+            <Text style={[s.subhead, { color: muted }]} numberOfLines={1}>
+              {ticker}{underlying != null ? ` · $${underlying.toFixed(2)}` : ''} · {fmtExpiration(contract.expiration)}
             </Text>
           </View>
           <TouchableOpacity onPress={onClose} hitSlop={8} style={[s.closeBtn, { backgroundColor: colors.surface ?? colors.card, borderColor: colors.border }]}>
-            <Ionicons name="close" size={18} color={colors.textSecondary ?? colors.tabBarInactive} />
+            <Ionicons name="close" size={18} color={muted} />
           </TouchableOpacity>
         </View>
-        <AccountModeBanner paperMode={paperMode} colors={colors} />
+        {!paperMode && <AccountModeBanner paperMode={paperMode} colors={colors} />}
 
-        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
-          {/* Contract + pricing — stays first and prominent */}
-          <View style={[s.priceCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={s.priceTop}>
-              <View style={{ flex: 1 }}>
-                <Text style={[s.priceContract, { color: colors.text }]}>
-                  {ticker} ${contract.strike} {contract.option_type === 'CALL' ? 'Call' : 'Put'}
-                </Text>
-                <Text style={[s.priceExp, { color: muted }]}>
-                  Exp {contract.expiration}{entryCheck.data ? ` · ${ticker} $${entryCheck.data.price.toFixed(2)}` : ''}
-                </Text>
-              </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={[s.priceAsk, { color: colors.text }]}>${contract.ask.toFixed(2)}</Text>
-                <Text style={[s.priceExp, { color: muted }]}>ask / share</Text>
-              </View>
+        <ScrollView contentContainerStyle={{ padding: 16, paddingTop: 12, paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
+          {/* Paper / Live */}
+          <View style={[s.accountToggle, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            {([['Paper', true], ['Live', false]] as const).map(([lbl, isPaper]) => {
+              const active = paperMode === isPaper;
+              const tint = isPaper ? '#FF9F0A' : colors.error;
+              return (
+                <TouchableOpacity
+                  key={lbl}
+                  onPress={() => setPaperMode(isPaper)}
+                  activeOpacity={0.8}
+                  style={[s.accountBtn, active && { backgroundColor: tint + '22', borderRadius: 8 }]}
+                >
+                  <Text style={[s.accountText, { color: active ? tint : colors.tabBarInactive, fontWeight: active ? '700' : '500' }]}>
+                    {lbl}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* One-line market + market value */}
+          <View style={s.marketLine}>
+            <Text style={[s.tab, { flex: 1, fontSize: 12.5, color: muted }]} numberOfLines={1}>
+              Ask <Text style={{ color: colors.text, fontWeight: '700' }}>${contract.ask.toFixed(2)}</Text>
+              {' · '}Bid ${contract.bid.toFixed(2)}
+              {spreadPct != null ? ` · Spread ${spreadPct.toFixed(0)}%` : ''}
+            </Text>
+            <Text style={[s.tab, { fontSize: 17, fontWeight: '800', color: colors.text }]}>${marketValue.toFixed(2)}</Text>
+          </View>
+
+          {/* Contracts: 1/2/3 chips + 1–10 stepper */}
+          <Text style={[s.label, { color: colors.tabBarInactive }]}>
+            CONTRACTS{noSL ? ' — no stop loss, size carefully' : ''}
+          </Text>
+          <View style={s.qtyRow}>
+            <View style={s.chips}>
+              {[1, 2, 3].map(n => {
+                const on = qty === n;
+                return (
+                  <TouchableOpacity
+                    key={n}
+                    onPress={() => setQty(n)}
+                    activeOpacity={0.75}
+                    style={[s.chip, { borderColor: on ? '#4A9EFF' : colors.border, backgroundColor: on ? '#4A9EFF14' : colors.card }]}
+                  >
+                    <Text style={{ fontSize: 15, fontWeight: '800', color: on ? colors.text : muted }}>{n}</Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
-            <View style={[s.priceRow, { borderTopColor: colors.border }]}>
-              <PriceCell label="Bid" value={`$${contract.bid.toFixed(2)}`} colors={colors} />
-              <PriceCell label="Mid" value={mid != null ? `$${mid.toFixed(2)}` : '—'} colors={colors} />
-              <PriceCell label="Per contract" value={`$${(contract.ask * 100).toFixed(0)}`} colors={colors} />
-              <PriceCell label={`Cost × ${qty}`} value={`$${(qty * contract.ask * 100).toFixed(0)}`} colors={colors} strong />
+            <View style={[s.stepper, { borderColor: colors.border, backgroundColor: colors.card }]}>
+              <TouchableOpacity onPress={() => setQty(q => Math.max(1, q - 1))} hitSlop={8} style={s.stepBtn}>
+                <Ionicons name="remove" size={18} color={colors.text} />
+              </TouchableOpacity>
+              <Text style={[s.tab, s.qtyValue, { color: colors.text }]}>{qty}</Text>
+              <TouchableOpacity onPress={() => setQty(q => Math.min(MAX_QTY, q + 1))} hitSlop={8} style={s.stepBtn}>
+                <Ionicons name="add" size={18} color={colors.text} />
+              </TouchableOpacity>
             </View>
           </View>
 
-          {/* Technicals gate — above the account/profile controls so the
-              verdict is on screen without scrolling */}
-          <View style={{ marginTop: 12, marginBottom: 18 }}>
-            <EntryTechnicalsPanel
-              data={entryCheck.data}
-              isLoading={entryCheck.isLoading}
-              error={entryCheck.error}
-              direction={contract.option_type}
-              colors={colors}
-            />
-            <PositioningRow ticker={ticker} direction={contract.option_type} expiry={contract.expiration} colors={colors} />
-          </View>
+          {/* Technicals gate — untouched, above the exit plan */}
+          <Text style={[s.label, { color: colors.tabBarInactive, marginTop: 16 }]}>TECHNICALS</Text>
+          <EntryTechnicalsPanel
+            data={entryCheck.data}
+            isLoading={entryCheck.isLoading}
+            error={entryCheck.error}
+            direction={contract.option_type}
+            colors={colors}
+          />
+          <PositioningRow ticker={ticker} direction={contract.option_type} expiry={contract.expiration} colors={colors} />
 
           {/* Alert-matched stop — only when the checklist's parsed contract
-              had both an entry and stop price, and NO_STOP_LOSS (which
-              ignores max_loss_pct entirely server-side) isn't selected. */}
+              had both an entry and stop price, and SL is armed. */}
           {alertMaxLossPct != null && slEnabled && (
             <TouchableOpacity
               onPress={() => setUseAlertStop(v => !v)}
@@ -326,7 +427,7 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
               style={[s.alertStopRow, {
                 backgroundColor: (useAlertStop ? colors.accent : colors.tabBarInactive) + '14',
                 borderColor: (useAlertStop ? colors.accent : colors.border) + '55',
-                marginBottom: 18,
+                marginTop: 14,
               }]}
             >
               <Ionicons
@@ -346,126 +447,113 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
             </TouchableOpacity>
           )}
 
-          {/* Account */}
-          <Text style={[s.label, { color: colors.tabBarInactive }]}>ACCOUNT</Text>
-          <View style={[s.accountToggle, { backgroundColor: colors.card, borderColor: colors.border, marginBottom: 18 }]}>
-            {([['Paper', true], ['Live', false]] as const).map(([lbl, isPaper]) => {
-              const active = paperMode === isPaper;
-              const tint = isPaper ? '#FF9F0A' : colors.error;
-              return (
-                <TouchableOpacity
-                  key={lbl}
-                  onPress={() => setPaperMode(isPaper)}
-                  activeOpacity={0.8}
-                  style={[s.accountBtn, active && { backgroundColor: tint + '22', borderRadius: 8 }]}
-                >
-                  <Text style={[s.accountText, { color: active ? tint : colors.tabBarInactive, fontWeight: active ? '700' : '500' }]}>
-                    {lbl}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-
-          {/* Profile */}
-          <Text style={[s.label, { color: colors.tabBarInactive }]}>PROFILE</Text>
-          <View style={{ marginBottom: 18 }}>
-            <ProfileDropdown selectedIndex={profileIndex} onSelect={handleProfileSelect} colors={colors} />
-          </View>
-
-          {/* Manual SL — only for MANUAL profile, and only while SL is enabled */}
-          {isManual && slEnabled && (
-            <View style={{ marginBottom: 18 }}>
-              <ManualSLPicker slPct={manualSlPct} onChangePct={setManualSlPct} askPrice={contract.ask} colors={colors} />
+          {/* Exit ladder (or the chosen non-ladder profile) */}
+          <Text style={[s.label, { color: colors.tabBarInactive, marginTop: 16 }]}>
+            {ladderOn ? 'EXIT LADDER' : `EXIT PROFILE · ${profile.emoji} ${profile.name.toUpperCase()}`}
+          </Text>
+          {ladderOn ? (
+            <ExitLadder
+              qty={qty}
+              setup={ladderSetup}
+              onSetup={chooseLadderSetup}
+              ask={contract.ask}
+              slPct={stopPct}
+              slEnabled={slEnabled}
+              tpEnabled={tpEnabled}
+              onToggleSl={() => setSlEnabled(v => !v)}
+              onToggleTp={() => setTpEnabled(v => !v)}
+              colors={colors}
+            />
+          ) : (
+            <View style={{ gap: 8 }}>
+              <Text style={{ fontSize: 12.5, color: muted, lineHeight: 18 }}>
+                {profile.description}
+                {!isManual && ` TP1 +${profile.tp1}%${profile.tp2 > 0 ? ` · TP2 +${profile.tp2}%` : ''} · SL −${profile.maxLoss}%.`}
+              </Text>
+              {isManual && slEnabled && (
+                <ManualSLPicker slPct={manualSlPct} onChangePct={setManualSlPct} askPrice={contract.ask} colors={colors} />
+              )}
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <ArmToggle label="Stop Loss" on={slEnabled} onPress={() => setSlEnabled(v => !v)} colors={colors} />
+                <ArmToggle label="Take Profit" on={tpEnabled} onPress={() => setTpEnabled(v => !v)} colors={colors} />
+              </View>
+              <TouchableOpacity onPress={() => handleProfileSelect(LADDER_PROFILE_INDEX)} hitSlop={6}>
+                <Text style={{ fontSize: 12.5, fontWeight: '700', color: '#4A9EFF' }}>← Back to the exit ladder</Text>
+              </TouchableOpacity>
             </View>
           )}
 
-          {/* Qty */}
-          <Text style={[s.label, { color: colors.tabBarInactive }]}>
-            CONTRACTS{noSL ? ' — no stop loss, size carefully' : ''}
-          </Text>
-          <View style={[s.qtyRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <TouchableOpacity
-              onPress={() => setQty(q => Math.max(1, q - 1))}
-              style={[s.qtyBtn, { borderColor: colors.border }]}
-              hitSlop={8}
-            >
-              <Ionicons name="remove" size={18} color={colors.text} />
-            </TouchableOpacity>
-            <Text style={[s.qtyValue, { color: colors.text }]}>{qty}</Text>
-            <TouchableOpacity
-              onPress={() => setQty(q => Math.min(50, q + 1))}
-              style={[s.qtyBtn, { borderColor: colors.border }]}
-              hitSlop={8}
-            >
-              <Ionicons name="add" size={18} color={colors.text} />
-            </TouchableOpacity>
-            <Text style={[s.qtyCost, { color: colors.tabBarInactive }]}>
-              ≈ ${(qty * contract.ask * 100).toFixed(0)}
-            </Text>
-          </View>
+          {/* Contract info */}
+          <Dropdown title="Contract info" open={openSection === 'info'} onToggle={() => toggleSection('info')} colors={colors}>
+            <KV k="Symbol" v={contract.symbol} colors={colors} />
+            <KV k="Last" v={contract.last_price != null ? `$${contract.last_price.toFixed(2)}` : '—'} colors={colors} />
+            <KV k="Bid / Ask" v={`$${contract.bid.toFixed(2)} / $${contract.ask.toFixed(2)}`} colors={colors} />
+            <KV k="Midpoint" v={mid != null ? `$${mid.toFixed(3)}` : '—'} colors={colors} />
+            <KV k="Spread" v={spreadPct != null ? `${spreadPct.toFixed(1)}%` : '—'} colors={colors} />
+            <KV k="Expiration" v={fmtExpiration(contract.expiration)} colors={colors} />
+            <KV k="Volume / OI" v={`${(contract.volume ?? 0).toLocaleString()} / ${(contract.open_interest ?? 0).toLocaleString()}`} colors={colors} />
+            {hasGreeks ? (
+              <View style={{ marginTop: 8 }}>
+                <GreeksExpander greeks={contract} colors={colors} />
+              </View>
+            ) : (
+              <KV k="Greeks" v="not on current feed" muted colors={colors} />
+            )}
+          </Dropdown>
 
-          {/* Exit Controls — SL/TP enable checkboxes apply on every profile;
-              unchecking either lets a runner run its course (or hold into
-              close) instead of auto-exiting on that leg. */}
-          <Text style={[s.label, { color: colors.tabBarInactive, marginTop: 18 }]}>EXIT CONTROLS</Text>
-          <View style={[s.exitToggles, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={s.exitRow}>
-              <Text style={[s.exitLabel, { color: colors.text }]}>Stop Loss</Text>
-              <TouchableOpacity onPress={() => setSlEnabled(v => !v)} hitSlop={8}>
-                <Ionicons
-                  name={slEnabled ? 'checkbox' : 'square-outline'}
-                  size={22}
-                  color={slEnabled ? colors.accent : colors.tabBarInactive}
-                />
-              </TouchableOpacity>
-            </View>
-            <View style={[s.exitRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
-              <Text style={[s.exitLabel, { color: colors.text }]}>Take Profit</Text>
-              <TouchableOpacity onPress={() => setTpEnabled(v => !v)} hitSlop={8}>
-                <Ionicons
-                  name={tpEnabled ? 'checkbox' : 'square-outline'}
-                  size={22}
-                  color={tpEnabled ? colors.accent : colors.tabBarInactive}
-                />
-              </TouchableOpacity>
-            </View>
+          {/* Exit details — remembered across opens */}
+          <Dropdown title="Exit details" open={openSection === 'exit'} onToggle={() => toggleSection('exit')} colors={colors}>
+            {slEnabled ? (
+              <View style={{ marginTop: 6 }}>
+                <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
+                <View style={{ marginTop: 14 }}>
+                  <EntrySafetySelector colors={colors} floorPct={floorPct} onFloorPct={setFloorPct}
+                    beGrace={beGrace} onBeGrace={setBeGrace} premium={contract.ask} stopIsTimer={stopType !== 'HARD'} />
+                </View>
+              </View>
+            ) : (
+              <Text style={{ fontSize: 12, color: faint, marginTop: 8 }}>Stop loss is off — stop type and floor don&apos;t apply.</Text>
+            )}
             {!isManual && (
-              <View style={[s.exitRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
-                <Text style={[s.exitLabel, { color: colors.text }]}>Volume Exit</Text>
-                <TouchableOpacity onPress={() => setVolumeExit(v => !v)} hitSlop={8}>
-                  <Ionicons
-                    name={volumeExit ? 'checkbox' : 'square-outline'}
-                    size={22}
-                    color={volumeExit ? colors.accent : colors.tabBarInactive}
-                  />
-                </TouchableOpacity>
+              <View style={{ marginTop: 14 }}>
+                <Text style={[s.subLabel, { color: faint }]}>VOLUME EXIT</Text>
+                <View style={s.chips}>
+                  {([false, true] as const).map(v => {
+                    const on = volumeExit === v;
+                    return (
+                      <TouchableOpacity
+                        key={String(v)}
+                        onPress={() => setVolumeExit(v)}
+                        activeOpacity={0.6}
+                        style={[s.pill, { backgroundColor: on ? colors.text + '14' : 'transparent', borderColor: on ? colors.text : colors.separator ?? colors.border }]}
+                      >
+                        <Text style={{ fontSize: 13, fontWeight: '600', color: on ? colors.text : muted }}>{v ? 'On' : 'Off'}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <Text style={{ fontSize: 11.5, color: faint, marginTop: 6 }}>Close half on low volume.</Text>
               </View>
             )}
-          </View>
-          {slEnabled && (
-            <View style={{ marginTop: 10 }}>
-              <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
-              <View style={{ marginTop: 14 }}>
-                <EntrySafetySelector colors={colors} floorPct={floorPct} onFloorPct={setFloorPct}
-                  beGrace={beGrace} onBeGrace={setBeGrace} premium={contract.ask} stopIsTimer={stopType !== 'HARD'} />
-              </View>
-            </View>
-          )}
+          </Dropdown>
 
-          <View style={{ marginTop: 18 }}>
-            <GreeksExpander greeks={contract} colors={colors} />
-          </View>
+          {/* All profiles — demoted; picking one switches the ladder off */}
+          <Dropdown title="All profiles" open={openSection === 'profiles'} onToggle={() => toggleSection('profiles')} colors={colors}>
+            <Text style={{ fontSize: 11.5, color: faint, marginVertical: 8 }}>
+              The ladder runs on Scalper. Pick another profile to use its exits instead.
+            </Text>
+            <ProfileDropdown selectedIndex={profileIndex} onSelect={handleProfileSelect} colors={colors} />
+          </Dropdown>
         </ScrollView>
 
-        {/* Sticky footer — the buy button (and any DON'T ENTER blocker)
+        {/* Sticky CTA — the buy button (and any DON'T ENTER blocker)
             never scrolls out of view */}
         <View style={[s.footer, { borderTopColor: colors.border, backgroundColor: colors.background }]}>
           <GatedBuyButton
             check={entryCheck.data}
             checkLoading={entryCheck.isLoading}
             paperMode={paperMode}
-            label={`Buy ${contract.option_type} × ${qty}`}
+            label={`Buy ${qty} ${contract.option_type} · $${marketValue.toFixed(2)}`}
             onReview={() => setReviewOpen(true)}
             overridden={overridden}
             onOverride={setOverridden}
@@ -486,7 +574,8 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
         onEnterBlind={isZeroDteContract ? enterBlind : undefined}
         onCancel={() => setReviewOpen(false)}
         successMessage={successMessage}
-        onSuccessDone={() => { setSuccessMessage(null); setReviewOpen(false); onClose(); }}
+        successHint={backgroundedDuringSuccess.current ? undefined : 'Taking you to your position…'}
+        onSuccessDone={finishSuccess}
         colors={colors}
       />
 
@@ -508,12 +597,48 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
   );
 }
 
-function PriceCell({ label, value, colors, strong }: { label: string; value: string; colors: any; strong?: boolean }) {
+const MAX_QTY = 10;
+const LADDER_PROFILE_INDEX = DEFAULT_PROFILE_INDEX; // SCALPER
+
+/** "2026-10-16" → "Oct 16, 2026". */
+function fmtExpiration(exp: string): string {
+  const d = new Date(`${exp.slice(0, 10)}T12:00:00`);
+  return isNaN(d.getTime()) ? exp : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function Dropdown({ title, open, onToggle, colors, children }: {
+  title: string; open: boolean; onToggle: () => void; colors: any; children: React.ReactNode;
+}) {
   return (
-    <View style={{ flex: 1 }}>
-      <Text style={[s.priceCellLabel, { color: colors.textSecondary ?? colors.tabBarInactive }]}>{label}</Text>
-      <Text style={[s.priceCellValue, { color: colors.text, fontWeight: strong ? '800' : '600' }]}>{value}</Text>
+    <View style={[s.dd, { borderColor: colors.border, backgroundColor: colors.card }]}>
+      <TouchableOpacity onPress={onToggle} activeOpacity={0.75} style={s.ddHead} accessibilityState={{ expanded: open }}>
+        <Text style={{ fontSize: 13.5, fontWeight: '700', color: colors.text }}>{title}</Text>
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textTertiary ?? colors.tabBarInactive} />
+      </TouchableOpacity>
+      {open && <View style={s.ddBody}>{children}</View>}
     </View>
+  );
+}
+
+function KV({ k, v, colors, muted }: { k: string; v: string; colors: any; muted?: boolean }) {
+  return (
+    <View style={[s.kv, { borderTopColor: colors.separator ?? colors.border }]}>
+      <Text style={{ fontSize: 12.5, color: colors.textSecondary ?? colors.tabBarInactive }}>{k}</Text>
+      <Text style={[s.tab, { fontSize: 12.5, fontWeight: '700', color: muted ? colors.textTertiary ?? colors.tabBarInactive : colors.text }]} numberOfLines={1}>
+        {v}
+      </Text>
+    </View>
+  );
+}
+
+function ArmToggle({ label, on, onPress, colors }: { label: string; on: boolean; onPress: () => void; colors: any }) {
+  const c = on ? colors.success : colors.textTertiary ?? colors.tabBarInactive;
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.75} style={[s.arm, { borderColor: colors.border, backgroundColor: colors.card }]}>
+      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: c }} />
+      <Text style={{ fontSize: 12.5, fontWeight: '600', color: colors.text }}>{label}</Text>
+      <Text style={{ marginLeft: 'auto', fontSize: 10.5, fontWeight: '800', letterSpacing: 0.8, color: c }}>{on ? 'ARMED' : 'OFF'}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -615,38 +740,39 @@ const qs = StyleSheet.create({
 });
 
 const s = StyleSheet.create({
-  header:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth },
-  title:       { fontSize: 18, fontWeight: '700' },
-  subhead:     { fontSize: 13, marginTop: 1 },
+  header:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  title:       { fontSize: 19, fontWeight: '800' },
+  subhead:     { fontSize: 12.5, marginTop: 1 },
   closeBtn:    { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  tab:         { fontVariant: ['tabular-nums'] },
 
   label:       { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 },
+  subLabel:    { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 },
 
   alertStopRow:   { flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderRadius: 12, borderWidth: 1, padding: 12 },
   alertStopTitle: { fontSize: 13.5, fontWeight: '700' },
   alertStopSub:   { fontSize: 11, marginTop: 2, lineHeight: 15 },
 
   accountToggle: { flexDirection: 'row', borderRadius: 10, borderWidth: 1, padding: 3 },
-  accountBtn:    { flex: 1, alignItems: 'center', paddingVertical: 9 },
+  accountBtn:    { flex: 1, alignItems: 'center', paddingVertical: 8 },
   accountText:   { fontSize: 13 },
 
-  qtyRow:      { flexDirection: 'row', alignItems: 'center', gap: 16, borderRadius: 12, borderWidth: 1, padding: 12 },
-  qtyBtn:      { width: 38, height: 38, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  qtyValue:    { fontSize: 18, fontWeight: '700', minWidth: 24, textAlign: 'center' },
-  qtyCost:     { marginLeft: 'auto', fontSize: 12, fontWeight: '600' },
+  marketLine:  { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, marginBottom: 14 },
 
-  exitToggles: { borderRadius: 12, borderWidth: 1, overflow: 'hidden' },
-  exitRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12 },
-  exitLabel:   { fontSize: 14, fontWeight: '500' },
+  qtyRow:      { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  chips:       { flexDirection: 'row', gap: 8 },
+  chip:        { width: 46, height: 40, borderRadius: 11, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  stepper:     { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 11, borderWidth: 1, height: 40, paddingHorizontal: 6 },
+  stepBtn:     { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
+  qtyValue:    { fontSize: 17, fontWeight: '800', minWidth: 24, textAlign: 'center' },
+  pill:        { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18, borderWidth: 1 },
 
-  priceCard:      { borderRadius: 12, borderWidth: 1, overflow: 'hidden' },
-  priceTop:       { flexDirection: 'row', alignItems: 'center', padding: 14 },
-  priceContract:  { fontSize: 17, fontWeight: '800' },
-  priceExp:       { fontSize: 12, marginTop: 2 },
-  priceAsk:       { fontSize: 26, fontWeight: '800' },
-  priceRow:       { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 14, paddingVertical: 10 },
-  priceCellLabel: { fontSize: 11 },
-  priceCellValue: { fontSize: 14, marginTop: 2 },
+  arm:         { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 7, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, paddingVertical: 9 },
+
+  dd:          { marginTop: 10, borderRadius: 12, borderWidth: 1, overflow: 'hidden' },
+  ddHead:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12 },
+  ddBody:      { paddingHorizontal: 14, paddingBottom: 12 },
+  kv:          { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 7, borderTopWidth: StyleSheet.hairlineWidth },
 
   footer:      { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 20, borderTopWidth: StyleSheet.hairlineWidth },
 });

@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import type { UseLivePositionsDataResult } from '@/common/components/strategy/LivePositionsSection';
 import { PositionBriefCard } from './PositionBriefCard';
+import { useEntryHighlight, isHighlighted } from '@/common/services/tradeEntryEvents';
 
 /**
  * 0.7 redesign positions list — same data contract as LivePositionsBody
@@ -24,6 +25,11 @@ export function BriefPositionsBody({
   const {
     isLoading, displayedPositions, hiddenCount, showHidden, setShowHidden, handleLiveUpdate,
   } = data;
+  // A position just opened from the entry flow goes first, highlighted.
+  const highlight = useEntryHighlight();
+  const ordered = highlight
+    ? [...displayedPositions].sort((a, b) => Number(isHighlighted(highlight, b)) - Number(isHighlighted(highlight, a)))
+    : displayedPositions;
 
   return (
     <>
@@ -67,12 +73,13 @@ export function BriefPositionsBody({
           )}
         </View>
       ) : (
-        displayedPositions.map((pos) => (
+        ordered.map((pos) => (
           <PositionBriefCard
             key={pos.strategy_id}
             pos={pos}
             colors={colors}
             onLiveUpdate={handleLiveUpdate}
+            highlighted={isHighlighted(highlight, pos)}
           />
         ))
       )}

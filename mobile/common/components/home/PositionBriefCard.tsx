@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
@@ -7,6 +7,7 @@ import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePric
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
 import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { PositionEditSheet } from './PositionEditSheet';
+import { ThetaReadout } from '@/common/components/strategy/ThetaReadout';
 
 /**
  * 0.7 redesign position card — the "Watchlist · Tindex" brief-card treatment
@@ -19,11 +20,29 @@ export function PositionBriefCard({
   pos,
   colors,
   onLiveUpdate,
+  highlighted = false,
 }: {
   pos: PositionEntry;
   colors: ReturnType<typeof useThemeColors>;
   onLiveUpdate: (strategyId: string, data: LivePriceData | null) => void;
+  /** Just opened from the entry flow — pulsing success outline. */
+  highlighted?: boolean;
 }) {
+  const glow = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!highlighted) {
+      glow.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(glow, { toValue: 1, duration: 800, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(glow, { toValue: 0.35, duration: 800, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [highlighted, glow]);
   const { data: live, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
   const [exitOpen, setExitOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
@@ -55,6 +74,12 @@ export function PositionBriefCard({
       onPress={() => setInfoOpen(true)}
       style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
     >
+      {highlighted && (
+        <Animated.View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, styles.glow, { borderColor: colors.success, opacity: glow }]}
+        />
+      )}
       {/* header */}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Text style={[styles.mono, { fontSize: 17, fontWeight: '800', color: colors.text }]}>
@@ -121,6 +146,13 @@ export function PositionBriefCard({
           {nowPremium != null ? `$${nowPremium.toFixed(2)}` : '—'}
         </Text>
       </View>
+      <ThetaReadout
+        ticker={pos.ticker}
+        contract={live?.contract ?? pos.contract}
+        premium={nowPremium}
+        colors={colors}
+        style={{ marginTop: 4 }}
+      />
 
       {/* invalidation */}
       {hardStop != null && (
@@ -171,6 +203,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 14,
     marginBottom: 12,
+  },
+  glow: {
+    borderRadius: 14,
+    borderWidth: 2,
+    margin: -1,
   },
   badge: {
     paddingHorizontal: 7,

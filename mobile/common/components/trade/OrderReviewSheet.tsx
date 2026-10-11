@@ -79,6 +79,8 @@ interface Props {
   successMessage: string | null;
   /** Called after the success animation finishes; the parent closes here. */
   onSuccessDone: () => void;
+  /** Optional line under the success copy, e.g. "Taking you to your position…". */
+  successHint?: string;
   colors: any;
 }
 
@@ -92,7 +94,7 @@ const SUBMIT_LABEL_DELAY_MS = 2000;
 
 export function OrderReviewSheet({
   visible, order, paperMode, check, overridden, warnings, isSubmitting, onSubmit, onCancel,
-  onEnterBlind, successMessage, onSuccessDone, colors,
+  onEnterBlind, successMessage, onSuccessDone, successHint, colors,
 }: Props) {
   const slide = useRef(new Animated.Value(1)).current;  // 1 = off-screen, 0 = shown
   const hold = useRef(new Animated.Value(0)).current;   // 0 → 1 while held
@@ -324,6 +326,9 @@ export function OrderReviewSheet({
               {order.qty} × {order.ticker} ${order.strike} {order.optionType}
             </Text>
             <Text style={[s.successSub, { color: muted }]} numberOfLines={2}>{successMessage}</Text>
+            {successHint ? (
+              <Text style={[s.successSub, { color: muted, marginTop: 22, fontSize: 13 }]}>{successHint}</Text>
+            ) : null}
           </Animated.View>
         )}
       </Animated.View>

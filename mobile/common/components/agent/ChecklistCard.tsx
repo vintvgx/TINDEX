@@ -38,9 +38,9 @@ const ChecklistContractRow: React.FC<{
   enabled: boolean;
   interactive: boolean;
   onToggle: () => void;
-  onLongPressTrade: (liveContract: OptionsContract, currentPrice: number) => void;
+  onTrade: (liveContract: OptionsContract, currentPrice: number) => void;
   colors: ReturnType<typeof useThemeColors>;
-}> = ({ ticker, contract, enabled, interactive, onToggle, onLongPressTrade, colors }) => {
+}> = ({ ticker, contract, enabled, interactive, onToggle, onTrade, colors }) => {
   const toast = useToast();
   const alreadyTracked = !!contract.already_tracked;
   const { data: liveData, isLoading } = useOptionsQuery(ticker, {
@@ -57,27 +57,31 @@ const ChecklistContractRow: React.FC<{
     livePrice = liveMatch ? (liveMatch.last_price ?? (liveMatch.bid + liveMatch.ask) / 2) : null;
   }
 
-  const handleLongPress = () => {
+  // A single tap on the row enters the trade (entry flow, 2026-10-11) —
+  // the trade sheet's Review step is the safety gate, not a long-press.
+  const handleTrade = () => {
     if (!liveMatch || !liveData?.success) {
       toast.error("Can't enter this contract yet — no live price found for it");
       return;
     }
-    onLongPressTrade(liveMatch, liveData.data.current_price);
+    onTrade(liveMatch, liveData.data.current_price);
   };
 
   return (
-    <TouchableOpacity
-      onPress={interactive && !alreadyTracked ? onToggle : undefined}
-      onLongPress={handleLongPress}
-      delayLongPress={400}
-      activeOpacity={0.7}
-      style={cc.row}
-    >
-      <Ionicons
-        name={alreadyTracked ? 'checkmark-done-circle' : (enabled ? 'checkmark-circle' : 'ellipse-outline')}
-        size={19}
-        color={alreadyTracked ? colors.textTertiary : (enabled ? colors.accent : colors.textTertiary)}
-      />
+    <TouchableOpacity onPress={handleTrade} activeOpacity={0.7} style={cc.row}>
+      {/* The circle alone toggles "include" for Submit (track contract). */}
+      <TouchableOpacity
+        onPress={interactive && !alreadyTracked ? onToggle : undefined}
+        disabled={!interactive || alreadyTracked}
+        hitSlop={10}
+        accessibilityLabel={enabled ? 'Exclude from submit' : 'Include in submit'}
+      >
+        <Ionicons
+          name={alreadyTracked ? 'checkmark-done-circle' : (enabled ? 'checkmark-circle' : 'ellipse-outline')}
+          size={19}
+          color={alreadyTracked ? colors.textTertiary : (enabled ? colors.accent : colors.textTertiary)}
+        />
+      </TouchableOpacity>
       <View style={{ flex: 1 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <View style={[cc.badge, {
@@ -119,7 +123,7 @@ interface Props {
   checklist: FlowChecklist;
   status: ChecklistStatus;
   onResolved: (status: 'submitted' | 'skipped') => void;
-  /** Long-press on a contract row — opens the same trade-entry sheet used
+  /** Tap on a contract row — opens the same trade-entry sheet used
    *  everywhere else in the app (profile, quantity, paper/live), rather than
    *  requiring Submit first. alertEntryPrice/alertStopLoss (contract
    *  premium, from the checklist contract's own entry_price/stop_loss) let
@@ -305,7 +309,7 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
 
           {checklist.contracts.length > 0 && (
             <Text style={{ color: colors.textTertiary, fontSize: 10.5, marginTop: -2, marginBottom: 2 }}>
-              Tap to include · long-press to enter now
+              Tap a contract to enter · tap ○ to include in Submit
             </Text>
           )}
 
@@ -317,7 +321,7 @@ export const ChecklistCard: React.FC<Props> = ({ checklist, status, onResolved, 
               enabled={contractsEnabled[i]}
               interactive
               onToggle={() => toggleContract(i)}
-              onLongPressTrade={(liveContract, currentPrice) => onTradeContract(checklist.ticker ?? '', liveContract, currentPrice, c.entry_price, c.stop_loss)}
+              onTrade={(liveContract, currentPrice) => onTradeContract(checklist.ticker ?? '', liveContract, currentPrice, c.entry_price, c.stop_loss)}
               colors={colors}
             />
           ))}

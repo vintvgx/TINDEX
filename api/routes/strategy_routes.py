@@ -1326,6 +1326,32 @@ def _entry_exit_fields(data: dict, exit_overrides: dict):
     return None
 
 
+def _ladder_fields(data: dict, exit_overrides: dict):
+    """Exit ladder from the v2 trade sheet (2026-10-11): `ladder` =
+    {tp2_mult?, tp1_close_pct?, tp2_close_pct?}. Layered onto the chosen
+    profile (SCALPER) — whose TP1 +30% / SL -30% / qty>2-only TP2 already
+    give the 1 · 1+runner · 1-1-1 splits; the ladder only picks C2's target
+    (Standard +100% / Risky +60%) and the qty>=4 close fractions.
+    Returns an error message for bad input, else None."""
+    ladder = data.get("ladder")
+    if ladder is None:
+        return None
+    if not isinstance(ladder, dict):
+        return "ladder must be an object"
+    bounds = {"tp2_mult": (1.05, 5.0), "tp1_close_pct": (0.01, 1.0), "tp2_close_pct": (0.01, 1.0)}
+    for key, (lo, hi) in bounds.items():
+        if ladder.get(key) is None:
+            continue
+        try:
+            val = float(ladder[key])
+        except (TypeError, ValueError):
+            return f"ladder.{key} must be a number between {lo} and {hi}"
+        if not lo <= val <= hi:
+            return f"ladder.{key} must be between {lo} and {hi}"
+        exit_overrides[key] = val
+    return None
+
+
 @strategy_bp.route("/configs/<strategy_id>/immediate-trade", methods=["POST"])
 def immediate_trade(strategy_id: str):
     """
@@ -1420,7 +1446,7 @@ def immediate_trade_by_ticker():
                 exit_overrides.update(grace_fields_for_minutes(int(raw) if raw is not None else None))
             except ValueError as e:
                 return jsonify({"status": "error", "message": str(e)}), 400
-        err = _entry_exit_fields(data, exit_overrides)
+        err = _entry_exit_fields(data, exit_overrides) or _ladder_fields(data, exit_overrides)
         if err:
             return jsonify({"status": "error", "message": err}), 400
 
