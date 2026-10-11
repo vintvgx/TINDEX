@@ -537,9 +537,16 @@ class TradeLogger:
                  strategy_id: str = None,
                  underlying_price_exit: Optional[float] = None,
                  trading_client=None,
-                 trade_id: Optional[str] = None) -> bool:
+                 trade_id: Optional[str] = None,
+                 armed_levels: Optional[dict] = None) -> bool:
         """
         Returns True only if a row was actually found and updated.
+
+        armed_levels: snapshot of the SL/TP levels as armed at exit time
+        (see ORBEngine._armed_levels_snapshot) — stored on the stage record
+        so future "what was the stop when it sold" debugging doesn't have to
+        guess from the entry-time levels. No migration needed: it lives in
+        the exit_stages JSON.
 
         trade_id: the exact orb_trades row to close out. Always pass this when
         the caller already knows it (self.active_trade_id / row["id"] — every
@@ -592,6 +599,8 @@ class TradeLogger:
                 "pnl":     round(stage_pnl, 2),
                 "time":    datetime.utcnow().isoformat(),
             }
+            if armed_levels:
+                stage["armed_levels"] = armed_levels
             current_stages = row.get("exit_stages") or []
             new_stages = list(current_stages) + [stage]
 
