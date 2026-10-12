@@ -16,6 +16,7 @@ import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 import { LinePriceChart } from '@/common/components/ticker/LinePriceChart';
 import { openChartOverlay } from '@/common/components/ui/ChartOverlayContext';
 import type { TickerInfo } from '../DynamicCard';
+import { isSimId } from '@/lib/devSim/simPositions';
 
 /**
  * Dynamic card "charts" view: one line chart per followed ticker — the
@@ -37,6 +38,13 @@ const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
 const COUNTER_VISIBLE_MS = 8000;
 /** Last ticker shown — survives this page unmounting (see activeTicker). */
 let lastActiveTicker: string | null = null;
+
+/** The minimized Home card steps the deck's ticker with an up/down swipe —
+ *  the mounted deck registers here (see DynamicCard's collapsed strip). */
+let stepListener: ((dir: 1 | -1) => void) | null = null;
+export function stepChartsTicker(dir: 1 | -1): void {
+  stepListener?.(dir);
+}
 
 function TickerPage({ ticker, height, width, period, interval, onStats }: {
   ticker: string; height: number; width: number; period: PricePeriod; interval: string;
@@ -116,8 +124,9 @@ export function DynamicChartsView({ onActiveTicker, height }: {
         if (!seen.has(t)) { seen.add(t); out.push(t); }
       }
     };
-    add(allLive.filteredPositions.map((p) => p.ticker).sort());
-    add(allPaper.filteredPositions.map((p) => p.ticker).sort());
+    // Dev sim positions don't add chart pages (they'd fetch real charts).
+    add(allLive.filteredPositions.filter((p) => !isSimId(p.strategy_id)).map((p) => p.ticker).sort());
+    add(allPaper.filteredPositions.filter((p) => !isSimId(p.strategy_id)).map((p) => p.ticker).sort());
     add((brief?.plays ?? []).map((p) => p.ticker));
     add((keyLevels ?? [])
       .filter((l) => l.status === 'watching' || l.status === 'confirmed')
@@ -190,6 +199,21 @@ export function DynamicChartsView({ onActiveTicker, height }: {
       listRef.current?.scrollToOffset({ offset: middleOffset(real), animated: false });
     }
   }, [loop, n, pageH, tickers, middleOffset, setActiveTicker]);
+
+  // Collapsed-card swipe → next / previous ticker, and keep the (hidden)
+  // deck scrolled to it so expanding shows the same chart.
+  const stepRef = useRef<(dir: 1 | -1) => void>(() => {});
+  stepRef.current = (dir) => {
+    if (n < 2) return;
+    const next = (((realIndex + dir) % n) + n) % n;
+    setActiveTicker(tickers[next]);
+    listRef.current?.scrollToOffset({ offset: middleOffset(next), animated: false });
+  };
+  useEffect(() => {
+    const fn = (dir: 1 | -1) => stepRef.current(dir);
+    stepListener = fn;
+    return () => { if (stepListener === fn) stepListener = null; };
+  }, []);
 
   return (
     <View style={{ width: pageWidth }}>

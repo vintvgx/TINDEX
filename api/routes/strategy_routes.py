@@ -293,6 +293,17 @@ def recover_open_positions():
             # breakouts are silently blocked, and every /strategy/positions
             # poll returns active=False, making the position invisible on all
             # three UI screens (Home, Live Positions, Strategy).
+            # Limit sells that filled while the server was down: book them
+            # BEFORE the broker check, or a fully-sold position gets closed
+            # as "reconciled" at a guessed price and the fill is double-counted.
+            if not engine.trade_taken and engine.limit_orders.recover_begin(row) > 0:
+                fresh = next((r for r in logger_svc.get_open_trades() if r.get("id") == row.get("id")), None)
+                if fresh is None:
+                    logger.warning("[strategy] Position recovery: %s fully sold by limit sells while down",
+                                   row.get("contract_symbol"))
+                    continue
+                row = fresh
+
             broker_result = _reconcile_trade_with_broker(row, engine)
             if broker_result["status"] != "still_open":
                 logger.warning(
@@ -496,6 +507,10 @@ def reconcile_trades():
     for row in open_rows:
         try:
             engine = _resolve_engine_for_row(row)
+            # A limit sell that just filled must be booked as LIMIT_SELL, not
+            # mistaken for "closed at the broker".
+            if engine.limit_orders.has_working():
+                engine.refresh_limit_orders()
             results.append(_reconcile_trade_with_broker(row, engine))
         except Exception as e:
             logger.error(
@@ -770,6 +785,12 @@ def force_close_strategy(strategy_id: str):
         return jsonify({"error": "Strategy not found"}), 404
     if not engine.trade_taken or not engine.contract_symbol:
         return jsonify({"status": "ok", "message": "No active position"})
+    # Resting limit sells hold contracts at the broker — cancel the ladder
+    # first so the market sell covers everything still held.
+    if engine.limit_orders.has_working():
+        engine.cancel_all_limit_orders()
+        if not engine.trade_taken or not engine.exit_manager or engine.exit_manager.qty_remaining <= 0:
+            return jsonify({"status": "ok", "message": "Limit sells filled the rest of the position"})
     try:
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
@@ -861,6 +882,52 @@ def sell_status(strategy_id: str, sell_id: str):
     if result is None:
         return jsonify({"status": "error", "message": "Unknown sell id"}), 404
     return jsonify(result)
+
+
+# ── Limit sell ladder (resting DAY limit sells) ───────────────────────────────
+
+@strategy_bp.route("/positions/<strategy_id>/limit-orders", methods=["POST"])
+def place_limit_orders(strategy_id: str):
+    """Body: {orders: [{qty, limit_price}]} → 202 {status, orders, errors}.
+    Each rung is a DAY limit SELL that rests until it fills or is cancelled —
+    no 10s fallback, no market fill. Total qty must fit the contracts not
+    already committed to working limit sells."""
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        return jsonify({"status": "error", "message": "Position not found"}), 404
+    data = request.get_json() or {}
+    result = engine.place_limit_orders(data.get("orders"))
+    if result.get("status") != "accepted":
+        return jsonify(result), (409 if "available" in result.get("message", "") or
+                                 result.get("message") == "No active position" else 400)
+    return jsonify(result), 202
+
+
+@strategy_bp.route("/positions/<strategy_id>/limit-orders", methods=["GET"])
+def list_limit_orders(strategy_id: str):
+    """{orders, qty_held, qty_working, qty_available, contract} — fill state is
+    refreshed from Alpaca first when any order is still working."""
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        return jsonify({"status": "error", "message": "Position not found"}), 404
+    if engine.limit_orders.has_working():
+        try:
+            engine.refresh_limit_orders()
+        except Exception as e:
+            logger.debug("[limit-orders] refresh failed: %s", e)
+    return jsonify(engine.list_limit_orders())
+
+
+@strategy_bp.route("/positions/<strategy_id>/limit-orders/<order_id>", methods=["DELETE"])
+def cancel_limit_order(strategy_id: str, order_id: str):
+    """Cancel one working limit sell; its unfilled contracts return to available."""
+    engine = _resolve_any_engine(strategy_id)
+    if not engine:
+        return jsonify({"status": "error", "message": "Position not found"}), 404
+    result = engine.cancel_limit_order(order_id)
+    if result.get("status") == "ok":
+        return jsonify(result)
+    return jsonify(result), (404 if result.get("message") == "Unknown order" else 409)
 
 
 @strategy_bp.route("/positions/<strategy_id>/add", methods=["POST"])
@@ -2570,6 +2637,9 @@ def _engine_position_response(engine: ORBEngine):
             "direction":           engine.position,
             "contract":            engine.contract_symbol,
             "qty_remaining":       qty_rem,
+            # Limit sell ladder: contracts resting in limit sells / still free.
+            "qty_working":         min(engine.limit_orders.reserved_qty(), qty_rem),
+            "qty_available":       max(0, qty_rem - engine.limit_orders.reserved_qty()),
             "qty_total":           em.qty if em else 0,
             "entry_premium":       entry_p,
             "current_price":       current_price,

@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { boostPositionPolling } from '@/lib/positionPolling';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
+import { isSimId, simSell } from '@/lib/devSim/simPositions';
 
 interface SellResult {
   status: 'ok' | 'error' | 'accepted' | 'pending';
@@ -68,6 +69,7 @@ export function useSellPosition() {
 
   return useMutation<SellResult, Error, { strategyId: string; qty?: number; limitPrice?: number }>({
     mutationFn: async ({ strategyId, qty, limitPrice }) => {
+      if (isSimId(strategyId)) return simSell(strategyId, qty, limitPrice);  // dev simulator
       const body: Record<string, number | boolean> = { async: true };
       if (qty != null) body.qty = qty;
       if (limitPrice != null) body.limit_price = limitPrice;

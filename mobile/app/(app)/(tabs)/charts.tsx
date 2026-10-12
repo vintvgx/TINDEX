@@ -49,6 +49,7 @@ import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLev
 import { useCancelKeyLevel } from '@/hooks/mutations/priceLevels/useCancelKeyLevel';
 import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLevel';
 import { useMorningBrief } from '@/hooks/queries/brief/useMorningBrief';
+import { isSimId } from '@/lib/devSim/simPositions';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -93,11 +94,12 @@ export function ChartsContent({ initialTicker, topInset }: {
   const { data: allKeyLevels } = useKeyLevels();
 
   const liveTickers = useMemo(
-    () => new Set(allLive.filteredPositions.map(p => p.ticker.toUpperCase())),
+    // Dev sim positions don't pull their ticker into the wheel (no fetches).
+    () => new Set(allLive.filteredPositions.filter(p => !isSimId(p.strategy_id)).map(p => p.ticker.toUpperCase())),
     [allLive.filteredPositions],
   );
   const paperTickers = useMemo(
-    () => new Set(allPaper.filteredPositions.map(p => p.ticker.toUpperCase())),
+    () => new Set(allPaper.filteredPositions.filter(p => !isSimId(p.strategy_id)).map(p => p.ticker.toUpperCase())),
     [allPaper.filteredPositions],
   );
   const watchedTickers = useMemo(() => {
@@ -328,6 +330,7 @@ export function ChartsContent({ initialTicker, topInset }: {
         delete next[strategyId];
         return next;
       }
+      if (prev[strategyId] === data) return prev;  // no-op report → no re-render
       return { ...prev, [strategyId]: data };
     });
   }, []);

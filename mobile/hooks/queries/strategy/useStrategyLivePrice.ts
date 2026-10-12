@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import type { PendingPriceUpdate } from '@/common/types/strategy';
+import { isSimId, useSimLive } from '@/lib/devSim/simPositions';
 
 export interface LivePriceData {
   contract:      string;
@@ -68,6 +69,12 @@ export interface LivePriceData {
    *  pre-select the toggle to what's actually in effect right now. */
   runner_mode?: 'trail' | 'be_hold' | 'none';
   cascade_enabled?: boolean;
+  /** Limit sell ladder: latest option bid/ask (either side may be null on a
+   *  one-sided quote) and contracts resting in limit sells vs still free. */
+  bid?: number | null;
+  ask?: number | null;
+  qty_working?: number;
+  qty_available?: number;
   // ── Simulation-only fields (all optional — absent on a real live position) ──
   sim?:               boolean;
   sim_tick?:          number;
@@ -131,7 +138,11 @@ export function useStrategyLivePrice(
   // Last few price updates, for display smoothing (see onmessage).
   const recentRef                 = useRef<LivePriceData[]>([]);
 
-  const wsUrl = strategyId
+  // Dev simulated position: its ticks come from the in-app simulator — no socket.
+  const sim = isSimId(strategyId);
+  const simLive = useSimLive(strategyId);
+
+  const wsUrl = strategyId && !sim
     ? RAILWAY_BASE_URL.replace(/^https?/, (s) => (s === 'https' ? 'wss' : 'ws'))
         + `/ws/strategy/${strategyId}/live`
     : null;
@@ -252,5 +263,20 @@ export function useStrategyLivePrice(
     setData(prev => (prev ? { ...prev, ...patch } : prev));
   }, []);
 
+  // The simulator applies exit edits synchronously, so an optimistic patch
+  // has nothing to bridge — and layering one on would hide its own later
+  // changes (e.g. the stop moving to breakeven after TP1).
+  const simPatchData = useCallback((_patch: Partial<LivePriceData>) => {}, []);
+  if (sim) {
+    return {
+      // useSimLive returns a stable object until the simulator ticks — a new
+      // object per render loops consumers that push it into parent state.
+      data: simLive,
+      pendingPriceData: null,
+      connected: !!simLive,
+      disconnect,
+      patchData: simPatchData,
+    };
+  }
   return { data, pendingPriceData, connected, disconnect, patchData };
 }

@@ -323,6 +323,9 @@ export interface StrategyPosition {
   be_grace_active?: boolean;
   be_grace_deadline?: string | null;
   cascade_enabled?: boolean;
+  /** Limit sell ladder: contracts resting in working limit sells / still free. */
+  qty_working?: number;
+  qty_available?: number;
 }
 
 export interface ExitStage {
@@ -489,4 +492,26 @@ export interface ORBSession {
     qty: number;
     qty_remaining: number;
   } | null;
+}
+
+/** One resting DAY limit SELL in a position's ladder (limit-sell-ladder spec).
+ *  Mirrors api/services/strategy/limit_order_tracker.py's record. */
+export interface WorkingLimitOrder {
+  order_id: string;
+  qty: number;
+  limit_price: number;
+  filled_qty: number;
+  filled_avg_price: number | null;
+  status: 'working' | 'partially_filled' | 'filled' | 'canceled' | 'expired' | 'rejected';
+  placed_at: string;
+  contract_symbol?: string;
+}
+
+/** GET /strategy/positions/<id>/limit-orders */
+export interface LimitOrdersResponse {
+  orders: WorkingLimitOrder[];
+  qty_held: number;
+  qty_working: number;
+  qty_available: number;
+  contract: string | null;
 }

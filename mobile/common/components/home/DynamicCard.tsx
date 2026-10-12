@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, FlatList, ScrollView, StyleSheet, useWindowDimensions } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -9,8 +9,10 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import * as Haptics from 'expo-haptics';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { DynamicChartsView } from './views/DynamicChartsView';
+import { DynamicChartsView, stepChartsTicker } from './views/DynamicChartsView';
 import { DynamicBriefView } from './views/DynamicBriefView';
 import { DynamicSignalsView } from './views/DynamicSignalsView';
 import { DynamicNewsView } from './views/DynamicNewsView';
@@ -144,6 +146,36 @@ export function DynamicCard({
     opacity: interpolate(scrollY.value, [COLLAPSE_RANGE * 0.4, COLLAPSE_RANGE], [0, 1], Extrapolation.CLAMP),
   }));
 
+  // ── Minimized card swipes ─────────────────────────────────────────────
+  // Left/right = previous/next page (same order as the expanded pager);
+  // up/down = step through the page's own items (chart tickers, open
+  // positions, headlines, …). The card is an overlay above Home's
+  // ScrollView, so these never fight the page scroll.
+  const [stripStep, setStripStep] = useState(0);
+  useEffect(() => { setStripStep(0); }, [viewIndex]);
+  const stepView = useCallback((dir: 1 | -1) => {
+    const next = Math.max(0, Math.min(DYNAMIC_VIEWS.length - 1, viewIndex + dir));
+    if (next === viewIndex) return;
+    Haptics.selectionAsync().catch(() => {});
+    setViewIndex(next);
+    // Keep the (hidden) expanded pager on the same page for when it expands.
+    pagerRef.current?.scrollToIndex({ index: next, animated: false });
+  }, [viewIndex]);
+  const stepItem = useCallback((dir: 1 | -1) => {
+    Haptics.selectionAsync().catch(() => {});
+    if (DYNAMIC_VIEWS[viewIndex] === 'charts') stepChartsTicker(dir);
+    else setStripStep((n) => n + dir);
+  }, [viewIndex]);
+  const stripSwipe = useMemo(() => Gesture.Pan()
+    .minDistance(10)
+    .onEnd((e) => {
+      const ax = Math.abs(e.translationX);
+      const ay = Math.abs(e.translationY);
+      if (Math.max(ax, ay) < 24) return;
+      if (ax > ay) runOnJS(stepView)(e.translationX < 0 ? 1 : -1);
+      else runOnJS(stepItem)(e.translationY < 0 ? 1 : -1);
+    }), [stepView, stepItem]);
+
   const onViewableChanged = useCallback(({ viewableItems }: { viewableItems: { index: number | null }[] }) => {
     const i = viewableItems[0]?.index;
     if (i != null) setViewIndex(i);
@@ -244,15 +276,26 @@ export function DynamicCard({
             </View>
           </Animated.View>
 
-          {/* collapsed strip */}
-          <Animated.View
-            style={[StyleSheet.absoluteFillObject, collapsedStyle, styles.collapsedRow]}
-            pointerEvents={collapsed ? 'auto' : 'none'}
-          >
-            {/* A short version of whichever view is showing — not the chart
-                ticker on every page. */}
-            <DynamicCollapsedSummary view={DYNAMIC_VIEWS[viewIndex]} tickerInfo={tickerInfo} />
-          </Animated.View>
+          {/* collapsed strip — swipe left/right for pages, up/down for items */}
+          <GestureDetector gesture={stripSwipe}>
+            <Animated.View
+              style={[StyleSheet.absoluteFillObject, collapsedStyle, styles.collapsedRow]}
+              pointerEvents={collapsed ? 'auto' : 'none'}
+            >
+              {/* A short version of whichever view is showing — not the chart
+                  ticker on every page. */}
+              <DynamicCollapsedSummary view={DYNAMIC_VIEWS[viewIndex]} tickerInfo={tickerInfo} step={stripStep} />
+              {/* page dots, so a sideways swipe has visible feedback */}
+              <View style={styles.stripDots} pointerEvents="none">
+                {DYNAMIC_VIEWS.map((v, i) => (
+                  <View
+                    key={v}
+                    style={[styles.stripDot, { backgroundColor: i === viewIndex ? colors.text : colors.textTertiary + '55' }]}
+                  />
+                ))}
+              </View>
+            </Animated.View>
+          </GestureDetector>
         </>
       )}
     </Animated.View>
@@ -290,4 +333,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     gap: 10,
   },
+  stripDots: {
+    position: 'absolute',
+    bottom: 6,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  stripDot: { width: 4, height: 4, borderRadius: 2 },
 });

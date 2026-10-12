@@ -144,6 +144,18 @@ def _eod_reset(engine):
                         engine.contract_symbol, expiry_str)
             return
 
+        # Resting limit sells hold contracts at Alpaca — cancel them first so
+        # close_position can sell everything (fills that land meanwhile are
+        # booked as LIMIT_SELL exits and shrink qty_remaining).
+        try:
+            if getattr(engine, "limit_orders", None) and engine.limit_orders.has_working():
+                engine.cancel_all_limit_orders()
+        except Exception as ex:
+            logger.error("[Scheduler] EOD limit-order cancel failed: %s", ex)
+        if not engine.trade_taken or not engine.exit_manager or engine.exit_manager.qty_remaining <= 0:
+            engine.reset_session()
+            return
+
         contract_symbol = engine.contract_symbol
         qty_closed = engine.exit_manager.qty_remaining if engine.exit_manager else 0
 

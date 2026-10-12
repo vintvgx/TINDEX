@@ -7,14 +7,16 @@ import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePosi
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { LivePositionPanel } from '@/common/components/strategy/LivePositionPanel';
-import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { AddContractModal } from '@/common/components/strategy/AddContractModal';
+import { LimitSellSheet } from '@/common/components/strategy/LimitSellSheet';
+import { WorkingLimitOrders } from '@/common/components/strategy/WorkingLimitOrders';
 import type { ImmediatePosition } from '@/common/types/strategy';
 import { TRADE_HORIZON_RANK, getTradeHorizon } from '@/lib/formatContract';
 import { useBaseNavigation } from '@/hooks/navigation/useBaseNavigation';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import { useHiddenPositions } from '@/hooks/useHiddenPositions';
 import { positionHideKey } from '@/lib/positionHideKey';
+import { isSimId, useSimPositionEntries } from '@/lib/devSim/simPositions';
 
 /**
  * Shared "list of open positions" data + UI — originally position.tsx's own
@@ -94,7 +96,9 @@ export function useLivePositionsData(mode: 'live' | 'paper', tickerFilter?: stri
   const { data: stratPositions = [], isLoading: stratLoading } = useStrategyPositions();
   const { data: immPositions = [], isLoading: immLoading } = useImmediatePositions();
   const isLoading = stratLoading || immLoading;
-  const livePositions = [...stratPositions, ...immPositions.map(toPositionEntry)];
+  // Dev simulated positions (Profile → Developer) ride along as ordinary rows.
+  const simPositions = useSimPositionEntries();
+  const livePositions = [...stratPositions, ...immPositions.map(toPositionEntry), ...simPositions];
 
   const activePositions = livePositions.filter(p => p.active);
   const filteredPositions = activePositions
@@ -121,6 +125,9 @@ export function useLivePositionsData(mode: 'live' | 'paper', tickerFilter?: stri
         delete next[strategyId];
         return next;
       }
+      // Same reference already stored → keep the old state object, so React
+      // bails out instead of re-rendering every list on a no-op report.
+      if (prev[strategyId] === data) return prev;
       return { ...prev, [strategyId]: data };
     });
   }, []);
@@ -152,8 +159,10 @@ export function PositionRow({
 }) {
   const { toTicker } = useBaseNavigation();
   const { data: live, connected, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
-  const [exitOpen, setExitOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [ladderOpen, setLadderOpen] = useState(false);
+  const heldQty = live?.qty_remaining ?? pos.qty_remaining ?? 0;
+  const qtyAvailable = live?.qty_available ?? pos.qty_available ?? heldQty;
   const accentColor = pos.direction === 'CALL' ? colors.success : colors.error;
 
   // Report every tick (and clear on unmount, e.g. mode toggle or exit) so the
@@ -238,23 +247,30 @@ export function PositionRow({
         ticker={pos.ticker}
         direction={pos.direction}
         paperMode={pos.paper_mode}
-        onExitPress={() => setExitOpen(true)}
-        onAddPress={() => setAddOpen(true)}
+        onExitPress={() => setLadderOpen(true)}
+        onAddPress={isSimId(pos.strategy_id) ? undefined : () => setAddOpen(true)}
         colors={colors}
         patchData={patchData}
         hideKey={positionHideKey(pos)}
       />
 
-      <ExitTradeModal
-        visible={exitOpen}
-        colors={colors}
+      {/* Resting limit sells (cancel with ×) */}
+      <WorkingLimitOrders strategyId={pos.strategy_id} />
+      <LimitSellSheet
+        visible={ladderOpen}
         strategyId={pos.strategy_id}
         ticker={pos.ticker}
         contract={live?.contract ?? pos.contract}
-        qtyRemaining={live?.qty_remaining ?? pos.qty_remaining ?? 1}
         paperMode={pos.paper_mode}
-        onClose={() => setExitOpen(false)}
+        qtyHeld={heldQty}
+        qtyAvailable={qtyAvailable}
+        entryPremium={live?.entry_premium ?? pos.entry_premium}
+        bid={live?.bid}
+        ask={live?.ask}
+        mid={live?.mid_price ?? pos.current_price}
+        onClose={() => setLadderOpen(false)}
       />
+
       <AddContractModal
         visible={addOpen}
         colors={colors}

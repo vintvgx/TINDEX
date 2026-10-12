@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
+import { isSimId } from '@/lib/devSim/simPositions';
 
 interface AddToPositionResult {
   status: 'ok' | 'error';
@@ -26,6 +27,7 @@ export function useAddToPosition() {
 
   return useMutation<AddToPositionResult, Error, { strategyId: string; qty: number }>({
     mutationFn: async ({ strategyId, qty }) => {
+      if (isSimId(strategyId)) throw new Error('Adding contracts isn\'t available on a simulated position');
       const res = await fetch(`${RAILWAY_BASE_URL}/strategy/positions/${strategyId}/add`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

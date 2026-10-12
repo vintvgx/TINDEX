@@ -10,6 +10,7 @@ import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePric
 import { PositionInfoModal } from '@/common/components/strategy/PositionInfoModal';
 import { SlGraceBadge, useSlGracePulse } from '@/common/components/strategy/SlGraceBadge';
 import type { ProfileKey } from '@/common/types/strategy';
+import { isSimId } from '@/lib/devSim/simPositions';
 
 /** TP2's own accent — distinct from TP1's (colors.success) so a glance at
  *  the SL → TP1 → TP2 row tells the two targets apart at a glance, not just
@@ -315,13 +316,15 @@ export function LivePositionPanel({
                 </View>
               )}
             </View>
-            <ThetaReadout
-              ticker={ticker}
-              contract={display.contract}
-              premium={display.mid_price}
-              colors={colors}
-              style={{ fontSize: 10.5, marginTop: 2 }}
-            />
+            {!isSimId(strategyId) && (
+              <ThetaReadout
+                ticker={ticker}
+                contract={display.contract}
+                premium={display.mid_price}
+                colors={colors}
+                style={{ fontSize: 10.5, marginTop: 2 }}
+              />
+            )}
 
             {/* Meta row: Qty, then the initial-stop grace and the worst-case
                 floor as icon + value side by side (was two extra full-width

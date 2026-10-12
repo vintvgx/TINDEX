@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useAlpacaPositionValues } from '@/hooks/queries/strategy/useAlpacaPositionValues';
 import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
+import { isSimId } from '@/lib/devSim/simPositions';
 
 /**
  * Live Equity for one account mode — the same figure the Positions screen
@@ -16,7 +17,9 @@ export function useLiveEquity(mode: 'live' | 'paper') {
   const { data: accounts } = useAlpacaBothAccounts();
   const account = accounts ? (mode === 'live' ? accounts.live : accounts.paper) : undefined;
 
-  const { filteredPositions, liveByStrategy } = useLivePositionsData(mode);
+  const { filteredPositions: allPositions, liveByStrategy } = useLivePositionsData(mode);
+  // Dev simulated positions never touch the real account's equity.
+  const filteredPositions = useMemo(() => allPositions.filter((p) => !isSimId(p.strategy_id)), [allPositions]);
 
   const { data: restPositions } = useAlpacaPositionValues(mode, { enabled: filteredPositions.length > 0 });
   const restMarketValueBySymbol = useMemo(() => {

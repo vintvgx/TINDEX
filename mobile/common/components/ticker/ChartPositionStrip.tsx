@@ -188,6 +188,7 @@ function PositionStrip({ pos, onPress, onLiveUpdate, colors }: {
   const entry = live?.entry_premium ?? pos.entry_premium;
   const now = live?.mid_price ?? pos.current_price;
   const qty = live?.qty_remaining ?? pos.qty_remaining ?? 0;
+  const working = live?.qty_working ?? pos.qty_working ?? 0;
   const pnl = live?.pnl ?? pos.unrealized_pnl ?? 0;
   const pnlPct = live?.pnl_pct ?? pos.unrealized_pnl_pct;
   const pnlColor = pnl >= 0 ? colors.success : colors.error;
@@ -206,8 +207,9 @@ function PositionStrip({ pos, onPress, onLiveUpdate, colors }: {
           {contractLabel(pos)}
         </Text>
         <Text style={[s.mono, { fontSize: 11, color: colors.textSecondary, marginTop: 2 }]} numberOfLines={1}>
-          {money(entry)} → <Text style={{ color: colors.text, fontWeight: '700' }}>{money(now)}</Text>
+          {money(entry)} → <Text style={{ color: now != null && entry != null ? (now >= entry ? colors.success : colors.error) : colors.text, fontWeight: '700' }}>{money(now)}</Text>
           {'  ·  '}Qty {qty}
+          {working > 0 && <Text style={{ color: colors.warning, fontWeight: '700' }}>{`  ·  ${working} working`}</Text>}
         </Text>
       </View>
       <View style={{ alignItems: 'flex-end' }}>

@@ -20,6 +20,7 @@ import { SlGraceBadge, useSlGracePulse } from '@/common/components/strategy/SlGr
 import { ExitSafetyControls, BE_GRACE_DEFAULT } from '@/common/components/strategy/ExitSafetyControls';
 import type { ProfileKey } from '@/common/types/strategy';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import { WorkingLimitOrders } from '@/common/components/strategy/WorkingLimitOrders';
 
 export interface PositionInfoData {
   ticker: string;
@@ -409,6 +410,9 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
               <QuickStat label="Current" value={`$${data.mid_price.toFixed(2)}`} colors={colors} />
               <QuickStat label="Qty" value={String(data.qty_remaining)} colors={colors} />
             </View>
+            {/* Resting limit sells shrink what the stop/TP engine sells from —
+                show them (with cancel) while editing levels. */}
+            {editable && strategyId && <WorkingLimitOrders strategyId={strategyId} compact />}
 
             {/* ── Stop Loss ── */}
             <View style={[s.divider, { backgroundColor: colors.separator }]} />

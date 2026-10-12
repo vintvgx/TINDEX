@@ -179,6 +179,7 @@ class OptionStreamManager:
         # and is what get_health() below surfaces to the Service Status
         # screen and to _enter_trade's post-failure diagnostics.
         self._last_quote_at: dict[str, float] = {}   # symbol → epoch seconds
+        self._last_bbo: dict = {}                     # symbol → (bid, ask), see get_last_bbo
         self._last_quote_at_any: float | None = None  # across ALL symbols
         self._quote_count: dict[str, int]     = {}   # symbol → lifetime tick count (this process)
         self._health_log_started = False
@@ -618,6 +619,12 @@ class OptionStreamManager:
                     health["subscribed_count"], health["subscribed_symbols"],
                 )
 
+    def get_last_bbo(self, symbol: str) -> "tuple[float | None, float | None]":
+        """(bid, ask) from the most recent quote for `symbol` — either side
+        may be None on a one-sided quote. (None, None) if never quoted."""
+        with self._lock:
+            return self._last_bbo.get(symbol, (None, None))
+
     def _make_handler(self, symbol: str):
         """Return an async quote handler that fans out to all registered callbacks."""
         async def _handler(quote):
@@ -649,6 +656,9 @@ class OptionStreamManager:
 
             now = time.time()
             with self._lock:
+                # Last two-sided-or-not quote, for the sell sheet's bid/ask
+                # row (limit sell ladder) — see get_last_bbo.
+                self._last_bbo[symbol] = (float(bid) if bid_ok else None, float(ask) if ask_ok else None)
                 self._last_quote_at[symbol] = now
                 self._last_quote_at_any     = now
                 self._quote_count[symbol]   = self._quote_count.get(symbol, 0) + 1

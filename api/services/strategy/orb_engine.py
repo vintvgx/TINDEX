@@ -29,6 +29,7 @@ from services.strategy.sentiment import SentimentFilter
 from services.strategy.trade_logger import TradeLogger
 from services.strategy.notifier import StrategyNotifier
 from services.strategy.debug_log import DebugLogBuffer
+from services.strategy.limit_order_tracker import LimitOrderTracker, MAX_RUNGS as LADDER_MAX_RUNGS
 from services.utils.orb_data_hub import get_orb_data_hub, OrbBar
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,15 @@ class ORBEngine:
         # only acts while a position is open with a dead stream (see
         # _stream_dead_poll_loop). Started per engine; negligible when idle.
         self._stream_dead_poll_active = False
+        # Limit sell ladder: resting DAY limit sells for the open position
+        # (see limit_order_tracker.py). Fills arrive via Alpaca trade_updates
+        # (C1) with the tracker's own poll as the fallback.
+        self.limit_orders = LimitOrderTracker(self)
+        try:
+            from services.alpaca.trade_events import get_trade_event_hub
+            get_trade_event_hub().subscribe(self.limit_orders.on_trade_event)
+        except Exception as _e:
+            logger.debug("[ORBEngine] limit-order trade-event subscribe failed: %s", _e)
         threading.Thread(target=self._stream_dead_poll_loop,
                          daemon=True,
                          name=f"StreamDeadPoll-{self.ticker}").start()
@@ -354,6 +364,8 @@ class ORBEngine:
     def reset_session(self):
         if self.stream_manager and self.contract_symbol:
             self.stream_manager.unsubscribe(self.contract_symbol, self._on_stream_quote)
+        if getattr(self, "limit_orders", None):
+            self.limit_orders.reset()
         self._reset_session_state()
 
     # ── Step 1: Called at 9:46 AM ET ──────────────────────────────────────────
@@ -2592,7 +2604,21 @@ class ORBEngine:
         contract_snapshot  = self.contract_symbol  # capture before any reset
         direction_snapshot = self.position          # capture before closing_all resets it
 
+        ladder = getattr(self, "limit_orders", None)
+
         if reason in PRICE_SEEKING_REASONS:
+            # Limit sell ladder: a TP only sells contracts that aren't already
+            # resting at the user's own limit prices — the ladder IS their
+            # take-profit plan for those.
+            reserved = self._ladder_reserved()
+            if reserved:
+                available = em.qty_remaining - reserved
+                if available <= 0:
+                    self.debug.emit("INFO", f"{_tag} {reason} skipped — all {em.qty_remaining} "
+                                            f"contract(s) have resting limit sells")
+                    return
+                qty_to_close = min(qty_to_close, available)
+                closing_all = qty_to_close >= em.qty_remaining
             # Reserve the qty up front (see _reserve_exit_qty) so the engine's
             # own state already reflects "these contracts are spoken for"
             # before we spend up to 10s trying for a good fill off-thread.
@@ -2608,6 +2634,29 @@ class ORBEngine:
         # ── Instant market order (HARD_STOP / BREAKEVEN_STOP / EOD_CLOSE /
         # RUNNER_TRAIL_STOP / CONSOLIDATION / LOW_VOLUME_EXIT) — speed matters
         # more than price here, there's no time to sample or wait. ─────────────
+
+        # Limit sell ladder: a protective exit protects the WHOLE position
+        # (decided 2026-10-12). Resting sells hold contracts at Alpaca, so a
+        # market sell for them would be rejected — cancel the ladder first
+        # (booking any fills that land meanwhile), then sell what's held.
+        if ladder and ladder.has_working():
+            unconfirmed = ladder.cancel_all(self._apply_ladder_fill_locked)
+            if not self.trade_taken or not self.exit_manager or em.qty_remaining <= 0:
+                self.debug.emit("INFO", f"{_tag} {reason}: limit sells filled the rest — nothing left to sell")
+                return
+            held_back = self._ladder_reserved() if unconfirmed else 0
+            qty_to_close = (em.qty_remaining if closing_all else min(qty_to_close, em.qty_remaining)) - held_back
+            if unconfirmed:
+                self.debug.emit("WARN", f"{_tag} {reason}: {len(unconfirmed)} limit sell cancel(s) not "
+                                        f"confirmed yet — selling {max(qty_to_close, 0)} now, the rest "
+                                        f"as soon as they cancel")
+                threading.Thread(target=self._stop_follow_through,
+                                 args=(unconfirmed, action, current_price),
+                                 daemon=True, name=f"StopFollowThrough-{contract_snapshot}").start()
+            if qty_to_close <= 0:
+                return
+            closing_all = qty_to_close >= em.qty_remaining
+
         order_ok   = False
         fill_order = None
         try:
@@ -2941,6 +2990,160 @@ class ORBEngine:
             logger.error("[ORBEngine] Exit log/notify failed: %s", e)
             self.debug.emit("ERROR", f"Exit log/notify failed: {e}")
 
+    # ── Limit sell ladder (resting DAY limit sells — limit_order_tracker.py) ──
+
+    def _ladder_reserved(self) -> int:
+        lo = getattr(self, "limit_orders", None)
+        return lo.reserved_qty() if lo else 0
+
+    def qty_available(self) -> int:
+        """Held contracts not already committed to a working limit sell."""
+        em = self.exit_manager
+        if not self.trade_taken or not em:
+            return 0
+        return max(0, em.qty_remaining - self.limit_orders.reserved_qty())
+
+    def list_limit_orders(self) -> dict:
+        em = self.exit_manager
+        held = em.qty_remaining if (self.trade_taken and em) else 0
+        working = self.limit_orders.reserved_qty() if held else 0
+        return {
+            "orders":        self.limit_orders.snapshot(),
+            "qty_held":      held,
+            "qty_working":   working,
+            "qty_available": max(0, held - working),
+            "contract":      self.contract_symbol if held else None,
+        }
+
+    def place_limit_orders(self, orders: list) -> dict:
+        """
+        Place one resting DAY limit SELL per rung [{qty, limit_price}].
+        Validates and reserves the total under _tick_lock (so a concurrent
+        manual sell / TP can't take the same contracts), then submits each
+        rung outside the lock. A rung Alpaca rejects releases its reservation.
+        Returns {"status": "accepted"|"error", "orders": [...], "errors": [...]}.
+        """
+        from alpaca.trading.requests import LimitOrderRequest
+
+        if not isinstance(orders, list) or not orders:
+            return {"status": "error", "message": "At least one order is required"}
+        if len(orders) > LADDER_MAX_RUNGS:
+            return {"status": "error", "message": f"At most {LADDER_MAX_RUNGS} orders at once"}
+        rungs = []
+        for o in orders:
+            try:
+                qty = int(o.get("qty"))
+                price = round(float(o.get("limit_price")), 2)
+            except (TypeError, ValueError, AttributeError):
+                return {"status": "error", "message": "Each order needs an integer qty and a numeric limit_price"}
+            if qty < 1 or price <= 0:
+                return {"status": "error", "message": "qty must be ≥ 1 and limit_price > 0"}
+            rungs.append((qty, price))
+        total = sum(q for q, _ in rungs)
+
+        with self._tick_lock:
+            if not self.trade_taken or not self.contract_symbol or not self.exit_manager:
+                return {"status": "error", "message": "No active position"}
+            available = self.qty_available()
+            if total > available:
+                return {"status": "error",
+                        "message": f"Only {available} contract(s) available — {total} requested"}
+            self.limit_orders.reserve_pending(total)
+            contract, trade_id = self.contract_symbol, self.active_trade_id
+
+        placed, errors = [], []
+        for qty, price in rungs:
+            try:
+                submitted = self.trading_client.submit_order(LimitOrderRequest(
+                    symbol=contract, qty=qty, side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY, limit_price=price,
+                ))
+                placed.append(self.limit_orders.add_submitted(
+                    str(submitted.id), qty, price, contract, trade_id, self.paper))
+            except Exception as e:
+                self.limit_orders.release_pending(qty)
+                errors.append({"qty": qty, "limit_price": price, "error": str(e)})
+                logger.error("[ORBEngine] limit sell %d @ %.2f failed: %s", qty, price, e)
+        if placed:
+            self.debug.emit("INFO", "Limit sells placed — " + ", ".join(
+                f"{r['qty']} @ ${r['limit_price']:.2f}" for r in placed))
+            # Fast fills (limit at/below the bid) show up without waiting for the poll.
+            threading.Thread(target=self.limit_orders.refresh, daemon=True).start()
+        return {"status": "accepted" if placed else "error", "orders": placed, "errors": errors,
+                **({} if placed else {"message": errors[0]["error"] if errors else "No orders placed"})}
+
+    def cancel_limit_order(self, order_id: str) -> dict:
+        rec = self.limit_orders.cancel(order_id, self._on_ladder_fill)
+        if rec is None:
+            return {"status": "error", "message": "Unknown order"}
+        if rec["status"] in ("working", "partially_filled"):
+            return {"status": "error", "message": "Cancel not confirmed yet — try again", "order": rec}
+        self.debug.emit("INFO", f"Limit sell {rec['qty']} @ ${rec['limit_price']:.2f} → {rec['status']}"
+                                f" ({rec['filled_qty']} filled)")
+        return {"status": "ok", "order": rec}
+
+    def cancel_all_limit_orders(self) -> list:
+        """Cancel the whole ladder (Force Close / EOD). Takes _tick_lock.
+        Returns ids whose cancel isn't confirmed yet."""
+        with self._tick_lock:
+            return self.limit_orders.cancel_all(self._apply_ladder_fill_locked)
+
+    def refresh_limit_orders(self) -> int:
+        return self.limit_orders.refresh()
+
+    def _on_ladder_fill(self, qty: int, price: float, rec: dict) -> None:
+        with self._tick_lock:
+            self._apply_ladder_fill_locked(qty, price, rec)
+
+    def _apply_ladder_fill_locked(self, qty: int, price: float, rec: dict) -> None:
+        """A resting limit sell filled `qty` more contracts at `price` — book it
+        like every other exit. Caller holds _tick_lock."""
+        em = self.exit_manager
+        if not self.trade_taken or not em or em.qty_remaining <= 0:
+            logger.error("[ORBEngine] limit sell fill %s (%d @ %.2f) with no open position — "
+                         "check the broker", rec and rec.get("order_id"), qty, price)
+            self.debug.emit("ERROR", f"Limit sell filled {qty} @ ${price:.2f} but no open position "
+                                      f"is tracked — check the broker")
+            return
+        qty = min(qty, em.qty_remaining)
+        closing_all = qty >= em.qty_remaining
+        contract, direction, entry_p = self.contract_symbol, self.position, em.entry_premium
+        self._reserve_exit_qty(closing_all, contract, qty)
+        action = {"type": "LIMIT_SELL", "reason": "LIMIT_SELL", "qty": qty}
+        self._finalize_exit(action, contract, direction, qty, closing_all,
+                            self._last_underlying_price or 0.0, price, entry_p)
+
+    def _stop_follow_through(self, order_ids: list, action: dict, current_price: float) -> None:
+        """A protective exit couldn't confirm every ladder cancel in time, so it
+        sold what it could. Wait for the rest to settle, then market-sell
+        whatever is still held — the stop must end with the position flat."""
+        deadline = time.monotonic() + 15
+        pending = list(order_ids)
+        while pending and time.monotonic() < deadline:
+            time.sleep(0.5)
+            pending = self.limit_orders._cancel_and_confirm(pending, self._on_ladder_fill)
+        with self._tick_lock:
+            em = self.exit_manager
+            if not self.trade_taken or not em or em.qty_remaining <= 0:
+                return
+            if pending:
+                self.debug.emit("ERROR", f"Stop follow-through: {len(pending)} limit order cancel(s) "
+                                          f"still unconfirmed — attempting to sell anyway")
+            qty = em.qty_remaining
+            contract, direction, entry_p = self.contract_symbol, self.position, em.entry_premium
+            try:
+                fill_order = self.trading_client.submit_order(MarketOrderRequest(
+                    symbol=contract, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.DAY))
+            except Exception as e:
+                logger.error("[ORBEngine] stop follow-through sell failed: %s", e)
+                self.debug.emit("ERROR", f"Stop follow-through sell failed: {e} — CHECK THE BROKER")
+                return
+            self._reserve_exit_qty(True, contract, qty)
+            mid = self._current_option_price or current_price
+            exit_premium = self._resolve_exit_premium(fill_order, mid) if fill_order else mid
+            self._finalize_exit({**action, "qty": qty}, contract, direction, qty, True,
+                                current_price, exit_premium, entry_p)
+
     def submit_manual_exit(self, qty: int | None = None, limit_price: float | None = None) -> dict:
         """
         Manually sell `qty` contracts of the open position (default: all
@@ -3020,8 +3223,14 @@ class ORBEngine:
             if remaining_before <= 0:
                 return {"error": {"status": "error", "message": "Position is already closed"}}
 
-            want = remaining_before if qty is None else int(qty)
-            want = max(1, min(want, remaining_before))
+            # Contracts resting in limit sells are spoken for (and held at
+            # the broker) — a manual sell only takes the rest.
+            available = remaining_before - self._ladder_reserved()
+            if available <= 0:
+                return {"error": {"status": "error", "message":
+                        "All contracts have resting limit sells — cancel one to sell now"}}
+            want = available if qty is None else int(qty)
+            want = max(1, min(want, available))
             contract           = self.contract_symbol
             direction_snapshot = self.position
             entry_p            = self.exit_manager.entry_premium
@@ -3313,6 +3522,10 @@ class ORBEngine:
             return None
         em = self.exit_manager
         entry_p = em.entry_premium or 0
+        _bbo = (self.stream_manager.get_last_bbo(self.contract_symbol)
+                if self.stream_manager and hasattr(self.stream_manager, "get_last_bbo") else (None, None))
+        _bbo = tuple(round(v, 4) if v is not None else None for v in _bbo)
+        _working = min(self._ladder_reserved(), em.qty_remaining)
         pnl          = (mid - entry_p) * em.qty_remaining * 100
         pnl_pct      = ((mid - entry_p) / entry_p * 100) if entry_p > 0 else 0
         market_value = mid * em.qty_remaining * 100
@@ -3377,6 +3590,12 @@ class ORBEngine:
             # the Edit sheet.
             "runner_mode":          em_state.get("runner_mode", "trail"),
             "cascade_enabled":      em_state.get("cascade_enabled", True),
+            # Limit sell ladder: the sheet's live Bid / Mid / Ask row, and how
+            # many contracts are resting in limit sells vs still free.
+            "bid":                  _bbo[0],
+            "ask":                  _bbo[1],
+            "qty_working":          _working,
+            "qty_available":        max(0, em.qty_remaining - _working),
         })
         return payload
 

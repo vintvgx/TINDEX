@@ -296,7 +296,8 @@ export function LinePriceChart({
           </View>
         )}
 
-        {onExpand && (
+        {/* Without a period row there's nowhere else for it — corner overlay. */}
+        {onExpand && !onPeriodChange && (
           <Pressable
             onPress={onExpand}
             hitSlop={10}
@@ -309,7 +310,7 @@ export function LinePriceChart({
       </View>
 
       {onPeriodChange && (
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 14 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
           {CHART_PERIODS.map((p) => {
             const active = p === period;
             return (
@@ -329,6 +330,18 @@ export function LinePriceChart({
               </Pressable>
             );
           })}
+          {/* Full chart lives at the end of the range row (like Robinhood /
+              TradingView) — off the plot, so it never covers the line. */}
+          {onExpand && (
+            <Pressable
+              onPress={onExpand}
+              hitSlop={8}
+              accessibilityLabel="Open full chart"
+              style={({ pressed }) => [styles.expandChip, { borderColor: colors.border, opacity: pressed ? 0.6 : 1 }]}
+            >
+              <Ionicons name="expand-outline" size={14} color={colors.textSecondary} />
+            </Pressable>
+          )}
         </View>
       )}
     </View>
@@ -346,6 +359,14 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
+  },
+  expandChip: {
+    width: 32,
+    height: 30,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   expand: {
     position: 'absolute',

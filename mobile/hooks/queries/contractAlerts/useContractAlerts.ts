@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { RAILWAY_BASE_URL } from "@/lib/railway.config";
 import { ContractPriceAlert } from "@/common/types/contractAlerts";
+import { isSimId } from '@/lib/devSim/simPositions';
 
 interface ContractAlertsResponse {
   success: boolean;
@@ -35,7 +36,7 @@ export function useContractAlerts(strategyId: string | undefined, enabled: boole
       }
       return data.data || [];
     },
-    enabled: enabled && !!strategyId && !!user?.id && !authLoading,
+    enabled: enabled && !!strategyId && !isSimId(strategyId) && !!user?.id && !authLoading,
     staleTime: 15 * 1000,
     // A watching alert can trigger server-side any time the position is
     // open — poll so PositionInfoModal reflects a fire without needing to
