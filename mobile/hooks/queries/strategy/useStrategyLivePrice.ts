@@ -141,7 +141,6 @@ export function useStrategyLivePrice(
   // Dev simulated position: its ticks come from the in-app simulator — no socket.
   const sim = isSimId(strategyId);
   const simLive = useSimLive(strategyId);
-  const [simPatch, setSimPatch] = useState<Partial<LivePriceData>>({});
 
   const wsUrl = strategyId && !sim
     ? RAILWAY_BASE_URL.replace(/^https?/, (s) => (s === 'https' ? 'wss' : 'ws'))
@@ -264,14 +263,15 @@ export function useStrategyLivePrice(
     setData(prev => (prev ? { ...prev, ...patch } : prev));
   }, []);
 
-  const simPatchData = useCallback((patch: Partial<LivePriceData>) => {
-    setSimPatch((prev) => ({ ...prev, ...patch }));
-  }, []);
+  // The simulator applies exit edits synchronously, so an optimistic patch
+  // has nothing to bridge — and layering one on would hide its own later
+  // changes (e.g. the stop moving to breakeven after TP1).
+  const simPatchData = useCallback((_patch: Partial<LivePriceData>) => {}, []);
   if (sim) {
     return {
-      data: simLive ? { ...simLive, ...simPatch, mid_price: simLive.mid_price, pnl: simLive.pnl,
-                        pnl_pct: simLive.pnl_pct, market_value: simLive.market_value,
-                        qty_remaining: simLive.qty_remaining } : null,
+      // useSimLive returns a stable object until the simulator ticks — a new
+      // object per render loops consumers that push it into parent state.
+      data: simLive,
       pendingPriceData: null,
       connected: !!simLive,
       disconnect,

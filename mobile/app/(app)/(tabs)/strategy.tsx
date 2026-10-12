@@ -29,7 +29,8 @@ import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { OrbHubHealthBanner } from '@/common/components/strategy/OrbHubHealthBanner';
 import { ImmediateTradePanel } from '@/common/components/strategy/ImmediateTradePanel';
-import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
+import { LimitSellSheet } from '@/common/components/strategy/LimitSellSheet';
+import { WorkingLimitOrders } from '@/common/components/strategy/WorkingLimitOrders';
 import { LivePositionPanel } from '@/common/components/strategy/LivePositionPanel';
 import { positionHideKey } from '@/lib/positionHideKey';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
@@ -679,16 +680,22 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
             hideKey=""
           />
         )}
+        {hasPosition && <WorkingLimitOrders strategyId={config.id} />}
       </View>
 
-      <ExitTradeModal
+      {/* The X opens the one sell sheet: Market (default) or limit ladder. */}
+      <LimitSellSheet
         visible={exitOpen}
-        colors={colors}
         strategyId={config.id}
         ticker={config.ticker}
         contract={live?.contract}
-        qtyRemaining={live?.qty_remaining ?? config.qty_remaining ?? 1}
         paperMode={config.paper_mode}
+        qtyHeld={live?.qty_remaining ?? config.qty_remaining ?? 0}
+        qtyAvailable={live?.qty_available ?? live?.qty_remaining ?? config.qty_remaining ?? 0}
+        entryPremium={live?.entry_premium}
+        bid={live?.bid}
+        ask={live?.ask}
+        mid={live?.mid_price}
         onClose={() => setExitOpen(false)}
       />
     </TouchableOpacity>

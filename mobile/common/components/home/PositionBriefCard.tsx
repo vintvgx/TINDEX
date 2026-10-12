@@ -5,7 +5,6 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
-import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { PositionEditSheet } from './PositionEditSheet';
 import { ThetaReadout } from '@/common/components/strategy/ThetaReadout';
 import { LimitSellSheet } from '@/common/components/strategy/LimitSellSheet';
@@ -47,7 +46,6 @@ export function PositionBriefCard({
     return () => loop.stop();
   }, [highlighted, glow]);
   const { data: live, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
-  const [exitOpen, setExitOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [ladderOpen, setLadderOpen] = useState(false);
 
@@ -118,10 +116,10 @@ export function PositionBriefCard({
           {qtyWorking > 0 ? ` · ${qtyWorking} working` : ''}
         </Text>
         <TouchableOpacity
-          onPress={() => setExitOpen(true)}
+          onPress={() => setLadderOpen(true)}
           hitSlop={10}
           style={styles.closeBtn}
-          accessibilityLabel={`Close ${pos.ticker} position`}
+          accessibilityLabel={`Sell ${pos.ticker} position`}
         >
           <Ionicons name="close" size={15} color={colors.textTertiary} />
         </TouchableOpacity>
@@ -176,22 +174,8 @@ export function PositionBriefCard({
         </View>
       )}
 
-      {/* Resting limit sells + the passive scale-out entry point */}
+      {/* Resting limit sells (cancel with ×) */}
       <WorkingLimitOrders strategyId={pos.strategy_id} />
-      {pos.contract && qty > 0 && (
-        <TouchableOpacity
-          onPress={() => setLadderOpen(true)}
-          activeOpacity={0.8}
-          style={[styles.scaleBtn, { borderColor: colors.border }]}
-          accessibilityLabel={`Sell ${pos.ticker}`}
-        >
-          <Ionicons name="layers-outline" size={14} color={colors.text} />
-          <Text style={{ fontSize: 13, fontWeight: '700', color: colors.text }}>Sell</Text>
-          {qtyAvailable < qty && (
-            <Text style={[styles.mono, { fontSize: 11, color: colors.textTertiary }]}>{qtyAvailable} free</Text>
-          )}
-        </TouchableOpacity>
-      )}
 
       <LimitSellSheet
         visible={ladderOpen}
@@ -201,6 +185,7 @@ export function PositionBriefCard({
         paperMode={pos.paper_mode}
         qtyHeld={qty}
         qtyAvailable={qtyAvailable}
+        entryPremium={entryPremium}
         bid={live?.bid}
         ask={live?.ask}
         mid={nowPremium}
@@ -215,16 +200,6 @@ export function PositionBriefCard({
         patchData={patchData}
       />
 
-      <ExitTradeModal
-        visible={exitOpen}
-        colors={colors}
-        strategyId={pos.strategy_id}
-        ticker={pos.ticker}
-        contract={live?.contract ?? pos.contract}
-        qtyRemaining={qtyAvailable || 1}
-        paperMode={pos.paper_mode}
-        onClose={() => setExitOpen(false)}
-      />
     </TouchableOpacity>
   );
 }
@@ -256,16 +231,6 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 6,
     borderWidth: 1,
-  },
-  scaleBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingVertical: 9,
-    marginTop: 12,
   },
   closeBtn: {
     width: 28,

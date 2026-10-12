@@ -7,6 +7,7 @@ import { TimeframeChips } from './TimeframeChips';
 import { ChartBottomSheet } from './ChartBottomSheet';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 import type { ChartSettingsSection } from './ChartControlToggles';
+import TickerSheetService from '@/common/services/TickerSheetService';
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
@@ -87,6 +88,15 @@ export function ChartBottomToolbar({
       label: isFollowed ? `Unfollow ${activeTicker}` : `Follow ${activeTicker}`,
       onPress: onToggleFollow,
       color: isFollowed ? colors.warning : undefined,
+    },
+    // The ticker's detail sheet (overview, stats, news). It's a native
+    // modal, so it opens above the chart — even the full-screen overlay —
+    // and its own full-chart button comes straight back here.
+    {
+      key: 'info',
+      icon: 'information-circle-outline',
+      label: `${activeTicker} info`,
+      onPress: () => { if (activeTicker) TickerSheetService.getInstance().open(activeTicker); },
     },
   ];
 

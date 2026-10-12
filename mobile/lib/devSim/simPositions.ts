@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
 import type { LimitOrdersResponse, WorkingLimitOrder } from '@/common/types/strategy';
@@ -386,25 +386,36 @@ function toOrders(p: SimPosition): LimitOrdersResponse {
 
 const getSnapshot = () => snapshot;
 
+// Every hook below derives its value with useMemo keyed on the store
+// snapshot, so it returns the SAME object until the simulator actually
+// changes (a tick / an action) — like a socket message. Building a fresh
+// object per render made consumers' "report live data up" effects
+// (PositionBriefCard → setLiveByStrategy) loop forever: "Maximum update
+// depth exceeded" (2026-10-12).
+
 /** Every open sim position, in the app's PositionEntry shape. */
 export function useSimPositionEntries(): PositionEntry[] {
   const s = useSyncExternalStore(subscribe, getSnapshot);
-  return s.positions.map(toEntry);
+  return useMemo(() => s.positions.map(toEntry), [s]);
 }
 
 /** Live tick data for one sim position (null for a real id / closed sim). */
 export function useSimLive(id: string | undefined): LivePriceData | null {
   const s = useSyncExternalStore(subscribe, getSnapshot);
-  if (!isSimId(id)) return null;
-  const p = s.positions.find((x) => x.id === id);
-  return p ? toLive(p) : null;
+  return useMemo(() => {
+    if (!isSimId(id)) return null;
+    const p = s.positions.find((x) => x.id === id);
+    return p ? toLive(p) : null;
+  }, [s, id]);
 }
 
 export function useSimLimitOrders(id: string | undefined): LimitOrdersResponse | null {
   const s = useSyncExternalStore(subscribe, getSnapshot);
-  if (!isSimId(id)) return null;
-  const p = s.positions.find((x) => x.id === id);
-  return p ? toOrders(p) : null;
+  return useMemo(() => {
+    if (!isSimId(id)) return null;
+    const p = s.positions.find((x) => x.id === id);
+    return p ? toOrders(p) : null;
+  }, [s, id]);
 }
 
 export function useSimLog(): SimLogEntry[] {

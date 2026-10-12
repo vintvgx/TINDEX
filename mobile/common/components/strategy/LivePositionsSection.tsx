@@ -7,7 +7,6 @@ import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePosi
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import { LivePositionPanel } from '@/common/components/strategy/LivePositionPanel';
-import { ExitTradeModal } from '@/common/components/strategy/ExitTradeModal';
 import { AddContractModal } from '@/common/components/strategy/AddContractModal';
 import { LimitSellSheet } from '@/common/components/strategy/LimitSellSheet';
 import { WorkingLimitOrders } from '@/common/components/strategy/WorkingLimitOrders';
@@ -126,6 +125,9 @@ export function useLivePositionsData(mode: 'live' | 'paper', tickerFilter?: stri
         delete next[strategyId];
         return next;
       }
+      // Same reference already stored → keep the old state object, so React
+      // bails out instead of re-rendering every list on a no-op report.
+      if (prev[strategyId] === data) return prev;
       return { ...prev, [strategyId]: data };
     });
   }, []);
@@ -157,7 +159,6 @@ export function PositionRow({
 }) {
   const { toTicker } = useBaseNavigation();
   const { data: live, connected, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
-  const [exitOpen, setExitOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [ladderOpen, setLadderOpen] = useState(false);
   const heldQty = live?.qty_remaining ?? pos.qty_remaining ?? 0;
@@ -246,28 +247,15 @@ export function PositionRow({
         ticker={pos.ticker}
         direction={pos.direction}
         paperMode={pos.paper_mode}
-        onExitPress={() => setExitOpen(true)}
+        onExitPress={() => setLadderOpen(true)}
         onAddPress={isSimId(pos.strategy_id) ? undefined : () => setAddOpen(true)}
         colors={colors}
         patchData={patchData}
         hideKey={positionHideKey(pos)}
       />
 
-      {/* Limit sell ladder: resting sells + the passive scale-out entry */}
+      {/* Resting limit sells (cancel with ×) */}
       <WorkingLimitOrders strategyId={pos.strategy_id} />
-      {pos.contract && heldQty > 0 && (
-        <TouchableOpacity
-          onPress={() => setLadderOpen(true)}
-          activeOpacity={0.8}
-          style={[styles.scaleBtn, { borderColor: colors.border }]}
-        >
-          <Ionicons name="layers-outline" size={14} color={colors.text} />
-          <Text style={{ fontSize: 13, fontWeight: '700', color: colors.text }}>Sell</Text>
-          {qtyAvailable < heldQty && (
-            <Text style={{ fontSize: 11, color: colors.textTertiary }}>{qtyAvailable} free</Text>
-          )}
-        </TouchableOpacity>
-      )}
       <LimitSellSheet
         visible={ladderOpen}
         strategyId={pos.strategy_id}
@@ -276,22 +264,13 @@ export function PositionRow({
         paperMode={pos.paper_mode}
         qtyHeld={heldQty}
         qtyAvailable={qtyAvailable}
+        entryPremium={live?.entry_premium ?? pos.entry_premium}
         bid={live?.bid}
         ask={live?.ask}
         mid={live?.mid_price ?? pos.current_price}
         onClose={() => setLadderOpen(false)}
       />
 
-      <ExitTradeModal
-        visible={exitOpen}
-        colors={colors}
-        strategyId={pos.strategy_id}
-        ticker={pos.ticker}
-        contract={live?.contract ?? pos.contract}
-        qtyRemaining={qtyAvailable || 1}
-        paperMode={pos.paper_mode}
-        onClose={() => setExitOpen(false)}
-      />
       <AddContractModal
         visible={addOpen}
         colors={colors}
@@ -382,10 +361,6 @@ export function LivePositionsBody({
 }
 
 const styles = StyleSheet.create({
-  scaleBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    borderWidth: 1, borderRadius: 10, paddingVertical: 9, marginTop: 8,
-  },
   hiddenBanner: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     paddingVertical: 9, borderRadius: 10, borderWidth: 1, marginBottom: 10,

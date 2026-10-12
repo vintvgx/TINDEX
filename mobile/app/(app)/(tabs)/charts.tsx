@@ -330,6 +330,7 @@ export function ChartsContent({ initialTicker, topInset }: {
         delete next[strategyId];
         return next;
       }
+      if (prev[strategyId] === data) return prev;  // no-op report → no re-render
       return { ...prev, [strategyId]: data };
     });
   }, []);

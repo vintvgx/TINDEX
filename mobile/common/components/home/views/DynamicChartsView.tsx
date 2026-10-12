@@ -39,6 +39,13 @@ const COUNTER_VISIBLE_MS = 8000;
 /** Last ticker shown — survives this page unmounting (see activeTicker). */
 let lastActiveTicker: string | null = null;
 
+/** The minimized Home card steps the deck's ticker with an up/down swipe —
+ *  the mounted deck registers here (see DynamicCard's collapsed strip). */
+let stepListener: ((dir: 1 | -1) => void) | null = null;
+export function stepChartsTicker(dir: 1 | -1): void {
+  stepListener?.(dir);
+}
+
 function TickerPage({ ticker, height, width, period, interval, onStats }: {
   ticker: string; height: number; width: number; period: PricePeriod; interval: string;
   onStats: (ticker: string, price: number | null, changePct: number | null) => void;
@@ -192,6 +199,21 @@ export function DynamicChartsView({ onActiveTicker, height }: {
       listRef.current?.scrollToOffset({ offset: middleOffset(real), animated: false });
     }
   }, [loop, n, pageH, tickers, middleOffset, setActiveTicker]);
+
+  // Collapsed-card swipe → next / previous ticker, and keep the (hidden)
+  // deck scrolled to it so expanding shows the same chart.
+  const stepRef = useRef<(dir: 1 | -1) => void>(() => {});
+  stepRef.current = (dir) => {
+    if (n < 2) return;
+    const next = (((realIndex + dir) % n) + n) % n;
+    setActiveTicker(tickers[next]);
+    listRef.current?.scrollToOffset({ offset: middleOffset(next), animated: false });
+  };
+  useEffect(() => {
+    const fn = (dir: 1 | -1) => stepRef.current(dir);
+    stepListener = fn;
+    return () => { if (stepListener === fn) stepListener = null; };
+  }, []);
 
   return (
     <View style={{ width: pageWidth }}>

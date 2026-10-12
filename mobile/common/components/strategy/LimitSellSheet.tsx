@@ -7,8 +7,12 @@ import * as Haptics from 'expo-haptics';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useToast } from '@/common/components/ui/Toast';
 import { usePlaceLimitOrders } from '@/hooks/queries/strategy/useLimitOrders';
+import { useSellPosition } from '@/hooks/mutations/strategy/useSellPosition';
+import { useSellStatus } from '@/hooks/useSellStatus';
+import { parseContractSymbol } from '@/lib/formatContract';
 
 interface Rung { qty: number; price: number }
+type Mode = 'market' | 'limit';
 
 interface Props {
   visible: boolean;
@@ -19,6 +23,8 @@ interface Props {
   /** Contracts held, and how many aren't already in working limit sells. */
   qtyHeld: number;
   qtyAvailable: number;
+  /** Cost basis per contract — colors every price green/red against it. */
+  entryPremium?: number | null;
   bid?: number | null;
   ask?: number | null;
   mid?: number | null;
@@ -31,38 +37,59 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 const targetAbove = (ask: number) => r2(Math.floor(ask * 2 + 1) / 2);
 
 /**
- * Limit sell ladder — the passive way out (limit-sell-ladder spec): build
- * one or more resting DAY limit sells ({qty, price} rungs) and place them
- * together. They wait for their price: no 10-second fallback, no market
- * fill. The aggressive "get me out now" path stays in ExitTradeModal.
+ * The position's one sell sheet — opened by the X on every open-position
+ * card. Two modes:
+ *   Market (default) — sell now: the backend works the best price for up to
+ *     ~10s, then market-sells whatever's left (same path as the old
+ *     ExitTradeModal).
+ *   Limit — the limit sell ladder: build one or more resting DAY limit
+ *     sells ({qty, price} rungs). They wait for their price — no 10s
+ *     fallback, no market fill.
+ * Prices are colored against the entry (green above, red below); the quote
+ * row dims bid/ask so the mid stands out.
  */
 export function LimitSellSheet({
-  visible, strategyId, ticker, contract, paperMode, qtyHeld, qtyAvailable, bid, ask, mid, onClose, onPlaced,
+  visible, strategyId, ticker, contract, paperMode, qtyHeld, qtyAvailable, entryPremium,
+  bid, ask, mid, onClose, onPlaced,
 }: Props) {
   const colors = useThemeColors();
   const toast = useToast();
   const place = usePlaceLimitOrders();
+  const { mutate: sell } = useSellPosition();
+  const { startSelling, markSold, clearSelling } = useSellStatus();
 
+  const [mode, setMode] = useState<Mode>('market');
   const [rungs, setRungs] = useState<Rung[]>([]);
   const [qty, setQty] = useState(1);
   const [priceText, setPriceText] = useState('');
 
-  const drafted = rungs.reduce((n, r) => n + r.qty, 0);
+  const drafted = mode === 'limit' ? rungs.reduce((n, r) => n + r.qty, 0) : 0;
   const free = Math.max(0, qtyAvailable - drafted);
   const price = parseFloat(priceText);
   const priceOk = Number.isFinite(price) && price > 0;
   const fillsNow = priceOk && bid != null && price <= bid;
 
-  // Fresh sheet each open: one contract at the mid.
+  /** Green at/above entry, red below — neutral when there's no entry. */
+  const pnlColor = (p?: number | null) =>
+    p == null || entryPremium == null ? colors.text : p >= entryPremium ? colors.success : colors.error;
+
+  // Fresh sheet each open: Market, all free contracts, price seeded at the mid.
   useEffect(() => {
     if (!visible) return;
+    setMode('market');
     setRungs([]);
-    setQty(1);
+    setQty(Math.max(1, qtyAvailable));
     const seed = mid ?? ask ?? bid;
     setPriceText(seed != null ? seed.toFixed(2) : '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
   useEffect(() => { setQty((q) => Math.max(1, Math.min(q, free || 1))); }, [free]);
+  const switchMode = (m: Mode) => {
+    if (m === mode) return;
+    Haptics.selectionAsync().catch(() => {});
+    setMode(m);
+    setQty(m === 'market' ? Math.max(1, qtyAvailable) : 1);
+  };
 
   const chips = useMemo(() => {
     const out: { label: string; value: number }[] = [];
@@ -87,13 +114,43 @@ export function LimitSellSheet({
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
   };
 
+  // ── Market ────────────────────────────────────────────────────────────
+  const sellAll = qty >= qtyAvailable;
+  const marketProceeds = bid != null ? qty * bid * 100 : null;
+
+  const doMarketSell = () => {
+    const parsed = contract ? parseContractSymbol(contract) : null;
+    const contractLabel = parsed
+      ? `${parsed.ticker} ${parsed.strike % 1 === 0 ? parsed.strike : parsed.strike.toFixed(1)}${parsed.type}`
+      : (contract || ticker);
+    const id = `${strategyId}-${Date.now()}`;
+    // Fire-and-close, like the old ExitTradeModal: the ticker tape shows
+    // "Selling… → Sold…" while the backend works the fill (up to ~10s).
+    startSelling({ id, strategyId, ticker, contractLabel, qty, paperMode });
+    onClose();
+    sell(
+      { strategyId, qty: sellAll ? undefined : qty },
+      {
+        onSuccess: (r) => {
+          toast.success(r.message || 'Position sold');
+          markSold(id, r.avg_fill_price ?? 0, r.qty_sold ?? qty, r.pnl);
+        },
+        onError: (e) => {
+          toast.error(e.message || 'Sell failed');
+          clearSelling(id);
+        },
+      },
+    );
+  };
+
+  // ── Limit ─────────────────────────────────────────────────────────────
   // Confirm places the drafted rungs — or, with nothing drafted yet, the
   // single order currently in the builder.
   const toPlace: Rung[] = rungs.length ? rungs : priceOk && qty >= 1 && qty <= free ? [{ qty, price: r2(price) }] : [];
   const placeQty = toPlace.reduce((n, r) => n + r.qty, 0);
   const proceeds = toPlace.reduce((n, r) => n + r.qty * r.price * 100, 0);
 
-  const submit = () => {
+  const placeLimits = () => {
     place.mutate(
       { strategyId, orders: toPlace.map((r) => ({ qty: r.qty, limit_price: r.price })) },
       {
@@ -109,17 +166,29 @@ export function LimitSellSheet({
   };
 
   const confirm = () => {
+    if (mode === 'market') {
+      if (qtyAvailable < 1) return;
+      if (paperMode) return doMarketSell();
+      Alert.alert(
+        'Sell LIVE position',
+        `Sell ${sellAll ? 'ALL' : qty} contract(s) of ${contract || ticker} with REAL money now?\n\nWorks the best price for up to ~10s, then sells at market.`,
+        [{ text: 'Cancel', style: 'cancel' }, { text: 'Sell', style: 'destructive', onPress: doMarketSell }],
+      );
+      return;
+    }
     if (!toPlace.length) return;
-    if (paperMode) return submit();
+    if (paperMode) return placeLimits();
     Alert.alert(
       'Place LIVE limit sells',
       toPlace.map((r) => `Sell ${r.qty} @ $${r.price.toFixed(2)}`).join('\n') +
         `\n\nReal money. Resting DAY orders — they wait for your price.`,
-      [{ text: 'Cancel', style: 'cancel' }, { text: 'Place', style: 'destructive', onPress: submit }],
+      [{ text: 'Cancel', style: 'cancel' }, { text: 'Place', style: 'destructive', onPress: placeLimits }],
     );
   };
 
   const fmt = (n?: number | null) => (n != null ? `$${n.toFixed(2)}` : '—');
+  const working = qtyHeld - qtyAvailable;
+  const ctaDisabled = mode === 'market' ? qtyAvailable < 1 : !toPlace.length || place.isPending;
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -133,7 +202,8 @@ export function LimitSellSheet({
                 <Text style={[styles.title, { color: colors.text }]}>Sell · {ticker}</Text>
                 <Text style={[styles.sub, { color: colors.textSecondary }]} numberOfLines={1}>
                   {contract ?? ''} · {paperMode ? 'Paper' : 'LIVE'} · {qtyHeld} held
-                  {qtyHeld - qtyAvailable > 0 ? ` · ${qtyHeld - qtyAvailable} working` : ''}
+                  {working > 0 ? ` · ${working} working` : ''}
+                  {entryPremium != null ? ` · entry $${entryPremium.toFixed(2)}` : ''}
                 </Text>
               </View>
               <TouchableOpacity onPress={onClose} hitSlop={10}>
@@ -141,26 +211,52 @@ export function LimitSellSheet({
               </TouchableOpacity>
             </View>
 
-            {/* live quote */}
+            {/* live quote — bid/ask dimmed so the mid stands out */}
             <View style={[styles.quoteRow, { borderColor: colors.border }]}>
-              {[['BID', bid], ['MID', mid], ['ASK', ask]].map(([label, v]) => (
-                <View key={label as string} style={{ flex: 1, alignItems: 'center' }}>
-                  <Text style={[styles.quoteLabel, { color: colors.textTertiary }]}>{label as string}</Text>
-                  <Text style={[styles.mono, styles.quoteValue, { color: colors.text }]}>{fmt(v as number | null)}</Text>
-                </View>
-              ))}
+              <View style={[styles.quoteSide, { opacity: 0.55 }]}>
+                <Text style={[styles.quoteLabel, { color: colors.error }]}>BID</Text>
+                <Text style={[styles.mono, styles.quoteSideValue, { color: colors.error }]}>{fmt(bid)}</Text>
+              </View>
+              <View style={styles.quoteMid}>
+                <Text style={[styles.quoteLabel, { color: colors.textSecondary }]}>MID</Text>
+                <Text style={[styles.mono, styles.quoteMidValue, { color: pnlColor(mid) }]}>{fmt(mid)}</Text>
+              </View>
+              <View style={[styles.quoteSide, { opacity: 0.55 }]}>
+                <Text style={[styles.quoteLabel, { color: colors.success }]}>ASK</Text>
+                <Text style={[styles.mono, styles.quoteSideValue, { color: colors.success }]}>{fmt(ask)}</Text>
+              </View>
             </View>
 
-            {/* drafted ladder */}
-            {rungs.length > 0 && (
+            {/* Market | Limit */}
+            <View style={[styles.seg, { borderColor: colors.border }]}>
+              {(['market', 'limit'] as Mode[]).map((m) => {
+                const on = mode === m;
+                return (
+                  <TouchableOpacity
+                    key={m}
+                    onPress={() => switchMode(m)}
+                    style={[styles.segItem, on && { backgroundColor: colors.accent + '22' }]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: on }}
+                  >
+                    <Text style={[styles.segText, { color: on ? colors.accent : colors.textSecondary }]}>
+                      {m === 'market' ? 'Market' : 'Limit'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* drafted ladder (limit) */}
+            {mode === 'limit' && rungs.length > 0 && (
               <View style={{ marginTop: 14 }}>
                 <Text style={[styles.label, { color: colors.textTertiary }]}>LADDER</Text>
                 {rungs.map((r, i) => (
                   <View key={i} style={[styles.rung, { borderColor: colors.border }]}>
-                    <Text style={[styles.mono, { flex: 1, color: colors.text, fontWeight: '700' }]}>
-                      {r.qty} @ ${r.price.toFixed(2)}
+                    <Text style={[styles.mono, { flex: 1, fontWeight: '700', color: colors.text }]}>
+                      {r.qty} @ <Text style={{ color: pnlColor(r.price) }}>${r.price.toFixed(2)}</Text>
                     </Text>
-                    <Text style={[styles.mono, { color: colors.textSecondary, fontSize: 12 }]}>
+                    <Text style={[styles.mono, { color: pnlColor(r.price), fontSize: 12 }]}>
                       ${(r.qty * r.price * 100).toFixed(0)}
                     </Text>
                     <TouchableOpacity onPress={() => setRungs((rs) => rs.filter((_, j) => j !== i))} hitSlop={10} style={{ marginLeft: 12 }}>
@@ -171,70 +267,97 @@ export function LimitSellSheet({
               </View>
             )}
 
-            {/* builder */}
+            {/* contracts */}
             <Text style={[styles.label, { color: colors.textTertiary, marginTop: 16 }]}>
               CONTRACTS ({free} available)
             </Text>
             <View style={styles.stepRow}>
               <StepBtn icon="remove" disabled={qty <= 1} onPress={() => setQty((q) => Math.max(1, q - 1))} colors={colors} />
-              <Text style={[styles.mono, styles.stepValue, { color: colors.text }]}>{free ? qty : 0}</Text>
+              <View style={{ alignItems: 'center', minWidth: 56 }}>
+                <Text style={[styles.mono, styles.stepValue, { color: colors.text }]}>{free ? qty : 0}</Text>
+                {mode === 'market' && sellAll && free > 0 && (
+                  <Text style={[styles.allTag, { color: colors.accent }]}>ALL</Text>
+                )}
+              </View>
               <StepBtn icon="add" disabled={qty >= free} onPress={() => setQty((q) => Math.min(free, q + 1))} colors={colors} />
             </View>
 
-            <Text style={[styles.label, { color: colors.textTertiary, marginTop: 14 }]}>LIMIT PRICE</Text>
-            <View style={styles.stepRow}>
-              <StepBtn icon="remove" onPress={() => stepPrice(-0.01)} colors={colors} />
-              <View style={[styles.priceBox, { borderColor: colors.border, backgroundColor: colors.background }]}>
-                <Text style={[styles.mono, { color: colors.textSecondary, fontSize: 18 }]}>$</Text>
-                <TextInput
-                  value={priceText}
-                  onChangeText={(t) => setPriceText(t.replace(/[^0-9.]/g, ''))}
-                  keyboardType="decimal-pad"
-                  style={[styles.mono, styles.priceInput, { color: colors.text }]}
-                />
-              </View>
-              <StepBtn icon="add" onPress={() => stepPrice(0.01)} colors={colors} />
-            </View>
-            <View style={styles.chips}>
-              {chips.map((c) => {
-                const on = priceOk && r2(price) === c.value;
-                return (
-                  <TouchableOpacity
-                    key={c.label}
-                    onPress={() => setPriceText(c.value.toFixed(2))}
-                    style={[styles.chip, { borderColor: on ? colors.accent : colors.border, backgroundColor: on ? colors.accent + '1A' : 'transparent' }]}
-                  >
-                    <Text style={[styles.chipText, { color: on ? colors.accent : colors.textSecondary }]}>{c.label}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            {fillsNow && (
-              <View style={styles.warnRow}>
-                <Ionicons name="flash-outline" size={13} color={colors.warning} />
-                <Text style={[styles.warnText, { color: colors.warning }]}>
-                  At or below the bid — this will fill immediately.
-                </Text>
-              </View>
+            {mode === 'market' ? (
+              <Text style={[styles.hint, { color: colors.textSecondary }]}>
+                Works the best price for up to ~10s, then sells whatever&apos;s left at market.
+                {marketProceeds != null && (
+                  <Text style={{ color: pnlColor(bid), fontWeight: '700' }}>
+                    {`  ≈ $${marketProceeds.toFixed(0)} at the bid`}
+                  </Text>
+                )}
+              </Text>
+            ) : (
+              <>
+                <Text style={[styles.label, { color: colors.textTertiary, marginTop: 14 }]}>LIMIT PRICE</Text>
+                <View style={styles.stepRow}>
+                  <StepBtn icon="remove" onPress={() => stepPrice(-0.01)} colors={colors} />
+                  <View style={[styles.priceBox, { borderColor: priceOk ? pnlColor(price) + '88' : colors.border, backgroundColor: colors.background }]}>
+                    <Text style={[styles.mono, { color: colors.textSecondary, fontSize: 18 }]}>$</Text>
+                    <TextInput
+                      value={priceText}
+                      onChangeText={(t) => setPriceText(t.replace(/[^0-9.]/g, ''))}
+                      keyboardType="decimal-pad"
+                      style={[styles.mono, styles.priceInput, { color: priceOk ? pnlColor(price) : colors.text }]}
+                    />
+                  </View>
+                  <StepBtn icon="add" onPress={() => stepPrice(0.01)} colors={colors} />
+                </View>
+                <View style={styles.chips}>
+                  {chips.map((c) => {
+                    const on = priceOk && r2(price) === c.value;
+                    const tint = c.label === 'Bid' ? colors.error : c.label === 'Ask' ? colors.success : c.label === 'Mid' ? colors.text : colors.accent;
+                    return (
+                      <TouchableOpacity
+                        key={c.label}
+                        onPress={() => setPriceText(c.value.toFixed(2))}
+                        style={[styles.chip, { borderColor: on ? tint : colors.border, backgroundColor: on ? tint + '1A' : 'transparent' }]}
+                      >
+                        <Text style={[styles.chipText, { color: on ? tint : colors.textSecondary }]}>{c.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {fillsNow && (
+                  <View style={styles.warnRow}>
+                    <Ionicons name="flash-outline" size={13} color={colors.warning} />
+                    <Text style={[styles.warnText, { color: colors.warning }]}>
+                      At or below the bid — this will fill immediately.
+                    </Text>
+                  </View>
+                )}
+                <TouchableOpacity
+                  onPress={addRung}
+                  disabled={!priceOk || free < 1}
+                  style={[styles.addBtn, { borderColor: colors.accent, opacity: !priceOk || free < 1 ? 0.4 : 1 }]}
+                >
+                  <Ionicons name="add" size={16} color={colors.accent} />
+                  <Text style={[styles.addText, { color: colors.accent }]}>Add order</Text>
+                </TouchableOpacity>
+              </>
             )}
-
-            <TouchableOpacity
-              onPress={addRung}
-              disabled={!priceOk || free < 1}
-              style={[styles.addBtn, { borderColor: colors.accent, opacity: !priceOk || free < 1 ? 0.4 : 1 }]}
-            >
-              <Ionicons name="add" size={16} color={colors.accent} />
-              <Text style={[styles.addText, { color: colors.accent }]}>Add order</Text>
-            </TouchableOpacity>
 
             {/* confirm */}
             <TouchableOpacity
               onPress={confirm}
-              disabled={!toPlace.length || place.isPending}
+              disabled={ctaDisabled}
               activeOpacity={0.85}
-              style={[styles.cta, { backgroundColor: !toPlace.length ? colors.border : colors.error }]}
+              style={[styles.cta, { backgroundColor: ctaDisabled ? colors.border : colors.error }]}
             >
-              {place.isPending ? <ActivityIndicator color="#fff" /> : (
+              {place.isPending ? <ActivityIndicator color="#fff" /> : mode === 'market' ? (
+                <>
+                  <Text style={styles.ctaText}>
+                    {paperMode ? '' : 'LIVE · '}Sell {sellAll ? `all ${qty}` : qty} at market
+                  </Text>
+                  <Text style={styles.ctaSub}>
+                    {qtyAvailable < 1 ? 'All contracts have resting limit sells' : 'Best price within ~10s, then market'}
+                  </Text>
+                </>
+              ) : (
                 <>
                   <Text style={styles.ctaText}>
                     {paperMode ? '' : 'LIVE · '}Place {toPlace.length} limit order{toPlace.length === 1 ? '' : 's'}
@@ -246,10 +369,12 @@ export function LimitSellSheet({
                 </>
               )}
             </TouchableOpacity>
-            <Text style={[styles.fine, { color: colors.textTertiary }]}>
-              Resting DAY limit orders — they wait for your price. No 10-second fallback, no surprise
-              market fills. Cancel any time. A stop-loss still sells the whole position, cancelling these first.
-            </Text>
+            {mode === 'limit' && (
+              <Text style={[styles.fine, { color: colors.textTertiary }]}>
+                Resting DAY limit orders — they wait for your price. No 10-second fallback, no surprise
+                market fills. Cancel any time. A stop-loss still sells the whole position, cancelling these first.
+              </Text>
+            )}
           </ScrollView>
         </Pressable>
       </Pressable>
@@ -279,14 +404,22 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 14 },
   title: { fontSize: 18, fontWeight: '700' },
   sub: { fontSize: 12, marginTop: 2 },
-  quoteRow: { flexDirection: 'row', borderWidth: 1, borderRadius: 12, paddingVertical: 10 },
-  quoteLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8 },
-  quoteValue: { fontSize: 16, fontWeight: '800', marginTop: 2 },
+  quoteRow: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 12, paddingVertical: 10 },
+  quoteSide: { flex: 1, alignItems: 'center' },
+  quoteMid: { flex: 1.3, alignItems: 'center' },
+  quoteLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
+  quoteSideValue: { fontSize: 14, fontWeight: '700', marginTop: 2 },
+  quoteMidValue: { fontSize: 22, fontWeight: '800', marginTop: 1 },
+  seg: { flexDirection: 'row', borderWidth: 1, borderRadius: 10, overflow: 'hidden', marginTop: 14 },
+  segItem: { flex: 1, alignItems: 'center', paddingVertical: 9 },
+  segText: { fontSize: 14, fontWeight: '700' },
   label: { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 },
   rung: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 6 },
   stepRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 18 },
   stepBtn: { width: 44, height: 44, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  stepValue: { fontSize: 26, fontWeight: '800', minWidth: 48, textAlign: 'center' },
+  stepValue: { fontSize: 26, fontWeight: '800', textAlign: 'center' },
+  allTag: { fontSize: 10, fontWeight: '800', letterSpacing: 1, marginTop: -2 },
+  hint: { fontSize: 12, lineHeight: 17, marginTop: 12, textAlign: 'center' },
   priceBox: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, minWidth: 120 },
   priceInput: { fontSize: 22, fontWeight: '800', paddingVertical: 8, marginLeft: 4, minWidth: 80 },
   chips: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginTop: 10 },
