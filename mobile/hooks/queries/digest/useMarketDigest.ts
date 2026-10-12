@@ -37,3 +37,41 @@ export function useMarketDigest(date: string | null) {
     retry: 1,
   });
 }
+
+function etTodayISO(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+}
+
+/** "MORNING BRIEF" today, "YESTERDAY'S BRIEF", else "BRIEF · OCT 10". */
+export function briefLabel(date: string | null): string {
+  if (!date) return 'MORNING BRIEF';
+  const today = etTodayISO();
+  if (date === today) return 'MORNING BRIEF';
+  const [y, m, d] = today.split('-').map(Number);
+  const yesterday = new Date(Date.UTC(y, m - 1, d) - 86_400_000).toISOString().slice(0, 10);
+  if (date === yesterday) return "YESTERDAY'S BRIEF";
+  const [, mm, dd] = date.split('-').map(Number);
+  const mon = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'][mm - 1];
+  return `BRIEF · ${mon} ${dd}`;
+}
+
+/**
+ * The most recent published brief — today's once it lands (8:00 AM ET),
+ * otherwise the last one (yesterday's, Friday's over a weekend). Never an
+ * empty "no brief yet" gap off-hours. `isToday` / `label` let the UI say
+ * which day it's showing.
+ */
+export function useLatestBrief() {
+  const list = useMarketDigestList(30);
+  const date = list.data?.data?.[0]?.digest_date ?? null;
+  const digest = useMarketDigest(date);
+  return {
+    digest: digest.data?.data ?? null,
+    date,
+    isToday: date === etTodayISO(),
+    label: briefLabel(date),
+    isLoading: list.isLoading || (!!date && digest.isLoading),
+    isError: list.isError || digest.isError,
+    refetch: () => { list.refetch(); if (date) digest.refetch(); },
+  };
+}

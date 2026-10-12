@@ -14,7 +14,6 @@ import * as Haptics from 'expo-haptics';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { DynamicChartsView, stepChartsTicker } from './views/DynamicChartsView';
 import { DynamicBriefView } from './views/DynamicBriefView';
-import { DynamicSignalsView } from './views/DynamicSignalsView';
 import { DynamicNewsView } from './views/DynamicNewsView';
 import { DynamicContractsView } from './views/DynamicContractsView';
 import { DynamicOpenContractsView } from './views/DynamicOpenContractsView';
@@ -42,7 +41,8 @@ import { useSoldTradeAlert } from './cards/useSoldTradeAlert';
  *   see ConfirmStackCard / SoldCard.
  */
 
-export const DYNAMIC_VIEWS = ['charts', 'account', 'brief', 'open', 'watched', 'news', 'signals'] as const;
+// 'signals' removed 2026-10-12 (deprecated).
+export const DYNAMIC_VIEWS = ['charts', 'account', 'brief', 'open', 'watched', 'news'] as const;
 export type DynamicViewKey = (typeof DYNAMIC_VIEWS)[number];
 
 export const EXPANDED_H = 380;
@@ -201,9 +201,6 @@ export function DynamicCard({
           break;
         case 'account':
           view = <DynamicAccountView />;
-          break;
-        case 'signals':
-          view = <DynamicSignalsView />;
           break;
         case 'news':
           view = <DynamicNewsView />;

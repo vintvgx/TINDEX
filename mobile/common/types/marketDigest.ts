@@ -188,6 +188,8 @@ export interface MuseBriefNewsItem {
   url: string;
   /** Tickers this story is relevant to, e.g. ["SPY", "NVDA"]. */
   tickers: string[];
+  /** Article thumbnail — only the live /market-news feed (Finnhub) has one. */
+  image?: string;
 }
 
 export interface MuseBriefEvent {

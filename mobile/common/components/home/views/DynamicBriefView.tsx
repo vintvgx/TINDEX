@@ -2,18 +2,13 @@ import React, { useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useMarketDigest } from '@/hooks/queries/digest/useMarketDigest';
+import { useLatestBrief } from '@/hooks/queries/digest/useMarketDigest';
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { isMuseBriefContent, type MuseBriefContent, type MuseBriefTicker } from '@/common/types/marketDigest';
 import { setupLevels, topDrivers, triggerDistancePct } from '@/common/components/digest/SetupChart';
 import { PickDetailSheet } from '@/common/components/digest/PickDetailSheet';
 
 type Colors = ReturnType<typeof useThemeColors>;
-
-function todayISO(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 /**
  * One play: ticker / direction / score / setup, live price vs the trigger,
@@ -141,15 +136,17 @@ function MarketStrip({ brief, vix, colors }: { brief: MuseBriefContent; vix: num
 }
 
 /**
- * Dynamic card "brief" view: today's Morning Brief at a glance — regime,
+ * Dynamic card "brief" view: the latest Morning Brief at a glance — today's
+ * once it lands, otherwise the last published one, labelled with its day
+ * (never an empty "no brief yet" gap off-hours / weekends) — regime,
  * top 4 TINDEX plays + top 4 Muse picks as compact brief-style rows.
  * Tapping a play opens its Pick Detail Sheet; "Open full" or a tap on the
  * background around the cards opens the full brief modal.
  */
 export function DynamicBriefView({ onOpenBrief }: { onOpenBrief: () => void }) {
   const colors = useThemeColors();
-  const { data, isLoading } = useMarketDigest(todayISO());
-  const content = data?.data?.content_json;
+  const { digest, label, isLoading, isError, refetch } = useLatestBrief();
+  const content = digest?.content_json;
   const brief = isMuseBriefContent(content) ? content : null;
   // Live prices off the app-wide /ws/prices socket — no extra connections.
   const tickers = brief ? [...brief.watchlist.slice(0, 4), ...brief.muse_picks.slice(0, 4)].map((t) => t.ticker) : [];
@@ -176,7 +173,7 @@ export function DynamicBriefView({ onOpenBrief }: { onOpenBrief: () => void }) {
       <Pressable onPress={onOpenBrief} style={{ flexGrow: 1, padding: 14, paddingBottom: 26 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Text style={[styles.mono, { fontSize: 10, letterSpacing: 2, color: colors.textTertiary }]}>
-          MORNING BRIEF
+          {label}
         </Text>
         <View style={{ flex: 1 }} />
         <TouchableOpacity onPress={onOpenBrief} hitSlop={8} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
@@ -188,11 +185,20 @@ export function DynamicBriefView({ onOpenBrief }: { onOpenBrief: () => void }) {
       </View>
 
       {isLoading ? (
-        <Text style={{ color: colors.textTertiary, fontSize: 13, marginTop: 16 }}>Loading brief…</Text>
+        // Quiet placeholder bars (first load only — React Query keeps the
+        // brief cached after that), not a "Loading brief…" message.
+        <View style={{ marginTop: 14, gap: 10 }}>
+          {[0.5, 0.9, 0.75, 0.85].map((w, i) => (
+            <View key={i} style={{ height: 12, width: `${w * 100}%`, borderRadius: 4, backgroundColor: colors.surfaceSecondary }} />
+          ))}
+        </View>
       ) : !brief ? (
-        <Text style={{ color: colors.textTertiary, fontSize: 13, marginTop: 16, lineHeight: 19 }}>
-          No brief published yet today — it lands at 8:00 AM ET.
-        </Text>
+        // Only when the list itself fails (or there's no brief on record at all).
+        <TouchableOpacity onPress={refetch} style={{ marginTop: 16 }}>
+          <Text style={{ color: colors.textTertiary, fontSize: 13, lineHeight: 19 }}>
+            {isError ? "Couldn't load the brief — tap to retry." : 'No brief on record yet.'}
+          </Text>
+        </TouchableOpacity>
       ) : (
         <>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>

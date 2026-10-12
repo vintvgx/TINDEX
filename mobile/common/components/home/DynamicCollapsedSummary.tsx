@@ -5,8 +5,8 @@ import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccount
 import { usePnlSummary } from '@/hooks/queries/strategy/usePnlSummary';
 import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
 import { useTrackedContracts } from '@/hooks/queries/track/useTrackedContracts';
-import { useSocialSignalContracts } from '@/hooks/queries/social/useSocialSignalContracts';
-import { useMarketDigest } from '@/hooks/queries/digest/useMarketDigest';
+import { useLatestBrief } from '@/hooks/queries/digest/useMarketDigest';
+import { useHeadlines } from './views/DynamicNewsView';
 import { isMuseBriefContent } from '@/common/types/marketDigest';
 import { accountAvailableFunds } from './views/DynamicAccountView';
 import type { DynamicViewKey, TickerInfo } from './DynamicCard';
@@ -18,11 +18,6 @@ import type { DynamicViewKey, TickerInfo } from './DynamicCard';
  */
 
 type Colors = ReturnType<typeof useThemeColors>;
-
-function todayISO(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 const money = (v: number) =>
   `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -97,8 +92,10 @@ function AccountStrip({ colors, step }: { colors: Colors; step: number }) {
 
 /** Up/down: the regime summary, then each watchlist play. */
 function BriefStrip({ colors, step }: { colors: Colors; step: number }) {
-  const { data } = useMarketDigest(todayISO());
-  const content = data?.data?.content_json;
+  // The latest brief — today's, else the last published one (labelled).
+  const { digest, isToday, label } = useLatestBrief();
+  const title = isToday ? 'BRIEF' : label;
+  const content = digest?.content_json;
   const brief = isMuseBriefContent(content) ? content : null;
   const regime = brief?.market.regime;
   const regimeColor = regime === 'risk-on' ? colors.success : regime === 'risk-off' ? colors.error : colors.warning;
@@ -109,8 +106,8 @@ function BriefStrip({ colors, step }: { colors: Colors; step: number }) {
     const top = plays[0];
     return (
       <Strip
-        title="BRIEF"
-        main={brief ? (regime ?? 'brief').toUpperCase() : 'No brief yet'}
+        title={title}
+        main={brief ? (regime ?? 'brief').toUpperCase() : '—'}
         sub={top ? `Top: ${top.ticker} ${top.direction}` : null}
         subColor={brief ? regimeColor : undefined}
         colors={colors}
@@ -122,7 +119,7 @@ function BriefStrip({ colors, step }: { colors: Colors; step: number }) {
   const p = plays[i - 1];
   return (
     <Strip
-      title="BRIEF"
+      title={title}
       main={`${p.ticker} ${p.direction}`}
       sub={p.trigger != null ? `trigger $${p.trigger.toFixed(2)}${p.target != null ? ` → $${p.target.toFixed(2)}` : ''}` : `score ${p.score}`}
       subColor={p.direction === 'CALL' ? colors.success : colors.error}
@@ -198,53 +195,19 @@ function WatchedStrip({ colors, step }: { colors: Colors; step: number }) {
 
 /** Up/down: each headline. */
 function NewsStrip({ colors, step }: { colors: Colors; step: number }) {
-  const { data } = useMarketDigest(todayISO());
-  const content = data?.data?.content_json;
-  const brief = isMuseBriefContent(content) ? content : null;
-  const news = brief?.news ?? [];
+  // Live headlines (brief news as the fallback) — same source as the view.
+  const { items: news } = useHeadlines();
   const i = pick(step, news.length);
   const item = news[i];
   return (
     <>
       <Text style={{ flex: 1, fontSize: 13, fontWeight: '600', color: colors.text }} numberOfLines={1}>
-        {item?.headline ?? 'No headlines yet'}
+        {item?.headline ?? 'No headlines right now'}
       </Text>
       <Text style={[styles.mono, { fontSize: 10, color: colors.textTertiary }]}>
         NEWS{news.length > 1 ? ` ${i + 1}/${news.length}` : ''}
       </Text>
     </>
-  );
-}
-
-/** Up/down: the count, then each live signal. */
-function SignalsStrip({ colors, step }: { colors: Colors; step: number }) {
-  const { data } = useSocialSignalContracts();
-  const tracking = (data ?? []).filter((c) => c.status === 'tracking');
-  const total = tracking.length ? 1 + tracking.length : 1;
-  const i = pick(step, total);
-  if (i === 0) {
-    const latest = tracking[0];
-    return (
-      <Strip
-        title="SIGNALS"
-        main={`${tracking.length} live`}
-        sub={latest ? `${latest.ticker} ${latest.option_type} ${latest.strike}` : null}
-        colors={colors}
-        pos={i}
-        total={total}
-      />
-    );
-  }
-  const c = tracking[i - 1];
-  return (
-    <Strip
-      title="SIGNALS"
-      main={`${c.ticker} ${c.option_type} ${c.strike}`}
-      sub={null}
-      colors={colors}
-      pos={i}
-      total={total}
-    />
   );
 }
 
@@ -264,7 +227,6 @@ export function DynamicCollapsedSummary({ view, tickerInfo, step = 0 }: {
     case 'open': return <OpenStrip colors={colors} step={step} />;
     case 'watched': return <WatchedStrip colors={colors} step={step} />;
     case 'news': return <NewsStrip colors={colors} step={step} />;
-    case 'signals': return <SignalsStrip colors={colors} step={step} />;
   }
 }
 
