@@ -21,7 +21,9 @@ export function useLiveEquity(mode: 'live' | 'paper') {
   // Dev simulated positions never touch the real account's equity.
   const filteredPositions = useMemo(() => allPositions.filter((p) => !isSimId(p.strategy_id)), [allPositions]);
 
-  const { data: restPositions } = useAlpacaPositionValues(mode, { enabled: filteredPositions.length > 0 });
+  // Share the 'both' query with useAccountValueDisplay (same queryKey) so
+  // React Query dedupes to ONE /accounts/positions poll instead of two.
+  const { data: restPositions } = useAlpacaPositionValues('both', { enabled: filteredPositions.length > 0 });
   const restMarketValueBySymbol = useMemo(() => {
     const side = mode === 'live' ? restPositions?.live : restPositions?.paper;
     const map: Record<string, number> = {};
