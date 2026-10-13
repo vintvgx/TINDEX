@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, AppState, useWindowDimensions } from 'react-native';
 import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useSparkQuery } from '@/hooks/queries/ticker/useSparkQuery';
+import { useIsFocused } from '@react-navigation/native';
+import { useSparkQuery, SPARK_FRESH_MS } from '@/hooks/queries/ticker/useSparkQuery';
+import { useMarketStream } from '@/hooks/useMarketStream';
+import { isMarketHours, isOptionsSessionOpen } from '@/lib/marketHours';
 import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
 import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
 import { useMorningBrief } from '@/hooks/queries/brief/useMorningBrief';
@@ -32,10 +35,50 @@ import { isSimId } from '@/lib/devSim/simPositions';
  * Order: open positions (live, then paper) → today's morning-brief plays →
  * tickers with a watched zone → the rest of the followed list. Each ticker
  * appears once, at its highest tier.
+ *
+ * Freshness: only the chart you're looking at stays live — it refetches as
+ * you land on it (if its bars are >15s old), polls every 60s, and its last
+ * point follows the live price stream during the session. Neighbor pages
+ * load once so a swipe lands on a drawn chart. Nothing polls while the
+ * charts page isn't the card's current view, Home isn't focused, or the app
+ * is in the background. Out-of-date bars (the backend's stale copy, or a
+ * catch-up on bars older than a missed poll) dim under an "Updating" spinner.
  */
 
 const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
 const COUNTER_VISIBLE_MS = 8000;
+/** Bars older than this (a missed poll) count as out of date while they're
+ *  being re-fetched — a routine 60s poll of fresh bars never shows the
+ *  spinner. */
+const OUTDATED_MS = 90_000;
+const INTERVAL_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, wk: 7 * 86_400_000, mo: 31 * 86_400_000 };
+
+function intervalMs(interval: string | undefined): number | null {
+  const m = interval?.match(/^(\d+)(m|h|d|wk|mo)$/);
+  return m ? Number(m[1]) * INTERVAL_MS[m[2]] : null;
+}
+
+/** The live price as the line's last point: it updates the forming bar, or
+ *  extends the line to "now" once that bar's window has passed. */
+function withLiveTail(dates: string[], prices: number[], live: number | undefined, interval: string | undefined) {
+  if (live == null || !(live > 0) || prices.length === 0) return { dates, prices };
+  const span = intervalMs(interval);
+  const lastStart = new Date(dates[dates.length - 1]).getTime();
+  const now = Date.now();
+  if (span != null && now < lastStart + span) {
+    return { dates, prices: [...prices.slice(0, -1), live] };
+  }
+  return { dates: [...dates, new Date(now).toISOString()], prices: [...prices, live] };
+}
+
+function useAppActive(): boolean {
+  const [active, setActive] = useState(AppState.currentState === 'active');
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => setActive(s === 'active'));
+    return () => sub.remove();
+  }, []);
+  return active;
+}
 /** Last ticker shown — survives this page unmounting (see activeTicker). */
 let lastActiveTicker: string | null = null;
 
@@ -46,14 +89,32 @@ export function stepChartsTicker(dir: 1 | -1): void {
   stepListener?.(dir);
 }
 
-function TickerPage({ ticker, height, width, period, interval, onStats }: {
+function TickerPage({ ticker, height, width, period, interval, active, livePrice, onStats }: {
   ticker: string; height: number; width: number; period: PricePeriod; interval: string;
+  /** The chart you're looking at — the only one that polls. */
+  active: boolean;
+  /** Streamed price for this ticker (active page, regular session only). */
+  livePrice?: number;
   onStats: (ticker: string, price: number | null, changePct: number | null) => void;
 }) {
   const colors = useThemeColors();
-  const { data } = useSparkQuery(ticker, period, 60_000);
-  const prices = data?.data?.closes ?? [];
-  const dates = data?.data?.dates ?? [];
+  const { data, isLoading, isFetching, dataUpdatedAt, refetch } = useSparkQuery(ticker, period, { interval, active });
+  const stale = !!data?.stale;
+
+  // Landing on a chart (swipe, or the card coming back into view): catch up
+  // if its bars are older than SPARK_FRESH_MS. A first load fetches anyway.
+  useEffect(() => {
+    if (active && dataUpdatedAt > 0 && Date.now() - dataUpdatedAt > SPARK_FRESH_MS) refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
+  // A stale copy may be a different session's bars — no live tail on it.
+  const series = useMemo(
+    () => withLiveTail(data?.data?.dates ?? [], data?.data?.closes ?? [], stale ? undefined : livePrice, data?.data?.interval),
+    [data, stale, livePrice],
+  );
+  const { prices, dates } = series;
+  const refreshing = active && (stale || (isFetching && isMarketHours() && Date.now() - dataUpdatedAt > OUTDATED_MS));
 
   const price = prices.length > 0 ? prices[prices.length - 1] : null;
   const changePct = prices.length > 1 ? ((prices[prices.length - 1] / prices[0]) - 1) * 100 : null;
@@ -82,25 +143,26 @@ function TickerPage({ ticker, height, width, period, interval, onStats }: {
         {period} · {INTERVAL_LABEL[interval] ?? interval}
       </Text>
       <View style={{ flex: 1, justifyContent: 'center', marginTop: 8 }}>
-        {prices.length > 0 ? (
-          <LinePriceChart
-            dates={dates}
-            prices={prices}
-            period={period}
-            height={height - 96}
-            positive={up}
-          />
-        ) : (
-          <Text style={{ color: colors.textTertiary, fontSize: 13, textAlign: 'center' }}>Loading chart…</Text>
-        )}
+        <LinePriceChart
+          dates={dates}
+          prices={prices}
+          period={period}
+          height={height - 96}
+          isLoading={isLoading}
+          refreshing={refreshing}
+          positive={up}
+        />
       </View>
     </View>
   );
 }
 
-export function DynamicChartsView({ onActiveTicker, height }: {
+export function DynamicChartsView({ onActiveTicker, height, visible = true }: {
   onActiveTicker: (info: TickerInfo) => void;
   height: number;
+  /** The card's current view (expanded or collapsed) — off-screen as a
+   *  pager neighbor, nothing polls or streams. */
+  visible?: boolean;
 }) {
   const colors = useThemeColors();
   const { width } = useWindowDimensions();
@@ -149,6 +211,14 @@ export function DynamicChartsView({ onActiveTicker, height }: {
   const n = tickers.length;
   const realIndex = Math.max(0, activeTicker ? tickers.indexOf(activeTicker) : 0);
   const current = tickers[realIndex] ?? '';
+  const focused = useIsFocused();
+  const appActive = useAppActive();
+  const live = visible && focused && appActive;
+  const { livePrices, connected } = useMarketStream(current ? [current] : [], {
+    enabled: live && !!current && isOptionsSessionOpen(),
+  });
+  const livePrice = live && connected && isOptionsSessionOpen() ? livePrices[current] : undefined;
+
   const [stats, setStats] = useState<Record<string, { price: number | null; changePct: number | null }>>({});
 
   const onStats = useCallback((ticker: string, price: number | null, changePct: number | null) => {
@@ -226,8 +296,19 @@ export function DynamicChartsView({ onActiveTicker, height }: {
         nestedScrollEnabled
         style={{ height: pageH }}
         renderItem={({ item }) => (
-          <TickerPage ticker={item} height={pageH} width={pageWidth} period={period} interval={interval} onStats={onStats} />
+          <TickerPage
+            ticker={item}
+            height={pageH}
+            width={pageWidth}
+            period={period}
+            interval={interval}
+            active={live && item === current}
+            livePrice={item === current ? livePrice : undefined}
+            onStats={onStats}
+          />
         )}
+        // Re-render the mounted pages when the active ticker / live price moves.
+        extraData={`${current}|${live}|${livePrice ?? ''}`}
         initialScrollIndex={loop ? n + realIndex : realIndex}
         onMomentumScrollEnd={onMomentumEnd}
         getItemLayout={(_, index) => ({ length: pageH, offset: pageH * index, index })}

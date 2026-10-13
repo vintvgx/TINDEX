@@ -95,3 +95,39 @@ def test_warm_history_fills_cache(yahoo):
     assert n == 2 and yahoo["calls"] == 2
     ys.get_historical_prices("SPY", "1Y")
     assert yahoo["calls"] == 2
+
+
+# ── Home chart deck spark (closes-only) ──────────────────────────────────────
+# The spark used to drop the history cache's `stale` flag and keep the expired
+# copy for another 45s, so the home charts showed old bars for up to a minute.
+
+def test_spark_passes_stale_through_and_doesnt_cache_it(yahoo):
+    ys._SPARK_CACHE.clear()
+    ys.get_historical_prices("AAPL", "1Y")
+    _age_cache(600)
+    yahoo["next"] = _frame(120.0)
+
+    first = ys.get_spark_prices("AAPL", "1Y")
+    assert first["stale"] is True and first["closes"][-1] == 100.0
+    _wait_refreshes()
+
+    # The quick re-ask gets the refreshed bars, not a cached stale copy.
+    second = ys.get_spark_prices("AAPL", "1Y")
+    assert second["stale"] is False and second["closes"][-1] == 120.0
+    ys._SPARK_CACHE.clear()
+
+
+def test_spark_caches_fresh_copies(yahoo):
+    ys._SPARK_CACHE.clear()
+    ys.get_spark_prices("AAPL", "1Y")
+    ys.get_spark_prices("AAPL", "1Y")
+    assert yahoo["calls"] == 1
+    ys._SPARK_CACHE.clear()
+
+
+def test_spark_keys_on_interval(yahoo):
+    ys._SPARK_CACHE.clear()
+    a = ys.get_spark_prices("AAPL", "1Y", "1d")
+    b = ys.get_spark_prices("AAPL", "1Y", "1wk")
+    assert (a["interval"], b["interval"]) == ("1d", "1wk")
+    ys._SPARK_CACHE.clear()

@@ -289,26 +289,32 @@ def _fetch_historical_prices(ticker: str, period_key: str, interval: str,
 
 # ── Sparkline fetch (home chart deck) ─────────────────────────────────────
 # The home deck's charts are plain price lines — no candles, no technicals,
-# no levels. This is a deliberately separate, minimal call from the chart
-# history endpoint: dates + closes only, cached ~45s per ticker+period so a
-# deck of tickers polling every minute doesn't hammer yfinance.
+# no levels. This is a deliberately separate, minimal response from the chart
+# history endpoint: dates + closes only, built from the shared history cache.
+# Only fresh copies are kept here: when the history cache answers with an
+# expired copy (stale-while-revalidate) the spark passes `stale` through and
+# isn't cached, so the app's quick re-ask gets the refreshed bars instead of
+# the same old copy for another 45s.
 _SPARK_CACHE: dict = {}
 _SPARK_TTL_S = 45
 
 
-def get_spark_prices(ticker: str, period_key: str) -> dict:
+def get_spark_prices(ticker: str, period_key: str, interval: str | None = None) -> dict:
     """Minimal closes-only series for lightweight sparkline views."""
-    cache_key = f"{ticker}:{period_key}"
+    cache_key = f"{ticker}:{period_key}:{interval or ''}"
     now = time.time()
     hit = _SPARK_CACHE.get(cache_key)
     if hit and now - hit[0] < _SPARK_TTL_S:
         return hit[1]
 
-    full = get_historical_prices(ticker, period_key)
-    dates = full.get("dates", []) if isinstance(full, dict) else []
-    closes = full.get("prices", []) if isinstance(full, dict) else []
-    result = {"dates": dates, "closes": closes, "interval": full.get("interval") if isinstance(full, dict) else None}
-    _SPARK_CACHE[cache_key] = (now, result)
+    full = get_historical_prices(ticker, period_key, interval)
+    if not isinstance(full, dict):
+        full = {}
+    stale = bool(full.get("stale"))
+    result = {"dates": full.get("dates", []), "closes": full.get("prices", []),
+              "interval": full.get("interval"), "stale": stale}
+    if not stale:
+        _SPARK_CACHE[cache_key] = (now, result)
     return result
 
 
