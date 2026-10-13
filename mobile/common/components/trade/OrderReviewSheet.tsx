@@ -1,13 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, Animated, Pressable, ActivityIndicator, Easing, ScrollView, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import type { EntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
-import { verdictColor, verdictLabel } from './EntryTechnicalsPanel';
 import { accountModeColor } from './AccountModeBanner';
-import { ExitPlanLadder } from '@/common/components/trade/ExitPlanLadder';
 
 export interface ReviewOrder {
   ticker: string;
@@ -35,6 +33,11 @@ function formatExpiry(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
   if (!y || !m || !d) return iso;
   return `${MONTHS[m - 1]} ${d}, ${y}`;
+}
+
+function formatExpiryShort(iso: string): string {
+  const [, m, d] = iso.slice(0, 10).split('-').map(Number);
+  return m && d ? `${MONTHS[m - 1]} ${d}` : iso;
 }
 
 const money = (v: number) => `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -69,7 +72,7 @@ interface Props {
    *  (same effect as confirming the BlindEntryModal that appears
    *  automatically on a stream_unavailable result, just opted into before
    *  submitting instead of after a timeout) — shown as a secondary option
-   *  below the main hold button, confirmed with its own Alert since it's
+   *  below the Enter button, confirmed with its own Alert since it's
    *  a real "trust the last-polled price, not a live tick" decision.
    *  Omitted entirely when the parent doesn't support it (e.g. not a 0DTE
    *  contract, where the backend never does the stream check anyway). */
@@ -84,8 +87,10 @@ interface Props {
   colors: any;
 }
 
-const HOLD_MS = 1200;        // how long the button must be held to submit
-const SUCCESS_HOLD_MS = 1500; // how long the success state shows before closing
+// Two-tap enter: the first tap arms ("Confirm"), the second submits. An
+// armed button falls back to "Enter" after this long with no second tap.
+const ARM_TIMEOUT_MS = 4000;
+const SUCCESS_HOLD_MS = 1700; // how long the success state shows before closing (mock: 1.7s)
 // How long "Submitting…" shows before swapping to "Checking live price
 // feed…" — shorter than the backend's 8s stream-verify window so the
 // message changes while the user is still watching, not right as it's
@@ -97,21 +102,21 @@ export function OrderReviewSheet({
   onEnterBlind, successMessage, onSuccessDone, successHint, colors,
 }: Props) {
   const slide = useRef(new Animated.Value(1)).current;  // 1 = off-screen, 0 = shown
-  const hold = useRef(new Animated.Value(0)).current;   // 0 → 1 while held
-  const holdAnim = useRef<Animated.CompositeAnimation | null>(null);
-  // Current fill level, so a re-press mid-rewind only takes the remaining time.
-  const holdLevel = useRef(0);
-  useEffect(() => {
-    const id = hold.addListener(({ value }) => { holdLevel.current = value; });
-    return () => hold.removeListener(id);
-  }, []);
   const fired = useRef(false);
-  const [holding, setHolding] = useState(false);
+  // First tap arms the button ("Confirm"); the second tap submits.
+  const [armed, setArmed] = useState(false);
+  const pop = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!armed) return;
+    pop.setValue(0.94);
+    Animated.spring(pop, { toValue: 1, friction: 4, tension: 160, useNativeDriver: true }).start();
+    const id = setTimeout(() => setArmed(false), ARM_TIMEOUT_MS);
+    return () => clearTimeout(id);
+  }, [armed, pop]);
   const successScale = useRef(new Animated.Value(0)).current;
   const successOpacity = useRef(new Animated.Value(0)).current;
   const muted = colors.textSecondary ?? colors.tabBarInactive;
   const modeColor = accountModeColor(paperMode, colors);
-  const { summary, maxLoss, breakeven, maxProfit } = useMemo(() => buildOrderSummary(order), [order]);
 
   useEffect(() => {
     Animated.timing(slide, {
@@ -119,18 +124,18 @@ export function OrderReviewSheet({
       easing: visible ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic), useNativeDriver: true,
     }).start();
     if (visible) {
-      hold.setValue(0);
+      setArmed(false);
       successScale.setValue(0);
       successOpacity.setValue(0);
       fired.current = false;
     }
   }, [visible]);
 
-  // An order that failed (or went to Blind Entry) resets for a fresh hold.
+  // An order that failed (or went to Blind Entry) resets to a fresh "Enter".
   useEffect(() => {
     if (!isSubmitting && fired.current && !successMessage) {
       fired.current = false;
-      Animated.timing(hold, { toValue: 0, duration: 200, useNativeDriver: false }).start();
+      setArmed(false);
     }
   }, [isSubmitting]);
 
@@ -157,36 +162,13 @@ export function OrderReviewSheet({
   useEffect(() => {
     if (!successMessage) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    successOpacity.setValue(1);  // replaces "Entering…" in place — no fade-from-blank
     Animated.parallel([
-      Animated.timing(successOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
       Animated.spring(successScale, { toValue: 1, friction: 5, tension: 90, useNativeDriver: true }),
     ]).start();
     const id = setTimeout(onSuccessDone, SUCCESS_HOLD_MS);
     return () => clearTimeout(id);
   }, [successMessage]);
-
-  const startHold = () => {
-    if (fired.current || isSubmitting || successMessage) return;
-    setHolding(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    holdAnim.current = Animated.timing(hold, {
-      toValue: 1, duration: HOLD_MS * (1 - holdLevel.current), easing: Easing.linear, useNativeDriver: false,
-    });
-    holdAnim.current.start(({ finished }) => {
-      if (!finished) return;
-      fired.current = true;
-      setHolding(false);
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
-      onSubmit();
-    });
-  };
-
-  const cancelHold = () => {
-    setHolding(false);
-    if (fired.current) return;
-    holdAnim.current?.stop();
-    Animated.timing(hold, { toValue: 0, duration: 180, useNativeDriver: false }).start();
-  };
 
   const handleEnterBlind = () => {
     if (!onEnterBlind || isSubmitting || successMessage) return;
@@ -202,8 +184,49 @@ export function OrderReviewSheet({
     );
   };
 
-  const vDecision = check?.verdict.decision;
-  const vColor = verdictColor(vDecision, colors);
+  // Confirm rows (entry-flow mock, stage 3).
+  const cp = order.optionType === 'CALL' ? 'C' : 'P';
+  const strikeTxt = order.strike.toFixed(2);
+  const maxCost = order.premium * order.qty * 100;
+  const ladderTxt = order.profileLabel.startsWith('Ladder · ')
+    ? order.profileLabel.slice('Ladder · '.length)
+    : [order.profileLabel,
+       ...(order.tp1Price != null ? [`TP ${money(order.tp1Price)}`] : []),
+       ...(order.tp2Price != null ? [money(order.tp2Price)] : [])].join(' · ');
+  const stopTxt = order.stopPrice == null
+    ? 'Off'
+    : `−${Math.round((1 - order.stopPrice / order.premium) * 100)}% · ${money(order.stopPrice)}` +
+      (order.stopLabel && order.stopLabel !== 'Hard stop' && order.stopLabel !== 'Off' ? ` · ${order.stopLabel}` : '');
+  // Anything the trader should still see at the last gate — an overridden
+  // DON'T ENTER plus the parent's warnings (no stop, other live positions).
+  const notes = [
+    ...(check?.verdict.decision === 'DONT_ENTER' && overridden ? ["Technicals say DON'T ENTER — overridden."] : []),
+    ...warnings,
+  ];
+  const green = colors.success;
+
+  // Two taps, paper and LIVE alike: "Enter" → "Confirm" (button changes
+  // color) → submit. Kareem 2026-10-13, replacing press-and-hold.
+  const tapEnter = () => {
+    if (fired.current || isSubmitting || successMessage) return;
+    if (!armed) {
+      setArmed(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      return;
+    }
+    fired.current = true;
+    setArmed(false);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+    onSubmit();
+  };
+  // Enter = solid green; armed Confirm = solid amber (paper) / red (LIVE —
+  // real money), white text, so the two states can't be mistaken.
+  const confirmBg = paperMode ? '#F59E0B' : colors.error;
+  const btnBg = armed ? confirmBg : green;
+  const btnFg = armed ? '#fff' : '#06240f';
+  const btnLabel = armed
+    ? `${paperMode ? 'Confirm' : 'Confirm LIVE'} · ${money(maxCost)}`
+    : `${paperMode ? 'Enter' : 'Enter LIVE'} · ${money(maxCost)}`;
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents={visible ? 'auto' : 'none'}>
@@ -213,98 +236,76 @@ export function OrderReviewSheet({
 
       <Animated.View style={[
         s.sheet,
-        { backgroundColor: colors.background, borderColor: modeColor,
+        { backgroundColor: colors.card ?? colors.background, borderColor: colors.border,
           transform: [{ translateY: slide.interpolate({ inputRange: [0, 1], outputRange: [0, 800] }) }] },
       ]}>
-        <View style={[s.modeStrip, { backgroundColor: modeColor }]}>
-          <Text style={s.modeStripText}>{paperMode ? 'PAPER ORDER · simulated' : 'LIVE ORDER · real money'}</Text>
-        </View>
+        <View style={[s.grabber, { backgroundColor: (colors.textTertiary ?? muted) + '66' }]} />
+        <ScrollView contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 6, paddingBottom: 8 }} bounces={false}>
+          <Text style={[s.title, { color: colors.text }]}>Confirm order</Text>
+          <Text style={[s.sub, { color: muted }]}>Last check before it goes out.</Text>
 
-        <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 8 }} bounces={false}>
-          <View style={s.titleRow}>
-            <Text style={[s.title, { color: colors.text }]}>Review order</Text>
-            <Pressable onPress={onCancel} disabled={isSubmitting} hitSlop={10}>
-              <Text style={[s.edit, { color: muted }]}>Edit</Text>
-            </Pressable>
-          </View>
-          <Text style={[s.contract, { color: muted }]}>
-            {order.ticker} ${order.strike} {order.optionType} · {formatExpiry(order.expiration)} · {order.qty} × {money(order.premium)}
-          </Text>
+          <Row k="Contract" v={`${order.ticker} $${strikeTxt}${cp} · ${formatExpiryShort(order.expiration)}`} colors={colors} />
+          <Row k="Side / Qty" v={`Buy ${order.qty} ${order.optionType}`} colors={colors} />
+          <Row k="Est. premium" v={money(order.premium)} colors={colors} />
+          <Row k="Max cost" v={money(maxCost)} colors={colors} />
+          <Row k="Ladder" v={ladderTxt} colors={colors} />
+          <Row k="Stop" v={stopTxt} color={order.stopPrice == null ? muted : colors.error} colors={colors} />
+          <Row k="Account" v={paperMode ? 'PAPER' : 'LIVE'} color={modeColor} colors={colors} last />
 
-          <Text style={[s.summary, { color: colors.text }]}>{summary}</Text>
-
-          <View style={[s.stats, { borderColor: colors.border }]}>
-            <Stat label="Max loss" value={money(maxLoss)} color={colors.error} colors={colors} />
-            <Stat label="Breakeven" value={money(breakeven)} colors={colors} />
-            <Stat label="Max profit" value={maxProfit == null ? 'Unlimited' : money(maxProfit)} color={colors.success} colors={colors} />
-          </View>
-
-          <Text style={[s.section, { color: muted }]}>EXIT PLAN · {order.profileLabel}</Text>
-          <ExitPlanLadder
-            colors={colors}
-            plan={{
-              premium: order.premium, qty: order.qty,
-              stopPrice: order.stopPrice, stopLabel: order.stopLabel,
-              floorPrice: order.floorPrice ?? null, floorIsDefault: order.floorIsDefault,
-              beGraceSeconds: order.beGraceSeconds ?? 0,
-              tp1Price: order.tp1Price, tp2Price: order.tp2Price,
-            }}
-          />
-          <Text style={[s.fineprint, { color: muted }]}>Levels are estimated from the {money(order.premium)} ask; final levels are set from your fill price.</Text>
-
-          <View style={[s.verdictRecap, { backgroundColor: vColor + '1A', borderColor: vColor + '55' }]}>
-            <Text style={[s.verdictRecapText, { color: vColor }]} numberOfLines={3}>
-              {check
-                ? `${verdictLabel(check.verdict.decision)}${overridden && vDecision === 'DONT_ENTER' ? ' (overridden)' : ''} — ${check.verdict.reason.replace(/^(ENTER|WAIT|DON'T ENTER) — /, '')}`
-                : 'No technicals verdict for this entry.'}
-            </Text>
-          </View>
-
-          {warnings.map(w => (
+          {notes.map(w => (
             <View key={w} style={s.warningRow}>
-              <Ionicons name="warning" size={14} color={colors.warning} />
+              <Ionicons name="warning" size={13} color={colors.warning} />
               <Text style={[s.warningText, { color: colors.warning }]}>{w}</Text>
             </View>
           ))}
         </ScrollView>
 
-        {/* Press-and-hold to submit */}
-        <View style={[s.holdWrap, { borderTopColor: colors.border }]}>
+        <View style={[s.ctaBar, { borderTopColor: colors.border }]}>
           <Pressable
-            onPressIn={startHold}
-            onPressOut={cancelHold}
+            onPress={tapEnter}
             disabled={isSubmitting || !!successMessage}
-            style={[s.holdBtn, { borderColor: modeColor, backgroundColor: modeColor + '22' }]}
+            accessibilityRole="button"
+            accessibilityLabel={btnLabel}
           >
-            <Animated.View
-              style={[s.holdFill, {
-                backgroundColor: modeColor,
-                width: hold.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),
-              }]}
-            />
-            {isSubmitting ? (
-              <View style={s.holdLabelRow}>
-                <ActivityIndicator color="#fff" />
-                <Text style={[s.holdText, { color: '#fff' }]}>{submitLabel}</Text>
-              </View>
-            ) : (
-              <View style={s.holdLabelRow}>
-                <Ionicons name="finger-print" size={20} color={holding ? '#fff' : modeColor} />
-                <Text style={[s.holdText, { color: holding ? '#fff' : modeColor }]}>
-                  {holding ? 'Keep holding…' : `Hold to ${paperMode ? 'submit paper order' : 'submit LIVE order'}`}
-                </Text>
-              </View>
+            {({ pressed }) => (
+              // Styled on an inner Animated.View (not Pressable's style
+              // callback) so the solid fill, ring and shadow always render.
+              <Animated.View
+                style={[
+                  s.enterBtn,
+                  {
+                    backgroundColor: isSubmitting ? green : btnBg,
+                    borderColor: armed && !isSubmitting ? '#ffffff55' : 'transparent',
+                    shadowColor: isSubmitting ? green : btnBg,
+                    opacity: pressed ? 0.88 : 1,
+                    transform: [{ scale: pressed ? 0.98 : 1 }, { scale: pop }],
+                  },
+                ]}
+              >
+                {isSubmitting ? (
+                  <View style={s.btnRow}>
+                    <ActivityIndicator color="#06240f" />
+                    <Text style={[s.enterText, { color: '#06240f' }]}>{submitLabel}</Text>
+                  </View>
+                ) : (
+                  <View style={s.btnRow}>
+                    <Ionicons
+                      name={armed ? 'checkmark-circle' : 'arrow-forward-circle'}
+                      size={21}
+                      color={btnFg}
+                    />
+                    <Text style={[s.enterText, { color: btnFg }]}>{btnLabel}</Text>
+                  </View>
+                )}
+              </Animated.View>
             )}
           </Pressable>
-          <Text style={[s.holdHint, { color: muted }]}>Release early to cancel</Text>
+          <Pressable onPress={onCancel} disabled={isSubmitting} hitSlop={6} style={s.backBtn}>
+            <Text style={[s.backText, { color: muted }]}>Back</Text>
+          </Pressable>
 
-          {/* Opt into skipping the live-tick check upfront instead of
-              waiting out the 8s backend check and getting the same choice
-              as a fallback (BlindEntryModal) — see onEnterBlind's doc
-              comment. Hidden once submitting/succeeded, same as the main
-              button; the parent only passes this at all for a 0DTE
-              contract (where the backend's stream check — and therefore
-              this bypass — actually means something). */}
+          {/* Opt into skipping the live-tick check upfront — see onEnterBlind's
+              doc comment. Only passed for a 0DTE contract. */}
           {onEnterBlind && !isSubmitting && !successMessage && (
             <Pressable onPress={handleEnterBlind} hitSlop={8} style={s.blindLink}>
               <Ionicons name="flash-outline" size={13} color={muted} />
@@ -313,21 +314,41 @@ export function OrderReviewSheet({
           )}
         </View>
 
-        {/* Success confirmation */}
+        {/* Entering → Entered (stage 4). The full-sheet state takes over the
+            moment Confirm is tapped: "Entering…" with a spinner while the
+            order is in flight (a 0DTE / after-hours submit can spend ~8s on
+            the live-price check), then the check + "Entered" on success and
+            on to Home. On failure it drops away, back to Confirm (error
+            toast from the parent). */}
+        {isSubmitting && !successMessage && (
+          <View style={[StyleSheet.absoluteFill, s.successWrap, { backgroundColor: colors.background }]}>
+            <View style={[s.successRing, { backgroundColor: green + '10', borderColor: green + '66' }]}>
+              <ActivityIndicator size="large" color={green} />
+            </View>
+            <Text style={[s.successTitle, { color: colors.text }]}>Entering…</Text>
+            <Text style={[s.successLine, { color: colors.textSecondary ?? muted }]}>
+              {order.ticker} ${strikeTxt}{cp} ×{order.qty} @ {money(order.premium)}
+            </Text>
+            <Text style={[s.successMode, { color: modeColor }]}>{paperMode ? 'PAPER' : 'LIVE'}</Text>
+            <Text style={[s.successHint, { color: muted }]}>{submitLabel}</Text>
+            <ProgressSweep color={green} track={colors.border} />
+          </View>
+        )}
         {successMessage && (
           <Animated.View style={[StyleSheet.absoluteFill, s.successWrap, { backgroundColor: colors.background, opacity: successOpacity }]}>
-            <Animated.View style={[s.successCircle, { backgroundColor: colors.success, transform: [{ scale: successScale }] }]}>
-              <Ionicons name="checkmark" size={56} color="#fff" />
+            <Animated.View style={[s.successRing, { backgroundColor: green + '18', borderColor: green, transform: [{ scale: successScale }] }]}>
+              <Ionicons name="checkmark" size={46} color={green} />
             </Animated.View>
-            <Text style={[s.successTitle, { color: colors.text }]}>
-              {paperMode ? 'Paper order placed' : 'Order placed'}
+            <Text style={[s.successTitle, { color: colors.text }]}>Entered</Text>
+            <Text style={[s.successLine, { color: colors.textSecondary ?? muted }]}>
+              {order.ticker} ${strikeTxt}{cp} ×{order.qty} @ {money(order.premium)}
             </Text>
-            <Text style={[s.successSub, { color: muted }]}>
-              {order.qty} × {order.ticker} ${order.strike} {order.optionType}
-            </Text>
-            <Text style={[s.successSub, { color: muted }]} numberOfLines={2}>{successMessage}</Text>
+            <Text style={[s.successMode, { color: modeColor }]}>{paperMode ? 'PAPER' : 'LIVE'}</Text>
             {successHint ? (
-              <Text style={[s.successSub, { color: muted, marginTop: 22, fontSize: 13 }]}>{successHint}</Text>
+              <>
+                <Text style={[s.successHint, { color: muted }]}>{successHint}</Text>
+                <ProgressSweep color={green} track={colors.border} />
+              </>
             ) : null}
           </Animated.View>
         )}
@@ -336,55 +357,66 @@ export function OrderReviewSheet({
   );
 }
 
-function Stat({ label, value, color, colors }: { label: string; value: string; color?: string; colors: any }) {
+function Row({ k, v, color, colors, last }: { k: string; v: string; color?: string; colors: any; last?: boolean }) {
   return (
-    <View style={s.stat}>
-      <Text style={[s.statLabel, { color: colors.textSecondary ?? colors.tabBarInactive }]}>{label}</Text>
-      <Text style={[s.statValue, { color: color ?? colors.text }]}>{value}</Text>
+    <View style={[s.row, { borderBottomColor: colors.border, borderBottomWidth: last ? 0 : StyleSheet.hairlineWidth }]}>
+      <Text style={[s.rowK, { color: colors.textSecondary ?? colors.tabBarInactive }]}>{k}</Text>
+      <Text style={[s.rowV, { color: color ?? colors.text }]} numberOfLines={1}>{v}</Text>
     </View>
   );
 }
 
+/** Indeterminate sliding bar under "Taking you to your position…". */
+function ProgressSweep({ color, track }: { color: string; track: string }) {
+  const x = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(Animated.timing(x, { toValue: 1, duration: 1100, easing: Easing.linear, useNativeDriver: true }));
+    loop.start();
+    return () => loop.stop();
+  }, [x]);
+  return (
+    <View style={[s.bar, { backgroundColor: track }]}>
+      <Animated.View
+        style={[s.barFill, { backgroundColor: color,
+          transform: [{ translateX: x.interpolate({ inputRange: [0, 1], outputRange: [-72, 180] }) }] }]}
+      />
+    </View>
+  );
+}
+
+
 const s = StyleSheet.create({
   backdrop:     { backgroundColor: '#000' },
-  sheet:        { position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '92%', borderTopLeftRadius: 20, borderTopRightRadius: 20, borderWidth: 2, borderBottomWidth: 0, overflow: 'hidden' },
-  modeStrip:    { paddingVertical: 6, alignItems: 'center' },
-  modeStripText:{ color: '#fff', fontSize: 11.5, fontWeight: '800', letterSpacing: 0.8 },
+  sheet:        { position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '92%', borderTopLeftRadius: 24, borderTopRightRadius: 24, borderWidth: 1, borderBottomWidth: 0, overflow: 'hidden' },
+  grabber:      { width: 40, height: 5, borderRadius: 3, alignSelf: 'center', marginTop: 8, marginBottom: 10 },
+  title:        { fontSize: 18, fontWeight: '800' },
+  sub:          { fontSize: 12.5, marginTop: 3, marginBottom: 10 },
 
-  titleRow:     { flexDirection: 'row', alignItems: 'center' },
-  title:        { fontSize: 20, fontWeight: '800' },
-  edit:         { marginLeft: 'auto', fontSize: 14, fontWeight: '600' },
-  contract:     { fontSize: 13, marginTop: 3 },
-  summary:      { fontSize: 15, lineHeight: 22, marginTop: 14 },
+  row:          { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 16, paddingVertical: 10 },
+  rowK:         { fontSize: 13.5 },
+  rowV:         { fontSize: 13.5, fontWeight: '700', fontVariant: ['tabular-nums'], flexShrink: 1, textAlign: 'right' },
 
-  stats:        { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, marginTop: 16, paddingVertical: 12 },
-  stat:         { flex: 1 },
-  statLabel:    { fontSize: 11.5 },
-  statValue:    { fontSize: 15, fontWeight: '700', marginTop: 3 },
-
-  section:      { fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginTop: 18, marginBottom: 8 },
-  exitCard:     { borderRadius: 12, borderWidth: 1, overflow: 'hidden' },
-  exitLine:     { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10 },
-  exitLabel:    { fontSize: 13.5, fontWeight: '500' },
-  exitValue:    { fontSize: 13.5, fontWeight: '700', marginLeft: 'auto' },
-  fineprint:    { fontSize: 11, marginTop: 6 },
-
-  verdictRecap: { borderRadius: 10, borderWidth: 1, padding: 10, marginTop: 14 },
-  verdictRecapText: { fontSize: 12.5, fontWeight: '700', lineHeight: 17 },
-  warningRow:   { flexDirection: 'row', gap: 6, alignItems: 'flex-start', marginTop: 8 },
+  warningRow:   { flexDirection: 'row', gap: 6, alignItems: 'flex-start', marginTop: 10 },
   warningText:  { fontSize: 12.5, flex: 1, lineHeight: 17, fontWeight: '600' },
 
-  holdWrap:     { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 18, paddingTop: 14, paddingBottom: 30 },
-  holdBtn:      { height: 58, borderRadius: 14, borderWidth: 1.5, overflow: 'hidden', justifyContent: 'center' },
-  holdFill:     { position: 'absolute', left: 0, top: 0, bottom: 0 },
-  holdLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  holdText:     { fontSize: 15.5, fontWeight: '800' },
-  holdHint:     { fontSize: 11.5, textAlign: 'center', marginTop: 8 },
-  blindLink:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 10, paddingVertical: 4 },
+  ctaBar:       { borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: 18, paddingTop: 12, paddingBottom: 26 },
+  enterBtn:     {
+    height: 56, borderRadius: 16, borderWidth: 2, alignItems: 'center', justifyContent: 'center',
+    shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6,
+  },
+  btnRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  enterText:    { fontSize: 16.5, fontWeight: '800', letterSpacing: 0.3, fontVariant: ['tabular-nums'] },
+  backBtn:      { alignItems: 'center', paddingVertical: 10, marginTop: 2 },
+  backText:     { fontSize: 13.5, fontWeight: '700' },
+  blindLink:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 4 },
   blindLinkText: { fontSize: 11.5, fontWeight: '600', textDecorationLine: 'underline' },
 
-  successWrap:  { alignItems: 'center', justifyContent: 'center', padding: 24 },
-  successCircle:{ width: 104, height: 104, borderRadius: 52, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
-  successTitle: { fontSize: 22, fontWeight: '800' },
-  successSub:   { fontSize: 14, marginTop: 6, textAlign: 'center' },
+  successWrap:  { alignItems: 'center', justifyContent: 'center', padding: 32 },
+  successRing:  { width: 92, height: 92, borderRadius: 46, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  successTitle: { fontSize: 24, fontWeight: '800', marginTop: 20 },
+  successLine:  { fontSize: 15, marginTop: 8, fontVariant: ['tabular-nums'] },
+  successMode:  { fontSize: 11, fontWeight: '800', letterSpacing: 1, marginTop: 6 },
+  successHint:  { fontSize: 13, marginTop: 28 },
+  bar:          { width: 180, height: 4, borderRadius: 3, marginTop: 10, overflow: 'hidden' },
+  barFill:      { width: 72, height: 4, borderRadius: 3 },
 });

@@ -582,7 +582,7 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
     queryClient.invalidateQueries({ queryKey: ['strategy-trades'] });
   }, [queryClient]);
 
-  const { data: live, connected: streaming, patchData } = useStrategyLivePrice(
+  const { data: live, connected: streaming, resyncing, patchData } = useStrategyLivePrice(
     config.id,
     hasPosition,
     onPositionClosed,
@@ -663,6 +663,7 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
           <LivePositionPanel
             live={live}
             streaming={streaming}
+            resyncing={resyncing}
             accentColor={accentColor}
             strategyId={config.id}
             ticker={config.ticker}

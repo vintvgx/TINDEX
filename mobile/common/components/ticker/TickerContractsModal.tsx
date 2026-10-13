@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { OptionsChainPicker } from '@/common/components/strategy/OptionsChainPicker';
+import { useCloseOnTradeEntered } from '@/common/services/tradeEntryEvents';
 
 interface Props {
   ticker: string;
@@ -27,6 +28,8 @@ interface Props {
  * tab's "Contracts" button.
  */
 export function TickerContractsModal({ ticker, visible, onClose, hasOptions, initialContract }: Props) {
+  // A trade entered from inside (chain → trade sheet) → close; Home takes over.
+  useCloseOnTradeEntered(visible, onClose);
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="pageSheet">
       {/* Nested SafeAreaProvider — a bare RN Modal is a separate native view

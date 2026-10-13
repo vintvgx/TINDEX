@@ -9,6 +9,7 @@ import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition
 import type { UseLivePositionsDataResult } from '@/common/components/strategy/LivePositionsSection';
 import { PositionsPager } from './PositionsPager';
 import { LiveAccountStrip } from './LiveAccountStrip';
+import { ValueSkeleton } from '@/common/components/ui/ValueSkeleton';
 
 /**
  * Chart bottom slot, position-aware (chart position strip, 2026-10-11):
@@ -179,7 +180,7 @@ function PositionStrip({ pos, onPress, onLiveUpdate, colors }: {
 }) {
   // Same live source the full position card uses — only one of the two is
   // ever mounted for a position, so this is never a second socket.
-  const { data: live } = useStrategyLivePrice(pos.strategy_id, pos.active);
+  const { data: live, resyncing } = useStrategyLivePrice(pos.strategy_id, pos.active);
   useEffect(() => {
     onLiveUpdate(pos.strategy_id, live);
   }, [pos.strategy_id, live, onLiveUpdate]);
@@ -206,17 +207,17 @@ function PositionStrip({ pos, onPress, onLiveUpdate, colors }: {
         <Text style={[s.mono, { fontSize: 13, fontWeight: '800', color: colors.text }]} numberOfLines={1}>
           {contractLabel(pos)}
         </Text>
-        <Text style={[s.mono, { fontSize: 11, color: colors.textSecondary, marginTop: 2 }]} numberOfLines={1}>
+        {resyncing ? <ValueSkeleton width={130} height={11} style={{ marginTop: 4 }} /> : <Text style={[s.mono, { fontSize: 11, color: colors.textSecondary, marginTop: 2 }]} numberOfLines={1}>
           {money(entry)} → <Text style={{ color: now != null && entry != null ? (now >= entry ? colors.success : colors.error) : colors.text, fontWeight: '700' }}>{money(now)}</Text>
           {'  ·  '}Qty {qty}
           {working > 0 && <Text style={{ color: colors.warning, fontWeight: '700' }}>{`  ·  ${working} working`}</Text>}
-        </Text>
+        </Text>}
       </View>
       <View style={{ alignItems: 'flex-end' }}>
-        <Text style={[s.mono, { fontSize: 13, fontWeight: '800', color: pnlColor }]}>
+        {resyncing ? <ValueSkeleton width={64} height={13} /> : <Text style={[s.mono, { fontSize: 13, fontWeight: '800', color: pnlColor }]}>
           {pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toFixed(2)}
-        </Text>
-        {pnlPct != null && (
+        </Text>}
+        {!resyncing && pnlPct != null && (
           <Text style={[s.mono, { fontSize: 10.5, fontWeight: '700', color: pnlColor }]}>
             {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
           </Text>

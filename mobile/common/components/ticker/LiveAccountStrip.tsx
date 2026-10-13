@@ -21,7 +21,7 @@ interface LiveAccountStripProps {
  */
 export function LiveAccountStrip({ bottomInset = 0 }: LiveAccountStripProps) {
   const colors = useThemeColors();
-  const { account, displayEquity } = useLiveEquity('live');
+  const { account, displayEquity, resyncing } = useLiveEquity('live');
   const { data: history } = useAlpacaAccountsHistory();
 
   const available = accountAvailableFunds(account);
@@ -40,7 +40,7 @@ export function LiveAccountStrip({ bottomInset = 0 }: LiveAccountStripProps) {
       <View style={s.cell}>
         <Text style={[s.label, { color: colors.textTertiary }]}>LIVE EQUITY</Text>
         <Text style={[s.value, { color: colors.text }]} numberOfLines={1}>
-          {unavailable ? '—' : account ? money(displayEquity) : '…'}
+          {unavailable ? '—' : account && !resyncing ? money(displayEquity) : '…'}
         </Text>
       </View>
       <View style={[s.cell, { alignItems: 'center' }]}>

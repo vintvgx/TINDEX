@@ -11,6 +11,7 @@ import { PositionInfoModal } from '@/common/components/strategy/PositionInfoModa
 import { SlGraceBadge, useSlGracePulse } from '@/common/components/strategy/SlGraceBadge';
 import type { ProfileKey } from '@/common/types/strategy';
 import { isSimId } from '@/lib/devSim/simPositions';
+import { ValueSkeleton } from '@/common/components/ui/ValueSkeleton';
 
 /** TP2's own accent — distinct from TP1's (colors.success) so a glance at
  *  the SL → TP1 → TP2 row tells the two targets apart at a glance, not just
@@ -60,6 +61,9 @@ interface LivePositionPanelProps {
   /** Shown immediately (and used if the WS never connects, e.g. mock/preview mode). */
   staticFallback?: LivePositionStaticFallback;
   streaming: boolean;
+  /** Back from the background, waiting for the first fresh price — the hero
+   *  numbers show a skeleton instead of the old value. */
+  resyncing?: boolean;
   /** True for a mock/preview position with no real WS to connect to — shows "PREVIEW" instead of LIVE/CONNECTING. */
   isMock?: boolean;
   accentColor: string;
@@ -95,7 +99,7 @@ interface LivePositionPanelProps {
  * without needing any other context first.
  */
 export function LivePositionPanel({
-  live, staticFallback, streaming, isMock, accentColor,
+  live, staticFallback, streaming, resyncing, isMock, accentColor,
   strategyId, ticker, direction, paperMode, onExitPress, onAddPress, profile,
   colors, patchData, hideKey,
 }: LivePositionPanelProps) {
@@ -255,6 +259,13 @@ export function LivePositionPanel({
         {display ? (
           <>
             {/* ── Hero: market value, then colored P&L ── */}
+            {resyncing ? (
+              <View style={{ gap: 8, marginTop: 2, marginBottom: 6 }}>
+                <ValueSkeleton width={120} height={24} />
+                <ValueSkeleton width={96} height={14} />
+              </View>
+            ) : (
+            <>
             <Text style={[styles.heroValue, { color: colors.text }]}>
               {marketValue != null ? `$${marketValue.toFixed(2)}` : '—'}
             </Text>
@@ -268,6 +279,8 @@ export function LivePositionPanel({
                 </Text>
               </View>
             </View>
+            </>
+            )}
 
             {/* ── Caption row: entry → current · qty on the left, SL · TP1 ·
                 TP2 flexed to the right — the exit levels are the more

@@ -1,3 +1,4 @@
+import { AppState, type AppStateStatus } from 'react-native';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import type { PendingPriceUpdate } from '@/common/types/strategy';
 import type { LivePriceData } from './useStrategyLivePrice';
@@ -13,6 +14,14 @@ import type { LivePriceData } from './useStrategyLivePrice';
  * hooks like useLiveEquity can derive live equity from the same sockets the
  * rows hold open — or open them themselves when no rows are mounted — without
  * ever duplicating a connection.
+ *
+ * Background/foreground (2026-10-13): every socket closes when the app leaves
+ * the foreground and reopens the instant it returns. Left open, iOS kept the
+ * socket alive while the app was suspended and buffered the server's ticks;
+ * on return the app replayed them all, so P&L and equity visibly ticked
+ * through ~10s of old prices before the real one. Now the snapshot is cleared
+ * and flagged `resyncing` (UI shows a skeleton) until the fresh socket's first
+ * message — the server sends the current price on connect.
  */
 
 export interface LiveSnapshot {
@@ -23,10 +32,13 @@ export interface LiveSnapshot {
    *  server stops sending when its option stream dies (see orb_engine's
    *  _build_price_payload), so an old tick is a frozen mark, not a live one. */
   receivedAt:       number;
+  /** Back from the background, waiting for the fresh socket's first price —
+   *  show a skeleton rather than the pre-background value. */
+  resyncing:        boolean;
 }
 
 export const EMPTY_SNAPSHOT: LiveSnapshot = Object.freeze({
-  data: null, pendingPriceData: null, connected: false, receivedAt: 0,
+  data: null, pendingPriceData: null, connected: false, receivedAt: 0, resyncing: false,
 });
 
 /** A tick older than this is treated as stale by the equity hooks, which
@@ -40,6 +52,9 @@ export function isFresh(snap: LiveSnapshot | undefined): snap is LiveSnapshot & 
 
 const LINGER_MS = 5_000;
 const OPEN_TIMEOUT_MS = 8_000;
+/** Give up waiting for the first post-resume price after this long and let
+ *  the UI fall back to the REST values. */
+const RESYNC_TIMEOUT_MS = 4_000;
 
 interface Entry {
   url:            string;
@@ -54,9 +69,12 @@ interface Entry {
   reconnectTimer: ReturnType<typeof setTimeout> | null;
   openTimer:      ReturnType<typeof setTimeout> | null;
   lingerTimer:    ReturnType<typeof setTimeout> | null;
+  resyncTimer:    ReturnType<typeof setTimeout> | null;
 }
 
 const entries = new Map<string, Entry>();
+/** True while the app is backgrounded — sockets stay closed, no reconnects. */
+let paused = false;
 
 function wsUrlFor(strategyId: string): string {
   return RAILWAY_BASE_URL.replace(/^https?/, (s) => (s === 'https' ? 'wss' : 'ws'))
@@ -118,12 +136,13 @@ function StrategyLiveSocket(strategyId: string, entry: Entry) {
             market_value: med.market_value,
           };
         }
-        setSnap(entry, { data, receivedAt: Date.now() });
+        if (entry.resyncTimer) { clearTimeout(entry.resyncTimer); entry.resyncTimer = null; }
+        setSnap(entry, { data, receivedAt: Date.now(), resyncing: false });
       } else if (msg.type === 'pending_price_update') {
         setSnap(entry, { pendingPriceData: msg as PendingPriceUpdate });
       } else if (msg.type === 'position_closed') {
         entry.recent = [];
-        setSnap(entry, { data: null, receivedAt: 0 });
+        setSnap(entry, { data: null, receivedAt: 0, resyncing: false });
         entry.closedListeners.forEach((l) => l());
       }
     } catch {
@@ -137,6 +156,7 @@ function StrategyLiveSocket(strategyId: string, entry: Entry) {
     entry.ws = null;
     setSnap(entry, { connected: false });
     if (entry.refs === 0) return;  // lingering — let the teardown happen
+    if (paused) return;            // backgrounded — resume() reconnects
     // Capped exponential backoff so failed connects don't storm the server.
     const delay = Math.min(2000 * 1.6 ** entry.attempts, 20000);
     entry.attempts += 1;
@@ -159,6 +179,7 @@ function teardown(strategyId: string, entry: Entry) {
   if (entry.reconnectTimer) clearTimeout(entry.reconnectTimer);
   if (entry.openTimer) clearTimeout(entry.openTimer);
   if (entry.lingerTimer) clearTimeout(entry.lingerTimer);
+  if (entry.resyncTimer) clearTimeout(entry.resyncTimer);
   const ws = entry.ws;
   entry.ws = null;
   ws?.close();
@@ -182,13 +203,60 @@ function retain(strategyId: string): Entry {
       reconnectTimer: null,
       openTimer: null,
       lingerTimer: null,
+      resyncTimer: null,
     };
     entries.set(strategyId, entry);
   }
+  ensureAppStateListener();
   entry.refs += 1;
   if (entry.lingerTimer) { clearTimeout(entry.lingerTimer); entry.lingerTimer = null; }
-  if (!entry.ws && !entry.reconnectTimer) StrategyLiveSocket(strategyId, entry);
+  if (!paused && !entry.ws && !entry.reconnectTimer) StrategyLiveSocket(strategyId, entry);
   return entry;
+}
+
+// ── Background / foreground ──────────────────────────────────────────────
+
+function pauseAll() {
+  if (paused) return;
+  paused = true;
+  entries.forEach((entry) => {
+    if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+    if (entry.openTimer) { clearTimeout(entry.openTimer); entry.openTimer = null; }
+    if (entry.resyncTimer) { clearTimeout(entry.resyncTimer); entry.resyncTimer = null; }
+    const ws = entry.ws;
+    entry.ws = null;          // detach first, so its onclose is ignored
+    ws?.close();
+    entry.recent = [];
+    // Drop the pre-background value — nothing stale gets replayed or shown.
+    setSnap(entry, { connected: false, data: null, receivedAt: 0, resyncing: true });
+  });
+}
+
+function resumeAll() {
+  if (!paused) return;
+  paused = false;
+  entries.forEach((entry, strategyId) => {
+    if (entry.refs === 0) {
+      teardown(strategyId, entry);
+      return;
+    }
+    entry.attempts = 0;
+    if (!entry.ws) StrategyLiveSocket(strategyId, entry);
+    if (entry.resyncTimer) clearTimeout(entry.resyncTimer);
+    entry.resyncTimer = setTimeout(() => {
+      entry.resyncTimer = null;
+      if (entry.snap.resyncing) setSnap(entry, { resyncing: false });
+    }, RESYNC_TIMEOUT_MS);
+  });
+}
+
+let appStateSub: { remove: () => void } | null = null;
+function ensureAppStateListener() {
+  if (appStateSub) return;
+  appStateSub = AppState.addEventListener('change', (state: AppStateStatus) => {
+    if (state === 'active') resumeAll();
+    else if (state === 'background') pauseAll();
+  });
 }
 
 function release(strategyId: string, entry: Entry) {

@@ -60,9 +60,14 @@ export function useLiveEquity(mode: 'live' | 'paper') {
     return account.cash + sumMarketValue;
   }, [account, filteredPositions, liveById, restPriceBySymbol]);
 
+  // Any open position still waiting for its first post-background price →
+  // the equity isn't real-time yet; the UI shows a skeleton instead.
+  const resyncing = filteredPositions.some((p) => liveById[p.strategy_id]?.resyncing);
+
   return {
     account,
     liveDerivedEquity,
+    resyncing,
     /** The hero number: live-derived when positions are open, else the broker's equity. */
     displayEquity: liveDerivedEquity ?? account?.equity ?? 0,
     positionCount: filteredPositions.length,

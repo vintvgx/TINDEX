@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useMemo } from 'react';
-import { Animated, View, Text, TouchableOpacity, StyleSheet, Platform, Modal } from 'react-native';
+import { Animated, View, Text, StyleSheet, Platform } from 'react-native';
+import { FullWindowOverlay } from 'react-native-screens';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
@@ -91,12 +92,16 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const blurTint = isDarkColorScheme ? 'dark' : 'light';
 
   const toastOverlay = (
-    <View style={styles.container} pointerEvents="box-none">
+    // pointerEvents="none" all the way down: a toast is a notification, never
+    // an interaction — touches always reach whatever is underneath (charts,
+    // lists, sheets).
+    <View style={styles.container} pointerEvents="none">
       {toasts.map(toast => {
         const vc = getVariantConfig(toast.variant);
         return (
           <Animated.View
             key={toast.id}
+            pointerEvents="none"
             style={[
               styles.toastOuter,
               {
@@ -117,12 +122,6 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               <Text style={[styles.message, { color: colors.text }]} numberOfLines={3}>
                 {toast.message}
               </Text>
-              <TouchableOpacity
-                onPress={() => dismiss(toast.id, toast.opacity, toast.translateY)}
-                hitSlop={10}
-              >
-                <Ionicons name="close" size={15} color={colors.textSecondary} />
-              </TouchableOpacity>
             </View>
           </Animated.View>
         );
@@ -134,38 +133,19 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     <ToastContext.Provider value={api}>
       {children}
       {/*
-        A toast's zIndex only ranks it against OTHER PLAIN VIEWS in this
-        same stacking context — it does nothing against a native <Modal>
-        (TradeContractSheet/SignalEnterSheet's own pageSheet, or
-        BlindEntryModal on top of either), since iOS/Android present a
-        Modal in its own native layer entirely outside the regular view
-        hierarchy, unconditionally above every plain View no matter what
-        zIndex says. ToastProvider is mounted once at the app root
-        (app/_layout.tsx) — well below any screen's own Modal in z-order —
-        so an error fired while the entry sheet (and especially while
-        BlindEntryModal, stacked on top of IT) is open rendered invisibly
-        behind both (2026-10-01 bug report: toasts only visible after
-        exiting the modals quickly enough to catch the last second of the
-        3.5s auto-dismiss).
-        Fix: only when there's actually something to show, mount the SAME
-        overlay inside its own transparent, unanimated Modal instead of a
-        plain View. iOS/Android stack simultaneously-presented Modals in
-        presentation order — most-recently-presented on top — and a toast
-        is, by definition, always fired AFTER whatever modal is already
-        open, so this one is always the newest and always wins, regardless
-        of how many native Modals are already stacked underneath it.
-        animationType="none": the toast items already animate themselves
-        (translateY/opacity); the Modal's own slide/fade would double up.
-        onRequestClose is a no-op, not a dismiss-on-back: Android's back
-        button hits this Modal's handler whenever a toast happens to be up,
-        and a toast shouldn't eat a back-press meant for the modal beneath
-        it — it has nothing better to do, so it does nothing.
+        Above everything, blocking nothing. A toast must show over native
+        <Modal>s (the trade sheet, BlindEntryModal, …) — a plain View can't,
+        since iOS presents a Modal in its own layer above every view. This
+        used to mount the overlay in its own transparent <Modal>, but a Modal
+        captures EVERY touch on the screen, so while a toast was up you
+        couldn't pan the chart, scroll, or tap anything (2026-10-13).
+        FullWindowOverlay (react-native-screens) is a separate iOS window
+        above all modals that passes touches through to what's beneath —
+        combined with pointerEvents="none" above, the toast is purely
+        visual. On Android it renders inline (touch-through too; it just
+        can't sit above an open Modal there).
       */}
-      {toasts.length > 0 && (
-        <Modal transparent visible animationType="none" onRequestClose={() => {}}>
-          {toastOverlay}
-        </Modal>
-      )}
+      {toasts.length > 0 && <FullWindowOverlay>{toastOverlay}</FullWindowOverlay>}
     </ToastContext.Provider>
   );
 }

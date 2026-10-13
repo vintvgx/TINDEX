@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useThemeColors } from '@/lib/useColorScheme';
 import TickerSheetService, { type TickerSheetOpenOptions } from '@/common/services/TickerSheetService';
 import { TickerDetailSheet } from '@/common/components/ticker/TickerDetailSheet';
+import { useCloseOnTradeEntered } from '@/common/services/tradeEntryEvents';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -50,6 +51,11 @@ export const TickerSheetProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }).start();
     }
   }, [visible, slideAnim]);
+
+  // A trade entered from inside the ticker sheet (options list → trade
+  // sheet) → close via the service, so its state stays in sync; Home takes
+  // over (TradeEntryNavigator waits out this animation before navigating).
+  useCloseOnTradeEntered(visible, () => TickerSheetService.getInstance().close());
 
   const handleClose = () => {
     Animated.timing(slideAnim, {

@@ -50,6 +50,8 @@ export function ladderRequest(qty: number, setup: LadderSetup) {
 }
 
 const RUNG_COLORS = { tp1: '#4ADE80', tp2: '#4A9EFF', run: '#C084FC' } as const;
+/** Selected Standard/Risky (amber, per the trade sheet v2 mock). */
+const SETUP_ON = '#FFB020';
 
 export function ExitLadder({
   qty, setup, onSetup, ask, slPct, slEnabled, tpEnabled, onToggleSl, onToggleTp, colors,
@@ -81,12 +83,12 @@ export function ExitLadder({
               key={k}
               onPress={() => onSetup(k)}
               activeOpacity={0.75}
-              style={[s.setupBtn, { borderColor: on ? '#4A9EFF' : colors.border, backgroundColor: on ? '#4A9EFF14' : colors.card }]}
+              style={[s.setupBtn, { borderColor: on ? SETUP_ON : colors.border, backgroundColor: on ? SETUP_ON + '10' : colors.card }]}
             >
-              <Text style={{ fontSize: 13, fontWeight: '800', color: on ? colors.text : muted }}>
+              <Text style={{ fontSize: 13.5, fontWeight: '700', color: on ? colors.text : muted }}>
                 {k === 'standard' ? 'Standard' : 'Risky'}
               </Text>
-              <Text style={{ fontSize: 10.5, color: muted, marginTop: 1 }}>C2 takes +{LADDER_TP2_PCT[k]}%</Text>
+              <Text style={{ fontSize: 10.5, fontWeight: '600', color: on ? SETUP_ON : muted, marginTop: 2 }}>C2 takes +{LADDER_TP2_PCT[k]}%</Text>
             </TouchableOpacity>
           );
         })}
@@ -121,14 +123,15 @@ export function ExitLadder({
         })}
       </View>
 
-      <View style={[s.slBand, { backgroundColor: colors.error + '12', borderColor: colors.error + '40', opacity: slEnabled ? 1 : 0.4 }]}>
-        <Text style={{ fontSize: 12.5, fontWeight: '700', color: colors.error }}>
+      {/* Stop band — dashed, so it reads as a floor under the ladder, not a rung */}
+      <View style={[s.slBand, { backgroundColor: colors.error + '0D', borderColor: colors.error + '55', opacity: slEnabled ? 1 : 0.4 }]}>
+        <Text style={{ fontSize: 13.5, fontWeight: '800', color: colors.error }}>
           {slPct != null
-            ? `SL −${Math.round(slPct * 100)}% · $${(ask * (1 - slPct)).toFixed(2)} all contracts`
-            : 'Stop loss off'}
+            ? `🛑 SL −${Math.round(slPct * 100)}% · $${(ask * (1 - slPct)).toFixed(2)}`
+            : '🛑 Stop loss off'}
         </Text>
         {slPct != null && (
-          <Text style={[s.tab, { fontSize: 12, fontWeight: '700', color: colors.error }]}>
+          <Text style={[s.tab, { fontSize: 11, color: muted }]}>
             −${(ask * slPct * 100).toFixed(2)} / contract
           </Text>
         )}
@@ -165,10 +168,10 @@ function ArmPill({ label, on, onPress, colors }: { label: string; on: boolean; o
 const s = StyleSheet.create({
   tab: { fontVariant: ['tabular-nums'] },
   setupRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
-  setupBtn: { flex: 1, borderWidth: 1, borderRadius: 12, paddingVertical: 9, paddingHorizontal: 12 },
+  setupBtn: { flex: 1, borderWidth: 1.5, borderRadius: 13, paddingVertical: 10, paddingHorizontal: 12 },
   rung: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: 12, borderWidth: 1, marginTop: 7 },
   cn: { minWidth: 30, height: 30, paddingHorizontal: 4, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
-  slBand: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9, marginTop: 7 },
+  slBand: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderStyle: 'dashed', borderRadius: 13, paddingHorizontal: 13, paddingVertical: 11, marginTop: 8 },
   armRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
   arm: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 7, borderWidth: 1, borderRadius: 11, paddingHorizontal: 10, paddingVertical: 9 },
   dot: { width: 7, height: 7, borderRadius: 4 },

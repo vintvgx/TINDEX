@@ -211,7 +211,7 @@ export function TickerTape() {
   // (onPressOut hides it) and only when neither takeover above is active —
   // those already occlude the base Pressable's touch, but this guard keeps
   // it explicit rather than relying solely on z-order.
-  const { live: liveAccount } = useAccountValueDisplay();
+  const { live: liveAccount, resyncing: accountResyncing } = useAccountValueDisplay();
   const [showAccountOverlay, setShowAccountOverlay] = useState(false);
   const handleTapeLongPress = () => {
     if (pendingCount > 0 || sellOverlayMounted || reconnectOverlayMounted) return;
@@ -571,7 +571,7 @@ export function TickerTape() {
               <>
                 <View style={styles.item}>
                   <Text style={[styles.symbol, { color: colors.tapeText }]}>Equity</Text>
-                  <Text style={[styles.value, { color: colors.tapeText }]}>{fmtMoney(liveAccount.equity)}</Text>
+                  <Text style={[styles.value, { color: colors.tapeText }]}>{accountResyncing ? '…' : fmtMoney(liveAccount.equity)}</Text>
                   <Text style={[styles.dot, { color: colors.tapeMuted }]}>•</Text>
                 </View>
                 <View style={styles.item}>
