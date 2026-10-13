@@ -58,3 +58,23 @@ export function isPastMarketDigestTime(): boolean {
   if (!et) return false;
   return et.hour * 60 + et.minute >= 8 * 60 + 30;
 }
+
+/** An option expiring `expiration` (YYYY-MM-DD) has stopped trading: its
+ *  date is past in ET, or it's that date and the 4:00 PM ET close has hit.
+ *  Holidays aren't modelled. */
+export function isOptionExpired(expiration: string): boolean {
+  const day = expiration?.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day ?? '')) return false;
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: 'numeric', hour12: false,
+    }).formatToParts(new Date());
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+    const today = `${get('year')}-${get('month')}-${get('day')}`;
+    if (today !== day) return today > day;
+    return Number(get('hour')) % 24 >= 16;
+  } catch {
+    return false;
+  }
+}

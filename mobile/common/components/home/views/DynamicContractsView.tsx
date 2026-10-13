@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useTrackedContracts } from '@/hooks/queries/track/useTrackedContracts';
@@ -9,6 +9,7 @@ import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsContractDetailModal';
 import { TradeContractSheet } from '@/common/components/ticker/TradeContractSheet';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
+import { isOptionExpired } from '@/lib/marketHours';
 import type { TrackedOptionContract } from '@/common/types/options';
 import type { OptionsContract } from '@/common/types/blogPosts/ticker';
 
@@ -20,7 +21,9 @@ import type { OptionsContract } from '@/common/types/blogPosts/ticker';
  *
  * Each row shows the price when tracking started → the price now, with the
  * change colored green/red (one batched quote poll, see
- * useTrackedContractQuotes).
+ * useTrackedContractQuotes). While the first quote loads the price shows a
+ * spinner; a failed or empty quote shows "—". Expired contracts aren't
+ * quoted or removed — they're labelled "Expired" for you to untrack.
  */
 
 /** The price when tracking started — the snapshot's mid, the same basis as
@@ -77,7 +80,9 @@ export function DynamicContractsView({ visible = true }: {
   const colors = useThemeColors();
   const { data: contracts, isLoading } = useTrackedContracts();
   const watched = (contracts ?? []).filter((c) => c.status === 'tracking' || c.status === 'entered');
-  const { data: quotes } = useTrackedContractQuotes(watched.map((c) => c.contract_symbol), visible);
+  const live = watched.filter((c) => !isOptionExpired(c.expiration_date));
+  const { data: quotes, isFetching: quotesFetching, isError: quotesFailed } =
+    useTrackedContractQuotes(live.map((c) => c.contract_symbol), visible);
   const [selected, setSelected] = useState<TrackedOptionContract | null>(null);
   const [trade, setTrade] = useState<{ contract: OptionsContract; ticker: string; price: number } | null>(null);
 
@@ -122,8 +127,13 @@ export function DynamicContractsView({ visible = true }: {
             {watched.map((c) => {
               const up = c.option_type === 'CALL';
               const dirColor = up ? colors.success : colors.error;
+              const expired = isOptionExpired(c.expiration_date);
               const from = trackedAtPrice(c);
-              const now = quotes?.[c.contract_symbol]?.mark ?? null;
+              const now = expired ? null : quotes?.[c.contract_symbol]?.mark ?? null;
+              // First quote request in flight → spinner. Once it has answered
+              // without this contract, or failed, → "—" (no spinner flashing
+              // on every 15s poll for a contract Alpaca doesn't price).
+              const loadingPrice = !expired && quotes === undefined && quotesFetching && !quotesFailed;
               const pct = from != null && now != null ? ((now - from) / from) * 100 : null;
               const pctColor = pct == null || Math.abs(pct) < 0.05
                 ? colors.textSecondary
@@ -148,13 +158,26 @@ export function DynamicContractsView({ visible = true }: {
                     {c.strike} · {c.expiration_date}
                   </Text>
                   <View style={{ flex: 1 }} />
-                  {from != null && (
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={[styles.mono, { fontSize: 11, color: colors.textSecondary }]}>
-                        {fmt(from)} → <Text style={{ fontWeight: '800', color: now != null ? pctColor : colors.textTertiary }}>
-                          {now != null ? fmt(now) : '—'}
-                        </Text>
+                  {expired ? (
+                    <View style={[styles.badge, { backgroundColor: colors.textTertiary + '22', borderColor: colors.textTertiary + '55' }]}>
+                      <Text style={[styles.mono, { fontSize: 9, fontWeight: '800', color: colors.textSecondary }]}>
+                        EXPIRED
                       </Text>
+                    </View>
+                  ) : (
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={[styles.mono, { fontSize: 11, color: colors.textSecondary }]}>
+                          {from != null ? fmt(from) : '—'} →{' '}
+                        </Text>
+                        {loadingPrice ? (
+                          <ActivityIndicator size="small" color={colors.textTertiary} style={{ transform: [{ scale: 0.7 }] }} />
+                        ) : (
+                          <Text style={[styles.mono, { fontSize: 11, fontWeight: '800', color: now != null ? pctColor : colors.textTertiary }]}>
+                            {now != null ? fmt(now) : '—'}
+                          </Text>
+                        )}
+                      </View>
                       {pct != null && (
                         <Text style={[styles.mono, { fontSize: 10, fontWeight: '800', color: pctColor }]}>
                           ({pct > 0 ? '+' : ''}{pct.toFixed(1)}%)
