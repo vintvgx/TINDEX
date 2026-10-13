@@ -24,8 +24,10 @@ import { isSimId } from '@/lib/devSim/simPositions';
 /**
  * Dynamic card "charts" view: one line chart per followed ticker — the
  * shared LinePriceChart (same chart as the ticker sheet): price/time axes,
- * current-price tag, long-press scrub, and expand → full chart. Timeframe comes
- * from Profile → Home chart timeframe (default 1D · 15m). On 1D the x-axis
+ * current-price tag, long-press scrub, and expand → full chart. Every chart
+ * opens on 1D (the 9:30–4:00 session, bar size from Profile → Home chart
+ * timeframe); the bottom-left chip cycles 1D → 1W → 1M → 1Y for the chart
+ * you're on, and swiping to another chart starts it back on 1D. On 1D the x-axis
  * always spans the full 9:30–4:00 session, so at the open the line starts
  * at the left edge and grows through the day (Robinhood-style). Swipe up/
  * down pages tickers, endlessly in both directions (no first/last page);
@@ -48,6 +50,8 @@ import { isSimId } from '@/lib/devSim/simPositions';
 
 const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
 const COUNTER_VISIBLE_MS = 8000;
+/** The range chip's cycle (bottom-left of the chart). */
+const HOME_RANGES: PricePeriod[] = ['1D', '1W', '1M', '1Y'];
 const INTERVAL_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, wk: 7 * 86_400_000, mo: 31 * 86_400_000 };
 
 function intervalMs(interval: string | undefined): number | null {
@@ -118,8 +122,10 @@ export function stepChartsTicker(dir: 1 | -1): void {
   stepListener?.(dir);
 }
 
-function TickerPage({ ticker, height, width, period, interval, active, livePrice, onStats }: {
+function TickerPage({ ticker, height, width, period, interval, active, livePrice, onCycleRange, onStats }: {
   ticker: string; height: number; width: number; period: PricePeriod; interval: string;
+  /** Next range (1D → 1W → 1M → 1Y) — the chart you're on only. */
+  onCycleRange?: () => void;
   /** The chart you're looking at — the only one that polls. */
   active: boolean;
   /** Streamed price for this ticker (active page, regular session only). */
@@ -187,6 +193,17 @@ function TickerPage({ ticker, height, width, period, interval, active, livePrice
           positive={up}
         />
       </View>
+      {onCycleRange && (
+        <Pressable
+          onPress={onCycleRange}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={`Time range ${period}. Tap for the next range`}
+          style={[styles.range, { backgroundColor: colors.surfaceSecondary + 'E6', borderColor: colors.border }]}
+        >
+          <Text style={[styles.mono, { fontSize: 11, fontWeight: '800', color: colors.text }]}>{period}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -203,9 +220,10 @@ export function DynamicChartsView({ onActiveTicker, height, visible = true }: {
   const pageWidth = width - 28;
   const { data: follows } = useUserORBFollows();
   const { prefs } = useChartDisplayPrefs();
-  const period = prefs.homeChartPeriod;
-  const allowed = intervalCycleFor(ALLOWED_INTERVALS[period]);
-  const interval = allowed.includes(prefs.homeChartInterval) ? prefs.homeChartInterval : DEFAULT_INTERVAL[period];
+  // 1D's bar size is the Profile pick; the longer ranges use their defaults.
+  const allowed1D = intervalCycleFor(ALLOWED_INTERVALS['1D']);
+  const interval1D = allowed1D.includes(prefs.homeChartInterval) ? prefs.homeChartInterval : DEFAULT_INTERVAL['1D'];
+  const intervalFor = (p: PricePeriod) => (p === '1D' ? interval1D : DEFAULT_INTERVAL[p]);
 
   const allLive = useLivePositionsData('live');
   const allPaper = useLivePositionsData('paper');
@@ -245,6 +263,14 @@ export function DynamicChartsView({ onActiveTicker, height, visible = true }: {
   const n = tickers.length;
   const realIndex = Math.max(0, activeTicker ? tickers.indexOf(activeTicker) : 0);
   const current = tickers[realIndex] ?? '';
+  // The chart you're on can step through HOME_RANGES; it isn't remembered —
+  // landing on another chart starts it on 1D.
+  const [range, setRange] = useState<PricePeriod>('1D');
+  useEffect(() => { setRange('1D'); }, [current]);
+  const cycleRange = useCallback(() => {
+    setRange((r) => HOME_RANGES[(HOME_RANGES.indexOf(r) + 1) % HOME_RANGES.length]);
+  }, []);
+
   const focused = useIsFocused();
   const appActive = useAppActive();
   const live = visible && focused && appActive;
@@ -334,15 +360,16 @@ export function DynamicChartsView({ onActiveTicker, height, visible = true }: {
             ticker={item}
             height={pageH}
             width={pageWidth}
-            period={period}
-            interval={interval}
+            period={item === current ? range : '1D'}
+            interval={intervalFor(item === current ? range : '1D')}
             active={live && item === current}
+            onCycleRange={item === current ? cycleRange : undefined}
             livePrice={item === current ? livePrice : undefined}
             onStats={onStats}
           />
         )}
         // Re-render the mounted pages when the active ticker / live price moves.
-        extraData={`${current}|${live}|${livePrice ?? ''}`}
+        extraData={`${current}|${range}|${live}|${livePrice ?? ''}`}
         initialScrollIndex={loop ? n + realIndex : realIndex}
         onMomentumScrollEnd={onMomentumEnd}
         getItemLayout={(_, index) => ({ length: pageH, offset: pageH * index, index })}
@@ -380,6 +407,19 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  /** Bottom-left, in the page's bottom padding under the x-axis. */
+  range: {
+    position: 'absolute',
+    left: 14,
+    bottom: 0,
+    minWidth: 34,
+    height: 22,
+    paddingHorizontal: 8,
+    borderRadius: 7,
+    borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
   },
