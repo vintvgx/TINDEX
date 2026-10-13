@@ -199,6 +199,16 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
     cached = _history_cache_get(cache_key, _history_ttl_s(interval))
     if cached is not None:
         return cached
+    # After the close the bars stop moving: a copy fetched since the last
+    # session close is final until the next open, so it's served as fresh —
+    # no expired-copy reply (and "Updating" in the app) on every evening
+    # swipe. Not for 1D with extended hours: post-market bars keep coming.
+    if not (period_key == "1D" and extended_hours):
+        hit = _HISTORY_CACHE.get(cache_key)
+        if hit and _fetched_since_close(hit[0]):
+            result = dict(hit[1])
+            result["from_cache"] = True
+            return result
     # Stale-while-revalidate (polling audit B4): an expired-but-recent copy
     # is returned at once (flagged stale=True) and refreshed from Yahoo in
     # the background — a cold chart open never waits on Yahoo when we've
@@ -567,6 +577,31 @@ def get_historical_window(ticker: str, interval: str, start, end, extended_hours
     _history_cache_put(cache_key, result)
     result["from_cache"] = False
     return result
+
+
+# The session counts as live from 09:15 to 16:15 ET (the app's isMarketHours
+# buffer): pre-open refreshes are wanted, and Yahoo finalises the last bars a
+# few minutes after 16:00.
+_SESSION_START_MIN = 9 * 60 + 15
+_SESSION_SETTLED_MIN = 16 * 60 + 15
+
+
+def _last_close_et(now_et: "datetime") -> "datetime":
+    """The most recent weekday 16:15 ET at or before `now_et` (holidays ignored)."""
+    close = now_et.replace(hour=16, minute=15, second=0, microsecond=0)
+    while close > now_et or close.weekday() >= 5:
+        close -= timedelta(days=1)
+    return close
+
+
+def _fetched_since_close(fetched_at: float, now_et: "datetime | None" = None) -> bool:
+    """True outside the live session when `fetched_at` (epoch s) is after the
+    last close — that copy holds the session's final bars."""
+    now_et = now_et or datetime.now(ET)
+    minutes = now_et.hour * 60 + now_et.minute
+    if now_et.weekday() < 5 and _SESSION_START_MIN <= minutes < _SESSION_SETTLED_MIN:
+        return False
+    return fetched_at >= _last_close_et(now_et).timestamp()
 
 
 def _is_regular_trading_hours(now_et: "datetime | None" = None) -> bool:

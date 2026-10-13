@@ -21,9 +21,7 @@ import type { PricePeriod } from '@/common/types/blogPosts/ticker';
  *   reported via onScrub (the ticker sheet swaps its header price with it).
  * - Optional period picker (onPeriodChange) and expand button (onExpand —
  *   both callers open the full chart, charts.tsx, on this ticker).
- * - isLoading (no data yet) shows a spinner in the empty plot; refreshing
- *   (the bars on screen are known to be out of date) dims the line under a
- *   spinner until fresh bars arrive.
+ * - isLoading (no data yet) shows a spinner in the empty plot.
  */
 
 export const CHART_PERIODS: PricePeriod[] = ['1D', '1W', '1M', '3M', 'YTD', '1Y', '5Y'];
@@ -87,7 +85,6 @@ export function LinePriceChart({
   period,
   height = 200,
   isLoading,
-  refreshing,
   positive,
   onScrub,
   onPeriodChange,
@@ -99,9 +96,6 @@ export function LinePriceChart({
   /** Chart height including the x-axis (not the period picker). */
   height?: number;
   isLoading?: boolean;
-  /** The plotted bars are out of date and being re-fetched — dims the line
-   *  under a spinner. Not for routine polls of already-fresh data. */
-  refreshing?: boolean;
   /** Line color direction; defaults to last price vs first. */
   positive?: boolean;
   onScrub?: (point: ScrubPoint | null) => void;
@@ -229,7 +223,7 @@ export function LinePriceChart({
           </View>
         ) : (
           <GestureDetector gesture={gesture}>
-            <Svg width={width} height={height} opacity={refreshing ? 0.4 : 1}>
+            <Svg width={width} height={height}>
               <Defs>
                 <LinearGradient id="lpcFill" x1="0" y1="0" x2="0" y2="1">
                   <Stop offset="0" stopColor={stroke} stopOpacity={0.28} />
@@ -283,15 +277,6 @@ export function LinePriceChart({
               )}
             </Svg>
           </GestureDetector>
-        )}
-
-        {model && refreshing && (
-          <View pointerEvents="none" style={[styles.refreshing, { width: plotW, height: plotH }]}>
-            <View style={[styles.refreshingPill, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <ActivityIndicator size="small" color={colors.textSecondary} />
-              <Text style={[styles.mono, { fontSize: 11, color: colors.textSecondary }]}>Updating</Text>
-            </View>
-          </View>
         )}
 
         {/* scrub label — price + time, pinned to the top of the plot */}
@@ -371,16 +356,6 @@ export function LinePriceChart({
 const styles = StyleSheet.create({
   mono: { fontFamily: 'Menlo' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 14 },
-  refreshing: { position: 'absolute', top: 0, left: 0, alignItems: 'center', justifyContent: 'center' },
-  refreshingPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
   scrubLabel: {
     position: 'absolute',
     top: 2,

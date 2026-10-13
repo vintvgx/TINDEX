@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, AppState, useWindowDimensions } from 'react-native';
+import { View, Text, FlatList, Pressable, ActivityIndicator, StyleSheet, AppState, useWindowDimensions } from 'react-native';
 import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useIsFocused } from '@react-navigation/native';
-import { useSparkQuery, SPARK_FRESH_MS } from '@/hooks/queries/ticker/useSparkQuery';
+import { useSparkQuery, sparkNeedsRefresh } from '@/hooks/queries/ticker/useSparkQuery';
 import { useMarketStream } from '@/hooks/useMarketStream';
-import { isMarketHours, isOptionsSessionOpen } from '@/lib/marketHours';
+import { isOptionsSessionOpen } from '@/lib/marketHours';
 import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
 import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
 import { useMorningBrief } from '@/hooks/queries/brief/useMorningBrief';
@@ -41,16 +41,13 @@ import { isSimId } from '@/lib/devSim/simPositions';
  * point follows the live price stream during the session. Neighbor pages
  * load once so a swipe lands on a drawn chart. Nothing polls while the
  * charts page isn't the card's current view, Home isn't focused, or the app
- * is in the background. Out-of-date bars (the backend's stale copy, or a
- * catch-up on bars older than a missed poll) dim under an "Updating" spinner.
+ * is in the background. After the close, bars fetched since it are final —
+ * no refetches until the next open. While the visible chart is fetching, a
+ * small spinner shows left of the expand button (never over the chart).
  */
 
 const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
 const COUNTER_VISIBLE_MS = 8000;
-/** Bars older than this (a missed poll) count as out of date while they're
- *  being re-fetched — a routine 60s poll of fresh bars never shows the
- *  spinner. */
-const OUTDATED_MS = 90_000;
 const INTERVAL_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, wk: 7 * 86_400_000, mo: 31 * 86_400_000 };
 
 function intervalMs(interval: string | undefined): number | null {
@@ -134,9 +131,10 @@ function TickerPage({ ticker, height, width, period, interval, active, livePrice
   const stale = !!data?.stale;
 
   // Landing on a chart (swipe, or the card coming back into view): catch up
-  // if its bars are older than SPARK_FRESH_MS. A first load fetches anyway.
+  // if its bars are out of date (sparkNeedsRefresh — never after the close
+  // once they've been fetched since it). A first load fetches anyway.
   useEffect(() => {
-    if (active && dataUpdatedAt > 0 && Date.now() - dataUpdatedAt > SPARK_FRESH_MS) refetch();
+    if (active && dataUpdatedAt > 0 && sparkNeedsRefresh(dataUpdatedAt)) refetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
@@ -147,7 +145,6 @@ function TickerPage({ ticker, height, width, period, interval, active, livePrice
     [data, stale, livePrice],
   );
   const { prices, dates } = series;
-  const refreshing = active && (stale || (isFetching && isMarketHours() && Date.now() - dataUpdatedAt > OUTDATED_MS));
 
   const price = prices.length > 0 ? prices[prices.length - 1] : null;
   const changePct = prices.length > 1 ? ((prices[prices.length - 1] / prices[0]) - 1) * 100 : null;
@@ -159,6 +156,11 @@ function TickerPage({ ticker, height, width, period, interval, active, livePrice
 
   return (
     <View style={{ width, height, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 22 }}>
+      {active && isFetching && (
+        <View pointerEvents="none" style={styles.fetching}>
+          <ActivityIndicator size="small" color={colors.textTertiary} />
+        </View>
+      )}
       <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 10 }}>
         <Text style={[styles.mono, { fontSize: 22, fontWeight: '800', color: colors.text }]}>{ticker}</Text>
         {price != null && (
@@ -182,7 +184,6 @@ function TickerPage({ ticker, height, width, period, interval, active, livePrice
           period={period}
           height={height - 96}
           isLoading={isLoading}
-          refreshing={refreshing}
           positive={up}
         />
       </View>
@@ -382,10 +383,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  /** Left of the expand button (top 10, right 10, 30×30). */
+  fetching: {
+    position: 'absolute',
+    top: 10,
+    right: 44,
+    height: 30,
+    justifyContent: 'center',
+  },
   counter: {
     position: 'absolute',
     top: 14,
-    right: 48,
+    right: 74,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,

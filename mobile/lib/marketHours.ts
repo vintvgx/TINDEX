@@ -78,3 +78,33 @@ export function isOptionExpired(expiration: string): boolean {
     return false;
   }
 }
+
+/** True outside the live session (Mon–Fri 9:15 AM–4:15 PM ET) when `fetchedAt`
+ *  (epoch ms) is after the most recent 4:15 PM ET weekday close — data from
+ *  then holds the session's final bars and won't change until the next open.
+ *  Mirrors the backend's _fetched_since_close. Holidays aren't modelled. */
+export function fetchedSinceClose(fetchedAt: number): boolean {
+  if (!fetchedAt || isMarketHours()) return false;
+  try {
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', year: 'numeric', month: 'numeric', day: 'numeric',
+      hour: 'numeric', minute: 'numeric', hour12: false, weekday: 'short',
+    }).formatToParts(now);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+    const [y, mo, d, h, mi] = ['year', 'month', 'day', 'hour', 'minute'].map((t) => Number(get(t)));
+    // ET wall clock as if it were UTC, minus "now" → ET's UTC offset.
+    const etAsUtc = Date.UTC(y, mo - 1, d, h % 24, mi);
+    const offsetMs = etAsUtc - Math.floor(now.getTime() / 60_000) * 60_000;
+    const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    let dow = weekdays.indexOf(get('weekday'));
+    let close = Date.UTC(y, mo - 1, d, 16, 15);
+    while (close > etAsUtc || dow === 0 || dow === 6) {
+      close -= 86_400_000;
+      dow = (dow + 6) % 7;
+    }
+    return fetchedAt >= close - offsetMs;
+  } catch {
+    return false;
+  }
+}

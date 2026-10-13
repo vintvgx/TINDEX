@@ -22,8 +22,8 @@ import type { OptionsContract } from '@/common/types/blogPosts/ticker';
  * Each row shows the price when tracking started → the price now, with the
  * change colored green/red (one batched quote poll, see
  * useTrackedContractQuotes). While the first quote loads the price shows a
- * spinner; a failed or empty quote shows "—". Expired contracts aren't
- * quoted or removed — they're labelled "Expired" for you to untrack.
+ * spinner; a failed or empty quote shows "null" in grey. Expired contracts
+ * aren't quoted or removed — an orange EXPIRED badge, for you to untrack.
  */
 
 /** The price when tracking started — the snapshot's mid, the same basis as
@@ -131,7 +131,7 @@ export function DynamicContractsView({ visible = true }: {
               const from = trackedAtPrice(c);
               const now = expired ? null : quotes?.[c.contract_symbol]?.mark ?? null;
               // First quote request in flight → spinner. Once it has answered
-              // without this contract, or failed, → "—" (no spinner flashing
+              // without this contract, or failed, → "null" (no spinner flashing
               // on every 15s poll for a contract Alpaca doesn't price).
               const loadingPrice = !expired && quotes === undefined && quotesFetching && !quotesFailed;
               const pct = from != null && now != null ? ((now - from) / from) * 100 : null;
@@ -159,8 +159,8 @@ export function DynamicContractsView({ visible = true }: {
                   </Text>
                   <View style={{ flex: 1 }} />
                   {expired ? (
-                    <View style={[styles.badge, { backgroundColor: colors.textTertiary + '22', borderColor: colors.textTertiary + '55' }]}>
-                      <Text style={[styles.mono, { fontSize: 9, fontWeight: '800', color: colors.textSecondary }]}>
+                    <View style={[styles.badge, { backgroundColor: colors.warning + '22', borderColor: colors.warning + '55' }]}>
+                      <Text style={[styles.mono, { fontSize: 9, fontWeight: '800', color: colors.warning }]}>
                         EXPIRED
                       </Text>
                     </View>
@@ -174,7 +174,7 @@ export function DynamicContractsView({ visible = true }: {
                           <ActivityIndicator size="small" color={colors.textTertiary} style={{ transform: [{ scale: 0.7 }] }} />
                         ) : (
                           <Text style={[styles.mono, { fontSize: 11, fontWeight: '800', color: now != null ? pctColor : colors.textTertiary }]}>
-                            {now != null ? fmt(now) : '—'}
+                            {now != null ? fmt(now) : 'null'}
                           </Text>
                         )}
                       </View>

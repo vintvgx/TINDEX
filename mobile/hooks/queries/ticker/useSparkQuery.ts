@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { RAILWAY_BASE_URL } from "@/lib/railway.config";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
-import { isMarketHours } from "@/lib/marketHours";
+import { isMarketHours, fetchedSinceClose } from "@/lib/marketHours";
 import type { PricePeriod } from "@/common/types/blogPosts/ticker";
 
 export interface SparkData {
@@ -24,6 +24,15 @@ interface SparkResponse {
 
 /** A chart you land on refetches if its bars are older than this. */
 export const SPARK_FRESH_MS = 15_000;
+
+/** Whether bars fetched at `dataUpdatedAt` should be re-fetched now: older
+ *  than SPARK_FRESH_MS, unless fetched since the last close (final until the
+ *  next open — no evening refetches). */
+export function sparkNeedsRefresh(dataUpdatedAt: number): boolean {
+  if (dataUpdatedAt <= 0) return true;
+  if (fetchedSinceClose(dataUpdatedAt)) return false;
+  return Date.now() - dataUpdatedAt > SPARK_FRESH_MS;
+}
 /** Re-ask this soon after a stale reply (the backend refresh is in flight). */
 const STALE_RETRY_MS = 3_000;
 /** The chart you're looking at polls for new bars at this cadence. Between
@@ -72,7 +81,7 @@ export function useSparkQuery(
       return data;
     },
     enabled: !!ticker && !!user?.id && !authLoading,
-    staleTime: SPARK_FRESH_MS,
+    staleTime: (query) => (fetchedSinceClose(query.state.dataUpdatedAt) ? Infinity : SPARK_FRESH_MS),
     refetchInterval: (query) => {
       if (!active) return false;
       if (query.state.data?.stale) return STALE_RETRY_MS;
