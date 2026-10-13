@@ -744,6 +744,7 @@ export function ChartsContent({ initialTicker, topInset }: {
             onSignalPress={openContracts}
             onTickerPress={openSearch}
             setTapeInfo={setTapeInfo}
+            isBrief={briefTickers.has(activeTicker)}
             renderChart={({ streamPrice, resolvedLivePrice, displayPositive }) => (
               useTVChart ? (
                 <TVChart
@@ -936,8 +937,11 @@ const TAPE_PUBLISH_MS = 1_000;
  */
 function ChartLivePane({
   ticker, stockData, tapeActive, tapeSignal, tapeLoading, onSignalPress, onTickerPress, setTapeInfo, renderChart,
+  isBrief = false,
 }: {
   ticker: string;
+  /** In the Morning Brief — the tape shows an "MB" tag by the symbol. */
+  isBrief?: boolean;
   stockData: { current_price?: number | null; price_change?: number | null; price_change_percent?: number | null } | undefined;
   tapeActive: boolean;
   tapeSignal: ChartTapeInfo['signal'];
@@ -999,11 +1003,12 @@ function ChartLivePane({
       changePct: tapePrice.pct,
       signal: tapeSignal,
       loading: tapeLoading,
+      brief: isBrief,
       onSignalPress,
       onTickerPress,
     });
     return () => setTapeInfo(null);
-  }, [tapeActive, ticker, tapePrice, tapeSignal, tapeLoading, onSignalPress, onTickerPress, setTapeInfo]);
+  }, [tapeActive, ticker, tapePrice, tapeSignal, tapeLoading, isBrief, onSignalPress, onTickerPress, setTapeInfo]);
 
   return <>{renderChart({ streamPrice, resolvedLivePrice, displayPositive })}</>;
 }
