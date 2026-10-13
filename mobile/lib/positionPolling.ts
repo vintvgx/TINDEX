@@ -6,9 +6,8 @@ import { isAppSocketConnected } from '@/common/services/appSocket';
  * Poll cadence for the position REST endpoints (polling audit A6).
  *
  * These used to poll every 5s around the clock. Live prices come from the
- * per-position WebSocket; the polls only need to catch structure changes
- * (a fill, a close) — plus /accounts/positions keeps the tape's equity
- * moving while positions are open. So:
+ * per-position WebSocket (equity included — see useLiveEquity); the polls
+ * only need to catch structure changes (a fill, a close). So:
  *
  *   market closed / weekend     → no polling (one fetch on mount/focus)
  *   just traded (boost window)  → 5s, so a fill or close shows up fast

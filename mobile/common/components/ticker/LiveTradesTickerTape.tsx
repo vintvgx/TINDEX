@@ -3,7 +3,8 @@ import { View, Text, Animated, StyleSheet } from 'react-native';
 import { useMarketStream } from '@/hooks/useMarketStream';
 import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
-import { useStrategyLivePrice, type LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import { useStrategyLiveValues } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import type { LiveSnapshot } from '@/hooks/queries/strategy/strategyLiveStore';
 import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import type { AlpacaAccount } from '@/common/types/strategy';
 import { useOrbRangesForTickers } from '@/hooks/queries/orb/useOrbRangesForTickers';
@@ -16,31 +17,6 @@ import { isSimId } from '@/lib/devSim/simPositions';
 // Same PAPER tint used everywhere else a live/paper trade needs to be told
 // apart at a glance (PositionCard, PendingConfirmationCard/Modal).
 const PAPER_COLOR = '#FF9F0A';
-
-/**
- * Headless per-position live-tick subscriber — reports every mark-to-market
- * tick up via onUpdate, same mechanism PositionRow uses internally (see
- * LivePositionsSection.tsx), but with no UI of its own. Needed because this
- * tape doesn't render position rows, yet still has to feed the exact same
- * cash + sum(live market_value) equity calc position.tsx's account bar
- * uses — otherwise its Today P&L silently drifts from the slower ~60s
- * account-level poll instead of matching what Live Positions shows.
- */
-function LivePositionPnlSub({
-  pos, onUpdate,
-}: {
-  pos: PositionEntry;
-  onUpdate: (strategyId: string, data: LivePriceData | null) => void;
-}) {
-  const { data: live } = useStrategyLivePrice(pos.strategy_id, pos.active);
-  useEffect(() => {
-    onUpdate(pos.strategy_id, live);
-  }, [pos.strategy_id, live, onUpdate]);
-  useEffect(() => {
-    return () => onUpdate(pos.strategy_id, null);
-  }, [pos.strategy_id, onUpdate]);
-  return null;
-}
 
 const CYCLE_MS = 8000;
 const TRANSITION_MS = 350;
@@ -73,13 +49,13 @@ function rangeLabel(price: number, orbHigh: number, orbLow: number, colors: any)
 function useDerivedEquity(
   account: (AlpacaAccount & { available: boolean }) | undefined,
   positions: PositionEntry[],
-  liveByStrategy: Record<string, LivePriceData | null>,
+  liveById: Record<string, LiveSnapshot>,
 ) {
   const derivedEquity = useMemo(() => {
     if (!account?.available || positions.length === 0) return null;
     let sumMarketValue = 0;
     for (const pos of positions) {
-      const live = liveByStrategy[pos.strategy_id];
+      const live = liveById[pos.strategy_id]?.data;
       if (live?.market_value != null) {
         sumMarketValue += live.market_value;
       } else if (pos.entry_premium != null && pos.qty_remaining != null) {
@@ -87,7 +63,7 @@ function useDerivedEquity(
       }
     }
     return account.cash + sumMarketValue;
-  }, [account, positions, liveByStrategy]);
+  }, [account, positions, liveById]);
 
   const equity = derivedEquity ?? account?.equity ?? null;
   const pnlToday =
@@ -140,8 +116,15 @@ export function LiveTradesTickerTape({ colors }: { colors: any }) {
   const { data: orbRanges } = useOrbRangesForTickers(allTickers);
   const { data: accounts } = useAlpacaBothAccounts();
 
-  const liveEquity = useDerivedEquity(accounts?.live, live.filteredPositions, live.liveByStrategy);
-  const paperEquity = useDerivedEquity(accounts?.paper, paper.filteredPositions, paper.liveByStrategy);
+  // Shared per-position sockets (see strategyLiveStore) — the same ones the
+  // Live Positions rows use, so this tape's equity matches theirs exactly.
+  const strategyIds = useMemo(
+    () => [...live.filteredPositions, ...paper.filteredPositions].map(p => p.strategy_id),
+    [live.filteredPositions, paper.filteredPositions],
+  );
+  const liveById = useStrategyLiveValues(strategyIds);
+  const liveEquity = useDerivedEquity(accounts?.live, live.filteredPositions, liveById);
+  const paperEquity = useDerivedEquity(accounts?.paper, paper.filteredPositions, liveById);
 
   const [index, setIndex] = useState(0);
   // The open-trade list itself can shrink/grow (a position closes, a new one
@@ -202,13 +185,6 @@ export function LiveTradesTickerTape({ colors }: { colors: any }) {
 
   return (
     <View style={[styles.wrap, { backgroundColor: colors.tape }]}>
-      {/* Headless — feeds liveByStrategy above, nothing rendered. */}
-      {live.filteredPositions.map(pos => (
-        <LivePositionPnlSub key={`live-${pos.strategy_id}`} pos={pos} onUpdate={live.handleLiveUpdate} />
-      ))}
-      {paper.filteredPositions.map(pos => (
-        <LivePositionPnlSub key={`paper-${pos.strategy_id}`} pos={pos} onUpdate={paper.handleLiveUpdate} />
-      ))}
       <View style={[styles.liveDot, { backgroundColor: modeColor }]} />
       <View style={styles.content}>
         {/* Only this row animates on cycle — ticker/price/range are what
