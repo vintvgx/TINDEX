@@ -28,6 +28,9 @@ export interface TickerStatus {
   watching?: boolean;
   /** One of the pinned index ETFs (SPY/IWM/QQQ). */
   pinned?: boolean;
+  /** In the Morning Brief — amber dot on the badge's top-right corner (the
+   *  brief trigger color). */
+  brief?: boolean;
 }
 
 /**
@@ -206,14 +209,24 @@ function WheelRow({ slot, slots, offset, ticker, status, colors }: {
   });
   return (
     <Animated.View style={[s.row, style]} pointerEvents="none">
-      <LetterBadge ticker={ticker} status={status} colors={colors} />
+      <View>
+        <LetterBadge ticker={ticker} status={status} colors={colors} />
+        {status?.brief && (
+          <View
+            accessibilityLabel="Morning Brief ticker"
+            style={[s.briefDot, { backgroundColor: colors.warning, borderColor: colors.background }]}
+          />
+        )}
+      </View>
       <Text numberOfLines={1} style={[s.rowText, { color: colors.text }]}>{ticker}</Text>
     </Animated.View>
   );
 }
 
 /** First-letter badge. Fill: live = green, paper = orange, both = split
- *  green/orange, pinned index ETF = accent. Red rim = active watch level. */
+ *  green/orange, pinned index ETF = accent. Red rim = active watch level.
+ *  (Amber corner dot = Morning Brief ticker — drawn by WheelRow, outside the
+ *  badge's clip.) */
 function LetterBadge({ ticker, status, colors }: { ticker: string; status?: TickerStatus; colors: any }) {
   const live = !!status?.live;
   const paper = !!status?.paper;
@@ -273,6 +286,16 @@ const s = StyleSheet.create({
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  /** Morning Brief marker — sits on the badge's top-right corner. */
+  briefDot: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    borderWidth: 1.5,
   },
   half: {
     position: 'absolute',

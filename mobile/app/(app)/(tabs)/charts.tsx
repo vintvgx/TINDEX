@@ -48,7 +48,7 @@ import type { WatchedPriceLevel } from '@/common/types/priceLevels';
 import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
 import { useCancelKeyLevel } from '@/hooks/mutations/priceLevels/useCancelKeyLevel';
 import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLevel';
-import { useBriefLevels, useBriefTriggerAlert } from '@/common/components/digest/briefLevels';
+import { useBriefLevels, useBriefTickers, useBriefTriggerAlert } from '@/common/components/digest/briefLevels';
 import type { ChartLevelBand } from '@/common/components/ticker/TVChart';
 import { isSimId } from '@/lib/devSim/simPositions';
 
@@ -125,7 +125,9 @@ export function ChartsContent({ initialTicker, topInset }: {
     return out;
   }, [liveTickers, paperTickers, watchedTickers, follows]);
 
-  // Letter-badge state for the ticker wheel (see TickerWheel's LetterBadge).
+  // Letter-badge state for the ticker wheel (see TickerWheel's LetterBadge),
+  // plus the Morning Brief flag.
+  const briefTickers = useBriefTickers();
   const tickerStatus = useMemo(() => {
     const map: Record<string, TickerStatus> = {};
     for (const t of tickerList) {
@@ -134,10 +136,11 @@ export function ChartsContent({ initialTicker, topInset }: {
         paper: paperTickers.has(t),
         watching: watchedTickers.has(t),
         pinned: PINNED_TICKERS.includes(t),
+        brief: briefTickers.has(t),
       };
     }
     return map;
-  }, [tickerList, liveTickers, paperTickers, watchedTickers]);
+  }, [tickerList, liveTickers, paperTickers, watchedTickers, briefTickers]);
 
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   // A ticker opened from search or a deep link that isn't otherwise in the

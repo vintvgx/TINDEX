@@ -65,6 +65,22 @@ export function useBriefLevels(ticker: string | null | undefined): BriefLevels |
   }, [ticker, digest, engineBrief]);
 }
 
+/** Every ticker in the Morning Brief (latest brief's watchlist + Muse picks)
+ *  or today's TINDEX brief plays — the same set useBriefLevels draws for. */
+export function useBriefTickers(): Set<string> {
+  const { digest } = useLatestBrief();
+  const { data: engineBrief } = useMorningBrief();
+  return useMemo(() => {
+    const out = new Set<string>();
+    const content = digest?.content_json;
+    if (isMuseBriefContent(content)) {
+      for (const p of [...(content.watchlist ?? []), ...(content.muse_picks ?? [])]) out.add(p.ticker.toUpperCase());
+    }
+    for (const p of engineBrief?.plays ?? []) out.add(p.ticker.toUpperCase());
+    return out;
+  }, [digest, engineBrief]);
+}
+
 /**
  * The trigger alert for a brief ticker: a watched key level at the trigger
  * (KeyLevelWatcher pushes on the first 1-min close through it, with that
