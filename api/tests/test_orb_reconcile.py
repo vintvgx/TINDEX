@@ -80,3 +80,78 @@ def test_ticker_with_no_streamed_bars_gets_history():
     svc, _ = _svc({}, [FULL])
     _run(svc)
     assert svc.orb_ranges["QQQ"]["low"] == Decimal("738.84")
+
+
+# ── Persisting a corrected range ─────────────────────────────────────────────
+# A bare upsert() keyed on the id primary key, so it could only insert: the
+# 09:45 save worked, but a restart re-saving a corrected range collided with
+# today's existing row and failed silently — the sliver stuck all day.
+
+from datetime import datetime  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import MagicMock  # noqa: E402
+
+import pytz  # noqa: E402
+
+import services.tindex.orb_service as orb_mod  # noqa: E402
+
+
+class _FakeTable:
+    def __init__(self, rows):
+        self.rows, self._op, self._payload, self._filters = rows, None, None, {}
+
+    def update(self, payload):
+        self._op, self._payload = "update", payload
+        return self
+
+    def insert(self, payload):
+        self._op, self._payload = "insert", payload
+        return self
+
+    def upsert(self, payload, **_):  # orb_monitoring_state etc.
+        self._op = "noop"
+        return self
+
+    def eq(self, col, val):
+        self._filters[col] = val
+        return self
+
+    def execute(self):
+        if self._op == "update":
+            hit = [r for r in self.rows
+                   if all(r.get(k) == v for k, v in self._filters.items())]
+            for r in hit:
+                r.update(self._payload)
+            return SimpleNamespace(data=hit)
+        if self._op == "insert":
+            self.rows.append(dict(self._payload))
+            return SimpleNamespace(data=[self._payload])
+        return SimpleNamespace(data=[])
+
+
+def _saving_svc(rows, monkeypatch):
+    svc = OrbService.__new__(OrbService)
+    svc.orb_ranges = {}
+    svc._previous_close_cache = {}
+    svc._state_cache = MagicMock()
+    et = pytz.timezone("America/New_York")
+    svc.get_current_et_time = lambda: et.localize(datetime(2026, 10, 13, 11, 38))
+    svc.supabase = SimpleNamespace(table=lambda name: _FakeTable(rows if name == "orb_ranges" else []))
+    monkeypatch.setattr(orb_mod, "get_gap_analysis_service",
+                        lambda: SimpleNamespace(get_cached_prior=lambda *_: None))
+    return svc
+
+
+def test_save_overwrites_todays_existing_row(monkeypatch):
+    rows = [{"ticker": "QQQ", "trade_date": "2026-10-13", "orb_high": 743.43, "orb_low": 742.69}]
+    svc = _saving_svc(rows, monkeypatch)
+    asyncio.run(svc.save_orb_range("QQQ", FULL))
+    assert len(rows) == 1
+    assert (rows[0]["orb_high"], rows[0]["orb_low"]) == (743.62, 738.84)
+
+
+def test_save_inserts_when_no_row_yet(monkeypatch):
+    rows = []
+    svc = _saving_svc(rows, monkeypatch)
+    asyncio.run(svc.save_orb_range("QQQ", FULL))
+    assert len(rows) == 1 and rows[0]["orb_low"] == 738.84

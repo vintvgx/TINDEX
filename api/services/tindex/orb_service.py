@@ -539,7 +539,20 @@ class OrbService:
                         self.orb_ranges[ticker]["prior_day_trend"] = gap_ctx["prior_day_trend"]
                         self.orb_ranges[ticker]["trend_continuation"] = gap_ctx["trend_continuation"]
             
-            self.supabase.table("orb_ranges").upsert(orb_record).execute()
+            # Update today's row if there is one, else insert. A bare upsert()
+            # keys on the id primary key (absent here), so it only ever
+            # inserted: the 09:45 save worked, but any later correction (a
+            # restart re-fetching history) collided with the existing
+            # (ticker, trade_date) row and failed — the bad range stuck.
+            updated = (
+                self.supabase.table("orb_ranges")
+                .update(orb_record)
+                .eq("ticker", ticker)
+                .eq("trade_date", str(trade_date))
+                .execute()
+            )
+            if not updated.data:
+                self.supabase.table("orb_ranges").insert(orb_record).execute()
             
             # Determine current_price: prefer real last trade/close value if available
             # Check previous_close_cache for a valid previous close value
