@@ -48,7 +48,8 @@ import type { WatchedPriceLevel } from '@/common/types/priceLevels';
 import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
 import { useCancelKeyLevel } from '@/hooks/mutations/priceLevels/useCancelKeyLevel';
 import { useUpdateKeyLevel } from '@/hooks/mutations/priceLevels/useUpdateKeyLevel';
-import { useMorningBrief } from '@/hooks/queries/brief/useMorningBrief';
+import { useBriefLevels, useBriefTriggerAlert } from '@/common/components/digest/briefLevels';
+import type { ChartLevelBand } from '@/common/components/ticker/TVChart';
 import { isSimId } from '@/lib/devSim/simPositions';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -370,8 +371,40 @@ export function ChartsContent({ initialTicker, topInset }: {
   // TVChart has no equivalent yet, so the row only shows on the legacy
   // engine. The Signal & RSI strip renders right below the ticker tape.
   // (displayPrefs/useTVChart were hoisted above the history hooks.)
+  // ── Morning Brief levels + trigger alert (Chart settings → Overlays) ──
+  // Same levels, colors and alert as the brief's Pick Detail Sheet.
+  const briefLevels = useBriefLevels(activeTicker);
+  const briefAlert = useBriefTriggerAlert(briefLevels);
+  const briefToast = useToast();
+  const showBriefLevels = tickerPrefs.showBriefLevels;
+  const briefRows = useMemo(() => {
+    const trig = briefLevels?.trigger;
+    const side = briefLevels?.long ? 'above' : 'below';
+    return [
+      {
+        kind: 'toggle' as const, key: 'briefLevels', icon: 'flag-outline' as const, label: 'Morning Brief levels',
+        description: briefLevels
+          ? `Trigger${trig != null ? ` ${trig.toFixed(2)}` : ''} · stop${briefLevels.stop != null ? ` ${briefLevels.stop.toFixed(2)}` : ''} · target zone${briefLevels.target != null ? ` ${briefLevels.target.toFixed(2)}` : ''}`
+          : 'Trigger, stop and target zone — shown when this ticker is in the Morning Brief',
+        value: showBriefLevels, onChange: (v: boolean) => setTickerPref('showBriefLevels', v),
+      },
+      ...(briefLevels && trig != null ? [{
+        kind: 'toggle' as const, key: 'briefAlert', icon: 'notifications-outline' as const, label: 'Brief trigger alert',
+        description: `Notify on a 1-min close ${side} ${trig.toFixed(2)}, with that bar's volume`,
+        value: briefAlert.armed,
+        onChange: (v: boolean) => briefAlert.setArmed(v, {
+          onSuccess: () => briefToast.success(v
+            ? `Alert armed: ${briefLevels.ticker} 1-min close ${side} ${trig.toFixed(2)}`
+            : `${briefLevels.ticker} trigger alert off`),
+          onError: (e: Error) => briefToast.error(e.message || 'Failed to update the alert'),
+        }),
+      }] : []),
+    ];
+  }, [briefLevels, briefAlert, briefToast, showBriefLevels, setTickerPref]);
+
   const chart = useChartSettings({
     ticker: activeTicker, period, colors,
+    extraOverlayRows: briefRows,
     canMarkWatchLevel: displayPrefs.chartEngine === 'legacy',
     technicalsGo,
     // The tape's signal pill reads chart.technicals — with the strip, VWAP
@@ -414,19 +447,29 @@ export function ChartsContent({ initialTicker, topInset }: {
   // ZoneEngine's auto-detected support/resistance bands, same as the
   // full-screen chart — fetched only while "Auto-detected zones" is on.
   const { zones: autoZones, context: zoneContext } = useChartAutoZones(activeTicker, chart.showAutoZones && technicalsGo);
-  // Today's morning-brief play for this ticker (if any) draws its if/then
-  // levels — trigger, target, invalid — alongside the chart's own lines.
-  const { data: morningBrief } = useMorningBrief();
+  // The ticker's Morning Brief levels, drawn like the Pick Detail Sheet's
+  // setup chart: dashed amber trigger, the stop as its support (green, CALL)
+  // or resistance (red, PUT) line, and the target as a red-tinted zone with
+  // dashed edges (TVChart levelBands; a plain line on the legacy engine).
+  const briefOn = showBriefLevels && briefLevels != null;
   const chartReferenceLines = useMemo<ChartReferenceLine[] | null>(() => {
-    const play = morningBrief?.plays.find(p => p.ticker === activeTicker);
-    if (!play) return chart.referenceLines ?? null;
+    if (!briefOn || !briefLevels) return chart.referenceLines ?? null;
+    const { trigger, stop, target, long } = briefLevels;
     return [
       ...(chart.referenceLines ?? []),
-      { label: 'Brief trigger', price: play.trigger, color: '#F59E0B', dash: '6,4' },
-      { label: 'Brief target', price: play.target, color: colors.success, dash: '6,4' },
-      { label: 'Brief invalid', price: play.invalidation, color: colors.error, dash: '2,4' },
+      ...(trigger != null ? [{ label: 'Trigger', price: trigger, color: colors.warning, dash: '5,4' }] : []),
+      ...(stop != null ? [{ label: 'Stop', price: stop, color: long ? colors.success : colors.error, dash: '6,4' }] : []),
+      ...(!useTVChart && target != null ? [{ label: 'Target', price: target, color: colors.error, dash: '4,3' }] : []),
     ];
-  }, [morningBrief, activeTicker, chart.referenceLines, colors.success, colors.error]);
+  }, [briefOn, briefLevels, chart.referenceLines, colors.warning, colors.success, colors.error, useTVChart]);
+  const briefLevelBands = useMemo<ChartLevelBand[] | null>(() => {
+    if (!briefOn || !briefLevels?.zone) return null;
+    const { zone, target } = briefLevels;
+    return [{
+      id: 'brief-target', low: zone.low, high: zone.high, color: colors.error,
+      tag: target != null ? { price: target, title: 'Target' } : undefined,
+    }];
+  }, [briefOn, briefLevels, colors.error]);
   const onChartAreaLayout = useCallback((e: LayoutChangeEvent) => {
     setChartAreaHeight(e.nativeEvent.layout.height);
   }, []);
@@ -711,8 +754,9 @@ export function ChartsContent({ initialTicker, topInset }: {
                   showOrbRange={chart.showOrb && (period === '1D' || period === '1W')}
                   sessionReferenceLines={sessionReferenceLines}
                   showSessionLines={chart.chartSettings.showSessionLines}
-                  // Includes today's morning-brief play levels for this ticker.
+                  // Includes the ticker's Morning Brief trigger / stop (+ target on legacy).
                   referenceLines={chartReferenceLines}
+                  levelBands={briefLevelBands}
                   livePrice={streamPrice}
                   onAutoZoneTap={handleTVAutoZoneTap}
                   onWatchZoneTap={handleTVWatchZoneTap}
@@ -750,7 +794,7 @@ export function ChartsContent({ initialTicker, topInset }: {
                   onUpdateWatchZone={handleUpdateWatchZone}
                   resetKey={activeTicker}
                   sessionReferenceLines={sessionReferenceLines}
-                  // Includes today's morning-brief play levels for this ticker.
+                  // Includes the ticker's Morning Brief trigger / stop (+ target on legacy).
                   referenceLines={chartReferenceLines}
                   settings={chart.chartSettings}
                 />

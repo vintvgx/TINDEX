@@ -29,6 +29,8 @@ export interface ChartDisplayPrefs {
   showSR: boolean;
   /** Options call/put OI walls (+ expiry-day max pain) on intraday views. */
   showWalls: boolean;
+  /** Charts tab: the ticker's Morning Brief trigger / stop / target zone. */
+  showBriefLevels: boolean;
   /** Timeframe moving-average overlays (computed from the loaded bars). */
   ema20: boolean;
   ema50: boolean;
@@ -60,6 +62,7 @@ export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
   showOrb: true,
   showSR: false,
   showWalls: true,
+  showBriefLevels: true,
   ema20: true,
   ema50: true,
   ema200: false,

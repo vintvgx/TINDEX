@@ -40,6 +40,15 @@ EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 
 _MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
+def _fmt_volume(v: int) -> str:
+    """1240000 → 1.24M, 52300 → 52.3K, 812 → 812."""
+    if v >= 1_000_000:
+        return f"{v / 1_000_000:.2f}M"
+    if v >= 1_000:
+        return f"{v / 1_000:.1f}K"
+    return str(v)
+
+
 def _fmt_contract(symbol: str) -> str:
     """
     Converts OCC symbol to human-readable label.
@@ -467,7 +476,8 @@ class StrategyNotifier:
 
     def notify_level_confirmed(self, ticker: str, direction: str, level_low: float,
                                 level_high: float, price: float, level_id: str,
-                                zone_type: str = "trade"):
+                                zone_type: str = "trade", volume: int | None = None,
+                                avg_volume: float | None = None, brief_trigger: bool = False):
         """
         A user-watched key level (self-identified or from a Discord flow
         call — see watched_price_levels / KeyLevelWatcher) just had a
@@ -475,20 +485,29 @@ class StrategyNotifier:
         contract suggestions (Kareem's call 2026-10-06); suggestions are
         still scored and stored on the row for the app's level UI.
         An investment zone reads as a long-term buy zone, not a trade setup.
+        The body carries the close bar's volume (and × its recent average)
+        whatever it was — there's no volume gate on a level cross.
         """
         side = "above" if direction == "bullish" else "below"
         level_label = (
             f"${level_low:.2f}" if level_low == level_high
             else f"${level_low:.2f}-${level_high:.2f}"
         )
+        emoji = "📈" if direction == "bullish" else "📉"
         if zone_type == "investment":
             emoji, title = "💼", f"{ticker} in Investment Buy Zone"
+        elif brief_trigger:
+            title = f"{ticker} Brief Trigger Crossed"
         else:
-            emoji = "📈" if direction == "bullish" else "📉"
             title = f"{ticker} Key Level Confirmed"
+        body = f"Closed {side} {level_label} @ ${price:.2f}"
+        if volume is not None:
+            body += f" · 1m vol {_fmt_volume(volume)}"
+            if avg_volume:
+                body += f" ({volume / avg_volume:.1f}× avg)"
         self._dispatch(
             title=f"{emoji} {title}",
-            body=f"Closed {side} {level_label} @ ${price:.2f}",
+            body=body,
             data={
                 "screen": "options",
                 "type": "level_confirmed",
