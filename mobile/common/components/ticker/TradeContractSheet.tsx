@@ -29,6 +29,7 @@ import {
   ExitLadder, ladderRequest, ladderRungs, LADDER_TP1_PCT, LADDER_TP2_PCT, type LadderSetup,
 } from '@/common/components/trade/ExitLadder';
 import { useTradeSheetPrefs } from '@/hooks/useTradeSheetPrefs';
+import { isOptionsSessionOpen } from '@/lib/marketHours';
 
 interface Props {
   visible: boolean;
@@ -48,6 +49,8 @@ interface Props {
    *  differential), entered here at $1.35 → stop set to $1.10, not $1.25. */
   alertEntryPrice?: number | null;
   alertStopLoss?: number | null;
+  /** Paper/Live the sheet opens on (e.g. the host chain's own toggle). Default paper. */
+  initialPaperMode?: boolean;
 }
 
 /**
@@ -62,9 +65,9 @@ interface Props {
  * never has to close to enter a trade). Neither wrapper duplicates any of
  * this logic — only how it's presented differs.
  */
-function TradeContractForm({ visible, onClose, colors, ticker, contract, currentPrice, alertEntryPrice, alertStopLoss }: Omit<Props, 'contract'> & { contract: OptionsContract }) {
+function TradeContractForm({ visible, onClose, colors, ticker, contract, currentPrice, alertEntryPrice, alertStopLoss, initialPaperMode }: Omit<Props, 'contract'> & { contract: OptionsContract }) {
   const toast = useToast();
-  const [paperMode, setPaperMode]       = useState(true);
+  const [paperMode, setPaperMode]       = useState(initialPaperMode ?? true);
   // The ladder runs on SCALPER; picking another profile under "All
   // profiles" switches the ladder off and uses that profile as before.
   const [profileIndex, setProfileIndex] = useState(LADDER_PROFILE_INDEX);
@@ -199,6 +202,14 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
       },
       onError: (e) => {
         if (e instanceof StreamUnavailableError) {
+          // No live quote because the options market is closed (after hours /
+          // weekends) — "enter off the last price?" is the wrong question
+          // then. Say so plainly and stay on Confirm.
+          if (!isOptionsSessionOpen()) {
+            toast.error("Can't enter — the options market is closed. It opens 9:30 AM ET.");
+            setBlindEntry(null);
+            return;
+          }
           setReviewOpen(false);
           setBlindEntry({ body, lastPrice: e.payload.last_price ?? 0 });
           return;
@@ -648,14 +659,14 @@ function ArmToggle({ label, on, onPress, colors }: { label: string; on: boolean;
  * exact same profile/SL pickers and submission path as Home's Trade flow so
  * behavior is identical regardless of where the contract was found.
  */
-export function TradeContractSheet({ visible, onClose, colors, ticker, contract, currentPrice, alertEntryPrice, alertStopLoss }: Props) {
+export function TradeContractSheet({ visible, onClose, colors, ticker, contract, currentPrice, alertEntryPrice, alertStopLoss, initialPaperMode }: Props) {
   if (!contract) return null;
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <TradeContractForm
         visible={visible} onClose={onClose} colors={colors}
         ticker={ticker} contract={contract} currentPrice={currentPrice}
-        alertEntryPrice={alertEntryPrice} alertStopLoss={alertStopLoss}
+        alertEntryPrice={alertEntryPrice} alertStopLoss={alertStopLoss} initialPaperMode={initialPaperMode}
       />
     </Modal>
   );

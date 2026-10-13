@@ -198,7 +198,7 @@
               ctx.save();
               ctx.globalAlpha = z.edgeOpacity;
               ctx.strokeStyle = z.edgeColor || z.color;
-              ctx.lineWidth = Math.max(1, Math.round(vpr));
+              ctx.lineWidth = Math.max(1, Math.round((z.edgeWidth || 1) * vpr));
               if (z.dashed) ctx.setLineDash([4 * vpr, 4 * vpr]);
               ctx.beginPath();
               ctx.moveTo(x0, top + 0.5);
@@ -420,12 +420,21 @@
     // A tap elsewhere dismisses a pending ⊕ (but not the click LWC may emit
     // as the long-press itself ends).
     if (pendingAlertPrice !== null && Date.now() - pendingShownAt > 400) hidePendingAlert();
-    if (!param || !param.point || !mainSeries) return;
+    // Only a clean tap (one finger, barely moved, quick) can select an alert
+    // line — the end of a pan, a pinch or a long-press never does
+    // (2026-10-13: lines were opening by accident). Recorded in the capture
+    // phase by the touch listeners below, so it's set before this runs.
+    var clean = lastTapClean && Date.now() - lastTapAt < 500;
+    lastTapClean = false;
+    if (!clean || !param || !param.point || !mainSeries) {
+      post({ type: 'chart-interact' });
+      return;
+    }
     var price = mainSeries.coordinateToPrice(param.point.y);
-    if (price === null) return;
-    // Watch zones have no pills — hit-test the band directly. ±14px tolerance
-    // so thin/point levels (high == low) stay tappable on touch.
-    var TAP_TOL_PX = 14;
+    if (price === null) { post({ type: 'chart-interact' }); return; }
+    // Watch zones have no pills — hit-test the band directly. Tight ±6px so
+    // only a deliberate tap on the line selects it (was ±14px).
+    var TAP_TOL_PX = 6;
     for (var i = 0; i < zones.watch.length; i++) {
       var z = zones.watch[i];
       var yTop = mainSeries.priceToCoordinate(z.high);
@@ -444,6 +453,38 @@
         return;
       }
     }
+    // A clean tap that missed every line — dismisses any selection.
+    post({ type: 'chart-interact' });
+  }
+
+  // Clean-tap tracking for onChartClick (capture phase: runs before LWC's
+  // own handlers on the chart's inner elements).
+  var lastTapClean = false, lastTapAt = 0;
+  var tapStartT = 0, tapStartX = 0, tapStartY = 0, tapMoved = false, tapMulti = false, panNotified = false;
+  var TAP_MAX_MS = 300, TAP_SLOP_PX2 = 100;
+  function tapStart(e) {
+    var t = e.touches && e.touches[0];
+    tapStartT = Date.now();
+    tapStartX = t ? t.clientX : 0;
+    tapStartY = t ? t.clientY : 0;
+    tapMoved = false;
+    panNotified = false;
+    tapMulti = !!(e.touches && e.touches.length > 1);
+  }
+  function tapMove(e) {
+    if (e.touches && e.touches.length > 1) tapMulti = true;
+    var t = e.touches && e.touches[0];
+    if (!t) return;
+    var dx = t.clientX - tapStartX, dy = t.clientY - tapStartY;
+    if (dx * dx + dy * dy > TAP_SLOP_PX2) {
+      tapMoved = true;
+      // A pan/zoom gesture dismisses any selected alert line — once per gesture.
+      if (!panNotified) { panNotified = true; post({ type: 'chart-interact' }); }
+    }
+  }
+  function tapEnd() {
+    lastTapAt = Date.now();
+    lastTapClean = !tapMoved && !tapMulti && lastTapAt - tapStartT <= TAP_MAX_MS;
   }
 
   // ── Commands ────────────────────────────────────────────────────────
@@ -1011,6 +1052,12 @@
     var lastCrosshairPrice = null;
     var crosshairShownThisPress = false;
     var touchStartX = 0, touchStartY = 0;
+    // Clean-tap tracking (see onChartClick) — capture phase, so these run
+    // before LWC's own touch handlers decide it was a click.
+    chartEl.addEventListener('touchstart', tapStart, { capture: true, passive: true });
+    chartEl.addEventListener('touchmove', tapMove, { capture: true, passive: true });
+    chartEl.addEventListener('touchend', tapEnd, { capture: true, passive: true });
+    chartEl.addEventListener('touchcancel', function () { tapMoved = true; tapEnd(); }, { capture: true, passive: true });
     chartEl.addEventListener('touchstart', function (e) {
       touchedSinceFit = true;
       longPressArmed = false;

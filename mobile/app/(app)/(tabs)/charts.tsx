@@ -508,6 +508,20 @@ export function ChartsContent({ initialTicker, topInset }: {
     setTappedAlert(level);
   }, [allKeyLevels]);
   const [tappedAlert, setTappedAlert] = useState<WatchedPriceLevel | null>(null);
+  // The alert pill is a momentary selection, not a panel (2026-10-13): it
+  // closes on a pan/zoom or a tap elsewhere (onChartInteract), on any
+  // ticker/timeframe/bar-size switch, on leaving the tab, or after a few
+  // idle seconds. Delete takes two taps (trash → red "Delete").
+  const [alertDeleteArmed, setAlertDeleteArmed] = useState(false);
+  const dismissAlertPill = useCallback(() => setTappedAlert(null), []);
+  useEffect(() => { setAlertDeleteArmed(false); }, [tappedAlert?.id]);
+  useEffect(() => { setTappedAlert(null); }, [activeTicker, period, chartInterval]);
+  useEffect(() => {
+    if (!tappedAlert) return;
+    const id = setTimeout(() => setTappedAlert(null), alertDeleteArmed ? 4000 : 5000);
+    return () => clearTimeout(id);
+  }, [tappedAlert, alertDeleteArmed]);
+  useEffect(() => { if (!tabFocused) setTappedAlert(null); }, [tabFocused]);
   // Optimistic alert lines, TradingView-style — the line itself is the
   // confirmation (no toasts): a created alert draws the instant ⊕ is tapped,
   // a deleted one disappears the instant delete is confirmed. Both roll
@@ -702,6 +716,8 @@ export function ChartsContent({ initialTicker, topInset }: {
                   livePrice={streamPrice}
                   onAutoZoneTap={handleTVAutoZoneTap}
                   onWatchZoneTap={handleTVWatchZoneTap}
+                  selectedWatchZoneId={tappedAlert?.id ?? null}
+                  onChartInteract={dismissAlertPill}
                   resetKey={`${activeTicker}:${period}:${chartInterval}`}
                   emas={chart.emaOverlays}
                   mode={tvMode}
@@ -752,6 +768,8 @@ export function ChartsContent({ initialTicker, topInset }: {
               <View style={{ width: 1, alignSelf: 'stretch', backgroundColor: colors.border }} />
               <Pressable
                 onPress={() => {
+                  // First tap arms (red "Delete"); the second deletes.
+                  if (!alertDeleteArmed) { setAlertDeleteArmed(true); return; }
                   const id = tappedAlert.id;
                   setTappedAlert(null);
                   // Line disappears right away — that's the confirmation.
@@ -764,9 +782,11 @@ export function ChartsContent({ initialTicker, topInset }: {
                   });
                 }}
                 hitSlop={10}
-                accessibilityLabel="Delete alert"
+                accessibilityLabel={alertDeleteArmed ? 'Confirm delete alert' : 'Delete alert'}
+                style={alertDeleteArmed ? { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.error, borderRadius: 7, paddingHorizontal: 9, paddingVertical: 4 } : undefined}
               >
-                <Ionicons name="trash-outline" size={18} color={colors.text} />
+                <Ionicons name="trash-outline" size={alertDeleteArmed ? 15 : 18} color={alertDeleteArmed ? '#fff' : colors.text} />
+                {alertDeleteArmed && <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>Delete</Text>}
               </Pressable>
               <Pressable onPress={() => setTappedAlert(null)} hitSlop={10} accessibilityLabel="Dismiss">
                 <Ionicons name="close" size={16} color={colors.textSecondary} />

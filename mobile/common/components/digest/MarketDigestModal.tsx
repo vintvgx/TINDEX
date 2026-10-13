@@ -9,6 +9,7 @@ import { format, parseISO } from 'date-fns';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketDigest } from '@/hooks/queries/digest/useMarketDigest';
 import { useSeenMarketDigests } from '@/hooks/useSeenMarketDigests';
+import { useCloseOnTradeEntered } from '@/common/services/tradeEntryEvents';
 
 interface Props {
   /** ISO date (YYYY-MM-DD) of the digest to view. */
@@ -31,6 +32,8 @@ interface Props {
  * for `date` already exists.
  */
 export function MarketDigestModal({ date, visible, onClose, previewContent }: Props) {
+  // A trade entered from the full brief → close; Home takes over.
+  useCloseOnTradeEntered(visible, onClose);
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} presentationStyle="fullScreen">
       {/* Two providers, both needed for the same underlying reason: a core

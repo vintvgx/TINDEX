@@ -36,6 +36,18 @@ export function isMarketHours(): boolean {
   return mins >= 9 * 60 + 15 && mins < 16 * 60 + 15;
 }
 
+/** Strictly the regular options session — Mon–Fri, 9:30 AM–4:00 PM ET
+ *  (no buffer, unlike isMarketHours). Used to tell "the market is closed"
+ *  apart from a genuinely dead price feed when an entry can't verify a live
+ *  quote. Holidays aren't modelled. */
+export function isOptionsSessionOpen(): boolean {
+  const et = getETNow();
+  if (!et) return false;
+  if (['Sat', 'Sun'].includes(et.weekday)) return false;
+  const mins = et.hour * 60 + et.minute;
+  return mins >= 9 * 60 + 30 && mins < 16 * 60;
+}
+
 /** Returns true once it's at/after 8:30 AM ET — the Market Digest's own
  *  cron schedule (see supabase/migrations/20260902_market_digest_cron.sql).
  *  Used to keep the Home card's "not generated yet" fallback — and its

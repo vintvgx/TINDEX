@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 
 /**
  * Post-entry handoff (entry flow, 2026-10-11): once a trade sheet's success
@@ -30,6 +30,22 @@ export function subscribeTradeEntered(l: Listener): () => void {
   return () => {
     listeners.delete(l);
   };
+}
+
+/**
+ * Close a sheet/modal that can sit UNDER a trade sheet (ticker sheet, the
+ * brief's pick sheet, contracts modal, …) the moment a trade is entered, so
+ * TradeEntryNavigator lands on Home with no orphaned modal / ghost backdrop
+ * left behind (entry-flow spec, acceptance #4). `close` is read from a ref —
+ * passing a fresh closure each render never re-subscribes.
+ */
+export function useCloseOnTradeEntered(open: boolean, close: () => void): void {
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    if (!open) return;
+    return subscribeTradeEntered(() => closeRef.current());
+  }, [open]);
 }
 
 // --- Highlight: which position card Home should flag as just opened -------
