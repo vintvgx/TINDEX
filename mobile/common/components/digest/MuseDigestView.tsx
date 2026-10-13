@@ -802,12 +802,12 @@ export function MuseDigestView({
               </Text>
             </View>
           ) : null}
-          {content.earnings_blackout.length > 0 ? (
+          {(content.earnings_blackout ?? []).length > 0 ? (
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
               <Text style={[styles.mono, { fontSize: 10, color: colors.textTertiary, alignSelf: 'center' }]}>
                 EARNINGS BLACKOUT:
               </Text>
-              {content.earnings_blackout.map((t) => (
+              {(content.earnings_blackout ?? []).map((t) => (
                 <View
                   key={t}
                   style={[styles.badge, { backgroundColor: colors.error + '18', borderColor: colors.error + '44' }]}
