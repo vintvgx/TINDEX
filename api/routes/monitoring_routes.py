@@ -218,7 +218,7 @@ def start_contracts_monitor_core(debug_mode: bool = False) -> dict:
     """
     Core start logic shared by the /contracts/monitor/start route and app.py's
     boot-time auto-start — same fix as start_orb_service /
-    start_signal_ingest_core above/in social_routes.py (see start_orb_service's
+    the boot self-heal in app.py (see start_orb_service's
     docstring for the 2026-07-09 incident this pattern exists to prevent).
     OPTIONS_MONITOR_SERVICE is a plain in-process global with no cron backstop,
     so a mid-session Railway restart (redeploy, platform restart, crash) wipes
@@ -563,18 +563,6 @@ def _get_price_stream_status() -> dict:
         return {"running": False, "toggle": False, "error": str(exc)}
 
 
-def _get_social_signals_stream_status() -> dict:
-    try:
-        from services.websocket.social_signals_stream import social_signals_stream
-        return {
-            "running": bool(getattr(social_signals_stream, "_running", False)),
-            "clients": len(getattr(social_signals_stream, "_queues", [])),
-            "toggle": False,
-        }
-    except Exception as exc:
-        return {"running": False, "toggle": False, "error": str(exc)}
-
-
 SERVICE_REGISTRY: dict = {
     "orb": (_svc_start_orb, _svc_stop_orb, _svc_status_orb),
     "contracts": (_svc_start_contracts, _svc_stop_contracts, _svc_status_contracts),
@@ -639,10 +627,8 @@ def get_services_status():
     Backing data for the Profile → Admin → Service Status screen. Combines
     the toggle-able services (SERVICE_REGISTRY) with the always-on infra
     streams that active positions depend on (status-only, no toggle — see
-    the comment above _get_option_stream_status). Social signal ingest is
-    intentionally NOT included here — it's a separate, explicitly-triggered
-    service (see routes/social_routes.py docstring); the frontend hits
-    /social-signals/status directly for it.
+    the comment above _get_option_stream_status). (Social signal ingest was
+    removed 2026-10-12.)
     """
     status: dict = {}
     for name, (_, _, status_fn) in SERVICE_REGISTRY.items():
@@ -654,6 +640,5 @@ def get_services_status():
 
     status["option_quote_stream"] = _get_option_stream_status()
     status["price_stream"] = _get_price_stream_status()
-    status["social_signals_price_stream"] = _get_social_signals_stream_status()
 
     return jsonify(status)

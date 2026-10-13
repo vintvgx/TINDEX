@@ -50,42 +50,9 @@ from services.websocket.stock_chart_stream import chart_stream, LatestPriceMailb
 # create unconditionally rather than tucking it inside a try/except. Do not
 # create a second OptionStreamManager anywhere else: this account's Alpaca
 # plan allows only one live connection per API key, and a second one causes
-# a "connection limit exceeded" reconnect storm (see
-# services/websocket/social_signals_stream.py's docstring for the incident).
+# a "connection limit exceeded" reconnect storm (2026-10-05 incident).
 from services.strategy.option_stream import OptionStreamManager
 _option_stream_manager = OptionStreamManager()
-
-from services.websocket.social_signals_stream import social_signals_stream
-social_signals_stream.set_stream_manager(_option_stream_manager)
-social_signals_stream.start()
-
-
-@sock.route("/ws/social-signals/live")
-def ws_social_signals_live(ws):
-    """
-    Live mid-price ticks for every currently-tracked social-signal contract —
-    one shared connection per client, fanned out from social_signals_stream's
-    single background broadcast loop (see that module's docstring for why
-    this isn't one poll-loop-per-connection, and why this route is registered
-    here at module scope rather than nested inside the ORB engine's
-    try/except below — a failure initialising ORB engines must never be able
-    to silently take the social-signals stream down with it).
-    """
-    import queue as _queue
-
-    client_q = social_signals_stream.add_client()
-    try:
-        while True:
-            try:
-                msg = client_q.get(timeout=30)
-                ws.send(msg)
-            except _queue.Empty:
-                ws.send(json.dumps({"type": "ping"}))
-    except Exception as exc:
-        logger.debug("[WS/social-signals] connection ended: %s", exc)
-    finally:
-        social_signals_stream.remove_client(client_q)
-
 
 # ── Blueprints ─────────────────────────────────────────────────────────────────
 
@@ -96,7 +63,6 @@ from routes.options_routes import bp as options_bp
 from routes.portfolio_routes import bp as portfolio_bp
 from routes.agent_routes import bp as agent_bp
 from routes.swing_routes import bp as swing_bp
-from routes.social_routes import bp as social_bp
 from routes.robinhood_routes import bp as robinhood_bp
 from routes.review_notes_routes import bp as review_notes_bp
 from routes.news_routes import news_bp
@@ -116,7 +82,6 @@ app.register_blueprint(options_bp)
 app.register_blueprint(portfolio_bp)
 app.register_blueprint(agent_bp)
 app.register_blueprint(swing_bp)
-app.register_blueprint(social_bp)
 app.register_blueprint(robinhood_bp)
 app.register_blueprint(review_notes_bp)
 app.register_blueprint(news_bp)
@@ -318,12 +283,12 @@ try:
     # other Unusual Whales integration, following cancellation of the
     # Unusual Whales subscription.
 
-    # Auto-start the ORB data hub, social-signal ingest, and options contract
+    # Auto-start the ORB data hub and options contract
     # monitor on process boot — a self-healing backstop for a MID-SESSION
     # Railway restart (redeploy, platform restart, crash) that would otherwise
     # wipe these plain in-process globals to None with nothing to bring them
     # back (2026-07-09 / 2026-07-17 incidents — see each start function's own
-    # docstring in monitoring_routes.py / social_routes.py).
+    # docstring in monitoring_routes.py).
     #
     # Gated on is_market_hours() (2026-08-04): this used to fire unconditionally
     # on every boot, including deploys pushed well outside trading hours — e.g.
@@ -343,13 +308,6 @@ try:
             logger.warning("[App] ORB hub auto-start at boot failed: %s", _orb_boot_err)
 
         try:
-            from routes.social_routes import start_signal_ingest_core as _start_social_ingest
-            _start_social_result, _ = _start_social_ingest()
-            logger.info("[App] Social signal ingest auto-start at boot: %s", _start_social_result.get("message"))
-        except Exception as _social_boot_err:
-            logger.warning("[App] Social signal ingest auto-start at boot failed: %s", _social_boot_err)
-
-        try:
             from routes.monitoring_routes import start_contracts_monitor_core as _start_contracts_monitor
             _start_contracts_result = _start_contracts_monitor()
             logger.info("[App] Options contract monitor auto-start at boot: %s", _start_contracts_result.get("message"))
@@ -357,7 +315,7 @@ try:
             logger.warning("[App] Options contract monitor auto-start at boot failed: %s", _contracts_boot_err)
     else:
         logger.info(
-            "[App] Boot auto-start skipped for ORB hub / social ingest / options "
+            "[App] Boot auto-start skipped for ORB hub / options "
             "monitor — outside market hours (9:30 AM-4 PM ET, Mon-Fri). The 9:20 "
             "AM cron (or a manual Admin start) will bring them up normally."
         )

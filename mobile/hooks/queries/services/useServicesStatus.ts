@@ -64,7 +64,6 @@ export interface ServicesStatus {
   contracts: ContractsServiceStatus;
   option_quote_stream: InfraStreamStatus;
   price_stream: InfraStreamStatus;
-  social_signals_price_stream: InfraStreamStatus;
 }
 
 const FALLBACK: ServicesStatus = {
@@ -72,7 +71,6 @@ const FALLBACK: ServicesStatus = {
   contracts: { running: false, toggle: true },
   option_quote_stream: { running: false, toggle: false },
   price_stream: { running: false, toggle: false },
-  social_signals_price_stream: { running: false, toggle: false },
 };
 
 function isWithinServiceHours(): boolean {

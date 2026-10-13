@@ -5,7 +5,6 @@ import { SegmentedPager } from '@/common/components/ui/SegmentedPager';
 import MonitorScreen from './monitor';
 import MorningBriefScreen from './brief';
 import StrategyScreen from './strategy';
-import SignalsScreen from './signals';
 import TradeLogScreen from './tradelog';
 import DailyReviewScreen from './daily_review';
 
@@ -13,15 +12,14 @@ const ROUTES = [
   { key: 'monitor', label: 'Monitor' },
   { key: 'brief', label: 'Brief' },
   { key: 'strategy', label: 'Strategy' },
-  { key: 'signals', label: 'Signals' },
   { key: 'tradelog', label: 'Trade Log' },
   { key: 'daily_review', label: 'Daily Review' },
 ];
 
 /**
- * ORB tab — swipeable pager: Monitor | Brief | Strategy | Signals |
+ * ORB tab — swipeable pager: Monitor | Brief | Strategy |
  * Trade Log | Daily Review. Each page reuses the existing standalone screen component
- * directly (monitor.tsx / strategy.tsx / signals.tsx / tradelog.tsx /
+ * directly (monitor.tsx / strategy.tsx / tradelog.tsx /
  * daily_review.tsx are still real routes too, still reachable via
  * router.push for deep links).
  */
@@ -52,7 +50,6 @@ export default function ORBTabScreen() {
           case 'monitor': return <MonitorScreen />;
           case 'brief': return <MorningBriefScreen embedded />;
           case 'strategy': return <StrategyScreen embedded />;
-          case 'signals': return <SignalsScreen embedded />;
           case 'tradelog': return <TradeLogScreen embedded />;
           case 'daily_review': return <DailyReviewScreen />;
           default: return null;
