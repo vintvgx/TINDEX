@@ -58,27 +58,49 @@ function intervalMs(interval: string | undefined): number | null {
   return m ? Number(m[1]) * INTERVAL_MS[m[2]] : null;
 }
 
-/** The line ends at "now". Bars are stamped at their start, so on 15m bars
- *  at 3:36 the forming bar is the 3:30 one — drawn at 3:30, the line looked
- *  6 minutes behind even though its close was current. The forming intraday
- *  bar is re-stamped to now and takes the live price when there is one; once
- *  its window has passed, the live price extends the line to now instead. */
-function withLiveTail(dates: string[], prices: number[], live: number | undefined, interval: string | undefined) {
-  if (prices.length === 0) return { dates, prices };
+/**
+ * Spark bars → the plotted line, ending at "now".
+ *
+ * Intraday bars are stamped at their START but a close is the price at the
+ * bar's END — so each close is plotted at start + interval, with the first
+ * bar's open as the starting point. On 5m bars at 3:42 the points run
+ * …3:35, 3:40, 3:42: the last one is the forming 3:40 bar, re-stamped to now
+ * and taking the live price when streaming. Once a bar's window has passed,
+ * the live price extends the line to now instead. Daily+ bars keep their
+ * dates (index-spaced axis); only their last close follows the live price.
+ */
+function toLine(
+  dates: string[], closes: number[], open: number | null | undefined,
+  live: number | undefined, interval: string | undefined,
+) {
+  const n = Math.min(dates.length, closes.length);
+  if (n === 0) return { dates: [] as string[], prices: [] as number[] };
   const span = intervalMs(interval);
-  const lastStart = new Date(dates[dates.length - 1]).getTime();
   const now = Date.now();
   const hasLive = live != null && live > 0;
-  if (span != null && now < lastStart + span) {
-    const intraday = span < INTERVAL_MS.d;
-    if (!intraday && !hasLive) return { dates, prices };
-    return {
-      dates: intraday ? [...dates.slice(0, -1), new Date(now).toISOString()] : dates,
-      prices: hasLive ? [...prices.slice(0, -1), live] : prices,
-    };
+
+  if (span == null || span >= INTERVAL_MS.d) {
+    const lastStart = new Date(dates[n - 1]).getTime();
+    const prices = closes.slice(0, n);
+    if (!hasLive) return { dates: dates.slice(0, n), prices };
+    if (span != null && now < lastStart + span) return { dates: dates.slice(0, n), prices: [...prices.slice(0, -1), live] };
+    return { dates: [...dates.slice(0, n), new Date(now).toISOString()], prices: [...prices, live] };
   }
-  if (!hasLive) return { dates, prices };
-  return { dates: [...dates, new Date(now).toISOString()], prices: [...prices, live] };
+
+  const ends = dates.slice(0, n).map((d) => new Date(d).getTime() + span);
+  const prices = closes.slice(0, n);
+  if (ends[n - 1] > now) {
+    ends[n - 1] = now;
+    if (hasLive) prices[n - 1] = live;
+  } else if (hasLive) {
+    ends.push(now);
+    prices.push(live);
+  }
+  if (open != null && open > 0) {
+    ends.unshift(new Date(dates[0]).getTime());
+    prices.unshift(open);
+  }
+  return { dates: ends.map((t) => new Date(t).toISOString()), prices };
 }
 
 function useAppActive(): boolean {
@@ -120,7 +142,8 @@ function TickerPage({ ticker, height, width, period, interval, active, livePrice
 
   // A stale copy may be a different session's bars — no live tail on it.
   const series = useMemo(
-    () => withLiveTail(data?.data?.dates ?? [], data?.data?.closes ?? [], stale ? undefined : livePrice, data?.data?.interval),
+    () => toLine(data?.data?.dates ?? [], data?.data?.closes ?? [], data?.data?.open,
+      stale ? undefined : livePrice, data?.data?.interval),
     [data, stale, livePrice],
   );
   const { prices, dates } = series;

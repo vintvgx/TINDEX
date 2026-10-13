@@ -122,6 +122,7 @@ def test_spark_caches_fresh_copies(yahoo):
     ys.get_spark_prices("AAPL", "1Y")
     ys.get_spark_prices("AAPL", "1Y")
     assert yahoo["calls"] == 1
+    assert ys.get_spark_prices("AAPL", "1Y")["open"] == 100.0
     ys._SPARK_CACHE.clear()
 
 

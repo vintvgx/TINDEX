@@ -7,6 +7,8 @@ import type { PricePeriod } from "@/common/types/blogPosts/ticker";
 export interface SparkData {
   dates: string[];
   closes: number[];
+  /** First bar's open — the line's starting point (bars plot at their end). */
+  open?: number | null;
   interval?: string;
   stale?: boolean;
 }

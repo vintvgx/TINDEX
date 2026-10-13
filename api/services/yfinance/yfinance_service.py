@@ -311,7 +311,11 @@ def get_spark_prices(ticker: str, period_key: str, interval: str | None = None) 
     if not isinstance(full, dict):
         full = {}
     stale = bool(full.get("stale"))
+    opens = full.get("opens") or []
+    # `open` = the first bar's open: the app plots closes at each bar's END,
+    # so this is the line's starting point (09:30 on 1D).
     result = {"dates": full.get("dates", []), "closes": full.get("prices", []),
+              "open": opens[0] if opens else None,
               "interval": full.get("interval"), "stale": stale}
     if not stale:
         _SPARK_CACHE[cache_key] = (now, result)
