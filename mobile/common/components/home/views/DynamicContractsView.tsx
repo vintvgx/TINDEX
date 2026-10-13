@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useTrackedContracts } from '@/hooks/queries/track/useTrackedContracts';
+import { useTrackedContractQuotes } from '@/hooks/queries/track/useTrackedContractQuotes';
 import { useUntrackContract } from '@/hooks/mutations/track/useUntrackContract';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
 import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsContractDetailModal';
@@ -16,7 +17,21 @@ import type { OptionsContract } from '@/common/types/blogPosts/ticker';
  * those are on the Open page, DynamicOpenContractsView). Tapping one opens
  * its contract window (OptionsContractDetailModal), same as the Track
  * screen, whose Trade button opens the entry sheet for that contract.
+ *
+ * Each row shows the price when tracking started → the price now, with the
+ * change colored green/red (one batched quote poll, see
+ * useTrackedContractQuotes).
  */
+
+/** The price when tracking started — the snapshot's mid, the same basis as
+ *  the live mark it's compared to (last trade / ask only when there's none). */
+function trackedAtPrice(c: TrackedOptionContract): number | null {
+  const s = c.tracking_snapshot ?? {};
+  const p = [s.mark, s.lastPrice, s.ask].find((v) => typeof v === 'number' && v > 0);
+  return p ?? null;
+}
+
+const fmt = (v: number) => `$${v.toFixed(2)}`;
 
 /**
  * The trade sheet wants an OptionsContract with a CURRENT bid/ask (it sizes
@@ -55,10 +70,14 @@ async function liveContractFor(c: TrackedOptionContract): Promise<OptionsContrac
     timestamp: new Date().toISOString(),
   };
 }
-export function DynamicContractsView() {
+export function DynamicContractsView({ visible = true }: {
+  /** The card's current view — off-screen as a pager neighbor, quotes don't poll. */
+  visible?: boolean;
+} = {}) {
   const colors = useThemeColors();
   const { data: contracts, isLoading } = useTrackedContracts();
   const watched = (contracts ?? []).filter((c) => c.status === 'tracking' || c.status === 'entered');
+  const { data: quotes } = useTrackedContractQuotes(watched.map((c) => c.contract_symbol), visible);
   const [selected, setSelected] = useState<TrackedOptionContract | null>(null);
   const [trade, setTrade] = useState<{ contract: OptionsContract; ticker: string; price: number } | null>(null);
 
@@ -103,6 +122,12 @@ export function DynamicContractsView() {
             {watched.map((c) => {
               const up = c.option_type === 'CALL';
               const dirColor = up ? colors.success : colors.error;
+              const from = trackedAtPrice(c);
+              const now = quotes?.[c.contract_symbol]?.mark ?? null;
+              const pct = from != null && now != null ? ((now - from) / from) * 100 : null;
+              const pctColor = pct == null || Math.abs(pct) < 0.05
+                ? colors.textSecondary
+                : pct > 0 ? colors.success : colors.error;
               return (
                 <TouchableOpacity
                   key={c.id}
@@ -123,6 +148,20 @@ export function DynamicContractsView() {
                     {c.strike} · {c.expiration_date}
                   </Text>
                   <View style={{ flex: 1 }} />
+                  {from != null && (
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={[styles.mono, { fontSize: 11, color: colors.textSecondary }]}>
+                        {fmt(from)} → <Text style={{ fontWeight: '800', color: now != null ? pctColor : colors.textTertiary }}>
+                          {now != null ? fmt(now) : '—'}
+                        </Text>
+                      </Text>
+                      {pct != null && (
+                        <Text style={[styles.mono, { fontSize: 10, fontWeight: '800', color: pctColor }]}>
+                          ({pct > 0 ? '+' : ''}{pct.toFixed(1)}%)
+                        </Text>
+                      )}
+                    </View>
+                  )}
                   <Ionicons name="chevron-forward" size={13} color={colors.textTertiary} />
                 </TouchableOpacity>
               );
@@ -135,6 +174,7 @@ export function DynamicContractsView() {
         <WatchedContractModal
           contract={selected}
           onClose={() => setSelected(null)}
+          liveContractPrice={quotes?.[selected.contract_symbol]?.mark ?? null}
           onTrade={(price) => startTrade(selected, price)}
         />
       )}
@@ -153,8 +193,9 @@ export function DynamicContractsView() {
 }
 
 /** Mounted only while open, so the ticker quote is fetched on demand. */
-function WatchedContractModal({ contract, onClose, onTrade }: {
+function WatchedContractModal({ contract, liveContractPrice, onClose, onTrade }: {
   contract: TrackedOptionContract;
+  liveContractPrice: number | null;
   onClose: () => void;
   onTrade: (underlyingPrice: number) => void;
 }) {
@@ -171,7 +212,8 @@ function WatchedContractModal({ contract, onClose, onTrade }: {
       currentPrice={underlying}
       onTrade={() => onTrade(underlying)}
       isTracked
-      trackedPrice={snapshot?.lastPrice ?? null}
+      trackedPrice={trackedAtPrice(contract)}
+      liveContractPrice={liveContractPrice}
       onUntrackContract={() => untrack.mutate(contract.id, { onSuccess: onClose })}
       isUntracking={untrack.isPending}
     />

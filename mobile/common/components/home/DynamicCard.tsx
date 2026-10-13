@@ -209,7 +209,7 @@ export function DynamicCard({
           view = <DynamicOpenContractsView />;
           break;
         case 'watched':
-          view = <DynamicContractsView />;
+          view = <DynamicContractsView visible={index === viewIndex} />;
           break;
       }
       return <View style={{ width: pageWidth, height: EXPANDED_H }}>{view}</View>;
