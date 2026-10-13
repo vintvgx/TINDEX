@@ -133,14 +133,19 @@ function TickerPage({ ticker, height, width, period, interval, active, livePrice
   onStats: (ticker: string, price: number | null, changePct: number | null) => void;
 }) {
   const colors = useThemeColors();
-  const { data, isLoading, isFetching, dataUpdatedAt, refetch } = useSparkQuery(ticker, period, { interval, active });
+  const { data, isLoading, isFetching, isPlaceholderData, dataUpdatedAt, refetch } =
+    useSparkQuery(ticker, period, { interval, active });
   const stale = !!data?.stale;
+  // While a new range loads, the previous range's line stays up (no
+  // blank-and-redraw) — drawn on its own range's axis, then swapped in one go.
+  const shownPeriod: PricePeriod = data?.period ?? period;
+  const shownInterval = data?.data?.interval ?? interval;
 
   // Landing on a chart (swipe, or the card coming back into view): catch up
   // if its bars are out of date (sparkNeedsRefresh — never after the close
   // once they've been fetched since it). A first load fetches anyway.
   useEffect(() => {
-    if (active && dataUpdatedAt > 0 && sparkNeedsRefresh(dataUpdatedAt)) refetch();
+    if (active && !isPlaceholderData && dataUpdatedAt > 0 && sparkNeedsRefresh(dataUpdatedAt)) refetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
@@ -181,13 +186,13 @@ function TickerPage({ ticker, height, width, period, interval, active, livePrice
         )}
       </View>
       <Text style={[styles.mono, { fontSize: 10, color: colors.textTertiary, marginTop: 2 }]}>
-        {period} · {INTERVAL_LABEL[interval] ?? interval}
+        {shownPeriod} · {INTERVAL_LABEL[shownInterval] ?? shownInterval}
       </Text>
       <View style={{ flex: 1, justifyContent: 'center', marginTop: 8 }}>
         <LinePriceChart
           dates={dates}
           prices={prices}
-          period={period}
+          period={shownPeriod}
           height={height - 96}
           isLoading={isLoading}
           positive={up}

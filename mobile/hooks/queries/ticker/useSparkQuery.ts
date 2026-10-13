@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { RAILWAY_BASE_URL } from "@/lib/railway.config";
 import { useAuth } from "@/common/utils/context/auth/AuthContext";
 import { isMarketHours, fetchedSinceClose } from "@/lib/marketHours";
@@ -48,6 +48,10 @@ const ACTIVE_POLL_MS = 60_000;
  * during market hours, or every 3s while the backend says its copy is stale.
  * Neighbor pages load once (so a swipe lands on a drawn chart) and catch up
  * when they become active (see DynamicChartsView's TickerPage).
+ *
+ * Switching range keeps the current line up until the new one is ready
+ * (keepPreviousData, like the Charts tab's history query) — no blank-and-
+ * redraw flicker. `data.period` says which range is actually on screen.
  */
 export function useSparkQuery(
   ticker: string,
@@ -81,6 +85,7 @@ export function useSparkQuery(
       return data;
     },
     enabled: !!ticker && !!user?.id && !authLoading,
+    placeholderData: keepPreviousData,
     staleTime: (query) => (fetchedSinceClose(query.state.dataUpdatedAt) ? Infinity : SPARK_FRESH_MS),
     refetchInterval: (query) => {
       if (!active) return false;
