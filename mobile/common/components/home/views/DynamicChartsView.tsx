@@ -58,16 +58,26 @@ function intervalMs(interval: string | undefined): number | null {
   return m ? Number(m[1]) * INTERVAL_MS[m[2]] : null;
 }
 
-/** The live price as the line's last point: it updates the forming bar, or
- *  extends the line to "now" once that bar's window has passed. */
+/** The line ends at "now". Bars are stamped at their start, so on 15m bars
+ *  at 3:36 the forming bar is the 3:30 one — drawn at 3:30, the line looked
+ *  6 minutes behind even though its close was current. The forming intraday
+ *  bar is re-stamped to now and takes the live price when there is one; once
+ *  its window has passed, the live price extends the line to now instead. */
 function withLiveTail(dates: string[], prices: number[], live: number | undefined, interval: string | undefined) {
-  if (live == null || !(live > 0) || prices.length === 0) return { dates, prices };
+  if (prices.length === 0) return { dates, prices };
   const span = intervalMs(interval);
   const lastStart = new Date(dates[dates.length - 1]).getTime();
   const now = Date.now();
+  const hasLive = live != null && live > 0;
   if (span != null && now < lastStart + span) {
-    return { dates, prices: [...prices.slice(0, -1), live] };
+    const intraday = span < INTERVAL_MS.d;
+    if (!intraday && !hasLive) return { dates, prices };
+    return {
+      dates: intraday ? [...dates.slice(0, -1), new Date(now).toISOString()] : dates,
+      prices: hasLive ? [...prices.slice(0, -1), live] : prices,
+    };
   }
+  if (!hasLive) return { dates, prices };
   return { dates: [...dates, new Date(now).toISOString()], prices: [...prices, live] };
 }
 
