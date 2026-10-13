@@ -27,21 +27,26 @@ export interface AlpacaPositionsResponse {
   live?: AlpacaPositionSide;
 }
 
+/** While positions are open their values stream over the shared per-position
+ *  WebSocket (useStrategyLiveValues) — this poll is only the backup for a
+ *  dead or stale stream, so it never needs to run faster than this. */
+const WS_BACKUP_MS = 60_000;
+
 /**
- * Fast poll of Alpaca open positions (market values updated by the broker).
+ * Alpaca open positions (market values marked by the broker).
  *
- * Enable this whenever the user has active ORB/0DTE positions.
- * When enabled, refetches every 5 s so the derived equity display stays current
- * without relying on the slower /accounts/both endpoint.
- *
- * When no positions are open, Alpaca returns an empty array in <100 ms — safe
- * to leave enabled at a slower interval.
+ * Live marks come from the per-position WebSocket; this is the slow REST
+ * backup behind them (a stale or disconnected stream) and the authoritative
+ * list of what the broker actually holds. 60s while positions are open, the
+ * usual positionPollMs cadence when flat, off outside market hours. Opens and
+ * closes still land immediately: /ws/app's `positions` push and
+ * boostPositionPolling both invalidate this query.
  */
 export function useAlpacaPositionValues(
   mode: 'paper' | 'live' | 'both' = 'both',
-  options?: { enabled?: boolean; refetchIntervalMs?: number },
+  options?: { enabled?: boolean },
 ) {
-  const { enabled = true, refetchIntervalMs } = options ?? {};
+  const { enabled = true } = options ?? {};
 
   return useQuery<AlpacaPositionsResponse>({
     queryKey: ['alpaca-position-values', mode],
@@ -52,14 +57,13 @@ export function useAlpacaPositionValues(
       return json as AlpacaPositionsResponse;
     },
     enabled,
-    // Explicit interval if given; otherwise 5s while positions are open
-    // (equity moves), 30s when flat, off outside market hours (audit A6).
     refetchInterval: (query) => {
       if (!enabled) return false;
-      if (refetchIntervalMs != null) return refetchIntervalMs;
+      const ms = positionPollMs();
+      if (ms === false) return false;
       const d = query.state.data;
       const open = (d?.paper?.positions?.length ?? 0) + (d?.live?.positions?.length ?? 0) > 0;
-      return positionPollMs({ fast: open });
+      return open ? Math.max(ms, WS_BACKUP_MS) : ms;
     },
     staleTime:       3_000,
     retry: 1,

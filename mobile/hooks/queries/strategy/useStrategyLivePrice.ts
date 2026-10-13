@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { RAILWAY_BASE_URL } from '@/lib/railway.config';
+import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { PendingPriceUpdate } from '@/common/types/strategy';
 import { isSimId, useSimLive } from '@/lib/devSim/simPositions';
+import {
+  EMPTY_SNAPSHOT, getLiveSnapshot, patchLiveData, subscribeLive, type LiveSnapshot,
+} from './strategyLiveStore';
 
 export interface LivePriceData {
   contract:      string;
@@ -102,166 +104,52 @@ interface UseStrategyLivePriceResult {
    *  this type and starts sending "price_update" instead) or nothing pending. */
   pendingPriceData:   PendingPriceUpdate | null;
   connected:          boolean;
-  disconnect:         () => void;
   /** Merge fields into the current WS snapshot immediately (e.g. right after
    *  a stop/TP edit succeeds server-side) instead of waiting for the next
    *  "price_update" tick to catch up — the server confirms the edit over
-   *  REST well before the next tick would otherwise reflect it. */
+   *  REST well before the next tick would otherwise reflect it. Shared:
+   *  every reader of this position sees the patch. */
   patchData:          (patch: Partial<LivePriceData>) => void;
 }
 
+const noopUnsubscribe = () => {};
+const subscribeNothing = () => noopUnsubscribe;
+const getEmpty = () => EMPTY_SNAPSHOT;
+
 /**
- * Opens a WebSocket to /ws/strategy/<strategyId>/live and streams real-time
- * option mid-price + P&L for the active position.
+ * Real-time option mid-price + P&L for one position, streamed from
+ * /ws/strategy/<strategyId>/live.
  *
- * Reconnects automatically on unexpected disconnects while `enabled` is true.
- * Pass enabled=false (or omit strategyId) when no position is open to avoid
- * unnecessary connections.
+ * The socket is shared app-wide (see strategyLiveStore.ts): every component
+ * reading the same strategyId shares ONE connection, which reconnects
+ * automatically while anyone is subscribed. Pass enabled=false (or omit
+ * strategyId) when no position is open to avoid holding a connection.
  */
 export function useStrategyLivePrice(
   strategyId: string | undefined,
   enabled: boolean = true,
   onPositionClosed?: () => void,
 ): UseStrategyLivePriceResult {
-  const [data, setData]                       = useState<LivePriceData | null>(null);
-  const [pendingPriceData, setPendingPriceData] = useState<PendingPriceUpdate | null>(null);
-  const [connected, setConnected]             = useState(false);
-  const wsRef                     = useRef<WebSocket | null>(null);
-  const reconnectTimer            = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const openTimer                 = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const attemptsRef               = useRef(0);
-  const mountedRef                = useRef(true);
-  const shouldReconnectRef        = useRef(true);
-  // Keep callback in a ref so changing it doesn't rebuild the WebSocket
-  const onPositionClosedRef       = useRef(onPositionClosed);
-  onPositionClosedRef.current     = onPositionClosed;
-  // Last few price updates, for display smoothing (see onmessage).
-  const recentRef                 = useRef<LivePriceData[]>([]);
+  // Keep callback in a ref so changing it doesn't resubscribe
+  const onPositionClosedRef = useRef(onPositionClosed);
+  onPositionClosedRef.current = onPositionClosed;
 
   // Dev simulated position: its ticks come from the in-app simulator — no socket.
   const sim = isSimId(strategyId);
   const simLive = useSimLive(strategyId);
 
-  const wsUrl = strategyId && !sim
-    ? RAILWAY_BASE_URL.replace(/^https?/, (s) => (s === 'https' ? 'wss' : 'ws'))
-        + `/ws/strategy/${strategyId}/live`
-    : null;
-
-  const connect = useCallback(() => {
-    if (!wsUrl || !mountedRef.current) return;
-
-    shouldReconnectRef.current = true;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    // Connect watchdog: if the handshake doesn't complete promptly (e.g. the
-    // server has no free thread to serve the upgrade), drop it and let onclose
-    // schedule a backed-off retry — never leave the socket hanging.
-    if (openTimer.current) clearTimeout(openTimer.current);
-    openTimer.current = setTimeout(() => {
-      if (mountedRef.current && ws.readyState !== WebSocket.OPEN) ws.close();
-    }, 8000);
-
-    ws.onopen = () => {
-      if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
-      attemptsRef.current = 0;            // reset backoff on a healthy connection
-      // Fresh connection, fresh tape: pre-gap ticks in the smoothing buffer
-      // would drag the median (and the displayed P&L) for two updates.
-      recentRef.current = [];
-      if (mountedRef.current) setConnected(true);
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data as string);
-        if (!mountedRef.current) return;
-        if (msg.type === 'price_update') {
-          // Display smoothing: the price-derived fields come from the update
-          // whose mid is the MEDIAN of the last 3, so a one-tick spread blip
-          // ($0.30 → $0.36 → $0.30 on a 0DTE) doesn't flash the P&L; a real
-          // move shows by the second update. Everything else (tp1_hit, qty,
-          // stops, timers…) is always the newest. The server already
-          // coalesces to ≤3/s (polling audit A3).
-          const next = msg as LivePriceData;
-          const buf = [...recentRef.current, next].slice(-3);
-          recentRef.current = buf;
-          if (buf.length < 3) {
-            setData(next);
-          } else {
-            const med = [...buf].sort((a, b) => a.mid_price - b.mid_price)[1];
-            setData({
-              ...next,
-              mid_price: med.mid_price,
-              pnl: med.pnl,
-              pnl_pct: med.pnl_pct,
-              market_value: med.market_value,
-            });
-          }
-        } else if (msg.type === 'pending_price_update') {
-          setPendingPriceData(msg as PendingPriceUpdate);
-        } else if (msg.type === 'position_closed') {
-          recentRef.current = [];
-          setData(null);
-          onPositionClosedRef.current?.();
-        }
-      } catch {
-        // ignore malformed frames (e.g. keepalive pings)
-      }
-    };
-
-    ws.onclose = () => {
-      if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
-      if (!mountedRef.current) return;
-      setConnected(false);
-      if (!shouldReconnectRef.current || !enabled) return;
-      // Capped exponential backoff so failed connects don't storm the server.
-      const delay = Math.min(2000 * 1.6 ** attemptsRef.current, 20000);
-      attemptsRef.current += 1;
-      reconnectTimer.current = setTimeout(() => {
-        if (mountedRef.current && enabled && shouldReconnectRef.current) connect();
-      }, delay);
-    };
-
-    ws.onerror = () => {
-      ws.close();
-    };
-  }, [wsUrl, enabled]);
-
-  const disconnect = useCallback(() => {
-    shouldReconnectRef.current = false;
-    if (reconnectTimer.current) {
-      clearTimeout(reconnectTimer.current);
-      reconnectTimer.current = null;
-    }
-    if (openTimer.current) {
-      clearTimeout(openTimer.current);
-      openTimer.current = null;
-    }
-    attemptsRef.current = 0;
-    wsRef.current?.close();
-    wsRef.current = null;
-    recentRef.current = [];
-    setConnected(false);
-    setData(null);
-    setPendingPriceData(null);
-  }, []);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    if (enabled && wsUrl) {
-      connect();
-    }
-    return () => {
-      mountedRef.current = false;
-      disconnect();
-    };
-    // connect is memoized on [wsUrl, enabled]; disconnect is stable — so this
-    // re-runs exactly when the target socket changes (no reconnect storm).
-  }, [connect, disconnect, enabled, wsUrl]);
+  const id = enabled && strategyId && !sim ? strategyId : null;
+  const subscribe = useCallback(
+    (onChange: () => void) =>
+      id ? subscribeLive(id, onChange, () => onPositionClosedRef.current?.()) : noopUnsubscribe,
+    [id],
+  );
+  const getSnapshot = useCallback(() => (id ? getLiveSnapshot(id) : EMPTY_SNAPSHOT), [id]);
+  const snap = useSyncExternalStore(id ? subscribe : subscribeNothing, id ? getSnapshot : getEmpty);
 
   const patchData = useCallback((patch: Partial<LivePriceData>) => {
-    setData(prev => (prev ? { ...prev, ...patch } : prev));
-  }, []);
+    if (id) patchLiveData(id, patch);
+  }, [id]);
 
   // The simulator applies exit edits synchronously, so an optimistic patch
   // has nothing to bridge — and layering one on would hide its own later
@@ -274,9 +162,43 @@ export function useStrategyLivePrice(
       data: simLive,
       pendingPriceData: null,
       connected: !!simLive,
-      disconnect,
       patchData: simPatchData,
     };
   }
-  return { data, pendingPriceData, connected, disconnect, patchData };
+  return { data: snap.data, pendingPriceData: snap.pendingPriceData, connected: snap.connected, patchData };
+}
+
+/**
+ * Latest shared WS snapshot for each of `strategyIds`, keyed by id — holding
+ * every one of those sockets open while mounted. Lets a consumer with no
+ * position rows on screen (Home's account card, the chart tape) read live
+ * marks without a REST poll, and without duplicating any socket a row
+ * already holds. Dev simulated ids are skipped (no socket behind them).
+ */
+export function useStrategyLiveValues(strategyIds: string[]): Record<string, LiveSnapshot> {
+  const key = useMemo(
+    () => Array.from(new Set(strategyIds.filter((id) => !isSimId(id)))).sort().join('|'),
+    [strategyIds],
+  );
+  const ids = useMemo(() => (key ? key.split('|') : []), [key]);
+
+  const subscribe = useCallback((onChange: () => void) => {
+    const unsubs = ids.map((id) => subscribeLive(id, onChange));
+    return () => unsubs.forEach((u) => u());
+  }, [ids]);
+
+  // Must return the same object until something actually changes, or
+  // useSyncExternalStore re-renders forever.
+  const cache = useRef<{ ids: string[]; snaps: Record<string, LiveSnapshot> }>({ ids: [], snaps: {} });
+  const getSnapshot = useCallback(() => {
+    const prev = cache.current;
+    const sameIds = prev.ids === ids;
+    if (sameIds && ids.every((id) => prev.snaps[id] === getLiveSnapshot(id))) return prev.snaps;
+    const snaps: Record<string, LiveSnapshot> = {};
+    for (const id of ids) snaps[id] = getLiveSnapshot(id);
+    cache.current = { ids, snaps };
+    return snaps;
+  }, [ids]);
+
+  return useSyncExternalStore(subscribe, getSnapshot);
 }
