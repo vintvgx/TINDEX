@@ -10,6 +10,7 @@ import { ThetaReadout } from '@/common/components/strategy/ThetaReadout';
 import { LimitSellSheet } from '@/common/components/strategy/LimitSellSheet';
 import { WorkingLimitOrders } from '@/common/components/strategy/WorkingLimitOrders';
 import { isSimId } from '@/lib/devSim/simPositions';
+import { ValueSkeleton } from '@/common/components/ui/ValueSkeleton';
 
 /**
  * 0.7 redesign position card — the "Watchlist · Tindex" brief-card treatment
@@ -45,7 +46,7 @@ export function PositionBriefCard({
     loop.start();
     return () => loop.stop();
   }, [highlighted, glow]);
-  const { data: live, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
+  const { data: live, patchData, resyncing } = useStrategyLivePrice(pos.strategy_id, pos.active);
   const [infoOpen, setInfoOpen] = useState(false);
   const [ladderOpen, setLadderOpen] = useState(false);
 
@@ -126,6 +127,13 @@ export function PositionBriefCard({
       </View>
 
       {/* Hero: market value, with the colored P&L under it */}
+      {resyncing ? (
+        <View style={{ marginTop: 12, gap: 8 }}>
+          <ValueSkeleton width={120} height={24} />
+          <ValueSkeleton width={90} height={14} />
+        </View>
+      ) : (
+      <>
       <Text style={[styles.mono, { fontSize: 26, fontWeight: '800', color: colors.text, marginTop: 10 }]}>
         {marketValue != null ? `$${marketValue.toFixed(2)}` : '—'}
       </Text>
@@ -152,6 +160,8 @@ export function PositionBriefCard({
           {nowPremium != null ? `$${nowPremium.toFixed(2)}` : '—'}
         </Text>
       </View>
+      </>
+      )}
       {/* Needs the real underlying's stream — skipped for a dev sim position. */}
       {!isSimId(pos.strategy_id) && (
         <ThetaReadout

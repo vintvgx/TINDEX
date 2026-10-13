@@ -28,6 +28,7 @@ import { TickerContractsModal } from '@/common/components/ticker/TickerContracts
 import { SetupChart, setupLevels, topDrivers, triggerDistancePct, whyThisSetup } from './SetupChart';
 import { pickContractRows, type PickContractRow } from './pickContracts';
 import type { MuseBriefTicker } from '@/common/types/marketDigest';
+import { useCloseOnTradeEntered } from '@/common/services/tradeEntryEvents';
 
 type Colors = ReturnType<typeof useThemeColors>;
 
@@ -172,6 +173,10 @@ export function PickDetailSheet({ pick, onClose }: { pick: MuseBriefTicker | nul
   };
   const closeRef = useRef(close);
   closeRef.current = close;
+  // A trade entered from this pick (chain → trade sheet) → get out of the
+  // way immediately; Home takes over (TradeEntryNavigator).
+  // (The chain picker lives in SheetBody, which unmounts with the sheet.)
+  useCloseOnTradeEntered(!!pick, () => { setShown(null); onClose(); });
 
   // Swipe-down on the grabber/header.
   const pan = useMemo(

@@ -1,35 +1,22 @@
 import { useEffect, useRef, useMemo, useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
-  FlatList, ScrollView, Switch, Animated, type LayoutChangeEvent,
+  FlatList, ScrollView, Animated, type LayoutChangeEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useToast } from '@/common/components/ui/Toast';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
-import { useImmediateTradeByTicker, StreamUnavailableError } from '@/hooks/mutations/strategy/useImmediateTradeByTicker';
-import { useImmediatePositions } from '@/hooks/queries/strategy/useImmediatePositions';
-import { OptionsContractDetailModal } from '@/common/components/ticker/OptionsContractDetailModal';
-import { BlindEntryModal } from '@/common/components/strategy/BlindEntryModal';
-import type { ImmediateTradeByTickerRequest } from '@/common/types/strategy';
 import { blendHex } from '@/lib/colorBlend';
-import type { OptionsContract, OptionsOpportunity } from '@/common/types/blogPosts/ticker';
-import {
-  IMMEDIATE_PROFILES, DEFAULT_PROFILE_INDEX, defaultQtyFor,
-  getCheapContractAutoGraceMinutes, ProfileDropdown, ManualSLPicker,
-} from '@/common/components/strategy/ImmediateProfilePicker';
-import { StopTypeSelector, type StopType } from '@/common/components/strategy/StopTypeSelector';
-import { EntrySafetySelector, BE_GRACE_DEFAULT, effectiveFloorPct } from '@/common/components/trade/EntrySafetySelector';
-import { useEntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
-import { EntryTechnicalsPanel } from '@/common/components/trade/EntryTechnicalsPanel';
-import { PositioningRow } from '@/common/components/trade/PositioningRow';
-import { GatedBuyButton } from '@/common/components/trade/GatedBuyButton';
-import { AccountModeBanner, accountModeColor } from '@/common/components/trade/AccountModeBanner';
-import { OrderReviewSheet, type ReviewOrder } from '@/common/components/trade/OrderReviewSheet';
+import type { OptionsContract } from '@/common/types/blogPosts/ticker';
+import { accountModeColor } from '@/common/components/trade/AccountModeBanner';
+import { TradeContractSheet } from '@/common/components/ticker/TradeContractSheet';
+import { useCloseOnTradeEntered } from '@/common/services/tradeEntryEvents';
 
 /**
- * Chain browser + order-entry UI: expiration-range/date chips, a calls/puts
- * strike chain (auto-centered on the current price), and the exit-profile /
- * quantity / submit footer. Extracted out of ImmediateTradePanel so the same
+ * Chain browser: expiration-range/date chips and a calls/puts strike chain
+ * (auto-centered on the current price). Tapping a strike opens the v2 trade
+ * sheet (TradeContractSheet → Confirm → Success → Home) — the same entry flow
+ * as everywhere else; this picker no longer has an order form of its own
+ * (entry-flow spec, 2026-10-13). Extracted out of ImmediateTradePanel so the same
  * "browse a chain, tap a strike, trade it" flow can be reused from a fixed
  * ticker (e.g. a ticker detail screen's Contracts tab) without also pulling
  * in the ticker picker, which only makes sense when the ticker isn't already
@@ -145,73 +132,20 @@ const buildRows = (contracts: OptionsContract[], price: number, side: OptionSide
   ];
 };
 
-const asOpportunity = (c: OptionsContract): OptionsOpportunity => ({
-  ask: c.ask, bid: c.bid, contractSymbol: c.symbol, delta: c.delta, dte: 0,
-  expirationDate: c.expiration, extrinsicValue: 0, gamma: c.gamma,
-  impliedVolatility: c.implied_volatility ?? 0, intrinsicValue: 0,
-  lastPrice: c.last_price ?? null, mark: (c.bid + c.ask) / 2, moneyness: 0,
-  openInterest: c.open_interest, optionType: c.option_type, reasons: '',
-  signal: 'CONSIDER', spreadPct: c.ask > 0 ? ((c.ask - c.bid) / c.ask) * 100 : 0,
-  strike: c.strike, theta: c.theta, total_score: 0, vega: c.vega, volume: c.volume,
-});
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChangePaperMode, onSubmitted, initialContract }: Props) {
-  const toast = useToast();
+export function OptionsChainPicker({ ticker, colors, visible, paperMode, onSubmitted, initialContract }: Props) {
   const [side, setSide]                 = useState<OptionSide>(initialContract?.side ?? 'CALL');
-  const [profileIndex, setProfileIndex] = useState(DEFAULT_PROFILE_INDEX);
+  // Tapped contract → the v2 trade sheet (TradeContractSheet): Review →
+  // Confirm → Success → Home. This picker no longer has its own order form.
   const [selected, setSelected]         = useState<OptionsContract | null>(null);
-  const [qty, setQty]                   = useState(defaultQtyFor(IMMEDIATE_PROFILES[DEFAULT_PROFILE_INDEX], 0));
-  const [stopType, setStopType]         = useState<StopType>(5);
-  // Floor + breakeven grace chosen at entry (sent with the order).
-  const [floorPct, setFloorPct] = useState<number | null>(null);
-  const [beGrace, setBeGrace] = useState<number>(BE_GRACE_DEFAULT);
-  const [volumeExit, setVolumeExit]     = useState(false);
-  const [manualSlPct, setManualSlPct]   = useState(30);
-  const [autoGraceMinutes, setAutoGraceMinutes] = useState<5 | 10 | null>(null);
-  // SL/TP enable — on by default for every profile; turning either off lets
-  // a runner run its course (or hold into close) instead of auto-exiting.
-  const [slEnabled, setSlEnabled] = useState(true);
-  const [tpEnabled, setTpEnabled] = useState(true);
-
-  const profile      = IMMEDIATE_PROFILES[profileIndex];
-  const isManual     = profile.isManual === true;
-  const isNoStopLoss = profile.isNoStopLoss === true;
-  // No stop loss in effect — either from a (legacy) NO_STOP_LOSS profile or
-  // the user unchecking Stop Loss directly.
-  const noSL = isNoStopLoss || !slEnabled;
-
-  const handleProfileSelect = (idx: number) => {
-    setProfileIndex(idx);
-    setQty(defaultQtyFor(IMMEDIATE_PROFILES[idx], selected?.ask ?? 0));
-  };
-
-  // Auto-suggest the grace stop-type when a cheap contract is tapped — mirrors
-  // the server-side unconditional price rule (see getCheapContractAutoGraceMinutes),
-  // not gated on OTM-ness. Sizing/profile is untouched; only stop type follows.
-  useEffect(() => {
-    if (!selected) { setAutoGraceMinutes(null); return; }
-    const minutes = getCheapContractAutoGraceMinutes(selected.ask);
-    setAutoGraceMinutes(minutes);
-    setStopType(minutes ?? 'HARD');
-  // Only re-run when the selected contract changes, not on every render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.symbol]);
-
+  // An entry from the sheet → tell the host (e.g. ImmediateTradePanel closes).
+  useCloseOnTradeEntered(visible, () => { setSelected(null); onSubmitted?.(); });
   // A contract selected for one ticker has no meaning once the ticker changes.
   useEffect(() => {
     setSelected(null);
   }, [ticker]);
-
-  // Floor + breakeven grace are per-contract choices — reset whenever a
-  // (different) contract is opened so one trade's safety settings can't
-  // leak into the next.
-  useEffect(() => {
-    setFloorPct(null);
-    setBeGrace(BE_GRACE_DEFAULT);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.symbol]);
 
   const today = useMemo(() => new Date().toISOString().split('T')[0], []);
 
@@ -290,32 +224,6 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   const contractsLoading =
     isLoading || rangeLoading || (!!ticker && !targetExpiration);
 
-  // Technicals gate + Review step for the selected contract — same flow as
-  // TradeContractSheet (see entry_check_service.py for the verdict rules).
-  const entryCheck = useEntryCheck(ticker, selected?.option_type ?? side, visible && !!selected);
-  const [overridden, setOverridden] = useState(false);
-  const [reviewOpen, setReviewOpen] = useState(false);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  useEffect(() => {
-    setOverridden(false);
-    setReviewOpen(false);
-    setSuccessMessage(null);
-  }, [selected?.symbol]);
-
-  const { mutate: submit, isPending } = useImmediateTradeByTicker();
-  // Overtrading guard — see TradeContractSheet's identical comment.
-  const { data: openPositions } = useImmediatePositions();
-  const openLiveCount = (openPositions ?? []).filter(p => p.paper_mode === false).length;
-
-  // Blind Entry — set when the backend couldn't verify a live stream tick
-  // within 8s (status: 'stream_unavailable'). Holds the exact request body
-  // that was in flight so "Enter Anyway" can resubmit it unchanged, just
-  // with bypass_stream_check added.
-  const [blindEntry, setBlindEntry] = useState<{
-    body: ImmediateTradeByTickerRequest;
-    lastPrice: number;
-  } | null>(null);
-
   const chain        = data?.success ? data.data : null;
   const currentPrice = chain?.current_price ?? 0;
 
@@ -387,84 +295,6 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
     return () => clearTimeout(id);
   }, [sepIndex, rows.length, offsets]);
 
-  // Shared by the initial submit and the Blind Entry "Enter Anyway" retry, so
-  // both go through identical success/error handling — the retry just adds
-  // bypass_stream_check to an otherwise-unchanged body.
-  const runSubmit = (body: ImmediateTradeByTickerRequest) => {
-    submit(body, {
-      onSuccess: (r) => {
-        setBlindEntry(null);
-        // See TradeContractSheet — animate on the Review sheet when it's open;
-        // finishSuccess does the reset/close afterwards.
-        if (reviewOpen) {
-          setSuccessMessage(r.message || 'Immediate trade submitted');
-          return;
-        }
-        toast.success(r.message || 'Immediate trade submitted');
-        finishSuccess();
-      },
-      onError: (e) => {
-        if (e instanceof StreamUnavailableError) {
-          setReviewOpen(false);
-          setBlindEntry({ body, lastPrice: e.payload.last_price ?? 0 });
-          return;
-        }
-        toast.error(e.message || 'Trade failed');
-        setBlindEntry(null);
-        setReviewOpen(false);
-        setSelected(null);
-        onSubmitted?.();
-      },
-    });
-  };
-
-  const finishSuccess = () => {
-    setSuccessMessage(null);
-    setReviewOpen(false);
-    setSelected(null);
-    setQty(profile.qty);
-    onSubmitted?.();
-  };
-
-  // Shared by doSubmit and the opt-in enterBlind below — see
-  // TradeContractSheet's buildTradeBody for the same split and why.
-  const buildTradeBody = (): ImmediateTradeByTickerRequest | null => {
-    if (!ticker || !selected) return null;
-    return {
-      ticker,
-      direction:       selected.option_type,
-      contract_symbol: selected.symbol,
-      qty,
-      profile:         profile.key,
-      paper_mode:      paperMode,
-      volume_exit:     isManual ? false : volumeExit,
-      sl_grace_minutes: (noSL || stopType === 'HARD') ? null : stopType,
-      sl_enabled: slEnabled,
-      ...(slEnabled && !noSL && floorPct != null ? { sl_outer_floor_pct: floorPct } : {}),
-      be_grace_seconds: beGrace,
-      tp_enabled: tpEnabled,
-      ...(slEnabled && isManual ? { max_loss_pct: manualSlPct / 100 } : {}),
-    };
-  };
-
-  const doSubmit = () => {
-    const body = buildTradeBody();
-    if (body) runSubmit(body);
-  };
-
-  // Opted into upfront from the Review sheet's "Skip live price check" —
-  // see OrderReviewSheet's onEnterBlind doc comment.
-  const enterBlind = () => {
-    const body = buildTradeBody();
-    if (body) runSubmit({ ...body, bypass_stream_check: true });
-  };
-
-  // Review sheet warnings — replace the old Submit LIVE / No Stop Loss Alerts.
-  const reviewWarnings = [
-    ...(noSL ? [`No automatic stop loss${!tpEnabled ? ' or take-profit exit' : ''}${isNoStopLoss ? ', including end of day — it expires if you don\'t sell it' : ''}.`] : []),
-    ...(!paperMode && openLiveCount > 0 ? [`You already have ${openLiveCount} other live position${openLiveCount > 1 ? 's' : ''} open.`] : []),
-  ];
-
   const renderRow = ({ item }: { item: ChainRow }) => {
     if (item.type === 'separator') {
       return (
@@ -518,149 +348,6 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
   // toggle alone was easy to glance past and buy into the wrong account.
   const modeTint = accountModeColor(paperMode, colors);
 
-  const reviewContract = liveSelected ?? selected;
-  const stopPct = noSL ? null : isManual ? manualSlPct / 100 : profile.maxLoss / 100;
-  const reviewOrder: ReviewOrder | null = reviewContract ? {
-    ticker,
-    optionType: reviewContract.option_type,
-    strike: reviewContract.strike,
-    expiration: reviewContract.expiration,
-    premium: reviewContract.ask,
-    qty,
-    profileLabel: `${profile.emoji} ${profile.name}`,
-    stopPrice: stopPct == null ? null : reviewContract.ask * (1 - stopPct),
-    stopLabel: stopPct == null ? 'Off' : stopType === 'HARD' ? 'Hard stop' : `${stopType}-min SL timer`,
-    tp1Price: tpEnabled && !isManual && profile.tp1 > 0 ? reviewContract.ask * (1 + profile.tp1 / 100) : null,
-    tp2Price: tpEnabled && !isManual && profile.tp2 > 0 ? reviewContract.ask * (1 + profile.tp2 / 100) : null,
-    floorPrice: (() => { const f = stopPct == null ? null : effectiveFloorPct(floorPct, stopType !== 'HARD'); return f == null ? null : reviewContract.ask * (1 - f); })(),
-    floorIsDefault: floorPct == null,
-    beGraceSeconds: tpEnabled && !isManual ? beGrace : 0,
-  } : null;
-  // See TradeContractSheet's isZeroDteContract — same rough client-side
-  // check, purely to decide whether to show the option. Based on `selected`
-  // (what doSubmit/enterBlind actually submit), not reviewContract.
-  const isZeroDteContract = selected?.expiration?.slice(0, 10) === new Date().toISOString().slice(0, 10);
-
-  // Technicals verdict first, then the order form — both inside the detail
-  // modal's scroll content (right under the hero/pricing card) rather than
-  // its pinned bottom bar, which used to hold all of this and covered half
-  // the screen. Only the gated buy button stays pinned.
-  const detailForm = selected ? (
-    <View style={{ gap: 22, marginBottom: 20 }}>
-      <EntryTechnicalsPanel
-        data={entryCheck.data}
-        isLoading={entryCheck.isLoading}
-        error={entryCheck.error}
-        direction={selected.option_type}
-        colors={colors}
-      />
-      <PositioningRow ticker={ticker} direction={selected.option_type} expiry={selected.expiration} colors={colors} />
-
-      {/* Account — tinted with the paper/live wash, more strongly than the
-          rest of the screen, so the mode reads at the exact point the trade
-          is confirmed. */}
-      <View>
-        <Text style={[styles.sectionHeader, { color: colors.textTertiary }]}>ACCOUNT</Text>
-        <View style={[styles.groupCard, { backgroundColor: blendHex(colors.card, modeTint, 0.16), borderColor: modeTint + '40', borderWidth: 1 }]}>
-          <SegmentedControl
-            colors={colors}
-            options={[{ key: 'paper', label: 'Paper', tint: accountModeColor(true, colors) }, { key: 'live', label: 'Live', tint: accountModeColor(false, colors) }]}
-            value={paperMode ? 'paper' : 'live'}
-            onChange={k => onChangePaperMode(k === 'paper')}
-          />
-        </View>
-      </View>
-
-      <View>
-        <Text style={[styles.sectionHeader, { color: colors.textTertiary }]}>EXIT PROFILE</Text>
-        <ProfileDropdown
-          selectedIndex={profileIndex}
-          onSelect={handleProfileSelect}
-          colors={colors}
-        />
-      </View>
-
-      {/* Manual SL picker — only when MANUAL selected and SL is enabled */}
-      {isManual && slEnabled && (
-        <ManualSLPicker
-          slPct={manualSlPct}
-          onChangePct={setManualSlPct}
-          askPrice={(liveSelected ?? selected).ask}
-          colors={colors}
-        />
-      )}
-
-      {/* Contracts — UIStepper-style − | + control */}
-      <View>
-        <Text style={[styles.sectionHeader, { color: colors.textTertiary }]}>CONTRACTS</Text>
-        <View style={[styles.groupCard, styles.groupRow, { backgroundColor: colors.card }]}>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.qtyValue, { color: colors.text }]}>{qty}</Text>
-            <Text style={[styles.qtyHint, { color: colors.textTertiary }]}>
-              {noSL ? 'No stop loss — size carefully' : `Default for ${profile.name}: ${profile.qty}`}
-            </Text>
-          </View>
-          <View style={[styles.stepper, { backgroundColor: colors.surfaceSecondary }]}>
-            <TouchableOpacity
-              onPress={() => setQty(q => Math.max(1, q - 1))}
-              activeOpacity={0.5}
-              style={styles.stepperBtn}
-              hitSlop={{ top: 6, bottom: 6 }}
-            >
-              <Ionicons name="remove" size={18} color={qty <= 1 ? colors.textTertiary : colors.text} />
-            </TouchableOpacity>
-            <View style={[styles.stepperDivider, { backgroundColor: colors.separator }]} />
-            <TouchableOpacity
-              onPress={() => setQty(q => q + 1)}
-              activeOpacity={0.5}
-              style={styles.stepperBtn}
-              hitSlop={{ top: 6, bottom: 6 }}
-            >
-              <Ionicons name="add" size={18} color={colors.text} />
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-
-      {/* Exit Controls — SL/TP enable toggles apply on every profile;
-          turning either off lets a runner run its course (or hold into
-          close) instead of auto-exiting on that leg. */}
-      <View>
-        <Text style={[styles.sectionHeader, { color: colors.textTertiary }]}>EXIT CONTROLS</Text>
-        <View style={[styles.groupCard, { backgroundColor: colors.card, paddingVertical: 0 }]}>
-          <SwitchRow colors={colors} label="Stop Loss" sub="Auto-close on hard stop" value={slEnabled} onValueChange={setSlEnabled} />
-          <SwitchRow colors={colors} label="Take Profit" sub="Auto-close on TP1/TP2" value={tpEnabled} onValueChange={setTpEnabled} divider />
-          {!isManual && (
-            <SwitchRow colors={colors} label="Volume Exit" sub="Close half on low volume" value={volumeExit} onValueChange={setVolumeExit} divider />
-          )}
-        </View>
-        {slEnabled && (
-          <View style={{ marginTop: 22 }}>
-            <Text style={[styles.sectionHeader, { color: colors.textTertiary }]}>STOP TYPE</Text>
-            <StopTypeSelector value={stopType} onChange={setStopType} colors={colors} autoSuggested={autoGraceMinutes} />
-            <View style={{ marginTop: 16 }}>
-              <EntrySafetySelector colors={colors} floorPct={floorPct} onFloorPct={setFloorPct}
-                beGrace={beGrace} onBeGrace={setBeGrace} premium={(liveSelected ?? selected).ask} stopIsTimer={stopType !== 'HARD'} />
-            </View>
-          </View>
-        )}
-      </View>
-
-    </View>
-  ) : null;
-
-  const detailFooter = selected ? (
-    <GatedBuyButton
-      check={entryCheck.data}
-      checkLoading={entryCheck.isLoading}
-      paperMode={paperMode}
-      label={`Buy ${qty} ${selected.option_type} · ${profile.emoji} ${profile.name}`}
-      onReview={() => setReviewOpen(true)}
-      overridden={overridden}
-      onOverride={setOverridden}
-      colors={colors}
-    />
-  ) : null;
 
   return (
     <View style={{ flex: 1, backgroundColor: blendHex(colors.background, modeTint, 0.08) }}>
@@ -778,61 +465,19 @@ export function OptionsChainPicker({ ticker, colors, visible, paperMode, onChang
         />
       )}
 
-      {/* Detail modal with footer */}
-      {selected && (
-        <OptionsContractDetailModal
-          visible
-          onClose={() => setSelected(null)}
-          contract={asOpportunity(liveSelected ?? selected)}
-          ticker={ticker}
-          currentPrice={currentPrice}
-          footer={detailFooter}
-          tintColor={modeTint}
-          qty={qty}
-          headerBanner={<AccountModeBanner paperMode={paperMode} colors={colors} />}
-          aboveDetails={detailForm}
-          collapseGreeks
-          overlay={reviewOrder && (
-            <OrderReviewSheet
-              visible={reviewOpen}
-              order={reviewOrder}
-              paperMode={paperMode}
-              check={entryCheck.data}
-              overridden={overridden}
-              warnings={reviewWarnings}
-              isSubmitting={isPending}
-              onSubmit={doSubmit}
-              onEnterBlind={isZeroDteContract ? enterBlind : undefined}
-              onCancel={() => setReviewOpen(false)}
-              successMessage={successMessage}
-              onSuccessDone={finishSuccess}
-              colors={colors}
-            />
-          )}
-        />
-      )}
-
-      {/* Blind Entry — backend couldn't verify a live stream tick within 8s.
-          Lets the user enter off the last polled quote or skip, instead of
-          the trade just being blocked outright. */}
-      {blindEntry && (
-        <BlindEntryModal
-          visible
-          colors={colors}
-          contractSymbol={blindEntry.body.contract_symbol}
-          lastPrice={blindEntry.lastPrice}
-          qty={blindEntry.body.qty ?? qty}
-          direction={blindEntry.body.direction}
-          paperMode={blindEntry.body.paper_mode}
-          isSubmitting={isPending}
-          onConfirm={() => runSubmit({ ...blindEntry.body, bypass_stream_check: true })}
-          onSkip={() => {
-            setBlindEntry(null);
-            setSelected(null);
-            onSubmitted?.();
-          }}
-        />
-      )}
+      {/* Tapped contract → the same v2 trade sheet every entry path uses
+          (entry-flow spec, 2026-10-13). Fed the live-polled contract so its
+          bid/ask/last keep moving while it's open. Its success hands off to
+          TradeEntryNavigator (Home + highlight); hosts close themselves. */}
+      <TradeContractSheet
+        visible={!!selected}
+        onClose={() => setSelected(null)}
+        colors={colors}
+        ticker={ticker}
+        contract={liveSelected ?? selected}
+        currentPrice={currentPrice}
+        initialPaperMode={paperMode}
+      />
     </View>
   );
 }
@@ -897,24 +542,6 @@ function SegmentedControl({ options, value, onChange, colors, compact }: {
 }
 
 /** Settings-style row with a native iOS Switch. */
-function SwitchRow({ label, sub, value, onValueChange, colors, divider }: {
-  label: string; sub: string; value: boolean; onValueChange: (v: boolean) => void; colors: any; divider?: boolean;
-}) {
-  return (
-    <View style={[styles.switchRow, divider && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.separator }]}>
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.switchLabel, { color: colors.text }]}>{label}</Text>
-        <Text style={[styles.switchSub, { color: colors.textTertiary }]}>{sub}</Text>
-      </View>
-      <Switch
-        value={value}
-        onValueChange={onValueChange}
-        trackColor={{ true: colors.success, false: colors.surfaceTertiary }}
-        ios_backgroundColor={colors.surfaceTertiary}
-      />
-    </View>
-  );
-}
 
 const styles = StyleSheet.create({
   controlsCard: { marginHorizontal: 16, marginTop: 12, marginBottom: 12, borderRadius: 13, padding: 12, gap: 14 },

@@ -104,6 +104,9 @@ interface UseStrategyLivePriceResult {
    *  this type and starts sending "price_update" instead) or nothing pending. */
   pendingPriceData:   PendingPriceUpdate | null;
   connected:          boolean;
+  /** Just back from the background, waiting for the fresh socket's first
+   *  price — show a skeleton, not the old value (see strategyLiveStore). */
+  resyncing:          boolean;
   /** Merge fields into the current WS snapshot immediately (e.g. right after
    *  a stop/TP edit succeeds server-side) instead of waiting for the next
    *  "price_update" tick to catch up — the server confirms the edit over
@@ -162,10 +165,11 @@ export function useStrategyLivePrice(
       data: simLive,
       pendingPriceData: null,
       connected: !!simLive,
+      resyncing: false,
       patchData: simPatchData,
     };
   }
-  return { data: snap.data, pendingPriceData: snap.pendingPriceData, connected: snap.connected, patchData };
+  return { data: snap.data, pendingPriceData: snap.pendingPriceData, connected: snap.connected, resyncing: snap.resyncing, patchData };
 }
 
 /**

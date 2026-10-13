@@ -158,7 +158,7 @@ export function PositionRow({
   hideTicker?: boolean;
 }) {
   const { toTicker } = useBaseNavigation();
-  const { data: live, connected, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
+  const { data: live, connected, resyncing, patchData } = useStrategyLivePrice(pos.strategy_id, pos.active);
   const [addOpen, setAddOpen] = useState(false);
   const [ladderOpen, setLadderOpen] = useState(false);
   const heldQty = live?.qty_remaining ?? pos.qty_remaining ?? 0;
@@ -241,6 +241,7 @@ export function PositionRow({
           cascade_enabled:  pos.cascade_enabled,
         }}
         streaming={connected}
+        resyncing={resyncing}
         accentColor={accentColor}
         profile={pos.profile}
         strategyId={pos.strategy_id}

@@ -403,7 +403,11 @@ try:
         if not engine:
             return
 
-        client_q = _queue.Queue(maxsize=50)
+        # Coalescing mailbox, not a FIFO: a backgrounded/slow client gets
+        # only the newest price on resume, never a replay of stale ones
+        # (services/websocket/live_mailbox.py).
+        from services.websocket.live_mailbox import LiveMailbox
+        client_q = LiveMailbox()
         engine._register_live_client(client_q)
 
         try:

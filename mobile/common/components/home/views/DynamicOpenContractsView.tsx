@@ -9,6 +9,7 @@ import { AddContractModal } from '@/common/components/strategy/AddContractModal'
 import { useStrategyLivePrice } from '@/hooks/queries/strategy/useStrategyLivePrice';
 import type { PositionEntry } from '@/hooks/queries/strategy/useStrategyPosition';
 import { PositionEditSheet } from '../PositionEditSheet';
+import { ValueSkeleton } from '@/common/components/ui/ValueSkeleton';
 
 /**
  * Dynamic card "open" view: contracts you actually hold (live + paper
@@ -85,7 +86,7 @@ export function DynamicOpenContractsView() {
 function DynamicPositionRow({ pos: p, colors, onEdit }: {
   pos: PositionEntry; colors: any; onEdit: () => void;
 }) {
-  const { data: live } = useStrategyLivePrice(p.strategy_id, p.active);
+  const { data: live, resyncing } = useStrategyLivePrice(p.strategy_id, p.active);
   const [addOpen, setAddOpen] = useState(false);
 
   const dirColor = p.direction === 'PUT' ? colors.error : colors.success;
@@ -147,10 +148,10 @@ function DynamicPositionRow({ pos: p, colors, onEdit }: {
           </View>
         )}
         <View style={{ flex: 1 }} />
-        <Text style={[styles.mono, { fontSize: 12, fontWeight: '800', color: pnlColor }]}>
+        {resyncing ? <ValueSkeleton width={84} height={12} /> : <Text style={[styles.mono, { fontSize: 12, fontWeight: '800', color: pnlColor }]}>
           {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
           {pnlPct != null ? ` (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%)` : ''}
-        </Text>
+        </Text>}
         {/* Add to position — same AddContractModal the chart rows use. */}
         <TouchableOpacity
           onPress={(e) => { e.stopPropagation(); setAddOpen(true); }}

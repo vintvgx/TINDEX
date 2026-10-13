@@ -5,6 +5,7 @@ import { useAlpacaBothAccounts } from '@/hooks/queries/strategy/useAlpacaAccount
 import { usePnlSummary, type PnlPeriod } from '@/hooks/queries/strategy/usePnlSummary';
 import { useStrategyPerformance } from '@/hooks/queries/strategy/useStrategyStats';
 import { useLiveEquity } from '@/hooks/queries/strategy/useLiveEquity';
+import { ValueSkeleton } from '@/common/components/ui/ValueSkeleton';
 
 const money = (v: number | null | undefined) =>
   v == null ? '—' : `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -35,7 +36,7 @@ export function DynamicAccountView() {
   const { data: accounts, isLoading } = useAlpacaBothAccounts();
   const { data: pnl } = usePnlSummary(mode);
   const { data: perf } = useStrategyPerformance(mode);
-  const { account, displayEquity, positionCount } = useLiveEquity(mode);
+  const { account, displayEquity, positionCount, resyncing } = useLiveEquity(mode);
 
   const overall = perf?.overall;
   const available = accountAvailableFunds(account);
@@ -109,9 +110,13 @@ export function DynamicAccountView() {
           <Text style={[styles.mono, { fontSize: 11, color: colors.textSecondary }]}>
             Live Equity{positionCount > 0 ? ` · ${positionCount} open` : ''}
           </Text>
-          <Text style={[styles.mono, { fontSize: 30, fontWeight: '800', color: colors.text, marginTop: 2 }]}>
-            {isLoading ? '…' : money(displayEquity)}
-          </Text>
+          {resyncing ? (
+            <ValueSkeleton width={150} height={28} style={{ marginTop: 6 }} />
+          ) : (
+            <Text style={[styles.mono, { fontSize: 30, fontWeight: '800', color: colors.text, marginTop: 2 }]}>
+              {isLoading ? '…' : money(displayEquity)}
+            </Text>
+          )}
         </View>
         <View style={{ alignItems: 'flex-end' }}>
           <Text style={[styles.mono, { fontSize: 11, color: colors.textSecondary }]}>Available</Text>

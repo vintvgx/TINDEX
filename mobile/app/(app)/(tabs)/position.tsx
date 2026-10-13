@@ -45,7 +45,7 @@ export default function PositionScreen({ embedded = false }: Props) {
   // hook so the Home account card shows exactly this figure. The hook picks
   // the account by `mode`, so this always matches what's actually being
   // viewed (never "whichever engine happened to be first").
-  const { account, liveDerivedEquity, displayEquity } = useLiveEquity(mode);
+  const { account, liveDerivedEquity, displayEquity, resyncing } = useLiveEquity(mode);
 
   const positionsData = useLivePositionsData(mode);
   const { filteredPositions } = positionsData;
@@ -176,7 +176,7 @@ export default function PositionScreen({ embedded = false }: Props) {
         >
           <AccountStat
             label={mode === 'live' ? 'Live Equity' : 'Paper Equity'}
-            value={`$${displayEquity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+            value={resyncing ? '…' : `$${displayEquity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
             color={mode === 'live' ? '#30D158' : '#FF9F0A'}
             colors={colors}
           />

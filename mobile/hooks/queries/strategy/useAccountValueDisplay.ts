@@ -32,6 +32,9 @@ export interface AccountValueDisplay {
   live: AccountDisplayValue | null;
   /** True when at least one account has open positions */
   has_open_positions: boolean;
+  /** Back from the background, waiting for the first fresh price on an open
+   *  position — equity isn't real-time yet; show a skeleton. */
+  resyncing: boolean;
 }
 
 /**
@@ -195,5 +198,7 @@ export function useAccountValueDisplay(): AccountValueDisplay {
     (posData?.paper?.positions?.length ?? 0) > 0 ||
     (posData?.live?.positions?.length  ?? 0) > 0;
 
-  return { paper, live, has_open_positions };
+  const resyncing = Object.values(liveById).some((snap) => snap?.resyncing);
+
+  return { paper, live, has_open_positions, resyncing };
 }
