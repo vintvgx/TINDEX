@@ -9,8 +9,6 @@ import {
   useStartServices, useStopServices,
   useUnsubscribeOptionStreamSymbol, useClearUnusedOptionSubscriptions,
 } from '@/hooks/mutations/services/useServicesControl';
-import { useSocialIngestStatus } from '@/hooks/queries/social/useSocialIngestStatus';
-import { useStartSocialIngest, useStopSocialIngest } from '@/hooks/mutations/social/useSocialIngestControl';
 import { useToast } from '@/common/components/ui/Toast';
 
 interface ServiceStatusModalProps {
@@ -208,10 +206,6 @@ export const ServiceStatusModal: React.FC<ServiceStatusModalProps> = ({ visible,
   const startServices = useStartServices();
   const stopServices = useStopServices();
 
-  const { data: ingest } = useSocialIngestStatus({ alwaysPoll: visible });
-  const startIngest = useStartSocialIngest();
-  const stopIngest = useStopSocialIngest();
-  const ingestAccountErrors = (ingest?.accounts ?? []).filter((a) => a.last_poll_error);
 
   const unsubscribeSymbol = useUnsubscribeOptionStreamSymbol();
   const clearUnused = useClearUnusedOptionSubscriptions();
@@ -261,16 +255,7 @@ export const ServiceStatusModal: React.FC<ServiceStatusModalProps> = ({ visible,
     );
   };
 
-  const toggleIngest = (next: boolean) => {
-    const mutation = next ? startIngest : stopIngest;
-    mutation.mutate(undefined, {
-      onSuccess: (res) => toast.success(res.message || `Social ingest ${next ? 'started' : 'stopped'}`),
-      onError: (err) => toast.error(err instanceof Error ? err.message : 'Social ingest control failed'),
-    });
-  };
-
   const orbBusy = startServices.isPending || stopServices.isPending;
-  const ingestBusy = startIngest.isPending || stopIngest.isPending;
 
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -330,37 +315,7 @@ export const ServiceStatusModal: React.FC<ServiceStatusModalProps> = ({ visible,
               busy={orbBusy}
               onToggle={(next) => toggleService('contracts', next)}
             />
-            <ServiceRow
-              label="Social Signal Ingest"
-              description="X/Twitter contract signal parsing"
-              running={ingest?.running ?? false}
-              liveSince={ingest?.live_since}
-              toggle={ingest?.toggle ?? true}
-              busy={ingestBusy}
-              onToggle={toggleIngest}
-              extra={ingest?.last_poll_summary ?? undefined}
-            />
           </View>
-
-          {ingestAccountErrors.length > 0 && (
-            <View
-              style={{
-                marginHorizontal: 16,
-                marginTop: 10,
-                padding: 12,
-                borderRadius: 12,
-                backgroundColor: colors.errorBg,
-                borderWidth: 1,
-                borderColor: colors.error,
-              }}
-            >
-              {ingestAccountErrors.map((a) => (
-                <Text key={a.id} style={{ color: colors.error, fontSize: 12, marginBottom: 2 }}>
-                  @{a.handle}: {a.last_poll_error}
-                </Text>
-              ))}
-            </View>
-          )}
 
           <Text
             style={{
@@ -479,17 +434,6 @@ export const ServiceStatusModal: React.FC<ServiceStatusModalProps> = ({ visible,
               running={services?.price_stream.running ?? false}
               toggle={false}
               extra={services?.price_stream.clients != null ? `${services.price_stream.clients} clients` : undefined}
-            />
-            <ServiceRow
-              label="Social Signal Price Stream"
-              description="Live prices for tracked signal contracts"
-              running={services?.social_signals_price_stream.running ?? false}
-              toggle={false}
-              extra={
-                services?.social_signals_price_stream.clients != null
-                  ? `${services.social_signals_price_stream.clients} clients`
-                  : undefined
-              }
             />
           </View>
 

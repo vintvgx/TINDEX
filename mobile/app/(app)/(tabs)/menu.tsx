@@ -27,7 +27,6 @@ const SECTIONS: { title: string; items: { key: string; label: string; icon: stri
       { key: 'orb', label: 'ORB', icon: 'pulse-outline' },
       { key: 'brief', label: 'Brief', icon: 'newspaper-outline' },
       { key: 'watchlists', label: 'Watchlists', icon: 'bookmark-outline' },
-      { key: 'signals', label: 'Signals', icon: 'notifications-outline' },
       { key: 'dashboard', label: 'Dashboard', icon: 'grid-outline' },
       { key: 'position', label: 'Positions', icon: 'briefcase-outline' },
       { key: 'options', label: 'Contracts', icon: 'layers-outline' },

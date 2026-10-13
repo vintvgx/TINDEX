@@ -32,7 +32,6 @@ jobs:
       ANTHROPIC_API_KEY: ci-placeholder
       FINNHUB_API_KEY: ci-placeholder
       FMP_API_KEY: ci-placeholder
-      X_API_BEARER_TOKEN: ci-placeholder
       ALPACA_LIVE_API_KEY: ci-placeholder
       ALPACA_LIVE_SECRET_KEY: ci-placeholder
       ALPACA_PAPER_API_KEY: ci-placeholder

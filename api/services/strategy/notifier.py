@@ -12,7 +12,7 @@ engine events fire simultaneously. Priority tiers:
   0 — TRADE_EXIT   (HARD_STOP / TP1 / TP2 / EOD close — money moved)
   1 — TRADE_ENTRY  (order placed — position open)
   2 — OPERATIONAL  (stream failure / no contract / capital warning)
-  3 — MARKET       (retest armed / 30-min timer update / social signal)
+  3 — MARKET       (retest armed / 30-min timer update)
   4 — INFO         (session armed / skip / no trade / service start)
 
 Within the same tier, notifications are delivered in chronological order
@@ -463,29 +463,6 @@ class StrategyNotifier:
                 "paper_mode": paper_mode,
             },
             priority=P_TRADE_ENTRY,
-        )
-
-    def notify_social_signal(self, handle: str, contract_symbol: str, ticker: str,
-                              option_type: str, strike: float, tweet_text: str,
-                              tweet_url: str):
-        """A watched X/Twitter account called out an options contract."""
-        contract_label = _fmt_contract(contract_symbol)
-        snippet = tweet_text if len(tweet_text) <= 100 else tweet_text[:97] + "..."
-        self._dispatch(
-            title=f"🔥 @{handle}: {contract_label}",
-            body=snippet,
-            data={
-                "screen": "options",
-                "type": "social_signal",
-                "handle": handle,
-                "contract_symbol": contract_symbol,
-                "ticker": ticker,
-                "option_type": option_type,
-                "strike": strike,
-                "tweet_url": tweet_url,
-            },
-            priority=P_MARKET,
-            pref_key="flow_signals",
         )
 
     def notify_level_confirmed(self, ticker: str, direction: str, level_low: float,
