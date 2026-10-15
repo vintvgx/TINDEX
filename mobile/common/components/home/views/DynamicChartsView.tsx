@@ -1,13 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, FlatList, Pressable, ActivityIndicator, StyleSheet, AppState, useWindowDimensions } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, ActivityIndicator, useWindowDimensions } from 'react-native';
 import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useIsFocused } from '@react-navigation/native';
-import { useSparkQuery, sparkNeedsRefresh } from '@/hooks/queries/ticker/useSparkQuery';
-import { useMarketStream } from '@/hooks/useMarketStream';
-import { isOptionsSessionOpen } from '@/lib/marketHours';
+import { useSparkQuery } from '@/hooks/queries/ticker/useSparkQuery';
 import { useUserORBFollows } from '@/hooks/mutations/ticker/tickerORB';
 import { useLivePositionsData } from '@/common/components/strategy/LivePositionsSection';
 import { useMorningBrief } from '@/hooks/queries/brief/useMorningBrief';
@@ -24,10 +21,8 @@ import { isSimId } from '@/lib/devSim/simPositions';
 /**
  * Dynamic card "charts" view: one line chart per followed ticker — the
  * shared LinePriceChart (same chart as the ticker sheet): price/time axes,
- * current-price tag, long-press scrub, and expand → full chart. Every chart
- * opens on 1D (the 9:30–4:00 session, bar size from Profile → Home chart
- * timeframe); the bottom-left chip cycles 1D → 1W → 1M → 1Y for the chart
- * you're on, and swiping to another chart starts it back on 1D. On 1D the x-axis
+ * current-price tag, long-press scrub, and expand → full chart. Timeframe comes
+ * from Profile → Home chart timeframe (default 1D · 15m). On 1D the x-axis
  * always spans the full 9:30–4:00 session, so at the open the line starts
  * at the left edge and grows through the day (Robinhood-style). Swipe up/
  * down pages tickers, endlessly in both directions (no first/last page);
@@ -37,81 +32,10 @@ import { isSimId } from '@/lib/devSim/simPositions';
  * Order: open positions (live, then paper) → today's morning-brief plays →
  * tickers with a watched zone → the rest of the followed list. Each ticker
  * appears once, at its highest tier.
- *
- * Freshness: only the chart you're looking at stays live — it refetches as
- * you land on it (if its bars are >15s old), polls every 60s, and its last
- * point follows the live price stream during the session. Neighbor pages
- * load once so a swipe lands on a drawn chart. Nothing polls while the
- * charts page isn't the card's current view, Home isn't focused, or the app
- * is in the background. After the close, bars fetched since it are final —
- * no refetches until the next open. While the visible chart is fetching, a
- * small spinner shows left of the expand button (never over the chart).
  */
 
 const FALLBACK_TICKERS = ['SPY', 'QQQ', 'IWM'];
 const COUNTER_VISIBLE_MS = 8000;
-/** The range chip's cycle (bottom-left of the chart). */
-const HOME_RANGES: PricePeriod[] = ['1D', '1W', '1M', '1Y'];
-const INTERVAL_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, wk: 7 * 86_400_000, mo: 31 * 86_400_000 };
-
-function intervalMs(interval: string | undefined): number | null {
-  const m = interval?.match(/^(\d+)(m|h|d|wk|mo)$/);
-  return m ? Number(m[1]) * INTERVAL_MS[m[2]] : null;
-}
-
-/**
- * Spark bars → the plotted line, ending at "now".
- *
- * Intraday bars are stamped at their START but a close is the price at the
- * bar's END — so each close is plotted at start + interval, with the first
- * bar's open as the starting point. On 5m bars at 3:42 the points run
- * …3:35, 3:40, 3:42: the last one is the forming 3:40 bar, re-stamped to now
- * and taking the live price when streaming. Once a bar's window has passed,
- * the live price extends the line to now instead. Daily+ bars keep their
- * dates (index-spaced axis); only their last close follows the live price.
- */
-function toLine(
-  dates: string[], closes: number[], open: number | null | undefined,
-  live: number | undefined, interval: string | undefined,
-) {
-  const n = Math.min(dates.length, closes.length);
-  if (n === 0) return { dates: [] as string[], prices: [] as number[] };
-  const span = intervalMs(interval);
-  const now = Date.now();
-  const hasLive = live != null && live > 0;
-
-  if (span == null || span >= INTERVAL_MS.d) {
-    const lastStart = new Date(dates[n - 1]).getTime();
-    const prices = closes.slice(0, n);
-    if (!hasLive) return { dates: dates.slice(0, n), prices };
-    if (span != null && now < lastStart + span) return { dates: dates.slice(0, n), prices: [...prices.slice(0, -1), live] };
-    return { dates: [...dates.slice(0, n), new Date(now).toISOString()], prices: [...prices, live] };
-  }
-
-  const ends = dates.slice(0, n).map((d) => new Date(d).getTime() + span);
-  const prices = closes.slice(0, n);
-  if (ends[n - 1] > now) {
-    ends[n - 1] = now;
-    if (hasLive) prices[n - 1] = live;
-  } else if (hasLive) {
-    ends.push(now);
-    prices.push(live);
-  }
-  if (open != null && open > 0) {
-    ends.unshift(new Date(dates[0]).getTime());
-    prices.unshift(open);
-  }
-  return { dates: ends.map((t) => new Date(t).toISOString()), prices };
-}
-
-function useAppActive(): boolean {
-  const [active, setActive] = useState(AppState.currentState === 'active');
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (s) => setActive(s === 'active'));
-    return () => sub.remove();
-  }, []);
-  return active;
-}
 /** Last ticker shown — survives this page unmounting (see activeTicker). */
 let lastActiveTicker: string | null = null;
 
@@ -122,40 +46,18 @@ export function stepChartsTicker(dir: 1 | -1): void {
   stepListener?.(dir);
 }
 
-function TickerPage({ ticker, height, width, period, interval, active, livePrice, onCycleRange, onStats }: {
+function TickerPage({ ticker, height, width, period, interval, onStats }: {
   ticker: string; height: number; width: number; period: PricePeriod; interval: string;
-  /** Next range (1D → 1W → 1M → 1Y) — the chart you're on only. */
-  onCycleRange?: () => void;
-  /** The chart you're looking at — the only one that polls. */
-  active: boolean;
-  /** Streamed price for this ticker (active page, regular session only). */
-  livePrice?: number;
   onStats: (ticker: string, price: number | null, changePct: number | null) => void;
 }) {
   const colors = useThemeColors();
-  const { data, isLoading, isFetching, isPlaceholderData, dataUpdatedAt, refetch } =
-    useSparkQuery(ticker, period, { interval, active });
-  const stale = !!data?.stale;
-  // While a new range loads, the previous range's line stays up (no
-  // blank-and-redraw) — drawn on its own range's axis, then swapped in one go.
-  const shownPeriod: PricePeriod = data?.period ?? period;
-  const shownInterval = data?.data?.interval ?? interval;
-
-  // Landing on a chart (swipe, or the card coming back into view): catch up
-  // if its bars are out of date (sparkNeedsRefresh — never after the close
-  // once they've been fetched since it). A first load fetches anyway.
-  useEffect(() => {
-    if (active && !isPlaceholderData && dataUpdatedAt > 0 && sparkNeedsRefresh(dataUpdatedAt)) refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
-
-  // A stale copy may be a different session's bars — no live tail on it.
-  const series = useMemo(
-    () => toLine(data?.data?.dates ?? [], data?.data?.closes ?? [], data?.data?.open,
-      stale ? undefined : livePrice, data?.data?.interval),
-    [data, stale, livePrice],
-  );
-  const { prices, dates } = series;
+  const { data, isLoading } = useSparkQuery(ticker, period, 60_000);
+  const prices = data?.data?.closes ?? [];
+  const dates = data?.data?.dates ?? [];
+  // Degenerate datasets (e.g. 1–2 stale points from an earlier fetch) render
+  // as a misleading single vertical line — treat as not-ready so the loader
+  // shows instead of a broken chart.
+  const hasEnoughData = prices.length >= 3 && dates.length >= 3;
 
   const price = prices.length > 0 ? prices[prices.length - 1] : null;
   const changePct = prices.length > 1 ? ((prices[prices.length - 1] / prices[0]) - 1) * 100 : null;
@@ -167,11 +69,6 @@ function TickerPage({ ticker, height, width, period, interval, active, livePrice
 
   return (
     <View style={{ width, height, paddingHorizontal: 14, paddingTop: 12, paddingBottom: 22 }}>
-      {active && isFetching && (
-        <View pointerEvents="none" style={styles.fetching}>
-          <ActivityIndicator size="small" color={colors.textTertiary} />
-        </View>
-      )}
       <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 10 }}>
         <Text style={[styles.mono, { fontSize: 22, fontWeight: '800', color: colors.text }]}>{ticker}</Text>
         {price != null && (
@@ -186,49 +83,40 @@ function TickerPage({ ticker, height, width, period, interval, active, livePrice
         )}
       </View>
       <Text style={[styles.mono, { fontSize: 10, color: colors.textTertiary, marginTop: 2 }]}>
-        {shownPeriod} · {INTERVAL_LABEL[shownInterval] ?? shownInterval}
+        {period} · {INTERVAL_LABEL[interval] ?? interval}
       </Text>
       <View style={{ flex: 1, justifyContent: 'center', marginTop: 8 }}>
-        <LinePriceChart
-          dates={dates}
-          prices={prices}
-          period={shownPeriod}
-          height={height - 96}
-          isLoading={isLoading}
-          positive={up}
-        />
+        {hasEnoughData ? (
+          <LinePriceChart
+            dates={dates}
+            prices={prices}
+            period={period}
+            height={height - 96}
+            positive={up}
+            isLoading={isLoading}
+          />
+        ) : (
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+            <ActivityIndicator size="small" color={colors.textTertiary} />
+          </View>
+        )}
       </View>
-      {onCycleRange && (
-        <Pressable
-          onPress={onCycleRange}
-          hitSlop={8}
-          accessibilityRole="button"
-          accessibilityLabel={`Time range ${period}. Tap for the next range`}
-          style={[styles.range, { backgroundColor: colors.surfaceSecondary + 'E6', borderColor: colors.border }]}
-        >
-          <Text style={[styles.mono, { fontSize: 11, fontWeight: '800', color: colors.text }]}>{period}</Text>
-        </Pressable>
-      )}
     </View>
   );
 }
 
-export function DynamicChartsView({ onActiveTicker, height, visible = true }: {
+export function DynamicChartsView({ onActiveTicker, height }: {
   onActiveTicker: (info: TickerInfo) => void;
   height: number;
-  /** The card's current view (expanded or collapsed) — off-screen as a
-   *  pager neighbor, nothing polls or streams. */
-  visible?: boolean;
 }) {
   const colors = useThemeColors();
   const { width } = useWindowDimensions();
   const pageWidth = width - 28;
   const { data: follows } = useUserORBFollows();
   const { prefs } = useChartDisplayPrefs();
-  // 1D's bar size is the Profile pick; the longer ranges use their defaults.
-  const allowed1D = intervalCycleFor(ALLOWED_INTERVALS['1D']);
-  const interval1D = allowed1D.includes(prefs.homeChartInterval) ? prefs.homeChartInterval : DEFAULT_INTERVAL['1D'];
-  const intervalFor = (p: PricePeriod) => (p === '1D' ? interval1D : DEFAULT_INTERVAL[p]);
+  const period = prefs.homeChartPeriod;
+  const allowed = intervalCycleFor(ALLOWED_INTERVALS[period]);
+  const interval = allowed.includes(prefs.homeChartInterval) ? prefs.homeChartInterval : DEFAULT_INTERVAL[period];
 
   const allLive = useLivePositionsData('live');
   const allPaper = useLivePositionsData('paper');
@@ -268,22 +156,6 @@ export function DynamicChartsView({ onActiveTicker, height, visible = true }: {
   const n = tickers.length;
   const realIndex = Math.max(0, activeTicker ? tickers.indexOf(activeTicker) : 0);
   const current = tickers[realIndex] ?? '';
-  // The chart you're on can step through HOME_RANGES; it isn't remembered —
-  // landing on another chart starts it on 1D.
-  const [range, setRange] = useState<PricePeriod>('1D');
-  useEffect(() => { setRange('1D'); }, [current]);
-  const cycleRange = useCallback(() => {
-    setRange((r) => HOME_RANGES[(HOME_RANGES.indexOf(r) + 1) % HOME_RANGES.length]);
-  }, []);
-
-  const focused = useIsFocused();
-  const appActive = useAppActive();
-  const live = visible && focused && appActive;
-  const { livePrices, connected } = useMarketStream(current ? [current] : [], {
-    enabled: live && !!current && isOptionsSessionOpen(),
-  });
-  const livePrice = live && connected && isOptionsSessionOpen() ? livePrices[current] : undefined;
-
   const [stats, setStats] = useState<Record<string, { price: number | null; changePct: number | null }>>({});
 
   const onStats = useCallback((ticker: string, price: number | null, changePct: number | null) => {
@@ -361,20 +233,8 @@ export function DynamicChartsView({ onActiveTicker, height, visible = true }: {
         nestedScrollEnabled
         style={{ height: pageH }}
         renderItem={({ item }) => (
-          <TickerPage
-            ticker={item}
-            height={pageH}
-            width={pageWidth}
-            period={item === current ? range : '1D'}
-            interval={intervalFor(item === current ? range : '1D')}
-            active={live && item === current}
-            onCycleRange={item === current ? cycleRange : undefined}
-            livePrice={item === current ? livePrice : undefined}
-            onStats={onStats}
-          />
+          <TickerPage ticker={item} height={pageH} width={pageWidth} period={period} interval={interval} onStats={onStats} />
         )}
-        // Re-render the mounted pages when the active ticker / live price moves.
-        extraData={`${current}|${range}|${live}|${livePrice ?? ''}`}
         initialScrollIndex={loop ? n + realIndex : realIndex}
         onMomentumScrollEnd={onMomentumEnd}
         getItemLayout={(_, index) => ({ length: pageH, offset: pageH * index, index })}
@@ -415,31 +275,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  /** Bottom-left, in the page's bottom padding under the x-axis. */
-  range: {
-    position: 'absolute',
-    left: 14,
-    bottom: 0,
-    minWidth: 34,
-    height: 22,
-    paddingHorizontal: 8,
-    borderRadius: 7,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  /** Left of the expand button (top 10, right 10, 30×30). */
-  fetching: {
-    position: 'absolute',
-    top: 10,
-    right: 44,
-    height: 30,
-    justifyContent: 'center',
-  },
   counter: {
     position: 'absolute',
     top: 14,
-    right: 74,
+    right: 48,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,

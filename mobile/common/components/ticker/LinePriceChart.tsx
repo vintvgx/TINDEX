@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, ActivityIndicator, StyleSheet, type LayoutChangeEvent } from 'react-native';
+import { View, Text, Pressable, StyleSheet, ActivityIndicator, type LayoutChangeEvent } from 'react-native';
 import Svg, { Path, Circle, Line, Rect, Defs, LinearGradient, Stop, Text as SvgText } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
@@ -21,7 +21,6 @@ import type { PricePeriod } from '@/common/types/blogPosts/ticker';
  *   reported via onScrub (the ticker sheet swaps its header price with it).
  * - Optional period picker (onPeriodChange) and expand button (onExpand —
  *   both callers open the full chart, charts.tsx, on this ticker).
- * - isLoading (no data yet) shows a spinner in the empty plot.
  */
 
 export const CHART_PERIODS: PricePeriod[] = ['1D', '1W', '1M', '3M', 'YTD', '1Y', '5Y'];
@@ -110,9 +109,7 @@ export function LinePriceChart({
   const onLayout = (e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width);
 
   const n = Math.min(dates.length, prices.length);
-  // One point is a chart too: from 09:30 until the second bar lands, 1D has
-  // only the forming opening bar — it used to read "No chart data available".
-  const hasData = n >= 1 && width > 0;
+  const hasData = n > 1 && width > 0;
   const up = positive ?? (n > 1 ? prices[n - 1] >= prices[0] : true);
   const stroke = up ? colors.success : colors.error;
   const plotW = Math.max(0, width - Y_AXIS_W);
@@ -140,9 +137,9 @@ export function LinePriceChart({
         text: fmtClock(SESSION_OPEN_MIN + m),
       }));
     } else {
-      xs = ps.map((_, i) => (n > 1 ? (i / (n - 1)) * plotW : 0));
+      xs = ps.map((_, i) => (i / (n - 1)) * plotW);
       const withTime = period === '1W';
-      xLabels = [...new Set([0, Math.floor((n - 1) / 2), n - 1])].map((i) => {
+      xLabels = [0, Math.floor((n - 1) / 2), n - 1].map((i) => {
         const e = etParts(ts[i]);
         return { x: xs[i], text: withTime ? `${e.month}/${e.day} ${fmtClock(e.mins)}` : `${e.month}/${e.day}` };
       });
@@ -211,12 +208,12 @@ export function LinePriceChart({
         {!model ? (
           <View style={[styles.empty, { backgroundColor: colors.surfaceSecondary }]}>
             {isLoading ? (
-              <ActivityIndicator color={colors.textTertiary} />
+              <ActivityIndicator size="small" color={colors.textTertiary} />
             ) : (
               <>
                 <Ionicons name="bar-chart-outline" size={30} color={colors.textTertiary} />
                 <Text style={{ color: colors.textTertiary, fontSize: 13, marginTop: 6 }}>
-                  {n === 0 && width > 0 ? 'No chart data available' : ''}
+                  {n <= 1 && width > 0 ? 'No chart data available' : ''}
                 </Text>
               </>
             )}
