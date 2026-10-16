@@ -1344,6 +1344,98 @@ def _digest_play(p: dict) -> dict:
     }
 
 
+def _fetch_premarket_quote(ticker: str) -> dict | None:
+    """Fetch a live premarket quote via yfinance fast_info.
+    Returns {price, quote_time_et} or None on failure.
+    The quote_time is when we fetched it (server time in ET)."""
+    try:
+        import yfinance as yf
+        fi = yf.Ticker(ticker).fast_info
+        price = float(fi.last_price)
+        if not price or price <= 0:
+            return None
+        return {
+            "price": round(price, 4),
+            "quote_time_et": datetime.now(ET).strftime("%-I:%M %p ET"),
+        }
+    except Exception as e:
+        logger.warning("[muse/digest/compose] premarket quote failed for %s: %s", ticker, e)
+        return None
+
+
+def _requote_digest_play(play: dict) -> dict:
+    """Apply the premarket re-quote rules to one digest play.
+    
+    Per the digest-premarket-requote spec (Kareem, 2026-10-15):
+    - Fetch live premarket quote, recompute distance-to-trigger on it
+    - PLAYED OUT: price crossed trigger AND reached/exceeded target → no trade affordance
+    - STALE: trigger >2% away after re-quote → no top-pick styling
+    - QUOTE_STALE: quote fetch failed → degrade loudly, never clean if/then on yesterday's close
+    
+    Enforced at the data layer: played-out plays get card_state="played_out"
+    which the app must honor by removing entry/confirm/Trade paths.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    
+    ticker = play["ticker"]
+    direction = play["direction"]  # "CALL" or "PUT"
+    trigger = play["trigger"]
+    target = play["target"]
+    
+    quote = _fetch_premarket_quote(ticker)
+    
+    if not quote:
+        # Degrade loudly — never a clean if/then on yesterday's close
+        play["card_state"] = "quote_stale"
+        play["quote_note"] = "QUOTE STALE — live price unavailable, setup scored off yesterday's data"
+        return play
+    
+    px = quote["price"]
+    play["premarket_price"] = px
+    play["premarket_quote_time"] = quote["quote_time_et"]
+    play["quote_note"] = f"premarket quote as of {quote['quote_time_et']}"
+    
+    # Distance to trigger on the live quote (signed: positive = above trigger)
+    dist_pct = (px - trigger) / trigger * 100 if trigger else 0
+    play["distance_to_trigger_pct"] = round(dist_pct, 2)
+    
+    # Played-out kill rule: price crossed trigger AND reached/exceeded target
+    # Long (CALL): price >= target means it ran through trigger to target
+    # Short (PUT): price <= target means it dropped through trigger to target
+    played_out = False
+    if direction == "CALL":
+        crossed_trigger = px >= trigger
+        reached_target = px >= target
+        played_out = crossed_trigger and reached_target
+    else:  # PUT
+        crossed_trigger = px <= trigger
+        reached_target = px <= target
+        played_out = crossed_trigger and reached_target
+    
+    if played_out:
+        play["card_state"] = "played_out"
+        play["quote_note"] = (
+            f"PLAYED OUT — {ticker} ran past the target before the open "
+            f"(${px:.2f} vs target ${target:.2f}) — that's chasing, not entering."
+        )
+        # Data-layer enforcement: strip trade affordances
+        play["premium_tier"] = None
+        return play
+    
+    # Distance honesty: trigger >2% away → STALE, no top-pick styling
+    if abs(dist_pct) > 2.0:
+        play["card_state"] = "stale"
+        play["quote_note"] = (
+            f"STALE — scored off yesterday's data, trigger {abs(dist_pct):.1f}% away "
+            f"at premarket ${px:.2f}"
+        )
+        return play
+    
+    # Clean setup: live quote confirms the trigger is within reach
+    play["card_state"] = "active"
+    return play
+
+
 def _digest_etf(s: dict) -> dict:
     trend = (s.get("technicals") or {}).get("trend")
     return {
@@ -1479,6 +1571,13 @@ def compose_digest():
                 logger.warning("[muse/digest/compose] scoring failed for %s: %s", t, e)
     ranked = rank_plays(scored, top_n=4)
 
+    # Premarket re-quote (Kareem 2026-10-15): every digest play gets a live
+    # premarket quote BEFORE rendering. Played-out and stale cards are flagged
+    # at the data layer so the app can never offer a trade on them.
+    plays = [_digest_play(p) for p in ranked["plays"]]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        plays = list(pool.map(_requote_digest_play, plays))
+
     etfs = []
     for t in ("SPY", "QQQ", "IWM"):
         inp = _inputs(t)
@@ -1494,7 +1593,7 @@ def compose_digest():
     return _ok({
         "as_of": datetime.now(ET).isoformat(),
         "universe": sorted(universe),
-        "watchlist": [_digest_play(p) for p in ranked["plays"]],
+        "watchlist": plays,
         "etfs": etfs,
         "sectors": _sector_performance(),
         "blocked": ranked["blocked"],
