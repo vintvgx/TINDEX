@@ -218,6 +218,8 @@ def _slim_contract(c: dict, spot: float | None = None) -> dict:
 
 def _build_account() -> dict:
     """Live Alpaca account only — balances plus period P&L."""
+    from alpaca.trading.requests import GetPortfolioHistoryRequest
+
     client = _alpaca_client(paper=False)
     acct = client.get_account()
     equity = float(acct.equity)
@@ -241,27 +243,31 @@ def _build_account() -> dict:
         "pnl_all_time": None,
     }
 
-    # Period P&L from the unified summary (orb_trades, net of estimated fees,
-    # plus live unrealized) — the same numbers Home and the Trade Log show.
-    # Replaced the Alpaca profit_loss-series copy (2026-10-11), which
-    # subtracted two daily bars instead of summing the window.
+    # Same approach as /strategy/accounts/history: Alpaca's profit_loss series
+    # already excludes deposits/withdrawals, so deltas of it are real trading P&L.
     try:
-        from routes.strategy_routes import logger_svc
-        from services.strategy.pnl_summary import get_summary
+        hist = client.get_portfolio_history(GetPortfolioHistoryRequest(period="all", timeframe="1D"))
+        stamps = list(hist.timestamp or [])
+        pls = [float(p) if p is not None else None for p in (hist.profit_loss or [])]
+        latest = next((p for p in reversed(pls) if p is not None), None)
+        if stamps and latest is not None:
+            def _since(ts: float):
+                idx = 0
+                for i, t in enumerate(stamps):
+                    if t <= ts:
+                        idx = i
+                    else:
+                        break
+                return round(latest - pls[idx], 2) if pls[idx] is not None else None
 
-        summary = get_summary(logger_svc.client, paper=False)
-        # Today too, so Muse quotes what Home shows; the raw equity move
-        # (includes anything outside the app's trades) stays alongside.
-        out["equity_change_today"] = out["pnl_today"]
-        out["pnl_today"] = summary["today"]["total"]
-        out["pnl_week"] = summary["week"]["total"]
-        out["pnl_month"] = summary["month"]["total"]
-        out["pnl_ytd"] = summary["ytd"]["total"]
-        out["pnl_all_time"] = summary["all_time"]["total"]
-        out["pnl_realized_today"] = summary["today"]["realized_net"]
-        out["est_fees_today"] = summary["today"]["fees"]
+            now_ts = stamps[-1]
+            jan1 = datetime(datetime.now(ET).year, 1, 1, tzinfo=timezone.utc).timestamp()
+            out["pnl_week"] = _since(now_ts - 7 * 86400)
+            out["pnl_month"] = _since(now_ts - 30 * 86400)
+            out["pnl_ytd"] = _since(jan1)
+            out["pnl_all_time"] = round(latest - pls[0], 2) if pls[0] is not None else None
     except Exception as e:
-        logger.warning("[muse] pnl summary failed: %s", e)
+        logger.warning("[muse] portfolio history failed: %s", e)
 
     return out
 
@@ -1250,58 +1256,6 @@ def publish_market_digest():
         return _err(f"Failed to publish digest: {e}", 500)
 
 
-# ── Investing theses (Bandit writes them; this is queue + storage + push) ─────
-
-@bp.route("/thesis/requests", methods=["GET"])
-def thesis_requests():
-    """Pending Generate-Thesis requests from the app, oldest first."""
-    from services.thesis.thesis_queue import list_pending
-    limit = min(max(request.args.get("limit", 20, type=int), 1), 100)
-    try:
-        return _ok(list_pending(get_supabase_service().client, limit))
-    except Exception as e:
-        logger.error("[muse/thesis/requests] %s", e)
-        return _err(f"Failed to list thesis requests: {e}", 500)
-
-
-@bp.route("/thesis/publish", methods=["POST"])
-def thesis_publish():
-    """
-    Publish the thesis Bandit wrote. Body:
-      { "request_id": "<uuid>"  (or "ticker" + "user_id"),
-        "thesis": { verdict, summary, conviction?, horizon?, for_you?[],
-                    bull?[], bear?[], what_changes? } }
-    Stores it in ticker_theses, closes the request, pushes the requester.
-    To report a failure instead: { "request_id": ..., "error": "..." }.
-    """
-    from services.thesis.thesis_queue import clean_ticker, mark_failed, publish, validate_thesis
-    body = request.get_json(silent=True) or {}
-    sb = get_supabase_service().client
-    request_id = body.get("request_id")
-    if body.get("error") and request_id:
-        try:
-            mark_failed(sb, request_id, str(body["error"]))
-            return _ok({"request_id": request_id, "status": "failed"})
-        except Exception as e:
-            return _err(f"Failed to mark request failed: {e}", 500)
-    thesis = body.get("thesis")
-    problem = validate_thesis(thesis)
-    if problem:
-        return _err(problem)
-    ticker = clean_ticker(body.get("ticker")) if body.get("ticker") else None
-    try:
-        out = publish(sb, thesis, request_id=request_id, ticker=ticker,
-                      user_id=body.get("user_id") or (None if request_id else _muse_user_id()))
-        return _ok(out)
-    except LookupError as e:
-        return _err(str(e), 404)
-    except ValueError as e:
-        return _err(str(e))
-    except Exception as e:
-        logger.error("[muse/thesis/publish] %s", e, exc_info=True)
-        return _err(f"Failed to publish thesis: {e}", 500)
-
-
 def _digest_play(p: dict) -> dict:
     """Map one score_ticker() result onto the muse-brief-v1 ticker shape."""
     d = p["direction"]
@@ -1342,6 +1296,98 @@ def _digest_play(p: dict) -> dict:
         "sector": tech.get("sector"),
         "expected_move": p.get("expected_move"),
     }
+
+
+def _fetch_premarket_quote(ticker: str) -> dict | None:
+    """Fetch a live premarket quote via yfinance fast_info.
+    Returns {price, quote_time_et} or None on failure.
+    The quote_time is when we fetched it (server time in ET)."""
+    try:
+        import yfinance as yf
+        fi = yf.Ticker(ticker).fast_info
+        price = float(fi.last_price)
+        if not price or price <= 0:
+            return None
+        return {
+            "price": round(price, 4),
+            "quote_time_et": datetime.now(ET).strftime("%-I:%M %p ET"),
+        }
+    except Exception as e:
+        logger.warning("[muse/digest/compose] premarket quote failed for %s: %s", ticker, e)
+        return None
+
+
+def _requote_digest_play(play: dict) -> dict:
+    """Apply the premarket re-quote rules to one digest play.
+    
+    Per the digest-premarket-requote spec (Kareem, 2026-10-15):
+    - Fetch live premarket quote, recompute distance-to-trigger on it
+    - PLAYED OUT: price crossed trigger AND reached/exceeded target → no trade affordance
+    - STALE: trigger >2% away after re-quote → no top-pick styling
+    - QUOTE_STALE: quote fetch failed → degrade loudly, never clean if/then on yesterday's close
+    
+    Enforced at the data layer: played-out plays get card_state="played_out"
+    which the app must honor by removing entry/confirm/Trade paths.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    
+    ticker = play["ticker"]
+    direction = play["direction"]  # "CALL" or "PUT"
+    trigger = play["trigger"]
+    target = play["target"]
+    
+    quote = _fetch_premarket_quote(ticker)
+    
+    if not quote:
+        # Degrade loudly — never a clean if/then on yesterday's close
+        play["card_state"] = "quote_stale"
+        play["quote_note"] = "QUOTE STALE — live price unavailable, setup scored off yesterday's data"
+        return play
+    
+    px = quote["price"]
+    play["premarket_price"] = px
+    play["premarket_quote_time"] = quote["quote_time_et"]
+    play["quote_note"] = f"premarket quote as of {quote['quote_time_et']}"
+    
+    # Distance to trigger on the live quote (signed: positive = above trigger)
+    dist_pct = (px - trigger) / trigger * 100 if trigger else 0
+    play["distance_to_trigger_pct"] = round(dist_pct, 2)
+    
+    # Played-out kill rule: price crossed trigger AND reached/exceeded target
+    # Long (CALL): price >= target means it ran through trigger to target
+    # Short (PUT): price <= target means it dropped through trigger to target
+    played_out = False
+    if direction == "CALL":
+        crossed_trigger = px >= trigger
+        reached_target = px >= target
+        played_out = crossed_trigger and reached_target
+    else:  # PUT
+        crossed_trigger = px <= trigger
+        reached_target = px <= target
+        played_out = crossed_trigger and reached_target
+    
+    if played_out:
+        play["card_state"] = "played_out"
+        play["quote_note"] = (
+            f"PLAYED OUT — {ticker} ran past the target before the open "
+            f"(${px:.2f} vs target ${target:.2f}) — that's chasing, not entering."
+        )
+        # Data-layer enforcement: strip trade affordances
+        play["premium_tier"] = None
+        return play
+    
+    # Distance honesty: trigger >2% away → STALE, no top-pick styling
+    if abs(dist_pct) > 2.0:
+        play["card_state"] = "stale"
+        play["quote_note"] = (
+            f"STALE — scored off yesterday's data, trigger {abs(dist_pct):.1f}% away "
+            f"at premarket ${px:.2f}"
+        )
+        return play
+    
+    # Clean setup: live quote confirms the trigger is within reach
+    play["card_state"] = "active"
+    return play
 
 
 def _digest_etf(s: dict) -> dict:
@@ -1479,6 +1525,13 @@ def compose_digest():
                 logger.warning("[muse/digest/compose] scoring failed for %s: %s", t, e)
     ranked = rank_plays(scored, top_n=4)
 
+    # Premarket re-quote (Kareem 2026-10-15): every digest play gets a live
+    # premarket quote BEFORE rendering. Played-out and stale cards are flagged
+    # at the data layer so the app can never offer a trade on them.
+    plays = [_digest_play(p) for p in ranked["plays"]]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        plays = list(pool.map(_requote_digest_play, plays))
+
     etfs = []
     for t in ("SPY", "QQQ", "IWM"):
         inp = _inputs(t)
@@ -1494,7 +1547,7 @@ def compose_digest():
     return _ok({
         "as_of": datetime.now(ET).isoformat(),
         "universe": sorted(universe),
-        "watchlist": [_digest_play(p) for p in ranked["plays"]],
+        "watchlist": plays,
         "etfs": etfs,
         "sectors": _sector_performance(),
         "blocked": ranked["blocked"],
@@ -1713,27 +1766,6 @@ _OPENAPI = {
                 "silent": {"type": "boolean",
                            "description": "Skip the push notification"},
             }, ["content"]))},
-        "/muse/thesis/requests": {"get": _op(
-            "listThesisRequests", "Pending thesis requests",
-            "Generate-Thesis requests the user queued from the app's Invest tab, oldest first. "
-            "Each has id, ticker, user_id, created_at, price_at_request, next_earnings_at_request. "
-            "Write the thesis (investing horizon — never contradict the trading verdict's lane) "
-            "and POST it to /muse/thesis/publish.",
-            [_q("limit", "Max rows (default 20)", required=False)])},
-        "/muse/thesis/publish": {"post": _op(
-            "publishThesis", "Publish a thesis",
-            "Store the thesis for a request, mark it complete and push the user "
-            "\"Your <TICKER> thesis is ready\". Send {request_id, error} instead to mark it failed.",
-            body=_body({
-                "request_id": {"type": "string", "description": "From /muse/thesis/requests"},
-                "ticker": {"type": "string", "description": "Instead of request_id (owner's thesis)"},
-                "user_id": {"type": "string", "description": "With ticker; defaults to the owner"},
-                "error": {"type": "string", "description": "Mark the request failed instead"},
-                "thesis": {"type": "object", "description": (
-                    "{verdict (e.g. 'HOLD / ADD ON DIPS'), summary, conviction 1-10, horizon "
-                    "(e.g. '12–24 mo'), for_you [str], bull [str], bear [str], what_changes str}. "
-                    "verdict and summary are required.")},
-            }, []))},
         "/muse/digest/compose": {"get": _op(
             "composeDigest", "Compose digest inputs",
             "Score the morning-brief universe (or ?tickers= override) with the brief "
