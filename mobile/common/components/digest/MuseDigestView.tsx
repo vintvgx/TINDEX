@@ -600,13 +600,14 @@ export function MuseDigestView({
         : colors.warning;
 
   const tapeItems: TapeItem[] = [
-    ...Object.entries(content.market.futures).map(([k, v]) => ({
+    // Delta updates carry a partial schema — guard every array (2026-10-13).
+    ...Object.entries(content.market.futures ?? {}).map(([k, v]) => ({
       label: k.toUpperCase(),
       value: v,
       tone: (v.trim().startsWith('-') ? 'down' : v.trim().startsWith('+') ? 'up' : 'flat') as TapeItem['tone'],
     })),
     ...(content.market.vix != null ? [{ label: 'VIX', value: String(content.market.vix), tone: 'flat' as const }] : []),
-    ...content.etfs.map((e) => ({
+    ...(content.etfs ?? []).map((e) => ({
       label: e.ticker,
       value: fmtScore(e.score),
       tone: (e.trend === 'up' ? 'up' : e.trend === 'down' ? 'down' : 'flat') as TapeItem['tone'],
@@ -745,42 +746,50 @@ export function MuseDigestView({
       )}
 
       {/* watchlist */}
-      <Enter index={7} silent={silent}>
-        <SectionHeader label="WATCHLIST · TINDEX" colors={colors} />
-      </Enter>
-      {content.watchlist.map((t, i) => (
-        <Enter key={t.ticker} index={8 + i} silent={silent}>
-          <TickerCard
-            t={t}
-            bandit={false}
-            animate={animate}
-            colors={colors}
-            chartWidth={chartWidth}
-            preview={preview}
-            entryMode={entryModes?.[t.ticker] ?? 'confirm'}
-            onSetEntryMode={(mode) => setEntryMode.mutate({ ticker: t.ticker, mode })}
-            onOpenChart={() => openTickerChart(t.ticker)}
-          />
-        </Enter>
-      ))}
+      {(content.watchlist ?? []).length > 0 && (
+        <>
+          <Enter index={7} silent={silent}>
+            <SectionHeader label="WATCHLIST · TINDEX" colors={colors} />
+          </Enter>
+          {(content.watchlist ?? []).map((t, i) => (
+            <Enter key={t.ticker} index={8 + i} silent={silent}>
+              <TickerCard
+                t={t}
+                bandit={false}
+                animate={animate}
+                colors={colors}
+                chartWidth={chartWidth}
+                preview={preview}
+                entryMode={entryModes?.[t.ticker] ?? 'confirm'}
+                onSetEntryMode={(mode) => setEntryMode.mutate({ ticker: t.ticker, mode })}
+                onOpenChart={() => openTickerChart(t.ticker)}
+              />
+            </Enter>
+          ))}
+        </>
+      )}
 
       {/* bandit's picks */}
-      <Enter index={12} silent={silent}>
-        <SectionHeader label="BANDIT'S PICKS" colors={colors} />
-      </Enter>
-      {content.muse_picks.map((t, i) => (
-        <Enter key={t.ticker} index={13 + i} silent={silent}>
-          <TickerCard
-            t={t}
-            bandit
-            animate={animate}
-            colors={colors}
-            chartWidth={chartWidth}
-            preview={preview}
-            onOpenChart={() => openTickerChart(t.ticker)}
-          />
-        </Enter>
-      ))}
+      {(content.muse_picks ?? []).length > 0 && (
+        <>
+          <Enter index={12} silent={silent}>
+            <SectionHeader label="BANDIT'S PICKS" colors={colors} />
+          </Enter>
+          {(content.muse_picks ?? []).map((t, i) => (
+            <Enter key={t.ticker} index={13 + i} silent={silent}>
+              <TickerCard
+                t={t}
+                bandit
+                animate={animate}
+                colors={colors}
+                chartWidth={chartWidth}
+                preview={preview}
+                onOpenChart={() => openTickerChart(t.ticker)}
+              />
+            </Enter>
+          ))}
+        </>
+      )}
 
       {/* footer */}
       <Enter index={17} silent={silent}>
@@ -793,12 +802,12 @@ export function MuseDigestView({
               </Text>
             </View>
           ) : null}
-          {content.earnings_blackout.length > 0 ? (
+          {(content.earnings_blackout ?? []).length > 0 ? (
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
               <Text style={[styles.mono, { fontSize: 10, color: colors.textTertiary, alignSelf: 'center' }]}>
                 EARNINGS BLACKOUT:
               </Text>
-              {content.earnings_blackout.map((t) => (
+              {(content.earnings_blackout ?? []).map((t) => (
                 <View
                   key={t}
                   style={[styles.badge, { backgroundColor: colors.error + '18', borderColor: colors.error + '44' }]}

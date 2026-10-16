@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, FlatList, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
+import { View, Text, FlatList, Pressable, StyleSheet, ActivityIndicator, useWindowDimensions } from 'react-native';
 import type { NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
@@ -51,9 +51,13 @@ function TickerPage({ ticker, height, width, period, interval, onStats }: {
   onStats: (ticker: string, price: number | null, changePct: number | null) => void;
 }) {
   const colors = useThemeColors();
-  const { data } = useSparkQuery(ticker, period, 60_000);
+  const { data, isLoading } = useSparkQuery(ticker, period, 60_000);
   const prices = data?.data?.closes ?? [];
   const dates = data?.data?.dates ?? [];
+  // Degenerate datasets (e.g. 1–2 stale points from an earlier fetch) render
+  // as a misleading single vertical line — treat as not-ready so the loader
+  // shows instead of a broken chart.
+  const hasEnoughData = prices.length >= 3 && dates.length >= 3;
 
   const price = prices.length > 0 ? prices[prices.length - 1] : null;
   const changePct = prices.length > 1 ? ((prices[prices.length - 1] / prices[0]) - 1) * 100 : null;
@@ -82,16 +86,19 @@ function TickerPage({ ticker, height, width, period, interval, onStats }: {
         {period} · {INTERVAL_LABEL[interval] ?? interval}
       </Text>
       <View style={{ flex: 1, justifyContent: 'center', marginTop: 8 }}>
-        {prices.length > 0 ? (
+        {hasEnoughData ? (
           <LinePriceChart
             dates={dates}
             prices={prices}
             period={period}
             height={height - 96}
             positive={up}
+            isLoading={isLoading}
           />
         ) : (
-          <Text style={{ color: colors.textTertiary, fontSize: 13, textAlign: 'center' }}>Loading chart…</Text>
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+            <ActivityIndicator size="small" color={colors.textTertiary} />
+          </View>
         )}
       </View>
     </View>

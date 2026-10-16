@@ -29,6 +29,8 @@ export interface ChartDisplayPrefs {
   showSR: boolean;
   /** Options call/put OI walls (+ expiry-day max pain) on intraday views. */
   showWalls: boolean;
+  /** Charts tab: the ticker's Morning Brief trigger / stop / target zone. */
+  showBriefLevels: boolean;
   /** Timeframe moving-average overlays (computed from the loaded bars). */
   ema20: boolean;
   ema50: boolean;
@@ -43,6 +45,8 @@ export interface ChartDisplayPrefs {
   /** Home dynamic card's chart page (Profile → Home chart timeframe). */
   homeChartPeriod: PricePeriod;
   homeChartInterval: string;
+  /** Set once the 15m → 5m Home chart default migration has run (see loadPrefs). */
+  homeChartInterval5m: boolean;
   /** The ticker the Charts screen was last showing — reopened on return
    *  (the chart overlay unmounts when closed). null = none yet. */
   lastChartTicker: string | null;
@@ -58,6 +62,7 @@ export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
   showOrb: true,
   showSR: false,
   showWalls: true,
+  showBriefLevels: true,
   ema20: true,
   ema50: true,
   ema200: false,
@@ -66,7 +71,8 @@ export const DEFAULT_CHART_DISPLAY_PREFS: ChartDisplayPrefs = {
   defaultPeriod: '1D',
   defaultInterval: null,
   homeChartPeriod: '1D',
-  homeChartInterval: '15m',
+  homeChartInterval: '5m',
+  homeChartInterval5m: true,
   lastChartTicker: null,
 };
 
@@ -76,7 +82,15 @@ async function loadPrefs(): Promise<ChartDisplayPrefs> {
     if (!raw) return DEFAULT_CHART_DISPLAY_PREFS;
     // Merge over the defaults so a pref added later gets its default
     // instead of undefined for anyone with an older saved blob.
-    return { ...DEFAULT_CHART_DISPLAY_PREFS, ...JSON.parse(raw) };
+    const saved = JSON.parse(raw);
+    // 2026-10-13: the Home chart default went 15m → 5m. A saved blob carries
+    // every pref, so the old default rode along for anyone who changed any
+    // chart setting — move those to 5m once. An explicit 15m picked later is
+    // saved alongside the flag and kept.
+    if (!saved.homeChartInterval5m && saved.homeChartInterval === '15m') {
+      saved.homeChartInterval = '5m';
+    }
+    return { ...DEFAULT_CHART_DISPLAY_PREFS, ...saved };
   } catch {
     return DEFAULT_CHART_DISPLAY_PREFS;
   }

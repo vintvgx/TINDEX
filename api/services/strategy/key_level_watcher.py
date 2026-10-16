@@ -28,6 +28,7 @@ multi-second Claude round trip if this blocked there.
 import asyncio
 import logging
 import threading
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -42,6 +43,9 @@ LEVEL_SCORE_SYSTEM_PROMPT = (
     "and market analysis. Provide data-driven, actionable insights. Always include the "
     "disclaimer: \"Not financial advice. Always do your own research.\""
 )
+
+# Bars averaged for the "× avg" volume read on a confirmation push.
+VOLUME_LOOKBACK_BARS = 20
 
 # How many strikes (per side) to fetch/score candidates from — bounded so a
 # confirmation never fires more than this many Claude calls.
@@ -59,6 +63,12 @@ INVESTMENT_SCORE_NOTE = (
     "as a LEAPS-style stock replacement held for months (time decay, liquidity, strike vs "
     "the long-term thesis), not as a quick momentum play."
 )
+
+
+# Alerts armed from a Morning Brief pick (the Pick Detail Sheet / Charts
+# "Brief trigger alert") carry notes starting with this — they push as a
+# brief trigger cross. Mirrors BRIEF_ALERT_NOTE in the app's briefLevels.ts.
+BRIEF_ALERT_NOTE = "Brief pick"
 
 
 def _run_async(coro):
@@ -95,6 +105,9 @@ class KeyLevelWatcher:
         # must change into the trigger side. Being already true at arm time
         # (or after a restart reload) never fires.
         self._sides: dict[str, str] = {}
+        # ticker -> recent 1m bar volumes (same feed as the bars), so a
+        # confirmation can say how its close bar's volume compared.
+        self._volumes: dict[str, deque] = {}
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -152,8 +165,13 @@ class KeyLevelWatcher:
     def _on_bar(self, ticker: str, bar: OrbBar) -> None:
         if bar.close is None:
             return
+        volume = int(bar.volume or 0)
         with self._lock:
             levels = list(self._watching.get(ticker, {}).values())
+            recent = self._volumes.setdefault(ticker, deque(maxlen=VOLUME_LOOKBACK_BARS))
+            # Average of the bars BEFORE this one — this bar is what's judged.
+            avg_volume = (sum(recent) / len(recent)) if recent else None
+            recent.append(volume)
         if not levels:
             return
 
@@ -209,14 +227,15 @@ class KeyLevelWatcher:
                         ticker, triggered_direction, level["id"], bar.close, direction)
             threading.Thread(
                 target=self._process_confirmation,
-                args=(level, bar.close, triggered_direction),
+                args=(level, bar.close, triggered_direction, volume, avg_volume),
                 daemon=True,
                 name=f"key-level-confirm-{level['id'][:8]}",
             ).start()
 
     # ── Confirmation processing (background thread) ─────────────────────────
 
-    def _process_confirmation(self, level: dict, confirmed_price: float, direction: str) -> None:
+    def _process_confirmation(self, level: dict, confirmed_price: float, direction: str,
+                              volume: Optional[int] = None, avg_volume: Optional[float] = None) -> None:
         ticker = level["ticker"]
         try:
             suggestions = self._build_suggestions(level, confirmed_price, direction)
@@ -249,6 +268,9 @@ class KeyLevelWatcher:
                 price=confirmed_price,
                 level_id=level["id"],
                 zone_type=level.get("zone_type") or "trade",
+                volume=volume,
+                avg_volume=avg_volume,
+                brief_trigger=(level.get("notes") or "").startswith(BRIEF_ALERT_NOTE),
             )
         except Exception as e:
             logger.error("[KeyLevelWatcher] confirmation save/notify failed for %s: %s",

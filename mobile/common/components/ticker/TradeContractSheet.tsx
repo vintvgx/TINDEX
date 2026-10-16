@@ -169,7 +169,9 @@ function TradeContractForm({ visible, onClose, colors, ticker, contract, current
     setFloorPctState(prefs.floorPct !== undefined ? prefs.floorPct : null);
     setBeGraceState(prefs.beGrace ?? BE_GRACE_DEFAULT);
     setManualSlPct(30);
-    setPaperMode(true);
+    // Carry over the account picked upstream (e.g. TickerContractsModal's
+    // Live/Paper toggle) — paper only when the opener didn't say.
+    setPaperMode(initialPaperMode ?? true);
     setBlindEntry(null);
     setUseAlertStop(true);
     setSlEnabled(true);

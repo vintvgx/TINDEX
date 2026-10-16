@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, type LayoutChangeEvent } from 'react-native';
+import { View, Text, Pressable, StyleSheet, ActivityIndicator, type LayoutChangeEvent } from 'react-native';
 import Svg, { Path, Circle, Line, Rect, Defs, LinearGradient, Stop, Text as SvgText } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
@@ -207,7 +207,9 @@ export function LinePriceChart({
       <View onLayout={onLayout} style={{ height, width: '100%' }}>
         {!model ? (
           <View style={[styles.empty, { backgroundColor: colors.surfaceSecondary }]}>
-            {!isLoading && (
+            {isLoading ? (
+              <ActivityIndicator size="small" color={colors.textTertiary} />
+            ) : (
               <>
                 <Ionicons name="bar-chart-outline" size={30} color={colors.textTertiary} />
                 <Text style={{ color: colors.textTertiary, fontSize: 13, marginTop: 6 }}>

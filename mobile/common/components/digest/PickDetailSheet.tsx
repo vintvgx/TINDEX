@@ -17,15 +17,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { format, parseISO } from 'date-fns';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMarketStream } from '@/hooks/useMarketStream';
+import { openChartOverlay } from '@/common/components/ui/ChartOverlayContext';
 import { useSetupSessionBars, SETUP_BARS_INTERVAL, type SetupSessionBars } from '@/hooks/queries/ticker/useSetupSessionBars';
 import { useOptionsQuery } from '@/hooks/queries/ticker/useOptionsQuery';
 import { useEntryCheck, type EntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
 import { useMorningBrief } from '@/hooks/queries/brief/useMorningBrief';
-import { useCreateKeyLevel } from '@/hooks/mutations/priceLevels/useCreateKeyLevel';
-import { useAuth } from '@/common/utils/context/auth/AuthContext';
 import { useToast } from '@/common/components/ui/Toast';
 import { TickerContractsModal } from '@/common/components/ticker/TickerContractsModal';
 import { SetupChart, setupLevels, topDrivers, triggerDistancePct, whyThisSetup } from './SetupChart';
+import { briefLevelsFor, useBriefTriggerAlert } from './briefLevels';
 import { pickContractRows, type PickContractRow } from './pickContracts';
 import type { MuseBriefTicker } from '@/common/types/marketDigest';
 import { useCloseOnTradeEntered } from '@/common/services/tradeEntryEvents';
@@ -165,11 +165,18 @@ export function PickDetailSheet({ pick, onClose }: { pick: MuseBriefTicker | nul
     }
   }, [pick, slide]);
 
-  const close = () => {
+  const close = (after?: () => void) => {
     Animated.timing(slide, { toValue: SHEET_H, duration: 220, useNativeDriver: true }).start(() => {
       setShown(null);
       onClose();
+      after?.();
     });
+  };
+  // Full-screen chart: slide the sheet away, then open charts.tsx on this
+  // ticker (the chart overlay renders under this native Modal otherwise).
+  const openChart = () => {
+    const ticker = shown?.ticker;
+    close(() => openChartOverlay(ticker));
   };
   const closeRef = useRef(close);
   closeRef.current = close;
@@ -195,14 +202,16 @@ export function PickDetailSheet({ pick, onClose }: { pick: MuseBriefTicker | nul
   );
 
   return (
-    <Modal transparent animationType="none" visible={shown != null} onRequestClose={close} statusBarTranslucent>
+    <Modal transparent animationType="none" visible={shown != null} onRequestClose={() => close()} statusBarTranslucent>
       <SafeAreaProvider>
-        <Pressable style={styles.backdrop} onPress={close} />
+        <Pressable style={styles.backdrop} onPress={() => close()} />
         <Animated.View
           style={[styles.sheet, { backgroundColor: colors.background, borderColor: colors.border, transform: [{ translateY: slide }] }]}
         >
           <SafeAreaView style={{ flex: 1 }} edges={['bottom']}>
-            {shown && <SheetBody t={shown} colors={colors} onClose={close} panHandlers={pan.panHandlers} />}
+            {shown && (
+              <SheetBody t={shown} colors={colors} onClose={() => close()} onOpenChart={openChart} panHandlers={pan.panHandlers} />
+            )}
           </SafeAreaView>
         </Animated.View>
       </SafeAreaProvider>
@@ -214,15 +223,17 @@ function SheetBody({
   t,
   colors,
   onClose,
+  onOpenChart,
   panHandlers,
 }: {
   t: MuseBriefTicker;
   colors: Colors;
   onClose: () => void;
+  /** Close the sheet and open this ticker in the full chart (charts.tsx). */
+  onOpenChart: () => void;
   panHandlers: ReturnType<typeof PanResponder.create>['panHandlers'];
 }) {
   const toast = useToast();
-  const { authState: { user } } = useAuth();
   const { long, trigger, invalidation, target } = setupLevels(t);
   const dirColor = long ? colors.success : colors.error;
 
@@ -260,27 +271,16 @@ function SheetBody({
   const why = t.thesis ?? whyThisSetup(t, bars?.priorHigh, bars?.priorLow);
   const scoring = topDrivers(t);
 
-  const { mutate: createLevel, isPending: arming } = useCreateKeyLevel();
-  const [armed, setArmed] = useState(false);
+  // Shared with the Charts tab's "Brief trigger alert" toggle — armed state
+  // is the watched level itself, so both show the same thing.
+  const briefLevels = useMemo(() => briefLevelsFor(t), [t]);
+  const { armed, busy: arming, setArmed: setAlertArmed } = useBriefTriggerAlert(briefLevels);
   const armAlert = () => {
-    if (!user?.id || trigger == null) return;
-    createLevel(
-      {
-        userId: user.id,
-        ticker: t.ticker,
-        direction: long ? 'bullish' : 'bearish',
-        levelLow: trigger,
-        zoneType: 'trade',
-        notes: `Brief pick — ${t.setup} ${t.direction} trigger${target != null ? `, target ${target.toFixed(2)}` : ''}`,
-      },
-      {
-        onSuccess: () => {
-          setArmed(true);
-          toast.success(`Alert armed: ${t.ticker} 1-min close ${long ? 'above' : 'below'} ${trigger.toFixed(2)}`);
-        },
-        onError: (e) => toast.error(e.message || 'Failed to set alert'),
-      },
-    );
+    if (trigger == null) return;
+    setAlertArmed(true, {
+      onSuccess: () => toast.success(`Alert armed: ${t.ticker} 1-min close ${long ? 'above' : 'below'} ${trigger.toFixed(2)}`),
+      onError: (e) => toast.error(e.message || 'Failed to set alert'),
+    });
   };
 
   const [chain, setChain] = useState<{ initial?: PickContractRow } | null>(null);
@@ -304,6 +304,14 @@ function SheetBody({
           <Badge label={Number.isInteger(t.score) ? String(t.score) : t.score.toFixed(1)} color={colors.warning} />
           <Text style={{ flexShrink: 1, fontSize: 13, color: colors.textSecondary }} numberOfLines={1}>{t.setup}</Text>
           <View style={{ flex: 1 }} />
+          <TouchableOpacity
+            onPress={onOpenChart}
+            hitSlop={10}
+            accessibilityLabel={`Open ${t.ticker} in the full chart`}
+            style={[styles.close, { backgroundColor: colors.surfaceSecondary }]}
+          >
+            <Ionicons name="expand-outline" size={15} color={colors.textSecondary} />
+          </TouchableOpacity>
           <TouchableOpacity onPress={onClose} hitSlop={10} style={[styles.close, { backgroundColor: colors.surfaceSecondary }]}>
             <Ionicons name="close" size={16} color={colors.textSecondary} />
           </TouchableOpacity>
