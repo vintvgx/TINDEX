@@ -149,7 +149,12 @@ export function DynamicBriefView({ onOpenBrief }: { onOpenBrief: () => void }) {
   const content = digest?.content_json;
   const brief = isMuseBriefContent(content) ? content : null;
   // Live prices off the app-wide /ws/prices socket — no extra connections.
-  const tickers = brief ? [...brief.watchlist.slice(0, 4), ...brief.muse_picks.slice(0, 4)].map((t) => t.ticker) : [];
+  // Delta updates (delta_update: true) carry a partial schema without the pick
+  // arrays — guard everything so a partial brief renders what it has instead
+  // of crashing (2026-10-13: .slice of undefined on watchlist/muse_picks).
+  const watchlist = brief?.watchlist ?? [];
+  const musePicks = brief?.muse_picks ?? [];
+  const tickers = [...watchlist.slice(0, 4), ...musePicks.slice(0, 4)].map((t) => t.ticker);
   const { livePrices, vix } = useMarketStream(tickers, { enabled: tickers.length > 0 });
   // Tapping a pick opens its detail sheet; "Open full" and taps on the
   // background around the cards still open the full brief.
@@ -204,7 +209,7 @@ export function DynamicBriefView({ onOpenBrief }: { onOpenBrief: () => void }) {
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
             <View style={[styles.regimeDot, { backgroundColor: regimeColor }]} />
             <Text style={[styles.mono, { fontSize: 13, fontWeight: '800', color: regimeColor }]}>
-              {brief.market.regime.toUpperCase().replace('-', ' ')}
+              {(brief.market.regime ?? 'update').toUpperCase().replace('-', ' ')}
             </Text>
           </View>
           <Text style={{ fontSize: 12.5, color: colors.textSecondary, marginTop: 6, lineHeight: 17 }} numberOfLines={3}>
@@ -215,16 +220,16 @@ export function DynamicBriefView({ onOpenBrief }: { onOpenBrief: () => void }) {
           <Text style={[styles.mono, { fontSize: 10, letterSpacing: 1.5, color: colors.textTertiary, marginTop: 20, marginBottom: 4 }]}>
             TOP TINDEX PLAYS
           </Text>
-          {brief.watchlist.slice(0, 4).map((t) => (
+          {watchlist.slice(0, 4).map((t) => (
             <PickRow key={t.ticker} t={t} price={livePrices[t.ticker]} colors={colors} onPress={() => setSelected(t)} />
           ))}
 
-          {brief.muse_picks.length > 0 && (
+          {musePicks.length > 0 && (
             <>
               <Text style={[styles.mono, { fontSize: 10, letterSpacing: 1.5, color: colors.textTertiary, marginTop: 20, marginBottom: 4 }]}>
                 MUSE PICKS
               </Text>
-              {brief.muse_picks.slice(0, 4).map((t) => (
+              {musePicks.slice(0, 4).map((t) => (
                 <PickRow key={t.ticker} t={t} price={livePrices[t.ticker]} colors={colors} onPress={() => setSelected(t)} />
               ))}
             </>

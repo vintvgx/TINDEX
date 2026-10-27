@@ -15,6 +15,8 @@ export interface ChartTapeInfo {
   changePct: number | null;
   signal: ChartTapeSignal;
   loading: boolean;
+  /** In the Morning Brief — the tape shows an "MB" tag by the symbol. */
+  brief?: boolean;
   /** Tapping the signal pill — the Charts tab opens that ticker's contracts. */
   onSignalPress?: () => void;
   /** Tapping the ticker symbol — the Charts tab opens ticker search. */

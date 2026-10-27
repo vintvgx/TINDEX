@@ -293,7 +293,9 @@ class OrbService:
             orb_bars = []
             for idx, row in hist.iterrows():
                 bar_time = idx.time()
-                if orb_start_time <= bar_time <= orb_end_time:
+                # 1m bars are stamped at their START: the 09:45 bar covers
+                # 09:45-09:46, outside the 09:30-09:45 window.
+                if orb_start_time <= bar_time < orb_end_time:
                     orb_bars.append({
                         'time': idx,
                         'open': row['Open'],
@@ -320,17 +322,23 @@ class OrbService:
             opening_price = Decimal(str(orb_bars[0]['open']))
             total_volume = sum(volumes)
             
+            # Complete = the window's last minute (09:44) has printed. yfinance
+            # can lag a minute behind real time, so right at 09:45 it may not.
+            last_minute = (datetime.combine(today, orb_end_time) - timedelta(minutes=1)).time()
+            complete = any(bar['time'].time() == last_minute for bar in orb_bars)
+
             orb_data = {
                 "high": orb_high,
                 "low": orb_low,
                 "open": opening_price,
-                "volume": total_volume
+                "volume": total_volume,
+                "complete": complete,
             }
             
             logger.info(
                 f"[HISTORICAL ORB via yfinance] {ticker}: "
                 f"High={orb_high}, Low={orb_low}, Open={opening_price}, "
-                f"Volume={total_volume}, Bars={len(orb_bars)}"
+                f"Volume={total_volume}, Bars={len(orb_bars)}, Complete={complete}"
             )
             
             return orb_data
@@ -339,6 +347,71 @@ class OrbService:
             logger.error(f"Error fetching historical ORB for {ticker} via yfinance: {e}", exc_info=True)
             return None
     
+    ORB_HISTORY_ATTEMPTS = 7
+    ORB_HISTORY_RETRY_SEC = 10
+
+    async def _finalize_orb_ranges_from_history(self, tickers: Set[str]) -> None:
+        """
+        At 09:45, make the 09:30-09:45 1m history the source of truth for each
+        ticker's ORB. The streamed range only covers the bars that arrived
+        while the stream was up, so a late connect or a mid-window restart
+        (which clears the range at phase entry) leaves a sliver of the real
+        range (2026-10-13: QQQ saved 742.69-743.43 vs the real 738.84-743.62).
+
+        yfinance can lag a minute, so retry until each ticker's 09:44 bar is
+        in (~1 min max). A ticker whose history never completes (no 09:44
+        trade on a thin name, yfinance down) falls back to the union of
+        streamed + partial history — every streamed bar is a real trade in
+        the window, so the union can only widen toward the true range.
+        """
+        pending = set(tickers)
+        partial: Dict[str, Dict] = {}
+        for attempt in range(self.ORB_HISTORY_ATTEMPTS):
+            for ticker in sorted(pending):
+                hist = await self.fetch_orb_range_historical(ticker)
+                if not hist:
+                    continue
+                if hist.get("complete"):
+                    self._apply_history_orb(ticker, hist)
+                    pending.discard(ticker)
+                else:
+                    partial[ticker] = hist
+            if not pending:
+                return
+            if attempt < self.ORB_HISTORY_ATTEMPTS - 1:
+                await asyncio.sleep(self.ORB_HISTORY_RETRY_SEC)
+
+        for ticker in sorted(pending):
+            hist = partial.get(ticker)
+            if hist:
+                logger.warning(f"[ORB FINALIZE] {ticker}: history incomplete — merging with stream")
+                self._merge_history_orb(ticker, hist)
+            else:
+                logger.warning(f"[ORB FINALIZE] {ticker}: no history — keeping streamed range")
+
+    def _apply_history_orb(self, ticker: str, hist: Dict) -> None:
+        """Complete 09:30-09:45 history replaces the streamed range outright."""
+        streamed = self.orb_ranges.get(ticker)
+        if streamed and (Decimal(str(streamed["high"])) != hist["high"]
+                         or Decimal(str(streamed["low"])) != hist["low"]):
+            logger.warning(
+                f"[ORB FINALIZE] {ticker}: streamed {streamed['low']}-{streamed['high']} "
+                f"-> history {hist['low']}-{hist['high']}"
+            )
+        entry = self.orb_ranges.setdefault(ticker, {})
+        entry.update(high=hist["high"], low=hist["low"], open=hist["open"], volume=int(hist["volume"]))
+
+    def _merge_history_orb(self, ticker: str, hist: Dict) -> None:
+        """Partial history: union with the streamed range (max high, min low)."""
+        streamed = self.orb_ranges.get(ticker)
+        if not streamed:
+            self._apply_history_orb(ticker, hist)
+            return
+        streamed["high"] = max(Decimal(str(streamed["high"])), hist["high"])
+        streamed["low"] = min(Decimal(str(streamed["low"])), hist["low"])
+        streamed["open"] = hist["open"]
+        streamed["volume"] = max(int(streamed.get("volume", 0)), int(hist["volume"]))
+
     async def ensure_orb_ranges(self):
         """
         Ensure we have ORB ranges for all followed tickers.
@@ -363,16 +436,17 @@ class OrbService:
         
         logger.info(f"Ensuring ORB ranges for {len(tickers)} tickers...")
         
-        for ticker in tickers:
-            if ticker in self.orb_ranges:
-                logger.info(f"  {ticker}: Already in memory")
-                continue
-            
-            logger.info(f"  {ticker}: Missing, fetching historically...")
-            orb_data = await self.fetch_orb_range_historical(ticker)
-            
+        missing = {t for t in tickers if t not in self.orb_ranges}
+        for ticker in sorted(tickers - missing):
+            logger.info(f"  {ticker}: Already in memory")
+        if missing:
+            # Same path as the 09:45 finalize — waits for the 09:44 bar if a
+            # restart lands right after 09:45, before yfinance has it.
+            logger.info(f"  Missing, fetching historically: {sorted(missing)}")
+            await self._finalize_orb_ranges_from_history(missing)
+        for ticker in sorted(missing):
+            orb_data = self.orb_ranges.get(ticker)
             if orb_data:
-                self.orb_ranges[ticker] = orb_data
                 await self.save_orb_range(ticker, orb_data)
                 logger.info(
                     f"  {ticker}: Fetched and saved - "
@@ -465,7 +539,20 @@ class OrbService:
                         self.orb_ranges[ticker]["prior_day_trend"] = gap_ctx["prior_day_trend"]
                         self.orb_ranges[ticker]["trend_continuation"] = gap_ctx["trend_continuation"]
             
-            self.supabase.table("orb_ranges").upsert(orb_record).execute()
+            # Update today's row if there is one, else insert. A bare upsert()
+            # keys on the id primary key (absent here), so it only ever
+            # inserted: the 09:45 save worked, but any later correction (a
+            # restart re-fetching history) collided with the existing
+            # (ticker, trade_date) row and failed — the bad range stuck.
+            updated = (
+                self.supabase.table("orb_ranges")
+                .update(orb_record)
+                .eq("ticker", ticker)
+                .eq("trade_date", str(trade_date))
+                .execute()
+            )
+            if not updated.data:
+                self.supabase.table("orb_ranges").insert(orb_record).execute()
             
             # Determine current_price: prefer real last trade/close value if available
             # Check previous_close_cache for a valid previous close value
@@ -1149,6 +1236,11 @@ class OrbService:
                 bar_ts = self.get_current_et_time()
             if bar_ts.time() < time(9, 30):
                 logger.debug(f"[ORB CALC] Skipping pre-09:30 bar for {ticker} (ts={bar_ts.time()})")
+                return
+            # Same window's other edge: a 09:45 bar can land while the phase
+            # is still open (the loop exits it on its own clock).
+            if bar_ts.time() >= self.orb_end:
+                logger.debug(f"[ORB CALC] Skipping post-09:45 bar for {ticker} (ts={bar_ts.time()})")
                 return
 
             # During ORB calculation, track the TRUE high and low from bar data
@@ -2380,8 +2472,16 @@ class OrbService:
                     logger.info(f"ORB calculation complete. Total bars received: {self._bars_received_count}")
                     logger.info(f"ORB ranges calculated: {list(self.orb_ranges.keys())}")
                     logger.info("=" * 50)
+                    # 09:30-09:45 history is the source of truth (survives a
+                    # late stream or a restart inside the window). Stay in the
+                    # calculation phase until it lands, so no breakout is
+                    # checked against a partial range; post-09:45 bars are
+                    # skipped meanwhile (see handle_bar).
+                    await self._finalize_orb_ranges_from_history(
+                        self.active_tickers | set(self.orb_ranges)
+                    )
                     self.calculation_phase = False
-                    
+
                     for ticker, data in self.orb_ranges.items():
                         await self.save_orb_range(ticker, data)
                         # Publish finalized ORB status to the hub (engines use bars,

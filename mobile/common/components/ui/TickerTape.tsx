@@ -447,6 +447,15 @@ export function TickerTape() {
                 ${chartInfo.ticker}
               </Text>
             </Pressable>
+            {chartInfo.brief ? (
+              // Morning Brief ticker — amber, the brief trigger color.
+              <View
+                accessibilityLabel="Morning Brief ticker"
+                style={[styles.briefTag, { backgroundColor: colors.warning + '22', borderColor: colors.warning }]}
+              >
+                <Text style={[styles.briefTagText, { color: colors.warning }]}>MB</Text>
+              </View>
+            ) : null}
             <View style={{ flex: 1 }} />
             {chartInfo.loading || chartInfo.price == null ? (
               <Skeleton width={64} height={10} borderRadius={4} />
@@ -645,6 +654,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingRight: 12,
+  },
+  briefTag: {
+    marginLeft: 6,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  briefTagText: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
   signalPill: {
     marginLeft: 8,
