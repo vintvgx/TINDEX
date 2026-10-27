@@ -718,13 +718,24 @@ function GateWatchRow({ watch, colors }: { watch: GateWatch; colors: any }) {
   const c = watch.direction === 'CALL' ? colors.success : colors.error;
   const mins = Math.max(0, Math.round((new Date(watch.expires_at).getTime() - Date.now()) / 60_000));
   const left = mins >= 60 ? `${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, '0')}m` : `${mins}m`;
+  // Don't infer VWAP from gate_ok: a false gate_ok only means the gate
+  // failed, not that VWAP specifically failed. Report the actual failed
+  // factors; only claim VWAP when VWAP is in the failed list (or when no
+  // factor info exists yet, since the reversal gate is VWAP-only).
+  const revLabel = watch.gate_ok
+    ? 'VWAP aligned, no trigger'
+    : watch.failed.some(f => f.toLowerCase() === 'vwap')
+      ? 'VWAP not aligned'
+      : watch.failed.length > 0
+        ? `needs ${watch.failed.join(', ')}`
+        : 'VWAP not aligned';
   return (
     <View style={[styles.watchRow, { backgroundColor: c + '14', borderColor: c + '44' }]}>
       <Ionicons name="eye-outline" size={14} color={c} />
       <Text style={[styles.watchText, { color: colors.text }]} numberOfLines={1}>
         Watching {reversal ? 'reversal ' : ''}{watch.direction}
         {reversal
-          ? ` · ${watch.gate_ok ? 'VWAP aligned, no trigger' : 'VWAP not aligned'}`
+          ? ` · ${revLabel}`
           : watch.score && watch.score !== '?' ? ` · ${watch.score}` : ''}
         {` · ${left} left`}
       </Text>
