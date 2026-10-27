@@ -180,7 +180,10 @@ def get_ticker_spark(ticker: str):
     Lightweight closes-only series for sparkline views (home chart deck).
     Deliberately separate from /history: no OHLC, no volumes, no session
     lines, no technicals — just dates + closes, cached ~45s server-side.
-    Body: { "period": "1D" } (default "1D").
+    Body: { "period": "1D", "interval": "15m" } (period defaults to "1D";
+    an interval not allowed for the period falls back to its default).
+    `stale` is true when the bars are an expired copy being refreshed in the
+    background — the app re-asks a few seconds later.
     """
     try:
         ticker = ticker.strip().upper()
@@ -192,9 +195,10 @@ def get_ticker_spark(ticker: str):
         if period not in PERIOD_MAP:
             return jsonify({"success": False, "error": f"Invalid period. Must be one of: {', '.join(PERIOD_MAP.keys())}"}), 400
 
-        spark = get_spark_prices(ticker, period)
+        interval = data.get("interval") or None
+        spark = get_spark_prices(ticker, period, interval)
         return jsonify({"success": True, "data": spark, "period": period,
-                        "timestamp": time.time()})
+                        "stale": spark["stale"], "timestamp": time.time()})
     except Exception as e:
         logger.error("Ticker spark fetch failed for ticker '%s': %s", ticker, e, exc_info=True)
         return jsonify({"success": False, "error": f"Spark fetch failed: {str(e)}"}), 500

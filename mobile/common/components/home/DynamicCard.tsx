@@ -194,7 +194,7 @@ export function DynamicCard({
       let view: React.ReactNode;
       switch (item) {
         case 'charts':
-          view = <DynamicChartsView onActiveTicker={setTickerInfo} height={EXPANDED_H} />;
+          view = <DynamicChartsView onActiveTicker={setTickerInfo} height={EXPANDED_H} visible={index === viewIndex} />;
           break;
         case 'brief':
           view = <DynamicBriefView onOpenBrief={handleOpenBrief} />;
@@ -209,7 +209,7 @@ export function DynamicCard({
           view = <DynamicOpenContractsView />;
           break;
         case 'watched':
-          view = <DynamicContractsView />;
+          view = <DynamicContractsView visible={index === viewIndex} />;
           break;
       }
       return <View style={{ width: pageWidth, height: EXPANDED_H }}>{view}</View>;

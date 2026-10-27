@@ -187,6 +187,73 @@ def get_tracked_options():
         return jsonify({"success": False, "error": f"Failed to get tracked contracts: {str(e)}"}), 500
 
 
+# ── Watched-contract quotes ────────────────────────────────────────────────
+# The Home card's watched list shows each contract's price now vs. when it was
+# tracked. One Alpaca snapshot request covers every symbol (the per-contract
+# /swing quote pulls a whole option chain each time), cached briefly so a few
+# open screens polling together cost one upstream call.
+_OCC_SYMBOL_RE = re.compile(r"^[A-Z]{1,6}\d{6}[CP]\d{8}$")
+_QUOTES_MAX = 50
+_QUOTE_TTL_S = 10
+_QUOTE_CACHE: dict = {}
+
+
+def _quote_from_snapshot(snap) -> dict | None:
+    q = getattr(snap, "latest_quote", None)
+    t = getattr(snap, "latest_trade", None)
+    bid = float(getattr(q, "bid_price", 0) or 0) if q is not None else 0.0
+    ask = float(getattr(q, "ask_price", 0) or 0) if q is not None else 0.0
+    last = getattr(t, "price", None) if t is not None else None
+    last = float(last) if last else None
+    # Mid when there's a two-sided quote; a stale last trade otherwise.
+    mark = round((bid + ask) / 2, 4) if bid > 0 and ask > 0 else last
+    if mark is None:
+        return None
+    return {"bid": bid, "ask": ask, "last_price": last, "mark": mark}
+
+
+def fetch_option_quotes(symbols: list[str]) -> dict:
+    """{symbol: {bid, ask, last_price, mark}} for the symbols Alpaca priced."""
+    now = time.time()
+    out, missing = {}, []
+    for sym in symbols:
+        hit = _QUOTE_CACHE.get(sym)
+        if hit and now - hit[0] < _QUOTE_TTL_S:
+            if hit[1] is not None:
+                out[sym] = hit[1]
+        else:
+            missing.append(sym)
+    if missing:
+        from alpaca.data.requests import OptionSnapshotRequest
+        from services.alpaca.alpaca_option_service import get_alpaca_option_service
+        snaps = get_alpaca_option_service().options_client.get_option_snapshot(
+            OptionSnapshotRequest(symbol_or_symbols=missing)) or {}
+        for sym in missing:
+            snap = snaps.get(sym)
+            quote = _quote_from_snapshot(snap) if snap is not None else None
+            _QUOTE_CACHE[sym] = (now, quote)
+            if quote is not None:
+                out[sym] = quote
+    return out
+
+
+@bp.route("/tracked-options/quotes", methods=["GET"])
+def get_tracked_option_quotes():
+    """?symbols=OCC1,OCC2 → { success, data: { OCC: {bid, ask, last_price, mark} } }."""
+    raw = request.args.get("symbols", "")
+    symbols = sorted({s.strip().upper() for s in raw.split(",") if s.strip()})
+    if not symbols:
+        return jsonify({"success": True, "data": {}}), 200
+    if len(symbols) > _QUOTES_MAX or not all(_OCC_SYMBOL_RE.match(s) for s in symbols):
+        return jsonify({"success": False,
+                        "error": f"symbols must be up to {_QUOTES_MAX} OCC option symbols"}), 400
+    try:
+        return jsonify({"success": True, "data": fetch_option_quotes(symbols)}), 200
+    except Exception as e:
+        logger.warning("Option quotes fetch failed for %s: %s", symbols, e)
+        return jsonify({"success": False, "error": f"Quote fetch failed: {str(e)}"}), 502
+
+
 @bp.route("/track-option/<contract_id>", methods=["PUT"])
 def update_tracked_option(contract_id: str):
     try:

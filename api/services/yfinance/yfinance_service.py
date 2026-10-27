@@ -199,6 +199,16 @@ def get_historical_prices(ticker: str, period_key: str, interval_override: str |
     cached = _history_cache_get(cache_key, _history_ttl_s(interval))
     if cached is not None:
         return cached
+    # After the close the bars stop moving: a copy fetched since the last
+    # session close is final until the next open, so it's served as fresh —
+    # no expired-copy reply (and "Updating" in the app) on every evening
+    # swipe. Not for 1D with extended hours: post-market bars keep coming.
+    if not (period_key == "1D" and extended_hours):
+        hit = _HISTORY_CACHE.get(cache_key)
+        if hit and _fetched_since_close(hit[0]):
+            result = dict(hit[1])
+            result["from_cache"] = True
+            return result
     # Stale-while-revalidate (polling audit B4): an expired-but-recent copy
     # is returned at once (flagged stale=True) and refreshed from Yahoo in
     # the background — a cold chart open never waits on Yahoo when we've
@@ -289,26 +299,36 @@ def _fetch_historical_prices(ticker: str, period_key: str, interval: str,
 
 # ── Sparkline fetch (home chart deck) ─────────────────────────────────────
 # The home deck's charts are plain price lines — no candles, no technicals,
-# no levels. This is a deliberately separate, minimal call from the chart
-# history endpoint: dates + closes only, cached ~45s per ticker+period so a
-# deck of tickers polling every minute doesn't hammer yfinance.
+# no levels. This is a deliberately separate, minimal response from the chart
+# history endpoint: dates + closes only, built from the shared history cache.
+# Only fresh copies are kept here: when the history cache answers with an
+# expired copy (stale-while-revalidate) the spark passes `stale` through and
+# isn't cached, so the app's quick re-ask gets the refreshed bars instead of
+# the same old copy for another 45s.
 _SPARK_CACHE: dict = {}
 _SPARK_TTL_S = 45
 
 
-def get_spark_prices(ticker: str, period_key: str) -> dict:
+def get_spark_prices(ticker: str, period_key: str, interval: str | None = None) -> dict:
     """Minimal closes-only series for lightweight sparkline views."""
-    cache_key = f"{ticker}:{period_key}"
+    cache_key = f"{ticker}:{period_key}:{interval or ''}"
     now = time.time()
     hit = _SPARK_CACHE.get(cache_key)
     if hit and now - hit[0] < _SPARK_TTL_S:
         return hit[1]
 
-    full = get_historical_prices(ticker, period_key)
-    dates = full.get("dates", []) if isinstance(full, dict) else []
-    closes = full.get("prices", []) if isinstance(full, dict) else []
-    result = {"dates": dates, "closes": closes, "interval": full.get("interval") if isinstance(full, dict) else None}
-    _SPARK_CACHE[cache_key] = (now, result)
+    full = get_historical_prices(ticker, period_key, interval)
+    if not isinstance(full, dict):
+        full = {}
+    stale = bool(full.get("stale"))
+    opens = full.get("opens") or []
+    # `open` = the first bar's open: the app plots closes at each bar's END,
+    # so this is the line's starting point (09:30 on 1D).
+    result = {"dates": full.get("dates", []), "closes": full.get("prices", []),
+              "open": opens[0] if opens else None,
+              "interval": full.get("interval"), "stale": stale}
+    if not stale:
+        _SPARK_CACHE[cache_key] = (now, result)
     return result
 
 
@@ -557,6 +577,31 @@ def get_historical_window(ticker: str, interval: str, start, end, extended_hours
     _history_cache_put(cache_key, result)
     result["from_cache"] = False
     return result
+
+
+# The session counts as live from 09:15 to 16:15 ET (the app's isMarketHours
+# buffer): pre-open refreshes are wanted, and Yahoo finalises the last bars a
+# few minutes after 16:00.
+_SESSION_START_MIN = 9 * 60 + 15
+_SESSION_SETTLED_MIN = 16 * 60 + 15
+
+
+def _last_close_et(now_et: "datetime") -> "datetime":
+    """The most recent weekday 16:15 ET at or before `now_et` (holidays ignored)."""
+    close = now_et.replace(hour=16, minute=15, second=0, microsecond=0)
+    while close > now_et or close.weekday() >= 5:
+        close -= timedelta(days=1)
+    return close
+
+
+def _fetched_since_close(fetched_at: float, now_et: "datetime | None" = None) -> bool:
+    """True outside the live session when `fetched_at` (epoch s) is after the
+    last close — that copy holds the session's final bars."""
+    now_et = now_et or datetime.now(ET)
+    minutes = now_et.hour * 60 + now_et.minute
+    if now_et.weekday() < 5 and _SESSION_START_MIN <= minutes < _SESSION_SETTLED_MIN:
+        return False
+    return fetched_at >= _last_close_et(now_et).timestamp()
 
 
 def _is_regular_trading_hours(now_et: "datetime | None" = None) -> bool:

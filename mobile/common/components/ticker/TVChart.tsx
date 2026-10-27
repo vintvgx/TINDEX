@@ -102,6 +102,14 @@ type WVInbound =
   | { type: 'log'; message: string }
   | { type: 'error'; message: string };
 
+export interface ChartLevelBand {
+  id: string;
+  low: number;
+  high: number;
+  color: string;
+  tag?: { price: number; title: string };
+}
+
 export interface TVChartProps {
   data?: TickerHistoryData | null;
   isLoading?: boolean;
@@ -113,6 +121,10 @@ export interface TVChartProps {
   /** Technicals overlays from useChartSettings — VWAP, daily EMA-20/50,
    *  options walls. Already filtered by their own toggles. */
   referenceLines?: ChartReferenceLine[] | null;
+  /** Tinted price bands with dashed edges, full width — e.g. a Morning Brief
+   *  target zone, drawn like the Pick Detail Sheet's. `tag` adds a price-axis
+   *  label (and keeps the band in the autoscaled range). */
+  levelBands?: ChartLevelBand[] | null;
   /** The "Pre / post-market lines" setting — sessionReferenceLines are
    *  hidden unless this is on (same as AdvancedPriceChart). */
   showSessionLines?: boolean;
@@ -249,7 +261,7 @@ function foldOrbBar(d: OrbDay, c: TVCandle) {
 
 export function TVChart({
   data, isLoading, autoZones, watchZones, orbRange, showOrbRange,
-  sessionReferenceLines, referenceLines, showSessionLines, onAutoZoneTap, onWatchZoneTap, resetKey, emas, mode, crosshair = true, style,
+  sessionReferenceLines, referenceLines, levelBands, showSessionLines, onAutoZoneTap, onWatchZoneTap, resetKey, emas, mode, crosshair = true, style,
   visibleSeconds, onRequestMoreHistory, historyExhausted, onAddAlertAtPrice, livePrice,
   selectedWatchZoneId, onChartInteract,
 }: TVChartProps) {
@@ -618,10 +630,17 @@ export function TVChart({
     return bands;
   }, [orbDays, orbRange, orbTail, lastBarT]);
 
+  // Level bands: 10% fill, dashed edges at 70% — the Pick Detail Sheet's
+  // target-zone look (SetupChart).
+  const levelZoneBands: TVZoneBand[] = useMemo(() => (levelBands ?? []).map(b => ({
+    id: `__level__${b.id}`, low: Math.min(b.low, b.high), high: Math.max(b.low, b.high),
+    color: b.color, opacity: 0.1, edgeOpacity: 0.7, dashed: true,
+  })), [levelBands]);
+
   useEffect(() => {
     if (!chartReady) return;
-    send({ type: 'setZones', auto: autoBands, watch: watchBands, bands: orbBands });
-  }, [chartReady, autoBands, watchBands, orbBands, send]);
+    send({ type: 'setZones', auto: autoBands, watch: watchBands, bands: [...orbBands, ...levelZoneBands] });
+  }, [chartReady, autoBands, watchBands, orbBands, levelZoneBands, send]);
 
   // ── Reference lines (ORB edges, session lines) ─────────────────────
   const lastBarDate = lastBarT != null ? etParts(lastBarT).date : null;
@@ -652,6 +671,12 @@ export function TVChart({
         ...refLineStyle(l.dash), fitInScale: true, textLabel: true,
       });
     }
+    // Level band tags: axis label only (the band draws its own edges).
+    for (const b of levelBands ?? []) {
+      if (b.tag) {
+        lines.push({ price: b.tag.price, color: b.color, title: b.tag.title, dashed: false, lineVisible: false, fitInScale: true });
+      }
+    }
     // Watch levels: price-axis tag per edge. The band primitive already
     // draws the dashed/solid line, so these are label-only.
     for (const b of watchBands) {
@@ -661,7 +686,7 @@ export function TVChart({
       }
     }
     return lines;
-  }, [showOrbRange, orbRange, orbBands, lastBarDate, showSessionLines, sessionReferenceLines, referenceLines, watchBands, colors]);
+  }, [showOrbRange, orbRange, orbBands, lastBarDate, showSessionLines, sessionReferenceLines, referenceLines, levelBands, watchBands, colors]);
 
   useEffect(() => {
     if (!chartReady) return;

@@ -87,8 +87,9 @@ function downsample(bars: SessionBar[], max: number): SessionBar[] {
  *  briefs that predate trigger/target on the payload. */
 export function setupLevels(t: MuseBriefTicker) {
   const long = t.direction === 'CALL';
-  const trigger = t.trigger ?? (long ? t.levels.resistance : t.levels.support) ?? null;
-  const invalidation = (long ? t.levels.support : t.levels.resistance) ?? null;
+  const lv = t.levels ?? {};
+  const trigger = t.trigger ?? (long ? lv.resistance : lv.support) ?? null;
+  const invalidation = (long ? lv.support : lv.resistance) ?? null;
   // Older briefs only carry the target inside the if/then copy ("… toward 249.25").
   const parsed = /toward\s+\$?(\d+(?:\.\d+)?)/.exec(t.if_then ?? '');
   const target = t.target ?? (parsed ? Number(parsed[1]) : null);
