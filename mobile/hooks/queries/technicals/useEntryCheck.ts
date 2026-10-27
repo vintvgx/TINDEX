@@ -16,6 +16,32 @@ export interface EntryVerdict {
   factors: { key: string; ok: boolean; points: number; note?: string | null }[];
 }
 
+/** Composite technicals score — api/services/composite_technicals.py. */
+export type CompositeTier = 'STRONG' | 'MODERATE' | 'WATCH' | 'NO_TRADE';
+export type CompositeKey = 'rsi_intraday' | 'rsi_daily' | 'macd' | 'trend_intraday' | 'trend_daily' | 'vwap' | 'orb';
+
+export interface CompositeIndicator {
+  key: CompositeKey;
+  label: string;
+  /** -2..+2, signed for this side (higher = more in favour); null = no data. */
+  score: number | null;
+  /** Short chip value, e.g. "68", "49 ↗", "Bullish", "Above high". */
+  value: string;
+  /** Plain-language line for the detail sheet. */
+  detail: string;
+  available: boolean;
+}
+
+export interface CompositeScore {
+  direction: 'CALL' | 'PUT';
+  total: number;
+  max: number;
+  tier: CompositeTier;
+  indicators: CompositeIndicator[];
+  turning: { kind: 'turning' | 'caveat'; title: string; text: string }[];
+  missing: string[];
+}
+
 export interface EntryCheck {
   ticker: string;
   direction: 'CALL' | 'PUT';
@@ -37,6 +63,8 @@ export interface EntryCheck {
   /** Optional: added in a later API version — older deploys omit them. */
   verdicts?: { CALL: EntryVerdict; PUT: EntryVerdict };
   signal?: ChartSignal;
+  /** Optional (2026-10-26 API): composite score for both sides. */
+  composite?: { CALL: CompositeScore; PUT: CompositeScore };
   errors: Record<string, string> | null;
 }
 

@@ -31,6 +31,7 @@ from services.strategy.notifier import StrategyNotifier
 from services.strategy.debug_log import DebugLogBuffer
 from services.strategy.limit_order_tracker import LimitOrderTracker, MAX_RUNGS as LADDER_MAX_RUNGS
 from services.utils.orb_data_hub import get_orb_data_hub, OrbBar
+from services.strategy.gate_watch import GateWatchMixin
 
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
@@ -93,9 +94,11 @@ STRATEGY_DEFAULTS = {
     "debug_mode":              False,
     "smart_contracts":         False,
     "confirm_entry":           False,  # True = pause for user approval before every auto entry
-    # Per-strategy technicals gate — {"enabled": bool, "required": [factor, ...]}
-    # with factors from entry_check_service.GATE_FACTORS. Every required
-    # factor must match or the signal is blocked. None = no gate.
+    # Per-strategy technicals gate — {"enabled": bool, "required": [factor, ...],
+    # "mode"?: daily|intraday|and|composite, "watch"?: bool} with factors from
+    # entry_check_service.GATE_FACTORS. Every required factor must match or
+    # the signal is blocked; watch=True keeps a blocked breakout as a pending
+    # watch (gate_watch.py). None = no gate.
     "technicals_gate":         None,
     "paused_by_kill_switch":   False,  # True = this config was auto-paused by the bulk
                                         # pause-all switch (not a manual per-strategy pause) —
@@ -131,14 +134,15 @@ EOD_CLOSE_TIMES = {
 # against an adverse move, so it's worth trying. Options can move $0.05-$0.10
 # in seconds even on a liquid underlying, so a plain market sell on a TP hit
 # or a manual exit can leave real money on the table.
-PRICE_SEEKING_REASONS = frozenset({"TP1", "TP2", "TP2_FULL_CLOSE", "MANUAL_EXIT"})
+# TIME_STOP is a dead trade, not a breakdown — worth up to 10s seeking the bid.
+PRICE_SEEKING_REASONS = frozenset({"TP1", "TP2", "TP2_FULL_CLOSE", "MANUAL_EXIT", "TIME_STOP"})
 PRICE_SEEK_SAMPLE_WINDOW_SEC = 3.0   # total time spent sampling the bid
 PRICE_SEEK_MIN_SAMPLES       = 4     # bid samples taken across that window
 PRICE_SEEK_TOTAL_BUDGET_SEC  = 10.0  # ceiling on how long we'll wait for a fill
                                       # before cancelling and market-selling the rest
 
 
-class ORBEngine:
+class ORBEngine(GateWatchMixin):
     def __init__(self, config: dict = None, stream_manager=None, hub=None):
         self.config = config or STRATEGY_DEFAULTS.copy()
         self._stream_manager_ref = stream_manager
@@ -227,12 +231,14 @@ class ORBEngine:
                 self._hub.unsubscribe(self._subscribed_ticker, self._on_retest_event)
                 if self._subscription_type == "reversal":
                     self._hub.unsubscribe(self._subscribed_ticker, self.on_reversal_confirmed)
+                    self._hub.unsubscribe(self._subscribed_ticker, self._on_reversal_status)
                 else:
                     self._hub.unsubscribe(self._subscribed_ticker, self.on_breakout_confirmed)
             self._hub.subscribe_bar(self.ticker, self.on_bar)
             self._hub.subscribe_retest_events(self.ticker, self._on_retest_event)
             if is_reversal_profile:
                 self._hub.subscribe_reversal(self.ticker, self.on_reversal_confirmed)
+                self._hub.subscribe_reversal_status(self.ticker, self._on_reversal_status)
             else:
                 self._hub.subscribe_breakout(self.ticker, self.on_breakout_confirmed)
             self._subscribed_ticker = self.ticker
@@ -329,6 +335,10 @@ class ORBEngine:
         # / skip_pending_entry). None when no confirmation is outstanding.
         self._pending_confirmation: Optional[dict] = None
         self._pending_last_price:   Optional[float] = None
+        # Blocked-breakout watch (gate_watch.py) — re-checks the technicals
+        # gate on each 1-min close and enters the first time it passes.
+        self._gate_watch:           Optional[dict] = None
+        self._gate_watch_inflight:  bool = False
         # Fan-out queues for /ws/strategy/<id>/live WebSocket clients
         self._live_clients: list     = []
         self._live_clients_lock      = __import__("threading").Lock()
@@ -366,6 +376,7 @@ class ORBEngine:
             self.stream_manager.unsubscribe(self.contract_symbol, self._on_stream_quote)
         if getattr(self, "limit_orders", None):
             self.limit_orders.reset()
+        self._end_gate_watch("cancelled", "session reset", notify=False)
         self._reset_session_state()
 
     # ── Step 1: Called at 9:46 AM ET ──────────────────────────────────────────
@@ -457,7 +468,8 @@ class ORBEngine:
         if gate_cfg.get("enabled"):
             import threading
             from services.entry_check_service import prewarm
-            threading.Thread(target=prewarm, args=(self.ticker, gate_cfg.get("required")),
+            threading.Thread(target=prewarm, args=(self.ticker, gate_cfg.get("required"),
+                                                   self._gate_mode(gate_cfg)),
                              daemon=True).start()
 
         result = self.sentiment.check_all(
@@ -491,6 +503,7 @@ class ORBEngine:
                                    f"ORL={self.orl:.2f} VWAP={self.session_vwap}",
                         {"vix": result["vix"], "sentiment": result["sentiment"],
                          "fib_levels": {k: round(v, 2) for k, v in self.fib_levels.items()}})
+        self.restore_gate_watch()
         return True
 
     # ── Step 2: Called every minute after ORB is set ──────────────────────────
@@ -565,6 +578,7 @@ class ORBEngine:
             # below so a restart resumes (or drops) the countdown instead
             # of silently granting a fresh window.
             be_grace_was_active = self.exit_manager._be_grace_start is not None
+            time_stop_met_before = self.exit_manager.time_stop_progress_met
             action = self.exit_manager.evaluate(
                 current_option_price=current_option_price,
                 current_underlying_price=current_price,
@@ -602,6 +616,15 @@ class ORBEngine:
             # this is at most two small writes per grace episode, not per
             # tick. Best-effort: a failed persist only affects a later
             # restart, never this session's in-memory countdown.
+            if (self.exit_manager and self.active_trade_id and not time_stop_met_before
+                    and self.exit_manager.time_stop_progress_met):
+                try:
+                    self.logger.update_exit_levels(
+                        trade_id=self.active_trade_id,
+                        exit_overrides_patch={"time_stop_progress_met": True},
+                    )
+                except Exception:
+                    logger.error("[ORBEngine] Failed to persist time_stop_progress_met", exc_info=True)
             if self.exit_manager and self.active_trade_id:
                 be_grace_now = self.exit_manager._be_grace_start
                 if (be_grace_now is not None) != be_grace_was_active:
@@ -995,9 +1018,39 @@ class ORBEngine:
             return True
         return False
 
-    def _check_technicals_gate(self, direction: str, trigger_price: float, required: list) -> bool:
+    def _gate_mode(self, gate_cfg: dict) -> str:
+        """technicals_gate.mode, defaulting to daily (the original gate). The
+        composite score replaces the binary gate for breakout profiles only —
+        REVERSAL keeps its binary gate (TODO a3e2a3d9), so composite on a
+        REVERSAL strategy falls back to daily."""
+        from services.entry_check_service import normalize_gate_mode
+        mode = normalize_gate_mode(gate_cfg.get("mode"))
+        if mode == "composite" and self.profile_key == "REVERSAL":
+            return "daily"
+        return mode
+
+    def _live_session_vwap(self) -> Optional[float]:
+        """OrbService's running session VWAP for today (hub status), the one
+        the technicals gate judges against. None if unavailable."""
+        try:
+            status = self._hub.get_status(self.ticker)
+            if status and status.session_date == datetime.now(ET).date() and status.vwap:
+                return float(status.vwap)
+        except Exception:
+            pass
+        return None
+
+    def _check_technicals_gate(self, direction: str, trigger_price: float, required: list,
+                               mode: str = "daily", notify: bool = True,
+                               quiet: bool = False) -> tuple[bool, bool, Optional[dict]]:
         """
-        True when every technical in `required` matches this signal — see
+        (passed, needs_confirm, gate) — gate is evaluate_gate's dict, None
+        when it couldn't be evaluated. notify=False skips the "blocked" push
+        for an evaluated fail (a gate watch sends its own); quiet=True (a
+        watch re-check, every bar) skips every push and debug line. Passed when every technical in `required`
+        matches this signal (daily / intraday / and modes), or the composite
+        score is STRONG / MODERATE (composite mode — MODERATE sets
+        needs_confirm, routing the entry through a confirmation pause) — see
         entry_check_service.evaluate_gate for the per-factor rules. Uses the
         engine's own live inputs: the trigger price, OrbService's running
         session VWAP (hub status — self.session_vwap is only the opening
@@ -1006,16 +1059,10 @@ class ORBEngine:
         """
         from services.entry_check_service import evaluate_gate
 
-        vwap = None
-        try:
-            status = self._hub.get_status(self.ticker)
-            if status and status.session_date == datetime.now(ET).date() and status.vwap:
-                vwap = float(status.vwap)
-        except Exception:
-            pass
+        vwap = self._live_session_vwap()
 
         intraday_closes = None
-        if "trend_intraday" in required:
+        if "trend_intraday" in required or mode != "daily":
             try:
                 intraday_closes = [(b.ts, b.close) for b in self._hub.get_recent_bars(self.ticker)]
             except Exception:
@@ -1029,42 +1076,58 @@ class ORBEngine:
         future = _GATE_EXECUTOR.submit(
             evaluate_gate, self.ticker, direction, required, trigger_price,
             vwap=vwap, orh=self.orh, orl=self.orl, intraday_closes=intraday_closes,
+            mode=mode,
         )
         try:
             gate = future.result(timeout=TECHNICALS_GATE_TIMEOUT_S)
         except concurrent.futures.TimeoutError:
             msg = f"technicals gate timed out after {TECHNICALS_GATE_TIMEOUT_S:.0f}s"
             logger.error("[ORBEngine] %s for %s", msg, self.ticker)
+            if quiet:
+                return False, False, None
             self.debug.emit("ERROR", f"Entry blocked — {msg} (market data slow)")
             self.notifier.notify_entry_blocked_technicals(
                 self.ticker, self.strategy_name or self.profile_key, direction,
                 f"{msg} — entry blocked for safety")
-            return False
+            return False, False, None
         except Exception as e:
             logger.error("[ORBEngine] technicals gate failed for %s: %s", self.ticker, e, exc_info=True)
+            if quiet:
+                return False, False, None
             self.debug.emit("ERROR", f"Entry blocked — technicals gate could not be evaluated ({e})")
             self.notifier.notify_entry_blocked_technicals(
                 self.ticker, self.strategy_name or self.profile_key, direction,
                 "technicals unavailable — entry blocked for safety")
-            return False
+            return False, False, None
 
         detail = ", ".join(
             f"{r['key'].upper()} {'skip' if r['skipped'] else 'ok' if r['ok'] else 'no'}"
             for r in gate["results"]
         )
+        if quiet:
+            return bool(gate["passed"]), bool(gate["passed"] and gate.get("needs_confirm")), gate
         if gate["passed"]:
-            self.debug.emit("INFO", f"Technicals gate passed — {gate['summary']} ({detail})")
-            return True
+            self.debug.emit("INFO", f"Technicals gate passed [{gate.get('mode', 'daily')}] — "
+                                    f"{gate['summary']} ({detail})"
+                                    + (" — MODERATE, routing through confirm-first" if gate.get("needs_confirm") else ""))
+            return True, bool(gate.get("needs_confirm")), gate
 
-        self.debug.emit("WARN", f"Entry blocked — technicals gate: {gate['summary']} ({detail})")
-        self.notifier.notify_entry_blocked_technicals(
-            self.ticker, self.strategy_name or self.profile_key, direction, gate["summary"])
-        return False
+        if notify:
+            self.debug.emit("WARN", f"Entry blocked — technicals gate [{gate.get('mode', 'daily')}]: "
+                                    f"{gate['summary']} ({detail})")
+            self.notifier.notify_entry_blocked_technicals(
+                self.ticker, self.strategy_name or self.profile_key, direction, gate["summary"])
+        return False, False, gate
 
-    def _enter_trade(self, direction: str, trigger_price: float):
+    def _enter_trade(self, direction: str, trigger_price: float,
+                     gate_result: Optional[bool] = None):
         """
         Select a contract, validate buying power, and submit a market order
         via Alpaca.  Sets trade state and initialises ExitManager on success.
+
+        gate_result — set only by a confirmed gate watch (gate_watch.py): the
+        gate already passed on this bar, so it isn't re-run; the value is its
+        needs_confirm (composite MODERATE → confirm-first).
 
         NOTE: Called by on_price_tick when price closes above ORH (CALL) or
         below ORL (PUT) for the first time in the session.
@@ -1120,13 +1183,29 @@ class ORBEngine:
         # Technicals gate — opt-in per strategy (strategy_configs.technicals_gate).
         # Blocks this signal only; the session stays armed for a later one.
         gate_cfg = self.config.get("technicals_gate") or {}
-        if gate_cfg.get("enabled") and gate_cfg.get("required"):
-            if not self._check_technicals_gate(direction, trigger_price, gate_cfg["required"]):
+        gate_mode = self._gate_mode(gate_cfg)
+        gate_needs_confirm = False
+        if gate_result is not None:
+            gate_needs_confirm = gate_result
+        elif gate_cfg.get("enabled") and (gate_cfg.get("required") or gate_mode == "composite"):
+            watch = self._gate_watch_eligible(gate_cfg)
+            gate_ok, gate_needs_confirm, gate = self._check_technicals_gate(
+                direction, trigger_price, gate_cfg.get("required") or [], mode=gate_mode,
+                notify=not watch)
+            if not gate_ok:
                 # A blocked REVERSAL entry tells the scorer, which un-latches
-                # with a cooldown so it may fire again later this session.
+                # with a cooldown so it may fire again later this session —
+                # and keeps scoring, which a reversal watch re-checks against.
                 if getattr(self, "_reversal_entry_in_progress", False):
                     self._hub.publish_reversal_declined(self.ticker, direction)
+                if watch and gate is not None and not self._start_gate_watch(
+                        direction, trigger_price, gate, gate_mode):
+                    # Too late in the day to watch — the plain block push.
+                    self.notifier.notify_entry_blocked_technicals(
+                        self.ticker, self.strategy_name or self.profile_key, direction, gate["summary"])
                 return
+            # This signal passed on its own — any watch is superseded.
+            self._end_gate_watch("cancelled", "a new signal passed the gate", notify=False)
 
         # VWAP soft confirmation (log only — does not block entry)
         if self.session_vwap is not None:
@@ -1383,8 +1462,11 @@ class ORBEngine:
                                          conflict_context=conflict_context)
             return
 
-        if self.confirm_entry:
-            self._pause_for_confirmation(direction, trigger_price, contract, qty, effective_profile)
+        if self.confirm_entry or gate_needs_confirm:
+            # A composite MODERATE entry must be confirmed — fail closed if
+            # the confirmation can't be persisted (unlike plain opt-in).
+            self._pause_for_confirmation(direction, trigger_price, contract, qty, effective_profile,
+                                         require_confirm=gate_needs_confirm and not self.confirm_entry)
             return
 
         self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
@@ -1714,6 +1796,7 @@ class ORBEngine:
         # profile field — lift it out before the dict is used as a profile.
         stored_overrides = dict(row.get("exit_overrides") or {})
         be_grace_start_iso = stored_overrides.pop("be_grace_start", None)
+        time_stop_met = bool(stored_overrides.pop("time_stop_progress_met", False))
         profile = stored_overrides or get_profile(self.profile_key)
         fib_levels = dict(row.get("fib_targets") or {})
         fib_levels.setdefault("orh", row.get("orh"))
@@ -1743,6 +1826,9 @@ class ORBEngine:
             ).astimezone(ET)
         except Exception:
             pass  # keep ExitManager's own now() default — only affects hold-time-gated exits, not the stop
+        # Time stop: entry_time (above) keeps the 60-min clock; a trade that
+        # already made its progress stays disarmed.
+        self.exit_manager.time_stop_progress_met = time_stop_met
 
         # Restore stop/TP progress so a restart never silently reverts to a
         # wider stop or re-fires an already-completed TP1/TP2.
@@ -1918,7 +2004,8 @@ class ORBEngine:
 
     def _pause_for_confirmation(self, direction: str, trigger_price: float,
                                  contract: dict, qty: int, effective_profile: dict,
-                                 conflict_context: dict | None = None):
+                                 conflict_context: dict | None = None,
+                                 require_confirm: bool = False):
         """
         Instead of submitting the order, persist the candidate trade, push a
         notification, and stream the live premium so the user can Enter or
@@ -1969,6 +2056,12 @@ class ORBEngine:
             payload["conflict_context"] = conflict_context
         row = self.logger.create_pending_confirmation(payload)
         if row is None:
+            if require_confirm:
+                # Composite MODERATE: the score alone isn't enough to enter
+                # unattended — never fall back to entering directly.
+                self.debug.emit("ERROR",
+                    "Confirmation persist failed — skipping entry (composite MODERATE, fail-closed)")
+                return
             if conflict_context is not None:
                 # Fail CLOSED here, unlike the opt-in confirm_entry case below —
                 # this pause exists specifically to prevent stacking duplicate
@@ -3611,6 +3704,7 @@ class ORBEngine:
         """
         self.session_skipped = True
         self.skip_reason = reason
+        self._end_gate_watch("expired", f"session skipped ({reason})")
         self.logger.log_skip(self.ticker, reason, self.session_date, self.profile_key,
                              strategy_id=self.strategy_id)
         logger.info("[ORBEngine] Session skipped: %s", reason)
@@ -3661,6 +3755,8 @@ class ORBEngine:
         # getattr guards the brief __init__ window before _reset_session_state runs.
         if not getattr(self, "orh", None) or getattr(self, "session_skipped", False):
             return
+
+        self._on_bar_gate_watch(bar.close)
 
         # Bar-close confirmation: after the 3-minute OrbService signal the engine
         # waits for a 1-minute bar to CLOSE on the correct side of the ORH/ORL
@@ -3960,6 +4056,7 @@ class ORBEngine:
             "session_halted":             self._session_halted,
             "daily_loss_limit":           self.profile.get("daily_loss_limit", 0),
             "re_entry_cooldown_min":      self.profile.get("re_entry_cooldown_min", 45),
+            "gate_watch":                 self.gate_watch_public(),
             "last_loss_by_direction":     {
                 k: {"pnl": round(v["pnl"], 2), "time": v["time"].isoformat()}
                 for k, v in self._last_loss_by_direction.items()

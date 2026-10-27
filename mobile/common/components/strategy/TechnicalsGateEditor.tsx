@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, Switch, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { ProfileKey, TechnicalsFactor, TechnicalsGate } from '@/common/types/strategy';
+import { GateModePicker, NEW_GATE_MODE, gateModeOf } from './GateModePicker';
 
 /**
  * Strategy-editor section for the per-strategy technicals gate: which of the
@@ -39,17 +40,24 @@ interface Props {
 export function TechnicalsGateEditor({ gate, profile, profileName, onChange, colors }: Props) {
   const enabled = !!gate?.enabled;
   const required = gate?.required ?? [];
+  const mode = gateModeOf(gate, profile);
+  const isComposite = mode === 'composite';
+  // Spread so a gate saved without `mode`/`watch` keeps behaving as before
+  // on every edit; only a brand-new gate gets NEW_GATE_MODE and watching.
+  const base = gate ?? { enabled: true, required: [], mode: NEW_GATE_MODE, watch: true };
+  const watch = !!gate?.watch;
+  const isReversal = profile === 'REVERSAL';
   const muted = colors.tabBarInactive;
   const recommended = recommendedGate(profile);
   const isRecommended = recommended.length === required.length && recommended.every(k => required.includes(k));
 
   const toggleEnabled = (on: boolean) =>
-    onChange(on ? { enabled: true, required: required.length ? required : recommended } : { enabled: false, required });
+    onChange(on ? { ...base, enabled: true, required: required.length ? required : recommended } : { ...base, enabled: false, required });
 
   const toggleFactor = (key: TechnicalsFactor) => {
     const next = required.includes(key) ? required.filter(k => k !== key) : [...required, key];
     // Keep the canonical order so the saved list (and its summary) is stable.
-    onChange({ enabled: true, required: TECHNICALS_FACTORS.map(f => f.key).filter(k => next.includes(k)) });
+    onChange({ ...base, enabled: true, required: TECHNICALS_FACTORS.map(f => f.key).filter(k => next.includes(k)) });
   };
 
   return (
@@ -59,9 +67,11 @@ export function TechnicalsGateEditor({ gate, profile, profileName, onChange, col
           <Text style={[s.label, { color: colors.text }]}>Require Technicals</Text>
           <Text style={[s.hint, { color: muted }]}>
             {enabled
-              ? required.length
-                ? `Only enters when all ${required.length} selected technicals match — otherwise the signal is skipped and you get a push`
-                : 'Select at least one technical below'
+              ? isComposite
+                ? 'Enters on a composite score of +6 or more (+4/+5 asks you to confirm first) — otherwise the signal is skipped and you get a push'
+                : required.length
+                  ? `Only enters when all ${required.length} selected technicals match — otherwise the signal is skipped and you get a push`
+                  : 'Select at least one technical below'
               : 'Enter on the signal alone, regardless of technicals'}
           </Text>
         </View>
@@ -74,6 +84,50 @@ export function TechnicalsGateEditor({ gate, profile, profileName, onChange, col
       </View>
 
       {enabled && (
+        <View style={[s.modeRow, { borderTopColor: colors.border }]}>
+          <Text style={[s.modeLabel, { color: muted }]}>Gate Mode</Text>
+          <GateModePicker
+            value={mode}
+            onChange={m => onChange({ ...base, enabled: true, required, mode: isReversal && m === 'composite' ? 'daily' : m })}
+            profile={profile}
+            colors={colors}
+          />
+          {mode !== 'composite' && (
+            <Text style={[s.factorRule, { color: muted, marginTop: 4 }]}>
+              {mode === 'daily'
+                ? 'Trend + RSI judged on daily bars.'
+                : mode === 'intraday'
+                  ? 'Trend + RSI judged on 5-min bars (EMA-20/50, RSI-14). VWAP, ORB and sector are the same in every mode.'
+                  : 'Trend + RSI must pass on daily AND 5-min bars. VWAP, ORB and sector are the same in every mode.'}
+            </Text>
+          )}
+        </View>
+      )}
+
+      {enabled && (
+        <View style={[s.headRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={[s.label, { color: colors.text }]}>
+              {isReversal ? 'Watch Blocked Reversals' : 'Watch Blocked Breakouts'}
+            </Text>
+            <Text style={[s.hint, { color: muted }]}>
+              {!watch
+                ? `A blocked ${isReversal ? 'reversal' : 'breakout'} is dropped`
+                : isReversal
+                  ? 'A blocked reversal is re-checked each minute for up to 30 min and enters when the gate passes while the reversal signal still holds (VWAP alone never enters). Ends if price moves away from VWAP or the reversal setup resolves.'
+                  : 'A blocked breakout is re-checked each minute for up to 2h (within the breakout window, never past EOD) and enters the first time the gate passes. Ends if price closes back inside the range.'}
+            </Text>
+          </View>
+          <Switch
+            value={watch}
+            onValueChange={on => onChange({ ...base, enabled: true, required, watch: on })}
+            thumbColor={watch ? '#30D158' : '#ccc'}
+            trackColor={{ true: '#30D15855', false: colors.border }}
+          />
+        </View>
+      )}
+
+      {enabled && !isComposite && (
         <>
           {TECHNICALS_FACTORS.map(f => {
             const on = required.includes(f.key);
@@ -99,7 +153,7 @@ export function TechnicalsGateEditor({ gate, profile, profileName, onChange, col
                 : 'No technicals selected — the gate blocks nothing'}
             </Text>
             {!isRecommended && (
-              <TouchableOpacity onPress={() => onChange({ enabled: true, required: recommended })} hitSlop={8}>
+              <TouchableOpacity onPress={() => onChange({ ...base, enabled: true, required: recommended })} hitSlop={8}>
                 <Text style={[s.preset, { color: '#4A9EFF' }]}>Use {profileName} preset</Text>
               </TouchableOpacity>
             )}
@@ -121,4 +175,6 @@ const s = StyleSheet.create({
   footer:      { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 11, borderTopWidth: StyleSheet.hairlineWidth },
   summary:     { flex: 1, fontSize: 12.5, fontWeight: '600' },
   preset:      { fontSize: 12.5, fontWeight: '700' },
+  modeRow:     { paddingHorizontal: 14, paddingVertical: 11, borderTopWidth: StyleSheet.hairlineWidth, gap: 6 },
+  modeLabel:   { fontSize: 12, fontWeight: '700', letterSpacing: 0.4 },
 });

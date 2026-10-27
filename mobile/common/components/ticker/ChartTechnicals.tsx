@@ -1,8 +1,11 @@
-import React from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Pressable } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery } from '@tanstack/react-query';
 import { fetchEntryCheck, type ChartSignal, type EntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
+import { chartComposite, fmtScore, scoreColor, tierMeta } from './compositeMeta';
 import { formatAsOf } from '@/common/components/trade/EntryTechnicalsPanel';
+import { CompositeTechnicalsPanel } from '@/common/components/ticker/CompositeTechnicalsPanel';
 import type { ChartReferenceLine } from '@/common/components/ticker/AdvancedPriceChart';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 
@@ -71,9 +74,19 @@ export function technicalsReferenceLines(
   return lines;
 }
 
-/** Signal pill + the four technicals as chips — sits right above the chart. */
-export function ChartTechnicalsStrip({ check, isLoading, colors }: { check: EntryCheck | undefined; isLoading: boolean; colors: any }) {
+/**
+ * Signal pill + technicals chips, right above the chart. With the composite
+ * score: all 7 indicators in a horizontal scroll (name · value · score),
+ * right-edge fade until scrolled to the end; tapping a chip opens the
+ * detail sheet. Older API: the original four fixed chips.
+ */
+export function ChartTechnicalsStrip({ check, isLoading, colors, onPress }: {
+  check: EntryCheck | undefined; isLoading: boolean; colors: any;
+  /** Tap on a chip → open the Technicals detail sheet. */
+  onPress?: () => void;
+}) {
   const muted = colors.textSecondary;
+  const [atEnd, setAtEnd] = useState(false);
   if (!check) {
     return (
       <View style={s.strip}>
@@ -83,6 +96,67 @@ export function ChartTechnicalsStrip({ check, isLoading, colors }: { check: Entr
     );
   }
   const sig = signalMeta(check.signal, colors);
+  const comp = chartComposite(check);
+  if (comp) {
+    const bg = colors.background;
+    // The score leads the strip ("+2 WATCH"); the BUY CALL/PUT signal lives
+    // on the ticker tape's pill, so it isn't repeated here.
+    const tier = tierMeta(comp.tier, colors);
+    return (
+      <View style={s.strip}>
+        <Pressable
+          onPress={onPress}
+          style={[s.signal, { backgroundColor: tier.color }]}
+          hitSlop={4}
+          accessibilityLabel={`${comp.direction} score ${fmtScore(comp.total)} of ${comp.max}, ${tier.short}`}
+        >
+          <Text style={s.signalText}>{fmtScore(comp.total)} {tier.short}</Text>
+        </Pressable>
+        <View style={{ flex: 1, height: 28, justifyContent: 'center' }}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: 6, alignItems: 'center', paddingRight: 24 }}
+            scrollEventThrottle={64}
+            onScroll={e => {
+              const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+              setAtEnd(contentOffset.x + layoutMeasurement.width >= contentSize.width - 8);
+            }}
+          >
+            {comp.indicators.map(ind => {
+              const c = scoreColor(ind.score, colors);
+              return (
+                <Pressable
+                  key={ind.key}
+                  onPress={onPress}
+                  style={[s.chip, { borderColor: ind.score != null && ind.score > 0 ? colors.success + '66' : colors.separator }]}
+                  accessibilityLabel={`${ind.label} ${ind.value}, score ${ind.score ?? 'no data'}`}
+                >
+                  <View style={[s.dot, { backgroundColor: c }]} />
+                  <Text style={[s.chipText, { color: colors.text }]}>{ind.label} </Text>
+                  <Text style={[s.chipText, { color: muted }]}>{ind.value} </Text>
+                  <Text style={[s.chipText, { color: c, fontWeight: '800' }]}>
+                    {ind.score == null ? '—' : fmtScore(ind.score)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+          {!atEnd && (
+            <LinearGradient
+              pointerEvents="none"
+              colors={[bg + '00', bg]}
+              start={{ x: 0, y: 0.5 }}
+              end={{ x: 1, y: 0.5 }}
+              style={s.fade}
+            >
+              <Text style={[s.swipeHint, { color: muted }]}>›</Text>
+            </LinearGradient>
+          )}
+        </View>
+      </View>
+    );
+  }
   const { trend, rsi, vwap, orb } = check.rows;
   const chips: [string, string][] = [
     ['Trend', trend?.label ?? '—'],
@@ -119,6 +193,9 @@ export function ChartTechnicalsInfo({ check, isLoading, error, colors }: {
         </View>
       </View>
     );
+  }
+  if (check.composite) {
+    return <CompositeTechnicalsPanel check={check} colors={colors} />;
   }
   const sig = signalMeta(check.signal, colors);
   const { trend, rsi, vwap, orb, sector } = check.rows;
@@ -178,6 +255,9 @@ const s = StyleSheet.create({
   signalText: { color: '#fff', fontSize: 11, fontWeight: '800', letterSpacing: 0.4 },
   chip:       { flexDirection: 'row', alignItems: 'center', height: 24, paddingHorizontal: 7, borderRadius: 6, borderWidth: 1 },
   chipText:   { fontSize: 11 },
+  dot:        { width: 6, height: 6, borderRadius: 3, marginRight: 5 },
+  fade:       { position: 'absolute', right: 0, top: 0, bottom: 0, width: 36, alignItems: 'flex-end', justifyContent: 'center' },
+  swipeHint:  { fontSize: 16, fontWeight: '700', marginRight: 2 },
 
   infoWrap:   { gap: 8 },
   bigSignal:  { borderRadius: 10, borderWidth: 1, paddingVertical: 10, alignItems: 'center', gap: 2 },

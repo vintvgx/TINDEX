@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { signalMeta } from './ChartTechnicals';
+import { CompositeTechnicalsPanel } from './CompositeTechnicalsPanel';
 import type { EntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
 
 type IconName = keyof typeof Ionicons.glyphMap;
@@ -17,18 +18,20 @@ interface FactorCard {
 }
 
 /**
- * TechnicalsSheet — Analysis-hub-style Technicals bottom sheet: a hero
- * signal card, then a 2-column grid of factor cards (Trend / RSI / VWAP /
- * ORB / Sector), then the call/put verdict reasons.
+ * TechnicalsSheet — the Technicals bottom sheet. With the composite score
+ * (API 2026-10-26+) it's CompositeTechnicalsPanel; on an older API, the
+ * hero signal card + 2-column factor grid + call/put verdict reasons.
  */
 export function TechnicalsSheet({
   check,
   isLoading,
   error,
+  onReviewEntry,
 }: {
   check: EntryCheck | undefined;
   isLoading: boolean;
   error: Error | null;
+  onReviewEntry?: (direction: 'CALL' | 'PUT') => void;
 }) {
   const colors = useThemeColors();
   const muted = colors.textSecondary;
@@ -44,6 +47,11 @@ export function TechnicalsSheet({
         </View>
       </View>
     );
+  }
+
+  // Composite API → the composite detail panel; older deploys keep the grid.
+  if (check.composite) {
+    return <CompositeTechnicalsPanel check={check} colors={colors} onReviewEntry={onReviewEntry} />;
   }
 
   const sig = signalMeta(check.signal, colors);

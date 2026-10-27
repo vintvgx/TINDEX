@@ -42,6 +42,11 @@ export interface CustomThresholds {
   eod_buffer_minutes:      number;
   breakout_time_limit_min: number;
   vix_max_override:        number;
+  /** Time stop: close a pre-TP1 trade whose best premium never came
+   *  time_stop_progress of the way to TP1 within this many minutes.
+   *  0/undefined = off (backend exit_manager.py, TODO bfdeabc2). */
+  time_stop_minutes?:      number;
+  time_stop_progress?:     number;
 }
 
 export interface ProfileThresholds {
@@ -97,10 +102,45 @@ export interface ExitOverrides {
  *  api/services/entry_check_service.py evaluate_gate. */
 export type TechnicalsFactor = 'trend' | 'trend_intraday' | 'rsi' | 'vwap' | 'orb' | 'sector';
 
+/** How trend + RSI are judged — entry_check_service.GATE_MODES. Missing =
+ *  'daily' (the original gate; existing strategies are never switched). */
+export type TechnicalsGateMode = 'daily' | 'intraday' | 'and' | 'composite';
+
 export interface TechnicalsGate {
   enabled: boolean;
-  /** Every factor listed must match or the entry signal is blocked. */
+  /** Every factor listed must match or the entry signal is blocked
+   *  (ignored in 'composite' mode — the score decides). */
   required: TechnicalsFactor[];
+  mode?: TechnicalsGateMode;
+  /** Blocked breakout → watch: re-check the gate each 1-min close and enter
+   *  the first time it passes (backend gate_watch.py). Missing = off. */
+  watch?: boolean;
+}
+
+/** A live blocked-breakout watch — GET /strategy/gate-watches. */
+export interface GateWatch {
+  id: string;
+  strategy_id: string;
+  ticker: string;
+  /** 'reversal' = a blocked REVERSAL signal (30-min watch, enters only
+   *  while the reversal scorer's trigger still holds). Older API: absent. */
+  kind?: 'breakout' | 'reversal';
+  /** Reversal watches: is the scorer's reversal trigger present right now? */
+  reversal_trigger?: boolean | null;
+  /** Reversal watches: did the last re-check pass the gate (VWAP aligned)? */
+  gate_ok?: boolean;
+  direction: 'CALL' | 'PUT';
+  trigger_price: number;
+  level: number | null;
+  mode: TechnicalsGateMode;
+  /** '2/4' (factor gate) or '+3/14' (composite); '?' until the first re-check after a restart. */
+  score: string;
+  failed: string[];
+  summary: string;
+  created_at: string;
+  expires_at: string;
+  expiry_reason: string;
+  checks: number;
 }
 
 export interface StrategyConfig {

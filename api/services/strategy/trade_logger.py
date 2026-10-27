@@ -249,6 +249,55 @@ class TradeLogger:
             logger.error("[TradeLogger] expire_stale_pending_confirmations failed: %s", e)
             return 0
 
+    # ── Gate watches (blocked breakout → wait-and-monitor, gate_watch.py) ─────
+
+    def create_gate_watch(self, row: dict) -> dict | None:
+        try:
+            res = self.client.table("orb_gate_watches").insert(row).execute()
+            _notify_pending()
+            return res.data[0] if res.data else None
+        except Exception as e:
+            logger.error("[TradeLogger] create_gate_watch failed: %s", e)
+            return None
+
+    def update_gate_watch(self, watch_id: str, patch: dict) -> None:
+        try:
+            self.client.table("orb_gate_watches").update(patch).eq("id", watch_id).execute()
+            _notify_pending()
+        except Exception as e:
+            logger.error("[TradeLogger] update_gate_watch failed: %s", e)
+
+    def list_gate_watches(self, strategy_id: str | None = None, status: str = "watching") -> list[dict]:
+        try:
+            q = self.client.table("orb_gate_watches").select("*").eq("status", status)
+            if strategy_id:
+                q = q.eq("strategy_id", strategy_id)
+            return q.order("created_at").execute().data or []
+        except Exception as e:
+            logger.error("[TradeLogger] list_gate_watches failed: %s", e)
+            return []
+
+    def expire_stale_gate_watches(self) -> int:
+        """Safety net for watches left behind by an engine that no longer
+        exists (redeploy, deleted strategy) — same role as
+        expire_stale_pending_confirmations."""
+        try:
+            now_iso = datetime.utcnow().isoformat()
+            res = (
+                self.client.table("orb_gate_watches")
+                .update({"status": "expired", "reason": "deadline passed (engine not running)",
+                         "resolved_at": now_iso})
+                .eq("status", "watching")
+                .lt("expires_at", now_iso)
+                .execute()
+            )
+            if res.data:
+                _notify_pending()
+            return len(res.data or [])
+        except Exception as e:
+            logger.error("[TradeLogger] expire_stale_gate_watches failed: %s", e)
+            return 0
+
     # ── Limit sell ladder (working_limit_orders) ────────────────────────────────
 
     def insert_limit_order(self, row: dict) -> bool:

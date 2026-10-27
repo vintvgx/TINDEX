@@ -22,7 +22,7 @@ type Topic = 'positions' | 'account' | 'pending';
 const TOPIC_KEYS: Record<Topic, readonly unknown[][]> = {
   positions: [['immediate-positions'], ['alpaca-position-values'], ['strategy-positions'], ['strategy-trades'], ['pnl-summary'], ['limit-orders']],
   account:   [['alpaca-both-accounts'], ['alpaca-account']],
-  pending:   [['pending-confirmations']],
+  pending:   [['pending-confirmations'], ['gate-watches']],
 };
 
 let connected = false;

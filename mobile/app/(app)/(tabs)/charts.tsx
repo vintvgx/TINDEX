@@ -701,6 +701,18 @@ export function ChartsContent({ initialTicker, topInset }: {
   const { setInfo: setTapeInfo } = useChartTape();
   const tapeSignal = chart.technicals.data?.signal ?? null;
   const openContracts = useCallback(() => setContractsModalOpen(true), []);
+
+  // Composite technicals: the strip (score badge + chips) opens its sheet,
+  // and Review Entry leaves the sheet for the contract chain (→ trade sheet
+  // → confirm).
+  const [technicalsOpen, setTechnicalsOpen] = useState(false);
+  const openTechnicalsSheet = useCallback(() => setTechnicalsOpen(true), []);
+  const reviewEntryFromTechnicals = useCallback(() => {
+    // The bottom sheet is a native Modal — let it dismiss before the
+    // contracts modal presents (iOS drops a modal opened mid-dismiss).
+    setTechnicalsOpen(false);
+    setTimeout(() => setContractsModalOpen(true), 350);
+  }, []);
   const openSearch = useCallback(() => setSearchOpen(true), []);
   // The tape itself is published by ChartLivePane (it needs the live
   // price); this only feeds it the non-price fields.
@@ -727,6 +739,7 @@ export function ChartsContent({ initialTicker, topInset }: {
             check={chart.technicals.data}
             isLoading={chart.technicals.isLoading}
             colors={colors}
+            onPress={openTechnicalsSheet}
           />
         </View>
       )}
@@ -863,8 +876,11 @@ export function ChartsContent({ initialTicker, topInset }: {
             check={chart.technicals.data}
             isLoading={chart.technicals.isLoading}
             error={chart.technicals.error}
+            onReviewEntry={reviewEntryFromTechnicals}
           />
         }
+        technicalsOpen={technicalsOpen}
+        onTechnicalsOpenChange={setTechnicalsOpen}
         positioningContent={<OptionsPositioningPanel ticker={activeTicker} />}
         settingsSections={chart.sections}
         onPositionsPress={toggleExpanded}

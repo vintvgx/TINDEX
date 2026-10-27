@@ -49,6 +49,8 @@ export function ChartBottomToolbar({
   openPositionCount,
   tickerStatus,
   bottomInset = 0,
+  technicalsOpen,
+  onTechnicalsOpenChange,
 }: {
   tickers: string[];
   activeTicker: string;
@@ -73,9 +75,23 @@ export function ChartBottomToolbar({
   /** Home-indicator inset, added as bottom padding so the bar's background
    *  fills to the screen edge (no empty band under it). */
   bottomInset?: number;
+  /** Optional control of the Technicals sheet, so the caller can open it
+   *  (strip chips) and close it (Review Entry). Uncontrolled when omitted. */
+  technicalsOpen?: boolean;
+  onTechnicalsOpenChange?: (open: boolean) => void;
 }) {
   const colors = useThemeColors();
-  const [sheet, setSheet] = useState<'technicals' | 'positioning' | 'settings' | null>(null);
+  const [sheet, setSheetState] = useState<'technicals' | 'positioning' | 'settings' | null>(null);
+  const techControlled = technicalsOpen !== undefined;
+  const techVisible = techControlled ? technicalsOpen : sheet === 'technicals';
+  const setSheet = (v: typeof sheet) => {
+    if (techControlled) {
+      onTechnicalsOpenChange?.(v === 'technicals');
+      setSheetState(v === 'technicals' ? null : v);
+    } else {
+      setSheetState(v);
+    }
+  };
 
   const buttons: ToolButton[] = [
     { key: 'technicals', icon: 'pulse-outline', label: 'Technicals', onPress: () => setSheet('technicals') },
@@ -159,7 +175,7 @@ export function ChartBottomToolbar({
         </ScrollView>
       </View>
 
-      <ChartBottomSheet visible={sheet === 'technicals'} title="Technicals" onClose={() => setSheet(null)}>
+      <ChartBottomSheet visible={techVisible} title="Technicals" onClose={() => setSheet(null)}>
         {technicalsContent}
       </ChartBottomSheet>
 

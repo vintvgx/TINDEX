@@ -180,6 +180,41 @@ class StrategyNotifier:
             priority=P_OPERATIONAL,
         )
 
+    def notify_gate_watch_started(self, ticker: str, strategy_label: str, direction: str,
+                                  summary: str, expires_at, kind: str = "breakout"):
+        """The technicals gate blocked a breakout/reversal and the strategy is
+        now watching it (gate_watch.py) instead of dropping it."""
+        if kind == "reversal":
+            title = f"{ticker} {direction} reversal blocked — watching"
+            body = (f"{strategy_label}: {summary}. Re-checking each minute until {expires_at:%-I:%M} ET "
+                    f"(up to 30 min); enters if VWAP aligns while the reversal signal holds.")
+        else:
+            title = f"{ticker} {direction} blocked — watching"
+            body = (f"{strategy_label}: {summary}. Re-checking each minute until "
+                    f"{expires_at:%-I:%M} ET; enters if the gate passes.")
+        self._dispatch(title=title, body=body, data={"screen": "strategy"}, priority=P_OPERATIONAL)
+
+    def notify_gate_watch_confirmed(self, ticker: str, strategy_label: str, direction: str,
+                                    score: str, confirm_first: bool, kind: str = "breakout"):
+        title = (f"Watch confirmed — {ticker} {direction} reversal, VWAP aligned" if kind == "reversal"
+                 else f"Watch confirmed — {ticker} {direction} gate now {score}")
+        self._dispatch(
+            title=title,
+            body=(f"{strategy_label}: running the entry"
+                  + (" — confirm-first, you'll be asked to approve." if confirm_first else ".")),
+            data={"screen": "strategy"},
+            priority=P_OPERATIONAL,
+        )
+
+    def notify_gate_watch_ended(self, ticker: str, strategy_label: str, direction: str, reason: str,
+                                kind: str = "breakout"):
+        self._dispatch(
+            title=f"Watch expired — {ticker} {direction}{' reversal' if kind == 'reversal' else ''}",
+            body=f"{strategy_label}: {reason}. No longer tracking this signal.",
+            data={"screen": "strategy"},
+            priority=P_OPERATIONAL,
+        )
+
     def notify_insufficient_capital(self, ticker: str, required: float, available: float):
         """Buying power too low to enter even one contract."""
         self._dispatch(
@@ -271,6 +306,7 @@ class StrategyNotifier:
             "EOD_HARD_CLOSE":     "EOD hard close",
             "BREAKEVEN_STOP":     "Breakeven stop hit",
             "LOW_VOLUME_EXIT":    "Low-volume exit",
+            "TIME_STOP":          "Time stop — no progress to TP1",
             "MANUAL_CLOSE":       "Manually closed",
             "MANUAL_EXIT":        "Manually sold",
             "FORCE_CLOSE":        "Force-closed",
