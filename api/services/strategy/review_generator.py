@@ -115,6 +115,9 @@ CASCADE_EXIT        N consecutive 1-min bars of underlying against position
 RUNNER_TRAIL_STOP   Trailing stop fired on final runner (trail-mode profiles).
 EOD_CLOSE           Orderly close before 3:58 PM ET hard deadline.
 EOD_HARD_CLOSE      Position still open at hard deadline — force-closed.
+TIME_STOP           No progress toward TP1 within the strategy's time-stop window
+                    (peak premium never reached the progress target) — closed
+                    to stop theta bleed on a dead trade.
 
 ─── Output Format ───────────────────────────────────────────────────────────
 Return ONLY the Markdown review. No preamble, no commentary outside the

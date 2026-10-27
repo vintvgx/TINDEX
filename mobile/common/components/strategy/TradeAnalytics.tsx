@@ -473,7 +473,7 @@ const EXIT_REASON_LABEL: Record<string, string> = {
   MANUAL_EXIT: 'Manual Exit', HARD_STOP: 'Hard Stop', HARD_STOP_FLOOR: 'Hard Stop (Floor)',
   BREAKEVEN_STOP: 'Breakeven Stop', SL_CONFIRMING: 'SL Confirming', TP1: 'TP1', TP2: 'TP2',
   TP2_FULL_CLOSE: 'TP2 Full Close', RUNNER_TRAIL_STOP: 'Runner Trail Stop',
-  EOD_CLOSE: 'EOD Close', EOD_HARD_CLOSE: 'EOD Hard Close',
+  EOD_CLOSE: 'EOD Close', EOD_HARD_CLOSE: 'EOD Hard Close', TIME_STOP: 'Time Stop',
 };
 
 /**

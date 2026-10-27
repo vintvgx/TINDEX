@@ -270,6 +270,20 @@ class ExitManager:
         # without ever risking an unwanted auto-sell.
         self._disable_tp1_exit = profile.get("disable_tp1_exit", False)
 
+        # Time stop (TODO bfdeabc2): a pre-TP1 trade whose PEAK premium never
+        # came time_stop_progress of the way from entry to TP1 within
+        # time_stop_minutes is closed — 0DTE theta bleed on a dead trade
+        # (2026-10-26 paper review: stops fire on ~0.05% adverse moves, the
+        # losses are decay, not direction). Peak, not current: a trade that
+        # made the progress and pulled back isn't cut. Off when 0/None.
+        # time_stop_progress_met is persisted by the engine (exit_overrides)
+        # so a restart can't re-arm the stop for a trade that already earned
+        # its keep.
+        self._time_stop_minutes  = int(profile.get("time_stop_minutes") or 0)
+        self._time_stop_progress = float(profile.get("time_stop_progress") or 0.5)
+        self._peak_premium       = entry_premium
+        self.time_stop_progress_met = False
+
         # EOD_CLOSE below only makes sense for a 0DTE contract — flattening a
         # swing/LEAPS hold every single day at eod_close_time just because the
         # clock crossed that time-of-day would silently sell a multi-week
@@ -351,6 +365,9 @@ class ExitManager:
                  current_underlying_price: float = None,
                  current_volume: float = None) -> dict:
         now_et = datetime.now(ET).time()
+
+        if current_option_price is not None and current_option_price > self._peak_premium:
+            self._peak_premium = current_option_price
 
         if self._is_zero_dte and not self._disable_eod_close and now_et >= self.eod_close_time:
             return self._action("CLOSE_ALL", self.qty_remaining, "EOD_CLOSE")
@@ -464,6 +481,16 @@ class ExitManager:
             self.volume_buffer.append(current_volume)
 
         secs_held = (datetime.now(ET) - self.entry_time).total_seconds()
+
+        if self._time_stop_armed():
+            if self._peak_premium >= self._time_stop_target():
+                self.time_stop_progress_met = True
+                self._log_decision("TIME_STOP_DISARMED", peak=self._peak_premium,
+                                   target=self._time_stop_target(), secs_held=int(secs_held))
+            elif secs_held >= self._time_stop_minutes * 60:
+                self._log_decision("TIME_STOP", peak=self._peak_premium,
+                                   target=self._time_stop_target(), secs_held=int(secs_held))
+                return self._action("CLOSE_ALL", self.qty_remaining, "TIME_STOP", current_option_price)
 
         # Minimum 3-minute hold before volume exit
         if secs_held >= 180 and self.profile.get("volume_exit", False) and self._is_low_volume() and not self.tp1_hit:
@@ -580,6 +607,13 @@ class ExitManager:
                                     current_option_price)
 
         return self._action("HOLD", 0, "")
+
+    def _time_stop_armed(self) -> bool:
+        return (self._time_stop_minutes > 0 and not self.tp1_hit and not self.time_stop_progress_met
+                and self.tp1 > self.entry_premium)
+
+    def _time_stop_target(self) -> float:
+        return self.entry_premium + self._time_stop_progress * (self.tp1 - self.entry_premium)
 
     def _resolve_sl_close(self, reason: str) -> tuple[str, int]:
         """
@@ -962,4 +996,13 @@ class ExitManager:
             "tp1_qty":               self._tp1_qty_override,
             "tp2_qty":               self._tp2_qty_override,
             "sl_override_consumed":  self._sl_override_consumed,
+            # Time stop — config + live deadline (None once disarmed / after TP1).
+            "time_stop_minutes":     self._time_stop_minutes or None,
+            "time_stop_target":      round(self._time_stop_target(), 4) if self._time_stop_minutes else None,
+            "time_stop_deadline":    (
+                (self.entry_time + timedelta(minutes=self._time_stop_minutes)).isoformat()
+                if self._time_stop_armed() else None
+            ),
+            "time_stop_progress_met": self.time_stop_progress_met,
+            "peak_premium":          round(self._peak_premium, 4),
         }

@@ -300,6 +300,7 @@ const EXIT_REASON_LABELS: Record<string, string> = {
   BREAKEVEN_STOP:    'Breakeven Stop',
   CONSOLIDATION:     'Consolidation Exit',
   LOW_VOLUME_EXIT:   'Low Volume Exit',
+  TIME_STOP:         'Time Stop — No Progress',
   MANUAL_CLOSE:      'Manually Closed',
   FORCE_CLOSE:       'Force Closed',
   MANUAL_EXIT:         'Manual Exit',

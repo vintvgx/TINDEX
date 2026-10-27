@@ -134,7 +134,8 @@ EOD_CLOSE_TIMES = {
 # against an adverse move, so it's worth trying. Options can move $0.05-$0.10
 # in seconds even on a liquid underlying, so a plain market sell on a TP hit
 # or a manual exit can leave real money on the table.
-PRICE_SEEKING_REASONS = frozenset({"TP1", "TP2", "TP2_FULL_CLOSE", "MANUAL_EXIT"})
+# TIME_STOP is a dead trade, not a breakdown — worth up to 10s seeking the bid.
+PRICE_SEEKING_REASONS = frozenset({"TP1", "TP2", "TP2_FULL_CLOSE", "MANUAL_EXIT", "TIME_STOP"})
 PRICE_SEEK_SAMPLE_WINDOW_SEC = 3.0   # total time spent sampling the bid
 PRICE_SEEK_MIN_SAMPLES       = 4     # bid samples taken across that window
 PRICE_SEEK_TOTAL_BUDGET_SEC  = 10.0  # ceiling on how long we'll wait for a fill
@@ -575,6 +576,7 @@ class ORBEngine(GateWatchMixin):
             # below so a restart resumes (or drops) the countdown instead
             # of silently granting a fresh window.
             be_grace_was_active = self.exit_manager._be_grace_start is not None
+            time_stop_met_before = self.exit_manager.time_stop_progress_met
             action = self.exit_manager.evaluate(
                 current_option_price=current_option_price,
                 current_underlying_price=current_price,
@@ -612,6 +614,15 @@ class ORBEngine(GateWatchMixin):
             # this is at most two small writes per grace episode, not per
             # tick. Best-effort: a failed persist only affects a later
             # restart, never this session's in-memory countdown.
+            if (self.exit_manager and self.active_trade_id and not time_stop_met_before
+                    and self.exit_manager.time_stop_progress_met):
+                try:
+                    self.logger.update_exit_levels(
+                        trade_id=self.active_trade_id,
+                        exit_overrides_patch={"time_stop_progress_met": True},
+                    )
+                except Exception:
+                    logger.error("[ORBEngine] Failed to persist time_stop_progress_met", exc_info=True)
             if self.exit_manager and self.active_trade_id:
                 be_grace_now = self.exit_manager._be_grace_start
                 if (be_grace_now is not None) != be_grace_was_active:
@@ -1777,6 +1788,7 @@ class ORBEngine(GateWatchMixin):
         # profile field — lift it out before the dict is used as a profile.
         stored_overrides = dict(row.get("exit_overrides") or {})
         be_grace_start_iso = stored_overrides.pop("be_grace_start", None)
+        time_stop_met = bool(stored_overrides.pop("time_stop_progress_met", False))
         profile = stored_overrides or get_profile(self.profile_key)
         fib_levels = dict(row.get("fib_targets") or {})
         fib_levels.setdefault("orh", row.get("orh"))
@@ -1806,6 +1818,9 @@ class ORBEngine(GateWatchMixin):
             ).astimezone(ET)
         except Exception:
             pass  # keep ExitManager's own now() default — only affects hold-time-gated exits, not the stop
+        # Time stop: entry_time (above) keeps the 60-min clock; a trade that
+        # already made its progress stays disarmed.
+        self.exit_manager.time_stop_progress_met = time_stop_met
 
         # Restore stop/TP progress so a restart never silently reverts to a
         # wider stop or re-fires an already-completed TP1/TP2.

@@ -25,6 +25,8 @@ export const DEFAULT_CUSTOM_THRESHOLDS: CustomThresholds = {
   eod_buffer_minutes:      25,
   breakout_time_limit_min: 45,
   vix_max_override:        30,
+  time_stop_minutes:       0,
+  time_stop_progress:      0.5,
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -354,6 +356,27 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragSta
           onChange={v => patch('eod_buffer_minutes', Math.round(v))}
           {...sliderProps}
         />
+        <StepperRow
+          label="Time Stop"
+          value={t.time_stop_minutes ?? 0} min={0} max={120} step={15}
+          format={v => (v > 0 ? `${Math.round(v)} min` : 'Off')}
+          onChange={v => patch('time_stop_minutes', Math.round(v))}
+          accent={accent} labelColor={labelColor} textColor={textColor} borderColor={borderColor}
+        />
+        {(t.time_stop_minutes ?? 0) > 0 && (
+          <>
+            <StepperRow
+              label="Needs progress to TP1"
+              value={t.time_stop_progress ?? 0.5} min={0.25} max={1} step={0.25}
+              format={v => `${Math.round(v * 100)}%`}
+              onChange={v => patch('time_stop_progress', v)}
+              accent={accent} labelColor={labelColor} textColor={textColor} borderColor={borderColor}
+            />
+            <Text style={[s.toggleSub, { color: labelColor, paddingHorizontal: 14, paddingBottom: 10 }]}>
+              {`Before TP1: if the trade's best price never gets ${Math.round((t.time_stop_progress ?? 0.5) * 100)}% of the way from entry to TP1 within ${t.time_stop_minutes} min, it's sold (bid first, market after 10s).`}
+            </Text>
+          </>
+        )}
       </View>
 
       {/* ── Filters ── */}

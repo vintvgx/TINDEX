@@ -42,6 +42,11 @@ export interface CustomThresholds {
   eod_buffer_minutes:      number;
   breakout_time_limit_min: number;
   vix_max_override:        number;
+  /** Time stop: close a pre-TP1 trade whose best premium never came
+   *  time_stop_progress of the way to TP1 within this many minutes.
+   *  0/undefined = off (backend exit_manager.py, TODO bfdeabc2). */
+  time_stop_minutes?:      number;
+  time_stop_progress?:     number;
 }
 
 export interface ProfileThresholds {

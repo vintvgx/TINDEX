@@ -292,6 +292,7 @@ class StrategyNotifier:
             "EOD_HARD_CLOSE":     "EOD hard close",
             "BREAKEVEN_STOP":     "Breakeven stop hit",
             "LOW_VOLUME_EXIT":    "Low-volume exit",
+            "TIME_STOP":          "Time stop — no progress to TP1",
             "MANUAL_CLOSE":       "Manually closed",
             "MANUAL_EXIT":        "Manually sold",
             "FORCE_CLOSE":        "Force-closed",

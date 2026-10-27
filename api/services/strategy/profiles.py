@@ -691,6 +691,8 @@ CUSTOM_DEFAULTS = {
     "eod_buffer_minutes":     25,
     "breakout_time_limit_min": 45,
     "vix_max_override":       30,
+    "time_stop_minutes":      0,      # 0 = off — see GRACE_OVERRIDE_KEYS' time-stop note
+    "time_stop_progress":     0.5,
 }
 
 _DISPLAY_NAMES = {
@@ -773,6 +775,10 @@ GRACE_OVERRIDE_KEYS = {
     # hardening) — without these, get_profile() silently dropped the floor's
     # custom flag and the chosen breakeven grace on every immediate trade.
     "sl_floor_custom", "sl_floor_enabled", "be_grace_seconds",
+    # Time stop (TODO bfdeabc2, 2026-10-27): exit a trade that hasn't come
+    # time_stop_progress of the way to TP1 within time_stop_minutes. No base
+    # profile declares it (off everywhere) — it's set per strategy.
+    "time_stop_minutes", "time_stop_progress",
 }
 
 
