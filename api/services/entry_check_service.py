@@ -133,7 +133,11 @@ def _prior_closes_5m(ticker: str):
     def fetch():
         hist = yf.Ticker(ticker).history(period="5d", interval="5m", prepost=False)
         if hist.empty or "Close" not in hist.columns:
-            return []
+            # Fail loudly, don't return []: _cached would cache the failed
+            # download for the whole day and the intraday/AND gate would
+            # fail closed on every check. _closes_5m catches this and
+            # retries on the next gate check.
+            raise ValueError(f"no 5-min history for {ticker}")
         closes = hist["Close"].dropna()
         idx = closes.index.tz_convert(ET) if closes.index.tz is not None else closes.index.tz_localize(ET)
         return [float(c) for t, c in zip(idx, closes.values) if t.date() < today]
