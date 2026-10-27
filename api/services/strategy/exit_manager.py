@@ -483,14 +483,18 @@ class ExitManager:
         secs_held = (datetime.now(ET) - self.entry_time).total_seconds()
 
         if self._time_stop_armed():
+            # Deadline FIRST: progress that first arrives at/after the deadline
+            # is late, not earned — it must stop, not disarm. (Progress made
+            # in time would already have set time_stop_progress_met on an
+            # earlier tick and disarmed, so reaching here means it never did.)
+            if secs_held >= self._time_stop_minutes * 60:
+                self._log_decision("TIME_STOP", peak=self._peak_premium,
+                                   target=self._time_stop_target(), secs_held=int(secs_held))
+                return self._action("CLOSE_ALL", self.qty_remaining, "TIME_STOP", current_option_price)
             if self._peak_premium >= self._time_stop_target():
                 self.time_stop_progress_met = True
                 self._log_decision("TIME_STOP_DISARMED", peak=self._peak_premium,
                                    target=self._time_stop_target(), secs_held=int(secs_held))
-            elif secs_held >= self._time_stop_minutes * 60:
-                self._log_decision("TIME_STOP", peak=self._peak_premium,
-                                   target=self._time_stop_target(), secs_held=int(secs_held))
-                return self._action("CLOSE_ALL", self.qty_remaining, "TIME_STOP", current_option_price)
 
         # Minimum 3-minute hold before volume exit
         if secs_held >= 180 and self.profile.get("volume_exit", False) and self._is_low_volume() and not self.tp1_hit:

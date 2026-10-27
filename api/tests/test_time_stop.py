@@ -78,7 +78,18 @@ def test_not_after_tp1():
 
 
 def test_custom_progress():
+    # A first qualifying quote AT/AFTER the deadline is late, not earned:
+    # 61 min held on a 60-min stop, target 1.075, tick 1.08 → TIME_STOP.
     em = _em(progress=0.25, held_min=61)    # target 1.075
+    a = _tick(em, 1.08)
+    assert (a["type"], a["reason"]) == ("CLOSE_ALL", "TIME_STOP")
+    assert not em.time_stop_progress_met
+
+
+def test_custom_progress_in_time_disarms():
+    # Same custom progress, but the qualifying quote arrives BEFORE the
+    # deadline: 59 min held, tick 1.08 ≥ 1.075 target → disarm, HOLD.
+    em = _em(progress=0.25, held_min=59)    # target 1.075
     assert _tick(em, 1.08)["type"] == "HOLD" and em.time_stop_progress_met
 
 
@@ -88,8 +99,11 @@ def test_hard_stop_still_wins():
     assert a["reason"] in ("HARD_STOP", "HARD_STOP_FLOOR", "SL_CONFIRMING")
 
 
-def test_time_stop_uses_priced_exit():
-    assert "TIME_STOP" in oe.PRICE_SEEKING_REASONS
+def test_time_stop_uses_protective_close():
+    # TIME_STOP must NOT take the price-seeking path: a priced exit can't
+    # sell contracts reserved by resting ladder sells, leaving the position
+    # open past the stop. The protective path cancels the ladder first.
+    assert "TIME_STOP" not in oe.PRICE_SEEKING_REASONS
 
 
 def test_engine_persists_progress_once(monkeypatch):
