@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, Pressable, StyleSheet, ScrollView, Switch, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -24,6 +24,8 @@ interface Props {
   /** Body of the Options Positioning modal (same section as the ticker
    *  sheet). The button only shows when this is passed. */
   positioning?: React.ReactNode;
+  /** Bump to open the Technicals sheet from outside (the strip's chips). */
+  openTechnicalsKey?: number;
 }
 
 type OpenSheet = 'technicals' | 'positioning' | 'settings' | null;
@@ -39,12 +41,16 @@ type OpenSheet = 'technicals' | 'positioning' | 'settings' | null;
  * (presented on top of it), which RN supports; only sibling Modals are
  * unreliable.
  */
-export function ChartControlToggles({ sections, colors, technicals, onTechnicalsOpenChange, positioning }: Props) {
+export function ChartControlToggles({ sections, colors, technicals, onTechnicalsOpenChange, positioning, openTechnicalsKey }: Props) {
   const [openSheet, setOpenSheetState] = useState<OpenSheet>(null);
   const setOpenSheet = (v: OpenSheet) => {
     setOpenSheetState(v);
     onTechnicalsOpenChange?.(v === 'technicals');
   };
+  useEffect(() => {
+    if (openTechnicalsKey) setOpenSheet('technicals');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openTechnicalsKey]);
   const close = () => setOpenSheet(null);
 
   return (

@@ -20,6 +20,8 @@ interface ToolButton {
   /** Icon color override (e.g. the gold star of a followed ticker). */
   color?: string;
   badge?: number;
+  /** Text pill beside the icon (the Technicals "+7 STRONG" score). */
+  pill?: { label: string; color: string };
 }
 
 /**
@@ -49,6 +51,9 @@ export function ChartBottomToolbar({
   openPositionCount,
   tickerStatus,
   bottomInset = 0,
+  technicalsPill,
+  technicalsOpen,
+  onTechnicalsOpenChange,
 }: {
   tickers: string[];
   activeTicker: string;
@@ -73,12 +78,28 @@ export function ChartBottomToolbar({
   /** Home-indicator inset, added as bottom padding so the bar's background
    *  fills to the screen edge (no empty band under it). */
   bottomInset?: number;
+  /** Composite score at a glance on the Technicals button, e.g. "+7 STRONG". */
+  technicalsPill?: { label: string; color: string };
+  /** Optional control of the Technicals sheet, so the caller can open it
+   *  (strip chips) and close it (Review Entry). Uncontrolled when omitted. */
+  technicalsOpen?: boolean;
+  onTechnicalsOpenChange?: (open: boolean) => void;
 }) {
   const colors = useThemeColors();
-  const [sheet, setSheet] = useState<'technicals' | 'positioning' | 'settings' | null>(null);
+  const [sheet, setSheetState] = useState<'technicals' | 'positioning' | 'settings' | null>(null);
+  const techControlled = technicalsOpen !== undefined;
+  const techVisible = techControlled ? technicalsOpen : sheet === 'technicals';
+  const setSheet = (v: typeof sheet) => {
+    if (techControlled) {
+      onTechnicalsOpenChange?.(v === 'technicals');
+      setSheetState(v === 'technicals' ? null : v);
+    } else {
+      setSheetState(v);
+    }
+  };
 
   const buttons: ToolButton[] = [
-    { key: 'technicals', icon: 'pulse-outline', label: 'Technicals', onPress: () => setSheet('technicals') },
+    { key: 'technicals', icon: 'pulse-outline', label: 'Technicals', onPress: () => setSheet('technicals'), pill: technicalsPill },
     { key: 'positioning', icon: 'bar-chart-outline', label: 'Positioning', onPress: () => setSheet('positioning') },
     { key: 'positions', icon: 'briefcase-outline', label: 'Positions', onPress: onPositionsPress, badge: openPositionCount || undefined },
     { key: 'settings', icon: 'options-outline', label: 'Settings', onPress: () => setSheet('settings') },
@@ -135,12 +156,13 @@ export function ChartBottomToolbar({
               hitSlop={4}
               style={({ pressed }) => [
                 s.toolBtn,
+                b.pill && s.toolBtnWide,
                 {
                   backgroundColor: pressed ? colors.surfaceSecondary : 'transparent',
                 },
               ]}
               accessibilityRole="button"
-              accessibilityLabel={b.label}
+              accessibilityLabel={b.pill ? `${b.label}, ${b.pill.label}` : b.label}
             >
               <View style={{ position: 'relative' }}>
                 <Ionicons
@@ -154,12 +176,17 @@ export function ChartBottomToolbar({
                   </View>
                 ) : null}
               </View>
+              {b.pill ? (
+                <View style={[s.pill, { backgroundColor: b.pill.color }]}>
+                  <Text style={s.pillText}>{b.pill.label}</Text>
+                </View>
+              ) : null}
             </Pressable>
           ))}
         </ScrollView>
       </View>
 
-      <ChartBottomSheet visible={sheet === 'technicals'} title="Technicals" onClose={() => setSheet(null)}>
+      <ChartBottomSheet visible={techVisible} title="Technicals" onClose={() => setSheet(null)}>
         {technicalsContent}
       </ChartBottomSheet>
 
@@ -283,6 +310,23 @@ const s = StyleSheet.create({
     borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  toolBtnWide: {
+    width: undefined,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 8,
+  },
+  pill: {
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 7,
+    justifyContent: 'center',
+  },
+  pillText: {
+    color: '#000',
+    fontSize: 11,
+    fontWeight: '800',
   },
   badge: {
     position: 'absolute',

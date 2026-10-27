@@ -457,7 +457,8 @@ class ORBEngine:
         if gate_cfg.get("enabled"):
             import threading
             from services.entry_check_service import prewarm
-            threading.Thread(target=prewarm, args=(self.ticker, gate_cfg.get("required")),
+            threading.Thread(target=prewarm, args=(self.ticker, gate_cfg.get("required"),
+                                                   self._gate_mode(gate_cfg)),
                              daemon=True).start()
 
         result = self.sentiment.check_all(
@@ -995,9 +996,24 @@ class ORBEngine:
             return True
         return False
 
-    def _check_technicals_gate(self, direction: str, trigger_price: float, required: list) -> bool:
+    def _gate_mode(self, gate_cfg: dict) -> str:
+        """technicals_gate.mode, defaulting to daily (the original gate). The
+        composite score replaces the binary gate for breakout profiles only —
+        REVERSAL keeps its binary gate (TODO a3e2a3d9), so composite on a
+        REVERSAL strategy falls back to daily."""
+        from services.entry_check_service import normalize_gate_mode
+        mode = normalize_gate_mode(gate_cfg.get("mode"))
+        if mode == "composite" and self.profile_key == "REVERSAL":
+            return "daily"
+        return mode
+
+    def _check_technicals_gate(self, direction: str, trigger_price: float, required: list,
+                               mode: str = "daily") -> tuple[bool, bool]:
         """
-        True when every technical in `required` matches this signal — see
+        (passed, needs_confirm). Passed when every technical in `required`
+        matches this signal (daily / intraday / and modes), or the composite
+        score is STRONG / MODERATE (composite mode — MODERATE sets
+        needs_confirm, routing the entry through a confirmation pause) — see
         entry_check_service.evaluate_gate for the per-factor rules. Uses the
         engine's own live inputs: the trigger price, OrbService's running
         session VWAP (hub status — self.session_vwap is only the opening
@@ -1015,7 +1031,7 @@ class ORBEngine:
             pass
 
         intraday_closes = None
-        if "trend_intraday" in required:
+        if "trend_intraday" in required or mode != "daily":
             try:
                 intraday_closes = [(b.ts, b.close) for b in self._hub.get_recent_bars(self.ticker)]
             except Exception:
@@ -1029,6 +1045,7 @@ class ORBEngine:
         future = _GATE_EXECUTOR.submit(
             evaluate_gate, self.ticker, direction, required, trigger_price,
             vwap=vwap, orh=self.orh, orl=self.orl, intraday_closes=intraday_closes,
+            mode=mode,
         )
         try:
             gate = future.result(timeout=TECHNICALS_GATE_TIMEOUT_S)
@@ -1039,27 +1056,30 @@ class ORBEngine:
             self.notifier.notify_entry_blocked_technicals(
                 self.ticker, self.strategy_name or self.profile_key, direction,
                 f"{msg} — entry blocked for safety")
-            return False
+            return False, False
         except Exception as e:
             logger.error("[ORBEngine] technicals gate failed for %s: %s", self.ticker, e, exc_info=True)
             self.debug.emit("ERROR", f"Entry blocked — technicals gate could not be evaluated ({e})")
             self.notifier.notify_entry_blocked_technicals(
                 self.ticker, self.strategy_name or self.profile_key, direction,
                 "technicals unavailable — entry blocked for safety")
-            return False
+            return False, False
 
         detail = ", ".join(
             f"{r['key'].upper()} {'skip' if r['skipped'] else 'ok' if r['ok'] else 'no'}"
             for r in gate["results"]
         )
         if gate["passed"]:
-            self.debug.emit("INFO", f"Technicals gate passed — {gate['summary']} ({detail})")
-            return True
+            self.debug.emit("INFO", f"Technicals gate passed [{gate.get('mode', 'daily')}] — "
+                                    f"{gate['summary']} ({detail})"
+                                    + (" — MODERATE, routing through confirm-first" if gate.get("needs_confirm") else ""))
+            return True, bool(gate.get("needs_confirm"))
 
-        self.debug.emit("WARN", f"Entry blocked — technicals gate: {gate['summary']} ({detail})")
+        self.debug.emit("WARN", f"Entry blocked — technicals gate [{gate.get('mode', 'daily')}]: "
+                                f"{gate['summary']} ({detail})")
         self.notifier.notify_entry_blocked_technicals(
             self.ticker, self.strategy_name or self.profile_key, direction, gate["summary"])
-        return False
+        return False, False
 
     def _enter_trade(self, direction: str, trigger_price: float):
         """
@@ -1120,8 +1140,12 @@ class ORBEngine:
         # Technicals gate — opt-in per strategy (strategy_configs.technicals_gate).
         # Blocks this signal only; the session stays armed for a later one.
         gate_cfg = self.config.get("technicals_gate") or {}
-        if gate_cfg.get("enabled") and gate_cfg.get("required"):
-            if not self._check_technicals_gate(direction, trigger_price, gate_cfg["required"]):
+        gate_mode = self._gate_mode(gate_cfg)
+        gate_needs_confirm = False
+        if gate_cfg.get("enabled") and (gate_cfg.get("required") or gate_mode == "composite"):
+            gate_ok, gate_needs_confirm = self._check_technicals_gate(
+                direction, trigger_price, gate_cfg.get("required") or [], mode=gate_mode)
+            if not gate_ok:
                 # A blocked REVERSAL entry tells the scorer, which un-latches
                 # with a cooldown so it may fire again later this session.
                 if getattr(self, "_reversal_entry_in_progress", False):
@@ -1383,8 +1407,11 @@ class ORBEngine:
                                          conflict_context=conflict_context)
             return
 
-        if self.confirm_entry:
-            self._pause_for_confirmation(direction, trigger_price, contract, qty, effective_profile)
+        if self.confirm_entry or gate_needs_confirm:
+            # A composite MODERATE entry must be confirmed — fail closed if
+            # the confirmation can't be persisted (unlike plain opt-in).
+            self._pause_for_confirmation(direction, trigger_price, contract, qty, effective_profile,
+                                         require_confirm=gate_needs_confirm and not self.confirm_entry)
             return
 
         self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
@@ -1918,7 +1945,8 @@ class ORBEngine:
 
     def _pause_for_confirmation(self, direction: str, trigger_price: float,
                                  contract: dict, qty: int, effective_profile: dict,
-                                 conflict_context: dict | None = None):
+                                 conflict_context: dict | None = None,
+                                 require_confirm: bool = False):
         """
         Instead of submitting the order, persist the candidate trade, push a
         notification, and stream the live premium so the user can Enter or
@@ -1969,6 +1997,12 @@ class ORBEngine:
             payload["conflict_context"] = conflict_context
         row = self.logger.create_pending_confirmation(payload)
         if row is None:
+            if require_confirm:
+                # Composite MODERATE: the score alone isn't enough to enter
+                # unattended — never fall back to entering directly.
+                self.debug.emit("ERROR",
+                    "Confirmation persist failed — skipping entry (composite MODERATE, fail-closed)")
+                return
             if conflict_context is not None:
                 # Fail CLOSED here, unlike the opt-in confirm_entry case below —
                 # this pause exists specifically to prevent stacking duplicate

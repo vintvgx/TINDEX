@@ -85,6 +85,7 @@ _lock = threading.Lock()
 _daily_cache: dict[str, tuple[float, object]] = {}
 _intraday_cache: dict[str, tuple[float, object]] = {}
 _sector_cache: dict[str, Optional[str]] = {}
+_bars_5m_cache: dict[str, tuple[float, object]] = {}
 
 
 # ── Data fetch (cached) ─────────────────────────────────────────────────────────
@@ -120,6 +121,59 @@ def _intraday_bars(ticker: str):
         return hist
 
     return _cached(_intraday_cache, ticker, _INTRADAY_TTL_S, fetch)
+
+
+def _prior_closes_5m(ticker: str):
+    """Regular-session 5-min closes for the previous ~4 sessions (today
+    excluded), oldest first — fetched once per ET date (prewarmed at ORB
+    calc), so a gate check never waits on this download mid-session."""
+    import yfinance as yf
+    today = datetime.now(ET).date()
+
+    def fetch():
+        hist = yf.Ticker(ticker).history(period="5d", interval="5m", prepost=False)
+        if hist.empty or "Close" not in hist.columns:
+            return []
+        closes = hist["Close"].dropna()
+        idx = closes.index.tz_convert(ET) if closes.index.tz is not None else closes.index.tz_localize(ET)
+        return [float(c) for t, c in zip(idx, closes.values) if t.date() < today]
+
+    return _cached(_bars_5m_cache, f"{ticker}:{today.isoformat()}", _DAILY_TTL_S, fetch)
+
+
+def _today_closes_5m(closes_1m: list[tuple]) -> list[float]:
+    """Today's regular-session 1-min closes [(ts, close)] → 5-min closes
+    (last close in each bucket), same bucketing as intraday_trend()."""
+    today = datetime.now(ET).date()
+    buckets: dict = {}
+    for ts, close in closes_1m:
+        if close is None:
+            continue
+        t = ts.astimezone(ET) if ts.tzinfo else ET.localize(ts)
+        if t.date() != today or t.time() < ORB_START:
+            continue
+        buckets[t.replace(minute=t.minute - t.minute % 5, second=0, microsecond=0)] = float(close)
+    return [buckets[k] for k in sorted(buckets)]
+
+
+def _closes_5m(ticker: str, closes_1m: Optional[list[tuple]] = None):
+    """
+    5-min closes spanning several sessions, oldest first (pd.Series) — prior
+    sessions from the per-day cache + today rebuilt from 1-min bars (the
+    engine's live bars when given, else the 15s-cached fetch). None if empty.
+    """
+    import pandas as pd
+    if closes_1m is None:
+        bars = _intraday_bars(ticker)
+        closes_1m = ([(ts.to_pydatetime(), c) for ts, c in bars["Close"].items()]
+                     if bars is not None and not bars.empty else [])
+    try:
+        prior = _prior_closes_5m(ticker)
+    except Exception as e:
+        logger.warning("[entry_check] prior 5-min bars failed for %s: %s", ticker, e)
+        prior = []
+    values = list(prior) + _today_closes_5m(closes_1m)
+    return pd.Series(values, dtype=float) if values else None
 
 
 def _day_change_pct(symbol: str) -> Optional[float]:
@@ -643,11 +697,12 @@ def get_entry_check(ticker: str, direction: str) -> dict:
     ticker = ticker.upper().strip()
     direction = direction.upper()
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         f_daily = pool.submit(_daily_closes, ticker)
         f_bars = pool.submit(_intraday_bars, ticker)
         f_sector = pool.submit(_sector_row, ticker)
         f_zone = pool.submit(_zone_snapshot, ticker)
+        f_prior_5m = pool.submit(_prior_closes_5m, ticker)  # warms the per-day cache
 
         errors: dict[str, str] = {}
         try:
@@ -670,6 +725,14 @@ def get_entry_check(ticker: str, direction: str) -> dict:
         except Exception as e:
             logger.warning("[entry_check] zone snapshot failed for %s: %s", ticker, e)
             zone_snap, errors["zone"] = None, str(e)
+        try:
+            f_prior_5m.result()
+        except Exception as e:
+            logger.warning("[entry_check] prior 5-min bars failed for %s: %s", ticker, e)
+            errors["bars_5m"] = str(e)
+
+    closes_5m = _closes_5m(ticker, [(ts.to_pydatetime(), c) for ts, c in bars["Close"].items()]
+                           if bars is not None and not bars.empty else [])
 
     vwap_row, orb_row, last, session_date = _session_rows(ticker, bars)
     if last is None and closes is not None and len(closes):
@@ -685,6 +748,21 @@ def get_entry_check(ticker: str, direction: str) -> dict:
 
     rows = {"trend": trend, "rsi": rsi, "vwap": vwap_row, "orb": orb_row, "sector": sector, "zone": zone_row}
     verdicts = {d: compute_verdict(d, rows) for d in ("CALL", "PUT")}
+
+    # Composite score (both sides) + the 5-min trend/RSI rows the Intraday
+    # and AND gate modes judge — display context for the chart; the daily
+    # rows above stay the primary read (#21: daily gate is not replaced).
+    from services.composite_technicals import compute_composite, intraday_trend_rsi
+    i_trend, i_rsi = intraday_trend_rsi(closes_5m, last)
+    orb_forming = bool(orb_row and orb_row["position"] == "Forming")
+    composite = {
+        d: compute_composite(d, last, daily_closes=closes, closes_5m=closes_5m,
+                             vwap=vwap_row["value"] if vwap_row else None,
+                             orh=orb_row["high"] if orb_row else None,
+                             orl=orb_row["low"] if orb_row else None,
+                             orb_forming=orb_forming)
+        for d in ("CALL", "PUT")
+    }
     from services.utils.market_hours import is_market_hours
     return {
         "ticker": ticker,
@@ -699,6 +777,8 @@ def get_entry_check(ticker: str, direction: str) -> dict:
         # "BUY CALL / BUY PUT / WAIT / N/A" from one request.
         "verdicts": verdicts,
         "signal": chart_signal(verdicts),
+        "composite": composite,
+        "rows_intraday": {"trend": i_trend, "rsi": i_rsi},
         "errors": errors or None,
     }
 
@@ -706,6 +786,20 @@ def get_entry_check(ticker: str, direction: str) -> dict:
 # ── Strategy technicals gate (automated ORB engines) ───────────────────────────
 
 GATE_FACTORS = ("trend", "trend_intraday", "rsi", "vwap", "orb", "sector", "zone")
+
+# technicals_gate.mode (TODOs 91307fec / a3e2a3d9). A missing or unknown
+# mode is DAILY — today's behaviour, unchanged (TODO c8fc1694: the daily
+# gate is never silently replaced; intraday / composite are opt-in).
+#   daily     — trend + RSI on daily bars (the original gate)
+#   intraday  — trend + RSI on 5-min bars (EMA-20/50, RSI-14)
+#   and       — trend + RSI must pass on BOTH daily and 5-min
+#   composite — ignores `required`; the -14..+14 composite score decides:
+#               STRONG enters, MODERATE enters via confirm-first, else blocked
+GATE_MODES = ("daily", "intraday", "and", "composite")
+
+
+def normalize_gate_mode(mode) -> str:
+    return mode if mode in GATE_MODES else "daily"
 
 INTRADAY_FAST, INTRADAY_SLOW, INTRADAY_BAR_MIN = 9, 21, 5
 
@@ -745,7 +839,7 @@ def intraday_trend(closes_1m: list[tuple], price: float) -> Optional[dict]:
     return {"label": label, "ema9": round(fast, 2), "ema21": round(slow, 2), "bars": len(buckets)}
 
 
-def prewarm(ticker: str, required: Optional[list[str]] = None) -> None:
+def prewarm(ticker: str, required: Optional[list[str]] = None, mode: str = "daily") -> None:
     """
     Load the slow, session-stable inputs ahead of the first entry signal
     (called off-thread at ORB calc): daily bars (per-date cache) and the
@@ -755,8 +849,11 @@ def prewarm(ticker: str, required: Optional[list[str]] = None) -> None:
     ticker = ticker.upper().strip()
     required = required or list(GATE_FACTORS)
     try:
-        if "trend" in required or "rsi" in required:
+        mode = normalize_gate_mode(mode)
+        if mode == "composite" or "trend" in required or "rsi" in required:
             _daily_closes(ticker)
+        if mode != "daily":
+            _prior_closes_5m(ticker)
         if "sector" in required:
             _sector_of(ticker)
         if "zone" in required:
@@ -768,8 +865,13 @@ def prewarm(ticker: str, required: Optional[list[str]] = None) -> None:
 def evaluate_gate(ticker: str, direction: str, required: list[str], price: float,
                   vwap: Optional[float] = None, orh: Optional[float] = None,
                   orl: Optional[float] = None,
-                  intraday_closes: Optional[list[tuple]] = None) -> dict:
+                  intraday_closes: Optional[list[tuple]] = None,
+                  mode: str = "daily") -> dict:
     """
+    `mode` — see GATE_MODES. Only "trend"/"rsi" change timeframe between
+    daily / intraday / and; every other factor is judged identically in all
+    three. "composite" returns early from evaluate_composite_gate().
+
     Per-strategy entry gate: EVERY factor in `required` must pass (same
     per-factor rules as compute_verdict — e.g. RSI passes at 50–70 for a
     call, trend passes when aligned with the trade). Unlike the entry
@@ -785,11 +887,16 @@ def evaluate_gate(ticker: str, direction: str, required: list[str], price: float
     sector on an ETF, which has no sector and is skipped.
     """
     ticker = ticker.upper().strip()
+    mode = normalize_gate_mode(mode)
+    if mode == "composite":
+        return evaluate_composite_gate(ticker, direction, price, vwap=vwap, orh=orh, orl=orl,
+                                       intraday_closes=intraday_closes)
     required = [k for k in GATE_FACTORS if k in (required or [])]
     rows: dict = {}
     errors: list[str] = []
+    needs_tr = "trend" in required or "rsi" in required
 
-    if "trend" in required or "rsi" in required:
+    if needs_tr and mode in ("daily", "and"):
         try:
             closes = _daily_closes(ticker)
             if closes is not None and len(closes) >= 22:
@@ -800,6 +907,22 @@ def evaluate_gate(ticker: str, direction: str, required: list[str], price: float
                     rows["rsi"] = rsi
         except Exception as e:
             errors.append(f"daily bars: {e}")
+
+    # 5-min trend/RSI rows, same shape as the daily ones so compute_verdict's
+    # pass rules (trend aligned, RSI 50–70 call / 30–50 put) apply unchanged.
+    rows_5m: dict = {}
+    if needs_tr and mode in ("intraday", "and"):
+        try:
+            from services.composite_technicals import intraday_trend_rsi
+            t5, r5 = intraday_trend_rsi(_closes_5m(ticker, intraday_closes), price)
+            if "trend" in required:
+                rows_5m["trend"] = t5
+            if "rsi" in required:
+                rows_5m["rsi"] = r5
+        except Exception as e:
+            errors.append(f"5-min bars: {e}")
+        if mode == "intraday":
+            rows.update(rows_5m)
 
     need_session = ("vwap" in required and vwap is None) or ("orb" in required and (orh is None or orl is None))
     session_vwap_row = session_orb_row = None
@@ -855,6 +978,28 @@ def evaluate_gate(ticker: str, direction: str, required: list[str], price: float
 
     verdict = compute_verdict(direction, {k: rows.get(k) for k in ("trend", "rsi", "vwap", "orb", "sector", "zone")})
     by_key = {f["key"]: f for f in verdict["factors"]}
+    if mode == "intraday":
+        for f in by_key.values():
+            if f["key"] in ("trend", "rsi") and f.get("note"):
+                f["note"] = f"5-min {f['note']}"
+    elif mode == "and":
+        # Both timeframes must pass; a timeframe with no data fails (closed).
+        v5 = compute_verdict(direction, {k: rows_5m.get(k) for k in ("trend", "rsi")})
+        by_5m = {f["key"]: f for f in v5["factors"]}
+        for key in ("trend", "rsi"):
+            if key not in required:
+                continue
+            fd, f5 = by_key.get(key), by_5m.get(key)
+            if fd is None or f5 is None:
+                missing_tf = "daily" if fd is None else "5-min"
+                by_key[key] = {"key": key, "ok": False, "points": 0, "note": f"no {missing_tf} data"}
+                continue
+            ok = fd["ok"] and f5["ok"]
+            mark = lambda f: "✓" if f["ok"] else "✗"
+            by_key[key] = {"key": key, "ok": ok, "points": fd["points"] if ok else 0,
+                           "note": f"daily {mark(fd)} {fd.get('note') or ''} · 5-min {mark(f5)} {f5.get('note') or ''}".strip()}
+        rows["trend_5m"] = rows_5m.get("trend")
+        rows["rsi_5m"] = rows_5m.get("rsi")
 
     results = []
     for key in required:
@@ -893,7 +1038,9 @@ def evaluate_gate(ticker: str, direction: str, required: list[str], price: float
     matched = sum(1 for r in results if r["ok"] and not r["skipped"])
     counted = sum(1 for r in results if not r["skipped"])
     return {
+        "mode": mode,
         "passed": passed,
+        "needs_confirm": False,
         "required": required,
         "matched": matched,
         "total": counted,
@@ -901,5 +1048,69 @@ def evaluate_gate(ticker: str, direction: str, required: list[str], price: float
         "summary": (f"{matched}/{counted} technicals matched"
                     + ("" if passed else " — " + "; ".join(failing))),
         "rows": rows,
+        "errors": errors or None,
+    }
+
+
+def evaluate_composite_gate(ticker: str, direction: str, price: float,
+                            vwap: Optional[float] = None, orh: Optional[float] = None,
+                            orl: Optional[float] = None,
+                            intraday_closes: Optional[list[tuple]] = None) -> dict:
+    """
+    Composite-mode gate: the -14..+14 score for this direction decides.
+    STRONG → pass; MODERATE → pass with needs_confirm (the engine routes the
+    entry through a confirmation pause); WATCH / NO_TRADE → blocked. Uses the
+    engine's live VWAP / ORB when given, fetched bars otherwise. Fails closed
+    when the score can't be computed at all.
+    """
+    from services.composite_technicals import compute_composite
+    errors: list[str] = []
+    closes = None
+    try:
+        closes = _daily_closes(ticker)
+    except Exception as e:
+        errors.append(f"daily bars: {e}")
+    closes_5m = None
+    try:
+        closes_5m = _closes_5m(ticker, intraday_closes)
+    except Exception as e:
+        errors.append(f"5-min bars: {e}")
+
+    orb_forming = False
+    if vwap is None or orh is None or orl is None:
+        try:
+            vwap_row, orb_row, _, _ = _session_rows(ticker, _intraday_bars(ticker))
+            if vwap is None and vwap_row:
+                vwap = vwap_row["value"]
+            if (orh is None or orl is None) and orb_row:
+                orh, orl = orb_row["high"], orb_row["low"]
+                orb_forming = orb_row["position"] == "Forming"
+        except Exception as e:
+            errors.append(f"intraday bars: {e}")
+
+    comp = compute_composite(direction, price, daily_closes=closes, closes_5m=closes_5m,
+                             vwap=vwap, orh=orh, orl=orl, orb_forming=orb_forming)
+    available = sum(1 for r in comp["indicators"] if r["available"])
+    tier = comp["tier"] if available else "NO_TRADE"
+    passed = tier in ("STRONG", "MODERATE")
+    detail = ", ".join(f"{r['label']} {r['score']:+d}" for r in comp["indicators"] if r["available"])
+    summary = f"composite {comp['total']:+d}/{comp['max']} {tier.replace('_', ' ')}"
+    if not available:
+        summary += " — no indicator data"
+    elif comp["missing"]:
+        summary += f" (no data: {', '.join(comp['missing'])})"
+    return {
+        "mode": "composite",
+        "passed": passed,
+        "needs_confirm": tier == "MODERATE",
+        "required": [],
+        "matched": comp["total"],
+        "total": comp["max"],
+        "results": [{"key": r["key"], "ok": (r["score"] or 0) > 0, "skipped": not r["available"],
+                     "note": f"{r['value']} ({r['score']:+d})" if r["available"] else r["detail"]}
+                    for r in comp["indicators"]],
+        "summary": summary + (f" — {detail}" if detail and not passed else ""),
+        "composite": comp,
+        "rows": {},
         "errors": errors or None,
     }

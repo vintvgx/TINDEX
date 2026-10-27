@@ -8,6 +8,7 @@ import type { StrategyConfig, StrategyProfile } from '@/common/types/strategy';
 import { PROFILES as PROFILE_GUIDES } from '@/common/components/strategy/ProfileGuideModal';
 import { useUpdateStrategyConfig } from '@/hooks/mutations/strategy/useUpdateStrategyConfig';
 import { TECHNICALS_FACTORS } from '@/common/components/strategy/TechnicalsGateEditor';
+import { gateModeLabel, gateModeOf } from '@/common/components/strategy/GateModePicker';
 import { useToast } from '@/common/components/ui/Toast';
 import { RUNNER_MODE_LABEL } from '@/common/utils/strategy/runnerModeLabel';
 
@@ -139,9 +140,13 @@ export function StrategyDetailModal({ visible, config, profiles, colors, onClose
             <SettingRow label="Smart Contracts" value={config.smart_contracts ? 'Enabled' : 'Disabled'} colors={colors} />
             <SettingRow
               label="Technicals Gate"
-              value={config.technicals_gate?.enabled && config.technicals_gate.required.length
-                ? `${config.technicals_gate.required.length}/${config.technicals_gate.required.length} · ${config.technicals_gate.required.map(k => TECHNICALS_FACTORS.find(f => f.key === k)?.label ?? k).join(' + ')}`
-                : 'Off'}
+              value={!config.technicals_gate?.enabled
+                ? 'Off'
+                : gateModeOf(config.technicals_gate) === 'composite'
+                  ? 'Score (composite)'
+                  : config.technicals_gate.required.length
+                    ? `${gateModeLabel(gateModeOf(config.technicals_gate))} · ${config.technicals_gate.required.map(k => TECHNICALS_FACTORS.find(f => f.key === k)?.label ?? k).join(' + ')}`
+                    : 'Off'}
               colors={colors}
               last
             />

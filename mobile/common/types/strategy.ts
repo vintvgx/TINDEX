@@ -97,10 +97,16 @@ export interface ExitOverrides {
  *  api/services/entry_check_service.py evaluate_gate. */
 export type TechnicalsFactor = 'trend' | 'trend_intraday' | 'rsi' | 'vwap' | 'orb' | 'sector';
 
+/** How trend + RSI are judged — entry_check_service.GATE_MODES. Missing =
+ *  'daily' (the original gate; existing strategies are never switched). */
+export type TechnicalsGateMode = 'daily' | 'intraday' | 'and' | 'composite';
+
 export interface TechnicalsGate {
   enabled: boolean;
-  /** Every factor listed must match or the entry signal is blocked. */
+  /** Every factor listed must match or the entry signal is blocked
+   *  (ignored in 'composite' mode — the score decides). */
   required: TechnicalsFactor[];
+  mode?: TechnicalsGateMode;
 }
 
 export interface StrategyConfig {

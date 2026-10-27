@@ -75,6 +75,8 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   const [scrubPoint, setScrubPoint] = useState<AdvancedScrubPoint | null>(null);
+  // Bumped by a technicals-strip chip tap → ChartControlToggles opens the sheet.
+  const [openTechnicalsKey, setOpenTechnicalsKey] = useState(0);
   const { authState: { user } } = useAuth();
 
   // Feeds the shaded ORB band drawn directly on the chart (see
@@ -416,10 +418,16 @@ export const PriceChartFullScreen: React.FC<PriceChartFullScreenProps> = ({
               technicals={chart.technicalsContent}
               onTechnicalsOpenChange={chart.onTechnicalsOpenChange}
               positioning={<OptionsPositioningPanel ticker={ticker} />}
+              openTechnicalsKey={openTechnicalsKey}
             />
           </View>
           {chart.showStrip && (
-            <ChartTechnicalsStrip check={chart.technicals.data} isLoading={chart.technicals.isLoading} colors={colors} />
+            <ChartTechnicalsStrip
+              check={chart.technicals.data}
+              isLoading={chart.technicals.isLoading}
+              colors={colors}
+              onPress={() => setOpenTechnicalsKey(k => k + 1)}
+            />
           )}
           <AdvancedPriceChart
             data={historyData}
