@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS orb_gate_watches (
     resolved_at     timestamptz
 );
 
+-- Row-level security: the backend reads/writes via the service-role key
+-- (TradeLogger), which bypasses RLS. Enabling it here keeps public
+-- PostgREST clients from reading or writing watch rows without a policy.
+ALTER TABLE orb_gate_watches ENABLE ROW LEVEL SECURITY;
+
 CREATE INDEX IF NOT EXISTS idx_orb_gate_watches_status
     ON orb_gate_watches (status, expires_at);
 
