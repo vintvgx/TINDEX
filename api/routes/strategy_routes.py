@@ -1265,7 +1265,31 @@ def sweep_pending_confirmations():
         except Exception as e:
             logger.error("[strategy] Confirmation sweep failed for %s: %s", sid, e)
     bulk_expired = logger_svc.expire_stale_pending_confirmations()
-    return jsonify({"status": "ok", "engine_expired": engine_expired, "bulk_expired": bulk_expired})
+
+    # Gate watches ride the same sweep: a deadline can pass with no bar to
+    # notice it (quiet ticker, dead hub).
+    watches_expired = 0
+    for sid, eng in _all_engines():
+        try:
+            if eng.expire_gate_watch_if_stale():
+                watches_expired += 1
+        except Exception as e:
+            logger.error("[strategy] Gate watch sweep failed for %s: %s", sid, e)
+    watches_expired += logger_svc.expire_stale_gate_watches()
+    return jsonify({"status": "ok", "engine_expired": engine_expired, "bulk_expired": bulk_expired,
+                    "watches_expired": watches_expired})
+
+
+@strategy_bp.route("/gate-watches", methods=["GET"])
+def list_gate_watches():
+    """Live blocked-breakout watches (gate_watch.py), one per engine at most.
+    Served from engine memory — it carries the latest re-check score."""
+    out = []
+    for _sid, eng in _all_engines():
+        w = eng.gate_watch_public()
+        if w:
+            out.append(w)
+    return jsonify(out)
 
 
 @strategy_bp.route("/configs/<strategy_id>/pending/<pending_id>/approve", methods=["POST"])

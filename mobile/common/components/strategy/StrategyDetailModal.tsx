@@ -140,13 +140,13 @@ export function StrategyDetailModal({ visible, config, profiles, colors, onClose
             <SettingRow label="Smart Contracts" value={config.smart_contracts ? 'Enabled' : 'Disabled'} colors={colors} />
             <SettingRow
               label="Technicals Gate"
-              value={!config.technicals_gate?.enabled
+              value={(!config.technicals_gate?.enabled
                 ? 'Off'
                 : gateModeOf(config.technicals_gate) === 'composite'
                   ? 'Score (composite)'
                   : config.technicals_gate.required.length
                     ? `${gateModeLabel(gateModeOf(config.technicals_gate))} · ${config.technicals_gate.required.map(k => TECHNICALS_FACTORS.find(f => f.key === k)?.label ?? k).join(' + ')}`
-                    : 'Off'}
+                    : 'Off') + (config.technicals_gate?.enabled && config.technicals_gate.watch ? ' · Watch' : '')}
               colors={colors}
               last
             />

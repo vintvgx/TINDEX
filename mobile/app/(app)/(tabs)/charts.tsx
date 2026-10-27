@@ -17,7 +17,6 @@ import { ChartBottomToolbar } from '@/common/components/ticker/ChartBottomToolba
 import { ChartPositionStrip } from '@/common/components/ticker/ChartPositionStrip';
 import { TechnicalsSheet } from '@/common/components/ticker/TechnicalsSheet';
 import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals';
-import { chartComposite, fmtScore, tierMeta } from '@/common/components/ticker/compositeMeta';
 import { OptionsPositioningPanel } from '@/common/components/ticker/brief/TickerBrief';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
 import { useChartTape } from '@/common/components/ui/ChartTapeContext';
@@ -657,17 +656,11 @@ export function ChartsContent({ initialTicker, topInset }: {
   const tapeSignal = chart.technicals.data?.signal ?? null;
   const openContracts = useCallback(() => setContractsModalOpen(true), []);
 
-  // Composite technicals: score on the Technicals button ("+7 STRONG"), the
-  // strip's chips open its sheet, and Review Entry leaves the sheet for the
-  // contract chain (→ trade sheet → confirm).
+  // Composite technicals: the strip (score badge + chips) opens its sheet,
+  // and Review Entry leaves the sheet for the contract chain (→ trade sheet
+  // → confirm).
   const [technicalsOpen, setTechnicalsOpen] = useState(false);
   const openTechnicalsSheet = useCallback(() => setTechnicalsOpen(true), []);
-  const technicalsPill = useMemo(() => {
-    const comp = chartComposite(chart.technicals.data);
-    if (!comp) return undefined;
-    const t = tierMeta(comp.tier, colors);
-    return { label: `${fmtScore(comp.total)} ${t.short}`, color: t.color };
-  }, [chart.technicals.data, colors]);
   const reviewEntryFromTechnicals = useCallback(() => {
     // The bottom sheet is a native Modal — let it dismiss before the
     // contracts modal presents (iOS drops a modal opened mid-dismiss).
@@ -838,7 +831,6 @@ export function ChartsContent({ initialTicker, topInset }: {
             onReviewEntry={reviewEntryFromTechnicals}
           />
         }
-        technicalsPill={technicalsPill}
         technicalsOpen={technicalsOpen}
         onTechnicalsOpenChange={setTechnicalsOpen}
         positioningContent={<OptionsPositioningPanel ticker={activeTicker} />}

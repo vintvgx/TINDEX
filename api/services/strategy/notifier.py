@@ -171,6 +171,36 @@ class StrategyNotifier:
             priority=P_OPERATIONAL,
         )
 
+    def notify_gate_watch_started(self, ticker: str, strategy_label: str, direction: str,
+                                  summary: str, expires_at):
+        """The technicals gate blocked a breakout and the strategy is now
+        watching it (gate_watch.py) instead of dropping it."""
+        self._dispatch(
+            title=f"{ticker} {direction} blocked — watching",
+            body=(f"{strategy_label}: {summary}. Re-checking each minute until "
+                  f"{expires_at:%-I:%M} ET; enters if the gate passes."),
+            data={"screen": "strategy"},
+            priority=P_OPERATIONAL,
+        )
+
+    def notify_gate_watch_confirmed(self, ticker: str, strategy_label: str, direction: str,
+                                    score: str, confirm_first: bool):
+        self._dispatch(
+            title=f"Watch confirmed — {ticker} {direction} gate now {score}",
+            body=(f"{strategy_label}: running the entry"
+                  + (" — confirm-first, you'll be asked to approve." if confirm_first else ".")),
+            data={"screen": "strategy"},
+            priority=P_OPERATIONAL,
+        )
+
+    def notify_gate_watch_ended(self, ticker: str, strategy_label: str, direction: str, reason: str):
+        self._dispatch(
+            title=f"Watch expired — {ticker} {direction}",
+            body=f"{strategy_label}: {reason}. No longer tracking this signal.",
+            data={"screen": "strategy"},
+            priority=P_OPERATIONAL,
+        )
+
     def notify_insufficient_capital(self, ticker: str, required: float, available: float):
         """Buying power too low to enter even one contract."""
         self._dispatch(

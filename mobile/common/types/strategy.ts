@@ -107,6 +107,28 @@ export interface TechnicalsGate {
    *  (ignored in 'composite' mode — the score decides). */
   required: TechnicalsFactor[];
   mode?: TechnicalsGateMode;
+  /** Blocked breakout → watch: re-check the gate each 1-min close and enter
+   *  the first time it passes (backend gate_watch.py). Missing = off. */
+  watch?: boolean;
+}
+
+/** A live blocked-breakout watch — GET /strategy/gate-watches. */
+export interface GateWatch {
+  id: string;
+  strategy_id: string;
+  ticker: string;
+  direction: 'CALL' | 'PUT';
+  trigger_price: number;
+  level: number | null;
+  mode: TechnicalsGateMode;
+  /** '2/4' (factor gate) or '+3/14' (composite); '?' until the first re-check after a restart. */
+  score: string;
+  failed: string[];
+  summary: string;
+  created_at: string;
+  expires_at: string;
+  expiry_reason: string;
+  checks: number;
 }
 
 export interface StrategyConfig {

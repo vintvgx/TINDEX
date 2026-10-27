@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Pressable } from
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery } from '@tanstack/react-query';
 import { fetchEntryCheck, type ChartSignal, type EntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
-import { chartComposite, fmtScore, scoreColor } from './compositeMeta';
+import { chartComposite, fmtScore, scoreColor, tierMeta } from './compositeMeta';
 import { formatAsOf } from '@/common/components/trade/EntryTechnicalsPanel';
 import { CompositeTechnicalsPanel } from '@/common/components/ticker/CompositeTechnicalsPanel';
 import type { ChartReferenceLine } from '@/common/components/ticker/AdvancedPriceChart';
@@ -99,10 +99,18 @@ export function ChartTechnicalsStrip({ check, isLoading, colors, onPress }: {
   const comp = chartComposite(check);
   if (comp) {
     const bg = colors.background;
+    // The score leads the strip ("+2 WATCH"); the BUY CALL/PUT signal lives
+    // on the ticker tape's pill, so it isn't repeated here.
+    const tier = tierMeta(comp.tier, colors);
     return (
       <View style={s.strip}>
-        <Pressable onPress={onPress} style={[s.signal, { backgroundColor: sig.color }]} hitSlop={4}>
-          <Text style={s.signalText}>{sig.label}</Text>
+        <Pressable
+          onPress={onPress}
+          style={[s.signal, { backgroundColor: tier.color }]}
+          hitSlop={4}
+          accessibilityLabel={`${comp.direction} score ${fmtScore(comp.total)} of ${comp.max}, ${tier.short}`}
+        >
+          <Text style={s.signalText}>{fmtScore(comp.total)} {tier.short}</Text>
         </Pressable>
         <View style={{ flex: 1, height: 28, justifyContent: 'center' }}>
           <ScrollView

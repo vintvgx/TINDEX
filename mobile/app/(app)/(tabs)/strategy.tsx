@@ -34,7 +34,8 @@ import { WorkingLimitOrders } from '@/common/components/strategy/WorkingLimitOrd
 import { LivePositionPanel } from '@/common/components/strategy/LivePositionPanel';
 import { positionHideKey } from '@/lib/positionHideKey';
 import { useStrategyTrades } from '@/hooks/queries/strategy/useStrategyTrades';
-import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, LiveOptionPrice, ExitOverrides, ORBTrade, TechnicalsGate } from '@/common/types/strategy';
+import { useGateWatches } from '@/hooks/queries/strategy/useGateWatches';
+import type { StrategyConfig, ProfileKey, StrategyProfile, CustomThresholds, OtmFibLevel, LiveOptionPrice, ExitOverrides, ORBTrade, TechnicalsGate, GateWatch } from '@/common/types/strategy';
 import { formatContractSymbolShort, parseContractSymbol } from '@/lib/formatContract';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -588,6 +589,8 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
     onPositionClosed,
   );
   const [exitOpen, setExitOpen]   = useState(false);
+  const { data: gateWatches } = useGateWatches();
+  const gateWatch = hasPosition ? undefined : gateWatches?.find(w => w.strategy_id === config.id);
 
   // Direction isn't a field on StrategyConfig/LiveOptionPrice — the OCC
   // contract symbol already encodes it (see parseContractSymbol), so derive
@@ -655,6 +658,8 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
           </Text>
         )}
 
+        {gateWatch && <GateWatchRow watch={gateWatch} colors={colors} />}
+
         {/* ── Live position — the same Robinhood-styled card/quick-edit
             sheet used on Live Positions/Dashboard, not a third separate
             implementation. Tapping it opens PositionInfoModal, which now
@@ -700,6 +705,31 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
         onClose={() => setExitOpen(false)}
       />
     </TouchableOpacity>
+  );
+}
+
+// ── GateWatchRow ──────────────────────────────────────────────────────────────
+
+/** A blocked breakout the engine is still re-checking (backend gate_watch.py):
+ *  "Watching CALL · 2/4 · 1h12m left". */
+function GateWatchRow({ watch, colors }: { watch: GateWatch; colors: any }) {
+  const c = watch.direction === 'CALL' ? colors.success : colors.error;
+  const mins = Math.max(0, Math.round((new Date(watch.expires_at).getTime() - Date.now()) / 60_000));
+  const left = mins >= 60 ? `${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, '0')}m` : `${mins}m`;
+  return (
+    <View style={[styles.watchRow, { backgroundColor: c + '14', borderColor: c + '44' }]}>
+      <Ionicons name="eye-outline" size={14} color={c} />
+      <Text style={[styles.watchText, { color: colors.text }]} numberOfLines={1}>
+        Watching {watch.direction}
+        {watch.score && watch.score !== '?' ? ` · ${watch.score}` : ''}
+        {` · ${left} left`}
+      </Text>
+      {watch.failed.length > 0 && (
+        <Text style={[styles.watchSub, { color: colors.tabBarInactive }]} numberOfLines={1}>
+          needs {watch.failed.join(', ')}
+        </Text>
+      )}
+    </View>
   );
 }
 
@@ -1515,6 +1545,9 @@ const styles = StyleSheet.create({
   stratName:   { fontSize: 12, marginTop: 1 },
   stratMeta:   { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 6 },
   stratCapital:{ fontSize: 12, marginTop: 4 },
+  watchRow:    { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, borderWidth: 1 },
+  watchText:   { fontSize: 12.5, fontWeight: '700', flexShrink: 0 },
+  watchSub:    { fontSize: 11.5, flex: 1, textAlign: 'right' },
 
   modeBadge:     { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
   modeBadgeText: { fontSize: 11, fontWeight: '600' },

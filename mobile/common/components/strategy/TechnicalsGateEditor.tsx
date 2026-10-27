@@ -42,9 +42,12 @@ export function TechnicalsGateEditor({ gate, profile, profileName, onChange, col
   const required = gate?.required ?? [];
   const mode = gateModeOf(gate);
   const isComposite = mode === 'composite';
-  // Spread so a gate saved without `mode` stays mode-less (= daily) on every
-  // edit; only a brand-new gate gets NEW_GATE_MODE.
-  const base = gate ?? { enabled: true, required: [], mode: NEW_GATE_MODE };
+  // Spread so a gate saved without `mode`/`watch` keeps behaving as before
+  // on every edit; only a brand-new gate gets NEW_GATE_MODE and watching.
+  const base = gate ?? { enabled: true, required: [], mode: NEW_GATE_MODE, watch: true };
+  const watch = !!gate?.watch;
+  // REVERSAL keeps its own decline path — the backend never watches it.
+  const canWatch = profile !== 'REVERSAL';
   const muted = colors.tabBarInactive;
   const recommended = recommendedGate(profile);
   const isRecommended = recommended.length === required.length && recommended.every(k => required.includes(k));
@@ -99,6 +102,25 @@ export function TechnicalsGateEditor({ gate, profile, profileName, onChange, col
                   : 'Trend + RSI must pass on daily AND 5-min bars. VWAP, ORB and sector are the same in every mode.'}
             </Text>
           )}
+        </View>
+      )}
+
+      {enabled && canWatch && (
+        <View style={[s.headRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={[s.label, { color: colors.text }]}>Watch Blocked Breakouts</Text>
+            <Text style={[s.hint, { color: muted }]}>
+              {watch
+                ? 'A blocked breakout is re-checked each minute for up to 2h (within the breakout window, never past EOD) and enters the first time the gate passes. Ends if price closes back inside the range.'
+                : 'A blocked breakout is dropped'}
+            </Text>
+          </View>
+          <Switch
+            value={watch}
+            onValueChange={on => onChange({ ...base, enabled: true, required, watch: on })}
+            thumbColor={watch ? '#30D158' : '#ccc'}
+            trackColor={{ true: '#30D15855', false: colors.border }}
+          />
         </View>
       )}
 
