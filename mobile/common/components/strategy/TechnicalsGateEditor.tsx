@@ -46,8 +46,7 @@ export function TechnicalsGateEditor({ gate, profile, profileName, onChange, col
   // on every edit; only a brand-new gate gets NEW_GATE_MODE and watching.
   const base = gate ?? { enabled: true, required: [], mode: NEW_GATE_MODE, watch: true };
   const watch = !!gate?.watch;
-  // REVERSAL keeps its own decline path — the backend never watches it.
-  const canWatch = profile !== 'REVERSAL';
+  const isReversal = profile === 'REVERSAL';
   const muted = colors.tabBarInactive;
   const recommended = recommendedGate(profile);
   const isRecommended = recommended.length === required.length && recommended.every(k => required.includes(k));
@@ -105,14 +104,18 @@ export function TechnicalsGateEditor({ gate, profile, profileName, onChange, col
         </View>
       )}
 
-      {enabled && canWatch && (
+      {enabled && (
         <View style={[s.headRow, { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }]}>
           <View style={{ flex: 1 }}>
-            <Text style={[s.label, { color: colors.text }]}>Watch Blocked Breakouts</Text>
+            <Text style={[s.label, { color: colors.text }]}>
+              {isReversal ? 'Watch Blocked Reversals' : 'Watch Blocked Breakouts'}
+            </Text>
             <Text style={[s.hint, { color: muted }]}>
-              {watch
-                ? 'A blocked breakout is re-checked each minute for up to 2h (within the breakout window, never past EOD) and enters the first time the gate passes. Ends if price closes back inside the range.'
-                : 'A blocked breakout is dropped'}
+              {!watch
+                ? `A blocked ${isReversal ? 'reversal' : 'breakout'} is dropped`
+                : isReversal
+                  ? 'A blocked reversal is re-checked each minute for up to 30 min and enters when the gate passes while the reversal signal still holds (VWAP alone never enters). Ends if price moves away from VWAP or the reversal setup resolves.'
+                  : 'A blocked breakout is re-checked each minute for up to 2h (within the breakout window, never past EOD) and enters the first time the gate passes. Ends if price closes back inside the range.'}
             </Text>
           </View>
           <Switch

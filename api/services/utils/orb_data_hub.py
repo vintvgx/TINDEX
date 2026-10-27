@@ -77,6 +77,13 @@ class OrbDataHub:
         # OrbService's handler for "an engine's technicals gate declined a
         # fired reversal" (ticker, direction) — lets the scorer re-open.
         self._reversal_declined_handler: Callable[[str, str], None] | None = None
+        # Live reversal-scorer status, published by OrbService after it scores
+        # each bar (gate_watch.py's reversal watch re-checks on it — a bar
+        # reaches engines BEFORE the scorer runs, so on_bar would always see
+        # the previous bar's verdict). cb(status) — status is
+        # {"active": False, "reason": str} once the episode ends, else
+        # {"active": True, "direction", "score", "threshold", "trigger", "close"}.
+        self._reversal_status_subs: dict[str, list[Callable[[dict], None]]] = defaultdict(list)
         # Retest-event subscribers: OrbService publishes here on every retest
         # state transition (break detected, invalidated/re-armed, exhausted,
         # confirmed) so engines can surface it to their own Debug tab — this
@@ -132,6 +139,11 @@ class OrbDataHub:
                 self._reversal_subs[ticker].append(cb)
         logger.info("[OrbDataHub] reversal subscriber added for %s", ticker)
 
+    def subscribe_reversal_status(self, ticker: str, cb: Callable[[dict], None]) -> None:
+        with self._lock:
+            if cb not in self._reversal_status_subs[ticker]:
+                self._reversal_status_subs[ticker].append(cb)
+
     def subscribe_retest_events(self, ticker: str, cb: Callable[[str, str], None]) -> None:
         """Register a retest-event callback: cb(level, message) — level is a
         debug-log level string ("INFO"/"WARN"/"SUCCESS"), message is
@@ -144,7 +156,8 @@ class OrbDataHub:
         """Remove a callback from bar, ORB, breakout, reversal, and retest-event subscriptions."""
         with self._lock:
             for registry in (self._bar_subs, self._orb_subs, self._breakout_subs,
-                             self._reversal_subs, self._retest_event_subs):
+                             self._reversal_subs, self._retest_event_subs,
+                             self._reversal_status_subs):
                 if cb in registry.get(ticker, []):
                     registry[ticker].remove(cb)
         logger.info("[OrbDataHub] subscriber removed for %s", ticker)
@@ -238,6 +251,18 @@ class OrbDataHub:
                 cb(direction, price)
             except Exception as e:
                 logger.error("[OrbDataHub] reversal subscriber error for %s: %s",
+                             ticker, e, exc_info=True)
+
+    def publish_reversal_status(self, ticker: str, status: dict) -> None:
+        """OrbService, after scoring a bar for a ticker with a live reversal
+        episode (or when that episode ends). Best-effort fan-out."""
+        with self._lock:
+            listeners = list(self._reversal_status_subs.get(ticker, ()))
+        for cb in listeners:
+            try:
+                cb(status)
+            except Exception as e:
+                logger.error("[OrbDataHub] reversal-status subscriber error for %s: %s",
                              ticker, e, exc_info=True)
 
     def set_reversal_declined_handler(self, cb: Callable[[str, str], None]) -> None:

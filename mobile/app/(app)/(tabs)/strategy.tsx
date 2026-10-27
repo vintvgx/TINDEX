@@ -710,9 +710,11 @@ function StrategyCard({ config, profiles, colors, onPress }: StrategyCardProps) 
 
 // ── GateWatchRow ──────────────────────────────────────────────────────────────
 
-/** A blocked breakout the engine is still re-checking (backend gate_watch.py):
- *  "Watching CALL · 2/4 · 1h12m left". */
+/** A blocked signal the engine is still re-checking (backend gate_watch.py):
+ *  "Watching CALL · 2/4 · 1h12m left", or for a reversal
+ *  "Watching reversal CALL · VWAP not aligned · 12m left". */
 function GateWatchRow({ watch, colors }: { watch: GateWatch; colors: any }) {
+  const reversal = watch.kind === 'reversal';
   const c = watch.direction === 'CALL' ? colors.success : colors.error;
   const mins = Math.max(0, Math.round((new Date(watch.expires_at).getTime() - Date.now()) / 60_000));
   const left = mins >= 60 ? `${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, '0')}m` : `${mins}m`;
@@ -720,11 +722,13 @@ function GateWatchRow({ watch, colors }: { watch: GateWatch; colors: any }) {
     <View style={[styles.watchRow, { backgroundColor: c + '14', borderColor: c + '44' }]}>
       <Ionicons name="eye-outline" size={14} color={c} />
       <Text style={[styles.watchText, { color: colors.text }]} numberOfLines={1}>
-        Watching {watch.direction}
-        {watch.score && watch.score !== '?' ? ` · ${watch.score}` : ''}
+        Watching {reversal ? 'reversal ' : ''}{watch.direction}
+        {reversal
+          ? ` · ${watch.gate_ok ? 'VWAP aligned, no trigger' : 'VWAP not aligned'}`
+          : watch.score && watch.score !== '?' ? ` · ${watch.score}` : ''}
         {` · ${left} left`}
       </Text>
-      {watch.failed.length > 0 && (
+      {!reversal && watch.failed.length > 0 && (
         <Text style={[styles.watchSub, { color: colors.tabBarInactive }]} numberOfLines={1}>
           needs {watch.failed.join(', ')}
         </Text>

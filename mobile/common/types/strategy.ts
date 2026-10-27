@@ -122,6 +122,13 @@ export interface GateWatch {
   id: string;
   strategy_id: string;
   ticker: string;
+  /** 'reversal' = a blocked REVERSAL signal (30-min watch, enters only
+   *  while the reversal scorer's trigger still holds). Older API: absent. */
+  kind?: 'breakout' | 'reversal';
+  /** Reversal watches: is the scorer's reversal trigger present right now? */
+  reversal_trigger?: boolean | null;
+  /** Reversal watches: did the last re-check pass the gate (VWAP aligned)? */
+  gate_ok?: boolean;
   direction: 'CALL' | 'PUT';
   trigger_price: number;
   level: number | null;

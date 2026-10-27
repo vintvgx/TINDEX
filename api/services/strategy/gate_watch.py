@@ -9,10 +9,24 @@ gate blocked at 2/4 (daily trend + RSI lag intraday momentum) and a block
 that never re-checks turned a delayed entry into a missed one.
 
 Opt-in per gate — technicals_gate.watch. A gate saved before this existed has
-no `watch` key and behaves exactly as before (constraint c8fc1694). REVERSAL
-keeps its own decline path (publish_reversal_declined) and never watches.
+no `watch` key and behaves exactly as before (constraint c8fc1694).
 
-One live watch per engine. A watch ends at the earliest of:
+Two kinds (orb_gate_watches.kind):
+  breakout — TREND_RIDER/BREAK profiles; rules below.
+  reversal — REVERSAL profiles (2026-10-27): a reversal the gate (VWAP)
+             blocked. Re-checked on OrbService's per-bar scorer status
+             (hub.publish_reversal_status — bars reach engines before the
+             scorer runs). Enters only when the gate passes AND the scorer's
+             own fire condition (score ≥ threshold, boundary penetration —
+             reversal_signals / OrbService._score_reversal, cooldown aside)
+             still holds: VWAP alone never enters. Ends at the earliest of
+             REVERSAL_WATCH_MAX_MIN, the scorer episode ending (re-break of
+             the ORB level / new breakout), price closing further from VWAP
+             than at the block, the breakout window, EOD − buffer, a position,
+             or an opposite-side block. Not restored after a restart (the
+             scorer's state is in memory).
+
+One live watch per engine. A breakout watch ends at the earliest of:
   - a bar closing back through the trigger level (below ORH for a CALL,
     above ORL for a PUT)
   - GATE_WATCH_MAX_MIN after the block
@@ -37,6 +51,7 @@ logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
 
 GATE_WATCH_MAX_MIN = 120
+REVERSAL_WATCH_MAX_MIN = 30   # reversal setups go stale fast
 
 # Re-checks run off the hub's bar thread — a cold-cache gate evaluation can
 # take seconds and must never stall bar delivery or exit evaluation.
@@ -66,15 +81,20 @@ class GateWatchMixin:
     # ── eligibility / deadline ────────────────────────────────────────────────
 
     def _gate_watch_eligible(self, gate_cfg: dict) -> bool:
-        return (bool(gate_cfg.get("watch"))
-                and self.profile_key != "REVERSAL"
-                and not getattr(self, "_reversal_entry_in_progress", False))
+        return bool(gate_cfg.get("watch"))
 
-    def _gate_watch_deadline(self, now: datetime) -> tuple[datetime, str]:
+    def _watch_kind(self) -> str:
+        return "reversal" if self.profile_key == "REVERSAL" else "breakout"
+
+    def _gate_watch_deadline(self, now: datetime, kind: str = "breakout") -> tuple[datetime, str]:
         from services.strategy.orb_engine import EOD_CLOSE_TIMES, ORB_WINDOW_MINUTES
 
-        options = [(now + timedelta(minutes=GATE_WATCH_MAX_MIN),
-                    f"{GATE_WATCH_MAX_MIN // 60}h without confirmation")]
+        if kind == "reversal":
+            options = [(now + timedelta(minutes=REVERSAL_WATCH_MAX_MIN),
+                        f"{REVERSAL_WATCH_MAX_MIN} min without confirmation")]
+        else:
+            options = [(now + timedelta(minutes=GATE_WATCH_MAX_MIN),
+                        f"{GATE_WATCH_MAX_MIN // 60}h without confirmation")]
         eod_h, eod_m = (int(x) for x in EOD_CLOSE_TIMES.get(self.ticker, "15:58").split(":"))
         eod = now.replace(hour=eod_h, minute=eod_m, second=0, microsecond=0)
         options.append((eod - timedelta(minutes=self.profile.get("eod_buffer_minutes") or 0),
@@ -92,6 +112,8 @@ class GateWatchMixin:
             return "a position opened"
         if now >= w["expires_at"]:
             return w["expiry_reason"]
+        if w.get("kind") == "reversal":
+            return self._reversal_away_from_vwap(w, price)
         level = w.get("level")
         if price is not None and level:
             if w["direction"] == "CALL" and price < level:
@@ -107,6 +129,7 @@ class GateWatchMixin:
         signal. Returns False when no watch could start (deadline already
         passed) — the caller then sends the plain "blocked" push."""
         now = datetime.now(ET)
+        kind = self._watch_kind()
         score = gate_score_label(gate)
         failed = gate_failed_factors(gate)
         w = self._gate_watch
@@ -121,7 +144,7 @@ class GateWatchMixin:
                                     f"watch continues until {w['expires_at']:%H:%M} ET")
             return True
 
-        expires_at, expiry_reason = self._gate_watch_deadline(now)
+        expires_at, expiry_reason = self._gate_watch_deadline(now, kind)
         if expires_at <= now:
             return False
         if w:
@@ -130,27 +153,52 @@ class GateWatchMixin:
         level = self.orh if direction == "CALL" else self.orl
         w = {
             "id": str(_uuid.uuid4()), "strategy_id": self.strategy_id, "ticker": self.ticker,
-            "direction": direction, "trigger_price": trigger_price, "level": level, "mode": mode,
-            "score": score, "failed": failed, "summary": gate["summary"],
+            "kind": kind, "direction": direction, "trigger_price": trigger_price, "level": level,
+            "mode": mode, "score": score, "failed": failed, "summary": gate["summary"],
             "created_at": now, "expires_at": expires_at, "expiry_reason": expiry_reason, "checks": 0,
+            "trigger": True if kind == "reversal" else None,
         }
+        if kind == "reversal":
+            vwap = self._live_session_vwap()
+            w["vwap_gap"] = self._vwap_gap(direction, trigger_price, vwap)
+        row = {
+            "id": w["id"], "strategy_id": self.strategy_id, "ticker": self.ticker,
+            "direction": direction, "trigger_price": trigger_price, "level": level,
+            "gate_mode": mode, "failed_factors": failed, "summary": gate["summary"],
+            "expires_at": expires_at.isoformat(), "expiry_reason": expiry_reason,
+        }
+        if kind == "reversal":
+            row["kind"] = "reversal"   # breakout rows rely on the column default
         try:
-            self.logger.create_gate_watch({
-                "id": w["id"], "strategy_id": self.strategy_id, "ticker": self.ticker,
-                "direction": direction, "trigger_price": trigger_price, "level": level,
-                "gate_mode": mode, "failed_factors": failed, "summary": gate["summary"],
-                "expires_at": expires_at.isoformat(), "expiry_reason": expiry_reason,
-            })
+            self.logger.create_gate_watch(row)
         except Exception:
             # In-memory watch still runs; only restart-survival is lost.
             logger.error("[GateWatch] persist failed for %s %s", self.ticker, direction, exc_info=True)
         self._gate_watch = w
         self.debug.emit("WARN", f"Entry blocked — technicals gate [{mode}] {score}: {gate['summary']} "
-                                f"— watching, re-checking each 1-min close until "
-                                f"{expires_at:%H:%M} ET ({expiry_reason})")
+                                f"— watching{' reversal' if kind == 'reversal' else ''}, re-checking "
+                                f"each 1-min close until {expires_at:%H:%M} ET ({expiry_reason})")
         self.notifier.notify_gate_watch_started(
-            self.ticker, self.strategy_name or self.profile_key, direction, gate["summary"], expires_at)
+            self.ticker, self.strategy_name or self.profile_key, direction, gate["summary"], expires_at,
+            kind=kind)
         return True
+
+    @staticmethod
+    def _vwap_gap(direction: str, price: Optional[float], vwap: Optional[float]) -> Optional[float]:
+        """How far price sits on the WRONG side of VWAP for `direction`
+        (positive = wrong side; ≤ 0 = aligned). None without both inputs."""
+        if price is None or vwap is None:
+            return None
+        return (vwap - price) if direction == "CALL" else (price - vwap)
+
+    def _reversal_away_from_vwap(self, w: dict, price: Optional[float]) -> Optional[str]:
+        start = w.get("vwap_gap")
+        if price is None or start is None or start <= 0:
+            return None
+        gap = self._vwap_gap(w["direction"], price, self._live_session_vwap())
+        if gap is not None and gap > start:
+            return "price moved away from VWAP instead of toward it"
+        return None
 
     def _end_gate_watch(self, status: str, reason: str, notify: bool = True) -> None:
         w = getattr(self, "_gate_watch", None)
@@ -163,7 +211,8 @@ class GateWatchMixin:
             self.debug.emit("WARN", f"Gate watch {status} — {w['ticker']} {w['direction']}: {reason}")
             if notify:
                 self.notifier.notify_gate_watch_ended(
-                    w["ticker"], self.strategy_name or self.profile_key, w["direction"], reason)
+                    w["ticker"], self.strategy_name or self.profile_key, w["direction"], reason,
+                    kind=w.get("kind", "breakout"))
 
     def _persist_gate_watch(self, w: dict, patch: dict) -> None:
         try:
@@ -176,8 +225,9 @@ class GateWatchMixin:
     def _on_bar_gate_watch(self, close: float) -> None:
         """on_bar hook (hub thread). Cheap end-condition check under the lock,
         then the gate re-evaluation goes to the worker pool."""
-        if not getattr(self, "_gate_watch", None):
-            return
+        w = getattr(self, "_gate_watch", None)
+        if not w or w.get("kind") == "reversal":
+            return  # a reversal watch re-checks on the scorer's status instead
         with self._tick_lock:
             w = self._gate_watch
             if not w:
@@ -199,7 +249,45 @@ class GateWatchMixin:
             self._gate_watch_inflight = False
             raise
 
-    def _recheck_gate_watch(self, watch_id: str, price: float) -> None:
+    def _on_reversal_status(self, status: dict) -> None:
+        """Hub callback (OrbService loop thread), once per scored bar while
+        the reversal episode is live, and once when it ends."""
+        w = getattr(self, "_gate_watch", None)
+        if not w or w.get("kind") != "reversal":
+            return
+        with self._tick_lock:
+            w = self._gate_watch
+            if not w or w.get("kind") != "reversal":
+                return
+            if not status or not status.get("active"):
+                self._end_gate_watch("expired", f"reversal setup ended — "
+                                                f"{(status or {}).get('reason') or 'scorer reset'}")
+                return
+            if status.get("direction") and status["direction"] != w["direction"]:
+                self._end_gate_watch("expired", f"the scorer is now tracking a {status['direction']} reversal")
+                return
+            price = status.get("close")
+            reason = self._gate_watch_end_reason(price, datetime.now(ET))
+            if reason:
+                self._end_gate_watch("expired", reason)
+                return
+            if w.get("trigger") != bool(status.get("trigger")):
+                w["trigger"] = bool(status.get("trigger"))
+                self.debug.emit("INFO", f"Reversal watch {w['direction']} — reversal trigger "
+                                        f"{'present' if w['trigger'] else 'not present'} "
+                                        f"(score {status.get('score')}/{status.get('threshold')})")
+            if (self._gate_watch_inflight or self._pending_confirmation is not None
+                    or not self.config.get("active", True) or self._session_halted or price is None):
+                return
+            self._gate_watch_inflight = True
+            watch_id = w["id"]
+        try:
+            _WATCH_EXECUTOR.submit(self._recheck_gate_watch, watch_id, price, bool(status.get("trigger")))
+        except Exception:
+            self._gate_watch_inflight = False
+            raise
+
+    def _recheck_gate_watch(self, watch_id: str, price: float, trigger: Optional[bool] = None) -> None:
         try:
             w = self._gate_watch
             if not w or w["id"] != watch_id:
@@ -227,6 +315,7 @@ class GateWatchMixin:
                 w["checks"] += 1
                 score = gate_score_label(gate)
                 if not ok:
+                    w["gate_ok"] = False
                     if score != w["score"]:
                         w.update(score=score, failed=gate_failed_factors(gate), summary=gate["summary"])
                         self.debug.emit("INFO", f"Gate watch {w['direction']} — now {score}: {gate['summary']}")
@@ -235,16 +324,33 @@ class GateWatchMixin:
                 if (self._pending_confirmation is not None or not self.config.get("active", True)
                         or self._session_halted):
                     return
+                kind = w.get("kind", "breakout")
+                if kind == "reversal" and not trigger:
+                    # VWAP aligned without the reversal trigger is a breakdown,
+                    # not a reversal — keep watching.
+                    if not w.get("gate_ok"):
+                        w["gate_ok"] = True
+                        self.debug.emit("INFO", f"Reversal watch {w['direction']} — gate passes but the "
+                                                f"reversal trigger isn't present; not entering")
+                    return
                 direction = w["direction"]
                 self._end_gate_watch("confirmed", f"gate now {score}")
-                self.debug.emit("SUCCESS", f"Watch confirmed — {self.ticker} {direction} gate now {score} "
-                                           f"@ {price:.2f} — running entry")
+                self.debug.emit("SUCCESS", f"Watch confirmed — {self.ticker} {direction}"
+                                           f"{' reversal, VWAP aligned' if kind == 'reversal' else f' gate now {score}'}"
+                                           f" @ {price:.2f} — running entry")
                 self.notifier.notify_gate_watch_confirmed(
                     self.ticker, self.strategy_name or self.profile_key, direction, score,
-                    confirm_first=bool(needs_confirm or self.confirm_entry))
+                    confirm_first=bool(needs_confirm or self.confirm_entry), kind=kind)
                 # The gate just passed — hand its verdict to _enter_trade so it
                 # doesn't re-run (and can't loop back into a new watch).
-                self._enter_trade(direction, price, gate_result=bool(needs_confirm))
+                if kind == "reversal":
+                    self._reversal_entry_in_progress = True
+                    try:
+                        self._enter_trade(direction, price, gate_result=bool(needs_confirm))
+                    finally:
+                        self._reversal_entry_in_progress = False
+                else:
+                    self._enter_trade(direction, price, gate_result=bool(needs_confirm))
         except Exception:
             logger.error("[GateWatch] re-check failed for %s", self.ticker, exc_info=True)
         finally:
@@ -289,6 +395,7 @@ class GateWatchMixin:
             except Exception:
                 created = expires = None
             if (live is None and created and expires and created.date() == now.date() and expires > now
+                    and (row.get("kind") or "breakout") == "breakout"
                     and gate_cfg.get("enabled") and self._gate_watch_eligible(gate_cfg)):
                 live = (row, created, expires)
                 continue
@@ -302,7 +409,7 @@ class GateWatchMixin:
         row, created, expires = live
         self._gate_watch = {
             "id": row["id"], "strategy_id": self.strategy_id, "ticker": self.ticker,
-            "direction": row["direction"], "trigger_price": float(row["trigger_price"]),
+            "kind": "breakout", "trigger": None, "direction": row["direction"], "trigger_price": float(row["trigger_price"]),
             "level": self.orh if row["direction"] == "CALL" else self.orl,
             "mode": row.get("gate_mode") or "daily", "score": "?", "failed": row.get("failed_factors") or [],
             "summary": row.get("summary") or "", "created_at": created, "expires_at": expires,
@@ -317,6 +424,8 @@ class GateWatchMixin:
             return None
         return {
             "id": w["id"], "strategy_id": w["strategy_id"], "ticker": w["ticker"],
+            "kind": w.get("kind", "breakout"), "reversal_trigger": w.get("trigger"),
+            "gate_ok": bool(w.get("gate_ok")),
             "direction": w["direction"], "trigger_price": w["trigger_price"], "level": w["level"],
             "mode": w["mode"], "score": w["score"], "failed": w["failed"], "summary": w["summary"],
             "created_at": w["created_at"].isoformat(), "expires_at": w["expires_at"].isoformat(),

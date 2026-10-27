@@ -115,11 +115,13 @@ def test_gate_without_watch_key_behaves_as_before(clock, no_contract):
     assert eng._check_technicals_gate.call_args.kwargs["notify"] is True
 
 
-def test_reversal_never_watches(clock, no_contract):
+def test_reversal_block_gets_a_reversal_watch_not_a_breakout_one(clock, no_contract):
+    # REVERSAL watches are their own kind (test_reversal_watch.py); the scorer
+    # is still told about the decline so it keeps scoring.
     eng = _engine(profile="REVERSAL")
     eng._reversal_entry_in_progress = True
     _block(eng)
-    assert eng.gate_watch_public() is None
+    assert eng.gate_watch_public()["kind"] == "reversal"
     eng._hub.publish_reversal_declined.assert_called_once_with("SPY", "CALL")
 
 

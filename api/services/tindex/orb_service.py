@@ -1011,6 +1011,9 @@ class OrbService:
         state["threshold"] = threshold
 
         fire = effective_score >= threshold and cleared_boundary_buffer
+        # The reversal trigger as defined above, before the decline cooldown —
+        # what a reversal watch (gate_watch.py) requires at re-check.
+        state["trigger"] = fire
         # A reversal the gate declined re-opened under a cooldown — keep
         # scoring, but no re-fire until it has passed.
         if fire and in_cooldown(state, self.get_current_et_time()):
@@ -1028,6 +1031,23 @@ class OrbService:
                         f"{session_vwap:.2f}" if session_vwap else "n/a", sorted(signals_hit))
         return {"score": effective_score, "signals": list(signals_hit), "fire": fire,
                 "threshold": threshold}
+
+    def _publish_reversal_status(self, ticker: str, price: float, end_reason: "str | None") -> None:
+        """Live scorer verdict for the bar just scored → reversal watches."""
+        try:
+            rev = self._rev_state.get(ticker)
+            if end_reason or rev is None:
+                status = {"active": False, "reason": end_reason or "the reversal episode ended"}
+            else:
+                status = {
+                    "active": True,
+                    "direction": "PUT" if rev["direction"] == "CALL" else "CALL",
+                    "score": rev.get("score", 0), "threshold": rev.get("threshold"),
+                    "trigger": bool(rev.get("trigger")), "close": price,
+                }
+            self._hub.publish_reversal_status(ticker, status)
+        except Exception:
+            logger.exception("[REV] %s reversal status publish failed", ticker)
 
     def _on_reversal_declined(self, ticker: str, direction: str) -> None:
         """Hub callback: an engine's technicals gate declined the reversal it
@@ -1377,7 +1397,9 @@ class OrbService:
             
             # PRIORITY 2: Reversal scoring — runs every bar once a breakout was
             # confirmed (rev_state is populated by _wait_for_confirmation).
-            if ticker in self._rev_state and not self._rev_state[ticker].get("fired"):
+            rev_scored = ticker in self._rev_state and not self._rev_state[ticker].get("fired")
+            rev_end_reason = None
+            if rev_scored:
                 rev = self._rev_state[ticker]
                 original_direction = rev["direction"]
 
@@ -1390,6 +1412,8 @@ class OrbService:
                     rev["worst_wrong_close"] = None
                     rev["prev_wrong_close"]  = None
                     rev["consec_recovery"]   = 0
+                    rev["trigger"] = False
+                    rev_end_reason = "price re-broke the ORB high — the original breakout resumed"
                     logger.debug("[REV] %s price re-broke above ORH — reversal state reset", ticker)
                 elif original_direction == "PUT" and current_price < float(orb_low):
                     rev["signals_hit"].clear()
@@ -1398,6 +1422,8 @@ class OrbService:
                     rev["worst_wrong_close"] = None
                     rev["prev_wrong_close"]  = None
                     rev["consec_recovery"]   = 0
+                    rev["trigger"] = False
+                    rev_end_reason = "price re-broke the ORB low — the original breakout resumed"
                     logger.debug("[REV] %s price re-broke below ORL — reversal state reset", ticker)
                 else:
                     result = self._score_reversal(
@@ -1467,6 +1493,8 @@ class OrbService:
                             logger.info("[REV] %s reversal re-opened after gate decline "
                                         "(cooldown until %s)", ticker,
                                         self._rev_state[ticker]["cooldown_until"])
+            if rev_scored:
+                self._publish_reversal_status(ticker, current_price, rev_end_reason)
     
     def _reset_side_state(self, ticker: str, side: str) -> None:
         """Reset one side (high/low) of the retest state machine back to UNBROKEN."""
@@ -1808,6 +1836,7 @@ class OrbService:
             if ticker in self._rev_state:
                 logger.debug("Clearing reversal scoring state for %s due to new breakout", ticker)
                 del self._rev_state[ticker]
+                self._hub.publish_reversal_status(ticker, {"active": False, "reason": "a new breakout started"})
             self._rev_last_fired.pop(ticker, None)
             self._rev_declined.discard(ticker)
             

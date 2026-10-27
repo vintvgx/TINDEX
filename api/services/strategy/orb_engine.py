@@ -231,12 +231,14 @@ class ORBEngine(GateWatchMixin):
                 self._hub.unsubscribe(self._subscribed_ticker, self._on_retest_event)
                 if self._subscription_type == "reversal":
                     self._hub.unsubscribe(self._subscribed_ticker, self.on_reversal_confirmed)
+                    self._hub.unsubscribe(self._subscribed_ticker, self._on_reversal_status)
                 else:
                     self._hub.unsubscribe(self._subscribed_ticker, self.on_breakout_confirmed)
             self._hub.subscribe_bar(self.ticker, self.on_bar)
             self._hub.subscribe_retest_events(self.ticker, self._on_retest_event)
             if is_reversal_profile:
                 self._hub.subscribe_reversal(self.ticker, self.on_reversal_confirmed)
+                self._hub.subscribe_reversal_status(self.ticker, self._on_reversal_status)
             else:
                 self._hub.subscribe_breakout(self.ticker, self.on_breakout_confirmed)
             self._subscribed_ticker = self.ticker
@@ -1027,6 +1029,17 @@ class ORBEngine(GateWatchMixin):
             return "daily"
         return mode
 
+    def _live_session_vwap(self) -> Optional[float]:
+        """OrbService's running session VWAP for today (hub status), the one
+        the technicals gate judges against. None if unavailable."""
+        try:
+            status = self._hub.get_status(self.ticker)
+            if status and status.session_date == datetime.now(ET).date() and status.vwap:
+                return float(status.vwap)
+        except Exception:
+            pass
+        return None
+
     def _check_technicals_gate(self, direction: str, trigger_price: float, required: list,
                                mode: str = "daily", notify: bool = True,
                                quiet: bool = False) -> tuple[bool, bool, Optional[dict]]:
@@ -1046,13 +1059,7 @@ class ORBEngine(GateWatchMixin):
         """
         from services.entry_check_service import evaluate_gate
 
-        vwap = None
-        try:
-            status = self._hub.get_status(self.ticker)
-            if status and status.session_date == datetime.now(ET).date() and status.vwap:
-                vwap = float(status.vwap)
-        except Exception:
-            pass
+        vwap = self._live_session_vwap()
 
         intraday_closes = None
         if "trend_intraday" in required or mode != "daily":
@@ -1187,10 +1194,11 @@ class ORBEngine(GateWatchMixin):
                 notify=not watch)
             if not gate_ok:
                 # A blocked REVERSAL entry tells the scorer, which un-latches
-                # with a cooldown so it may fire again later this session.
+                # with a cooldown so it may fire again later this session —
+                # and keeps scoring, which a reversal watch re-checks against.
                 if getattr(self, "_reversal_entry_in_progress", False):
                     self._hub.publish_reversal_declined(self.ticker, direction)
-                elif watch and gate is not None and not self._start_gate_watch(
+                if watch and gate is not None and not self._start_gate_watch(
                         direction, trigger_price, gate, gate_mode):
                     # Too late in the day to watch — the plain block push.
                     self.notifier.notify_entry_blocked_technicals(
