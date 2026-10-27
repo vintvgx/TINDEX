@@ -20,14 +20,18 @@ export const GATE_MODES: { key: TechnicalsGateMode; label: string; note: string 
 
 export const NEW_GATE_MODE: TechnicalsGateMode = 'and';
 
-export function gateModeOf(gate: TechnicalsGate | null | undefined): TechnicalsGateMode {
+export function gateModeOf(gate: TechnicalsGate | null | undefined, profile?: ProfileKey | string): TechnicalsGateMode {
   const m = gate?.mode;
+  // REVERSAL keeps its binary VWAP gate — a saved composite mode is its
+  // effective daily mode, never Score. Normalizing here means every
+  // display (and every save flowing through an editor) shows daily.
+  if (profile === 'REVERSAL' && m === 'composite') return 'daily';
   return m === 'intraday' || m === 'and' || m === 'composite' ? m : 'daily';
 }
 
 /** REVERSAL keeps its binary VWAP gate — the composite score is for breakouts. */
-export function gateModesFor(profile: ProfileKey | string | undefined, current?: TechnicalsGateMode) {
-  if (profile !== 'REVERSAL' || current === 'composite') return GATE_MODES;
+export function gateModesFor(profile: ProfileKey | string | undefined) {
+  if (profile !== 'REVERSAL') return GATE_MODES;
   return GATE_MODES.filter(m => m.key !== 'composite');
 }
 
@@ -47,7 +51,7 @@ export function GateModePicker({
   /** Override the option list (e.g. the chart sheet hides Score unless active). */
   modes?: typeof GATE_MODES;
 }) {
-  const options = modes ?? gateModesFor(profile, value);
+  const options = modes ?? gateModesFor(profile);
   const active = '#22c55e';
   return (
     <View style={{ opacity: disabled ? 0.5 : 1 }}>

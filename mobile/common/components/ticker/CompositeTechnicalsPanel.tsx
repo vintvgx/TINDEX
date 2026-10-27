@@ -109,6 +109,7 @@ export function CompositeTechnicalsPanel({ check, colors, onReviewEntry }: {
         strategies={strategies}
         strategy={strategy}
         loading={configs.isLoading}
+        loadFailed={configs.isError}
         onSelectStrategy={setStrategyId}
         colors={colors}
       />
@@ -156,10 +157,12 @@ function ScoreBar({ comp, colors }: { comp: CompositeScore; colors: any }) {
  * strategy's technicals_gate.mode (the engine hot-reloads). Score only
  * appears when the strategy already uses it — it's set in the editor.
  */
-function GateModeSection({ strategies, strategy, loading, onSelectStrategy, colors }: {
+function GateModeSection({ strategies, strategy, loading, loadFailed, onSelectStrategy, colors }: {
   strategies: StrategyConfig[];
   strategy: StrategyConfig | null;
   loading: boolean;
+  /** The strategies query failed — distinct from loading and from a successful empty result. */
+  loadFailed?: boolean;
   onSelectStrategy: (id: string) => void;
   colors: any;
 }) {
@@ -167,7 +170,7 @@ function GateModeSection({ strategies, strategy, loading, onSelectStrategy, colo
   const toast = useToast();
   const muted = colors.textSecondary;
   const gate = strategy?.technicals_gate ?? null;
-  const mode = gateModeOf(gate);
+  const mode = gateModeOf(gate, strategy?.profile);
 
   const setMode = (m: TechnicalsGateMode) => {
     if (!strategy) return;
@@ -217,8 +220,12 @@ function GateModeSection({ strategies, strategy, loading, onSelectStrategy, colo
           )}
         </>
       ) : (
-        <Text style={[s.gateWarn, { color: muted }]}>
-          {loading ? 'Loading strategies…' : 'No strategy trades this ticker — pick a gate mode when you create one.'}
+        <Text style={[s.gateWarn, { color: loadFailed ? colors.error : muted }]}>
+          {loading
+            ? 'Loading strategies…'
+            : loadFailed
+              ? 'Couldn’t load strategies — check your connection and try again.'
+              : 'No strategy trades this ticker — pick a gate mode when you create one.'}
         </Text>
       )}
     </View>

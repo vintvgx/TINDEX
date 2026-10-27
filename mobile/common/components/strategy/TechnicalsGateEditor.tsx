@@ -40,7 +40,7 @@ interface Props {
 export function TechnicalsGateEditor({ gate, profile, profileName, onChange, colors }: Props) {
   const enabled = !!gate?.enabled;
   const required = gate?.required ?? [];
-  const mode = gateModeOf(gate);
+  const mode = gateModeOf(gate, profile);
   const isComposite = mode === 'composite';
   // Spread so a gate saved without `mode`/`watch` keeps behaving as before
   // on every edit; only a brand-new gate gets NEW_GATE_MODE and watching.
@@ -88,7 +88,7 @@ export function TechnicalsGateEditor({ gate, profile, profileName, onChange, col
           <Text style={[s.modeLabel, { color: muted }]}>Gate Mode</Text>
           <GateModePicker
             value={mode}
-            onChange={m => onChange({ ...base, enabled: true, required, mode: m })}
+            onChange={m => onChange({ ...base, enabled: true, required, mode: isReversal && m === 'composite' ? 'daily' : m })}
             profile={profile}
             colors={colors}
           />

@@ -142,10 +142,10 @@ export function StrategyDetailModal({ visible, config, profiles, colors, onClose
               label="Technicals Gate"
               value={(!config.technicals_gate?.enabled
                 ? 'Off'
-                : gateModeOf(config.technicals_gate) === 'composite'
+                : gateModeOf(config.technicals_gate, config.profile) === 'composite'
                   ? 'Score (composite)'
                   : config.technicals_gate.required.length
-                    ? `${gateModeLabel(gateModeOf(config.technicals_gate))} · ${config.technicals_gate.required.map(k => TECHNICALS_FACTORS.find(f => f.key === k)?.label ?? k).join(' + ')}`
+                    ? `${gateModeLabel(gateModeOf(config.technicals_gate, config.profile))} · ${config.technicals_gate.required.map(k => TECHNICALS_FACTORS.find(f => f.key === k)?.label ?? k).join(' + ')}`
                     : 'Off') + (config.technicals_gate?.enabled && config.technicals_gate.watch ? ' · Watch' : '')}
               colors={colors}
               last
