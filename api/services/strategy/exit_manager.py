@@ -28,6 +28,7 @@ from datetime import datetime, time, timedelta
 from collections import deque
 
 from services.strategy.profiles import grace_fields_for_minutes
+from services.strategy.runner_exit import RunnerInvalidation
 
 ET = pytz.timezone("America/New_York")
 logger = logging.getLogger(__name__)
@@ -279,6 +280,24 @@ class ExitManager:
         # time_stop_progress_met is persisted by the engine (exit_overrides)
         # so a restart can't re-arm the stop for a trade that already earned
         # its keep.
+        # Runner profit floor (runner_floor_pct, spec 2026-10-27): when set,
+        # TP1 moves the stop to entry × (1 + pct) instead of entry — same
+        # grace, BE guard and CLOSE_ALL as breakeven (see mark_breakeven).
+        floor_pct = profile.get("runner_floor_pct")
+        self._runner_floor_pct = float(floor_pct) if floor_pct else None
+
+        # Runner technical invalidation exit (runner_exit_enabled): post-TP1,
+        # sells ALL remaining contracts — including the last one trail and
+        # cascade preserve — once structure + a second signal break, or the
+        # breakout fails back into the range. See runner_exit.py.
+        self._runner_exit = None
+        if profile.get("runner_exit_enabled"):
+            self._runner_exit = RunnerInvalidation(
+                direction, fib_levels.get("orh"), fib_levels.get("orl"),
+                buffer_pct=profile.get("runner_exit_buffer_pct", 0.05),
+                bar=profile.get("runner_exit_bar", "1m"),
+            )   # orb_override is cleared by the engine for REVERSAL trades
+
         self._time_stop_minutes  = int(profile.get("time_stop_minutes") or 0)
         self._time_stop_progress = float(profile.get("time_stop_progress") or 0.5)
         self._peak_premium       = entry_premium
@@ -333,9 +352,22 @@ class ExitManager:
                 triggered.append(alert)
         return triggered
 
-    def mark_breakeven(self) -> None:
+    def breakeven_level(self, cap: float | None = None) -> float:
+        """Where the post-TP1 stop sits: entry, or entry × (1 + runner_floor_pct).
+        `cap` is the premium that armed it (the TP1 / partial-sell price): a
+        floor above it would sit over the current price and sell the runner
+        on the next tick, so it's held at the cap — never below entry."""
+        if not self._runner_floor_pct:
+            return self.entry_premium
+        level = self.entry_premium * (1 + self._runner_floor_pct)
+        if cap is not None:
+            level = min(level, cap)
+        return round(max(self.entry_premium, level), 4)
+
+    def mark_breakeven(self, level: float | None = None) -> None:
         """
-        Move the stop to breakeven (entry premium) and force hard-stop-only
+        Move the stop to breakeven (entry premium — or `level`, default
+        breakeven_level(), which honors runner_floor_pct) and force hard-stop-only
         treatment for whatever's left of this position — same event whether
         it's triggered by TP1 auto-firing (see the TP1 branch in evaluate())
         or a manual partial sell (see ORBEngine.submit_manual_exit()): once
@@ -353,7 +385,7 @@ class ExitManager:
         self._be_guard = self.hard_stop if self.hard_stop and self.hard_stop < self.entry_premium else None
         self._be_grace_start = None
         self.be_stop_active = True
-        self.hard_stop      = self.entry_premium
+        self.hard_stop      = level if level is not None else self.breakeven_level()
         self._log_decision("BREAKEVEN_ARMED", stop=self.hard_stop, be_guard=self._be_guard,
                            be_grace_seconds=self._be_grace_seconds)
         self._sl_grace_active    = False
@@ -399,7 +431,9 @@ class ExitManager:
             if self._sl_ticks < self._sl_ticks_needed:
                 return self._action("HOLD", 0, "SL_CONFIRMING")
 
-            reason = "BREAKEVEN_STOP" if self.be_stop_active else "HARD_STOP"
+            reason = ("HARD_STOP" if not self.be_stop_active
+                      else "RUNNER_FLOOR_STOP" if self.hard_stop > self.entry_premium + 1e-9
+                      else "BREAKEVEN_STOP")
 
             # Post-TP1 breakeven grace — a fixed window from the first breach;
             # at its end, still at/below breakeven → sell. The BE guard (old
@@ -515,7 +549,7 @@ class ExitManager:
                 # "none" leaves the runner on its original pre-TP1 hard stop —
                 # no BE floor, no trail. It only exits via TP2/cascade/EOD/manual.
                 if self._runner_mode != "none":
-                    self.mark_breakeven()
+                    self.mark_breakeven(self.breakeven_level(cap=current_option_price))
                 if self._runner_mode == "trail":
                     self.runner_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
                 # tp1_qty override (see apply_overrides) replaces the
@@ -584,10 +618,14 @@ class ExitManager:
                     self._trail_breach_start = datetime.now(ET)
                 elapsed = (datetime.now(ET) - self._trail_breach_start).total_seconds()
                 if elapsed < self._trail_confirm_seconds:
-                    return self._action("HOLD", 0, "RUNNER_TRAIL_CONFIRMING")
-                self._trail_breach_start = None
-                return self._action("CLOSE_PARTIAL", 1, "RUNNER_TRAIL_STOP",
-                                    current_option_price)
+                    # A fired runner exit sells everything now rather than
+                    # waiting out a confirm window that would sell only 1.
+                    if not self._runner_exit_fired():
+                        return self._action("HOLD", 0, "RUNNER_TRAIL_CONFIRMING")
+                else:
+                    self._trail_breach_start = None
+                    return self._action("CLOSE_PARTIAL", 1, "RUNNER_TRAIL_STOP",
+                                        current_option_price)
             else:
                 self._trail_breach_start = None
 
@@ -610,7 +648,39 @@ class ExitManager:
                 return self._action("CLOSE_PARTIAL", qty_cascade, "CASCADE_EXIT",
                                     current_option_price)
 
+        # Runner technical invalidation — any qty, runner phase only. Last in
+        # priority: every exit above still wins when it triggers the same tick.
+        if self._runner_exit_fired() and self.qty_remaining > 0:
+            return self._action("CLOSE_ALL", self.qty_remaining, "RUNNER_INVALIDATION",
+                                current_option_price)
+
         return self._action("HOLD", 0, "")
+
+    def _runner_exit_fired(self) -> bool:
+        return bool(self.tp1_hit and self._runner_exit is not None and self._runner_exit.fired)
+
+    @property
+    def runner_exit_needs_seed(self) -> bool:
+        return self._runner_exit is not None and not self._runner_exit.seeded
+
+    def seed_runner_bars(self, bars_1m: list) -> None:
+        """Warm the runner exit's swings/RSI with the session's bars so far."""
+        if self._runner_exit is not None and not self._runner_exit.seeded:
+            self._runner_exit.seed(bars_1m)
+
+    def on_runner_bar(self, bar, zones: list | None = None, vwap: float | None = None) -> dict | None:
+        """Feed one closed 1m underlying bar to the runner exit. Arms on the
+        first bar after TP1; returns the fire detail once, else None."""
+        rx = self._runner_exit
+        if rx is None:
+            return None
+        if self.tp1_hit:
+            rx.arm()
+        fired = rx.on_bar(bar, zones, vwap)
+        if fired:
+            self._log_decision("RUNNER_INVALIDATION_FIRED", **{k: v for k, v in fired.items() if k != "signals"},
+                               **fired["signals"])
+        return fired
 
     def _time_stop_armed(self) -> bool:
         return (self._time_stop_minutes > 0 and not self.tp1_hit and not self.time_stop_progress_met
@@ -968,6 +1038,8 @@ class ExitManager:
             # a client (EditExitsModal) pre-select the toggle to what's
             # actually in effect right now, not just the profile default.
             "runner_mode":         self._runner_mode,
+            "runner_floor_pct":    self._runner_floor_pct,
+            "runner_exit":         self._runner_exit.to_dict() if self._runner_exit else None,
             "cascade_enabled":     self._cascade_enabled,
             "cascade_down_ticks":  self._cascade_down_ticks,
             "tp1_confirm_ticks":   self._tp1_ticks,

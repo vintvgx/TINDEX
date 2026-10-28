@@ -27,6 +27,10 @@ export const DEFAULT_CUSTOM_THRESHOLDS: CustomThresholds = {
   vix_max_override:        30,
   time_stop_minutes:       0,
   time_stop_progress:      0.5,
+  runner_exit_enabled:     false,
+  runner_exit_buffer_pct:  0.05,
+  runner_exit_bar:         '1m',
+  runner_floor_pct:        null,
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -250,7 +254,7 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragSta
   const [showAdvanced, setShowAdvanced] = useState(false);
   const t = thresholds;
 
-  const patch = (key: keyof CustomThresholds, val: number | boolean | string) =>
+  const patch = (key: keyof CustomThresholds, val: number | boolean | string | null) =>
     onChange({ ...t, [key]: val });
 
   const accent      = colors.accent;
@@ -315,6 +319,14 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragSta
           onChange={v => patch('tp2_close_pct', v)}
           {...sliderProps}
         />
+      </View>
+
+      {/* ── Runner Strategy (highlighted) ── */}
+      <GroupHeader title="Runner Strategy" colors={colors} highlight />
+      <View style={[s.card, s.runnerCard, { backgroundColor: cardBg, borderColor: accent }]}>
+        <Text style={[s.toggleSub, { color: labelColor, paddingHorizontal: 14, paddingTop: 12 }]}>
+          How the contracts left after TP1 are managed and sold.
+        </Text>
         <SegmentedRow
           label="Runner Mode"
           sub="What happens to the remaining runner contract(s) after TP1"
@@ -336,6 +348,53 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragSta
             onChange={v => patch('runner_trail_pct', v)}
             {...sliderProps}
           />
+        )}
+        {(t.runner_mode ?? 'trail') !== 'none' && (
+          <StepperRow
+            label="Profit Floor"
+            value={t.runner_floor_pct ?? 0} min={0} max={1} step={0.1}
+            format={v => (v > 0 ? `+${Math.round(v * 100)}%` : 'Breakeven')}
+            onChange={v => patch('runner_floor_pct', v > 0 ? parseFloat(v.toFixed(2)) : null)}
+            accent={accent} labelColor={labelColor} textColor={textColor} borderColor={borderColor}
+          />
+        )}
+        <View style={[s.toggleRow, { borderBottomColor: borderColor }]}>
+          <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text style={[s.sliderLabel, { color: labelColor }]}>Technical Exit</Text>
+            <Text style={[s.toggleSub, { color: labelColor }]}>Sell every runner, including the last, when the trend breaks</Text>
+          </View>
+          <Switch
+            value={!!t.runner_exit_enabled}
+            onValueChange={v => patch('runner_exit_enabled', v)}
+            thumbColor={t.runner_exit_enabled ? accent : '#ccc'}
+            trackColor={{ false: trackBg, true: accent + '66' }}
+          />
+        </View>
+        {!!t.runner_exit_enabled && (
+          <>
+            <SegmentedRow
+              label="Close Bar"
+              sub="Signals are judged on closed bars of this size"
+              value={t.runner_exit_bar ?? '1m'}
+              options={[
+                { value: '1m', label: '1 min' },
+                { value: '5m', label: '5 min' },
+              ]}
+              onChange={v => patch('runner_exit_bar', v)}
+              accent={accent} trackBg={trackBg} labelColor={labelColor}
+              textColor={textColor} borderColor={borderColor}
+            />
+            <StepperRow
+              label="Buffer"
+              value={t.runner_exit_buffer_pct ?? 0.05} min={0} max={0.3} step={0.01}
+              format={v => `${v.toFixed(2)}%`}
+              onChange={v => patch('runner_exit_buffer_pct', parseFloat(v.toFixed(2)))}
+              accent={accent} labelColor={labelColor} textColor={textColor} borderColor={borderColor}
+            />
+            <Text style={[s.toggleSub, { color: labelColor, paddingHorizontal: 14, paddingVertical: 10 }]}>
+              {`After TP1: sells when a ${t.runner_exit_bar === '5m' ? '5-min' : '1-min'} close breaks the last swing low/high AND loses the nearest zone (VWAP if none), cools RSI past 60/40, or makes a lower high. A close back inside the opening range sells on its own. Levels must break by more than ${(t.runner_exit_buffer_pct ?? 0.05).toFixed(2)}%.`}
+            </Text>
+          </>
         )}
       </View>
 
@@ -446,12 +505,15 @@ export function CustomThresholdsEditor({ thresholds, onChange, colors, onDragSta
   );
 }
 
-const GroupHeader = ({ title, colors }: { title: string; colors: any }) => (
-  <Text style={[s.groupHeader, { color: colors.tabBarInactive }]}>{title.toUpperCase()}</Text>
+const GroupHeader = ({ title, colors, highlight }: { title: string; colors: any; highlight?: boolean }) => (
+  <Text style={[s.groupHeader, { color: highlight ? colors.accent : colors.tabBarInactive }]}>
+    {highlight ? `★ ${title.toUpperCase()}` : title.toUpperCase()}
+  </Text>
 );
 
 const s = StyleSheet.create({
   card:         { borderRadius: 14, borderWidth: 1, overflow: 'hidden', marginBottom: 4 },
+  runnerCard:   { borderWidth: 1.5 },
   groupHeader:  { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginTop: 14, marginBottom: 6, marginLeft: 2 },
 
   // Slider
