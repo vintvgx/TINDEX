@@ -416,7 +416,7 @@ const Metric = ({ label, value, color, colors }: {
 // ── ExitQualityCard (Stats tab) ───────────────────────────────────────────────
 
 const EXIT_BUCKETS: { key: string; label: string; reasons: string[] }[] = [
-  { key: 'target',    label: 'Target hit', reasons: ['TP1', 'TP2', 'TP2_FULL_CLOSE', 'RUNNER_TRAIL_STOP'] },
+  { key: 'target',    label: 'Target hit', reasons: ['TP1', 'TP2', 'TP2_FULL_CLOSE', 'RUNNER_TRAIL_STOP', 'RUNNER_INVALIDATION', 'RUNNER_FLOOR_STOP'] },
   { key: 'breakeven', label: 'Breakeven',  reasons: ['BREAKEVEN_STOP'] },
   { key: 'stopped',   label: 'Stopped',    reasons: ['HARD_STOP', 'HARD_STOP_FLOOR'] },
   { key: 'eod',       label: 'EOD',        reasons: ['EOD_CLOSE', 'EOD_HARD_CLOSE'] },
@@ -474,6 +474,7 @@ const EXIT_REASON_LABEL: Record<string, string> = {
   BREAKEVEN_STOP: 'Breakeven Stop', SL_CONFIRMING: 'SL Confirming', TP1: 'TP1', TP2: 'TP2',
   TP2_FULL_CLOSE: 'TP2 Full Close', RUNNER_TRAIL_STOP: 'Runner Trail Stop',
   EOD_CLOSE: 'EOD Close', EOD_HARD_CLOSE: 'EOD Hard Close', TIME_STOP: 'Time Stop',
+  RUNNER_INVALIDATION: 'Runner Invalidation', RUNNER_FLOOR_STOP: 'Runner Profit Floor',
 };
 
 /**

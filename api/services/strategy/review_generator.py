@@ -118,6 +118,10 @@ EOD_HARD_CLOSE      Position still open at hard deadline — force-closed.
 TIME_STOP           No progress toward TP1 within the strategy's time-stop window
                     (peak premium never reached the progress target) — closed
                     to stop theta bleed on a dead trade.
+RUNNER_INVALIDATION Post-TP1 runner (all contracts, incl. the last) sold on a
+                    structure break + a second signal, or a close back inside
+                    the opening range.
+RUNNER_FLOOR_STOP   Post-TP1 runner hit its profit floor (entry + runner_floor_pct).
 
 ─── Output Format ───────────────────────────────────────────────────────────
 Return ONLY the Markdown review. No preamble, no commentary outside the

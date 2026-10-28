@@ -307,6 +307,8 @@ class StrategyNotifier:
             "BREAKEVEN_STOP":     "Breakeven stop hit",
             "LOW_VOLUME_EXIT":    "Low-volume exit",
             "TIME_STOP":          "Time stop — no progress to TP1",
+            "RUNNER_INVALIDATION": "Runner exit — trend invalidated",
+            "RUNNER_FLOOR_STOP":  "Runner profit floor",
             "MANUAL_CLOSE":       "Manually closed",
             "MANUAL_EXIT":        "Manually sold",
             "FORCE_CLOSE":        "Force-closed",

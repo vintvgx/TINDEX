@@ -47,6 +47,16 @@ export interface CustomThresholds {
    *  0/undefined = off (backend exit_manager.py, TODO bfdeabc2). */
   time_stop_minutes?:      number;
   time_stop_progress?:     number;
+  /** Runner Strategy (2026-10-27): post-TP1 technical invalidation exit —
+   *  sells every remaining contract on a structure break + second signal,
+   *  or a close back inside the opening range. Off unless set. */
+  runner_exit_enabled?:    boolean;
+  /** Buffer beyond each level, in percent of the underlying (0.05 = 0.05%). */
+  runner_exit_buffer_pct?: number;
+  /** Bar size the exit judges closes on. */
+  runner_exit_bar?:        '1m' | '5m';
+  /** Post-TP1 stop at entry × (1 + pct) instead of entry. null/undefined = breakeven. */
+  runner_floor_pct?:       number | null;
 }
 
 export interface ProfileThresholds {

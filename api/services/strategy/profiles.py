@@ -693,6 +693,10 @@ CUSTOM_DEFAULTS = {
     "vix_max_override":       30,
     "time_stop_minutes":      0,      # 0 = off — see GRACE_OVERRIDE_KEYS' time-stop note
     "time_stop_progress":     0.5,
+    "runner_exit_enabled":    False,
+    "runner_exit_buffer_pct": 0.05,
+    "runner_exit_bar":        "1m",
+    "runner_floor_pct":       None,
 }
 
 _DISPLAY_NAMES = {
@@ -779,6 +783,10 @@ GRACE_OVERRIDE_KEYS = {
     # time_stop_progress of the way to TP1 within time_stop_minutes. No base
     # profile declares it (off everywhere) — it's set per strategy.
     "time_stop_minutes", "time_stop_progress",
+    # Runner Strategy (spec 2026-10-27): technical invalidation exit for the
+    # post-TP1 runner + an optional profit floor above entry. Off by default
+    # on every profile — set per strategy.
+    "runner_exit_enabled", "runner_exit_buffer_pct", "runner_exit_bar", "runner_floor_pct",
 }
 
 

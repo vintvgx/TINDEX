@@ -134,8 +134,10 @@ EOD_CLOSE_TIMES = {
 # against an adverse move, so it's worth trying. Options can move $0.05-$0.10
 # in seconds even on a liquid underlying, so a plain market sell on a TP hit
 # or a manual exit can leave real money on the table.
-# TIME_STOP is a dead trade, not a breakdown — worth up to 10s seeking the bid.
-PRICE_SEEKING_REASONS = frozenset({"TP1", "TP2", "TP2_FULL_CLOSE", "MANUAL_EXIT", "TIME_STOP"})
+# TIME_STOP is deliberately NOT here: it must close the whole position, and a
+# priced exit can't sell contracts reserved by resting ladder sells. The
+# protective path cancels the ladder first, then sells everything.
+PRICE_SEEKING_REASONS = frozenset({"TP1", "TP2", "TP2_FULL_CLOSE", "MANUAL_EXIT"})
 PRICE_SEEK_SAMPLE_WINDOW_SEC = 3.0   # total time spent sampling the bid
 PRICE_SEEK_MIN_SAMPLES       = 4     # bid samples taken across that window
 PRICE_SEEK_TOTAL_BUDGET_SEC  = 10.0  # ceiling on how long we'll wait for a fill
@@ -1878,7 +1880,9 @@ class ORBEngine(GateWatchMixin):
                 self.exit_manager._be_guard = float(pre_stop)
             elif profile.get("max_loss_pct", 1.0) < 1.0:
                 self.exit_manager._be_guard = self.exit_manager.entry_premium * (1 - profile["max_loss_pct"])
-            self.exit_manager.hard_stop = self.exit_manager.entry_premium
+            tp1_fill = row.get("tp1_premium")
+            self.exit_manager.hard_stop = self.exit_manager.breakeven_level(
+                cap=float(tp1_fill) if tp1_fill is not None else self.exit_manager.tp1)
         elif row.get("hard_stop_price") is not None:
             self.exit_manager.hard_stop = float(row["hard_stop_price"])
         if row.get("tp1_price") is not None:
@@ -3015,8 +3019,9 @@ class ORBEngine(GateWatchMixin):
         # manual sell bypasses evaluate() entirely, so this was the one path
         # that never armed breakeven at all.
         if not closing_all and exit_premium > entry_premium and self.exit_manager:
-            if self.exit_manager.hard_stop < entry_premium:
-                self.exit_manager.hard_stop = entry_premium
+            be_level = self.exit_manager.breakeven_level(cap=exit_premium)
+            if self.exit_manager.hard_stop < be_level:
+                self.exit_manager.hard_stop = be_level
                 self.exit_manager.be_stop_active = True
 
         self._active_trade_pnl     += pnl
@@ -3368,7 +3373,8 @@ class ORBEngine(GateWatchMixin):
             # A manual partial sell banks profit (or cuts size) same as TP1
             # does — the remainder should be protected at breakeven with no
             # grace/timer, not left sitting on the original pre-sale stop.
-            self.exit_manager.mark_breakeven()
+            self.exit_manager.mark_breakeven(
+                self.exit_manager.breakeven_level(cap=result.get("avg_fill_price")))
             # mark_breakeven() clears any in-flight grace countdown — clear
             # the persisted start too so a restart can't resurrect it.
             if self.active_trade_id:
@@ -3725,6 +3731,63 @@ class ORBEngine(GateWatchMixin):
         except Exception:
             return None
 
+    # ── Runner technical invalidation exit ─────────────────────────────────────
+
+    _RUNNER_ZONES_MAX_AGE_SEC = 60
+
+    def _feed_runner_exit(self, bar: OrbBar) -> None:
+        """Bar-cadence feed for ExitManager's runner exit (runner_exit_enabled).
+        Seeds swings/RSI from the hub's session bars on first use (the
+        current bar is already the hub buffer's last entry), then hands each
+        closed bar over with the nearest zones (cached, refreshed off-thread —
+        zone_engine can block on a fetch) and the live session VWAP. The sell
+        itself happens on the next evaluate() tick, through the protective
+        close path (RUNNER_INVALIDATION is not a price-seeking reason)."""
+        em = self.exit_manager
+        if getattr(em, "_runner_exit", None) is None:
+            return
+        try:
+            if em.runner_exit_needs_seed:
+                if self.profile_key == "REVERSAL":
+                    em._runner_exit.orb_override = False   # reversal levels are phase 2
+                recent = self._hub.get_recent_bars(self.ticker)
+                today = datetime.now(ET).date()
+                em.seed_runner_bars([b for b in recent[:-1]
+                                     if b is not bar and getattr(b, "ts", None) and b.ts.date() == today])
+            if not em.tp1_hit:
+                em.on_runner_bar(bar)   # keeps history warm; inert pre-TP1
+                return
+            fired = em.on_runner_bar(bar, self._runner_zones(), self._live_session_vwap())
+            if fired:
+                self.debug.emit("WARN", f"Runner invalidation ({fired['trigger']}) on {em._runner_exit.bar} "
+                                        f"close ${fired['close']:.2f} — selling remaining "
+                                        f"{em.qty_remaining} contract(s)", {"runner_exit": fired})
+        except Exception:
+            logger.error("[ORBEngine] runner exit feed failed for %s", self.ticker, exc_info=True)
+
+    def _runner_zones(self) -> list:
+        """Last fetched zone bands (support + resistance) for this ticker;
+        kicks off a background refresh when older than a minute."""
+        cache = getattr(self, "_runner_zone_cache", None)
+        age = time.time() - cache[0] if cache else None
+        if (age is None or age > self._RUNNER_ZONES_MAX_AGE_SEC) and not getattr(self, "_runner_zone_inflight", False):
+            self._runner_zone_inflight = True
+
+            def _refresh():
+                try:
+                    from services.strategy.zone_engine import zones as _zones
+                    z = _zones(self.ticker)
+                    if not z.get("error"):
+                        self._runner_zone_cache = (time.time(), list(z.get("support") or []) +
+                                                   list(z.get("resistance") or []))
+                except Exception:
+                    logger.warning("[ORBEngine] runner zones refresh failed for %s", self.ticker, exc_info=True)
+                finally:
+                    self._runner_zone_inflight = False
+
+            threading.Thread(target=_refresh, daemon=True, name=f"RunnerZones-{self.ticker}").start()
+        return cache[1] if cache else []
+
     def on_bar(self, bar: OrbBar):
         """
         Hub callback: a new underlying bar arrived for this ticker.
@@ -3750,6 +3813,7 @@ class ORBEngine(GateWatchMixin):
         if self.trade_taken and self.exit_manager:
             bar_open = bar.open if bar.open is not None else bar.close
             self.exit_manager.on_underlying_bar(bar_open, bar.close)
+            self._feed_runner_exit(bar)
 
         # Only act once the ORB is established and the session isn't skipped.
         # getattr guards the brief __init__ window before _reset_session_state runs.

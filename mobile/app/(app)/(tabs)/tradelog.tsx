@@ -301,6 +301,8 @@ const EXIT_REASON_LABELS: Record<string, string> = {
   CONSOLIDATION:     'Consolidation Exit',
   LOW_VOLUME_EXIT:   'Low Volume Exit',
   TIME_STOP:         'Time Stop — No Progress',
+  RUNNER_INVALIDATION: 'Runner Exit — Trend Invalidated',
+  RUNNER_FLOOR_STOP: 'Runner Profit Floor',
   MANUAL_CLOSE:      'Manually Closed',
   FORCE_CLOSE:       'Force Closed',
   MANUAL_EXIT:         'Manual Exit',
