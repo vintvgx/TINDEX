@@ -82,7 +82,7 @@ export interface OverlayLiveExtras {
 
 export const STALE_AFTER_MS = 10_000;
 export const LOW_DELTA = 0.15;
-export const REDRAW_EVERY_MS = 15_000;
+export const REDRAW_EVERY_MS = 300_000; // Kareem 2026-11-02: 5-minute line cadence; badge still redraws immediately on marker change below.
 export const REDRAW_MAX_MS = 30_000;
 
 const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
@@ -249,7 +249,7 @@ export interface DrawnFrame { frame: TradeOverlayFrame | null; at: number }
  * Brief §6 cadence: compute on every push, REDRAW only when
  *  - a state changed (TP1/TP2/BE/cascade/qty/stale/close, or a new trade),
  *  - a sim tick arrived (sim draws every 6s tick, §9.3),
- *  - 15s passed since the last draw (30s is the hard cap — implied),
+ *  - 5 minutes passed since the last draw (Kareem 2026-11-02),
  *  - or any line moved ≥ moveThreshold from where it was drawn.
  */
 export function shouldRedraw(prev: DrawnFrame | null, next: TradeOverlayFrame | null, now: number): boolean {
@@ -260,7 +260,7 @@ export function shouldRedraw(prev: DrawnFrame | null, next: TradeOverlayFrame | 
   if (next.sim) return next.simTick !== p.simTick;
   // 2026-11-02 fix: the badge is the user's live PnL readout, so a marker
   // change (PnL text or contracts remaining) redraws immediately instead
-  // of waiting out the 15s line cadence — that throttle is what left the
+  // of waiting out the line cadence — that throttle is what left the
   // badge $8 behind the position card on a fast 0DTE. Redrawing the
   // overlay layer only re-applies price lines in-page; it never re-renders
   // candles, EMAs or VWAP.

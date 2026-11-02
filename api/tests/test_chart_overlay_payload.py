@@ -164,3 +164,57 @@ def test_overlay_delta_snapshot_hit_sets_source():
     assert eng._overlay_delta == pytest.approx(-0.38)
     assert eng._overlay_delta_source == "snapshot"
     client.get_option_chain.assert_not_called()
+
+
+def test_overlay_delta_snapshot_throw_still_falls_back_to_chain():
+    # 2026-11-02 revised fix: a snapshot THROW must not skip the chain.
+    eng = _engine()
+    eng._overlay_delta = None
+    eng._overlay_delta_at = 0.0
+    eng._overlay_delta_source = None
+    eng._maybe_refresh_overlay_delta = oe.ORBEngine._maybe_refresh_overlay_delta.__get__(eng, oe.ORBEngine)
+    client = MagicMock()
+    client.get_option_snapshot.side_effect = RuntimeError("opra entitlement")
+    client.get_option_chain.return_value = {"SPY261030P00758000": _Snap(-0.42)}
+    eng.option_client = client
+    eng._maybe_refresh_overlay_delta(force=True)
+    _wait_delta(eng)
+    assert eng._overlay_delta == pytest.approx(-0.42)
+    assert eng._overlay_delta_source == "chain"
+
+
+def test_overlay_delta_refresh_cadence_is_five_minutes():
+    # Kareem 2026-11-02: delta changes minimally; 5 minutes, not 15 seconds.
+    assert oe.OVERLAY_DELTA_REFRESH_S == 300
+
+
+def test_cascade_peak_restored_from_hit_levels_after_tp2():
+    # 2026-11-02 SPY RIDER shape: 4 entered, 2 left after TP2, peak wiped
+    # by a restart. Restore must seed a peak floor so cascade can re-arm.
+    eng = _engine(qty=4)
+    em = eng.exit_manager
+    em.tp1_hit = True
+    em.tp2_hit = True
+    em.qty_remaining = 2
+    assert em._cascade_peak is None
+    # _engine() uses entry 1.19, so seed with that entry premium.
+    row = {"tp1_price": 1.378, "tp1_premium": 1.40, "tp2_price": 1.96, "tp2_premium": 2.10}
+    peak = eng._seed_restored_cascade_peak(row, [], 1.19)
+    assert peak == pytest.approx(2.10)
+    assert em._cascade_peak == pytest.approx(2.10)
+    # Trigger from the floored peak still sits above entry (banks profit).
+    assert em.cascade_trigger_level() == pytest.approx(1.645)
+    assert em.cascade_trigger_level() > 1.19
+
+
+def test_cascade_peak_not_restored_when_runner_only():
+    # Runner preservation: with only 1 contract left, cascade has nothing
+    # to trim, so no peak is seeded (and no false re-arm).
+    eng = _engine(qty=4)
+    em = eng.exit_manager
+    em.tp1_hit = True
+    em.tp2_hit = True
+    em.qty_remaining = 1
+    row = {"tp1_price": 1.378, "tp2_price": 1.96}
+    assert eng._seed_restored_cascade_peak(row, [], 1.19) is None
+    assert em._cascade_peak is None
