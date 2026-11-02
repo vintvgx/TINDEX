@@ -259,7 +259,176 @@
       layoutRefLabels();
       layoutPendingAlert();
       layoutCountdown();
+      layoutTradeMarkers();
     });
+  }
+
+  // ── Chart trade overlay (display only) ──────────────────────────────
+  // RN sends a fresh overlay at most every ~15s (or on a trade state change):
+  // up to 4 price lines (TP2/TP1/BE/SL — title carries the premium, the axis
+  // label the price) plus one marker per open trade on this ticker. Lines
+  // are built-in price lines, so candles/EMAs/VWAP never re-render for them.
+  var tradeLineDefs = [];
+  var tradePriceLines = [];
+  var tradeMarkerDefs = [];
+  var tradeMarkersEl = document.getElementById('trademarkers');
+  var TM_H = 15, TM_GAP = 4, TM_AXIS_GAP = 4;
+  var tmLayoutRetries = 0;
+
+  function tradeLineOptions(l) {
+    return {
+      price: l.price,
+      color: l.color,
+      lineWidth: l.width || 1,
+      lineStyle: l.style === 'dotted' ? LWC.LineStyle.Dotted : l.style === 'dashed' ? LWC.LineStyle.Dashed : LWC.LineStyle.Solid,
+      lineVisible: true,
+      axisLabelVisible: true,
+      axisLabelColor: l.color,
+      axisLabelTextColor: l.labelText || '#0A0B0F',
+      title: l.title || '',
+    };
+  }
+  function clearTradeLines() {
+    for (var i = 0; i < tradePriceLines.length; i++) {
+      try { mainSeries.removePriceLine(tradePriceLines[i]); } catch (e) {}
+    }
+    tradePriceLines = [];
+  }
+  function applyTradeLines() {
+    if (!mainSeries) return;
+    var sameShape = tradePriceLines.length === tradeLineDefs.length && tradePriceLines.length > 0 &&
+      tradePriceLines.every(function (pl, i) { return pl._tmKind === tradeLineDefs[i].kind; });
+    if (sameShape) {
+      // Same lines, new positions: move them in place (no remove/re-add flicker).
+      for (var i = 0; i < tradeLineDefs.length; i++) tradePriceLines[i].applyOptions(tradeLineOptions(tradeLineDefs[i]));
+    } else {
+      clearTradeLines();
+      for (var j = 0; j < tradeLineDefs.length; j++) {
+        var pl = mainSeries.createPriceLine(tradeLineOptions(tradeLineDefs[j]));
+        pl._tmKind = tradeLineDefs[j].kind;
+        tradePriceLines.push(pl);
+      }
+    }
+    mainSeries.applyOptions({ autoscaleInfoProvider: autoscaleWithRefLines });
+  }
+  function setTradeOverlay(msg) {
+    tradeLineDefs = (msg && msg.lines) || [];
+    tradeMarkerDefs = (msg && msg.markers) || [];
+    applyTradeLines();
+    renderTradeMarkers();
+    schedulePills();
+  }
+  function renderTradeMarkers() {
+    var keep = {};
+    for (var i = 0; i < tradeMarkerDefs.length; i++) {
+      var m = tradeMarkerDefs[i];
+      keep[m.key] = true;
+      var el = tradeMarkersEl.querySelector('[data-key="' + m.key + '"]');
+      var fresh = !el;
+      if (fresh) {
+        el = document.createElement('div');
+        el.className = 'tm';
+        el.setAttribute('data-key', m.key);
+        el.style.opacity = '0';
+        (function (key) {
+          el.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            post({ type: 'tradeMarkerTap', key: key });
+          });
+        })(m.key);
+        tradeMarkersEl.appendChild(el);
+      }
+      var html = '';
+      if (m.sim) html += '<span class="tm-sim">SIM</span>';
+      if (m.label) html += '<span class="tm-label"></span>';
+      html += '<span class="tm-count"></span><span class="tm-pnl"></span>';
+      if (m.stale) html += '<span class="tm-stale">STALE</span>';
+      el.innerHTML = html;
+      if (m.label) el.querySelector('.tm-label').textContent = m.label;
+      var cnt = el.querySelector('.tm-count');
+      cnt.textContent = m.count;
+      cnt.style.background = m.edge;
+      var pnl = el.querySelector('.tm-pnl');
+      pnl.textContent = m.pnlText;
+      pnl.style.color = m.toneColor;
+      el.style.borderColor = m.edge;
+      el.style.background = theme.background;
+      el.style.color = m.toneColor;
+      el.classList.toggle('other', !m.selected);
+      el._tmIndex = i;
+      if (fresh) {
+        // Place without animating until the chart has re-fit its price range
+        // to the new lines (a frame or two), then fade in and glide after.
+        el.style.transition = 'none';
+        el._tmFreshUntil = Date.now() + 250;
+      }
+    }
+    var els = tradeMarkersEl.querySelectorAll('.tm');
+    for (var k = 0; k < els.length; k++) {
+      var e = els[k];
+      if (!keep[e.getAttribute('data-key')]) {
+        e.style.opacity = '0';
+        (function (node) { setTimeout(function () { if (node.parentNode) node.parentNode.removeChild(node); }, 320); })(e);
+        e.setAttribute('data-key', '_gone');
+      }
+    }
+  }
+  // Width of a price-line title as LWC paints it (layout font, 12px), so the
+  // marker can step left past any line title sitting at its height.
+  var tmMeasureCtx = null;
+  function lineTitleWidth(title) {
+    if (!title) return 0;
+    try {
+      if (!tmMeasureCtx) tmMeasureCtx = document.createElement('canvas').getContext('2d');
+      tmMeasureCtx.font = '12px -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif';
+      return Math.ceil(tmMeasureCtx.measureText(title).width) + 12;
+    } catch (e) { return title.length * 7 + 12; }
+  }
+  function layoutTradeMarkers() {
+    if (!tradeMarkersEl) return;
+    var els = tradeMarkersEl.querySelectorAll('.tm');
+    if (!els.length) return;
+    var last = lastCandles.length ? lastCandles[lastCandles.length - 1] : null;
+    var y = (mainSeries && last) ? mainSeries.priceToCoordinate(last.c) : null;
+    var H = chartEl.clientHeight;
+    var axisW = 0;
+    try { axisW = chart.priceScale('right').width(); } catch (e) {}
+    // Before the chart's first paint there are no coordinates yet — try again
+    // next frame (bounded) instead of waiting for some later redraw.
+    if (y === null || y === undefined || !H || !axisW) {
+      if (tmLayoutRetries++ < 120) requestAnimationFrame(layoutTradeMarkers);
+      return;
+    }
+    tmLayoutRetries = 0;
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el.getAttribute('data-key') === '_gone') continue;
+      // Selected trade sits on the current price; others stack above it.
+      var top = Math.round(y - TM_H / 2 - (el._tmIndex || 0) * (TM_H + TM_GAP));
+      top = Math.max(0, Math.min(top, H - TIME_AXIS_H - TM_H));
+      // Never cover a trade line's title: step left past any at this height.
+      var right = axisW + TM_AXIS_GAP;
+      for (var j = 0; j < tradeLineDefs.length; j++) {
+        var ly = mainSeries.priceToCoordinate(tradeLineDefs[j].price);
+        if (ly === null || ly === undefined) continue;
+        if (Math.abs(ly - (top + TM_H / 2)) < TM_H) {
+          right = Math.max(right, axisW + lineTitleWidth(tradeLineDefs[j].title) + TM_AXIS_GAP);
+        }
+      }
+      el.style.top = top + 'px';
+      el.style.right = right + 'px';
+      el.style.opacity = el.classList.contains('other') ? '0.8' : '1';
+      if (el._tmFreshUntil) {
+        if (Date.now() < el._tmFreshUntil) {
+          // Still settling: re-place on the next frame without animating.
+          requestAnimationFrame(layoutTradeMarkers);
+        } else {
+          el._tmFreshUntil = 0;
+          void el.offsetWidth;        // commit the un-animated placement
+          el.style.transition = '';
+        }
+      }
+    }
   }
 
   // ── Next-candle countdown (legacy chart parity) ─────────────────────
@@ -519,6 +688,8 @@
     var saved = refLineDefs.slice();
     clearPriceLines();
     setRefLines(saved);
+    tradePriceLines = [];   // belonged to the removed series
+    applyTradeLines();
   }
 
   var refLineDefs = [];
@@ -562,6 +733,13 @@
       if (!l.fitInScale || !isFinite(l.price)) continue;
       if (l.price < r.minValue) r.minValue = l.price;
       if (l.price > r.maxValue) r.maxValue = l.price;
+    }
+    // Trade overlay lines always stay in view.
+    for (var j = 0; j < tradeLineDefs.length; j++) {
+      var t = tradeLineDefs[j];
+      if (!isFinite(t.price)) continue;
+      if (t.price < r.minValue) r.minValue = t.price;
+      if (t.price > r.maxValue) r.maxValue = t.price;
     }
     return res;
   }
@@ -1132,6 +1310,7 @@
       case 'updateBars': updateBars(msg); break;
       case 'setZones': setZones(msg); break;
       case 'setRefLines': setRefLines(msg.lines); break;
+      case 'setTradeOverlay': setTradeOverlay(msg); break;
       case 'setEmaOverlays': setEmaOverlays(msg); break;
       case 'setVwap': setVwap(msg); break;
       case 'setCountdown': setCountdown(msg); break;

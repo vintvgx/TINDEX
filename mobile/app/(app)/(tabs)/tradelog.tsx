@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect } from 'react';
 import { View, Text, ScrollView, SafeAreaView, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -75,7 +75,8 @@ export default function TradeLogScreen({ embedded = false }: Props) {
 
   // Deep-link from a notification tap (see NotificationNavigationService) —
   // consume `paper_mode` exactly once, same pattern as orb.tsx's `section`.
-  const { paper_mode: paperModeParam } = useLocalSearchParams<{ paper_mode?: string }>();
+  const { paper_mode: paperModeParam, focus_strategy: focusStrategy, focus_contract: focusContract } =
+    useLocalSearchParams<{ paper_mode?: string; focus_strategy?: string; focus_contract?: string }>();
   useFocusEffect(
     useCallback(() => {
       if (paperModeParam != null) {
@@ -91,6 +92,18 @@ export default function TradeLogScreen({ embedded = false }: Props) {
   // computed client-side AFTER the paper/live split (see TradeAnalytics.tsx),
   // so the toggle changes the actual numbers, not just which rows render.
   const { data: trades,  isLoading: tradesLoading } = useStrategyTrades({ limit: 500 });
+
+  // Arriving from the chart's trade marker: open that trade's detail card
+  // (the open row on that strategy + contract). Today's view, Log tab.
+  useEffect(() => {
+    if (!focusStrategy || !trades) return;
+    const hit = trades.find(t => t.strategy_id === focusStrategy && t.exit_time == null
+      && (!focusContract || t.contract_symbol === focusContract));
+    if (!hit) return;
+    setTab('log');
+    setRange('TODAY');
+    setExpandedId(hit.id);
+  }, [focusStrategy, focusContract, trades]);
   const { data: performance }                       = useStrategyPerformance();
   const { data: sessionStates }                     = useStrategySessionState();
   const { data: acctHistory }                       = useAlpacaAccountsHistory();

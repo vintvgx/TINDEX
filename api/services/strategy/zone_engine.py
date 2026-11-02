@@ -106,6 +106,10 @@ _ROUND_5_MAX_DIST_PCT = 0.08
 # suspicious" is exactly the kind of threshold worth being able to tune
 # without re-reading the filter's logic.
 BAD_TICK_PCT = 0.03
+# Next-bar Low within this of the prior Close counts as "snapped back"
+# to the old level — i.e. the gappy Low was an isolated spike, not a
+# level the market held. See _drop_bad_tick_bars (2026-11-01 fix).
+SNAP_BACK_PCT = 0.015
 
 _ALLOWED_TIMEFRAMES = ("5m", "15m", "30m")
 
@@ -621,33 +625,63 @@ def _drop_zero_volume_bars(ticker: str, bars, label: str):
 
 def _drop_bad_tick_bars(ticker: str, bars, label: str):
     """
-    Defense in depth beyond the zero-volume filter above: drops any bar
-    whose Low gaps more than BAD_TICK_PCT below the PRIOR bar's Close — a
-    bogus print that happens to carry nonzero volume (a thin/erroneous
-    trade print, rather than the zero-volume placeholder rows the other
-    filter catches) would otherwise sail through untouched. Checked
-    against the bar immediately before it in this same (already
-    zero-volume-filtered) series, so a dropped bar never cascades into
-    falsely flagging the next one.
+    Defense in depth beyond the zero-volume filter above. A bar is only
+    dropped when its Low is BOTH gappy (> BAD_TICK_PCT from the PRIOR
+    bar's Close) AND unconfirmed — either it carried no volume, or the
+    next bar's Low snaps back to within SNAP_BACK_PCT of that prior
+    Close. A gappy Low that the next bar confirms (its Low stays near
+    the gappy Low) is a real level, not a phantom — dropping it was the
+    2026-11-01 bug: it deleted legitimate 09:30 opening bars (PLTR
+    2026-10-29/30, VST 2026-10-28, all traded, next-bar Low still near
+    the opening Low) while the true phantoms it was built for were all
+    zero-volume extended-session placeholders (SPY 2026-10-26 16:30:
+    Low $722.19, Close $765.30, Volume 0; OXY 2026-10-26 17:00 and VST
+    2026-10-29 16:30 likewise — a lone Low spike whose Close never
+    moved). Checked against the bar immediately before it in this same
+    (already zero-volume-filtered) series, so a dropped bar never
+    cascades into falsely flagging the next one. A candidate with no
+    next bar is kept: a phantom cannot be proven from one bar alone.
 
-    Logged at WARNING — a bar with real volume that still gets dropped
-    here is a genuinely unusual event worth seeing in the server log, not
-    a routine occurrence like a thin pre-market bar.
+    Logged at WARNING only when a bar is actually dropped; a gappy
+    bar that is kept is logged at DEBUG, so a Sunday-night zone
+    refresh over old history no longer reads as ten live emergencies.
     """
     if bars is None or bars.empty or len(bars) < 2:
         return bars
     prev_close = bars["Close"].shift(1)
+    next_low = bars["Low"].shift(-1)
     gap_pct = (bars["Low"] - prev_close).abs() / prev_close
-    bad = gap_pct.fillna(0.0) > BAD_TICK_PCT  # first bar has no prev_close (NaN) — can't judge it, keep it
-    if bad.any():
-        for ts, is_bad in bad.items():
-            if is_bad:
-                logger.warning(
-                    "[zone_engine] %s %s: dropping bad tick @ %s — Low %.2f vs prior close %.2f (%.1f%% gap)",
-                    ticker, label, ts, bars.loc[ts, "Low"], prev_close.loc[ts], gap_pct.loc[ts] * 100,
-                )
-        bars = bars[~bad]
-    return bars
+    has_volume = bars["Volume"] > 0 if "Volume" in bars.columns else None
+    drop = []
+    for i, ts in enumerate(bars.index):
+        if i == 0 or prev_close.iloc[i] is None or gap_pct.iloc[i] <= BAD_TICK_PCT:
+            drop.append(False)
+            continue
+        # Zero-volume extended-session bar: no traded Low to trust.
+        if has_volume is not None and has_volume.iloc[i] == 0:
+            drop.append(True)
+            continue
+        # Traded bar: drop only if the next bar's Low snaps back to the
+        # prior Close — an isolated spike, not a level the market held.
+        if i + 1 < len(bars) and next_low.iloc[i] is not None:
+            snap = abs(next_low.iloc[i] - prev_close.iloc[i]) / prev_close.iloc[i]
+            drop.append(snap <= SNAP_BACK_PCT)
+        else:
+            drop.append(False)  # last bar: unconfirmed, keep it
+    for i, ts in enumerate(bars.index):
+        if drop[i]:
+            logger.warning(
+                "[zone_engine] %s %s: dropping bad tick @ %s — Low %.2f vs prior close %.2f (%.1f%% gap)",
+                ticker, label, ts, bars.loc[ts, "Low"], prev_close.iloc[i], gap_pct.iloc[i] * 100,
+            )
+        elif gap_pct.iloc[i] > BAD_TICK_PCT:
+            logger.debug(
+                "[zone_engine] %s %s: keeping gappy bar @ %s — Low %.2f vs prior close %.2f (%.1f%% gap), "
+                "next-bar Low %.2f confirms it as a level, not a phantom",
+                ticker, label, ts, bars.loc[ts, "Low"], prev_close.iloc[i], gap_pct.iloc[i] * 100,
+                next_low.iloc[i] if i + 1 < len(bars) else float("nan"),
+            )
+    return bars[[not d for d in drop]]
 
 
 def _fetch_history(ticker: str, timeframe: str) -> tuple:

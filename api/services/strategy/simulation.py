@@ -168,9 +168,12 @@ def _gen_profit_path(entry: float, tp1: float, tp2: float, hard_stop: float,
     return _piecewise(anchors, n)
 
 
-def _gen_loss_path(entry: float, hard_stop: float, n: int = 4) -> list[float]:
-    """Linear decline that breaches hard_stop by the final tick."""
-    return _piecewise([(0, entry), (n, hard_stop * 0.97)], n)
+def _gen_loss_path(entry: float, hard_stop: float, n: int = 4, confirm_ticks: int = 1) -> list[float]:
+    """Linear decline that breaches hard_stop by tick n, then holds below it
+    for the profile's sl_confirm_ticks so the stop actually fires (with 2+
+    confirm ticks the old 4-tick path ended still open, on SL_CONFIRMING)."""
+    path = _piecewise([(0, entry), (n, hard_stop * 0.97)], n)
+    return path + [path[-1]] * max(0, confirm_ticks - 1)
 
 
 # ── Synthetic pre-entry chart history ────────────────────────────────────────
@@ -253,6 +256,7 @@ class SimulationRunner:
         self._engine   = engine
         self._running  = False
         self._notifier = _NullNotifier() if suppress_push else engine.notifier
+        self._realized: dict[int, float] = {}   # id(ExitManager) → banked leg P&L
 
     def is_running(self) -> bool:
         return self._running
@@ -298,7 +302,8 @@ class SimulationRunner:
                 em.profile.get("tp1_confirm_ticks", 2),
             )
             if scenario == "profit"
-            else _gen_loss_path(em.entry_premium, em.hard_stop)
+            else _gen_loss_path(em.entry_premium, em.hard_stop,
+                                confirm_ticks=em.profile.get("sl_confirm_ticks", 1))
         )
 
         self._notifier.notify_entry(
@@ -345,6 +350,7 @@ class SimulationRunner:
             closing_all  = qty_to_close >= em.qty_remaining
             exit_p       = action.get("current_premium") or mid
             pnl          = (exit_p - SIM_ENTRY) * qty_to_close * 100
+            self._realized[id(em)] = self._realized.get(id(em), 0.0) + pnl
 
             if closing_all:
                 em.qty_remaining = 0
@@ -363,6 +369,9 @@ class SimulationRunner:
                         tick_num, action["reason"], qty_to_close, pnl)
 
             if closing_all or em.qty_remaining <= 0:
+                # Final push at qty 0 so clients see the close (the per-tick
+                # push above went out before this exit was evaluated).
+                self._push_ws(em, exit_p, tick_num, len(ticks), scenario, SIM_CONTRACT)
                 break
 
         self._broadcast(json.dumps({"type": "sim_complete", "scenario": scenario}))
@@ -375,7 +384,8 @@ class SimulationRunner:
         """
         # ── Phase 1: CALL ─────────────────────────────────────────────────────
         call_em = _new_em(SIM_DIRECTION, profile_key)
-        call_ticks = _gen_loss_path(call_em.entry_premium, call_em.hard_stop, n=4)
+        call_ticks = _gen_loss_path(call_em.entry_premium, call_em.hard_stop, n=4,
+                                    confirm_ticks=call_em.profile.get("sl_confirm_ticks", 1))
 
         self._notifier.notify_entry(
             ticker        = SIM_TICKER,
@@ -418,6 +428,9 @@ class SimulationRunner:
             logger.info("[Sim] Reversal CALL exit tick=%d reason=%s pnl=%.2f",
                         tick_num, action["reason"], call_pnl)
             call_em.qty_remaining = 0
+            self._realized[id(call_em)] = call_pnl
+            self._push_ws(call_em, exit_p, tick_num, len(call_ticks),
+                          "reversal", SIM_CONTRACT, sim_leg="call")
             break
 
         # Signal the reversal to connected clients before the PUT entry
@@ -476,6 +489,7 @@ class SimulationRunner:
             closing_all  = qty_to_close >= put_em.qty_remaining
             exit_p       = action.get("current_premium") or mid
             pnl          = (exit_p - SIM_ENTRY) * qty_to_close * 100
+            self._realized[id(put_em)] = self._realized.get(id(put_em), 0.0) + pnl
 
             if closing_all:
                 put_em.qty_remaining = 0
@@ -494,6 +508,8 @@ class SimulationRunner:
                         tick_num, action["reason"], qty_to_close, pnl)
 
             if closing_all or put_em.qty_remaining <= 0:
+                self._push_ws(put_em, exit_p, tick_num, len(put_ticks), "reversal", SIM_CONTRACT_PUT,
+                              sim_leg="put", call_pnl=round(call_pnl, 2))
                 break
 
         self._broadcast(json.dumps({"type": "sim_complete", "scenario": "reversal"}))
@@ -532,6 +548,13 @@ class SimulationRunner:
             "tp1_underlying":   round(_underlying_at(em.tp1, ep, direction), 2),
             "tp2_underlying":   round(_underlying_at(em.tp2, ep, direction), 2),
             "stop_underlying":  round(_underlying_at(em.hard_stop, ep, direction), 2),
+            # Chart trade overlay: banked P&L of this leg's exited contracts
+            # (pnl above is unrealized on what's left) + BE state.
+            "realized_pnl":     round(self._realized.get(id(em), 0.0), 2),
+            "be_stop_active":   em.be_stop_active,
+            "be_level":         round(em.breakeven_level(), 4),
+            "qty_entered":      em.qty,
+            "quote_age_s":      0.0,
             "sim":           True,
             "sim_tick":      tick,
             "sim_total":     total,

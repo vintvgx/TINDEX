@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator, Pressable, ScrollView,
   Text, TouchableOpacity, View,
@@ -10,9 +10,9 @@ import { useSimulationRunner } from '@/hooks/useSimulationRunner';
 import { useStrategyProfiles } from '@/hooks/queries/strategy/useStrategyProfiles';
 import type { SimScenario, SimProfileKey } from '@/hooks/mutations/strategy/useRunSimulation';
 import type { TickerHistoryData } from '@/common/types/blogPosts/ticker';
-import {
-  AdvancedPriceChart, type ChartReferenceLine, type ChartEventMarker,
-} from '@/common/components/ticker/AdvancedPriceChart';
+import { TVChart } from '@/common/components/ticker/TVChart';
+import { useTradeOverlay } from '@/hooks/useTradeOverlay';
+import type { OverlayTradeInput } from '@/lib/chartTradeOverlay';
 import { SimProfilePicker } from '@/common/components/strategy/SimProfilePicker';
 import {
   ScenarioLabel, ScenarioCard, LegBadge, TickTimeline, Stat, LevelPill, scenarioLabel,
@@ -32,9 +32,10 @@ const DEFAULT_PROFILE: SimProfileKey = 'THUNDER_CAT';
  * screen), not nested under a saved strategy config. Shares the phase/tick/
  * event-log state machine with the bottom-sheet SimulationModal via
  * useSimulationRunner, but adds: a profile picker (SimProfilePicker),
- * profile-relative scenario previews, and a live AdvancedPriceChart showing
- * candles building tick-by-tick with entry/TP1/TP2/stop reference lines and
- * markers at the exact bar each fired.
+ * profile-relative scenario previews, and a live chart (the same TVChart +
+ * trade overlay as the Charts tab) showing candles building tick-by-tick with
+ * the TP2/TP1/BE/SL overlay lines and the position marker redrawing on every
+ * sim tick — the overlay's validation path before it ever sees a live trade.
  *
  * Always passes suppress_push: true — this entry point requires no
  * pre-existing strategy, and push notifications aren't scoped to a user
@@ -105,39 +106,19 @@ export function SimulationChartScreen({ onClose }: Props) {
     onClose();
   };
 
-  // ── Chart annotations ──────────────────────────────────────────────────────
+  // ── Chart trade overlay ────────────────────────────────────────────────────
+  // The sim's price_update feeds the SAME overlay as a live trade; positions
+  // come from the payload's *_underlying fields (no delta in a sim) and it
+  // redraws on every sim tick. Keyed per leg so the reversal's CALL and PUT
+  // are two separate trades, never one merged overlay. Cleared once the run
+  // is done.
+  const overlayTrades = useMemo<OverlayTradeInput[]>(() => (
+    displayLive && phase === 'running'
+      ? [{ strategyId: `sim-run:${displayLive.sim_leg ?? 'single'}`, name: chartProfile, live: displayLive, receivedAt: 0 }]
+      : []
+  ), [displayLive, phase, chartProfile]);
+  const overlayFrame = useTradeOverlay(overlayTrades, null, true);
 
-  const referenceLines: ChartReferenceLine[] = [];
-  if (displayLive) {
-    if (displayLive.entry_underlying != null) {
-      referenceLines.push({ label: 'Entry', price: displayLive.entry_underlying, color: colors.textSecondary, dash: '2,3' });
-    }
-    if (displayLive.tp1_underlying != null) {
-      referenceLines.push({ label: 'TP1', price: displayLive.tp1_underlying, color: colors.success });
-    }
-    if (displayLive.tp2_underlying != null) {
-      referenceLines.push({ label: 'TP2', price: displayLive.tp2_underlying, color: colors.success, dash: '3,3' });
-    }
-    if (displayLive.stop_underlying != null) {
-      referenceLines.push({ label: 'Stop', price: displayLive.stop_underlying, color: colors.error });
-    }
-  }
-
-  // simResult.history's bar count is where tick 1 lands — computed straight
-  // from the (already-reactive) simResult, not a ref, so it can never lag a
-  // render behind the markers array the way a ref set in a separate effect
-  // would for one frame.
-  const initialBarCount = simResult?.history.dates.length ?? 0;
-  const eventMarkers: ChartEventMarker[] = bars
-    ? markers
-        .map(m => ({
-          index: m.tick === 0 ? initialBarCount - 1 : initialBarCount + m.tick - 1,
-          price: m.price,
-          label: m.label,
-          color: m.color,
-        }))
-        .filter(m => m.index >= 0 && m.index < bars.dates.length)
-    : [];
 
   const activeProfile = (allProfiles ?? []).find(p => p.key === chartProfile);
 
@@ -266,20 +247,24 @@ export function SimulationChartScreen({ onClose }: Props) {
                 </View>
               )}
 
-              {/* Live chart — candles build one per tick, ORB band + entry/TP/stop
-                  reference lines + markers where each event actually fired. */}
-              <View style={{ marginBottom: 14 }}>
-                <AdvancedPriceChart
-                  data={bars ?? undefined}
+              {/* Live chart — candles build one per tick, ORB band + the trade
+                  overlay (lines + position marker). SIM-flagged throughout:
+                  the underlying here is a cosmetic mapping, not a market price. */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <Text style={{ color: colors.text, fontWeight: '700', fontSize: 14 }}>IWM</Text>
+                <Text style={{ color: '#111', backgroundColor: colors.warning, fontSize: 10, fontWeight: '800', paddingHorizontal: 5, borderRadius: 4, overflow: 'hidden' }}>SIM</Text>
+                <Text style={{ color: colors.textTertiary, fontSize: 11 }}>simulated prices, not market quotes</Text>
+              </View>
+              <View style={{ marginBottom: 14, height: 280 }}>
+                <TVChart
+                  style={{ flex: 1 }}
+                  data={bars}
                   isLoading={!bars}
-                  period="1D"
-                  onPeriodChange={() => {}}
-                  positive={pnl >= 0}
-                  height={280}
                   orbRange={simResult ? { high: simResult.orb_high, low: simResult.orb_low } : null}
                   showOrbRange
-                  referenceLines={referenceLines}
-                  eventMarkers={eventMarkers}
+                  resetKey={`sim:${scenario}:${simResult?.history.dates.length ?? 0}`}
+                  mode="candle"
+                  tradeOverlay={overlayFrame}
                 />
               </View>
 

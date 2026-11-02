@@ -101,12 +101,32 @@ function main() {
   }
   #countdown .cd-price { font-weight: 700; font-size: 11px; line-height: 13px; }
   #countdown .cd-time { font-weight: 600; font-size: 10px; line-height: 12px; opacity: 0.85; }
+  /* Chart trade overlay: a compact bordered marker on the current price —
+     contracts remaining (R = runner) + the trade's total P&L. Glides to
+     each new position instead of jumping (redraws are only every ~15s). */
+  #trademarkers { position: absolute; inset: 0; z-index: 11; pointer-events: none; overflow: hidden; }
+  .tm {
+    position: absolute; display: flex; align-items: stretch; height: 15px; box-sizing: border-box;
+    border: 1px solid; border-radius: 8px; overflow: hidden; pointer-events: auto; cursor: pointer;
+    font: 700 9px/13px -apple-system, 'SF Pro Text', sans-serif; font-variant-numeric: tabular-nums;
+    white-space: nowrap; -webkit-tap-highlight-color: transparent; user-select: none;
+    transition: top 0.6s cubic-bezier(.22,.8,.24,1), right 0.3s ease, opacity 0.3s ease, border-color 0.3s ease;
+  }
+  .tm::before { content: ''; position: absolute; inset: -8px -4px; }
+  .tm span { padding: 0 5px; display: flex; align-items: center; }
+  .tm .tm-sim { background: #FF9F0A; color: #111; }
+  .tm .tm-label { font-weight: 600; opacity: 0.75; }
+  .tm .tm-count { color: #0A0B0F; }
+  .tm .tm-stale { font-weight: 600; opacity: 0.8; }
+  .tm.other { opacity: 0.8; }
+  @media (prefers-reduced-motion: reduce) { .tm { transition: none; } }
 </style>
 </head>
 <body>
 <div id="chart"></div>
 <div id="reflabels"></div>
 <div id="pills"></div>
+<div id="trademarkers"></div>
 <script>${lw}</script>
 <script>${bootstrap}</script>
 </body>

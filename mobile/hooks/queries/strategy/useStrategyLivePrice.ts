@@ -77,6 +77,20 @@ export interface LivePriceData {
   ask?: number | null;
   qty_working?: number;
   qty_available?: number;
+  // ── Chart trade overlay fields (display only — see lib/chartTradeOverlay.ts).
+  //    Absent on an older backend; every reader treats them as missing. ──
+  /** Banked P&L of this trade's exited legs; `pnl` stays unrealized-on-remaining. */
+  realized_pnl?:   number | null;
+  /** Live option delta (signed: PUT < 0), cached server-side ≤15s / 1m bar. */
+  delta?:          number | null;
+  delta_age_s?:    number | null;
+  /** Age of the option quote behind mid_price when this push was built. */
+  quote_age_s?:    number | null;
+  be_stop_active?: boolean | null;
+  /** Premium the post-TP1 stop arms at (entry, or the runner profit floor). */
+  be_level?:       number | null;
+  qty_entered?:    number | null;
+  strategy_name?:  string | null;
   // ── Simulation-only fields (all optional — absent on a real live position) ──
   sim?:               boolean;
   sim_tick?:          number;
