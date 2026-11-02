@@ -108,3 +108,59 @@ def test_sim_reversal_closes_call_before_put_starts():
     put = [m for m in pushes if m.get("sim_leg") == "put"]
     assert call[-1]["qty_remaining"] == 0
     assert put and put[0]["contract"] != call[0]["contract"]
+
+
+class _Greeks:
+    def __init__(self, delta):
+        self.delta = delta
+
+
+class _Snap:
+    def __init__(self, delta):
+        self.greeks = _Greeks(delta) if delta is not None else None
+
+
+def _wait_delta(eng, timeout=2.0):
+    import time as _time
+    end = _time.time() + timeout
+    while _time.time() < end:
+        if eng._overlay_delta is not None or not eng._overlay_delta_inflight:
+            # Give the thread a beat to finish after inflight clears.
+            _time.sleep(0.05)
+            if eng._overlay_delta is not None:
+                return
+            if not eng._overlay_delta_inflight:
+                return
+        _time.sleep(0.02)
+
+
+def test_overlay_delta_snapshot_miss_falls_back_to_chain():
+    eng = _engine()
+    eng._overlay_delta = None
+    eng._overlay_delta_at = 0.0
+    eng._overlay_delta_source = None
+    # Real refresh method (the harness stubs it out).
+    eng._maybe_refresh_overlay_delta = oe.ORBEngine._maybe_refresh_overlay_delta.__get__(eng, oe.ORBEngine)
+    client = MagicMock()
+    client.get_option_snapshot.return_value = {"SPY261030P00758000": _Snap(None)}
+    client.get_option_chain.return_value = {"SPY261030P00758000": _Snap(-0.42)}
+    eng.option_client = client
+    eng._maybe_refresh_overlay_delta(force=True)
+    _wait_delta(eng)
+    assert eng._overlay_delta == pytest.approx(-0.42)
+    assert eng._overlay_delta_source == "chain"
+
+
+def test_overlay_delta_snapshot_hit_sets_source():
+    eng = _engine()
+    eng._overlay_delta = None
+    eng._overlay_delta_at = 0.0
+    eng._maybe_refresh_overlay_delta = oe.ORBEngine._maybe_refresh_overlay_delta.__get__(eng, oe.ORBEngine)
+    client = MagicMock()
+    client.get_option_snapshot.return_value = {"SPY261030P00758000": _Snap(-0.38)}
+    eng.option_client = client
+    eng._maybe_refresh_overlay_delta(force=True)
+    _wait_delta(eng)
+    assert eng._overlay_delta == pytest.approx(-0.38)
+    assert eng._overlay_delta_source == "snapshot"
+    client.get_option_chain.assert_not_called()

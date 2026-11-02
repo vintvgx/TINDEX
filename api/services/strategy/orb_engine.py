@@ -379,6 +379,7 @@ class ORBEngine(GateWatchMixin):
             self._overlay_delta            = None
             self._overlay_delta_at         = 0.0
             self._overlay_delta_inflight   = False
+            self._overlay_delta_source     = None
         # REVERSAL-profile: timestamp when the trade first dropped below the -15%
         # bleed threshold. Cleared when price recovers above -15%.
         self._reversal_down_since:    Optional[datetime] = None
@@ -1617,7 +1618,22 @@ class ORBEngine(GateWatchMixin):
             self._active_trade_pnl = 0.0  # reset accumulator for this trade
             self._overlay_realized_pnl = 0.0
             self._overlay_entry_underlying = self._last_underlying_price
-            self._overlay_delta, self._overlay_delta_at = None, 0.0
+            # Seed the overlay delta from the contract just selected, so the
+            # chart lines draw from the first push instead of waiting on the
+            # snapshot refresh — which is exactly how the lines went missing
+            # on 2026-11-02 (snapshot greeks absent -> delta stayed None ->
+            # the client silently skipped every line). contract["delta"] is
+            # unsigned, so sign it by direction. A 0.0 delta means the chain
+            # carried no greeks at entry; leave delta None then so the
+            # snapshot/chain refresh below is the only source.
+            _entry_delta = contract.get("delta") or 0.0
+            if _entry_delta > 0:
+                self._overlay_delta = round(float(_entry_delta) if direction == "CALL" else -float(_entry_delta), 4)
+                self._overlay_delta_at = time.monotonic()
+                self._overlay_delta_source = "entry"
+            else:
+                self._overlay_delta, self._overlay_delta_at = None, 0.0
+                self._overlay_delta_source = None
             # `or` alone isn't enough here: immediate-trade engines are created
             # with active=False/trade_days=[] specifically so they're NEVER put
             # on the daily calculate_orb() schedule (that's the only other place
@@ -1803,6 +1819,7 @@ class ORBEngine(GateWatchMixin):
         self._overlay_realized_pnl = float(row.get("pnl") or 0.0)
         self._overlay_entry_underlying = row.get("underlying_price_entry")
         self._overlay_delta, self._overlay_delta_at = None, 0.0
+        self._overlay_delta_source = None
         self._trade_was_taken_today = True
         self.active_trade_id   = row["id"]
         self.profile_key       = row.get("profile") or self.profile_key
@@ -3724,6 +3741,7 @@ class ORBEngine(GateWatchMixin):
             "underlying_price":     self._last_underlying_price,
             "entry_underlying":     self._overlay_entry_underlying,
             "delta":                self._overlay_delta,
+            "delta_source":         getattr(self, "_overlay_delta_source", None),
             "delta_age_s":          (round(time.monotonic() - self._overlay_delta_at, 1)
                                      if self._overlay_delta is not None else None),
             "quote_age_s":          round(time.time() - getattr(self, "_last_stream_tick_wall", time.time()), 1),
@@ -3735,10 +3753,34 @@ class ORBEngine(GateWatchMixin):
         self._maybe_refresh_overlay_delta()
         return payload
 
+    @staticmethod
+    def _snapshot_delta(snap):
+        """Delta out of an Alpaca option snapshot, whatever shape it arrives
+        in (object with .greeks, or a plain dict). None when greeks are
+        absent — the INDICATIVE feed omits them, which is a normal case,
+        not an error."""
+        if snap is None:
+            return None
+        greeks = snap.get("greeks") if isinstance(snap, dict) else getattr(snap, "greeks", None)
+        if greeks is None:
+            return None
+        delta = greeks.get("delta") if isinstance(greeks, dict) else getattr(greeks, "delta", None)
+        return float(delta) if delta is not None else None
+
     def _maybe_refresh_overlay_delta(self, force: bool = False) -> None:
         """Refresh the chart overlay's cached delta off-thread: at most every
         OVERLAY_DELTA_REFRESH_S (or on a 1m bar close via force=True). One
-        option snapshot per refresh — never per tick, never on the exit path."""
+        option snapshot per refresh — never per tick, never on the exit path.
+        Display only — exits never read this value.
+
+        2026-11-02 fix: the old code took delta from the snapshot alone and
+        swallowed every failure at debug level, so when snapshot greeks were
+        absent the delta stayed None forever and the client silently drew
+        no TP1/TP2/SL/BE lines at all (the badge only needs PnL, so it
+        kept working and hid the failure). Now: (1) delta is seeded at
+        entry from the selected contract, (2) a snapshot miss falls back
+        to the same indicative chain endpoint contract selection already
+        uses, and (3) a total miss logs a warning so it is visible."""
         if not self.trade_taken or not self.contract_symbol or self._overlay_delta_inflight:
             return
         if not force and time.monotonic() - self._overlay_delta_at < OVERLAY_DELTA_REFRESH_S:
@@ -3752,16 +3794,41 @@ class ORBEngine(GateWatchMixin):
             try:
                 from alpaca.data.requests import OptionSnapshotRequest
                 snaps = self.option_client.get_option_snapshot(OptionSnapshotRequest(symbol_or_symbols=symbol))
-                snap = snaps.get(symbol) if isinstance(snaps, dict) else None
-                greeks = getattr(snap, "greeks", None) if snap else None
-                delta = getattr(greeks, "delta", None) if greeks else None
+                if isinstance(snaps, dict):
+                    snap = snaps.get(symbol)
+                else:
+                    snap = getattr(getattr(snaps, "snapshots", None), "get", lambda _s: None)(symbol)
+                delta = self._snapshot_delta(snap)
+                source = "snapshot" if delta is not None else None
+                if delta is None:
+                    # Snapshot greeks absent — try the indicative chain, the
+                    # endpoint contract selection already relies on.
+                    try:
+                        from alpaca.data.enums import OptionsFeed
+                        from alpaca.data.requests import OptionChainRequest
+                        from datetime import date as _date
+                        chain = self.option_client.get_option_chain(OptionChainRequest(
+                            underlying_symbol=self.ticker,
+                            expiration_date=_date.today(),
+                            feed=OptionsFeed.INDICATIVE,
+                        ))
+                        chain_snap = chain.get(symbol) if isinstance(chain, dict) else None
+                        delta = self._snapshot_delta(chain_snap)
+                        source = "chain" if delta is not None else None
+                    except Exception as chain_exc:
+                        logger.debug("[ORBEngine] overlay delta chain fallback failed for %s: %s", symbol, chain_exc)
                 if delta is not None and symbol == self.contract_symbol:
                     self._overlay_delta = round(float(delta), 4)
+                    self._overlay_delta_source = source
+                elif self._overlay_delta is None:
+                    logger.warning("[ORBEngine] overlay delta unavailable for %s "
+                                   "(snapshot + chain greeks absent) — chart trade lines will not draw",
+                                   symbol)
             except Exception as e:
-                logger.debug("[ORBEngine] overlay delta refresh failed for %s: %s", symbol, e)
+                logger.warning("[ORBEngine] overlay delta refresh failed for %s: %s", symbol, e)
             finally:
-                # Stamp even on failure so a dead snapshot endpoint is retried
-                # on the normal cadence, not hammered.
+                # Stamp even on failure so a dead endpoint is retried on the
+                # normal cadence, not hammered.
                 self._overlay_delta_at = time.monotonic()
                 self._overlay_delta_inflight = False
 
