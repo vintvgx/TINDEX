@@ -217,6 +217,21 @@ PROFILES = {
         "eod_buffer_minutes":     25,
         "entry_mode":             "BREAK",
         "daily_loss_limit":       400,
+        # Fields copied from REVERSAL (2026-11-02 fix): without these,
+        # describe_profile() crashed on vix_max_override (KeyError ->
+        # /strategy/profiles 500 on live) and contract_selector crashed
+        # on strike_offset_*/target_delta_* at the first entry attempt.
+        "sl_grace_enabled":       True,
+        "sl_grace_bars":          3,
+        "sl_grace_seconds":       300,
+        "sl_outer_floor_pct":     0.50,
+        "volume_exit":            False,
+        "volume_exit_threshold":  0.20,
+        "strike_offset_min":      0.50,
+        "strike_offset_max":      2.00,
+        "target_delta_min":       0.38,
+        "target_delta_max":       0.58,
+        "vix_max_override":       45,
     },
     # ── IMMEDIATE TRADE PROFILES ──────────────────────────────────────────────────
 
