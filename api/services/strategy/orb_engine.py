@@ -1813,9 +1813,9 @@ class ORBEngine(GateWatchMixin):
                 # profile's defaults. See
                 # docs/incidents/2026-07-14-position-lost-on-restart.md.
                 exit_overrides=effective_profile,
-                hard_stop=self.exit_manager.hard_stop,
-                tp1=self.exit_manager.tp1,
-                tp2=self.exit_manager.tp2,
+                hard_stop_price=self.exit_manager.hard_stop,
+                tp1_price=self.exit_manager.tp1,
+                tp2_price=self.exit_manager.tp2,
             )
             if self.active_trade_id is None:
                 self.debug.emit("ERROR",
