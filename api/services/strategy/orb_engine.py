@@ -46,6 +46,9 @@ TECHNICALS_GATE_TIMEOUT_S = 4.0
 # dozens/sec on 0DTE; forwarding each one strobed the app's P&L and pegged
 # the phone (polling audit 2026-10-07, A3). Exit logic still sees every tick.
 LIVE_PUSH_MIN_INTERVAL_S = 1 / 3
+# Chart trade overlay: live delta cache lifetime (brief: refresh at most
+# every 15s, or on a 1m bar close). Display only — exits never read it.
+OVERLAY_DELTA_REFRESH_S = 15
 
 # Stream-dead exit-evaluation fast path (2026-10-11): when the option stream
 # stops delivering ticks for a held contract, the 1-minute bar cadence is too
@@ -364,6 +367,18 @@ class ORBEngine(GateWatchMixin):
         self._last_loss_by_direction: dict  = {}
         # Accumulates P&L across partial exits for the current open trade.
         self._active_trade_pnl:       float = 0.0
+        # Chart trade overlay (display only — never read by exit logic):
+        # banked P&L of the open trade's exited legs (restored from the row on
+        # restart, unlike _active_trade_pnl), its underlying at entry, and a
+        # cached live delta refreshed at most every OVERLAY_DELTA_REFRESH_S.
+        # Initialised once — entry/restore reset them per trade, so a swing
+        # position held across the daily reset keeps its banked P&L.
+        if not hasattr(self, "_overlay_realized_pnl"):
+            self._overlay_realized_pnl     = 0.0
+            self._overlay_entry_underlying = None
+            self._overlay_delta            = None
+            self._overlay_delta_at         = 0.0
+            self._overlay_delta_inflight   = False
         # REVERSAL-profile: timestamp when the trade first dropped below the -15%
         # bleed threshold. Cleared when price recovers above -15%.
         self._reversal_down_since:    Optional[datetime] = None
@@ -1600,6 +1615,9 @@ class ORBEngine(GateWatchMixin):
             self.timer_notified   = False
             self._sl_grace_notified = False  # reset for this trade's own grace window
             self._active_trade_pnl = 0.0  # reset accumulator for this trade
+            self._overlay_realized_pnl = 0.0
+            self._overlay_entry_underlying = self._last_underlying_price
+            self._overlay_delta, self._overlay_delta_at = None, 0.0
             # `or` alone isn't enough here: immediate-trade engines are created
             # with active=False/trade_days=[] specifically so they're NEVER put
             # on the daily calculate_orb() schedule (that's the only other place
@@ -1782,6 +1800,9 @@ class ORBEngine(GateWatchMixin):
         self.position          = row["direction"]
         self.contract_symbol   = row["contract_symbol"]
         self.trade_taken       = True
+        self._overlay_realized_pnl = float(row.get("pnl") or 0.0)
+        self._overlay_entry_underlying = row.get("underlying_price_entry")
+        self._overlay_delta, self._overlay_delta_at = None, 0.0
         self._trade_was_taken_today = True
         self.active_trade_id   = row["id"]
         self.profile_key       = row.get("profile") or self.profile_key
@@ -3026,6 +3047,7 @@ class ORBEngine(GateWatchMixin):
 
         self._active_trade_pnl     += pnl
         self._session_realized_pnl += pnl
+        self._overlay_realized_pnl += pnl
 
         if closing_all:
             # Full close: record a direction-specific loss for re-entry cooldown,
@@ -3533,6 +3555,7 @@ class ORBEngine(GateWatchMixin):
         """
         self._current_option_price = mid
         self._last_stream_tick_ts = time.monotonic()
+        self._last_stream_tick_wall = time.time()
 
         # Drive exit logic — pass None for underlying if not yet polled.
         # ExitManager skips the consolidation buffer on None, preventing false
@@ -3695,8 +3718,54 @@ class ORBEngine(GateWatchMixin):
             "ask":                  _bbo[1],
             "qty_working":          _working,
             "qty_available":        max(0, em.qty_remaining - _working),
+            # Chart trade overlay (display only). realized_pnl + pnl is the
+            # trade's total; pnl above stays unrealized-on-remaining as before.
+            "realized_pnl":         round(self._overlay_realized_pnl, 2),
+            "underlying_price":     self._last_underlying_price,
+            "entry_underlying":     self._overlay_entry_underlying,
+            "delta":                self._overlay_delta,
+            "delta_age_s":          (round(time.monotonic() - self._overlay_delta_at, 1)
+                                     if self._overlay_delta is not None else None),
+            "quote_age_s":          round(time.time() - getattr(self, "_last_stream_tick_wall", time.time()), 1),
+            "be_stop_active":       em.be_stop_active,
+            "be_level":             round(em.breakeven_level(), 4),
+            "qty_entered":          em.qty,
+            "strategy_name":        self.strategy_name,
         })
+        self._maybe_refresh_overlay_delta()
         return payload
+
+    def _maybe_refresh_overlay_delta(self, force: bool = False) -> None:
+        """Refresh the chart overlay's cached delta off-thread: at most every
+        OVERLAY_DELTA_REFRESH_S (or on a 1m bar close via force=True). One
+        option snapshot per refresh — never per tick, never on the exit path."""
+        if not self.trade_taken or not self.contract_symbol or self._overlay_delta_inflight:
+            return
+        if not force and time.monotonic() - self._overlay_delta_at < OVERLAY_DELTA_REFRESH_S:
+            return
+        if force and time.monotonic() - self._overlay_delta_at < 5:
+            return
+        self._overlay_delta_inflight = True
+        symbol = self.contract_symbol
+
+        def _fetch():
+            try:
+                from alpaca.data.requests import OptionSnapshotRequest
+                snaps = self.option_client.get_option_snapshot(OptionSnapshotRequest(symbol_or_symbols=symbol))
+                snap = snaps.get(symbol) if isinstance(snaps, dict) else None
+                greeks = getattr(snap, "greeks", None) if snap else None
+                delta = getattr(greeks, "delta", None) if greeks else None
+                if delta is not None and symbol == self.contract_symbol:
+                    self._overlay_delta = round(float(delta), 4)
+            except Exception as e:
+                logger.debug("[ORBEngine] overlay delta refresh failed for %s: %s", symbol, e)
+            finally:
+                # Stamp even on failure so a dead snapshot endpoint is retried
+                # on the normal cadence, not hammered.
+                self._overlay_delta_at = time.monotonic()
+                self._overlay_delta_inflight = False
+
+        threading.Thread(target=_fetch, daemon=True, name=f"overlay-delta-{self.ticker}").start()
 
     def _skip(self, reason: str):
         """
@@ -3815,6 +3884,7 @@ class ORBEngine(GateWatchMixin):
             self.exit_manager.on_underlying_bar(bar_open, bar.close, ts=bar.ts,
                                                 high=bar.high, low=bar.low)
             self._feed_runner_exit(bar)
+            self._maybe_refresh_overlay_delta(force=True)
 
         # Only act once the ORB is established and the session isn't skipped.
         # getattr guards the brief __init__ window before _reset_session_state runs.
