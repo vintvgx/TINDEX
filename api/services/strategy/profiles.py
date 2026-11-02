@@ -184,6 +184,40 @@ PROFILES = {
         "daily_loss_limit":       400,
         "re_entry_cooldown_min":  120,   # 2 hours — a failed reversal rarely works again same day
     },
+    # ─── MUSE_REVERSAL — Separate reversal strategy (spec §10, 2026-11-02) ───
+    # Do NOT edit REVERSAL to implement this. MUSE_REVERSAL enters only on:
+    # scorer fire + 3 consecutive 1m closes on the reversal side of VWAP +
+    # intraday-only technicals >= 5 (see muse_reversal.py). Exits on a
+    # VWAP reclaim: 3 consecutive 1m closes back on the trend side, then
+    # CLOSE_ALL. Ships paused (no strategy row is created by this code);
+    # a strategy row with active=true is what arms it, and only on
+    # Kareem's word, post-November unless he re-baselines November.
+    "MUSE_REVERSAL": {
+        "qty_contracts":          3,
+        "force_smart_qty":        True,
+        "min_smart_qty":          2,
+        "use_tp2":                True,
+        "max_loss_pct":           0.25,
+        "tp1_mult":               1.15,
+        "tp2_mult":               1.70,
+        "tp1_close_pct":          0.50,
+        "tp1_confirm_ticks":      2,
+        "min_tp1_dollars":        0.18,
+        "min_tp2_dollars":        0.50,
+        "cascade_ticks":          5,
+        "cascade_close_pct":      0.50,
+        "tp2_close_pct":          0.50,
+        "runner_trail_pct":       0.18,
+        "runner_mode":            "be_hold",
+        "sl_confirm_ticks":       3,
+        "vwap_hold_bars":         3,    # spec §10.2: consecutive 1m closes beyond VWAP
+        "vwap_reclaim_bars":      3,    # spec §10.3: consecutive 1m closes back across VWAP = CLOSE_ALL
+        "breakout_time_limit_min": 240,  # REVERSAL window, NOT the trend 180 (12:45 ET cutoff)
+        "re_entry_cooldown_min":  120,
+        "eod_buffer_minutes":     25,
+        "entry_mode":             "BREAK",
+        "daily_loss_limit":       400,
+    },
     # ── IMMEDIATE TRADE PROFILES ──────────────────────────────────────────────────
 
     # ─── NO_STOP_LOSS — Fully manual, hold until sold ────────────────────────────
