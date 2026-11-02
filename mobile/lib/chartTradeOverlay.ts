@@ -71,6 +71,7 @@ export interface OverlayTradeInput {
 export interface OverlayLiveExtras {
   realized_pnl?: number | null;
   delta?: number | null;
+  delta_source?: string | null;
   delta_age_s?: number | null;
   quote_age_s?: number | null;
   be_stop_active?: boolean | null;
@@ -122,7 +123,13 @@ function marker(t: OverlayTradeInput, now: number, selected: boolean, multi: boo
   const live = t.live;
   const sim = !!live.sim;
   const stale = !sim && quoteAgeMs(t, now) > STALE_AFTER_MS;
-  const pnl = totalPnl(live);
+  // 2026-11-02 fix: the badge must match the position card below the chart,
+  // which shows live.pnl — unrealized PnL on the contracts still open.
+  // The old total (realized + unrealized) made the badge read +$444 while
+  // the card read +$324 after TP1 banked 2 contracts, and the 15s draw
+  // throttle made it read -$18 while the card read -$26. Sim trades have
+  // no card, so they keep the total.
+  const pnl = sim ? totalPnl(live) : (isNum(live.pnl) ? live.pnl : null);
   const runner = live.qty_remaining === 1;
   const sign = pnl == null ? '' : pnl > 0.004 ? '+' : pnl < -0.004 ? '−' : '';
   return {
@@ -251,6 +258,16 @@ export function shouldRedraw(prev: DrawnFrame | null, next: TradeOverlayFrame | 
   if (!p || !next) return p !== next;
   if (p.stateSig !== next.stateSig) return true;
   if (next.sim) return next.simTick !== p.simTick;
+  // 2026-11-02 fix: the badge is the user's live PnL readout, so a marker
+  // change (PnL text or contracts remaining) redraws immediately instead
+  // of waiting out the 15s line cadence — that throttle is what left the
+  // badge $8 behind the position card on a fast 0DTE. Redrawing the
+  // overlay layer only re-applies price lines in-page; it never re-renders
+  // candles, EMAs or VWAP.
+  if (next.markers.some(m => {
+    const drawn = p.markers.find(d => d.key === m.key);
+    return !drawn || drawn.pnlText !== m.pnlText || drawn.count !== m.count;
+  })) return true;
   if (now - prev.at >= REDRAW_EVERY_MS) return true;
   const th = moveThreshold(next.refPrice, next.ticker);
   return next.lines.some(l => {
