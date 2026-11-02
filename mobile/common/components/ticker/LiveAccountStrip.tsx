@@ -4,6 +4,7 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useAlpacaAccountsHistory } from '@/hooks/queries/strategy/useAlpacaAccounts';
 import { useLiveEquity } from '@/hooks/queries/strategy/useLiveEquity';
 import { accountAvailableFunds } from '@/common/components/home/views/DynamicAccountView';
+import { useChartAccountMode } from '@/hooks/useChartAccountMode';
 
 const money = (v: number | null | undefined) =>
   v == null ? '—' : `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -15,18 +16,20 @@ interface LiveAccountStripProps {
 }
 
 /**
- * Read-only LIVE account summary pinned under the chart toolbar: Live Equity,
+ * Read-only account summary pinned under the chart toolbar: Equity,
  * Available funds, and today's P&L — the same figures the Home account card
- * shows. Also gives the ticker wheel thumb room above the screen edge.
+ * shows. Live or paper per the Profile setting (useChartAccountMode). Also
+ * gives the ticker wheel thumb room above the screen edge.
  */
 export function LiveAccountStrip({ bottomInset = 0 }: LiveAccountStripProps) {
   const colors = useThemeColors();
-  const { account, displayEquity, resyncing } = useLiveEquity('live');
+  const { mode } = useChartAccountMode();
+  const { account, displayEquity, resyncing } = useLiveEquity(mode);
   const { data: history } = useAlpacaAccountsHistory();
 
   const available = accountAvailableFunds(account);
-  const pnlToday = history?.live?.pnl_today ?? account?.pnl_today;
-  const pnlPct = history?.live?.pnl_today_pct ?? account?.pnl_today_pct;
+  const pnlToday = history?.[mode]?.pnl_today ?? account?.pnl_today;
+  const pnlPct = history?.[mode]?.pnl_today_pct ?? account?.pnl_today_pct;
   const pnlColor = pnlToday == null ? colors.textSecondary : pnlToday >= 0 ? colors.success : colors.error;
   const unavailable = account != null && !account.available;
 
@@ -38,7 +41,7 @@ export function LiveAccountStrip({ bottomInset = 0 }: LiveAccountStripProps) {
       ]}
     >
       <View style={s.cell}>
-        <Text style={[s.label, { color: colors.textTertiary }]}>LIVE EQUITY</Text>
+        <Text style={[s.label, { color: colors.textTertiary }]}>{mode === 'paper' ? 'PAPER EQUITY' : 'LIVE EQUITY'}</Text>
         <Text style={[s.value, { color: colors.text }]} numberOfLines={1}>
           {unavailable ? '—' : account && !resyncing ? money(displayEquity) : '…'}
         </Text>

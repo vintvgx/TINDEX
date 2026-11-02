@@ -18,7 +18,9 @@ import { useAlpacaAccountsHistory } from '@/hooks/queries/strategy/useAlpacaAcco
 import { usePnlSummary } from '@/hooks/queries/strategy/usePnlSummary';
 import { useReconcileTrades } from '@/hooks/mutations/strategy/useReconcileTrades';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
-import type { ORBTrade, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel, ExitStage } from '@/common/types/strategy';
+import type { ORBTrade, StrategyPerformance, RatingBreakdownItem, DebugLogEntry, DebugLevel } from '@/common/types/strategy';
+import { TradeDetailV2 } from '@/common/components/strategy/TradeDetailV2';
+import { avgExitPremium, finalCloseLabel, fmtEtClock, fmtPremium } from '@/lib/tradeLogV2';
 import { formatContractSymbol, getTradeHorizon } from '@/lib/formatContract';
 import { useToast } from '@/common/components/ui/Toast';
 
@@ -241,10 +243,12 @@ export default function TradeLogScreen({ embedded = false }: Props) {
                   {dayGroups.map(group => (
                     <View key={group.date} style={{ gap: 10 }}>
                       <DayHeader group={group} colors={colors} />
+                      <ReentrySequence trades={group.trades} colors={colors} />
                       {group.trades.map(trade => (
                         <TradeRow
                           key={trade.id}
                           trade={trade}
+                          dayTrades={group.trades}
                           colors={colors}
                           expanded={expandedId === trade.id}
                           onToggle={() => setExpandedId(id => id === trade.id ? null : trade.id)}
@@ -289,49 +293,6 @@ export default function TradeLogScreen({ embedded = false }: Props) {
 
 // ── Trade detail helpers ──────────────────────────────────────────────────────
 
-const EXIT_REASON_LABELS: Record<string, string> = {
-  HARD_STOP:         'Hard Stop',
-  TP1:               'TP1 Hit — Partial Close',
-  TP2:               'TP2 Hit — Partial Close',
-  TP2_FULL_CLOSE:    'TP2 Hit — Full Close',
-  RUNNER_TRAIL_STOP: 'Runner Trailing Stop',
-  EOD_CLOSE:         'EOD Close',
-  EOD_HARD_CLOSE:    'EOD Hard Close',
-  BREAKEVEN_STOP:    'Breakeven Stop',
-  CONSOLIDATION:     'Consolidation Exit',
-  LOW_VOLUME_EXIT:   'Low Volume Exit',
-  TIME_STOP:         'Time Stop — No Progress',
-  RUNNER_INVALIDATION: 'Runner Exit — Trend Invalidated',
-  RUNNER_FLOOR_STOP: 'Runner Profit Floor',
-  MANUAL_CLOSE:      'Manually Closed',
-  FORCE_CLOSE:       'Force Closed',
-  MANUAL_EXIT:         'Manual Exit',
-  REVERSAL_TIME_CUT:   'Reversal Bleed Stop (20m)',
-  'RECONCILED FROM ALPACA':         'Exit Reason: Reconciled from Alpaca',
-  'UNKNOWN — RECONCILED FROM ALPACA': 'Exit Reason: Unknown — pulled from Alpaca',
-  EXPIRED_WORTHLESS: 'Expired Worthless',
-  'RECONCILED — QTY ALREADY ZERO': 'Reconciled — Already Closed',
-};
-
-const fmtEt = (iso: string): string => {
-  try {
-    return new Date(iso).toLocaleString('en-US', {
-      timeZone: 'America/New_York',
-      month: 'short', day: 'numeric',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-      hour12: true,
-    }) + ' ET';
-  } catch { return iso; }
-};
-
-const fmtDuration = (entry: string, exit: string | null): string => {
-  if (!exit) return 'Still open';
-  const ms  = new Date(exit).getTime() - new Date(entry).getTime();
-  const min = Math.round(ms / 60_000);
-  if (min < 60) return `${min}m`;
-  return `${Math.floor(min / 60)}h ${min % 60}m`;
-};
-
 // "2026-06-15" → "Jun 15"
 const fmtTradeDate = (d: string): string => {
   const p = d?.split('-');
@@ -342,208 +303,42 @@ const fmtTradeDate = (d: string): string => {
     : dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 };
 
-// ── TradeDetail ───────────────────────────────────────────────────────────────
+// ── ReentrySequence ───────────────────────────────────────────────────────────
 
-const DetailRow = ({ label, value, colors, valueColor, mono }: {
-  label: string; value: string; colors: any; valueColor?: string; mono?: boolean;
-}) => (
-  <View style={styles.detailRow}>
-    <Text style={[styles.detailLabel, { color: colors.tabBarInactive }]}>{label}</Text>
-    <Text
-      style={[styles.detailValue, { color: valueColor ?? colors.text },
-              mono && { fontFamily: 'monospace' }]}
-      selectable
-    >
-      {value}
-    </Text>
-  </View>
-);
-
-const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
-  const orbRef  = trade.direction === 'CALL' ? trade.orh : trade.orl;
-  const dirWord = trade.direction === 'CALL' ? 'above ORH' : 'below ORL';
-  const exitLabel = trade.exit_reason
-    ? (EXIT_REASON_LABELS[trade.exit_reason] ?? trade.exit_reason)
-    : 'Open — position not yet closed';
-  const duration = fmtDuration(trade.entry_time, trade.exit_time);
-
-  // Entry stop-loss price is entry_premium × (1 − ~35%). We don't store max_loss_pct
-  // per trade, but we can show a note if the exit was HARD_STOP.
-  const stopHit = trade.exit_reason === 'HARD_STOP';
-
-  const isOpen = trade.exit_time == null;
-  // A partial exit (TP1/cascade) already locked in a real, non-null pnl
-  // even though the row stays open — see trade_logger.py's log_exit. Show
-  // that realized figure plus the still-open remainder's live estimate
-  // separately, rather than one number standing in for both. A fully-open
-  // trade (zero exits yet) has nothing realized — falls back to the live
-  // estimate alone, same as before.
-  const isPartial = isOpen && (trade.qty_exited ?? 0) > 0;
-  const displayPnl    = isPartial ? trade.pnl : isOpen ? trade.live_pnl ?? null : trade.pnl;
-  const displayPnlPct = isPartial ? trade.pnl_pct : isOpen ? trade.live_pnl_pct ?? null : trade.pnl_pct;
-  const pnlColor = displayPnl == null
-    ? undefined
-    : displayPnl >= 0 ? colors.success : colors.error;
-  const unrealizedColor = trade.live_pnl == null
-    ? undefined
-    : trade.live_pnl >= 0 ? colors.success : colors.error;
-
+/** Day-level strip: Trade A → (exit reason) → Trade B (re-entry), for each
+ *  later trade on the same strategy + ticker + direction. Each trade keeps its
+ *  own card; this only shows how they connect. Renders nothing without one. */
+const ReentrySequence = ({ trades, colors }: { trades: ORBTrade[]; colors: any }) => {
+  const chains = useMemo(() => {
+    const t = (iso: string | null | undefined) => {
+      const ms = iso ? new Date(iso).getTime() : NaN;
+      return Number.isNaN(ms) ? null : ms;
+    };
+    const sorted = [...trades].filter(x => t(x.entry_time) != null)
+      .sort((a, b) => t(a.entry_time)! - t(b.entry_time)!);
+    const links: { prev: ORBTrade; next: ORBTrade }[] = [];
+    sorted.forEach((next, i) => {
+      const prev = sorted.slice(0, i).reverse().find(p =>
+        p.ticker === next.ticker && p.direction === next.direction
+        && (next.strategy_id ? p.strategy_id === next.strategy_id : p.profile === next.profile)
+        && t(p.exit_time) != null && t(p.exit_time)! <= t(next.entry_time)!);
+      if (prev) links.push({ prev, next });
+    });
+    return links;
+  }, [trades]);
+  if (!chains.length) return null;
+  const name = (x: ORBTrade) => `${x.ticker} ${formatContractSymbol(x.contract_symbol)} ${fmtEtClock(x.entry_time) ?? ''}`.trim();
   return (
-    <View style={[styles.detailSection, { borderTopColor: colors.border }]}>
-      {/* Entry signal */}
-      <Text style={[styles.detailSectionHeader, { color: colors.tabBarInactive }]}>ENTRY SIGNAL</Text>
-      <DetailRow
-        label={`${trade.direction} Breakout`}
-        value={`Price closed ${dirWord} $${orbRef?.toFixed(2) ?? '—'}`}
-        colors={colors}
-      />
-      <DetailRow
-        label="Flow Confirmed"
-        value={trade.flow_confirmed ? '✓ Yes' : '✗ No'}
-        valueColor={trade.flow_confirmed ? colors.success : colors.error}
-        colors={colors}
-      />
-      <DetailRow label="ORH"              value={`$${trade.orh?.toFixed(2) ?? '—'}`}                       colors={colors} />
-      <DetailRow label="ORL"              value={`$${trade.orl?.toFixed(2) ?? '—'}`}                       colors={colors} />
-      <DetailRow label="Underlying Entry" value={trade.underlying_price_entry != null ? `$${trade.underlying_price_entry.toFixed(2)}` : '—'} colors={colors} />
-      {trade.vix_at_entry != null && (
-        <DetailRow label="VIX" value={trade.vix_at_entry.toFixed(2)} colors={colors} />
-      )}
-
-      {/* Contract */}
-      <Text style={[styles.detailSectionHeader, { color: colors.tabBarInactive, marginTop: 8 }]}>CONTRACT</Text>
-      <DetailRow label="Contract" value={formatContractSymbol(trade.contract_symbol)} colors={colors} />
-      <DetailRow label="Symbol"   value={trade.contract_symbol} colors={colors} mono />
-      <DetailRow label="Strike" value={`$${trade.strike?.toFixed(2) ?? '—'}`} colors={colors} />
-      <DetailRow label="Expiry" value={trade.expiry ?? '—'} colors={colors} />
-
-      {/* Timing & P&L */}
-      <Text style={[styles.detailSectionHeader, { color: colors.tabBarInactive, marginTop: 8 }]}>TRADE HISTORY</Text>
-      <DetailRow label="Entered"           value={fmtEt(trade.entry_time)}                                  colors={colors} />
-      <DetailRow label="Exited"            value={trade.exit_time ? fmtEt(trade.exit_time) : '—'}           colors={colors} />
-      <DetailRow label="Duration"          value={duration}                                                  colors={colors} />
-      <DetailRow label="Entry Premium"     value={`$${trade.entry_premium?.toFixed(2) ?? '—'}`}             colors={colors} />
-      <DetailRow
-        label={isOpen ? 'Current Price (live)' : 'Exit Premium'}
-        value={
-          isOpen
-            ? (trade.live_price != null ? `$${trade.live_price.toFixed(2)}` : '—')
-            : (trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—')
-        }
-        valueColor={
-          isOpen
-            ? (trade.live_price == null ? undefined : trade.live_price >= trade.entry_premium ? colors.success : colors.error)
-            : (trade.exit_premium == null ? undefined : trade.exit_premium >= trade.entry_premium ? colors.success : colors.error)
-        }
-        colors={colors}
-      />
-      <DetailRow
-        label="Underlying Exit"
-        value={trade.underlying_price_exit != null ? `$${trade.underlying_price_exit.toFixed(2)}` : '—'}
-        colors={colors}
-      />
-      <DetailRow
-        label={isPartial ? 'Realized (so far)' : isOpen ? 'P&L (live, unrealized)' : 'P&L'}
-        value={displayPnl != null ? `${displayPnl >= 0 ? '+' : ''}$${displayPnl.toFixed(2)}` : '—'}
-        valueColor={pnlColor}
-        colors={colors}
-      />
-      <DetailRow
-        label={isPartial ? 'Realized %' : isOpen ? 'P&L % (live)' : 'P&L %'}
-        value={displayPnlPct != null ? `${displayPnlPct >= 0 ? '+' : ''}${displayPnlPct.toFixed(1)}%` : '—'}
-        valueColor={pnlColor}
-        colors={colors}
-      />
-      {isPartial && (
-        <>
-          <DetailRow
-            label="Unrealized (remaining)"
-            value={trade.live_pnl != null ? `${trade.live_pnl >= 0 ? '+' : ''}$${trade.live_pnl.toFixed(2)}` : '—'}
-            valueColor={unrealizedColor}
-            colors={colors}
-          />
-          <DetailRow
-            label="Unrealized %"
-            value={trade.live_pnl_pct != null ? `${trade.live_pnl_pct >= 0 ? '+' : ''}${trade.live_pnl_pct.toFixed(1)}%` : '—'}
-            valueColor={unrealizedColor}
-            colors={colors}
-          />
-        </>
-      )}
-      <DetailRow
-        label="Exit Reason"
-        value={exitLabel}
-        valueColor={stopHit ? colors.error : undefined}
-        colors={colors}
-      />
-      <DetailRow label="Qty"
-        value={`${trade.qty_entered} entered · ${trade.qty_exited} exited`}
-        colors={colors}
-      />
-      {trade.account_balance_before != null && trade.account_balance_after != null && (
-        <DetailRow
-          label="Account Balance"
-          value={`$${trade.account_balance_before.toFixed(2)} → $${trade.account_balance_after.toFixed(2)}`}
-          valueColor={pnlColor}
-          colors={colors}
-        />
-      )}
-
-      {/* Per-stage exit breakdown */}
-      {trade.exit_stages && trade.exit_stages.length > 0 && (
-        <>
-          <Text style={[styles.detailSectionHeader, { color: colors.tabBarInactive, marginTop: 8 }]}>
-            EXIT BREAKDOWN
-          </Text>
-          {trade.exit_stages.map((stage: ExitStage, i: number) => {
-            const stageColor = stage.pnl >= 0 ? colors.success : colors.error;
-            return (
-              <View key={i} style={[styles.detailRow, {
-                backgroundColor: colors.card, borderRadius: 6,
-                marginBottom: 4, paddingHorizontal: 8, paddingVertical: 6,
-              }]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.text, fontWeight: '600', fontSize: 13 }}>
-                    {EXIT_REASON_LABELS[stage.reason] ?? stage.reason}
-                  </Text>
-                  <Text style={{ color: colors.tabBarInactive, fontSize: 11, marginTop: 2 }}>
-                    {stage.qty} contract{stage.qty !== 1 ? 's' : ''} @ ${stage.premium.toFixed(2)}
-                    {'  ·  '}{fmtEt(stage.time)}
-                  </Text>
-                </View>
-                <Text style={{ color: stageColor, fontWeight: '700', fontSize: 14 }}>
-                  {stage.pnl >= 0 ? '+' : ''}${stage.pnl.toFixed(2)}
-                </Text>
-              </View>
-            );
-          })}
-        </>
-      )}
-
-      {/* TP1 / TP2 summary rows (if exit_stages absent but columns populated) */}
-      {(!trade.exit_stages || trade.exit_stages.length === 0) && trade.tp1_pnl != null && (
-        <>
-          <Text style={[styles.detailSectionHeader, { color: colors.tabBarInactive, marginTop: 8 }]}>
-            EXIT BREAKDOWN
-          </Text>
-          {trade.tp1_pnl != null && (
-            <DetailRow
-              label="TP1"
-              value={`${trade.tp1_qty ?? '?'} contracts @ $${trade.tp1_premium?.toFixed(2) ?? '?'}  →  ${trade.tp1_pnl >= 0 ? '+' : ''}$${trade.tp1_pnl.toFixed(2)}`}
-              valueColor={trade.tp1_pnl >= 0 ? colors.success : colors.error}
-              colors={colors}
-            />
-          )}
-          {trade.tp2_pnl != null && (
-            <DetailRow
-              label="TP2"
-              value={`${trade.tp2_qty ?? '?'} contracts @ $${trade.tp2_premium?.toFixed(2) ?? '?'}  →  ${trade.tp2_pnl >= 0 ? '+' : ''}$${trade.tp2_pnl.toFixed(2)}`}
-              valueColor={trade.tp2_pnl >= 0 ? colors.success : colors.error}
-              colors={colors}
-            />
-          )}
-        </>
-      )}
+    <View style={{ gap: 4 }}>
+      {chains.map(({ prev, next }) => (
+        <Text key={next.id} style={{ fontSize: 11.5, color: colors.tabBarInactive }} numberOfLines={2}>
+          <Text style={{ color: colors.text }}>{name(prev)}</Text>
+          {`  →  ${finalCloseLabel(prev).replace(/^Closed in full · /, '')} ${fmtEtClock(prev.exit_time) ?? ''}  →  `}
+          <Text style={{ color: colors.text }}>{name(next)}</Text>
+          <Text style={{ color: colors.warning, fontWeight: '700' }}>  RE-ENTRY</Text>
+          {'  (linked from records, INFERRED)'}
+        </Text>
+      ))}
     </View>
   );
 };
@@ -551,9 +346,11 @@ const TradeDetail = ({ trade, colors }: { trade: ORBTrade; colors: any }) => {
 // ── TradeRow ──────────────────────────────────────────────────────────────────
 
 const TradeRow = ({
-  trade, colors, expanded, onToggle, accountEquity, accountLabel,
+  trade, dayTrades, colors, expanded, onToggle, accountEquity, accountLabel,
 }: {
   trade: ORBTrade; colors: any; expanded: boolean; onToggle: () => void;
+  /** The same session's trades — the v2 detail links re-entries from them. */
+  dayTrades?: ORBTrade[];
   /** Current equity of the account this trade belongs to (paper or live),
    *  so the card can show how this trade's realized P&L relates to the
    *  account's current total, not just the trade in isolation. */
@@ -587,9 +384,11 @@ const TradeRow = ({
   const isCall       = trade.direction === 'CALL';
   const dirColor     = isCall ? colors.success : colors.error;
 
-  const exitLabel = trade.exit_reason
-    ? (EXIT_REASON_LABELS[trade.exit_reason] ?? trade.exit_reason)
-    : isOpen ? 'Open' : null;
+  // Final state, never the last partial's label ("TP2 Hit — Partial Close"
+  // on a fully-closed trade), and the AVERAGE exit, never the last leg's
+  // premium (trade-logging-v2 brief §2, Oct 30 SPY 11:05).
+  const exitLabel = finalCloseLabel(trade);
+  const avgExit = avgExitPremium(trade);
 
   const handlePress = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -637,8 +436,8 @@ const TradeRow = ({
           <Text style={[styles.tradeMeta, { color: colors.tabBarInactive }]} numberOfLines={1}>
             {fmtTradeDate(trade.trade_date)}
             {'  ·  '}
-            ${trade.entry_premium?.toFixed(2) ?? '—'} → {trade.exit_premium != null ? `$${trade.exit_premium.toFixed(2)}` : '—'}
-            {exitLabel ? `  ·  ${exitLabel}` : ''}
+            {fmtPremium(trade.entry_premium)}{avgExit != null && !isOpen ? ` → avg ${fmtPremium(avgExit)}` : ''}
+            {`  ·  ${exitLabel}`}
           </Text>
 
           {/* Real account-level impact of this trade, snapshotted at entry and
@@ -694,7 +493,7 @@ const TradeRow = ({
         </View>
       </View>
 
-      {expanded && <TradeDetail trade={trade} colors={colors} />}
+      {expanded && <TradeDetailV2 trade={trade} dayTrades={dayTrades} colors={colors} />}
     </TouchableOpacity>
   );
 };
@@ -933,11 +732,6 @@ const styles = StyleSheet.create({
   tradePnlPct: { fontSize: 11, fontWeight: '700' },
 
   // Trade detail expansion
-  detailSection:       { marginTop: 12, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, gap: 5 },
-  detailSectionHeader: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 2 },
-  detailRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 },
-  detailLabel: { fontSize: 11, fontWeight: '600', flex: 1 },
-  detailValue: { fontSize: 11, flex: 2, textAlign: 'right' },
   byProfileTitle: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginTop: 8 },
 
   // Rating card

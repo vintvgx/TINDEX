@@ -17,6 +17,7 @@ import { useNotificationHistory } from '@/hooks/queries/notifications/useNotific
 import { useSearchBarVisibility } from '@/hooks/useSearchBarVisibility';
 import { useCardTintDarkMode } from '@/hooks/useCardTintDarkMode';
 import { useChartPriceSource } from '@/hooks/useChartPriceSource';
+import { useChartAccountMode } from '@/hooks/useChartAccountMode';
 import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 import { PERIOD_STOPS, intervalCycleFor } from '@/common/components/ticker/TimeframeChips';
 import { ALLOWED_INTERVALS, DEFAULT_INTERVAL, INTERVAL_LABEL } from '@/lib/chartIntervals';
@@ -38,6 +39,7 @@ const ProfileScreen = () => {
   const { hidden: searchBarHidden, setHidden: setSearchBarHidden } = useSearchBarVisibility();
   const { enabled: cardTintDarkMode, setEnabled: setCardTintDarkMode } = useCardTintDarkMode();
   const { source: chartPriceSource, setSource: setChartPriceSource } = useChartPriceSource();
+  const { mode: chartAccountMode, setMode: setChartAccountMode } = useChartAccountMode();
   // Home dynamic card chart timeframe (default 1D · 15m).
   const { prefs: chartPrefs, setPref: setChartPref } = useChartDisplayPrefs();
   const homeIntervals = intervalCycleFor(ALLOWED_INTERVALS[chartPrefs.homeChartPeriod]);
@@ -400,6 +402,62 @@ const ProfileScreen = () => {
                     <TouchableOpacity
                       key={key}
                       onPress={() => setChartPriceSource(key)}
+                      activeOpacity={0.75}
+                      style={{
+                        flex: 1,
+                        alignItems: 'center',
+                        paddingVertical: 8,
+                        borderRadius: 8,
+                        backgroundColor: active ? colors.accent : 'transparent',
+                      }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: '600', color: active ? colors.accentForeground : colors.textSecondary }}>
+                        {label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+            {/* Charts tab bottom strip — which account's balance + day P&L */}
+            <View
+              style={{
+                paddingHorizontal: 16,
+                paddingVertical: 14,
+                borderTopWidth: 1,
+                borderTopColor: colors.separator,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                <View
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 10,
+                    backgroundColor: colors.iconButton,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginRight: 12,
+                  }}
+                >
+                  <Ionicons name="wallet-outline" size={17} color={colors.textSecondary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.text, fontSize: 15, fontWeight: '500' }}>
+                    Chart Account Balance
+                  </Text>
+                  <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 1 }}>
+                    Which account's equity and day P&L show at the bottom of Charts
+                  </Text>
+                </View>
+              </View>
+              <View style={{ flexDirection: 'row', borderRadius: 10, borderWidth: 1, borderColor: colors.border, padding: 3, backgroundColor: colors.background }}>
+                {([['live', 'Live'], ['paper', 'Paper']] as const).map(([key, label]) => {
+                  const active = chartAccountMode === key;
+                  return (
+                    <TouchableOpacity
+                      key={key}
+                      onPress={() => setChartAccountMode(key)}
                       activeOpacity={0.75}
                       style={{
                         flex: 1,

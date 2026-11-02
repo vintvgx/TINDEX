@@ -3812,7 +3812,8 @@ class ORBEngine(GateWatchMixin):
         # no information) rather than crashing or guessing a direction.
         if self.trade_taken and self.exit_manager:
             bar_open = bar.open if bar.open is not None else bar.close
-            self.exit_manager.on_underlying_bar(bar_open, bar.close)
+            self.exit_manager.on_underlying_bar(bar_open, bar.close, ts=bar.ts,
+                                                high=bar.high, low=bar.low)
             self._feed_runner_exit(bar)
 
         # Only act once the ORB is established and the session isn't skipped.

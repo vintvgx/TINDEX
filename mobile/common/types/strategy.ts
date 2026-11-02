@@ -1,3 +1,4 @@
+import type { TradeLogV2 } from './tradeLogV2';
 export type ProfileKey =
   | 'BULL_DOG' | 'THUNDER_CAT' | 'WOLF' | 'TREND_RIDER' | 'RETESTER' | 'REVERSAL' | 'CUSTOM'
   // Immediate trade profiles (conviction / manual entries)
@@ -434,6 +435,13 @@ export interface ORBTrade {
   live_price?: number;
   live_pnl?: number;
   live_pnl_pct?: number;
+  // ── Levels as armed at entry (orb_trades columns; null on older rows) ──────
+  hard_stop_price?: number | null;
+  tp1_price?: number | null;
+  tp2_price?: number | null;
+  // ── Trade Logging v2 record — absent on every row logged before v2. See
+  //    common/types/tradeLogV2.ts; lib/tradeLogV2.ts renders absent → MISSING.
+  log_v2?: TradeLogV2 | null;
 }
 
 export interface StrategyStats {

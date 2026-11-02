@@ -787,6 +787,9 @@ GRACE_OVERRIDE_KEYS = {
     # post-TP1 runner + an optional profit floor above entry. Off by default
     # on every profile — set per strategy.
     "runner_exit_enabled", "runner_exit_buffer_pct", "runner_exit_bar", "runner_floor_pct",
+    # Cascade v2 (2026-11-01): share of the post-TP1 peak gain given back
+    # before a cascade candidate opens. 0.50 default; tune on November data.
+    "cascade_retrace_pct",
 }
 
 

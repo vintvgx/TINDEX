@@ -3,21 +3,23 @@ Profile-aware exit manager. All thresholds come from the profile dict.
 
 Exit sequence:
   1. TP1 (confirmed over N ticks, dollar-floored) — partial close, SL moves to entry.
-  2. Cascade exit — after TP1, monitors the underlying for consecutive down ticks.
-     On N consecutive downs: sells cascade_close_pct of non-runner contracts.
-     Always preserves 1 runner contract.
+  2. Cascade exit (v2) — after TP1, tracks the peak premium. When premium
+     gives back cascade_retrace_pct (50%) of the peak gain, 2 consecutive
+     1-min underlying bars against the trade by the close of the next full
+     5-min bar sell cascade_close_pct of non-runner contracts. Never below
+     breakeven; always preserves 1 runner contract.
   3. Runner — the final 1 contract exits at: TP2 (if reached), BE stop (entry price),
      EOD (15:58 ET), or manual.
 
 TP1 dollar floor: TP = max(entry × mult, entry + min_dollars)
   Prevents cheap OTM contracts from locking in noise-level gains.
 
-BULL DOG    — 10 contracts, TP1 +20% / $0.35 floor, cascade(3 ticks, 50%)
-THUNDER CAT — 6 contracts,  TP1 +20% / $0.25 floor, cascade(3 ticks, 50%)
-WOLF        — 3 contracts,  TP1 +15% / $0.20 floor, cascade(3 ticks, 50%)
-TREND RIDER — 6 contracts,  TP1 +15% / $0.30 floor, cascade(3 ticks, 50%), be_hold runner
-RETESTER    — 4 contracts,  TP1 +20% / $0.20 floor, cascade(3 ticks, 50%), trail runner
-REVERSAL    — 3 contracts,  TP1 +15% / $0.18 floor, cascade(5 ticks, 50%), be_hold runner
+BULL DOG    — 10 contracts, TP1 +20% / $0.35 floor, cascade(50%)
+THUNDER CAT — 6 contracts,  TP1 +20% / $0.25 floor, cascade(50%)
+WOLF        — 3 contracts,  TP1 +15% / $0.20 floor, cascade(50%)
+TREND RIDER — 6 contracts,  TP1 +15% / $0.30 floor, cascade(50%), be_hold runner
+RETESTER    — 4 contracts,  TP1 +20% / $0.20 floor, cascade(50%), trail runner
+REVERSAL    — 3 contracts,  TP1 +15% / $0.18 floor, cascade(50%), be_hold runner
 """
 
 import json
@@ -64,6 +66,14 @@ BE_GRACE_MAX_SECONDS = 120
 # (ORBEngine / TradeLogger.update_exit_levels) still needs its own look.
 _RUNNER_TRAIL_HARD_DISABLED = False
 _CASCADE_EXIT_HARD_DISABLED = False
+
+# Cascade v2 (trade-logging-cascade-v2 brief, 2026-11-01): replaces the v1
+# "N consecutive against-bars after TP1" rule, which fired on 1m noise (Oct 30
+# SPY 10:16 — a 3-bar bounce while every trend input still agreed). Arms at
+# TP1; trigger = peak − retrace_pct × (peak − entry); then needs this many
+# consecutive 1m bars against the trade, all closing by the next full 5m bar.
+CASCADE_CONFIRM_BARS = 2
+CASCADE_RETRACE_PCT_DEFAULT = 0.50
 
 # Sentinel distinguishing "sl_grace_minutes not provided" (leave the current
 # stop-type alone) from "sl_grace_minutes explicitly set to None" (switch to
@@ -140,19 +150,23 @@ class ExitManager:
         self._tp1_ticks        = 0
         self._tp1_ticks_needed = profile.get("tp1_confirm_ticks", 2)
 
-        # Cascade exit: after TP1, track consecutive underlying candles that
-        # close AGAINST the trade (red for a CALL, green for a PUT) — judged
-        # by each bar's own open vs. close, not against the previous bar's
-        # close (see on_underlying_bar; 2026-07-29 fix — the old cross-bar
-        # comparison could count a bearish-looking bar as "recovering" just
-        # because it gapped up, or a bullish-looking bar as "against" just
-        # because it closed a cent under the prior bar).
-        # On N consecutive against-candles, sell cascade_close_pct of
-        # non-runner contracts. Always preserves 1 runner contract regardless
-        # of cascade count.
-        self._cascade_down_ticks   = 0
-        self._cascade_ticks_needed = profile.get("cascade_ticks", 3)
+        # Cascade v2 (see CASCADE_CONFIRM_BARS): _cascade_peak is the highest
+        # premium since TP1 (None until TP1 arms it). A candidate opens when
+        # premium falls to the 50% retrace trigger; its 1m confirmation bars
+        # are judged by each bar's own open vs. close (red for a CALL, green
+        # for a PUT — 2026-07-29 candle-colour fix, unchanged). Profile
+        # `cascade_ticks` is no longer read. Trim size (cascade_close_pct of
+        # non-runner contracts) and the preserve-1-runner floor are unchanged.
+        # retrace_pct is the share of the peak gain given back before the
+        # trigger; clamped inside (0, 1) so the trigger always sits above
+        # entry (a cascade trim must bank profit by construction).
+        self._cascade_retrace_pct  = min(0.95, max(0.05, float(
+            profile.get("cascade_retrace_pct", CASCADE_RETRACE_PCT_DEFAULT))))
         self._cascade_close_pct    = profile.get("cascade_close_pct", 0.50)
+        self._cascade_peak         = None
+        self._cascade_candidate    = None   # see _cascade_open_candidate
+        self._cascade_fire_pending = False
+        self._last_option_price    = None
         # Mid-trade on/off switch for cascade (see apply_overrides) — separate
         # from the qty_remaining > 1 exemption in evaluate(), which is always
         # in force regardless of this flag. Defaults on for any profile that
@@ -400,6 +414,9 @@ class ExitManager:
 
         if current_option_price is not None and current_option_price > self._peak_premium:
             self._peak_premium = current_option_price
+        if current_option_price is not None:
+            self._last_option_price = current_option_price
+            self._cascade_on_tick(current_option_price)
 
         if self._is_zero_dte and not self._disable_eod_close and now_et >= self.eod_close_time:
             return self._action("CLOSE_ALL", self.qty_remaining, "EOD_CLOSE")
@@ -546,6 +563,7 @@ class ExitManager:
                 if self._tp1_ticks < self._tp1_ticks_needed:
                     return self._action("HOLD", 0, "TP1_CONFIRMING")
                 self.tp1_hit        = True
+                self._cascade_peak  = current_option_price   # arms cascade v2
                 # "none" leaves the runner on its original pre-TP1 hard stop —
                 # no BE floor, no trail. It only exits via TP2/cascade/EOD/manual.
                 if self._runner_mode != "none":
@@ -629,8 +647,10 @@ class ExitManager:
             else:
                 self._trail_breach_start = None
 
-        # Cascade exit — fires when on_underlying_bar() has accumulated enough
-        # consecutive against-the-trade candles (bar cadence, not quote cadence).
+        # Cascade exit (v2) — fires once on_underlying_bar() has confirmed an
+        # open candidate (trigger + 2×1m against, inside the 5m window). Sells
+        # at the first tick after the second bar closes, never at/below
+        # breakeven (_cascade_on_tick already blocked that case above).
         # Always preserves 1 runner contract; that runner exits only via TP2/BE/EOD/manual —
         # never cascade. This qty_remaining > 1 gate is also what makes a
         # 1-contract entry cascade-exempt entirely: it never has more than 1 to
@@ -638,15 +658,13 @@ class ExitManager:
         # closes it in full — see _use_tp2 above), so "manage your own runner,
         # or let the stop handle it" already holds for both the single-contract
         # case and the runner of any multi-contract trade.
-        if (not _CASCADE_EXIT_HARD_DISABLED and self._cascade_enabled
-                and self.tp1_hit and self.qty_remaining > 1):
-            if self._cascade_down_ticks >= self._cascade_ticks_needed:
-                self._cascade_down_ticks = 0
-                sellable    = self.qty_remaining - 1
-                qty_cascade = min(max(1, math.floor(sellable * self._cascade_close_pct)),
-                                  sellable)
-                return self._action("CLOSE_PARTIAL", qty_cascade, "CASCADE_EXIT",
-                                    current_option_price)
+        if self._cascade_fire_pending and self._cascade_active():
+            sellable    = self.qty_remaining - 1
+            qty_cascade = min(max(1, math.floor(sellable * self._cascade_close_pct)),
+                              sellable)
+            self._cascade_close("CASCADE_FIRE", price=current_option_price, qty=qty_cascade)
+            return self._action("CLOSE_PARTIAL", qty_cascade, "CASCADE_EXIT",
+                                current_option_price)
 
         # Runner technical invalidation — any qty, runner phase only. Last in
         # priority: every exit above still wins when it triggers the same tick.
@@ -738,7 +756,8 @@ class ExitManager:
         except Exception:
             pass
 
-    def on_underlying_bar(self, open_: float, close: float) -> None:
+    def on_underlying_bar(self, open_: float, close: float, ts: datetime | None = None,
+                          high: float | None = None, low: float | None = None) -> None:
         """
         Feed one 1-minute bar into the cascade tracker (post-TP1) or the SL
         grace-window tracker (pre-TP1). Must be called from on_bar (bar
@@ -749,7 +768,10 @@ class ExitManager:
         bar's close — that tracker cares about a sustained adverse drift
         while sitting at the stop, not candle shape.
 
-        Post-TP1 (cascade) instead judges each bar by its OWN open vs. close
+        Post-TP1 (cascade v2) only counts bars while a candidate is open —
+        see _cascade_on_bar. `ts` is the bar's START time (ET, OrbBar.ts);
+        without it the bar is assumed to have just closed. Each bar is judged
+        by its OWN open vs. close
         — a genuinely red (bearish) candle for a CALL, green (bullish) for a
         PUT — not by comparing to the previous bar's close. The two diverge
         exactly in the noisy post-TP1 window: a bar can gap up and still
@@ -782,15 +804,125 @@ class ExitManager:
             self._sl_grace_last_price = close
             return  # cascade is only relevant after TP1
 
-        is_red   = close < open_
-        is_green = close > open_
-        against    = is_red   if self.direction == "CALL" else is_green
-        recovering = is_green if self.direction == "CALL" else is_red
+        self._cascade_on_bar(open_, close, ts, high, low)
+
+    # ── Cascade v2 ───────────────────────────────────────────────────────────
+
+    def _cascade_active(self) -> bool:
+        return (not _CASCADE_EXIT_HARD_DISABLED and self._cascade_enabled
+                and self.tp1_hit and self._cascade_peak is not None
+                and self.qty_remaining > 1)
+
+    def cascade_trigger_level(self) -> float | None:
+        """peak − retrace_pct × (peak − entry) — at the default 0.50 this is the
+        brief's entry + 0.50 × (peak − entry). Above entry whenever the peak
+        is, so a trim triggered here always banks profit by construction."""
+        if self._cascade_peak is None:
+            return None
+        return self._cascade_peak - self._cascade_retrace_pct * (self._cascade_peak - self.entry_premium)
+
+    @staticmethod
+    def _now() -> datetime:
+        return datetime.now(ET)
+
+    @staticmethod
+    def cascade_deadline(trigger_at: datetime) -> datetime:
+        """Close of the next FULL 5m bar after the trigger: 10:22:30 → 10:30,
+        10:25:00 → 10:30. A trigger late in a 5m bar still gets a whole bar."""
+        base = trigger_at.replace(second=0, microsecond=0)
+        base -= timedelta(minutes=base.minute % 5)
+        start = base if base == trigger_at else base + timedelta(minutes=5)
+        return start + timedelta(minutes=5)
+
+    def _cascade_on_tick(self, price: float) -> None:
+        """Per-tick cascade state: peak tracking, opening a candidate at the
+        trigger, and the breakeven floor. Never sells — evaluate() does that."""
+        if self._cascade_peak is None:
+            return
+        if not self._cascade_active():
+            if self._cascade_candidate is not None:
+                self._cascade_close("CASCADE_BLOCKED", price=price,
+                                    blocked_reason="cascade disabled or only the runner remains")
+            return
+        if price > self._cascade_peak:
+            self._cascade_peak = price
+        if self._cascade_candidate is not None:
+            # Bars stopped arriving (feed gap): don't hold a candidate open
+            # past its window on ticks alone.
+            if (not self._cascade_fire_pending
+                    and self._now() > self._cascade_candidate["deadline"] + timedelta(seconds=90)):
+                self._cascade_close("CASCADE_BLOCKED", price=price,
+                                    blocked_reason="no 1m bars arrived before the 5m deadline")
+                return
+            # Floor: premium reached breakeven mid-window — the breakeven
+            # stop owns the position now, a trim here would not bank profit.
+            if price <= self.entry_premium:
+                self._cascade_close("CASCADE_BLOCKED", price=price,
+                                    blocked_reason="premium reached breakeven during confirmation window")
+            return
+        trigger = self.cascade_trigger_level()
+        if self.entry_premium < price <= trigger:
+            self._cascade_open_candidate(price, trigger)
+
+    def _cascade_open_candidate(self, price: float, trigger: float) -> None:
+        now = self._now()
+        self._cascade_candidate = {
+            "trigger_at":   now,
+            "deadline":     self.cascade_deadline(now),
+            "trigger":      round(trigger, 4),
+            "peak":         round(self._cascade_peak, 4),
+            "price":        round(price, 4),
+            "against":      0,
+            "bars":         [],
+        }
+        self._log_decision("CASCADE_CANDIDATE", **self._cascade_evidence())
+
+    def _cascade_on_bar(self, open_, close, ts, high, low) -> None:
+        c = self._cascade_candidate
+        if c is None or self._cascade_fire_pending:
+            return
+        start = ts if ts is not None else self._now() - timedelta(minutes=1)
+        if start.tzinfo is None:
+            start = ET.localize(start)
+        end = start + timedelta(minutes=1)
+        if start < c["trigger_at"]:
+            return   # bar began before the trigger — not post-trigger evidence
+        if end > c["deadline"]:
+            self._cascade_close("CASCADE_BLOCKED", price=self._last_option_price,
+                                blocked_reason="2x1m did not confirm by the next 5m close")
+            return
+        against = close < open_ if self.direction == "CALL" else close > open_
+        recovering = close > open_ if self.direction == "CALL" else close < open_
+        c["bars"].append({"t": start.isoformat(), "o": open_, "h": high, "l": low, "c": close,
+                          "against": against, "recovering": recovering})
         if against:
-            self._cascade_down_ticks += 1
+            c["against"] += 1
         elif recovering:
-            self._cascade_down_ticks = 0
-        # doji (close == open) → leave counter unchanged
+            c["against"] = 0
+        # doji (close == open) → count unchanged
+        if c["against"] >= CASCADE_CONFIRM_BARS:
+            c["confirmed_at"] = end
+            self._cascade_fire_pending = True
+        elif end >= c["deadline"]:
+            self._cascade_close("CASCADE_BLOCKED", price=self._last_option_price,
+                                blocked_reason="2x1m did not confirm by the next 5m close")
+
+    def _cascade_evidence(self) -> dict:
+        c = self._cascade_candidate or {}
+        return {"trigger": c.get("trigger"), "peak": c.get("peak"), "trigger_price": c.get("price"),
+                "trigger_at": c.get("trigger_at"), "deadline": c.get("deadline"),
+                "confirmed_at": c.get("confirmed_at"), "against_count": c.get("against"),
+                "bars": c.get("bars"), "entry": self.entry_premium,
+                "retrace_pct": self._cascade_retrace_pct}
+
+    def _cascade_close(self, event: str, price: float | None, **fields) -> None:
+        """End the open candidate (fired or blocked), log it with its evidence,
+        and re-arm: a fresh peak is tracked from the current premium."""
+        self._log_decision(event, **self._cascade_evidence(), price=price, **fields)
+        self._cascade_candidate    = None
+        self._cascade_fire_pending = False
+        if price is not None and self._cascade_peak is not None:
+            self._cascade_peak = max(price, self.entry_premium)
 
     def update_qty(self, qty_closed: int) -> None:
         """Call after executing a partial close so remaining contract count stays accurate."""
@@ -1041,7 +1173,13 @@ class ExitManager:
             "runner_floor_pct":    self._runner_floor_pct,
             "runner_exit":         self._runner_exit.to_dict() if self._runner_exit else None,
             "cascade_enabled":     self._cascade_enabled,
-            "cascade_down_ticks":  self._cascade_down_ticks,
+            "cascade_peak":        round(self._cascade_peak, 4) if self._cascade_peak is not None else None,
+            "cascade_trigger":     (round(self.cascade_trigger_level(), 4)
+                                    if self._cascade_peak is not None else None),
+            "cascade_candidate":   ({"trigger_at": self._cascade_candidate["trigger_at"].isoformat(),
+                                     "deadline":   self._cascade_candidate["deadline"].isoformat(),
+                                     "against":    self._cascade_candidate["against"]}
+                                    if self._cascade_candidate else None),
             "tp1_confirm_ticks":   self._tp1_ticks,
             "sl_confirm_ticks":    self._sl_ticks,
             "sl_grace_active":       self._sl_grace_active,

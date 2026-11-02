@@ -110,8 +110,9 @@ HARD_STOP           Full stop before TP1. Worst outcome — full position loss.
 BREAKEVEN_STOP      Runner hit entry price after TP1. Net positive or flat.
 TP1                 Partial close (50%) at first target. SL moves to entry.
 TP2                 Partial close at second target.
-CASCADE_EXIT        N consecutive 1-min bars of underlying against position
-                    triggered a partial runner close. Profile-specific N.
+CASCADE_EXIT        After TP1, premium gave back 50% of its peak gain, then 2
+                    consecutive 1-min bars closed against the position before
+                    the next 5-min close — trimmed 50% of non-runner contracts.
 RUNNER_TRAIL_STOP   Trailing stop fired on final runner (trail-mode profiles).
 EOD_CLOSE           Orderly close before 3:58 PM ET hard deadline.
 EOD_HARD_CLOSE      Position still open at hard deadline — force-closed.
