@@ -1768,13 +1768,17 @@ class ORBEngine(GateWatchMixin):
             # does not hold here is omitted (→ MISSING), never guessed.
             from services.strategy.trade_logger import build_log_v2_entry, utcnow_iso
             _entry_underlying = self._get_underlying_price()
-            _v2 = build_log_v2_entry(
+            try:
+                _v2 = build_log_v2_entry(
                 strategy_name=self.strategy_name or logged_profile_key,
                 profile_key=logged_profile_key,
                 effective_profile=effective_profile,
                 direction=direction,
                 trigger_price=trigger_price,
-                breakout_level=fib_levels.get("orh") if direction == "CALL" else fib_levels.get("orl"),
+                # No trigger price = no breakout signal (manual entries):
+                # never record a breakout claim for a trade that had none.
+                breakout_level=(fib_levels.get("orh") if direction == "CALL" else fib_levels.get("orl"))
+                    if trigger_price is not None else None,
                 vwap=self._live_session_vwap() or self.session_vwap,
                 gate=gate_snapshot,
                 contract=contract,
@@ -1785,10 +1789,15 @@ class ORBEngine(GateWatchMixin):
                 entry_premium=entry_premium,
                 qty=qty,
                 entry_time_iso=utcnow_iso(),
-            )
-            if _v2.get("events"):
-                _v2["events"][0]["underlying"] = (
-                    round(float(_entry_underlying), 2) if _entry_underlying is not None else None)
+                )
+                if _v2.get("events"):
+                    _v2["events"][0]["underlying"] = (
+                        round(float(_entry_underlying), 2) if _entry_underlying is not None else None)
+            except Exception as _v2_e:
+                # v2 logging is best-effort: a failed record build must never
+                # block log_entry (a filled position with no DB row).
+                logger.warning("[ORBEngine] v2 entry record failed (non-fatal): %s", _v2_e)
+                _v2 = None
             self.active_trade_id = self.logger.log_entry(
                 ticker=self.ticker,
                 direction=direction,
@@ -3235,14 +3244,15 @@ class ORBEngine(GateWatchMixin):
             try:
                 from services.strategy.trade_logger import build_log_v2_exit_event, utcnow_iso
                 _qty_after = self.exit_manager.qty_remaining if self.exit_manager else 0
-                _vwap_txt, _orb_txt = self._v2_exit_technicals(current_price)
+                _v2_underlying = current_price or None
+                _vwap_txt, _orb_txt = self._v2_exit_technicals(_v2_underlying)
                 self.logger.log_v2_event(self.active_trade_id, build_log_v2_exit_event(
                     code=reason,
                     qty_before=_qty_after + qty_closed,
                     qty_closed=qty_closed,
                     qty_after=_qty_after,
                     premium=exit_premium,
-                    underlying=current_price,
+                    underlying=_v2_underlying,
                     leg_pnl=pnl,
                     cum_pnl=_cum_pnl,
                     armed=self._armed_levels_snapshot(),
@@ -3779,7 +3789,7 @@ class ORBEngine(GateWatchMixin):
         """VWAP + ORB position strings at exit time, from live engine
         inputs only. Returns (vwap_txt, orb_txt), either possibly None.
         No composite is computed here — see build_log_v2_exit_event."""
-        if underlying is None:
+        if not underlying:
             return None, None
         vwap_txt = None
         vwap = None

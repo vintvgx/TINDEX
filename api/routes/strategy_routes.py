@@ -1015,9 +1015,15 @@ def update_strategy_exits(strategy_id: str):
         kwargs["sl_grace_minutes"] = int(raw) if raw is not None else None
     # v2 override trail: snapshot the pre-edit levels (apply_overrides
     # returns only new values, so old values must be captured first).
+    # getattr: v2 logging must never break the edit itself — a fake or
+    # partially-built ExitManager may lack these attributes (CI: the
+    # snapshot raised AttributeError on em.tp1 and returned HTTP 500).
     _v2_old = {
-        "hard_stop": em.hard_stop, "tp1": em.tp1, "tp2": em.tp2,
-        "runner_mode": em._runner_mode, "cascade_enabled": em._cascade_enabled,
+        "hard_stop": getattr(em, "hard_stop", None),
+        "tp1": getattr(em, "tp1", None),
+        "tp2": getattr(em, "tp2", None),
+        "runner_mode": getattr(em, "_runner_mode", None),
+        "cascade_enabled": getattr(em, "_cascade_enabled", None),
     }
     try:
         changed = em.apply_overrides(**kwargs)
@@ -1111,9 +1117,13 @@ def update_strategy_exits(strategy_id: str):
                 from services.strategy.trade_logger import utcnow_iso
                 _when = utcnow_iso()
                 for _field, _old in _v2_old.items():
-                    if _field in changed and changed[_field] != _old:
+                    # apply_overrides returns prices rounded to 4 decimals;
+                    # compare/store the old value rounded the same way, or a
+                    # resubmitted unchanged value logs a phantom override.
+                    _old_r = round(_old, 4) if isinstance(_old, float) else _old
+                    if _field in changed and changed[_field] != _old_r:
                         logger_svc.log_v2_override(trade_id, {
-                            "field": _field, "old": _old, "new": changed[_field],
+                            "field": _field, "old": _old_r, "new": changed[_field],
                             "who": "user", "when": _when, "via": "app (PATCH exits)",
                         })
             except Exception:

@@ -7,6 +7,7 @@ a fake client) so these tests never touch a database.
 """
 
 import json
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -322,11 +323,8 @@ console.log(JSON.stringify([
 
 
 def test_frontend_naive_utc_rule_via_node():
-    try:
-        out = subprocess.run([sys.executable, "-c", "import sys; sys.exit(0)"],
-                             capture_output=True, timeout=10)
-    except Exception:
-        pytest.skip("subprocess unavailable")
+    if shutil.which("node") is None:
+        pytest.skip("node not installed")
     res = subprocess.run(["node", "-e", NODE_RULE], capture_output=True, text=True, timeout=30)
     assert res.returncode == 0, res.stderr
     times = json.loads(res.stdout.strip())

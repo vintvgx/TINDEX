@@ -4,6 +4,7 @@ Reads config back from strategy_config table.
 """
 
 import os
+import threading
 import uuid
 import asyncio
 import hashlib
@@ -387,6 +388,9 @@ def _notify_pending() -> None:
         notify_app("pending")
     except Exception:
         pass
+
+
+_LOG_V2_LOCK = threading.RLock()
 
 
 class TradeLogger:
@@ -1073,41 +1077,47 @@ class TradeLogger:
     # Best-effort, never fatal: a failed v2 write logs a warning and returns
     # False — the trade itself is already recorded by log_entry/log_exit, and
     # a missing log_v2 column (migration not run) must never lose a fill.
-    # Read-modify-write is safe here because each trade's events are written
-    # under its engine's tick lock, in decision order.
+    # Read-modify-write is serialized per process by _LOG_V2_LOCK: v2 writers
+    # do NOT all run under the engine tick lock (_finalize_exit runs on a
+    # priced-exit thread, overrides arrive from the persist pool, only the
+    # cascade sink runs under the tick lock), so without this lock two
+    # writers could read the same blob and the second would silently drop
+    # the first writer's event. Module-level (not instance) because tests
+    # build TradeLogger via __new__ without __init__.
 
     def _append_log_v2(self, trade_id: str, mutate) -> bool:
         if not trade_id:
             return False
-        try:
-            row = (
-                self.client.table("orb_trades").select("log_v2")
-                .eq("id", trade_id).limit(1).execute()
-            )
-        except Exception as e:
-            logger.warning("[TradeLogger] log_v2 read failed (trade_id=%s): %s", trade_id, e)
-            return False
-        if not row.data:
-            return False
-        current = (row.data[0] or {}).get("log_v2") or {}
-        if not isinstance(current, dict):
-            current = {}
-        try:
-            updated = mutate(dict(current))
-        except Exception as e:
-            logger.warning("[TradeLogger] log_v2 build failed (trade_id=%s): %s", trade_id, e)
-            return False
-        try:
-            self.client.table("orb_trades").update({"log_v2": updated}).eq("id", trade_id).execute()
-            return True
-        except Exception as e:
-            if "log_v2" in str(e):
-                logger.warning(
-                    "[TradeLogger] log_v2 column missing — v2 events not persisted "
-                    "(run the log_v2 migration); trade logging itself is unaffected")
+        with _LOG_V2_LOCK:
+            try:
+                row = (
+                    self.client.table("orb_trades").select("log_v2")
+                    .eq("id", trade_id).limit(1).execute()
+                )
+            except Exception as e:
+                logger.warning("[TradeLogger] log_v2 read failed (trade_id=%s): %s", trade_id, e)
                 return False
-            logger.warning("[TradeLogger] log_v2 update failed (trade_id=%s): %s", trade_id, e)
-            return False
+            if not row.data:
+                return False
+            current = (row.data[0] or {}).get("log_v2") or {}
+            if not isinstance(current, dict):
+                current = {}
+            try:
+                updated = mutate(dict(current))
+            except Exception as e:
+                logger.warning("[TradeLogger] log_v2 build failed (trade_id=%s): %s", trade_id, e)
+                return False
+            try:
+                self.client.table("orb_trades").update({"log_v2": updated}).eq("id", trade_id).execute()
+                return True
+            except Exception as e:
+                if "log_v2" in str(e):
+                    logger.warning(
+                        "[TradeLogger] log_v2 column missing — v2 events not persisted "
+                        "(run the log_v2 migration); trade logging itself is unaffected")
+                    return False
+                logger.warning("[TradeLogger] log_v2 update failed (trade_id=%s): %s", trade_id, e)
+                return False
 
     def log_v2_entry(self, trade_id: str, v2: dict) -> bool:
         """Replace (or set) the whole v2 record — used only when log_entry
