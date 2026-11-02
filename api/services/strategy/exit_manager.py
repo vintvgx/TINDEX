@@ -103,7 +103,11 @@ def compute_exit_levels(entry_premium: float, profile: dict) -> tuple[float, flo
 class ExitManager:
     def __init__(self, entry_premium: float, qty: int, fib_levels: dict,
                  direction: str, eod_close_time: str, profile: dict,
-                 is_zero_dte: bool = True):
+                 is_zero_dte: bool = True, v2_sink=None):
+        # v2_sink: optional callable(event_dict) invoked for cascade
+        # candidate/fire/blocked decisions so TradeLogger can persist them
+        # as v2 events. Logging only — it never influences a decision, and
+        # any exception inside it is swallowed here, never in evaluate().
         self.entry_premium  = entry_premium
         self.qty            = qty
         self.qty_remaining  = qty
@@ -111,6 +115,8 @@ class ExitManager:
         self.direction      = direction
         self.eod_close_time = self._parse_time(eod_close_time)
         self.profile        = profile
+
+        self.v2_sink      = v2_sink
 
         self.entry_time   = datetime.now(ET)
 
@@ -864,6 +870,16 @@ class ExitManager:
         if self.entry_premium < price <= trigger:
             self._cascade_open_candidate(price, trigger)
 
+    def _emit_v2(self, event: dict) -> None:
+        """Best-effort v2 sink call — never raises into decision logic."""
+        sink = getattr(self, "v2_sink", None)
+        if sink is None:
+            return
+        try:
+            sink(event)
+        except Exception:
+            pass
+
     def _cascade_open_candidate(self, price: float, trigger: float) -> None:
         now = self._now()
         self._cascade_candidate = {
@@ -876,6 +892,9 @@ class ExitManager:
             "bars":         [],
         }
         self._log_decision("CASCADE_CANDIDATE", **self._cascade_evidence())
+        self._emit_v2({"code": "CASCADE_CANDIDATE", "price": price,
+                       "qty_before": self.qty_remaining, "qty_closed": 0,
+                       "evidence": self._cascade_evidence()})
 
     def _cascade_on_bar(self, open_, close, ts, high, low) -> None:
         c = self._cascade_candidate
@@ -918,7 +937,13 @@ class ExitManager:
     def _cascade_close(self, event: str, price: float | None, **fields) -> None:
         """End the open candidate (fired or blocked), log it with its evidence,
         and re-arm: a fresh peak is tracked from the current premium."""
-        self._log_decision(event, **self._cascade_evidence(), price=price, **fields)
+        evidence = self._cascade_evidence()
+        self._log_decision(event, **evidence, price=price, **fields)
+        self._emit_v2({"code": event, "price": price,
+                       "qty_before": self.qty_remaining,
+                       "qty_closed": int(fields.get("qty") or 0),
+                       "blocked_reason": fields.get("blocked_reason"),
+                       "evidence": evidence})
         self._cascade_candidate    = None
         self._cascade_fire_pending = False
         if price is not None and self._cascade_peak is not None:

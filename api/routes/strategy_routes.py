@@ -1013,6 +1013,18 @@ def update_strategy_exits(strategy_id: str):
     if "sl_grace_minutes" in data:
         raw = data["sl_grace_minutes"]
         kwargs["sl_grace_minutes"] = int(raw) if raw is not None else None
+    # v2 override trail: snapshot the pre-edit levels (apply_overrides
+    # returns only new values, so old values must be captured first).
+    # getattr: v2 logging must never break the edit itself — a fake or
+    # partially-built ExitManager may lack these attributes (CI: the
+    # snapshot raised AttributeError on em.tp1 and returned HTTP 500).
+    _v2_old = {
+        "hard_stop": getattr(em, "hard_stop", None),
+        "tp1": getattr(em, "tp1", None),
+        "tp2": getattr(em, "tp2", None),
+        "runner_mode": getattr(em, "_runner_mode", None),
+        "cascade_enabled": getattr(em, "_cascade_enabled", None),
+    }
     try:
         changed = em.apply_overrides(**kwargs)
     except ValueError as e:
@@ -1100,6 +1112,22 @@ def update_strategy_exits(strategy_id: str):
                     "[strategy] Failed to persist exit-level edit for trade %s: %s",
                     trade_id, e, exc_info=True,
                 )
+            # Trade Logging v2 override trail (best-effort, same queue).
+            try:
+                from services.strategy.trade_logger import utcnow_iso
+                _when = utcnow_iso()
+                for _field, _old in _v2_old.items():
+                    # apply_overrides returns prices rounded to 4 decimals;
+                    # compare/store the old value rounded the same way, or a
+                    # resubmitted unchanged value logs a phantom override.
+                    _old_r = round(_old, 4) if isinstance(_old, float) else _old
+                    if _field in changed and changed[_field] != _old_r:
+                        logger_svc.log_v2_override(trade_id, {
+                            "field": _field, "old": _old_r, "new": changed[_field],
+                            "who": "user", "when": _when, "via": "app (PATCH exits)",
+                        })
+            except Exception:
+                pass  # v2 trail must never fail an already-applied edit
 
         _EXIT_PERSIST_POOL.submit(_persist)
 
