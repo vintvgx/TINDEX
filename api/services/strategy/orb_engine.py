@@ -642,6 +642,10 @@ class ORBEngine(GateWatchMixin):
             # is a thesis break.
             if (action["type"] == "HOLD" and self.profile_key == "MUSE_REVERSAL"
                     and getattr(self, "_muse_reclaim_pending", False)):
+                # CodeRabbit PR #118: em was only assigned inside the
+                # REVERSAL branch above, so it was unbound here and the
+                # reclaim close raised UnboundLocalError every tick.
+                em = self.exit_manager
                 self._muse_reclaim_pending = False
                 action = {"type": "CLOSE_ALL", "qty": em.qty_remaining,
                           "reason": "MUSE_VWAP_RECLAIM"}
@@ -4091,6 +4095,17 @@ class ORBEngine(GateWatchMixin):
             self._muse_armed = False
             self.debug.emit("INFO", "MUSE_REVERSAL hold completed after window — disarmed")
             return
+        # CodeRabbit PR #118: the VWAP-side check must run before
+        # the score check, on every bar after the hold completes
+        # - not only when the score is below 5. A close back
+        # across VWAP resets the hold and must never enter,
+        # whatever the score on that bar is.
+        if ((direction == "PUT" and bar.close > vwap) or
+                (direction == "CALL" and bar.close < vwap)):
+            tracker.reset()
+            self.debug.emit("INFO",
+                            "MUSE_REVERSAL hold lost on VWAP cross - timer reset")
+            return
         score, detail = self._muse_intraday_score(direction, bar.close)
         if score >= 5:
             self._muse_armed = False
@@ -4105,15 +4120,10 @@ class ORBEngine(GateWatchMixin):
             self._enter_trade(direction, bar.close, gate_result=False)
         else:
             # Hold completed but technicals not there yet: keep the
-            # tracker complete and re-check each following bar while
-            # price stays on the reversal side of VWAP. A close back
-            # across VWAP resets the hold (tracker.feed handles it
-            # only while not complete, so reset explicitly here).
-            if ((direction == "PUT" and bar.close > vwap) or
-                    (direction == "CALL" and bar.close < vwap)):
-                tracker.reset()
-                self.debug.emit("INFO",
-                                "MUSE_REVERSAL hold lost on VWAP cross — timer reset")
+            # tracker complete and re-check each following bar. The
+            # VWAP-side check above already reset the hold on any
+            # close back across VWAP, so nothing is needed here.
+            pass
 
     def _feed_runner_exit(self, bar: OrbBar) -> None:
         """Bar-cadence feed for ExitManager's runner exit (runner_exit_enabled).
