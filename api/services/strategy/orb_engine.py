@@ -46,9 +46,11 @@ TECHNICALS_GATE_TIMEOUT_S = 4.0
 # dozens/sec on 0DTE; forwarding each one strobed the app's P&L and pegged
 # the phone (polling audit 2026-10-07, A3). Exit logic still sees every tick.
 LIVE_PUSH_MIN_INTERVAL_S = 1 / 3
-# Chart trade overlay: live delta cache lifetime (brief: refresh at most
-# every 15s, or on a 1m bar close). Display only — exits never read it.
-OVERLAY_DELTA_REFRESH_S = 15
+# Chart trade overlay: live delta cache lifetime (Kareem 2026-11-02:
+# every 5 minutes, or immediately on a state change). Display only —
+# exits never read it.
+OVERLAY_DELTA_REFRESH_S = 300  # Kareem 2026-11-02: delta changes minimally;
+# 5 minutes is enough for an idea of TP, no 15-second refresh.
 
 # Stream-dead exit-evaluation fast path (2026-10-11): when the option stream
 # stops delivering ticks for a held contract, the 1-minute bar cadence is too
@@ -1937,6 +1939,11 @@ class ORBEngine(GateWatchMixin):
         if row.get("cascade_enabled") is not None:
             self.exit_manager._cascade_enabled = bool(row["cascade_enabled"])
 
+        # 2026-11-02 fix: cascade peak restore (see _seed_restored_cascade_peak).
+        # Called AFTER runner_mode/cascade_enabled are restored above,
+        # so the seeding respects the trade's own overrides.
+        self._seed_restored_cascade_peak(row, stages, entry_premium)
+
         # Re-arm any still-watching contract price alerts (PositionInfoModal's
         # PRICE ALERT section) — these live only on the in-memory ExitManager
         # (see ExitManager.add_price_alert), so without this a restart would
@@ -3769,18 +3776,24 @@ class ORBEngine(GateWatchMixin):
 
     def _maybe_refresh_overlay_delta(self, force: bool = False) -> None:
         """Refresh the chart overlay's cached delta off-thread: at most every
-        OVERLAY_DELTA_REFRESH_S (or on a 1m bar close via force=True). One
-        option snapshot per refresh — never per tick, never on the exit path.
-        Display only — exits never read this value.
+        OVERLAY_DELTA_REFRESH_S (300s, Kareem 2026-11-02 — delta changes
+        minimally, 5 minutes is enough for an idea of TP), or immediately
+        when force=True (a state change: entry, TP hit, trade closed).
+        Never per tick, never on the exit path. Display only — exits
+        never read this value.
 
-        2026-11-02 fix: the old code took delta from the snapshot alone and
-        swallowed every failure at debug level, so when snapshot greeks were
-        absent the delta stayed None forever and the client silently drew
-        no TP1/TP2/SL/BE lines at all (the badge only needs PnL, so it
-        kept working and hid the failure). Now: (1) delta is seeded at
-        entry from the selected contract, (2) a snapshot miss falls back
-        to the same indicative chain endpoint contract selection already
-        uses, and (3) a total miss logs a warning so it is visible."""
+        2026-11-02 fix (revised): the old code took delta from the
+        snapshot alone and swallowed every failure at debug level, so
+        when snapshot greeks were absent the delta stayed None forever
+        and the client silently drew no TP1/TP2/SL/BE lines at all.
+        The first fix fell back to an INDICATIVE chain — which omits
+        Greeks by design. The watchlist contract detail screen DOES
+        return Greeks, from get_contract_snapshot: an OptionChainRequest
+        with NO feed and NO expiration filter. This refresh now uses
+        that exact call: snapshot first (its own try block, so a throw
+        cannot skip the chain), then a no-feed chain for the trade's
+        expiry, then a no-feed full chain as a last resort. A total
+        miss logs a warning so it is visible."""
         if not self.trade_taken or not self.contract_symbol or self._overlay_delta_inflight:
             return
         if not force and time.monotonic() - self._overlay_delta_at < OVERLAY_DELTA_REFRESH_S:
@@ -3791,6 +3804,10 @@ class ORBEngine(GateWatchMixin):
         symbol = self.contract_symbol
 
         def _fetch():
+            delta = None
+            source = None
+            # Snapshot first, in its OWN try block — a snapshot throw must
+            # never skip the chain fallback (the 2026-11-02 bug).
             try:
                 from alpaca.data.requests import OptionSnapshotRequest
                 snaps = self.option_client.get_option_snapshot(OptionSnapshotRequest(symbol_or_symbols=symbol))
@@ -3800,23 +3817,45 @@ class ORBEngine(GateWatchMixin):
                     snap = getattr(getattr(snaps, "snapshots", None), "get", lambda _s: None)(symbol)
                 delta = self._snapshot_delta(snap)
                 source = "snapshot" if delta is not None else None
-                if delta is None:
-                    # Snapshot greeks absent — try the indicative chain, the
-                    # endpoint contract selection already relies on.
-                    try:
-                        from alpaca.data.enums import OptionsFeed
-                        from alpaca.data.requests import OptionChainRequest
-                        from datetime import date as _date
-                        chain = self.option_client.get_option_chain(OptionChainRequest(
+            except Exception as snap_exc:
+                logger.debug("[ORBEngine] overlay delta snapshot failed for %s: %s", symbol, snap_exc)
+            if delta is None:
+                # Watchlist call, exactly as get_contract_snapshot does it:
+                # OptionChainRequest with NO feed and NO expiration filter.
+                # The INDICATIVE feed omits Greeks; the no-feed chain
+                # returns them (verified on the watchlist detail screen,
+                # 2026-11-02: SPY $800 Nov 13 CALL, delta 0.0180).
+                # Try the trade's own expiry first (cheaper), then the
+                # full no-filter chain as a last resort.
+                try:
+                    from alpaca.data.requests import OptionChainRequest
+                    from datetime import date as _date
+                    _, expiry_str = self._parse_occ_symbol(symbol)
+                    expiry = _date.fromisoformat(expiry_str)
+                    for chain_source, req in (
+                        ("chain", OptionChainRequest(
                             underlying_symbol=self.ticker,
-                            expiration_date=_date.today(),
-                            feed=OptionsFeed.INDICATIVE,
-                        ))
-                        chain_snap = chain.get(symbol) if isinstance(chain, dict) else None
-                        delta = self._snapshot_delta(chain_snap)
-                        source = "chain" if delta is not None else None
-                    except Exception as chain_exc:
-                        logger.debug("[ORBEngine] overlay delta chain fallback failed for %s: %s", symbol, chain_exc)
+                            expiration_date=expiry)),
+                        ("chain-full", OptionChainRequest(
+                            underlying_symbol=self.ticker)),
+                    ):
+                        try:
+                            chain = self.option_client.get_option_chain(req)
+                            chain_snap = chain.get(symbol) if isinstance(chain, dict) else None
+                            # Alpaca chain is a dict-like mapping, not a
+                            # plain dict — fall back to .get on any mapping.
+                            if chain_snap is None and hasattr(chain, "get"):
+                                chain_snap = chain.get(symbol)
+                            delta = self._snapshot_delta(chain_snap)
+                            if delta is not None:
+                                source = chain_source
+                                break
+                        except Exception as chain_exc:
+                            logger.debug("[ORBEngine] overlay delta %s chain failed for %s: %s",
+                                         chain_source, symbol, chain_exc)
+                except Exception as chain_exc:
+                    logger.debug("[ORBEngine] overlay delta chain fallback failed for %s: %s", symbol, chain_exc)
+            try:
                 if delta is not None and symbol == self.contract_symbol:
                     self._overlay_delta = round(float(delta), 4)
                     self._overlay_delta_source = source
@@ -3833,6 +3872,62 @@ class ORBEngine(GateWatchMixin):
                 self._overlay_delta_inflight = False
 
         threading.Thread(target=_fetch, daemon=True, name=f"overlay-delta-{self.ticker}").start()
+
+    def _seed_restored_cascade_peak(self, row, stages, entry_premium):
+        """Seed cascade peak (and runner trail floor) on position recovery.
+
+        Before 2026-11-02, a restart left _cascade_peak = None even for a
+        trade already past TP1, so cascade could never re-arm — on
+        2026-11-02 the SPY RIDER trade sat with 2 contracts after TP2,
+        fell from a $2.68 peak through its $1.87 cascade trigger, and
+        trimmed nothing, because both test-eng deploys that morning had
+        wiped the peak. The true peak is not persisted anywhere, so
+        seed from the highest level the trade is KNOWN to have reached
+        (TP2 fill/level if TP2 hit, else TP1 fill/level, else entry) —
+        an INFERRED floor, logged as such. A floored peak gives a lower
+        trigger than the true peak, so cascade fires later (on a larger
+        give-back) rather than earlier — the safe direction, and the
+        trigger still sits above entry, so a trim still banks profit by
+        construction. Per-tick peak tracking resumes from here, so the
+        peak only ever rises after restore.
+        """
+        em = self.exit_manager
+        if not (em.tp1_hit and em.qty_remaining > 1
+                and em._cascade_enabled and em._cascade_peak is None):
+            return None
+        peak_candidates = [entry_premium]
+        if row.get("tp1_price") is not None:
+            peak_candidates.append(float(row["tp1_price"]))
+        if row.get("tp1_premium") is not None:
+            peak_candidates.append(float(row["tp1_premium"]))
+        if em.tp2_hit:
+            if row.get("tp2_price") is not None:
+                peak_candidates.append(float(row["tp2_price"]))
+            if row.get("tp2_premium") is not None:
+                peak_candidates.append(float(row["tp2_premium"]))
+        for _stage in (stages or []):
+            if isinstance(_stage, dict) and _stage.get("price") is not None:
+                try:
+                    peak_candidates.append(float(_stage["price"]))
+                except (TypeError, ValueError):
+                    pass
+        restored_peak = max(peak_candidates)
+        em._cascade_peak = restored_peak
+        if em._runner_mode == "trail":
+            trail_pct = em.profile.get("runner_trail_pct", 0.18)
+            trail_floor = max(
+                float(row["tp1_price"]) if row.get("tp1_price") is not None else entry_premium,
+                entry_premium) * (1 - trail_pct)
+            em.runner_trail = max(em.runner_trail, trail_floor)
+        try:
+            em._log_decision(
+                "CASCADE_PEAK_RESTORED", peak=round(restored_peak, 4),
+                trigger=round(em.cascade_trigger_level(), 4),
+                provenance="INFERRED",
+                note="true pre-restart peak not persisted; floor from hit levels")
+        except Exception:
+            pass
+        return restored_peak
 
     def _skip(self, reason: str):
         """
@@ -3951,7 +4046,7 @@ class ORBEngine(GateWatchMixin):
             self.exit_manager.on_underlying_bar(bar_open, bar.close, ts=bar.ts,
                                                 high=bar.high, low=bar.low)
             self._feed_runner_exit(bar)
-            self._maybe_refresh_overlay_delta(force=True)
+            self._maybe_refresh_overlay_delta()
 
         # Only act once the ORB is established and the session isn't skipped.
         # getattr guards the brief __init__ window before _reset_session_state runs.
