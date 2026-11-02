@@ -1013,6 +1013,12 @@ def update_strategy_exits(strategy_id: str):
     if "sl_grace_minutes" in data:
         raw = data["sl_grace_minutes"]
         kwargs["sl_grace_minutes"] = int(raw) if raw is not None else None
+    # v2 override trail: snapshot the pre-edit levels (apply_overrides
+    # returns only new values, so old values must be captured first).
+    _v2_old = {
+        "hard_stop": em.hard_stop, "tp1": em.tp1, "tp2": em.tp2,
+        "runner_mode": em._runner_mode, "cascade_enabled": em._cascade_enabled,
+    }
     try:
         changed = em.apply_overrides(**kwargs)
     except ValueError as e:
@@ -1100,6 +1106,18 @@ def update_strategy_exits(strategy_id: str):
                     "[strategy] Failed to persist exit-level edit for trade %s: %s",
                     trade_id, e, exc_info=True,
                 )
+            # Trade Logging v2 override trail (best-effort, same queue).
+            try:
+                from services.strategy.trade_logger import utcnow_iso
+                _when = utcnow_iso()
+                for _field, _old in _v2_old.items():
+                    if _field in changed and changed[_field] != _old:
+                        logger_svc.log_v2_override(trade_id, {
+                            "field": _field, "old": _old, "new": changed[_field],
+                            "who": "user", "when": _when, "via": "app (PATCH exits)",
+                        })
+            except Exception:
+                pass  # v2 trail must never fail an already-applied edit
 
         _EXIT_PERSIST_POOL.submit(_persist)
 

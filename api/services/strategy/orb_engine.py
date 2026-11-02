@@ -1252,9 +1252,21 @@ class ORBEngine(GateWatchMixin):
 
         # Technicals gate — opt-in per strategy (strategy_configs.technicals_gate).
         # Blocks this signal only; the session stays armed for a later one.
+        # gate_snapshot is logging-only: the decision-time gate dict, carried
+        # into _execute_entry so the v2 entry record can store the composite
+        # rows that were actually judged. It never re-decides anything.
         gate_cfg = self.config.get("technicals_gate") or {}
         gate_mode = self._gate_mode(gate_cfg)
         gate_needs_confirm = False
+        gate_snapshot = None
+        if self.profile_key == "MUSE_REVERSAL":
+            # MUSE has no composite gate (bypassed by design); its internal
+            # gate — scorer fire + 3-bar VWAP hold + intraday technicals ≥5 —
+            # already passed in _muse_on_bar before this entry was attempted.
+            gate_snapshot = {
+                "mode": "muse_internal",
+                "summary": "MUSE internal gate: scorer fire + 3-bar VWAP hold + intraday technicals ≥5",
+            }
         if gate_result is not None:
             gate_needs_confirm = gate_result
         elif gate_cfg.get("enabled") and (gate_cfg.get("required") or gate_mode == "composite"):
@@ -1276,6 +1288,7 @@ class ORBEngine(GateWatchMixin):
                 return
             # This signal passed on its own — any watch is superseded.
             self._end_gate_watch("cancelled", "a new signal passed the gate", notify=False)
+            gate_snapshot = gate
 
         # VWAP soft confirmation (log only — does not block entry)
         if self.session_vwap is not None:
@@ -1529,17 +1542,22 @@ class ORBEngine(GateWatchMixin):
                 f"already has an open {direction} on {self.ticker} "
                 f"({'paper' if ticker_conflict.paper else 'live'})")
             self._pause_for_confirmation(direction, trigger_price, contract, qty, effective_profile,
-                                         conflict_context=conflict_context)
+                                         conflict_context=conflict_context,
+                                         gate_snapshot=gate_snapshot)
             return
 
         if self.confirm_entry or gate_needs_confirm:
             # A composite MODERATE entry must be confirmed — fail closed if
             # the confirmation can't be persisted (unlike plain opt-in).
             self._pause_for_confirmation(direction, trigger_price, contract, qty, effective_profile,
-                                         require_confirm=gate_needs_confirm and not self.confirm_entry)
+                                         require_confirm=gate_needs_confirm and not self.confirm_entry,
+                                         gate_snapshot=gate_snapshot)
             return
 
-        self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
+        self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels,
+                            gate_snapshot=gate_snapshot,
+                            buying_power=(acct["options_buying_power"] if acct else None),
+                            trigger_price=trigger_price)
 
     def _find_ticker_conflict(self, direction: str) -> "ORBEngine | None":
         """
@@ -1597,7 +1615,10 @@ class ORBEngine(GateWatchMixin):
     def _execute_entry(self, direction: str, contract: dict, qty: int,
                        effective_profile: dict, fib_levels: dict, manual: bool = False,
                        profile_key_override: str | None = None,
-                       prefilled_order=None, trade_type_override: str | None = None):
+                       prefilled_order=None, trade_type_override: str | None = None,
+                       gate_snapshot: dict | None = None,
+                       buying_power: float | None = None,
+                       trigger_price: float | None = None):
         """
         Submit the market order, set trade state, initialise ExitManager, log and
         notify. Shared by the auto path (_enter_trade) and the manual conviction
@@ -1718,6 +1739,9 @@ class ORBEngine(GateWatchMixin):
             )
             self.exit_manager.log_context = {"ticker": self.ticker, "contract": contract.get("symbol"),
                                              "strategy_id": self.strategy_id}
+            # Cascade decisions → v2 events (logging only; the sink never
+            # raises into ExitManager.evaluate()).
+            self.exit_manager.v2_sink = lambda ev: self._log_v2_cascade_event(ev)
 
             # Use the override key when the user selected a profile at trade time
             # (immediate trades). This fixes the bug where all immediate trades were
@@ -1738,6 +1762,33 @@ class ORBEngine(GateWatchMixin):
             except (ValueError, AttributeError, TypeError):
                 log_strategy_id = None
 
+            # Trade Logging v2 entry record — built from decision-time data
+            # only and written atomically with log_entry, so a trade can
+            # never exist with a half-written v2 record. Anything the engine
+            # does not hold here is omitted (→ MISSING), never guessed.
+            from services.strategy.trade_logger import build_log_v2_entry, utcnow_iso
+            _entry_underlying = self._get_underlying_price()
+            _v2 = build_log_v2_entry(
+                strategy_name=self.strategy_name or logged_profile_key,
+                profile_key=logged_profile_key,
+                effective_profile=effective_profile,
+                direction=direction,
+                trigger_price=trigger_price,
+                breakout_level=fib_levels.get("orh") if direction == "CALL" else fib_levels.get("orl"),
+                vwap=self._live_session_vwap() or self.session_vwap,
+                gate=gate_snapshot,
+                contract=contract,
+                buying_power=buying_power,
+                hard_stop=self.exit_manager.hard_stop,
+                tp1=self.exit_manager.tp1,
+                tp2=self.exit_manager.tp2,
+                entry_premium=entry_premium,
+                qty=qty,
+                entry_time_iso=utcnow_iso(),
+            )
+            if _v2.get("events"):
+                _v2["events"][0]["underlying"] = (
+                    round(float(_entry_underlying), 2) if _entry_underlying is not None else None)
             self.active_trade_id = self.logger.log_entry(
                 ticker=self.ticker,
                 direction=direction,
@@ -1748,12 +1799,13 @@ class ORBEngine(GateWatchMixin):
                 session_date=self.session_date,
                 profile=logged_profile_key,
                 qty=qty,
-                underlying_price_entry=self._get_underlying_price(),
+                underlying_price_entry=_entry_underlying,
                 vix_at_entry=self.vix,
                 strategy_id=log_strategy_id,
                 paper_mode=self.paper,
                 trade_type=trade_type,
                 trading_client=self.trading_client,
+                log_v2=_v2,
                 # Full effective profile snapshot (not just the named profile
                 # key) + the exact computed levels — so a restart can recover
                 # this exact position's exit management, including any
@@ -1761,9 +1813,9 @@ class ORBEngine(GateWatchMixin):
                 # profile's defaults. See
                 # docs/incidents/2026-07-14-position-lost-on-restart.md.
                 exit_overrides=effective_profile,
-                hard_stop_price=self.exit_manager.hard_stop,
-                tp1_price=self.exit_manager.tp1,
-                tp2_price=self.exit_manager.tp2,
+                hard_stop=self.exit_manager.hard_stop,
+                tp1=self.exit_manager.tp1,
+                tp2=self.exit_manager.tp2,
             )
             if self.active_trade_id is None:
                 self.debug.emit("ERROR",
@@ -1911,6 +1963,9 @@ class ORBEngine(GateWatchMixin):
         )
         self.exit_manager.log_context = {"ticker": self.ticker, "contract": row.get("contract_symbol"),
                                          "strategy_id": self.strategy_id, "recovered": True}
+        # Recovered trades keep logging cascade decisions to v2 (the
+        # active_trade_id was restored from the row above).
+        self.exit_manager.v2_sink = lambda ev: self._log_v2_cascade_event(ev)
         self.exit_manager.qty_remaining = qty_remaining
         try:
             self.exit_manager.entry_time = datetime.fromisoformat(
@@ -2104,7 +2159,8 @@ class ORBEngine(GateWatchMixin):
     def _pause_for_confirmation(self, direction: str, trigger_price: float,
                                  contract: dict, qty: int, effective_profile: dict,
                                  conflict_context: dict | None = None,
-                                 require_confirm: bool = False):
+                                 require_confirm: bool = False,
+                                 gate_snapshot: dict | None = None):
         """
         Instead of submitting the order, persist the candidate trade, push a
         notification, and stream the live premium so the user can Enter or
@@ -2175,7 +2231,8 @@ class ORBEngine(GateWatchMixin):
             # user can never approve it. Fall back to entering directly, same
             # as if confirm_entry were off.
             self.debug.emit("ERROR", "Confirmation persist failed — entering without confirmation")
-            self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
+            self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels,
+                                gate_snapshot=gate_snapshot, trigger_price=trigger_price)
             return
 
         self._pending_confirmation = {
@@ -2183,6 +2240,9 @@ class ORBEngine(GateWatchMixin):
             "_contract":          contract,
             "_qty":               qty,
             "_effective_profile": effective_profile,
+            # In-memory only (never a DB column): the decision-time gate
+            # snapshot, carried to _execute_entry if the user approves.
+            "_gate_snapshot":      gate_snapshot,
         }
 
         if self.stream_manager:
@@ -2283,7 +2343,9 @@ class ORBEngine(GateWatchMixin):
             self.debug.emit("SUCCESS",
                 f"Confirmation approved by user — entering {direction} {contract['symbol']}")
             try:
-                self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels)
+                self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels,
+                                    gate_snapshot=pc.get("_gate_snapshot"),
+                                    trigger_price=pc.get("trigger_price"))
             except Exception:
                 # Either the order itself failed (broker rejection — nothing
                 # happened, safe to mark EXPIRED) or a downstream step in
@@ -3103,6 +3165,9 @@ class ORBEngine(GateWatchMixin):
         reason = action.get("reason", "")
         _tag = f"[{self.strategy_name} | {self.profile_key}]"
         pnl = (exit_premium - entry_premium) * qty_closed * 100
+        # Capture cumulative P&L BEFORE the full-close reset below, so the
+        # v2 leg event carries the trade's true running total.
+        _cum_pnl = self._active_trade_pnl + pnl
 
         # Breakeven guarantee: ANY exit that locks in a profit (TP hit, manual
         # profit-take, cascade, ...) — not just the automatic TP1 path in
@@ -3164,6 +3229,29 @@ class ORBEngine(GateWatchMixin):
                 trade_id=self.active_trade_id,
                 armed_levels=self._armed_levels_snapshot(),
             )
+            # Trade Logging v2 leg event (logging only — never breaks the
+            # exit flow). qty_remaining was already decremented by
+            # _reserve_exit_qty, so before = remaining + closed.
+            try:
+                from services.strategy.trade_logger import build_log_v2_exit_event, utcnow_iso
+                _qty_after = self.exit_manager.qty_remaining if self.exit_manager else 0
+                _vwap_txt, _orb_txt = self._v2_exit_technicals(current_price)
+                self.logger.log_v2_event(self.active_trade_id, build_log_v2_exit_event(
+                    code=reason,
+                    qty_before=_qty_after + qty_closed,
+                    qty_closed=qty_closed,
+                    qty_after=_qty_after,
+                    premium=exit_premium,
+                    underlying=current_price,
+                    leg_pnl=pnl,
+                    cum_pnl=_cum_pnl,
+                    armed=self._armed_levels_snapshot(),
+                    vwap_txt=_vwap_txt,
+                    orb_txt=_orb_txt,
+                    time_iso=utcnow_iso(),
+                ))
+            except Exception as _v2_e:
+                logger.warning("[ORBEngine] v2 leg event failed (non-fatal): %s", _v2_e)
             self.notifier.notify_exit(
                 ticker=self.ticker,
                 contract_symbol=contract_snapshot,
@@ -3686,6 +3774,75 @@ class ORBEngine(GateWatchMixin):
                 )
             except Exception as ex:
                 logger.debug("[ORBEngine] stream-dead poll failed: %s", ex)
+
+    def _v2_exit_technicals(self, underlying: float | None) -> tuple:
+        """VWAP + ORB position strings at exit time, from live engine
+        inputs only. Returns (vwap_txt, orb_txt), either possibly None.
+        No composite is computed here — see build_log_v2_exit_event."""
+        if underlying is None:
+            return None, None
+        vwap_txt = None
+        vwap = None
+        try:
+            vwap = self._live_session_vwap() or self.session_vwap
+        except Exception:
+            vwap = self.session_vwap
+        if vwap:
+            pos = "above" if underlying > vwap else "below" if underlying < vwap else "at"
+            vwap_txt = f"{pos.capitalize()} VWAP ${vwap:.2f}"
+        orb_txt = None
+        if self.orh is not None and self.orl is not None:
+            if underlying > self.orh:
+                orb_txt = f"Above high ${self.orh:.2f}"
+            elif underlying < self.orl:
+                orb_txt = f"Below low ${self.orl:.2f}"
+            else:
+                orb_txt = f"Inside ${self.orl:.2f}–${self.orh:.2f}"
+        return vwap_txt, orb_txt
+
+    def _log_v2_cascade_event(self, ev: dict) -> None:
+        """ExitManager v2_sink: translate a cascade decision into a v2
+        event and persist it. Logging only — never raises."""
+        if not self.active_trade_id or not ev:
+            return
+        try:
+            from services.strategy.trade_logger import build_log_v2_cascade_event, utcnow_iso, _iso_or_none
+            code = str(ev.get("code") or "")
+            qty_before = int(ev.get("qty_before") or 0)
+            qty_closed = int(ev.get("qty_closed") or 0)
+            # CASCADE_FIRE's trim is sold by the normal exit path right
+            # after evaluate(); this event records the decision, and the
+            # CASCADE_EXIT leg records the fill. Blocked/candidate events
+            # close nothing.
+            qty_after = qty_before - qty_closed if code == "CASCADE_FIRE" else qty_before
+            # Full evidence comes from ExitManager's candidate dict,
+            # captured at candidate-open / close time (bars are ISO
+            # strings with ET offsets; trigger_at/deadline are ET
+            # datetimes, converted to ISO here).
+            evidence = ev.get("evidence") or {}
+            bars = evidence.get("bars") or None
+            if bars:
+                bars = [{
+                    "t": _iso_or_none(b.get("t")),
+                    "o": b.get("o"), "h": b.get("h"), "l": b.get("l"), "c": b.get("c"),
+                    "against": b.get("against"), "recovering": b.get("recovering"),
+                } for b in bars if isinstance(b, dict)]
+            self.logger.log_v2_event(self.active_trade_id, build_log_v2_cascade_event(
+                code=code,
+                qty_before=qty_before,
+                qty_closed=qty_closed,
+                qty_after=qty_after,
+                price=ev.get("price"),
+                underlying=self._last_underlying_price,
+                peak=evidence.get("peak"),
+                trigger=evidence.get("trigger"),
+                deadline_iso=_iso_or_none(evidence.get("deadline")),
+                bars=bars,
+                blocked_reason=ev.get("blocked_reason"),
+                time_iso=utcnow_iso(),
+            ))
+        except Exception as e:
+            logger.warning("[ORBEngine] v2 cascade event failed (non-fatal): %s", e)
 
     def _armed_levels_snapshot(self) -> dict | None:
         """Snapshot of the currently armed exit levels, persisted with every

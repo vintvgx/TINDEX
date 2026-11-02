@@ -38,7 +38,19 @@ const fmtPrice = (n: unknown): string | null => (isNum(n) ? `$${n.toFixed(2)}` :
 
 const parseTime = (iso: unknown): Date | null => {
   if (!isStr(iso)) return null;
-  const d = new Date(iso);
+  // Timezone fix: the backend used to write exit_stages times as naive
+  // UTC (datetime.utcnow().isoformat(), no offset) inside a JSONB blob,
+  // while entry/exit timestamptz columns round-trip with +00:00. A naive
+  // ISO string parses as PHONE-LOCAL time in JS, so in Boston (ET) a leg
+  // stored at 15:14 UTC displayed as 3:14 PM labelled ET — 5h late
+  // (true 10:14 AM ET), and leg clocks shifted with the phone's timezone
+  // while entry clocks (forced America/New_York below) did not. Naive
+  // strings are therefore UTC by construction: append 'Z' before parsing.
+  // Offset-aware strings (all new writes, all timestamptz columns) are
+  // untouched, so entry/exit clock behaviour does not change.
+  const s = iso.trim();
+  const hasOffset = /([+-]\d{2}:?\d{2}|[Zz])$/.test(s);
+  const d = new Date(hasOffset ? s : `${s}Z`);
   return Number.isNaN(d.getTime()) ? null : d;
 };
 export const fmtEtClock = (iso: unknown): string | null => {

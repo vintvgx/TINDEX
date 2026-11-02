@@ -6,15 +6,318 @@ Reads config back from strategy_config table.
 import os
 import uuid
 import asyncio
+import hashlib
+import json
 import logging
 import pytz
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional
 
 from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
 ET_TZ = pytz.timezone("America/New_York")
+
+
+def utcnow_iso() -> str:
+    """Offset-aware UTC timestamp for every new record.
+
+    Previously this module wrote ``datetime.utcnow().isoformat()`` — a naive
+    string that *happened* to be UTC. Timestamptz columns (entry_time,
+    exit_time) round-tripped it back with a +00:00 offset, so the app
+    converted them to ET correctly — but the same naive string stored
+    inside the ``exit_stages`` JSONB blob came back verbatim, and the
+    frontend parsed it as phone-local time, displaying the UTC clock
+    labelled ET (exactly +5h late in Boston). Writing +00:00 explicitly
+    makes the stored value self-describing; the frontend additionally
+    treats any surviving naive string as UTC (see tradeLogV2.ts).
+    """
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ── Trade Logging v2 (log_v2 record) ─────────────────────────────────────────
+# Pure builders: they take decision-time data and return the JSON the
+# frontend's TradeLogV2 type renders. They never guess — a value the engine
+# does not actually have at the call site is omitted, and the frontend
+# renders the omission as MISSING. Provenance: broker/API fills and
+# engine logs written at decision time are VERIFIED; system-computed
+# levels/scores are ENGINE. Nothing here is ever INFERRED.
+
+# Frontend COMPOSITE_FACTORS order (mobile/lib/tradeLogV2.ts).
+COMPOSITE_FACTOR_LABELS = {
+    "rsi_intraday": "Intraday RSI (5m)",
+    "rsi_daily": "Daily RSI",
+    "macd": "MACD (5m)",
+    "trend_intraday": "Intraday trend (5m EMA)",
+    "trend_daily": "Daily trend",
+    "vwap": "VWAP",
+    "orb": "ORB",
+}
+
+
+def pf(value, provenance: str, basis: Optional[str] = None) -> Optional[dict]:
+    """One PField, or None (→ renders MISSING) when the value is absent."""
+    if value is None:
+        return None
+    field = {"v": value, "p": provenance}
+    if basis:
+        field["basis"] = basis
+    return field
+
+
+def _num(value) -> Optional[float]:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if out == out and out not in (float("inf"), float("-inf")) else None
+
+
+def composite_rows(comp: Optional[dict]) -> Optional[list]:
+    """Map a compute_composite()/gate composite dict to v2 rows, or None.
+
+    ``comp`` is the ``gate["composite"]`` dict (indicators in ORDER) or a
+    compute_composite() result. Unavailable indicators keep score None so
+    the frontend renders their row as '—' rather than a guessed score.
+    """
+    if not comp or not isinstance(comp, dict):
+        return None
+    indicators = comp.get("indicators") or []
+    by_key = {r.get("key"): r for r in indicators if isinstance(r, dict)}
+    if not by_key:
+        return None
+    rows = []
+    for key, label in COMPOSITE_FACTOR_LABELS.items():
+        r = by_key.get(key)
+        if r is None:
+            rows.append({"factor": label, "value": None, "score": None})
+        else:
+            score = r.get("score")
+            rows.append({
+                "factor": label,
+                "value": r.get("value"),
+                "score": int(score) if isinstance(score, (int, float)) and score is not None else None,
+            })
+    return rows
+
+
+def config_hash(effective_profile: Optional[dict]) -> Optional[str]:
+    """Short stable hash of the frozen profile dict — a config version id."""
+    if not effective_profile:
+        return None
+    try:
+        blob = json.dumps(effective_profile, sort_keys=True, default=str)
+    except Exception:
+        return None
+    return hashlib.sha256(blob.encode()).hexdigest()[:12]
+
+
+def build_log_v2_entry(strategy_name: Optional[str],
+                        profile_key: str,
+                        effective_profile: Optional[dict],
+                        direction: str,
+                        trigger_price: Optional[float],
+                        breakout_level: Optional[float],
+                        vwap: Optional[float],
+                        gate: Optional[dict],
+                        contract: Optional[dict],
+                        buying_power: Optional[float],
+                        hard_stop: Optional[float],
+                        tp1: Optional[float],
+                        tp2: Optional[float],
+                        entry_premium: float,
+                        qty: int,
+                        entry_time_iso: str) -> dict:
+    """Build the v2 record written (atomically, with log_entry) at entry.
+
+    ``gate`` is the evaluate_gate() dict when the technicals gate ran, or a
+    ``{"mode": "muse_internal", "summary": ...}`` dict for MUSE_REVERSAL,
+    whose internal gate (scorer + VWAP hold + intraday technicals) is not
+    a composite gate. When neither ran (manual / gate-disabled entries),
+    gate and composite are omitted — MISSING, not guessed.
+    """
+    prof = effective_profile or {}
+    comp = (gate or {}).get("composite") if isinstance(gate, dict) else None
+    rows = composite_rows(comp)
+
+    entry: dict = {}
+    if direction and breakout_level is not None:
+        level_word = "above ORH" if direction == "CALL" else "below ORL"
+        entry["signal"] = pf(
+            f"{direction} breakout · closed {level_word} ${float(breakout_level):.2f}",
+            "ENGINE")
+    if trigger_price is not None and breakout_level is not None:
+        side = "above" if direction == "CALL" else "below"
+        entry["trigger"] = pf(
+            f"close ${float(trigger_price):.2f} {side} ${float(breakout_level):.2f}",
+            "ENGINE")
+    if vwap is not None and trigger_price is not None:
+        pos = "above" if trigger_price > vwap else "below" if trigger_price < vwap else "at"
+        entry["vwap"] = pf(f"VWAP ${float(vwap):.2f} · price {pos}", "ENGINE")
+    elif vwap is not None:
+        entry["vwap"] = pf(f"VWAP ${float(vwap):.2f}", "ENGINE")
+    if isinstance(gate, dict) and gate.get("summary"):
+        entry["gate"] = pf(str(gate["summary"]), "ENGINE",
+                           basis=f"gate mode: {gate.get('mode', 'unknown')}")
+    # Flow: the engine stores only a yes/no (flow_confirmed) — no print
+    # details exist to write, so flow is deliberately omitted here; the
+    # frontend falls back to the legacy bool, tagged UNVERIFIED.
+    # Market context (SPY/QQQ direction, sector, news) is not computed at
+    # entry by the engine, so market is omitted — MISSING by design.
+
+    contract_v2: dict = {}
+    if contract:
+        bid, ask = _num(contract.get("bid")), _num(contract.get("ask"))
+        if bid is not None or ask is not None:
+            spread = contract.get("spread_pct")
+            spread_txt = f" · spread {float(spread) * 100:.1f}%" if _num(spread) is not None else ""
+            contract_v2["quote"] = pf(
+                f"bid ${bid:.2f} · ask ${ask:.2f}{spread_txt}" if bid is not None and ask is not None
+                else f"ask ${ask:.2f}" if ask is not None else f"bid ${bid:.2f}",
+                "VERIFIED", basis="chain snapshot at entry")
+        delta = _num(contract.get("delta"))
+        if delta is not None and delta > 0:
+            # contract_selector stores |delta|; IV is not on the snapshot.
+            contract_v2["greeks"] = pf(f"delta {delta:.2f} (abs)", "VERIFIED",
+                                       basis="chain snapshot at entry; IV not available")
+        # Volume/OI: the chain snapshot carries oi=None by design (see
+        # contract_selector) — omit so it renders MISSING, never 0/STALE.
+        if buying_power is not None:
+            contract_v2["buying_power"] = pf(f"${float(buying_power):,.0f}", "VERIFIED",
+                                             basis="options buying power at entry")
+
+    frozen: dict = {}
+    if hard_stop is not None:
+        frozen["hard_stop"] = pf(round(float(hard_stop), 4), "ENGINE")
+    if tp1 is not None:
+        frozen["tp1"] = pf(round(float(tp1), 4), "ENGINE")
+    if tp2 is not None:
+        frozen["tp2"] = pf(round(float(tp2), 4), "ENGINE")
+    if prof.get("tp1_close_pct") is not None:
+        frozen["tp1_close_pct"] = pf(f"{float(prof['tp1_close_pct']) * 100:.0f}%", "ENGINE")
+    if prof.get("tp2_close_pct") is not None:
+        frozen["tp2_close_pct"] = pf(f"{float(prof['tp2_close_pct']) * 100:.0f}%", "ENGINE")
+    cascade_txt = None
+    if prof.get("cascade_close_pct") is not None:
+        cascade_txt = f"trim {float(prof['cascade_close_pct']) * 100:.0f}% of non-runner"
+        if prof.get("cascade_retrace_pct") is not None:
+            cascade_txt += f" · {float(prof['cascade_retrace_pct']) * 100:.0f}% retrace trigger"
+    if cascade_txt:
+        frozen["cascade"] = pf(cascade_txt, "ENGINE")
+    if prof.get("runner_mode"):
+        frozen["runner_mode"] = pf(str(prof["runner_mode"]), "ENGINE")
+
+    v2: dict = {
+        "schema": "trade-log-v2/1",
+        "strategy_name": strategy_name,
+        "config_hash": config_hash(prof),
+        "frozen_config": frozen,
+        "events": [{
+            "t": entry_time_iso,
+            "code": "ENTRY",
+            "p": "VERIFIED",
+            "qty_before": 0,
+            "qty_closed": 0,
+            "qty_after": qty,
+            "premium": round(float(entry_premium), 4),
+            "premium_source": "fill",
+            "underlying": None,  # filled by the caller when known
+            "leg_pnl": None,
+            "cum_pnl": 0.0,
+        }],
+    }
+    if entry:
+        v2["entry"] = entry
+    if comp and isinstance(comp, dict) and comp.get("total") is not None:
+        v2["composite"] = {"total": int(comp["total"]), "tier": comp.get("tier"), "rows": rows}
+    elif rows:
+        v2["composite"] = {"total": None, "tier": None, "rows": rows}
+    if contract_v2:
+        v2["contract"] = contract_v2
+    return v2
+
+
+def build_log_v2_exit_event(code: str, qty_before: int, qty_closed: int,
+                            qty_after: int, premium: Optional[float],
+                            underlying: Optional[float], leg_pnl: Optional[float],
+                            cum_pnl: Optional[float], armed: Optional[dict],
+                            vwap_txt: Optional[str], orb_txt: Optional[str],
+                            time_iso: str) -> dict:
+    """One v2 exit-leg event. Technicals at exit are limited to what the
+    engine holds at decision time (session VWAP + ORB position from live
+    inputs); a fresh composite is NOT computed here — that would be a new
+    market-data evaluation inside the exit path, not a log of the decision
+    as made, so composite_total stays absent (MISSING) on exit legs.
+    """
+    technicals = {}
+    if vwap_txt:
+        technicals["vwap"] = vwap_txt
+    if orb_txt:
+        technicals["orb"] = orb_txt
+    event: dict = {
+        "t": time_iso,
+        "code": code,
+        "p": "VERIFIED",
+        "qty_before": qty_before,
+        "qty_closed": qty_closed,
+        "qty_after": qty_after,
+        "premium": round(float(premium), 4) if premium is not None else None,
+        "premium_source": "fill/mid",
+        "underlying": round(float(underlying), 2) if underlying is not None else None,
+        "leg_pnl": round(float(leg_pnl), 2) if leg_pnl is not None else None,
+        "cum_pnl": round(float(cum_pnl), 2) if cum_pnl is not None else None,
+    }
+    if armed:
+        event["armed"] = {k: (round(float(v), 4) if isinstance(v, (int, float)) else v)
+                          for k, v in armed.items()}
+    if technicals:
+        event["technicals"] = technicals
+    return event
+
+
+def build_log_v2_cascade_event(code: str, qty_before: int, qty_closed: int,
+                               qty_after: int, price: Optional[float],
+                               underlying: Optional[float], peak: Optional[float],
+                               trigger: Optional[float], deadline_iso: Optional[str],
+                               bars: Optional[list], blocked_reason: Optional[str],
+                               time_iso: str) -> dict:
+    """A cascade candidate / fire / blocked event (a non-exit decision,
+    except CASCADE_FIRE, whose qty_closed is the trim the engine then sells
+    via the normal exit path — the CASCADE_EXIT leg carries the fill)."""
+    evidence: dict = {}
+    if peak is not None:
+        evidence["peak"] = round(float(peak), 4)
+    if trigger is not None:
+        evidence["trigger"] = round(float(trigger), 4)
+    if deadline_iso:
+        evidence["deadline"] = deadline_iso
+    if bars:
+        evidence["bars"] = bars
+    event: dict = {
+        "t": time_iso,
+        "code": code,
+        "p": "ENGINE",
+        "qty_before": qty_before,
+        "qty_closed": qty_closed,
+        "qty_after": qty_after,
+        "premium": round(float(price), 4) if price is not None else None,
+        "underlying": round(float(underlying), 2) if underlying is not None else None,
+    }
+    if evidence:
+        event["evidence"] = evidence
+    if blocked_reason:
+        event["blocked_reason"] = blocked_reason
+    return event
+
+
+def _iso_or_none(value) -> Optional[str]:
+    """Datetime → offset-aware ISO string; strings pass through unchanged."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    return str(value)
 
 
 def _run_async(coro):
@@ -131,7 +434,7 @@ class TradeLogger:
                 "paired_strategy_id":     config.get("paired_strategy_id"),
                 "paused_by_kill_switch":  config.get("paused_by_kill_switch", False),
                 "technicals_gate":        config.get("technicals_gate"),
-                "updated_at":             datetime.utcnow().isoformat(),
+                "updated_at":             utcnow_iso(),
             }
             if "id" in config and config["id"]:
                 row["id"] = config["id"]
@@ -234,7 +537,7 @@ class TradeLogger:
         own state; a fresh engine after a redeploy has no memory of it at all.
         """
         try:
-            now_iso = datetime.utcnow().isoformat()
+            now_iso = utcnow_iso()
             res = (
                 self.client.table("orb_pending_confirmations")
                 .update({"status": "EXPIRED", "resolved_at": now_iso})
@@ -282,7 +585,7 @@ class TradeLogger:
         exists (redeploy, deleted strategy) — same role as
         expire_stale_pending_confirmations."""
         try:
-            now_iso = datetime.utcnow().isoformat()
+            now_iso = utcnow_iso()
             res = (
                 self.client.table("orb_gate_watches")
                 .update({"status": "expired", "reason": "deadline passed (engine not running)",
@@ -310,7 +613,7 @@ class TradeLogger:
 
     def update_limit_order(self, order_id: str, patch: dict) -> bool:
         try:
-            patch = {**patch, "updated_at": datetime.utcnow().isoformat()}
+            patch = {**patch, "updated_at": utcnow_iso()}
             self.client.table("working_limit_orders").update(patch).eq("order_id", order_id).execute()
             return True
         except Exception as e:
@@ -392,7 +695,8 @@ class TradeLogger:
                   exit_overrides: Optional[dict] = None,
                   hard_stop_price: Optional[float] = None,
                   tp1_price: Optional[float] = None,
-                  tp2_price: Optional[float] = None) -> Optional[str]:
+                  tp2_price: Optional[float] = None,
+                  log_v2: Optional[dict] = None) -> Optional[str]:
         # Snapshot account equity right as the position opens — the baseline
         # `log_exit` compares against when the trade fully closes, so the
         # Trade Log can show this trade's real account-level impact rather
@@ -410,7 +714,7 @@ class TradeLogger:
             "entry_premium":          entry_premium,
             "qty_entered":            qty,
             "qty_exited":             0,
-            "entry_time":             datetime.utcnow().isoformat(),
+            "entry_time":             utcnow_iso(),
             "orh":                    orh,
             "orl":                    orl,
             "fib_targets":            fib_levels,
@@ -439,11 +743,14 @@ class TradeLogger:
         # "column not found" style error, rather than failing the whole insert
         # (and losing the trade record) over a migration that hasn't landed.
         optional_groups = [
+            ("log_v2",),
             ("exit_stages",),
             ("account_balance_before",),
             ("exit_overrides", "hard_stop_price", "tp1_price", "tp2_price"),
         ]
         attempt_row = dict(row, exit_stages=[])
+        if log_v2 is not None:
+            attempt_row["log_v2"] = log_v2
         remaining_groups = list(optional_groups)
 
         while True:
@@ -693,7 +1000,7 @@ class TradeLogger:
                 "qty":     qty_closed,
                 "premium": round(exit_p, 4),
                 "pnl":     round(stage_pnl, 2),
-                "time":    datetime.utcnow().isoformat(),
+                "time":    utcnow_iso(),
             }
             if armed_levels:
                 stage["armed_levels"] = armed_levels
@@ -723,7 +1030,7 @@ class TradeLogger:
             # Only stamp exit_time when the position is fully closed so that
             # subsequent partial exit calls can still find the row.
             if is_fully_closed:
-                update["exit_time"] = datetime.utcnow().isoformat()
+                update["exit_time"] = utcnow_iso()
 
                 # Real account-level impact of this trade's full life, not just
                 # its own premium math — only possible for trades that captured
@@ -761,6 +1068,75 @@ class TradeLogger:
         except Exception as e:
             logger.error("[TradeLogger] log_exit failed: %s", e)
             return False
+
+    # ── Trade Logging v2 (log_v2 JSONB) ─────────────────────────────────────
+    # Best-effort, never fatal: a failed v2 write logs a warning and returns
+    # False — the trade itself is already recorded by log_entry/log_exit, and
+    # a missing log_v2 column (migration not run) must never lose a fill.
+    # Read-modify-write is safe here because each trade's events are written
+    # under its engine's tick lock, in decision order.
+
+    def _append_log_v2(self, trade_id: str, mutate) -> bool:
+        if not trade_id:
+            return False
+        try:
+            row = (
+                self.client.table("orb_trades").select("log_v2")
+                .eq("id", trade_id).limit(1).execute()
+            )
+        except Exception as e:
+            logger.warning("[TradeLogger] log_v2 read failed (trade_id=%s): %s", trade_id, e)
+            return False
+        if not row.data:
+            return False
+        current = (row.data[0] or {}).get("log_v2") or {}
+        if not isinstance(current, dict):
+            current = {}
+        try:
+            updated = mutate(dict(current))
+        except Exception as e:
+            logger.warning("[TradeLogger] log_v2 build failed (trade_id=%s): %s", trade_id, e)
+            return False
+        try:
+            self.client.table("orb_trades").update({"log_v2": updated}).eq("id", trade_id).execute()
+            return True
+        except Exception as e:
+            if "log_v2" in str(e):
+                logger.warning(
+                    "[TradeLogger] log_v2 column missing — v2 events not persisted "
+                    "(run the log_v2 migration); trade logging itself is unaffected")
+                return False
+            logger.warning("[TradeLogger] log_v2 update failed (trade_id=%s): %s", trade_id, e)
+            return False
+
+    def log_v2_entry(self, trade_id: str, v2: dict) -> bool:
+        """Replace (or set) the whole v2 record — used only when log_entry
+        itself could not carry it (e.g. a recovered trade re-anchoring)."""
+        if not v2:
+            return False
+        return self._append_log_v2(trade_id, lambda _cur: dict(v2))
+
+    def log_v2_event(self, trade_id: str, event: dict) -> bool:
+        """Append one V2Event (exit leg, cascade candidate/fire/blocked)."""
+        if not event:
+            return False
+        def _add(cur: dict) -> dict:
+            events = list(cur.get("events") or [])
+            events.append(event)
+            cur["events"] = events
+            return cur
+        return self._append_log_v2(trade_id, _add)
+
+    def log_v2_override(self, trade_id: str, override: dict) -> bool:
+        """Append one mid-trade override {field, old, new, who, when, via}."""
+        if not override:
+            return False
+        def _add(cur: dict) -> dict:
+            overrides = list(cur.get("overrides") or [])
+            overrides.append(override)
+            cur["overrides"] = overrides
+            return cur
+        return self._append_log_v2(trade_id, _add)
 
     def _invalidate_pnl_summary(self):
         """Clear the account_pnl_summary cache (both modes — the exit row's
@@ -875,7 +1251,7 @@ class TradeLogger:
             rows = res.data or []
             if not rows:
                 return
-            now = datetime.utcnow().isoformat()
+            now = utcnow_iso()
             for row in rows:
                 entry_premium = row.get("entry_premium") or 0
                 qty_remaining = max(int(row["qty_entered"]) - int(row.get("qty_exited") or 0), 0)
