@@ -230,7 +230,7 @@ class ORBEngine(GateWatchMixin):
         # Subscribe to the hub bar feed for this ticker (re-subscribe on ticker or
         # profile-type change). REVERSAL-profile engines listen on the reversal
         # channel; all others listen on the regular breakout channel.
-        is_reversal_profile = self.profile_key == "REVERSAL"
+        is_reversal_profile = self.profile_key in ("REVERSAL", "MUSE_REVERSAL")
         new_sub_type = "reversal" if is_reversal_profile else "breakout"
         if self._subscribed_ticker != self.ticker or self._subscription_type != new_sub_type:
             if self._subscribed_ticker is not None:
@@ -346,6 +346,13 @@ class ORBEngine(GateWatchMixin):
         # gate on each 1-min close and enters the first time it passes.
         self._gate_watch:           Optional[dict] = None
         self._gate_watch_inflight:  bool = False
+        # MUSE_REVERSAL state (spec §10) — armed by a scorer fire, entered
+        # only after the 3-bar VWAP hold + intraday technicals >= 5.
+        self._muse_armed:           bool = False
+        self._muse_direction:       Optional[str] = None
+        self._muse_hold_tracker:    None = None
+        self._muse_reclaim_tracker: None = None
+        self._muse_reclaim_pending: bool = False
         # Fan-out queues for /ws/strategy/<id>/live WebSocket clients
         self._live_clients: list     = []
         self._live_clients_lock      = __import__("threading").Lock()
@@ -627,6 +634,25 @@ class ORBEngine(GateWatchMixin):
                 else:
                     self._reversal_down_since = None
 
+            # MUSE_REVERSAL VWAP-reclaim bleed cut (spec §10.3): the
+            # reclaim tracker fires in _muse_on_bar; the actual close
+            # happens here, on the next evaluate() tick, through the
+            # normal protective-close path - same shape as the REVERSAL
+            # bleed block above. Full close, not a trim: a VWAP reclaim
+            # is a thesis break.
+            if (action["type"] == "HOLD" and self.profile_key == "MUSE_REVERSAL"
+                    and getattr(self, "_muse_reclaim_pending", False)):
+                # CodeRabbit PR #118: em was only assigned inside the
+                # REVERSAL branch above, so it was unbound here and the
+                # reclaim close raised UnboundLocalError every tick.
+                em = self.exit_manager
+                self._muse_reclaim_pending = False
+                action = {"type": "CLOSE_ALL", "qty": em.qty_remaining,
+                          "reason": "MUSE_VWAP_RECLAIM"}
+                self.debug.emit("WARN",
+                                f"MUSE_REVERSAL VWAP reclaim - closing "
+                                f"{em.qty_remaining} contract(s)")
+
             self._handle_exit_action(action, current_price, current_option_price)
 
             # Persist breakeven-grace countdown transitions (started / ended
@@ -875,6 +901,30 @@ class ORBEngine(GateWatchMixin):
                 return
             if datetime.now(ET).weekday() not in self.trade_days:
                 self.debug.emit("WARN", "Ignoring reversal — not a trade day")
+                return
+
+            if self.profile_key == "MUSE_REVERSAL":
+                # Spec §10.2: do NOT enter on the scorer fire. Arm the
+                # 3-bar VWAP hold; entry happens in _muse_on_bar once the
+                # hold completes and intraday technicals reach >= 5.
+                # The old REVERSAL path below is untouched.
+                from services.strategy.muse_reversal import VwapSideTracker
+                hold_bars = int(self.profile.get("vwap_hold_bars", 3))
+                reclaim_bars = int(self.profile.get("vwap_reclaim_bars", 3))
+                self._muse_armed = True
+                self._muse_direction = direction
+                self._muse_hold_tracker = VwapSideTracker(direction, hold_bars)
+                # Reclaim tracker with the OPPOSITE direction so its
+                # "reversal side" is back across VWAP (the trend side).
+                self._muse_reclaim_tracker = VwapSideTracker(
+                    "CALL" if direction == "PUT" else "PUT", reclaim_bars)
+                self._muse_reclaim_pending = False
+                logger.info("[ORBEngine] MUSE_REVERSAL armed %s %s @ %.2f "
+                            "- waiting for %d-bar VWAP hold",
+                            direction, self.ticker, price, hold_bars)
+                self.debug.emit("INFO",
+                                f"MUSE_REVERSAL armed - {direction} @ {price:.2f}, "
+                                f"waiting for {hold_bars}-bar VWAP hold")
                 return
 
             logger.info("[ORBEngine] Reversal confirmed %s %s @ %.2f — entering",
@@ -3966,6 +4016,115 @@ class ORBEngine(GateWatchMixin):
 
     _RUNNER_ZONES_MAX_AGE_SEC = 60
 
+    # ── MUSE_REVERSAL (spec §10) ────────────────────────────────────────────
+    def _muse_intraday_score(self, direction: str, price: float) -> tuple:
+        """Intraday-only composite subtotal for MUSE_REVERSAL, 0..6.
+
+        Uses compute_composite with the hub's recent bars resampled to
+        5-minute closes (the hub feeds 1-minute bars; EMA periods are
+        5-minute periods, so raw 1-minute closes would distort them).
+        Daily closes are passed as None — daily rows become missing and
+        are NOT counted, by design (spec §10.2). Returns (score, detail)
+        where detail is the three intraday direction-adjusted scores.
+        Fail closed: any error or too few bars returns (0, "insufficient").
+        """
+        try:
+            import pandas as pd
+            from services.composite_technicals import compute_composite
+            recent = self._hub.get_recent_bars(self.ticker) or []
+            if len(recent) < 30:
+                return 0, "insufficient bars"
+            # Resample 1m closes to 5m closes: last close per 5-min bucket.
+            buckets = {}
+            for b in recent:
+                ts = getattr(b, "ts", None)
+                close = getattr(b, "close", None)
+                if ts is None or close is None:
+                    continue
+                key = ts.replace(minute=(ts.minute // 5) * 5, second=0, microsecond=0)
+                buckets[key] = float(close)
+            if len(buckets) < 14:
+                return 0, "insufficient 5m bars"
+            closes_5m = pd.Series(buckets, dtype=float).sort_index()
+            comp = compute_composite(direction, price, daily_closes=None,
+                                     closes_5m=closes_5m,
+                                     vwap=self._live_session_vwap(),
+                                     orh=self.orh, orl=self.orl)
+            rows = {r["key"]: r["score"] for r in comp.get("indicators", [])}
+            fav = 0
+            detail = {}
+            for k in ("rsi_intraday", "macd", "trend_intraday"):
+                s = rows.get(k)
+                fav += max(0, s) if s is not None else 0
+                detail[k] = s
+            return fav, str(detail)
+        except Exception:
+            logger.error("[ORBEngine] MUSE intraday score failed for %s", self.ticker, exc_info=True)
+            return 0, "error"
+
+    def _muse_on_bar(self, bar) -> None:
+        """Pre-entry MUSE_REVERSAL check, called from on_bar per 1m close.
+
+        Only runs when armed by a scorer fire and no trade is open.
+        Feeds the VWAP hold tracker; when the hold completes, checks
+        the intraday subtotal (>= 5 of 6) and, if it passes, enters
+        with gate_result=False — the muse gate already passed, so the
+        composite gate must NOT re-run (that is the 2026-11-02 block).
+        _enter_trade still enforces active (paused => no entry),
+        the cross-engine same-direction conflict pause, and the
+        contract/capital guards. Window: ORB close + profile
+        breakout_time_limit_min (240 for MUSE_REVERSAL); a hold that
+        completes after the deadline disarms without entering.
+        """
+        if not getattr(self, "_muse_armed", False) or self.trade_taken:
+            return
+        tracker = getattr(self, "_muse_hold_tracker", None)
+        direction = getattr(self, "_muse_direction", None)
+        if tracker is None or not direction:
+            return
+        vwap = self._live_session_vwap()
+        if vwap is None or bar.close is None:
+            return
+        if not tracker.feed(bar.close, vwap):
+            return
+        # Hold complete — check the window, then the technicals.
+        from datetime import datetime as _dt
+        orb_close = _dt.now(ET).replace(hour=9, minute=45, second=0, microsecond=0)
+        limit = int(self.profile.get("breakout_time_limit_min", 240))
+        if _dt.now(ET) > orb_close + timedelta(minutes=limit):
+            self._muse_armed = False
+            self.debug.emit("INFO", "MUSE_REVERSAL hold completed after window — disarmed")
+            return
+        # CodeRabbit PR #118: the VWAP-side check must run before
+        # the score check, on every bar after the hold completes
+        # - not only when the score is below 5. A close back
+        # across VWAP resets the hold and must never enter,
+        # whatever the score on that bar is.
+        if ((direction == "PUT" and bar.close > vwap) or
+                (direction == "CALL" and bar.close < vwap)):
+            tracker.reset()
+            self.debug.emit("INFO",
+                            "MUSE_REVERSAL hold lost on VWAP cross - timer reset")
+            return
+        score, detail = self._muse_intraday_score(direction, bar.close)
+        if score >= 5:
+            self._muse_armed = False
+            # Fresh reclaim state for the new trade (never reuse a
+            # stale pending flag from a previous trade this session).
+            if getattr(self, "_muse_reclaim_tracker", None) is not None:
+                self._muse_reclaim_tracker.reset()
+            self._muse_reclaim_pending = False
+            logger.info("[ORBEngine] MUSE_REVERSAL hold + technicals passed "
+                        "%s %s score=%d detail=%s — entering",
+                        direction, self.ticker, score, detail)
+            self._enter_trade(direction, bar.close, gate_result=False)
+        else:
+            # Hold completed but technicals not there yet: keep the
+            # tracker complete and re-check each following bar. The
+            # VWAP-side check above already reset the hold on any
+            # close back across VWAP, so nothing is needed here.
+            pass
+
     def _feed_runner_exit(self, bar: OrbBar) -> None:
         """Bar-cadence feed for ExitManager's runner exit (runner_exit_enabled).
         Seeds swings/RSI from the hub's session bars on first use (the
@@ -4047,6 +4206,10 @@ class ORBEngine(GateWatchMixin):
                                                 high=bar.high, low=bar.low)
             self._feed_runner_exit(bar)
             self._maybe_refresh_overlay_delta()
+            if self.profile_key == "MUSE_REVERSAL" and getattr(self, "_muse_reclaim_tracker", None) is not None:
+                vwap = self._live_session_vwap()
+                if vwap is not None and self._muse_reclaim_tracker.feed(bar.close, vwap):
+                    self._muse_reclaim_pending = True
 
         # Only act once the ORB is established and the session isn't skipped.
         # getattr guards the brief __init__ window before _reset_session_state runs.
@@ -4054,6 +4217,9 @@ class ORBEngine(GateWatchMixin):
             return
 
         self._on_bar_gate_watch(bar.close)
+
+        if self.profile_key == "MUSE_REVERSAL":
+            self._muse_on_bar(bar)
 
         # Bar-close confirmation: after the 3-minute OrbService signal the engine
         # waits for a 1-minute bar to CLOSE on the correct side of the ORH/ORL
