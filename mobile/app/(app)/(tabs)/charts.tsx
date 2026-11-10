@@ -1085,6 +1085,7 @@ export function ChartsContent({ initialTicker, topInset }: {
             isLoading={chart.technicals.isLoading}
             error={chart.technicals.error}
             onReviewEntry={reviewEntryFromTechnicals}
+            tradeSide={tradeSide}
           />
         }
         technicalsOpen={technicalsOpen}

@@ -20,6 +20,35 @@ logger = logging.getLogger(__name__)
 ET_TZ = pytz.timezone("America/New_York")
 
 
+def merge_rung_state(stored: Optional[dict], new: Optional[dict]) -> Optional[dict]:
+    """Merge a TP-ladder state patch over the stored one without ever
+    un-firing a line (PR #121 thread 1): a write built from an older
+    snapshot can't overwrite a hit the tick path already persisted — a
+    restart would re-arm that line and sell its contracts again."""
+    if not isinstance(new, dict):
+        return new
+    if not isinstance(stored, dict):
+        return new
+    fired = {r.get("id"): r for r in (stored.get("tp_rungs") or [])
+             if isinstance(r, dict) and r.get("hit")}
+    if not fired:
+        return new
+    out = dict(new)
+    rungs = []
+    seen = set()
+    for r in new.get("tp_rungs") or []:
+        if not isinstance(r, dict):
+            continue
+        rid = r.get("id")
+        seen.add(rid)
+        if rid in fired and not r.get("hit"):
+            r = {**r, **{k: fired[rid].get(k) for k in ("hit", "hit_premium", "hit_at")}}
+        rungs.append(r)
+    rungs.extend(r for rid, r in fired.items() if rid not in seen)
+    out["tp_rungs"] = rungs
+    return out
+
+
 def utcnow_iso() -> str:
     """Offset-aware UTC timestamp for every new record.
 
@@ -898,7 +927,10 @@ class TradeLogger:
                     .eq("id", trade_id).limit(1).execute()
                 )
                 current = (row.data[0].get("exit_overrides") or {}) if row.data else {}
-                update["exit_overrides"] = {**current, **exit_overrides_patch}
+                patch = dict(exit_overrides_patch)
+                if "rung_state" in patch:
+                    patch["rung_state"] = merge_rung_state(current.get("rung_state"), patch["rung_state"])
+                update["exit_overrides"] = {**current, **patch}
             except Exception as e:
                 logger.error(
                     "[TradeLogger] update_exit_levels: failed to read exit_overrides "

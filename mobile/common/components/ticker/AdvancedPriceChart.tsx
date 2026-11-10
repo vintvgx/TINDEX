@@ -166,8 +166,9 @@ export interface LegacyTradeMarker {
   summary: string | null;
 }
 
-/** Thin touch strip over a trade line: a tap selects; dragging the SELECTED
- *  line moves it and reports the new price on release. */
+/** Thin touch strip over the SELECTED trade line: dragging moves it and
+ *  reports the new price on release; a tap re-selects. Only the selected line
+ *  gets one, so the strip never blocks chart gestures elsewhere. */
 function TradeLineStrip({ y, width, selected, onTap, onDrag, onDragEnd }: {
   y: number; width: number; selected: boolean;
   onTap: () => void; onDrag: (dy: number) => void; onDragEnd: (dy: number) => void;
@@ -1247,6 +1248,15 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // makes this wait to see whether a second tap follows before firing, so
   // a real double-tap (reset) never also fires this as a false single-tap
   // first — the standard gesture-handler pattern for disambiguating the two.
+  // Unselected trade lines have no touch strip (it would block pan / scrub /
+  // pinch along the line — PR #121 thread 7): a tap is hit-tested here
+  // instead, ±12px like the strip, before the scrub.
+  const tradeLineHits = useMemo(
+    () => (scale ? (tradeLines ?? []).filter(l => l.editable && l.key !== selectedTradeLineKey)
+      .map(l => ({ key: l.key, y: scale.yForPrice(l.price) })) : []),
+    [scale, tradeLines, selectedTradeLineKey],
+  );
+  const selectTradeLine = useCallback((key: string) => onTradeLineTap?.(key), [onTradeLineTap]);
   const singleTapGesture = useMemo(
     () =>
       Gesture.Tap()
@@ -1254,6 +1264,13 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         .requireExternalGestureToFail(doubleTapGesture)
         .onEnd((e) => {
           'worklet';
+          let hit: string | null = null, best = 13;
+          for (let i = 0; i < tradeLineHits.length; i++) {
+            const d = Math.abs(tradeLineHits[i].y - e.y);
+            if (d < best) { best = d; hit = tradeLineHits[i].key; }
+          }
+          if (hit != null) { runOnJS(selectTradeLine)(hit); return; }
+          if (!crosshairEnabled) return;     // here only for the line hit test
           if (visibleCount < 2 || plotW === 0) return;
           // layoutVisibleCount, not visibleCount — must match scale.step
           // exactly (see its doc above) or a touch on the visually-last
@@ -1266,7 +1283,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           runOnJS(notifyScrub)(idx);
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doubleTapGesture, visibleStart, visibleEnd, visibleCount, layoutVisibleCount, plotW, notifyScrub, triggerHaptic],
+    [doubleTapGesture, visibleStart, visibleEnd, visibleCount, layoutVisibleCount, plotW, notifyScrub, triggerHaptic,
+      tradeLineHits, selectTradeLine, crosshairEnabled],
   );
 
   // ── Pan/zoom gestures ────────────────────────────────────────────────
@@ -1487,9 +1505,12 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           ? Gesture.Race(doubleTapGesture, drawGesture)
           : crosshairEnabled
             ? Gesture.Race(doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture)
-            : Gesture.Race(doubleTapGesture, manipulateGesture),
+            : tradeLineHits.length
+              ? Gesture.Race(doubleTapGesture, singleTapGesture, manipulateGesture)
+              : Gesture.Race(doubleTapGesture, manipulateGesture),
       ),
-    [pinchGesture, doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture, drawGesture, watchMode, crosshairEnabled],
+    [pinchGesture, doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture, drawGesture, watchMode, crosshairEnabled,
+      tradeLineHits.length],
   );
 
   const onLayout = (e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width);
@@ -2206,8 +2227,9 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             </Svg>
           </GestureDetector>
         )}
-        {/* Tap / drag strips over the trade lines (above the chart's own gestures). */}
-        {scale && !isLoading && hasData && (tradeLines ?? []).filter(l => l.editable).map((line) => {
+        {/* Drag strip over the SELECTED trade line only (above the chart's own
+            gestures); unselected lines are tapped via singleTapGesture. */}
+        {scale && !isLoading && hasData && (tradeLines ?? []).filter(l => l.editable && l.key === selectedTradeLineKey).map((line) => {
           const y0 = scale.yForPrice(line.price);
           const selected = line.key === selectedTradeLineKey;
           return (

@@ -27,11 +27,13 @@ export function TechnicalsSheet({
   isLoading,
   error,
   onReviewEntry,
+  tradeSide,
 }: {
   check: EntryCheck | undefined;
   isLoading: boolean;
   error: Error | null;
   onReviewEntry?: (direction: 'CALL' | 'PUT') => void;
+  tradeSide?: 'CALL' | 'PUT' | null;
 }) {
   const colors = useThemeColors();
   const muted = colors.textSecondary;
@@ -51,7 +53,7 @@ export function TechnicalsSheet({
 
   // Composite API → the composite detail panel; older deploys keep the grid.
   if (check.composite) {
-    return <CompositeTechnicalsPanel check={check} colors={colors} onReviewEntry={onReviewEntry} />;
+    return <CompositeTechnicalsPanel check={check} colors={colors} onReviewEntry={onReviewEntry} tradeSide={tradeSide} />;
   }
 
   const sig = signalMeta(check.signal, colors);

@@ -53,6 +53,11 @@ export default function MorningBriefScreen({ embedded = false }: Props) {
   const plays = brief?.plays ?? [];
   const live = plays.filter(p => ['checking', 'awaiting_confirmation', 'working'].includes(p.status));
   const rest = plays.filter(p => !live.includes(p));
+  // "As of" = when the reads were taken, never updated_at — that's stamped on
+  // every save, incl. post-lock status changes (PR #121 thread 4). Newest
+  // play read wins; generated_at (first build) when no play carries one.
+  const asOf = plays.map(p => p.entry_check?.as_of).filter((t): t is string => !!t && !Number.isNaN(Date.parse(t)))
+    .sort((a, b) => Date.parse(a) - Date.parse(b)).pop() ?? brief?.generated_at ?? null;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
@@ -99,7 +104,7 @@ export default function MorningBriefScreen({ embedded = false }: Props) {
               </View>
               {/* A frozen morning read must never pass for live (spec §2.2). */}
               <Text style={[styles.summaryNote, { color: colors.textSecondary, fontWeight: '600' }]}>
-                Brief as of {fmtEtTime(brief.updated_at)} ET · {brief.phase === 'build' ? 'premarket snapshot' : brief.locked ? 'locked snapshot' : 're-scored snapshot'} — the chart's live read may differ
+                Brief as of {fmtEtTime(asOf)} ET · {brief.phase === 'build' ? 'premarket snapshot' : brief.locked ? 'locked snapshot' : 're-scored snapshot'} — the chart's live read may differ
               </Text>
               <Text style={[styles.summaryNote, { color: colors.textSecondary }]}>
                 Paper only · score ≥ {cfg?.min_setup_score ?? 80} + Technicals Gate ENTER · 0DTE ·{' '}

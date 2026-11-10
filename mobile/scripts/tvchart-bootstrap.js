@@ -789,6 +789,9 @@
     tapMulti = !!(e.touches && e.touches.length > 1);
   }
   function tapMove(e) {
+    // A trade-line drag owns this gesture — don't let it read as a pan
+    // (chart-interact clears the selection mid-drag; PR #121 thread 11).
+    if (dragKey) return;
     if (e.touches && e.touches.length > 1) tapMulti = true;
     var t = e.touches && e.touches[0];
     if (!t) return;

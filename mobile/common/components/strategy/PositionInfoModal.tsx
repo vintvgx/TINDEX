@@ -195,6 +195,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
       setTp2Val('');
       setAlertPriceVal('');
       setFloorPriceVal('');
+      setLadderEdit({ rungs: null, problem: null });   // never carry an old ladder edit over (thread 6)
       const sl = data.slEnabled !== false;
       const tp = data.tpEnabled !== false;
       setSlOn(sl);
@@ -220,11 +221,14 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
 
   const canSplit = data.qty_remaining > 1;
   const hasLadder = tpOn && canSplit && !!data.tp_ladder && data.tp_ladder.length > 0;
+  // Only a mounted ladder editor's edits count — otherwise (TP turned off,
+  // can't split) a stale edit could save over lines set on the chart (thread 6).
+  const ladder: LadderEditState = hasLadder ? ladderEdit : { rungs: null, problem: null };
   const tp2Editable = data.showTp2 !== false;
   const entry = data.entry_premium;
 
   const dirty =
-    ladderEdit.rungs != null || ladderEdit.tp1 !== undefined || ladderEdit.tp2 !== undefined ||
+    ladder.rungs != null || ladder.tp1 !== undefined || ladder.tp2 !== undefined ||
     !!stopVal || !!tp1Val || !!tp2Val || !!floorPriceVal ||
     slOn !== initial.current.sl || tpOn !== initial.current.tp ||
     (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && graceMinutes !== initial.current.minutes))) ||
@@ -254,8 +258,8 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const handleSave = async () => {
     const stop  = stopVal ? parseFloat(stopVal) : undefined;
     // With a ladder, TP1 / TP2 come from the ladder editor (the only TP editor).
-    const tp1   = hasLadder ? ladderEdit.tp1 : tp1Val ? parseFloat(tp1Val) : undefined;
-    const tp2   = hasLadder ? ladderEdit.tp2 : tp2Val ? parseFloat(tp2Val) : undefined;
+    const tp1   = hasLadder ? ladder.tp1 : tp1Val ? parseFloat(tp1Val) : undefined;
+    const tp2   = hasLadder ? ladder.tp2 : tp2Val ? parseFloat(tp2Val) : undefined;
     const floor = floorPriceVal ? parseFloat(floorPriceVal) : undefined;
 
     if (stop !== undefined && (isNaN(stop) || stop <= 0)) {
@@ -287,8 +291,8 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
       return;
     }
 
-    if ((ladderEdit.rungs != null || ladderEdit.tp1 !== undefined || ladderEdit.tp2 !== undefined) && ladderEdit.problem) {
-      Alert.alert('TP lines', ladderEdit.problem);
+    if ((ladder.rungs != null || ladder.tp1 !== undefined || ladder.tp2 !== undefined) && ladder.problem) {
+      Alert.alert('TP lines', ladder.problem);
       return;
     }
     const slChanged = slOn !== initial.current.sl;
@@ -326,7 +330,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
     }
     if (canSplit && runnerMode !== initial.current.runnerMode) payload.runner_mode = runnerMode;
     if (canSplit && cascadeOn !== initial.current.cascade) payload.cascade_enabled = cascadeOn;
-    if (ladderEdit.rungs != null) payload.tp_rungs = ladderEdit.rungs;
+    if (ladder.rungs != null) payload.tp_rungs = ladder.rungs;
 
     try {
       await mutation.mutateAsync(payload);

@@ -1002,7 +1002,11 @@ class ExitManager:
     # ── User TP rungs ───────────────────────────────────────────────────────
 
     def _reserved_qty(self) -> int:
-        """Contracts owned by user rungs that haven't fired yet."""
+        """Contracts owned by user rungs that haven't fired yet. Nothing while
+        take-profit is off: the lines are kept for a later re-enable but can't
+        fire, so they mustn't shrink what TP2 / cascade / trail may sell."""
+        if self._disable_tp1_exit:
+            return 0
         return sum(r["qty"] for r in self._rungs if not r["hit"])
 
     def _free_qty(self) -> int:
@@ -1056,7 +1060,7 @@ class ExitManager:
                                source=r.get("source"))
             if r.get("replaces_tp1") and not self.tp1_hit:
                 self._tp1_side_effects(price)          # this line IS TP1
-            elif not self.be_stop_active and self._runner_mode != "none":
+            elif not self.be_stop_active and self._runner_mode != "none" and price > self.entry_premium:
                 # BE arms after the first TP hit, whichever rung it was.
                 self.mark_breakeven(self.breakeven_level(cap=price))
             if qty <= 0:
@@ -1205,7 +1209,19 @@ class ExitManager:
         """Inverse of rungs_state() — called by recover_position()."""
         if not state or not state.get("tp_rungs") and not state.get("tp1_override_before_set"):
             return
-        self._rungs = [dict(r) for r in (state.get("tp_rungs") or []) if isinstance(r, dict)]
+        # Normalise every stored line — a malformed row is dropped, never
+        # allowed to crash evaluate() (which reads these keys every tick).
+        rungs = []
+        for r in state.get("tp_rungs") or []:
+            if not isinstance(r, dict):
+                continue
+            try:
+                premium, qty = float(r["premium"]), int(r["qty"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            rungs.append({**r, "premium": premium, "qty": qty, "hit": bool(r.get("hit")),
+                          "id": str(r.get("id") or f"restored-{len(rungs)}")})
+        self._rungs = rungs
         self._tp1_qty_override = state.get("tp1_qty_override")
         self._tp1_replaced = bool(state.get("tp1_replaced"))
         self._tp1_base_qty = state.get("tp1_base_qty")

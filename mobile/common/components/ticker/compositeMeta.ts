@@ -51,9 +51,11 @@ export function resolveLens(check: EntryCheck | undefined, tradeSide?: 'CALL' | 
   };
 }
 
-/** Detail sheet: the lens side's composite, or the higher-scoring side on WAIT. */
-export function chartComposite(check: EntryCheck | undefined): CompositeScore | null {
-  const v = resolveLens(check);
+/** Detail sheet: the lens side's composite, or the higher-scoring side on WAIT.
+ *  Pass the open trade's side so the sheet leads with the same side as the
+ *  strip (PR #121 thread 10). */
+export function chartComposite(check: EntryCheck | undefined, tradeSide?: 'CALL' | 'PUT' | null): CompositeScore | null {
+  const v = resolveLens(check, tradeSide);
   if (!v) return null;
   return v.comp ?? (v.put && v.call && v.put.total > v.call.total ? v.put : v.call);
 }

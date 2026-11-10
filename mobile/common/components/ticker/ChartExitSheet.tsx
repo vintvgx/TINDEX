@@ -90,42 +90,64 @@ export function ChartExitSheet({
   const quote = convOK ? { stock: u!, premium: cur!, delta: ud.delta! } : null;
   const qtyRem = live?.qty_remaining ?? 0;
 
-  // ── (Re)initialise on each new request ─────────────────────────────────
+  // ── (Re)initialise on each new request, and on each trade switch ──────
+  // Fields are always computed from the RESOLVED trade object passed in —
+  // never from this render's derived values, which still belong to the
+  // previous request's trade until the next render (PR #121 thread 8: with
+  // two trades on one ticker, that saved one contract's premium onto the
+  // other trade).
+  const applyFields = (t: ExitSheetTrade, req: ExitSheetRequest) => {
+    const lv = t.live;
+    const lad = lv.tp_ladder ?? [];
+    const d = usableDelta({ delta: lv.delta, source: lv.delta_source ?? null, ageS: lv.delta_age_s });
+    const uu = isNum(lv.underlying_price) ? lv.underlying_price! : null;
+    const cc = isNum(lv.mid_price) ? lv.mid_price : null;
+    const q = d.delta != null && uu != null && cc != null ? { stock: uu, premium: cc, delta: d.delta } : null;
+    const en = lv.entry_premium ?? 0;
+    let k: Kind = 'tp';
+    let stockV: number | null = req.stock ?? null;
+    let premV: number | null = null;
+    const r = req.mode === 'edit' ? lad.find(x => x.key === req.key) ?? null : null;
+    if (req.mode === 'new') {
+      k = uu != null ? smartDefault(t.direction, req.stock, uu) : 'tp';
+    } else {
+      k = req.key === 'sl' ? 'sl' : req.key === 'be' ? 'be' : 'tp';
+      premV = r ? r.premium : req.key === 'sl' || req.key === 'be' ? lv.hard_stop : null;
+      if (req.stock == null) stockV = q && premV != null ? stockAt(q, premV) : r?.stock_price ?? null;
+      else premV = null;   // dragged: the new stock price drives the premium
+    }
+    if (premV == null && stockV != null && q) premV = premiumAt(q, stockV);
+    setKind(k);
+    setStockText(fmt(stockV));
+    setPremText(fmt(premV));
+    setPctText(premV != null && en ? String(Math.round(pctVsEntry(premV, en))) : '');
+    // First line before TP1 fires takes TP1's qty by default (§4.5); clamp
+    // to what can be saved so the sheet never opens in an error state (N1).
+    const tp1r = lad.find(x => x.key === 'tp1');
+    const firstLine = userRungs(lad).length === 0 && tp1r && !tp1r.hit;
+    const others = userRungs(lad).filter(x => x.id !== (req.mode === 'edit' ? req.key : undefined));
+    const cap = Math.max(1, lv.qty_remaining - 1 - others.reduce((n, x) => n + x.qty, 0));
+    setQty(Math.min(cap, r ? r.qty : Math.max(1, firstLine ? tp1r!.qty : 1)));
+    setConfirmArmed(null);
+  };
   const reqRef = useRef<ExitSheetRequest | null>(null);
   useEffect(() => {
-    if (!request || request === reqRef.current) return;
+    if (!request) { reqRef.current = null; setStrategyId(null); return; }   // closed: forget the pick
+    if (request === reqRef.current) return;
     reqRef.current = request;
-    setConfirmArmed(null);
-    setStrategyId(defaultStrategyId);
     setDeltaNonce(n => n + 1);
-    if (!live) return;
-    let k: Kind = 'tp';
-    let stock: number | null = request.stock ?? null;
-    let prem: number | null = null;
-    if (request.mode === 'new') {
-      k = u != null ? smartDefault(trade.direction, request.stock, u) : 'tp';
-    } else {
-      k = request.key === 'sl' ? 'sl' : request.key === 'be' ? 'be' : 'tp';
-      const r = ladder.find(x => x.key === request.key);
-      prem = r ? r.premium : request.key === 'sl' || request.key === 'be' ? live.hard_stop : null;
-      if (request.stock == null) stock = quote && prem != null ? stockAt(quote, prem) : r?.stock_price ?? null;
-      else prem = null;   // dragged: the new stock price drives the premium
-    }
-    if (prem == null && stock != null && quote) prem = premiumAt(quote, stock);
-    setKind(k);
-    setStockText(fmt(stock));
-    setPremText(fmt(prem));
-    setPctText(prem != null && entry ? String(Math.round(pctVsEntry(prem, entry))) : '');
-    // First line before TP1 fires takes TP1's qty by default (§4.5).
-    const tp1 = ladder.find(r => r.key === 'tp1');
-    const firstLine = userRungs(ladder).length === 0 && tp1 && !tp1.hit;
-    // Clamp to what can actually be saved, so the sheet never opens in an
-    // error state (1-contract boundary — PR #121 N1).
-    const others = userRungs(ladder).filter(r => r.id !== (request.mode === 'edit' ? request.key : undefined));
-    const cap = Math.max(1, live.qty_remaining - 1 - others.reduce((n, r) => n + r.qty, 0));
-    setQty(Math.min(cap, editRung ? editRung.qty : Math.max(1, firstLine ? tp1!.qty : 1)));
+    const resolved = trades.find(t => t.strategyId === defaultStrategyId) ?? trades[0];
+    if (!resolved) return;
+    setStrategyId(resolved.strategyId);
+    applyFields(resolved, request);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request]);
+  const pickTrade = (t: ExitSheetTrade) => {
+    if (!request || t.strategyId === trade?.strategyId) return;
+    setStrategyId(t.strategyId);
+    setDeltaNonce(n => n + 1);
+    applyFields(t, request);
+  };
 
   // Trade closed under the open sheet (§9).
   useEffect(() => {
@@ -249,7 +271,9 @@ export function ChartExitSheet({
       if (flipped && editKey) body.tp_rungs = otherUser;      // the TP line becomes the stop
       submit(body, `Stop set at $${p.toFixed(2)}${sp != null ? ` (≈ ${sp.toFixed(2)})` : ''} — sells all remaining`);
     } else if (editKey === 'tp1' || editKey === 'tp2') {
-      submit({ [editKey]: p }, `${editRung?.label ?? 'TP'} moved to $${p.toFixed(2)}`);
+      // Send the stepper's qty too — it was shown but dropped (thread 9).
+      submit({ [editKey]: p, [`${editKey}_qty`]: qty },
+        `${editRung?.label ?? 'TP'} moved to $${p.toFixed(2)} · ${qty} contract${qty === 1 ? '' : 's'}`);
     } else {
       const mine: TpRungInput = { id: editKey ?? undefined, premium: p, qty, stock_price: sp,
                                   source: editRung ? (editRung.source as TpRungInput['source']) : 'chart-long-press' };
@@ -290,10 +314,10 @@ export function ChartExitSheet({
             </View>
 
             {/* Which contract — only when there's a choice (§4.6). */}
-            {trades.length > 1 ? (
+            {trades.length > 1 && request!.mode === 'new' ? (
               <View style={s.wrapRow}>
                 {trades.map(t => (
-                  <Pressable key={t.strategyId} onPress={() => setStrategyId(t.strategyId)}
+                  <Pressable key={t.strategyId} onPress={() => pickTrade(t)}
                     style={[s.choice, { borderColor: t === trade ? colors.text : colors.border }]}>
                     <Text style={{ color: t === trade ? colors.text : colors.textSecondary, fontSize: 12, fontWeight: '600' }}>{t.label}</Text>
                   </Pressable>

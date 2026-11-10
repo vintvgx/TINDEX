@@ -75,7 +75,8 @@ export function BriefPlayCard({ play, colors, clockOffsetMs, onOpenChart, settin
         {/* The frozen entry-check read this play was composed from — the same
             payload the chart reads, labelled with its side and as-of time. */}
         {play.entry_check ? (
-          <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 6 }} numberOfLines={2}>
+          // No line cap — a both-lenses-disagree caption must show in full (thread 5).
+          <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 6 }}>
             Composed {fmtEtTime(play.entry_check.as_of)} ET · {play.entry_check.side ?? play.direction}
             {play.entry_check.composite_total != null
               ? ` ${play.entry_check.composite_total > 0 ? '+' : ''}${play.entry_check.composite_total} ${(play.entry_check.composite_tier ?? '').replace('_', ' ')}`

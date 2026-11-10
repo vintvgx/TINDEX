@@ -1026,18 +1026,26 @@ def update_strategy_exits(strategy_id: str):
     # getattr: v2 logging must never break the edit itself — a fake or
     # partially-built ExitManager may lack these attributes (CI: the
     # snapshot raised AttributeError on em.tp1 and returned HTTP 500).
-    _rungs_old = {r["id"]: dict(r) for r in (em.rungs_public() if hasattr(em, "rungs_public") else [])}
-    _v2_old = {
-        "hard_stop": getattr(em, "hard_stop", None),
-        "tp1": getattr(em, "tp1", None),
-        "tp2": getattr(em, "tp2", None),
-        "runner_mode": getattr(em, "_runner_mode", None),
-        "cascade_enabled": getattr(em, "_cascade_enabled", None),
-    }
-    try:
-        changed = em.apply_overrides(**kwargs)
-    except ValueError as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
+    # The whole edit runs under the engine's tick lock (PR #121 thread 0):
+    # ticks evaluate exits under the same lock, so a TP line can't fire in
+    # the middle of set_tp_rungs and come back as an unfired copy (which
+    # would let it sell twice). apply_overrides takes no locks itself.
+    import contextlib
+    _edit_lock = getattr(engine, "_tick_lock", None) or contextlib.nullcontext()
+    with _edit_lock:
+        _rungs_old = {r["id"]: dict(r) for r in (em.rungs_public() if hasattr(em, "rungs_public") else [])}
+        _v2_old = {
+            "hard_stop": getattr(em, "hard_stop", None),
+            "tp1": getattr(em, "tp1", None),
+            "tp2": getattr(em, "tp2", None),
+            "runner_mode": getattr(em, "_runner_mode", None),
+            "cascade_enabled": getattr(em, "_cascade_enabled", None),
+        }
+        try:
+            changed = em.apply_overrides(**kwargs)
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
+        _rung_state_now = em.rungs_state() if "tp_rungs" in changed else None
 
     if not changed:
         return jsonify({"status": "noop", "message": "No fields provided"}), 400
@@ -1083,7 +1091,7 @@ def update_strategy_exits(strategy_id: str):
     if "tp_rungs" in changed:
         # The whole ladder state (rungs + the TP1 carve), so recover_position
         # rebuilds exactly this ladder — never an in-memory-only line (§6).
-        exit_overrides_patch["rung_state"] = em.rungs_state()
+        exit_overrides_patch["rung_state"] = _rung_state_now
     if "be_grace_cancelled" in changed:
         # Cancel button: the in-memory countdown is already cleared by
         # apply_overrides() — clear the persisted start so a restart
@@ -1117,6 +1125,14 @@ def update_strategy_exits(strategy_id: str):
         )
 
         def _persist():
+            # Re-read the ladder at WRITE time, under the tick lock (thread 1):
+            # a line that fired between the request and this queued write must
+            # be saved as fired, not overwritten by the request-time snapshot.
+            # update_exit_levels also never un-fires a stored rung.
+            patch = persist_kwargs.get("exit_overrides_patch")
+            if patch and "rung_state" in patch and hasattr(em, "rungs_state"):
+                with _edit_lock:
+                    patch["rung_state"] = em.rungs_state()
             try:
                 if not logger_svc.update_exit_levels(**persist_kwargs):
                     logger.error(
