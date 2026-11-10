@@ -193,13 +193,17 @@ export function TpLadderEditor({
   }, [rows, qtyOk, engRows]);
   useEffect(() => { onChange(state); }, [state, onChange]);
 
-  // Display rows: engine + user, premium order, renumbered.
-  type Disp = { key: string; premium: number; label?: string; user?: number; engine?: LadderRung; hit?: boolean };
+  // Display rows: engine + user, renumbered. Order matches the server's
+  // ladder(): the line that took all of TP1 (replaces_tp1) sorts first — it
+  // IS TP1 — then premium ascending, with a stock-only line (no premium)
+  // after the premium rungs. Premium 0 used to sort stock-only lines first,
+  // so the editor's TP1 disagreed with the server's.
+  type Disp = { key: string; premium: number; label?: string; user?: number; engine?: LadderRung; hit?: boolean; replacesTp1?: boolean };
   const disp: Disp[] = [
-    ...engine.map(r => ({ key: r.key, premium: engEdit[r.key] ? parseFloat(engEdit[r.key]) || (r.premium ?? 0) : (r.premium ?? 0), engine: r, hit: r.hit })),
-    ...hitUser.map(r => ({ key: r.key, premium: r.premium ?? r.hit_premium ?? 0, engine: r, hit: true })),
-    ...rows.map((r, i) => ({ key: r.id ?? `new-${i}`, premium: parseFloat(r.premium) || 0, user: i })),
-  ].sort((a, b) => a.premium - b.premium).map((d, i) => ({ ...d, label: `TP${i + 1}` }));
+    ...engine.map(r => ({ key: r.key, premium: engEdit[r.key] ? parseFloat(engEdit[r.key]) || (r.premium ?? Number.POSITIVE_INFINITY) : (r.premium ?? Number.POSITIVE_INFINITY), engine: r, hit: r.hit, replacesTp1: r.replaces_tp1 })),
+    ...hitUser.map(r => ({ key: r.key, premium: r.premium ?? r.hit_premium ?? Number.POSITIVE_INFINITY, engine: r, hit: true, replacesTp1: r.replaces_tp1 })),
+    ...rows.map((r, i) => ({ key: r.id ?? `new-${i}`, premium: parseFloat(r.premium) || Number.POSITIVE_INFINITY, user: i, replacesTp1: ladder.find(l => l.key === r.id)?.replaces_tp1 })),
+  ].sort((a, b) => (a.replacesTp1 ? 0 : 1) - (b.replacesTp1 ? 0 : 1) || a.premium - b.premium).map((d, i) => ({ ...d, label: `TP${i + 1}` }));
 
   const muted = colors.textTertiary;
   return (

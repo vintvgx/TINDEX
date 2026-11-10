@@ -5,9 +5,11 @@ import type { CompositeScore, CompositeTier, EntryCheck } from '@/hooks/queries/
 /** Which side the strip / header lead with, and from which lens. */
 export interface LensView {
   side: 'CALL' | 'PUT' | 'WAIT';
-  /** trade = an open position on this ticker took that side; intraday = the
-   *  derived lens (entry-check `lens`); legacy = an API without `lens`. */
-  source: 'trade' | 'intraday' | 'legacy';
+  /** trade = an open position on this ticker took that side; composite = the
+   *  derived lens (entry-check `lens`) — the side is the higher composite
+   *  total, which the intraday lens itself may read as WAIT; legacy = an
+   *  API without `lens`. */
+  source: 'trade' | 'composite' | 'legacy';
   /** That side's composite — the lead side (trade side, else the higher
    *  total). Null only on a partial payload; the strip falls back to the
    *  dual-total WAIT pill then. */
@@ -40,7 +42,7 @@ export function resolveLens(check: EntryCheck | undefined, tradeSide?: 'CALL' | 
     if (lens && lens.intraday.side !== tradeSide) others.push(lens.intraday.text);
   } else if (lens) {
     side = dominantSide(check);
-    source = 'intraday';
+    source = 'composite';
     if (lens.intraday.side !== side) others.push(lens.intraday.text);
   } else {
     // Older API: no lens — follow the signal, else the dominant composite.

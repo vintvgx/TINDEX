@@ -300,7 +300,7 @@ function linesFor(t: OverlayTradeInput, now: number): {
   }
   const sig = [
     live.qty_remaining, tp1Hit, !!live.tp2_hit, beArmed, stale, lowDelta, note ?? '',
-    ladder.map(r => `${r.key}:${r.premium}:${r.qty}:${r.hit}`).join(','),
+    ladder.map(r => `${r.key}:${r.premium}:${r.stock_price ?? ''}:${r.qty}:${r.hit}`).join(','),
     live.runner_mode ?? '', live.sl_enabled ?? '', live.hard_stop ?? '',
   ].join('|');
   const quote = !sim && delta != null && u != null && cur != null ? { stock: u, premium: cur, delta, entry } : null;

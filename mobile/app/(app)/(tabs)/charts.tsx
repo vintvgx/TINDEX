@@ -910,7 +910,7 @@ export function ChartsContent({ initialTicker, topInset }: {
     const v = resolveLens(chart.technicals.data, tradeSide);
     if (!v) return null;
     // Spelled out (PR #121 N5): which lens the pill is reading.
-    const lensName = v.source === 'trade' ? 'Trade' : v.source === 'intraday' ? 'Intraday' : 'Signal';
+    const lensName = v.source === 'trade' ? 'Trade' : v.source === 'composite' ? 'Composite' : 'Signal';
     const text = v.comp ? `${lensName} ${v.side} ${fmtScore(v.comp.total)}` : `${lensName} WAIT`;
     return { side: v.side, text, other: v.otherLens };
   }, [chart.technicals.data, tradeSide]);

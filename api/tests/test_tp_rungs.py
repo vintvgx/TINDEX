@@ -237,22 +237,16 @@ def test_nov3_shape_levels():
 
 
 def test_tp2_follows_percentage_not_dollar_floor():
-    # 2026-11-10: the old max(entry × mult, entry + min_dollars) armed TP2
+    # 2026-11-10: the old max(entry x mult, entry + min_dollars) armed TP2
     # at $2.38 (+61%) on a $1.48 entry against a +50% strategy (mult 1.50
-    # vs the $0.90 floor). TPs now follow the strategy's percentages, and
-    # the ONLY intended difference from Master is that TP2.
-    import importlib.util, subprocess, tempfile
-    src = subprocess.run(["git", "show", "origin/Master:api/services/strategy/exit_manager.py"],
-                         capture_output=True, text=True, cwd=os.path.dirname(__file__))
-    if src.returncode != 0:
-        pytest.skip("origin/Master not available")
-    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-        f.write(src.stdout)
-    spec = importlib.util.spec_from_file_location("em_master", f.name)
-    master = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(master)
-    assert round(_nov3(master).tp2, 2) == 2.38     # Master still floors
-    assert round(_nov3(__import__("services.strategy.exit_manager", fromlist=["x"])).tp2, 2) == 2.22
+    # vs the $0.90 floor). TPs now follow the strategy's percentages.
+    # (Was a git comparison against origin/Master — it broke the moment
+    # this merged, skipped silently in shallow clones, and leaked a temp
+    # file. The legacy formula is inlined instead.)
+    import services.strategy.exit_manager as current
+    old_tp2 = max(1.48 * 1.50, 1.48 + 0.90)        # legacy dollar-floor formula
+    assert round(old_tp2, 2) == 2.38
+    assert round(_nov3(current).tp2, 2) == 2.22
 
 
 def test_nov3_shape_with_a_chart_line_sells_it_once():
@@ -326,6 +320,26 @@ def test_line_needs_a_premium_or_a_stock_price():
     em = _em()
     with pytest.raises(ValueError, match="premium or a stock price"):
         em.apply_overrides(tp_rungs=[{"qty": 1}])
+
+
+def test_bad_qty_names_qty_not_the_trigger():
+    em = _em()
+    with pytest.raises(ValueError, match="whole-number qty"):
+        em.apply_overrides(tp_rungs=[{"premium": 1.50}])       # qty missing
+    with pytest.raises(ValueError, match="whole-number qty"):
+        em.apply_overrides(tp_rungs=[{"premium": 1.50, "qty": "two"}])
+
+
+def test_bad_stock_price_is_rejected_not_silently_dropped():
+    em = _em()
+    # bool is an int subclass — True used to arm a $1.00 rung silently.
+    with pytest.raises(ValueError, match="stock price must be a number above \\$0"):
+        em.apply_overrides(tp_rungs=[{"stock_price": True, "qty": 1}])
+    # A string price used to vanish into "needs a premium or a stock price".
+    with pytest.raises(ValueError, match="stock price must be a number above \\$0"):
+        em.apply_overrides(tp_rungs=[{"stock_price": "772.5", "qty": 1}])
+    with pytest.raises(ValueError, match="stock price must be a number above \\$0"):
+        em.apply_overrides(tp_rungs=[{"stock_price": 0, "qty": 1}])
 
 
 def test_stock_line_that_takes_all_of_tp1_becomes_tp1():

@@ -182,7 +182,12 @@ function configToForm(cfg: StrategyConfig, profiles?: StrategyProfile[]): FormSt
     smart_contracts:        cfg.smart_contracts ?? false,
     confirm_entry:          cfg.confirm_entry ?? false,
     volume_exit:            cfg.exit_overrides?.volume_exit ?? false,
-    sl_grace_minutes:       cfg.exit_overrides?.sl_grace_minutes ?? profileGraceMinutes(cfg.profile, profiles),
+    // ?? would treat an explicit Hard Stop (null) as missing and fall back
+    // to the profile default — a saved Hard Stop reopened as "5 min" and
+    // silently overwrote itself on the next Save. Only undefined falls back.
+    sl_grace_minutes:       cfg.exit_overrides?.sl_grace_minutes !== undefined
+                              ? cfg.exit_overrides.sl_grace_minutes
+                              : profileGraceMinutes(cfg.profile, profiles),
     paired_strategy_id:     cfg.paired_strategy_id ?? null,
     technicals_gate:        cfg.technicals_gate ?? null,
   };
@@ -355,7 +360,10 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
     }
     const exitOverrides: ExitOverrides = {
       volume_exit: form.volume_exit,
-      sl_grace_minutes: form.sl_grace_minutes,
+      // NO_STOP_LOSS hides the timer, but the form can still carry a stale
+      // value from another profile — never persist a timer on a profile
+      // that has no stop to time.
+      sl_grace_minutes: form.profile === 'NO_STOP_LOSS' ? null : form.sl_grace_minutes,
     };
     const payload = {
       strategy_name:          form.strategy_name.trim(),

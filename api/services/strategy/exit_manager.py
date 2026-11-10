@@ -2,7 +2,7 @@
 Profile-aware exit manager. All thresholds come from the profile dict.
 
 Exit sequence:
-  1. TP1 (confirmed over N ticks, dollar-floored) — partial close, SL moves to entry.
+  1. TP1 (confirmed over N ticks) — partial close, SL moves to entry.
   2. Cascade exit (v2) — after TP1, tracks the peak premium. When premium
      gives back cascade_retrace_pct (50%) of the peak gain, 2 consecutive
      1-min underlying bars against the trade by the close of the next full
@@ -11,8 +11,10 @@ Exit sequence:
   3. Runner — the final 1 contract exits at: TP2 (if reached), BE stop (entry price),
      EOD (15:58 ET), or manual.
 
-TP1 dollar floor: TP = max(entry × mult, entry + min_dollars)
-  Prevents cheap OTM contracts from locking in noise-level gains.
+TPs follow the strategy's percentages exactly: TP = entry x mult.
+  (The old min_tp*_dollars floors were removed 2026-11-10 — they silently
+  overrode the percentages on cheap entries. The keys stay in the profiles
+  as inert legacy so stored overrides still validate.)
 
 BULL DOG    — 10 contracts, TP1 +20% / $0.35 floor, cascade(50%)
 THUNDER CAT — 6 contracts,  TP1 +20% / $0.25 floor, cascade(50%)
@@ -1160,18 +1162,25 @@ class ExitManager:
                 try:
                     premium = round(float(raw_prem), 4)
                 except (TypeError, ValueError):
-                    raise ValueError("each TP line needs a premium or a stock price")
+                    raise ValueError("each TP line needs a premium or a stock price") from None
                 if not math.isfinite(premium) or premium <= 0:
                     raise ValueError("TP premium must be above $0")
             try:
                 qty = int(raw["qty"])
             except (KeyError, TypeError, ValueError):
-                raise ValueError("each TP line needs a premium or a stock price")
+                raise ValueError("each TP line needs a whole-number qty") from None
             if qty < 1:
                 raise ValueError("each TP line must sell at least 1 contract")
             sp_raw = raw.get("stock_price")
-            sp = (round(float(sp_raw), 2)
-                  if isinstance(sp_raw, (int, float)) and math.isfinite(sp_raw) else None)
+            sp = None
+            if sp_raw is not None:
+                # bool is an int subclass — True would silently become $1.00
+                # and arm a rung that fires on the next tick. A present but
+                # unusable value is a client error, not an absent trigger.
+                if (isinstance(sp_raw, bool) or not isinstance(sp_raw, (int, float))
+                        or not math.isfinite(sp_raw) or sp_raw <= 0):
+                    raise ValueError("TP stock price must be a number above $0")
+                sp = round(float(sp_raw), 2)
             if premium is None and sp is None:
                 raise ValueError("each TP line needs a premium or a stock price")
             if premium is not None and premium <= self.entry_premium:

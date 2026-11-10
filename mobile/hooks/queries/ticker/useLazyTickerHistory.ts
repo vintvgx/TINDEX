@@ -252,6 +252,15 @@ export function useLazyTickerHistory(opts: {
   // in-flight backfill or tail poll from the previous ticker/period/interval
   // must not merge its bars — or its exhausted flag — into the new one.
   const gen = useRef(0);
+  // Tail-poll sequence: incremented per tick. A response from an older tick
+  // must not merge after a newer one started — a routine poll in flight
+  // when the nonce bumps would otherwise let its (older) window win the
+  // overlap and undo the catch-up until the next poll.
+  const tickSeq = useRef(0);
+  // Seq of the tick that turned the "Updating…" pill on (0 = none). Only
+  // that tick's settle clears it, so a superseded catch-up can't clear a
+  // newer catch-up's pill.
+  const catchUpSeq = useRef(0);
   // ticker|period|interval|extendedHours of the last successful initial
   // load. Re-enabling (tab refocus after the 30s blur pause) with the same
   // key keeps the bars and lets the tail poll catch up, instead of
@@ -408,7 +417,11 @@ export function useLazyTickerHistory(opts: {
       const s = live.current;
       if (!s.bars?.dates?.length || s.loadingMore) return;
       const myGen = gen.current;
-      if (catchUp) setCatchingUp(true);
+      const mySeq = ++tickSeq.current;
+      if (catchUp) {
+        catchUpSeq.current = mySeq;
+        setCatchingUp(true);
+      }
       try {
         // Only from the newest loaded bar's day (usually today, ~1-80 bars),
         // not a fixed 5-day window re-downloaded every 30s.
@@ -419,11 +432,15 @@ export function useLazyTickerHistory(opts: {
         // A ticker/period/interval switch mid-flight: don't merge the old
         // ticker's tail into the new ticker's chart.
         if (myGen !== gen.current) return;
+        // Superseded by a newer tick (routine poll in flight when the nonce
+        // bumped): the newer window is fresher — don't let this one win the
+        // overlap.
+        if (mySeq !== tickSeq.current) return;
         setBars((prev) => (prev ? mergeHistory(prev, data, true) : data));
       } catch {
         /* next poll retries */
       } finally {
-        if (catchUp) setCatchingUp(false);
+        if (catchUp && catchUpSeq.current === mySeq) setCatchingUp(false);
       }
     };
     // Catch up right away (no-op until bars exist) — on refocus the bars
@@ -437,6 +454,38 @@ export function useLazyTickerHistory(opts: {
     const id = setInterval(tick, pollMs);
     return () => clearInterval(id);
   }, [enabled, pollMs, ticker, interval, intraday, extendedHours, refreshNonce]);
+
+  // ── Daily+ refresh on return ────────────────────────────────────────
+  // The tail poll above only runs for intraday intervals, so a daily /
+  // weekly / monthly chart has no poll — a refreshNonce bump (return after
+  // >60s away) would otherwise leave its newest bar stale until the
+  // history key changes. Re-fetch just the tail window and merge it in:
+  // same shape as the tail poll, no spinner, no full reload. It reports
+  // itself as a catch-up so the "Updating…" pill shows for it too.
+  const prevDailyNonce = useRef(refreshNonce);
+  useEffect(() => {
+    if (!enabled || intraday) return;
+    if (refreshNonce === prevDailyNonce.current) return;
+    prevDailyNonce.current = refreshNonce;
+    const s = live.current;
+    if (!s.bars?.dates?.length) return;
+    const iv = interval ?? DEFAULT_INTERVAL[period];
+    const end = addDays(etToday(), 1);
+    const start = s.bars.dates[s.bars.dates.length - 1].slice(0, 10);
+    const myGen = gen.current;
+    setCatchingUp(true);
+    (async () => {
+      try {
+        const data = await postHistory(ticker, { interval: iv, start: start < end ? start : addDays(end, -1), end });
+        if (myGen !== gen.current) return;
+        setBars((prev) => (prev ? mergeHistory(prev, data) : data));
+      } catch {
+        /* next nonce bump retries */
+      } finally {
+        setCatchingUp(false);
+      }
+    })();
+  }, [enabled, intraday, ticker, period, interval, refreshNonce]);
 
   const fresh = barsKey === currentKey;
   return {
