@@ -6,6 +6,7 @@ Legacy single-engine endpoints (/strategy/config, /strategy/position, etc.)
 operate on the first engine for backwards compatibility with old clients.
 """
 
+import time
 import logging
 import concurrent.futures
 from datetime import date, datetime
@@ -1014,6 +1015,8 @@ def update_strategy_exits(strategy_id: str):
         # source?}]. Validated + reserved server-side in set_tp_rungs.
         "tp_rungs": data["tp_rungs"] if "tp_rungs" in data else None,
         "current_price": getattr(engine, "_current_option_price", None),
+        # The app's second confirm on a TP that's already reached (§4.4).
+        "allow_immediate": bool(data.get("allow_immediate", False)),
     }
     if "sl_grace_minutes" in data:
         raw = data["sl_grace_minutes"]
@@ -1161,10 +1164,22 @@ def update_strategy_exits(strategy_id: str):
         engine.debug.emit("INFO", f"Exit levels edited: {changed}")
     except Exception:
         pass
+    exit_state = em.to_dict()
+    # The ladder with live stock prices + the delta behind them, so the app
+    # can redraw from this response without waiting for the next tick.
+    try:
+        exit_state["tp_ladder"] = engine._ladder_with_stock(em, engine._current_option_price)
+        exit_state["delta"] = getattr(engine, "_overlay_delta", None)
+        exit_state["delta_source"] = getattr(engine, "_overlay_delta_source", None)
+        _at = getattr(engine, "_overlay_delta_at", 0.0)
+        exit_state["delta_age_s"] = (round(time.monotonic() - _at, 1)
+                                     if exit_state["delta"] is not None and _at else None)
+    except Exception:
+        pass
     return jsonify({
         "status": "ok",
         "updated": changed,
-        "exit_state": em.to_dict(),
+        "exit_state": exit_state,
     })
 
 
@@ -1176,7 +1191,9 @@ def _log_rung_events(trade_id: str, old: dict, new_list: list, delta_info: dict)
     from services.strategy.trade_logger import utcnow_iso
     when = utcnow_iso()
     new = {r["id"]: r for r in new_list if not r.get("hit")}
-    prov = "VERIFIED" if (delta_info.get("delta_source") or "").startswith("snapshot") else "ENGINE"
+    # Entry-seeded delta is the selected contract's own snapshot Greeks too.
+    src = delta_info.get("delta_source") or ""
+    prov = "VERIFIED" if src.startswith("snapshot") or src == "entry" else "ENGINE"
 
     def _ev(code, cur, prev):
         return {

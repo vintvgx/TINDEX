@@ -495,10 +495,10 @@ export function TickerTape() {
               // The other lens, labelled — never silently overwritten (§2.2.4).
               <View
                 accessibilityLabel={chartLens.other}
-                style={[styles.signalPill, { borderColor: colors.tapeText + '55', borderStyle: 'dashed', maxWidth: 120 }]}
+                style={[styles.signalPill, { borderColor: colors.tapeText + '55', borderStyle: 'dashed', maxWidth: 140 }]}
               >
                 <Text style={[styles.signalText, { color: colors.tapeText, opacity: 0.75 }]} numberOfLines={1}>
-                  {chartLens.other.replace(/^Daily: (\w+) \(verdict ([^)]+)\)/, 'D: $1 $2').replace(/^Intraday: /, 'I: ')}
+                  {chartLens.other.replace(/^Daily: (\w+) \(verdict ([^)]+)\)/, 'Daily: $1 $2')}
                 </Text>
               </View>
             ) : null}

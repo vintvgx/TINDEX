@@ -317,6 +317,8 @@
     tradeLineDefs = (msg && msg.lines) || [];
     tradeMarkerDefs = (msg && msg.markers) || [];
     selectedTradeKey = (msg && msg.selectedKey) || null;
+    tradeQuote = (msg && msg.quote) || null;
+    tradeStopColor = (msg && msg.stopColor) || '#FF453A';
     // A redraw mid-drag must not snap the line back under the finger.
     if (dragKey) {
       for (var i = 0; i < tradeLineDefs.length; i++) {
@@ -334,6 +336,7 @@
   // the finger, RN gets 'move' reports (throttled to a frame) and one 'end'.
   // Chart pan/zoom is suspended only for the length of that drag.
   var selectedTradeKey = null;
+  var tradeQuote = null, tradeStopColor = '#FF453A';
   var dragKey = null, dragPrice = null, dragFrame = false;
   var DRAG_GRAB_PX = 16;
   var handleRetries = 0;
@@ -345,6 +348,7 @@
   function tradeLineAt(y) {
     var best = null, bestD = 9;
     for (var i = 0; i < tradeLineDefs.length; i++) {
+      if (tradeLineDefs[i].editable === false) continue;   // history / not-yet-armed BE
       var ly = mainSeries.priceToCoordinate(tradeLineDefs[i].price);
       if (ly === null || ly === undefined) continue;
       var d = Math.abs(ly - y);
@@ -379,8 +383,9 @@
     var p = mainSeries.coordinateToPrice(y);
     if (p === null || p === undefined) return;
     dragPrice = Math.round(p * 100) / 100;
+    var live = dragTitle(dragKey, dragPrice);
     for (var i = 0; i < tradePriceLines.length; i++) {
-      if (tradePriceLines[i]._tmKind === dragKey) tradePriceLines[i].applyOptions({ price: dragPrice });
+      if (tradePriceLines[i]._tmKind === dragKey) tradePriceLines[i].applyOptions(live);
     }
     layoutHandle();
     if (!dragFrame) {
@@ -390,6 +395,23 @@
         if (dragKey) post({ type: 'tradeLineDrag', key: dragKey, price: dragPrice, phase: 'move' });
       });
     }
+  }
+  // The dragged line's own label, live: premium + % at the finger's price
+  // (same delta conversion as the sheet), and a TP dragged past the current
+  // price relabels as a stop before anything saves (§4.3).
+  function dragTitle(key, price) {
+    var def = null;
+    for (var i = 0; i < tradeLineDefs.length; i++) if (tradeLineDefs[i].key === key) def = tradeLineDefs[i];
+    if (!def) return { price: price };
+    var q = tradeQuote;
+    if (!q || !q.delta) return { price: price, title: def.label + ' · ≈ — (no delta)' };
+    var prem = q.premium + (price - q.stock) * q.delta;
+    var pct = q.entry ? Math.round((prem - q.entry) / q.entry * 100) : 0;
+    var tail = ' ≈ $' + prem.toFixed(2) + ' (' + (pct >= 0 ? '+' : '') + pct + '%)';
+    if (def.kind === 'TP' && prem < q.premium) {
+      return { price: price, title: '→ SL' + tail, color: tradeStopColor, axisLabelColor: tradeStopColor };
+    }
+    return { price: price, title: def.label + tail, color: def.color, axisLabelColor: def.color };
   }
   function dragStart(e) {
     if (!selectedTradeKey || !mainSeries || !e.touches || e.touches.length !== 1) return;

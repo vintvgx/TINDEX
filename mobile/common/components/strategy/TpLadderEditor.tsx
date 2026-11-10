@@ -26,6 +26,10 @@ export interface LadderEditState {
   rungs: TpRungInput[] | null;
   /** Why Save must stay blocked (qty check, bad price, duplicate), or null. */
   problem: string | null;
+  /** Engine TP1 / TP2 premiums edited here (the card's only TP editor when a
+   *  ladder exists), or undefined when untouched. */
+  tp1?: number;
+  tp2?: number;
 }
 
 const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
@@ -59,12 +63,39 @@ export function TpLadderEditor({
       qty: r.qty, source: r.source === 'chart-long-press' ? 'chart-long-press' : 'edit-card',
     }));
   const [rows, setRows] = useState<Row[]>(fromLadder);
+  // Engine TP1 / TP2 edits: the three inputs' text, absent = unchanged.
+  const [engRows, setEngRows] = useState<Record<string, { premium: string; stock: string; pct: string }>>({});
+  const engEdit: Record<string, string> = Object.fromEntries(Object.entries(engRows).map(([k, v]) => [k, v.premium]));
+  const engFields = (r: LadderRung) => engRows[r.key] ?? {
+    premium: f2(r.premium), stock: quote ? f2(stockAt(quote, r.premium)) : '',
+    pct: entry ? String(Math.round(pctVsEntry(r.premium, entry))) : '',
+  };
+  const setEng = (r: LadderRung, patch: Partial<{ premium: string; stock: string; pct: string }>) =>
+    setEngRows(e => ({ ...e, [r.key]: { ...engFields(r), ...patch } }));
+  const engPremium = (r: LadderRung, t: string) => {
+    const p = parseFloat(t);
+    setEng(r, { premium: t, stock: quote && isNum(p) ? f2(stockAt(quote, p)) : engFields(r).stock,
+                pct: isNum(p) && entry ? String(Math.round(pctVsEntry(p, entry))) : engFields(r).pct });
+  };
+  const engStock = (r: LadderRung, t: string) => {
+    const sv = parseFloat(t);
+    if (!quote || !isNum(sv)) { setEng(r, { stock: t }); return; }
+    const p = premiumAt(quote, sv);
+    setEng(r, { stock: t, premium: f2(p), pct: entry ? String(Math.round(pctVsEntry(p, entry))) : '' });
+  };
+  const engPct = (r: LadderRung, t: string) => {
+    const pc = parseFloat(t);
+    if (!isNum(pc) || !entry) { setEng(r, { pct: t }); return; }
+    const p = premiumFromPct(pc, entry);
+    setEng(r, { pct: t, premium: f2(p), stock: quote ? f2(stockAt(quote, p)) : engFields(r).stock });
+  };
   const baseline = useRef('');
   const wasVisible = useRef(false);
   useEffect(() => {
     if (visible && !wasVisible.current) {
       const r = fromLadder();
       setRows(r);
+      setEngRows({});
       baseline.current = JSON.stringify(r.map(x => [x.id, x.premium, x.qty]));
     }
     wasVisible.current = visible;
@@ -119,11 +150,17 @@ export function TpLadderEditor({
 
   const state = useMemo<LadderEditState>(() => {
     const prices = rows.map(r => parseFloat(r.premium));
+    const engVal = (k: string) => (engEdit[k] ? parseFloat(engEdit[k]) : undefined);
+    const tp1New = engVal('tp1'), tp2New = engVal('tp2');
+    const enginePrem = (r: LadderRung) => (engEdit[r.key] ? parseFloat(engEdit[r.key]) : r.premium);
     let problem: string | null = null;
+    if (tp1New !== undefined && (!isNum(tp1New) || tp1New <= entry)) problem = `TP1 must be above entry ($${entry.toFixed(2)})`;
+    else if (tp2New !== undefined && (!isNum(tp2New) || tp2New <= (tp1New ?? tp1?.premium ?? entry))) problem = 'TP2 must be above TP1';
+    else
     if (prices.some(p => !isNum(p) || p <= 0)) problem = 'Every TP line needs a premium above $0';
     else if (rows.some(r => r.qty < 1)) problem = 'Every TP line sells at least 1 contract';
     else {
-      const all = [...prices, ...engine.filter(r => !r.hit).map(r => r.premium)];
+      const all = [...prices, ...engine.filter(r => !r.hit).map(enginePrem)];
       const dup = all.find((p, i) => all.some((q, j) => j !== i && Math.abs(p - q) < 0.005));
       if (dup != null) problem = `Already a line at $${dup.toFixed(2)}`;
       else if (!qtyOk) problem = `Contracts don't add up — the last contract must stay the runner (${qtyRemaining} open)`;
@@ -135,15 +172,17 @@ export function TpLadderEditor({
         stock_price: isNum(parseFloat(r.stock)) ? round2(parseFloat(r.stock)) : null, source: r.source,
       })),
       problem,
+      tp1: isNum(tp1New) ? round2(tp1New) : undefined,
+      tp2: isNum(tp2New) ? round2(tp2New) : undefined,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, qtyOk]);
+  }, [rows, qtyOk, engRows]);
   useEffect(() => { onChange(state); }, [state, onChange]);
 
   // Display rows: engine + user, premium order, renumbered.
   type Disp = { key: string; premium: number; label?: string; user?: number; engine?: LadderRung; hit?: boolean };
   const disp: Disp[] = [
-    ...engine.map(r => ({ key: r.key, premium: r.premium, engine: r, hit: r.hit })),
+    ...engine.map(r => ({ key: r.key, premium: engEdit[r.key] ? parseFloat(engEdit[r.key]) || r.premium : r.premium, engine: r, hit: r.hit })),
     ...hitUser.map(r => ({ key: r.key, premium: r.premium, engine: r, hit: true })),
     ...rows.map((r, i) => ({ key: r.id ?? `new-${i}`, premium: parseFloat(r.premium) || 0, user: i })),
   ].sort((a, b) => a.premium - b.premium).map((d, i) => ({ ...d, label: `TP${i + 1}` }));
@@ -162,6 +201,27 @@ export function TpLadderEditor({
         if (d.user == null) {
           const r = d.engine!;
           const q = r.key === 'tp1' ? tp1Qty : r.key === 'tp2' ? tp2Qty : r.qty;
+          // Unfired engine TP1 / TP2: same stock / premium / % inputs as a
+          // user line — premium is what saves (qty follows the profile).
+          if (!r.hit && (r.key === 'tp1' || r.key === 'tp2')) {
+            const ef = engFields(r);
+            return (
+              <View key={d.key} style={[st.row, { borderColor: colors.separator }]}>
+                <Text style={[st.cell, { flex: 0.9, color: colors.text }]}>{d.label}</Text>
+                <TextInput value={ef.stock} editable={!!quote} keyboardType="decimal-pad" onChangeText={t => engStock(r, t)}
+                  style={[st.input, { flex: 1.4, color: colors.text, borderColor: colors.border, opacity: quote ? 1 : 0.4 }]}
+                  accessibilityLabel={`${d.label} stock price`} />
+                <TextInput value={ef.premium} onChangeText={t => engPremium(r, t)} keyboardType="decimal-pad"
+                  style={[st.input, { flex: 1.2, color: colors.success, borderColor: colors.border }]} accessibilityLabel={`${d.label} premium`} />
+                <TextInput value={ef.pct} keyboardType="numbers-and-punctuation" onChangeText={t => engPct(r, t)}
+                  style={[st.input, { flex: 0.9, color: colors.success, borderColor: colors.border }]} accessibilityLabel={`${d.label} percent vs entry`} />
+                <View style={{ flex: 1.4, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
+                  <Text style={[st.cell, st.num, { color: colors.text }]}>{q}</Text>
+                  <Text style={[st.tag, { color: muted, borderColor: colors.border }]}>engine</Text>
+                </View>
+              </View>
+            );
+          }
           return (
             <View key={d.key} style={[st.row, { borderColor: colors.separator }]}>
               <Text style={[st.cell, { flex: 0.9, color: r.hit ? colors.success : colors.text }]}>{r.hit ? '✓ ' : ''}{d.label}</Text>

@@ -46,6 +46,7 @@ import { useStrategyLiveValues } from '@/hooks/queries/strategy/useStrategyLiveP
 import { useTradeOverlay } from '@/hooks/useTradeOverlay';
 import type { OverlayTradeInput } from '@/lib/chartTradeOverlay';
 import { router } from 'expo-router';
+import { useContractDelta } from '@/hooks/queries/strategy/useContractDelta';
 import { formatContractSymbol } from '@/lib/formatContract';
 import { ChartExitSheet, type ExitSheetRequest, type ExitSheetTrade } from '@/common/components/ticker/ChartExitSheet';
 import type { TradePreviewLine } from '@/common/components/ticker/TVChart';
@@ -383,21 +384,33 @@ export function ChartsContent({ initialTicker, topInset }: {
   );
   const liveValues = useStrategyLiveValues(useMemo(() => overlayPositions.map(p => p.strategy_id), [overlayPositions]));
   const receivedAtRef = useRef(new Map<object, number>());
+  // The lines' delta comes from the open contract's own snapshot (spec §3.2):
+  // refetched every 5 minutes and whenever the trade's state changes; the
+  // engine payload's delta is the fallback when the snapshot has none.
+  const lineTrade = overlayPositions[overlayPositions.length - 1];
+  const lineLive = lineTrade ? liveValues[lineTrade.strategy_id]?.data ?? null : null;
+  const deltaNonce = lineLive ? `${lineLive.qty_remaining}:${lineLive.tp1_hit}:${lineLive.tp2_hit}` : '';
+  const contractDelta = useContractDelta(lineTrade?.contract, deltaNonce,
+                                         !!lineTrade && tickerPrefs.showTradeLines, 5 * 60_000);
   const overlayTrades = useMemo<OverlayTradeInput[]>(() => {
     const out: OverlayTradeInput[] = [];
     const seen = new Map<object, number>();
+    const cd = contractDelta.data;
     for (const p of overlayPositions) {
       // Shared socket snapshot first; dev-sim positions report via the strip.
-      const live = liveValues[p.strategy_id]?.data ?? liveByStrategy[p.strategy_id] ?? null;
-      if (!live) continue;
+      const raw = liveValues[p.strategy_id]?.data ?? liveByStrategy[p.strategy_id] ?? null;
+      if (!raw) continue;
       // Stamp each payload once, when it first arrives (stale rule, §3).
-      const at = receivedAtRef.current.get(live) ?? Date.now();
-      seen.set(live, at);
+      const at = receivedAtRef.current.get(raw) ?? Date.now();
+      seen.set(raw, at);
+      const live = p === lineTrade && cd?.delta != null
+        ? { ...raw, delta: cd.delta, delta_source: 'snapshot', delta_age_s: Math.max(0, (Date.now() - cd.fetchedAt) / 1000) }
+        : raw;
       out.push({ strategyId: p.strategy_id, name: p.strategy_name ?? null, live, receivedAt: at });
     }
     receivedAtRef.current = seen;
     return out;
-  }, [overlayPositions, liveValues, liveByStrategy]);
+  }, [overlayPositions, liveValues, liveByStrategy, contractDelta.data, lineTrade]);
   const [selectedTradeKey, setSelectedTradeKey] = useState<string | null>(null);
   useEffect(() => { setSelectedTradeKey(null); }, [activeTicker]);
   const overlayFocused = useIsFocused();
@@ -545,6 +558,9 @@ export function ChartsContent({ initialTicker, topInset }: {
     if (useTVChart || !overlayFrame) return [];
     return overlayFrame.lines.map(l => ({
       key: l.key,
+      label: l.label,
+      kind: l.kind,
+      editable: l.editable,
       title: l.title,
       price: l.price,
       color: l.hit ? colors.success
@@ -855,9 +871,9 @@ export function ChartsContent({ initialTicker, topInset }: {
   const tapeLens = useMemo<ChartTapeLens | null>(() => {
     const v = resolveLens(chart.technicals.data, tradeSide);
     if (!v) return null;
-    const text = v.comp
-      ? `${v.source === 'trade' ? 'IN ' : ''}${v.side} ${fmtScore(v.comp.total)}`
-      : 'WAIT';
+    // Spelled out (PR #121 N5): which lens the pill is reading.
+    const lensName = v.source === 'trade' ? 'Trade' : v.source === 'intraday' ? 'Intraday' : 'Signal';
+    const text = v.comp ? `${lensName} ${v.side} ${fmtScore(v.comp.total)}` : `${lensName} WAIT`;
     return { side: v.side, text, other: v.otherLens };
   }, [chart.technicals.data, tradeSide]);
   const openContracts = useCallback(() => setContractsModalOpen(true), []);
@@ -1004,6 +1020,8 @@ export function ChartsContent({ initialTicker, topInset }: {
                   selectedTradeLineKey={selectedLineKey}
                   onTradeLineTap={handleTradeLineTap}
                   onTradeLineDragEnd={(key, price) => handleTradeLineDrag(key, price, 'end')}
+                  tradeQuote={overlayFrame?.quote ?? null}
+                  previewLine={previewLine}
                 />
               )
             )}

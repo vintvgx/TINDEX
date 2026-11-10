@@ -4159,6 +4159,10 @@ class ORBEngine(GateWatchMixin):
                 peak_candidates.append(float(row["tp2_price"]))
             if row.get("tp2_premium") is not None:
                 peak_candidates.append(float(row["tp2_premium"]))
+        # Fired chart / Edit TP lines are known-reached levels too (a line
+        # that replaced TP1 leaves no tp1_premium on the row).
+        if hasattr(em, "rung_hit_premiums"):
+            peak_candidates.extend(em.rung_hit_premiums())
         for _stage in (stages or []):
             if isinstance(_stage, dict) and _stage.get("price") is not None:
                 try:

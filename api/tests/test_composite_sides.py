@@ -64,3 +64,15 @@ def test_lens_put_side_mirror():
     lens = chart_lens(745.0, _comp(-6, 6), rows, {"trend": {"label": "Bearish"}},
                       _verdicts("DONT_ENTER", "ENTER"), "PUT")
     assert lens["intraday"]["side"] == "PUT" and lens["agree"]
+
+
+def test_put_macd_row_text_describes_the_indicator_like_before():
+    # The row's value names the MACD state (above signal = "Bullish") on both
+    # sides, exactly as before the per-side rewrite; only the score is side-signed.
+    c5 = pd.Series([50 + i * 0.08 for i in range(70)])
+    put = ct.compute_composite("PUT", 55.6, closes_5m=c5)
+    call = ct.compute_composite("CALL", 55.6, closes_5m=c5)
+    pm = next(r for r in put["indicators"] if r["key"] == "macd")
+    cm = next(r for r in call["indicators"] if r["key"] == "macd")
+    assert pm["value"] == cm["value"] and pm["detail"] == cm["detail"]
+    assert pm["score"] == -cm["score"]

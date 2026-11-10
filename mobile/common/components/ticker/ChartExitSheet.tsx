@@ -119,7 +119,11 @@ export function ChartExitSheet({
     // First line before TP1 fires takes TP1's qty by default (§4.5).
     const tp1 = ladder.find(r => r.key === 'tp1');
     const firstLine = userRungs(ladder).length === 0 && tp1 && !tp1.hit;
-    setQty(editRung ? editRung.qty : Math.max(1, firstLine ? tp1!.qty : 1));
+    // Clamp to what can actually be saved, so the sheet never opens in an
+    // error state (1-contract boundary — PR #121 N1).
+    const others = userRungs(ladder).filter(r => r.id !== (request.mode === 'edit' ? request.key : undefined));
+    const cap = Math.max(1, live.qty_remaining - 1 - others.reduce((n, r) => n + r.qty, 0));
+    setQty(Math.min(cap, editRung ? editRung.qty : Math.max(1, firstLine ? tp1!.qty : 1)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request]);
 
@@ -189,9 +193,19 @@ export function ChartExitSheet({
   const tp1 = ladder.find(r => r.key === 'tp1');
   const carves = kind === 'tp' && !editRung && otherUser.length === 0 && tp1 && !tp1.hit ? Math.min(qty, tp1.qty) : 0;
 
+  const floorOn = live?.sl_floor_enabled !== false && isNum(live?.sl_outer_floor);
   const problem = useMemo<string | null>(() => {
     if (!trade || !live) return 'No open contract on this ticker';
     if (!premOK) return convOK ? 'Enter a price' : 'Enter the premium (delta unavailable — premium only)';
+    // Stops (SL, or the armed BE stop being moved): below the live premium,
+    // and above an armed floor — the floor would otherwise sell first.
+    if (kind === 'sl' || kind === 'be' || flipped) {
+      if (cur != null && prem >= cur) return `A stop sits below the current premium ($${cur.toFixed(2)})`;
+      if (floorOn && prem <= live.sl_outer_floor!) {
+        return `Stop $${prem.toFixed(2)} is at or below the floor $${live.sl_outer_floor!.toFixed(2)}, which would sell first`;
+      }
+    }
+    if (kind === 'tp' && !flipped && prem <= entry) return `A TP sits above entry ($${entry.toFixed(2)}) — below it, set a stop`;
     if (kind === 'tp' && !flipped && stockOK && u != null && !profitSide(stock) && convOK) {
       return `A TP sits ${dir === 'CALL' ? 'above' : 'below'} the current price ($${u.toFixed(2)})`;
     }
@@ -206,7 +220,7 @@ export function ChartExitSheet({
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trade, live, premOK, convOK, kind, flipped, stockOK, stock, u, dir, prem, qty, qtyCap, qtyRem, editKey, ladder]);
+  }, [trade, live, premOK, convOK, kind, flipped, stockOK, stock, u, dir, prem, qty, qtyCap, qtyRem, editKey, ladder, cur, floorOn, entry]);
 
   const immediate = kind === 'tp' && !flipped && premOK && cur != null && prem <= cur;
 
@@ -225,7 +239,10 @@ export function ChartExitSheet({
     if (as === 'tp' && immediate && confirmArmed !== 'immediate') { setConfirmArmed('immediate'); return; }
     const p = round2(prem);
     const sp = stockOK ? round2(stock) : null;
-    if (as === 'be') {
+    if (as === 'be' && editKey === 'be') {
+      // The armed BE line IS the stop: moving it moves the stop to here.
+      submit({ hard_stop: p, sl_enabled: true }, `Stop moved to $${p.toFixed(2)}${sp != null ? ` (≈ ${sp.toFixed(2)})` : ''}`);
+    } else if (as === 'be') {
       submit({ hard_stop: round2(entry), sl_enabled: true }, `Stop set to breakeven $${entry.toFixed(2)}`);
     } else if (as === 'sl') {
       const body: Record<string, unknown> = { hard_stop: p, sl_enabled: true };
@@ -236,7 +253,7 @@ export function ChartExitSheet({
     } else {
       const mine: TpRungInput = { id: editKey ?? undefined, premium: p, qty, stock_price: sp,
                                   source: editRung ? (editRung.source as TpRungInput['source']) : 'chart-long-press' };
-      submit({ tp_rungs: [...otherUser, mine] }, `TP set at $${p.toFixed(2)}${sp != null ? ` (≈ ${sp.toFixed(2)})` : ''}, sells ${qty}`);
+      submit({ tp_rungs: [...otherUser, mine], ...(immediate ? { allow_immediate: true } : {}) }, `TP set at $${p.toFixed(2)}${sp != null ? ` (≈ ${sp.toFixed(2)})` : ''}, sells ${qty}`);
     }
   };
 
@@ -328,7 +345,9 @@ export function ChartExitSheet({
 
             <Text style={[s.note, { color: colors.textSecondary }]}>
               {effective === 'sl' ? 'A stop sells ALL remaining contracts when hit.'
-                : effective === 'be' ? `Stop moves to breakeven ($${entry.toFixed(2)} premium).`
+                : effective === 'be' ? (editKey === 'be'
+                  ? `Moves the stop (now $${fmt(live?.hard_stop)}) to this price — sells all remaining if hit.`
+                  : `Stop moves to breakeven ($${entry.toFixed(2)} premium).`)
                 : carves ? `Takes ${carves} of TP1's ${tp1!.qty} — TP1 then sells ${tp1!.qty - carves}${tp1!.qty - carves === 0 ? ' (this line becomes TP1)' : ''}.`
                 : editRung ? `Moves ${editRung.label}; the ladder re-sorts by premium.`
                 : `New TP row; reserves ${qty} contract${qty === 1 ? '' : 's'} — the last contract stays the runner.`}
@@ -341,8 +360,12 @@ export function ChartExitSheet({
 
             <View style={s.wrapRow}>
               {snapToBE ? <Btn label="Snap to BE" onPress={() => onSave('be')} colors={colors} /> : null}
-              <Btn label={effective === 'sl' ? 'Set SL' : 'Set TP'} primary tone={effective === 'sl' ? colors.error : colors.success}
+              <Btn label={effective === 'sl' ? 'Set SL' : effective === 'be' ? 'Move stop here' : 'Set TP'} primary
+                tone={effective === 'tp' ? colors.success : effective === 'be' ? colors.textSecondary : colors.error}
                 onPress={() => onSave(effective)} colors={colors} disabled={!!problem || save.isPending} />
+              {editKey === 'be' ? <Btn label="Reset to breakeven" onPress={() => {
+                if (trade) submit({ hard_stop: round2(entry), sl_enabled: true }, `Stop set to breakeven $${entry.toFixed(2)}`);
+              }} colors={colors} /> : null}
               {isNew ? (
                 <>
                   <Btn label={kind === 'tp' ? 'Set SL' : 'Set TP'} onPress={() => { setKind(kind === 'tp' ? 'sl' : 'tp'); }} colors={colors} />

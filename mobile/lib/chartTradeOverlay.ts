@@ -30,6 +30,10 @@ export interface OverlayLine {
   user: boolean;
   /** This rung already sold — drawn green with ✓ TP (spec §4.4). */
   hit: boolean;
+  /** Can be selected / dragged / edited from the chart. False for a fired
+   *  rung (history) and for a BE line that hasn't armed yet (it's defined
+   *  as entry; there's no stop there to move). */
+  editable: boolean;
   price: number;          // where it sits on the underlying axis
   premium: number;        // what the engine actually evaluates
   style: OverlayLineStyle;
@@ -64,6 +68,9 @@ export interface TradeOverlayFrame {
    *  Null when every line is drawn from a usable delta. */
   linesNote: string | null;
   markers: OverlayMarker[];
+  /** Live quote behind the lines (null when delta/underlying/mid is missing) —
+   *  lets the chart relabel a line's premium / % while it's being dragged. */
+  quote: { stock: number; premium: number; delta: number; entry: number } | null;
   /** Changes on any state transition → redraw immediately (see shouldRedraw). */
   stateSig: string;
   /** For the "line moved ≥ threshold" check. */
@@ -188,7 +195,10 @@ export function ladderSummary(live: OverlayTradeInput['live']): string | null {
 }
 
 /** The selected trade's lines, per brief §2 (projection) and §4 (states). */
-function linesFor(t: OverlayTradeInput, now: number): { lines: OverlayLine[]; note: string | null; sig: string; refPrice: number | null } {
+function linesFor(t: OverlayTradeInput, now: number): {
+  lines: OverlayLine[]; note: string | null; sig: string; refPrice: number | null;
+  quote: TradeOverlayFrame['quote'];
+} {
   const live = t.live;
   const sim = !!live.sim;
   const tp1Hit = !!live.tp1_hit;
@@ -261,6 +271,7 @@ function linesFor(t: OverlayTradeInput, now: number): { lines: OverlayLine[]; no
       label: w.label,
       user: !!w.user,
       hit: !!w.hit,
+      editable: !w.hit && !w.pending && !sim,
       price: Math.round(price * 100) / 100,
       premium: w.premium,
       style: w.style,
@@ -273,7 +284,8 @@ function linesFor(t: OverlayTradeInput, now: number): { lines: OverlayLine[]; no
     ladder.map(r => `${r.key}:${r.premium}:${r.qty}:${r.hit}`).join(','),
     live.runner_mode ?? '', live.sl_enabled ?? '', live.hard_stop ?? '',
   ].join('|');
-  return { lines, note, sig, refPrice: u };
+  const quote = !sim && delta != null && u != null && cur != null ? { stock: u, premium: cur, delta, entry } : null;
+  return { lines, note, sig, refPrice: u, quote };
 }
 
 /**
@@ -290,7 +302,7 @@ export function buildOverlayFrame(
   if (!open.length) return null;
   const sel = open.find(t => t.strategyId === selectedKey) ?? open[open.length - 1];
   const multi = open.length > 1;
-  const { lines, note, sig, refPrice } = linesFor(sel, now);
+  const { lines, note, sig, refPrice, quote } = linesFor(sel, now);
   // Selected marker first: it sits on the current price, others stack above.
   const markers = [sel, ...open.filter(t => t !== sel)].map(t => marker(t, now, t === sel, multi));
   const tradeKey = `${sel.strategyId}:${sel.live.contract}`;
@@ -300,6 +312,7 @@ export function buildOverlayFrame(
     lines,
     linesNote: note,
     markers,
+    quote,
     stateSig: `${tradeKey}|${sig}|${markers.map(m => `${m.key}:${m.count}:${m.stale}`).join(',')}`,
     refPrice,
     ticker: occRoot(sel.live.contract),

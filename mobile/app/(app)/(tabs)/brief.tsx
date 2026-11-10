@@ -7,6 +7,7 @@ import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMorningBrief } from '@/hooks/queries/brief/useMorningBrief';
 import { BriefPlayCard } from '@/common/components/brief/BriefPlayCard';
+import { fmtEtTime } from '@/lib/formatEtTime';
 import { BriefReviewModal } from '@/common/components/brief/BriefReviewModal';
 import { useBriefConfig } from '@/hooks/queries/brief/useBriefReview';
 import type { BriefPlay, MorningBrief } from '@/common/types/morningBrief';
@@ -15,13 +16,6 @@ interface Props {
   /** True inside the ORB tab's pager — hides the back arrow and title. */
   embedded?: boolean;
 }
-
-const fmtEtTime = (iso: string | null | undefined): string => {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
-};
 
 const PHASE_LABEL: Record<MorningBrief['phase'], string> = {
   build: 'Built 9:00 · re-scores 9:10 / 9:20 · locks 9:28',

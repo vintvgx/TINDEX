@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { fmtEtTime } from '@/lib/formatEtTime';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
@@ -28,13 +29,6 @@ interface Props {
  * the limit-order tracking card (limit, elapsed wait, auto-cancel countdown,
  * underlying vs trigger). Tapping the setup opens the chart.
  */
-const fmtSnapTime = (iso: string | null | undefined): string => {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—'
-    : d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
-};
-
 export function BriefPlayCard({ play, colors, clockOffsetMs, onOpenChart, settings }: Props) {
   const stalePct = settings?.stale_pct ?? DEFAULT_STALE_PCT;
   const isLong = play.direction === 'CALL';
@@ -82,7 +76,7 @@ export function BriefPlayCard({ play, colors, clockOffsetMs, onOpenChart, settin
             payload the chart reads, labelled with its side and as-of time. */}
         {play.entry_check ? (
           <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 6 }} numberOfLines={2}>
-            Composed {fmtSnapTime(play.entry_check.as_of)} ET · {play.entry_check.side ?? play.direction}
+            Composed {fmtEtTime(play.entry_check.as_of)} ET · {play.entry_check.side ?? play.direction}
             {play.entry_check.composite_total != null
               ? ` ${play.entry_check.composite_total > 0 ? '+' : ''}${play.entry_check.composite_total} ${(play.entry_check.composite_tier ?? '').replace('_', ' ')}`
               : ''}

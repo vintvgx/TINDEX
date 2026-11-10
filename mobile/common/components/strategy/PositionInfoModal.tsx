@@ -219,11 +219,12 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   }, [visible, data]);
 
   const canSplit = data.qty_remaining > 1;
+  const hasLadder = tpOn && canSplit && !!data.tp_ladder && data.tp_ladder.length > 0;
   const tp2Editable = data.showTp2 !== false;
   const entry = data.entry_premium;
 
   const dirty =
-    ladderEdit.rungs != null ||
+    ladderEdit.rungs != null || ladderEdit.tp1 !== undefined || ladderEdit.tp2 !== undefined ||
     !!stopVal || !!tp1Val || !!tp2Val || !!floorPriceVal ||
     slOn !== initial.current.sl || tpOn !== initial.current.tp ||
     (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && graceMinutes !== initial.current.minutes))) ||
@@ -252,8 +253,9 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
 
   const handleSave = async () => {
     const stop  = stopVal ? parseFloat(stopVal) : undefined;
-    const tp1   = tp1Val ? parseFloat(tp1Val) : undefined;
-    const tp2   = tp2Val ? parseFloat(tp2Val) : undefined;
+    // With a ladder, TP1 / TP2 come from the ladder editor (the only TP editor).
+    const tp1   = hasLadder ? ladderEdit.tp1 : tp1Val ? parseFloat(tp1Val) : undefined;
+    const tp2   = hasLadder ? ladderEdit.tp2 : tp2Val ? parseFloat(tp2Val) : undefined;
     const floor = floorPriceVal ? parseFloat(floorPriceVal) : undefined;
 
     if (stop !== undefined && (isNaN(stop) || stop <= 0)) {
@@ -285,7 +287,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
       return;
     }
 
-    if (ladderEdit.rungs != null && ladderEdit.problem) {
+    if ((ladderEdit.rungs != null || ladderEdit.tp1 !== undefined || ladderEdit.tp2 !== undefined) && ladderEdit.problem) {
       Alert.alert('TP lines', ladderEdit.problem);
       return;
     }
@@ -509,6 +511,8 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
             />
             {editable ? (
               <View style={{ opacity: (tpOn || data.tp1_hit) ? 1 : 0.45 }}>
+                {/* With a ladder, the ladder below is the ONE TP editor (§4.6). */}
+                {!hasLadder && <>
                 <View style={s.editRow}>
                   <TextInput
                     value={tp1Val}
@@ -537,15 +541,16 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
                     />
                   </View>
                 )}
+                </>}
                 {!tpOn && !data.tp1_hit && (
                   <Text style={[s.hintText, { color: colors.textTertiary }]}>
                     No take profit — this runner rides its own course, including into close.
                   </Text>
                 )}
                 {/* One row per rung — engine + chart lines (§4.6). */}
-                {tpOn && canSplit && data.tp_ladder ? (
+                {hasLadder ? (
                   <TpLadderEditor
-                    ladder={data.tp_ladder}
+                    ladder={data.tp_ladder ?? []}
                     entry={entry}
                     qtyRemaining={data.qty_remaining}
                     stock={data.underlying_price}

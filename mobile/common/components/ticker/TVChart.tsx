@@ -76,8 +76,8 @@ interface TVRefLine {
 }
 /** Chart trade overlay line, colors resolved RN-side (see tradeOverlayMsg). */
 interface TVTradeLine {
-  key: string; kind: OverlayLine['kind']; price: number; color: string; labelText: string;
-  style: OverlayLine['style']; width: 1 | 2; title: string;
+  key: string; kind: OverlayLine['kind']; label: string; price: number; color: string; labelText: string;
+  style: OverlayLine['style']; width: 1 | 2; title: string; editable: boolean;
 }
 interface TVTradeMarker {
   key: string; label: string | null; count: string; pnlText: string;
@@ -97,7 +97,8 @@ type WVOutbound =
   | { type: 'updateBars'; bars: TVCandle[] }
   | { type: 'setZones'; auto: TVZoneBand[]; watch: TVZoneBand[]; bands: TVZoneBand[] }
   | { type: 'setRefLines'; lines: TVRefLine[] }
-  | { type: 'setTradeOverlay'; lines: TVTradeLine[]; markers: TVTradeMarker[]; selectedKey: string | null }
+  | { type: 'setTradeOverlay'; lines: TVTradeLine[]; markers: TVTradeMarker[]; selectedKey: string | null;
+      quote: TradeOverlayFrame['quote']; stopColor: string }
   | { type: 'setPreviewLine'; line: TradePreviewLine | null }
   | { type: 'setEmaOverlays'; emas: TVEmaOverlay[] }
   | { type: 'setVwap'; visible: boolean }
@@ -742,7 +743,7 @@ export function TVChart({
       l.hit ? colors.success
         : l.muted ? colors.textTertiary : l.kind === 'SL' ? colors.error : l.kind === 'BE' ? colors.textSecondary : colors.success;
     const lines: TVTradeLine[] = (f?.lines ?? []).map((l) => ({
-      key: l.key, kind: l.kind, price: l.price, color: lineColor(l),
+      key: l.key, kind: l.kind, label: l.label, editable: l.editable, price: l.price, color: lineColor(l),
       labelText: (l.kind === 'BE' || l.muted) && !l.hit ? colors.background : '#0A0B0F',
       style: l.style, width: (l.kind === 'BE' && l.style === 'solid') || l.hit ? 2 : 1, title: l.title,
     }));
@@ -756,7 +757,8 @@ export function TVChart({
       // The ladder rides on the selected trade's pill only (§3.4).
       summary: m.selected ? m.summary : null,
     }));
-    return { type: 'setTradeOverlay' as const, lines, markers, selectedKey: selectedTradeLineKey ?? null };
+    return { type: 'setTradeOverlay' as const, lines, markers, selectedKey: selectedTradeLineKey ?? null,
+             quote: f?.quote ?? null, stopColor: colors.error };
   }, [tradeOverlay, colors, selectedTradeLineKey]);
   useEffect(() => {
     if (!chartReady) return;

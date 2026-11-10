@@ -1064,14 +1064,21 @@ class ExitManager:
             return self._action("CLOSE_PARTIAL", qty, "TP_RUNG", price)
         return None
 
-    def set_tp_rungs(self, rungs: list, current_price: float | None = None) -> list:
+    def set_tp_rungs(self, rungs: list, current_price: float | None = None,
+                     allow_immediate: bool = False) -> list:
         """
         Replace this trade's user TP rungs with `rungs` (the full desired
         list — fired rungs are kept as history and can't be edited). Each:
-        {id?, premium, qty, stock_price?, source?}. Validates server-side —
-        the UI's checks are a convenience, this is the guarantee (§9):
-          • premium > 0, qty ≥ 1, no two lines at the same premium (nor on
-            an engine TP1/TP2 premium);
+        {id?, premium, qty, stock_price?, source?}. Enforced here, whatever
+        the client sent (§9):
+          • TP must be on: refused while take-profit is off for this trade
+            (the rungs could never fire);
+          • every premium is above entry (a TP never sells at a loss);
+          • a new or moved line's premium is above `current_price` — it
+            would fire on the next tick — unless `allow_immediate` (the
+            app's second confirm, §4.4). Skipped when current_price is None;
+          • qty ≥ 1, no two lines at the same premium (nor on an engine
+            TP1/TP2 premium);
           • at most one rung per contract, and every rung + TP1's remaining
             qty + 1 runner fits in qty_remaining.
         The first user line takes its qty out of TP1's allocation (§4.5).
@@ -1080,6 +1087,8 @@ class ExitManager:
         import uuid
         if not isinstance(rungs, list):
             raise ValueError("tp_rungs must be a list")
+        if rungs and self._disable_tp1_exit:
+            raise ValueError("Take profit is off for this trade — turn TP on to add TP lines")
         fired = [r for r in self._rungs if r["hit"]]
         fired_ids = {r["id"] for r in fired}
         existing = {r["id"]: r for r in self._rungs}
@@ -1100,7 +1109,15 @@ class ExitManager:
                 raise ValueError("TP premium must be above $0")
             if qty < 1:
                 raise ValueError("each TP line must sell at least 1 contract")
+            if premium <= self.entry_premium:
+                raise ValueError(f"A TP at ${premium:.2f} is at or below entry (${self.entry_premium:.2f}) "
+                                 f"— it would sell at a loss; set a stop instead")
             prev = existing.get(rid) or {}
+            moved = not prev or abs(prev.get("premium", 0) - premium) >= 0.005
+            if (moved and current_price is not None and not allow_immediate
+                    and premium <= current_price):
+                raise ValueError(f"A TP at ${premium:.2f} is already reached (premium now "
+                                 f"${current_price:.2f}) — it would fire on the next tick")
             sp = raw.get("stock_price")
             new.append({
                 "id": rid or uuid.uuid4().hex[:10],
@@ -1164,6 +1181,11 @@ class ExitManager:
         self._log_decision("TP_RUNGS_SET", rungs=[(r["premium"], r["qty"], r["from_tp1"]) for r in new],
                            tp1_qty=self._tp1_qty_override, tp1_replaced=self._tp1_replaced)
         return self.rungs_public()
+
+    def rung_hit_premiums(self) -> list:
+        """Fill premiums of fired user lines — known-reached levels for the
+        restart cascade-peak seed (orb_engine._seed_restored_cascade_peak)."""
+        return [r["hit_premium"] for r in self._rungs if r.get("hit") and isinstance(r.get("hit_premium"), (int, float))]
 
     def rungs_public(self) -> list:
         return [{k: v for k, v in r.items() if not k.startswith("_")} for r in self._rungs]
@@ -1265,7 +1287,8 @@ class ExitManager:
                         be_grace_seconds: int | None = None,
                         cancel_be_grace: bool = False,
                         tp_rungs: list | None = None,
-                        current_price: float | None = None) -> dict:
+                        current_price: float | None = None,
+                        allow_immediate: bool = False) -> dict:
         """
         Validate and apply user-supplied SL/TP1/TP2 price and/or qty overrides
         to this (already open) position. Raises ValueError with a user-facing
@@ -1331,6 +1354,16 @@ class ExitManager:
         """
         if hard_stop is not None and hard_stop <= 0:
             raise ValueError("hard_stop must be > 0")
+        # A user stop is a hard-stop override only; the worst-case floor stays
+        # a separate backstop and is checked FIRST in evaluate(). A stop at or
+        # below an armed floor could never be the one that sells, so refuse it
+        # rather than let the floor silently win (PR #121 review).
+        floor_after = sl_outer_floor if sl_outer_floor is not None else self._sl_outer_floor
+        floor_on = self._sl_floor_enabled if sl_floor_enabled is None else sl_floor_enabled
+        if (hard_stop is not None and floor_on and floor_after is not None
+                and hard_stop <= floor_after):
+            raise ValueError(f"Stop ${hard_stop:.2f} is at or below the floor ${floor_after:.2f}, which "
+                             f"would sell first — set the stop above the floor, or turn the floor off")
         if sl_outer_floor is not None and sl_outer_floor <= 0:
             raise ValueError("sl_outer_floor must be > 0")
         if be_grace_seconds is not None and not (0 <= be_grace_seconds <= BE_GRACE_MAX_SECONDS):
@@ -1354,7 +1387,7 @@ class ExitManager:
         if tp_rungs is not None:
             if tp1_qty is not None:
                 raise ValueError("Set TP1's quantity through the TP lines when lines are being saved")
-            rungs_changed = self.set_tp_rungs(tp_rungs, current_price)
+            rungs_changed = self.set_tp_rungs(tp_rungs, current_price, allow_immediate)
 
         changed = {}
         if rungs_changed is not None:

@@ -146,6 +146,11 @@ export { AUTO_ZONE_RESISTANCE_COLOR, AUTO_ZONE_SUPPORT_COLOR };
  *  draws the same lines in-page. */
 export interface LegacyTradeLine {
   key: string;
+  /** TP1 / TP2 / BE / SL … — used for the live label while dragging. */
+  label: string;
+  kind: 'TP' | 'BE' | 'SL';
+  /** False for a fired rung or a not-yet-armed BE: no tap / drag strip. */
+  editable: boolean;
   title: string;
   price: number;
   color: string;
@@ -273,6 +278,10 @@ interface AdvancedPriceChartProps {
   onTradeLineTap?: (key: string) => void;
   /** A selected line was dragged and let go at this price. */
   onTradeLineDragEnd?: (key: string, price: number) => void;
+  /** Live quote for relabelling a dragged line (premium / %), or null. */
+  tradeQuote?: { stock: number; premium: number; delta: number; entry: number } | null;
+  /** The exit sheet's dashed preview line, or null. */
+  previewLine?: { price: number; color: string; style: 'dashed' | 'dotted'; title: string } | null;
 }
 
 // ── Layout constants ─────────────────────────────────────────────────────
@@ -463,6 +472,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   selectedTradeLineKey,
   onTradeLineTap,
   onTradeLineDragEnd,
+  tradeQuote,
+  previewLine,
 }) => {
   const colors = useThemeColors();
   const [width, setWidth] = useState(0);
@@ -1852,18 +1863,48 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
               {(tradeLines ?? []).map((line) => {
                 const y = tradeDrag?.key === line.key ? tradeDrag.y : scale.yForPrice(line.price);
                 const selected = line.key === selectedTradeLineKey;
-                const price = tradeDrag?.key === line.key ? scale.priceForY(y) : line.price;
-                const label = `${line.title} · ${formatAxisPrice(price)}`;
+                const dragging = tradeDrag?.key === line.key;
+                const price = dragging ? scale.priceForY(y) : line.price;
+                // While dragging: premium + % at the finger's price, and a TP
+                // dragged past the current price reads as a stop (§4.3).
+                let title = line.title;
+                let color = line.color;
+                if (dragging) {
+                  if (!tradeQuote) title = `${line.label} · ≈ — (no delta)`;
+                  else {
+                    const prem = tradeQuote.premium + (price - tradeQuote.stock) * tradeQuote.delta;
+                    const pct = tradeQuote.entry ? Math.round(((prem - tradeQuote.entry) / tradeQuote.entry) * 100) : 0;
+                    const tail = ` ≈ $${prem.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct}%)`;
+                    const flipped = line.kind === 'TP' && prem < tradeQuote.premium;
+                    title = `${flipped ? '→ SL' : line.label}${tail}`;
+                    if (flipped) color = colors.error;
+                  }
+                }
+                const label = `${title} · ${formatAxisPrice(price)}`;
                 return (
                   <Fragment key={`trade-${line.key}`}>
-                    <Line x1={0} x2={plotW} y1={y} y2={y} stroke={line.color}
+                    <Line x1={0} x2={plotW} y1={y} y2={y} stroke={color}
                       strokeWidth={selected ? 3 : (line.width ?? 1.25)} strokeDasharray={line.dash} />
-                    <Rect x={plotW - label.length * 6 - 14} y={y - 8} width={label.length * 6 + 10} height={16} rx={4} fill={line.color} />
+                    <Rect x={plotW - label.length * 6 - 14} y={y - 8} width={label.length * 6 + 10} height={16} rx={4} fill={color} />
                     <SvgText x={plotW - 9} y={y + 3.5} fill={colors.background} fontSize={10} fontWeight="700" textAnchor="end">{label}</SvgText>
-                    {selected ? <Circle cx={plotW - label.length * 6 - 28} cy={y} r={8} fill={colors.background} stroke={line.color} strokeWidth={2} /> : null}
+                    {selected ? <Circle cx={plotW - label.length * 6 - 28} cy={y} r={8} fill={colors.background} stroke={color} strokeWidth={2} /> : null}
                   </Fragment>
                 );
               })}
+
+              {/* Exit sheet preview at the pressed / edited price. */}
+              {previewLine && previewLine.price >= scale.lo && previewLine.price <= scale.hi && (() => {
+                const y = scale.yForPrice(previewLine.price);
+                const label = `${previewLine.title} · ${formatAxisPrice(previewLine.price)}`;
+                return (
+                  <>
+                    <Line x1={0} x2={plotW} y1={y} y2={y} stroke={previewLine.color} strokeWidth={2}
+                      strokeDasharray={previewLine.style === 'dotted' ? '2,3' : '6,4'} />
+                    <Rect x={plotW - label.length * 6 - 14} y={y - 8} width={label.length * 6 + 10} height={16} rx={4} fill={previewLine.color} />
+                    <SvgText x={plotW - 9} y={y + 3.5} fill={colors.background} fontSize={10} fontWeight="700" textAnchor="end">{label}</SvgText>
+                  </>
+                );
+              })()}
 
               {/* Position pill on the current price: contracts | P&L | rungs. */}
               {tradeMarker && lastPrice != null && lastPrice >= scale.lo && lastPrice <= scale.hi && (() => {
@@ -2166,7 +2207,7 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           </GestureDetector>
         )}
         {/* Tap / drag strips over the trade lines (above the chart's own gestures). */}
-        {scale && !isLoading && hasData && (tradeLines ?? []).map((line) => {
+        {scale && !isLoading && hasData && (tradeLines ?? []).filter(l => l.editable).map((line) => {
           const y0 = scale.yForPrice(line.price);
           const selected = line.key === selectedTradeLineKey;
           return (
