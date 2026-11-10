@@ -8,7 +8,9 @@ export interface LensView {
   /** trade = an open position on this ticker took that side; intraday = the
    *  derived lens (entry-check `lens`); legacy = an API without `lens`. */
   source: 'trade' | 'intraday' | 'legacy';
-  /** That side's composite — null on WAIT (both sides shown instead). */
+  /** That side's composite — the lead side (trade side, else the higher
+   *  total). Null only on a partial payload; the strip falls back to the
+   *  dual-total WAIT pill then. */
   comp: CompositeScore | null;
   call: CompositeScore | null;
   put: CompositeScore | null;
@@ -18,10 +20,12 @@ export interface LensView {
 }
 
 /**
- * The one read the strip and the header show (spec 2026-11-10 §2.2). An
- * open trade's side wins (the engine took it); otherwise the derived
- * intraday lens. Each side is graded on its own composite — a side the
- * engine did not take is never shown unlabelled, and WAIT shows both.
+ * The one read the strip and the header show (spec 2026-11-10 §2.2, revised
+ * 2026-11-10: the strip shows ONE side only — the trend the system is most
+ * confident in). An open trade's side wins (the engine took it); otherwise
+ * the higher composite total. Each side is graded on its own composite —
+ * a side the engine did not take is never shown unlabelled, and the other
+ * side's total lives in the detail sheet, not the strip.
  */
 export function resolveLens(check: EntryCheck | undefined, tradeSide?: 'CALL' | 'PUT' | null): LensView | null {
   const c = check?.composite;
@@ -35,20 +39,44 @@ export function resolveLens(check: EntryCheck | undefined, tradeSide?: 'CALL' | 
     source = 'trade';
     if (lens && lens.intraday.side !== tradeSide) others.push(lens.intraday.text);
   } else if (lens) {
-    side = lens.intraday.side;
+    side = dominantSide(check);
     source = 'intraday';
+    if (lens.intraday.side !== side) others.push(lens.intraday.text);
   } else {
-    // Older API: no lens — follow the signal, never a negated mirror.
-    side = check.signal === 'CALL' || check.signal === 'PUT' ? check.signal : 'WAIT';
+    // Older API: no lens — follow the signal, else the dominant composite.
+    side = check.signal === 'CALL' || check.signal === 'PUT' ? check.signal : dominantSide(check);
     source = 'legacy';
   }
   if (lens?.daily.side && lens.daily.side !== side) others.push(lens.daily.text);
   return {
     side, source,
-    comp: side === 'WAIT' ? null : c[side],
+    comp: c[side],
     call: c.CALL, put: c.PUT,
     otherLens: others.length ? others.join(' · ') : null,
   };
+}
+
+/** The trend the system is most confident in: the higher composite total.
+ *  Ties keep the backend lens side so the pill doesn't flicker. */
+export function dominantSide(check: EntryCheck): 'CALL' | 'PUT' {
+  const c = check.composite;
+  if (!c) return 'CALL';
+  if (c.PUT.total > c.CALL.total) return 'PUT';
+  if (c.CALL.total > c.PUT.total) return 'CALL';
+  const ls = check.lens?.intraday.side;
+  return ls === 'PUT' || ls === 'CALL' ? ls : 'CALL';
+}
+
+/** Does this tier pass the gate — an enterable side? */
+export function isEnterTier(tier: CompositeTier): boolean {
+  return tier === 'STRONG' || tier === 'MODERATE';
+}
+
+/** Strip pill color (2026-11-10): WAIT is orange on both sides; an
+ *  enterable side is green for CALL, red for PUT. */
+export function leadPillColor(comp: CompositeScore, colors: any): string {
+  if (!isEnterTier(comp.tier)) return colors.warning;
+  return comp.direction === 'CALL' ? colors.success : colors.error;
 }
 
 /** Detail sheet: the lens side's composite, or the higher-scoring side on WAIT.

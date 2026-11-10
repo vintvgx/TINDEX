@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Pressable } from
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery } from '@tanstack/react-query';
 import { fetchEntryCheck, type ChartSignal, type EntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
-import { fmtScore, resolveLens, scoreColor, tierMeta } from './compositeMeta';
+import { fmtScore, isEnterTier, leadPillColor, resolveLens, scoreColor, tierMeta } from './compositeMeta';
 import { formatAsOf } from '@/common/components/trade/EntryTechnicalsPanel';
 import { CompositeTechnicalsPanel } from '@/common/components/ticker/CompositeTechnicalsPanel';
 import type { ChartReferenceLine } from '@/common/components/ticker/AdvancedPriceChart';
@@ -75,10 +75,12 @@ export function technicalsReferenceLines(
 }
 
 /**
- * Signal pill + technicals chips, right above the chart. With the composite
- * score: all 7 indicators in a horizontal scroll (name · value · score),
- * right-edge fade until scrolled to the end; tapping a chip opens the
- * detail sheet. Older API: the original four fixed chips.
+ * Signal pill + technicals chips, right above the chart. One pill only:
+ * the lead side and its score ("PUT +10") — WAIT is orange on both sides,
+ * an enterable side is green for CALL, red for PUT. The full picture
+ * (both sides, lenses, levels, reasons) lives in the detail sheet. The
+ * indicator chips still swipe horizontally, scored for the lead side;
+ * tapping anything opens the detail sheet.
  */
 export function ChartTechnicalsStrip({ check, isLoading, colors, onPress, tradeSide }: {
   check: EntryCheck | undefined; isLoading: boolean; colors: any;
@@ -102,10 +104,8 @@ export function ChartTechnicalsStrip({ check, isLoading, colors, onPress, tradeS
   if (view) {
     const bg = colors.background;
     const comp = view.comp;
-    // The lead pill names its side and grades it on that side's own tier
-    // ("CALL +5 MODERATE"). WAIT shows both totals, neither as the trade
-    // direction. Indicator chips score for the lead side; on WAIT they
-    // show values only.
+    // Lead pill: one side, one score. The tier word stays in the sheet —
+    // the pill's color is the state (orange WAIT, green/red ENTER).
     const tier = comp ? tierMeta(comp.tier, colors) : null;
     const chips = (comp ?? view.call ?? view.put)!.indicators;
     return (
@@ -113,11 +113,11 @@ export function ChartTechnicalsStrip({ check, isLoading, colors, onPress, tradeS
         {comp && tier ? (
           <Pressable
             onPress={onPress}
-            style={[s.signal, { backgroundColor: tier.color }]}
+            style={[s.signal, { backgroundColor: leadPillColor(comp, colors) }]}
             hitSlop={4}
-            accessibilityLabel={`${comp.direction}${view.source === 'trade' ? ' (open trade)' : ''} score ${fmtScore(comp.total)} of ${comp.max}, ${tier.short}`}
+            accessibilityLabel={`${comp.direction}${view.source === 'trade' ? ' (open trade)' : ''} score ${fmtScore(comp.total)} of ${comp.max}, ${tier.short}${isEnterTier(comp.tier) ? ', enter' : ', wait'}. Other side ${comp.direction === 'CALL' ? fmtScore(view.put?.total ?? 0) : fmtScore(view.call?.total ?? 0)}`}
           >
-            <Text style={s.signalText}>{comp.direction} {fmtScore(comp.total)} {tier.short}</Text>
+            <Text style={s.signalText}>{comp.direction} {fmtScore(comp.total)}</Text>
           </Pressable>
         ) : (
           <Pressable
