@@ -94,6 +94,21 @@ export interface BriefPlay {
   trade_id?: string;
   /** latest underlying price from the live 1m bars (null before 9:30) */
   live_price: number | null;
+  /** Frozen /strategy/entry-check read this play was composed from
+   *  (spec 2026-11-10 §2.2) — absent on briefs built before it. */
+  entry_check?: BriefEntrySnapshot | null;
+}
+
+export interface BriefEntrySnapshot {
+  side: 'CALL' | 'PUT' | null;
+  composite_total: number | null;
+  composite_tier: 'STRONG' | 'MODERATE' | 'WATCH' | 'NO_TRADE' | null;
+  verdict: 'ENTER' | 'WAIT' | 'DONT_ENTER' | null;
+  verdict_reason: string | null;
+  signal: 'CALL' | 'PUT' | 'WAIT' | 'NA' | null;
+  lens_label: string | null;
+  intraday_side: 'CALL' | 'PUT' | 'WAIT' | null;
+  as_of: string | null;
 }
 
 export interface MorningBrief {

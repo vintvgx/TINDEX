@@ -5,6 +5,29 @@ import {
   EMPTY_SNAPSHOT, getLiveSnapshot, patchLiveData, subscribeLive, type LiveSnapshot,
 } from './strategyLiveStore';
 
+/** One rung of a trade's TP ladder — exit_manager.ladder(). */
+export interface LadderRung {
+  /** 'tp1' / 'tp2' for engine levels, else the user line's id. */
+  key: string;
+  label: string;                 // TP1, TP2, … in premium order
+  source: 'engine' | 'chart-long-press' | 'edit-card' | string;
+  premium: number;
+  qty: number;
+  hit: boolean;
+  stock_price?: number | null;
+  replaces_tp1?: boolean;
+  hit_premium?: number | null;
+}
+
+/** A user TP line as sent to PATCH /exits (tp_rungs). */
+export interface TpRungInput {
+  id?: string;
+  premium: number;
+  qty: number;
+  stock_price?: number | null;
+  source?: 'chart-long-press' | 'edit-card';
+}
+
 export interface LivePriceData {
   contract:      string;
   mid_price:     number;
@@ -84,6 +107,8 @@ export interface LivePriceData {
   /** Live option delta (signed: PUT < 0), cached server-side ≤15s / 1m bar. */
   delta?:          number | null;
   delta_age_s?:    number | null;
+  /** Where `delta` came from — "snapshot", "chain", "entry", … */
+  delta_source?:   string | null;
   /** Age of the option quote behind mid_price when this push was built. */
   quote_age_s?:    number | null;
   be_stop_active?: boolean | null;
@@ -91,6 +116,10 @@ export interface LivePriceData {
   be_level?:       number | null;
   qty_entered?:    number | null;
   strategy_name?:  string | null;
+  /** The one TP ladder (engine TP1/TP2 + chart/Edit lines), premium order,
+   *  each with its stock price from the snapshot delta (null when delta /
+   *  underlying is missing — never guessed). Spec 2026-11-10 §7. */
+  tp_ladder?:      LadderRung[] | null;
   // ── Simulation-only fields (all optional — absent on a real live position) ──
   sim?:               boolean;
   sim_tick?:          number;

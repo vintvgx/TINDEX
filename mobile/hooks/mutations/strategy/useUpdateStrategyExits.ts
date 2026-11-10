@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { RAILWAY_BASE_URL } from '@/lib/railway.config';
 import { getAuthHeaders } from '@/common/utils/api/getAuthHeaders';
 import { isSimId, simUpdateExits } from '@/lib/devSim/simPositions';
+import type { TpRungInput } from '@/hooks/queries/strategy/useStrategyLivePrice';
 
 interface UpdateStrategyExitsPayload {
   strategy_id: string;
@@ -49,6 +50,9 @@ interface UpdateStrategyExitsPayload {
    *  breakeven stop stays armed: still below it on the next confirmed tick
    *  starts a fresh window. */
   cancel_be_grace?: boolean;
+  /** The FULL list of user TP lines (chart / Edit card) — the server
+   *  validates, reserves qty and carves the first line out of TP1. */
+  tp_rungs?: TpRungInput[];
 }
 
 export function useUpdateStrategyExits() {

@@ -50,6 +50,29 @@ TERMINAL = {"cut", "stood_down", "filled", "cancelled", "skipped", "scratch", "e
 # Non-terminal statuses during a live trigger: checking → awaiting_confirmation | working.
 
 
+def brief_entry_snapshot(chk: "dict | None", side: "str | None") -> "dict | None":
+    """The frozen entry-check read a brief play was composed from (2026-11-10
+    spec §2.2): the side analyzed, that side's composite total + tier and
+    verdict, both lenses, and the compose as-of time — so the brief can label
+    itself as a snapshot and be compared with the live chart honestly."""
+    if not chk:
+        return None
+    comp = (chk.get("composite") or {}).get(side) or {}
+    verdict = (chk.get("verdicts") or {}).get(side) or {}
+    lens = chk.get("lens") or {}
+    return {
+        "side": side,
+        "composite_total": comp.get("total"),
+        "composite_tier": comp.get("tier"),
+        "verdict": verdict.get("decision"),
+        "verdict_reason": verdict.get("reason"),
+        "signal": chk.get("signal"),
+        "lens_label": lens.get("label"),
+        "intraday_side": (lens.get("intraday") or {}).get("side"),
+        "as_of": chk.get("as_of"),
+    }
+
+
 def _now_iso(now: datetime) -> str:
     return now.isoformat(timespec="seconds")
 
@@ -153,6 +176,7 @@ class BriefService:
                     s = score_ticker(t, inp, earnings_block_days=cfg["earnings_block_days"],
                                      min_trigger_zone_score=cfg["min_trigger_zone_score"])
                     if s:
+                        s["entry_check"] = brief_entry_snapshot(inp.get("entry_check"), s.get("direction"))
                         out.append(s)
         return out
 
@@ -611,10 +635,15 @@ class BriefIO:
         prior = snap.get("prior_day") or {}
         zones = snap.get("support", []) + snap.get("resistance", [])
 
+        # The same /strategy/entry-check payload the chart reads — the whole
+        # thing (verdicts, signal, both composites, lens), not just the CALL
+        # rows, so the brief and the live surfaces share one source.
         trend = rsi = sector = None
+        chk = None
         try:
             from services.entry_check_service import get_entry_check
-            rows = (get_entry_check(ticker, "CALL") or {}).get("rows") or {}
+            chk = get_entry_check(ticker, "CALL") or {}
+            rows = chk.get("rows") or {}
             trend = (rows.get("trend") or {}).get("label")
             rsi = (rows.get("rsi") or {}).get("value")
             sector = (rows.get("sector") or {}).get("sector")
@@ -651,7 +680,7 @@ class BriefIO:
         gap = ((price - prior["close"]) / prior["close"] * 100) if prior.get("close") else 0.0
         return {"price": price, "zones": zones, "trend": trend, "rsi": rsi, "sector": sector,
                 "gap_pct": gap, "pm_high": pm_high, "pm_low": pm_low, "prior_day": prior,
-                "earnings_in_days": earnings_days}
+                "earnings_in_days": earnings_days, "entry_check": chk}
 
     def iex_open_baseline(self, ticker: str, today: date) -> "float | None":
         """Average 1m IEX volume over the most recent prior session's

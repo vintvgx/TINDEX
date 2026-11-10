@@ -118,8 +118,17 @@ function main() {
   .tm .tm-label { font-weight: 600; opacity: 0.75; }
   .tm .tm-count { color: #0A0B0F; }
   .tm .tm-stale { font-weight: 600; opacity: 0.8; }
+  /* Rung summary on the selected trade's pill: "TP1 768.56 · TP2 769.20 · R1". */
+  .tm .tm-sum { font-weight: 500; opacity: 0.7; border-left: 1px solid currentColor; }
   .tm.other { opacity: 0.8; }
   @media (prefers-reduced-motion: reduce) { .tm { transition: none; } }
+  /* Drag handle on the selected trade line (spec §4.3). */
+  #tlhandle {
+    position: absolute; z-index: 12; display: none; pointer-events: none;
+    width: 22px; height: 22px; border-radius: 11px; border: 2px solid; box-sizing: border-box;
+    font: 700 11px/18px -apple-system, 'SF Pro Text', sans-serif; text-align: center;
+  }
+  #tlhandle::after { content: '⇕'; }
 </style>
 </head>
 <body>
