@@ -20,7 +20,8 @@ import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals
 import { OptionsPositioningPanel } from '@/common/components/ticker/brief/TickerBrief';
 import { useChartSettings } from '@/common/components/ticker/useChartSettings';
 import { useChartTape } from '@/common/components/ui/ChartTapeContext';
-import type { ChartTapeInfo } from '@/common/components/ui/ChartTapeContext';
+import type { ChartTapeInfo, ChartTapeLens } from '@/common/components/ui/ChartTapeContext';
+import { fmtScore, resolveLens } from '@/common/components/ticker/compositeMeta';
 import { useChartAutoZones } from '@/hooks/queries/technicals/useTickerZones';
 import { SearchBottomSheet } from '@/common/components/search/SearchBottomSheet';
 import { useTickerQuery } from '@/hooks/queries/ticker/useTickerQuery';
@@ -44,6 +45,9 @@ import { useStrategyLiveValues } from '@/hooks/queries/strategy/useStrategyLiveP
 import { useTradeOverlay } from '@/hooks/useTradeOverlay';
 import type { OverlayTradeInput } from '@/lib/chartTradeOverlay';
 import { router } from 'expo-router';
+import { formatContractSymbol } from '@/lib/formatContract';
+import { ChartExitSheet, type ExitSheetRequest, type ExitSheetTrade } from '@/common/components/ticker/ChartExitSheet';
+import type { TradePreviewLine } from '@/common/components/ticker/TVChart';
 
 const NO_OVERLAY_TRADES: OverlayTradeInput[] = [];
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
@@ -394,15 +398,29 @@ export function ChartsContent({ initialTicker, topInset }: {
     return out;
   }, [overlayPositions, liveValues, liveByStrategy]);
   const [selectedTradeKey, setSelectedTradeKey] = useState<string | null>(null);
-  const [briefPeek, setBriefPeek] = useState(false);
-  useEffect(() => { setSelectedTradeKey(null); setBriefPeek(false); }, [activeTicker]);
+  useEffect(() => { setSelectedTradeKey(null); }, [activeTicker]);
   const overlayFocused = useIsFocused();
   const tradeLinesOn = tickerPrefs.showTradeLines;
   const overlayFrame = useTradeOverlay(tradeLinesOn ? overlayTrades : NO_OVERLAY_TRADES, selectedTradeKey, overlayFocused);
-  const tradeMode = tradeLinesOn && overlayFrame != null;
-  // Trade Mode hides the brief pills + setup lines; the peek is temporary.
-  const hideBrief = tradeMode && !briefPeek;
-  useEffect(() => { if (!tradeMode) setBriefPeek(false); }, [tradeMode]);
+  // Trade Mode engages on an OPEN TRADE (spec 2026-11-10 §3.3), not on a
+  // drawn frame: a frame that hasn't arrived yet is shown as an explicit
+  // "overlay unavailable" state on the chart instead of leaving the brief
+  // pills up as the only (ambiguous) symptom.
+  const tradeOpen = tradeLinesOn && overlayPositions.length > 0;
+  const tradeMode = tradeOpen;
+  const overlayUnavailable = tradeOpen && overlayFrame == null;
+  // Side of the trade the lines/strip/header lead with: the selected
+  // trade's, else the first open position's.
+  const tradeSide = useMemo<'CALL' | 'PUT' | null>(() => {
+    const key = overlayFrame?.markers[0]?.key;
+    const pos = overlayPositions.find(p => p.strategy_id === key) ?? overlayPositions[0];
+    const d = pos?.direction;
+    return d === 'CALL' || d === 'PUT' ? d : null;
+  }, [overlayFrame, overlayPositions]);
+  // An open trade with its lines drawn makes the brief's setup levels
+  // (trigger / stop / target) moot — those hide from the chart. The
+  // technicals strip above the chart always stays (Kareem 2026-11-10).
+  const tradeLinesDrawn = tradeOpen && (overlayFrame?.lines.length ?? 0) > 0;
   const handleTradeMarkerPress = useCallback((key: string) => {
     if (overlayFrame && overlayFrame.markers[0]?.key !== key) {
       setSelectedTradeKey(key);          // switch the lines to that trade
@@ -444,7 +462,7 @@ export function ChartsContent({ initialTicker, topInset }: {
     return [
       {
         kind: 'toggle' as const, key: 'tradeLines', icon: 'git-commit-outline' as const, label: 'Trade lines',
-        description: 'An open trade\'s TP2 / TP1 / BE / SL lines and position marker. While shown, the brief pills and setup lines are hidden',
+        description: 'An open trade\'s TP2 / TP1 / BE / SL lines and position marker. While drawn, the Morning Brief trigger, stop and target lines are hidden',
         value: tickerPrefs.showTradeLines, onChange: (v: boolean) => setTickerPref('showTradeLines', v),
       },
       {
@@ -517,7 +535,7 @@ export function ChartsContent({ initialTicker, topInset }: {
   // setup chart: dashed amber trigger, the stop as its support (green, CALL)
   // or resistance (red, PUT) line, and the target as a red-tinted zone with
   // dashed edges (TVChart levelBands; a plain line on the legacy engine).
-  const briefOn = showBriefLevels && briefLevels != null && !hideBrief;
+  const briefOn = showBriefLevels && briefLevels != null && !tradeLinesDrawn;
   // Legacy engine has no overlay layer: trade lines join its reference
   // lines (no marker). TVChart draws them itself via tradeOverlay.
   const legacyTradeLines = useMemo<ChartReferenceLine[]>(() => {
@@ -635,6 +653,12 @@ export function ChartsContent({ initialTicker, topInset }: {
   // idle seconds. Delete takes two taps (trash → red "Delete").
   const [alertDeleteArmed, setAlertDeleteArmed] = useState(false);
   const dismissAlertPill = useCallback(() => setTappedAlert(null), []);
+  // A pan, or a tap that missed every line: dismiss the alert pill and any
+  // selected trade line.
+  const onChartInteract = useCallback(() => {
+    setTappedAlert(null);
+    setSelectedLineKey(k => (k == null ? k : null));
+  }, []);
   useEffect(() => { setAlertDeleteArmed(false); }, [tappedAlert?.id]);
   useEffect(() => { setTappedAlert(null); }, [activeTicker, period, chartInterval]);
   useEffect(() => {
@@ -685,7 +709,7 @@ export function ChartsContent({ initialTicker, topInset }: {
   // Long-press on the TV chart resolved to a price — create a crossing alert
   // there. Direction 'either' = notify when a 1m bar closes through the
   // level from either side (TradingView's "Crossing" semantics).
-  const handleAddAlertAtPrice = useCallback(async (price: number) => {
+  const createAlertAt = useCallback(async (price: number) => {
     if (!user?.id) {
       toast.error('Not authenticated');
       return;
@@ -709,6 +733,45 @@ export function ChartsContent({ initialTicker, topInset }: {
       toast.error(e instanceof Error ? e.message : 'Failed to set the alert');
     }
   }, [user?.id, activeTicker, createKeyLevel, toast]);
+
+  // ── Chart-set exits (spec 2026-11-10 §4) ───────────────────────────
+  // Long-press → ⊕ opens the exit sheet when a contract is open on this
+  // ticker (TP / SL / BE, or an alert instead); with nothing open it's the
+  // plain alert, exactly as before. Tap a trade line to select it (thicker,
+  // with a drag handle); tap it again — or let go of a drag — to edit it.
+  const exitTrades = useMemo<ExitSheetTrade[]>(() => overlayTrades
+    .filter(t => (t.live?.qty_remaining ?? 0) > 0)
+    .map(t => {
+      const pos = overlayPositions.find(p => p.strategy_id === t.strategyId);
+      const direction = (pos?.direction === 'PUT' ? 'PUT' : 'CALL') as 'CALL' | 'PUT';
+      const contract = t.live.contract ?? pos?.contract ?? '';
+      return {
+        strategyId: t.strategyId, contract, direction, live: t.live,
+        label: `${formatContractSymbol(contract)} · ${t.live.qty_remaining} open`,
+      };
+    }), [overlayTrades, overlayPositions]);
+  const [exitRequest, setExitRequest] = useState<ExitSheetRequest | null>(null);
+  const [selectedLineKey, setSelectedLineKey] = useState<string | null>(null);
+  const [previewLine, setPreviewLine] = useState<TradePreviewLine | null>(null);
+  useEffect(() => { setSelectedLineKey(null); setExitRequest(null); setPreviewLine(null); }, [activeTicker]);
+  const handleAddAlertAtPrice = useCallback((price: number) => {
+    if (exitTrades.length > 0) setExitRequest({ mode: 'new', stock: Math.round(price * 100) / 100 });
+    else createAlertAt(price);
+  }, [exitTrades.length, createAlertAt]);
+  const handleTradeLineTap = useCallback((key: string) => {
+    if (selectedLineKey === key) setExitRequest({ mode: 'edit', key, stock: null });
+    else setSelectedLineKey(key);
+  }, [selectedLineKey]);
+  const handleTradeLineDrag = useCallback((key: string, price: number, phase: 'move' | 'end') => {
+    if (phase === 'end') setExitRequest({ mode: 'edit', key, stock: Math.round(price * 100) / 100 });
+  }, []);
+  const closeExitSheet = useCallback(() => {
+    setExitRequest(null);
+    setPreviewLine(null);
+    // Clearing the selection also re-sends the overlay, so a dragged line
+    // that wasn't saved snaps back to its real level.
+    setSelectedLineKey(null);
+  }, []);
   const handleWatchConfirm = async (draft: ChartWatchDraft): Promise<boolean> => {
     if (!user?.id) {
       toast.error('Not authenticated');
@@ -775,6 +838,17 @@ export function ChartsContent({ initialTicker, topInset }: {
   // ChartTapeContext while this tab is mounted. ──────────────────────────
   const { setInfo: setTapeInfo } = useChartTape();
   const tapeSignal = chart.technicals.data?.signal ?? null;
+  // Header pill = the same lens the strip leads with (spec §2.2): the open
+  // trade's side, else the derived intraday side, with the daily verdict as
+  // a labelled second pill whenever it reads differently.
+  const tapeLens = useMemo<ChartTapeLens | null>(() => {
+    const v = resolveLens(chart.technicals.data, tradeSide);
+    if (!v) return null;
+    const text = v.comp
+      ? `${v.source === 'trade' ? 'IN ' : ''}${v.side} ${fmtScore(v.comp.total)}`
+      : 'WAIT';
+    return { side: v.side, text, other: v.otherLens };
+  }, [chart.technicals.data, tradeSide]);
   const openContracts = useCallback(() => setContractsModalOpen(true), []);
 
   // Composite technicals: the strip (score badge + chips) opens its sheet,
@@ -808,36 +882,31 @@ export function ChartsContent({ initialTicker, topInset }: {
     <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: topInset ?? safeInsets.top }}>
       {/* Technicals strip — right below the global ticker tape, toggleable
           in Chart settings. */}
-      {/* Trade Mode: one small "Brief" toggle peeks the pills; they're
-          hidden by default while a trade is drawn (never shrunk or greyed). */}
-      {tradeMode && (
-        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingTop: 4, gap: 8 }}>
-          <Pressable
-            onPress={() => setBriefPeek(v => !v)}
-            accessibilityRole="button"
-            accessibilityState={{ selected: briefPeek }}
-            hitSlop={8}
-            style={{
-              borderWidth: 1, borderStyle: briefPeek ? 'solid' : 'dashed', borderColor: briefPeek ? colors.text : colors.border,
-              borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3,
-            }}
-          >
-            <Text style={{ color: briefPeek ? colors.text : colors.textSecondary, fontSize: 11, fontWeight: '600' }}>
-              {briefPeek ? 'Hide brief' : 'Brief'}
-            </Text>
-          </Pressable>
+      {/* Trade status row: only when something about the overlay needs
+          saying — SIM, lines that can't be drawn (and why), or a frame that
+          hasn't arrived. A missing line always explains itself (§3.3). */}
+      {tradeMode && (overlayFrame?.sim || overlayUnavailable || overlayFrame?.linesNote) ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', paddingHorizontal: 12, paddingTop: 4, gap: 8 }}>
           {overlayFrame?.sim && (
             <Text style={{ color: '#111', backgroundColor: colors.warning, fontSize: 10, fontWeight: '800', paddingHorizontal: 5, borderRadius: 4, overflow: 'hidden' }}>SIM</Text>
           )}
+          {overlayUnavailable ? (
+            <Text style={{ color: colors.warning, fontSize: 11, fontWeight: '600' }}>
+              Trade overlay unavailable — no live price for the open trade yet
+            </Text>
+          ) : overlayFrame?.linesNote ? (
+            <Text style={{ color: colors.warning, fontSize: 11, fontWeight: '600' }}>{overlayFrame.linesNote}</Text>
+          ) : null}
         </View>
-      )}
-      {(hideBrief ? false : chart.showStrip || (tradeMode && briefPeek)) && (
+      ) : null}
+      {chart.showStrip && (
         <View style={{ paddingHorizontal: 12, paddingTop: 4 }}>
           <ChartTechnicalsStrip
             check={chart.technicals.data}
             isLoading={chart.technicals.isLoading}
             colors={colors}
             onPress={openTechnicalsSheet}
+            tradeSide={tradeSide}
           />
         </View>
       )}
@@ -851,6 +920,7 @@ export function ChartsContent({ initialTicker, topInset }: {
             stockData={stockData}
             tapeActive={isFocused}
             tapeSignal={tapeSignal}
+            tapeLens={tapeLens}
             tapeLoading={tickerLoading && !stockData}
             onSignalPress={openContracts}
             onTickerPress={openSearch}
@@ -876,7 +946,7 @@ export function ChartsContent({ initialTicker, topInset }: {
                   onAutoZoneTap={handleTVAutoZoneTap}
                   onWatchZoneTap={handleTVWatchZoneTap}
                   selectedWatchZoneId={tappedAlert?.id ?? null}
-                  onChartInteract={dismissAlertPill}
+                  onChartInteract={onChartInteract}
                   resetKey={`${activeTicker}:${period}:${chartInterval}`}
                   emas={chart.emaOverlays}
                   mode={tvMode}
@@ -890,6 +960,10 @@ export function ChartsContent({ initialTicker, topInset }: {
                   onAddAlertAtPrice={handleAddAlertAtPrice}
                   tradeOverlay={overlayFrame}
                   onTradeMarkerPress={handleTradeMarkerPress}
+                  selectedTradeLineKey={selectedLineKey}
+                  onTradeLineTap={handleTradeLineTap}
+                  onTradeLineDrag={handleTradeLineDrag}
+                  previewLine={previewLine}
                 />
               ) : (
                 <AdvancedPriceChart
@@ -1002,6 +1076,16 @@ export function ChartsContent({ initialTicker, topInset }: {
         bottomInset={bottomInset}
       />
 
+      <ChartExitSheet
+        request={exitRequest}
+        trades={exitTrades}
+        defaultStrategyId={overlayFrame?.markers[0]?.key ?? null}
+        colors={colors}
+        onClose={closeExitSheet}
+        onSetAlert={createAlertAt}
+        onPreview={setPreviewLine}
+      />
+
       <SearchBottomSheet
         visible={searchOpen}
         onClose={() => setSearchOpen(false)}
@@ -1052,7 +1136,7 @@ const TAPE_PUBLISH_MS = 1_000;
  * Alpaca connection falls back instantly) or the last REST snapshot.
  */
 function ChartLivePane({
-  ticker, stockData, tapeActive, tapeSignal, tapeLoading, onSignalPress, onTickerPress, setTapeInfo, renderChart,
+  ticker, stockData, tapeActive, tapeSignal, tapeLens, tapeLoading, onSignalPress, onTickerPress, setTapeInfo, renderChart,
   isBrief = false,
 }: {
   ticker: string;
@@ -1061,6 +1145,7 @@ function ChartLivePane({
   stockData: { current_price?: number | null; price_change?: number | null; price_change_percent?: number | null } | undefined;
   tapeActive: boolean;
   tapeSignal: ChartTapeInfo['signal'];
+  tapeLens: ChartTapeLens | null;
   tapeLoading: boolean;
   onSignalPress: () => void;
   onTickerPress: () => void;
@@ -1118,13 +1203,14 @@ function ChartLivePane({
       change: tapePrice.change,
       changePct: tapePrice.pct,
       signal: tapeSignal,
+      lens: tapeLens,
       loading: tapeLoading,
       brief: isBrief,
       onSignalPress,
       onTickerPress,
     });
     return () => setTapeInfo(null);
-  }, [tapeActive, ticker, tapePrice, tapeSignal, tapeLoading, isBrief, onSignalPress, onTickerPress, setTapeInfo]);
+  }, [tapeActive, ticker, tapePrice, tapeSignal, tapeLens, tapeLoading, isBrief, onSignalPress, onTickerPress, setTapeInfo]);
 
   return <>{renderChart({ streamPrice, resolvedLivePrice, displayPositive })}</>;
 }

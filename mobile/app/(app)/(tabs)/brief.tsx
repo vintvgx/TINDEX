@@ -16,6 +16,13 @@ interface Props {
   embedded?: boolean;
 }
 
+const fmtEtTime = (iso: string | null | undefined): string => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+};
+
 const PHASE_LABEL: Record<MorningBrief['phase'], string> = {
   build: 'Built 9:00 · re-scores 9:10 / 9:20 · locks 9:28',
   rescore: 'Re-scored · locks at 9:28',
@@ -96,6 +103,10 @@ export default function MorningBriefScreen({ embedded = false }: Props) {
                 <Ionicons name={brief.locked ? 'lock-closed' : 'sunny'} size={14} color={brief.locked ? colors.accent : '#F59E0B'} />
                 <Text style={[styles.summaryTitle, { color: colors.text }]}>{PHASE_LABEL[brief.phase]}</Text>
               </View>
+              {/* A frozen morning read must never pass for live (spec §2.2). */}
+              <Text style={[styles.summaryNote, { color: colors.textSecondary, fontWeight: '600' }]}>
+                Brief as of {fmtEtTime(brief.updated_at)} ET · {brief.phase === 'build' ? 'premarket snapshot' : brief.locked ? 'locked snapshot' : 're-scored snapshot'} — the chart's live read may differ
+              </Text>
               <Text style={[styles.summaryNote, { color: colors.textSecondary }]}>
                 Paper only · score ≥ {cfg?.min_setup_score ?? 80} + Technicals Gate ENTER · 0DTE ·{' '}
                 {cfg?.max_losses_per_day ?? 2} losses ends the day · max {cfg?.max_open_trades ?? 2} open
