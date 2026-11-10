@@ -42,21 +42,6 @@ export interface CompositeScore {
   missing: string[];
 }
 
-/** entry_check_service.chart_lens — intraday (what the engine gates on)
- *  and daily (verdict) lenses, each labelled; neither overwrites the other. */
-export interface ChartLens {
-  intraday: {
-    side: 'CALL' | 'PUT' | 'WAIT';
-    sides: { CALL: { total: number; tier: CompositeTier }; PUT: { total: number; tier: CompositeTier } };
-    checks: Record<'CALL' | 'PUT', { composite: boolean; vwap: boolean; orb: boolean; trend: boolean }>;
-    trend_5m: string | null;
-    text: string;
-  };
-  daily: { signal: ChartSignal; side: 'CALL' | 'PUT' | null; verdict: EntryDecision | null; text: string };
-  agree: boolean;
-  label: string;
-}
-
 export interface EntryCheck {
   ticker: string;
   direction: 'CALL' | 'PUT';
@@ -80,9 +65,6 @@ export interface EntryCheck {
   signal?: ChartSignal;
   /** Optional (2026-10-26 API): composite score for both sides. */
   composite?: { CALL: CompositeScore; PUT: CompositeScore };
-  /** Optional (2026-11-10 API): the one derived read every surface shows —
-   *  entry_check_service.chart_lens. */
-  lens?: ChartLens;
   errors: Record<string, string> | null;
 }
 

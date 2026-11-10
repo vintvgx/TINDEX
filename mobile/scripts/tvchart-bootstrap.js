@@ -260,7 +260,6 @@
       layoutPendingAlert();
       layoutCountdown();
       layoutTradeMarkers();
-      layoutHandle();
     });
   }
 
@@ -277,11 +276,10 @@
   var tmLayoutRetries = 0;
 
   function tradeLineOptions(l) {
-    var selected = l.key && l.key === selectedTradeKey;
     return {
       price: l.price,
       color: l.color,
-      lineWidth: selected ? 3 : (l.width || 1),
+      lineWidth: l.width || 1,
       lineStyle: l.style === 'dotted' ? LWC.LineStyle.Dotted : l.style === 'dashed' ? LWC.LineStyle.Dashed : LWC.LineStyle.Solid,
       lineVisible: true,
       axisLabelVisible: true,
@@ -299,7 +297,7 @@
   function applyTradeLines() {
     if (!mainSeries) return;
     var sameShape = tradePriceLines.length === tradeLineDefs.length && tradePriceLines.length > 0 &&
-      tradePriceLines.every(function (pl, i) { return pl._tmKind === tradeLineDefs[i].key; });
+      tradePriceLines.every(function (pl, i) { return pl._tmKind === tradeLineDefs[i].kind; });
     if (sameShape) {
       // Same lines, new positions: move them in place (no remove/re-add flicker).
       for (var i = 0; i < tradeLineDefs.length; i++) tradePriceLines[i].applyOptions(tradeLineOptions(tradeLineDefs[i]));
@@ -307,7 +305,7 @@
       clearTradeLines();
       for (var j = 0; j < tradeLineDefs.length; j++) {
         var pl = mainSeries.createPriceLine(tradeLineOptions(tradeLineDefs[j]));
-        pl._tmKind = tradeLineDefs[j].key;
+        pl._tmKind = tradeLineDefs[j].kind;
         tradePriceLines.push(pl);
       }
     }
@@ -316,116 +314,9 @@
   function setTradeOverlay(msg) {
     tradeLineDefs = (msg && msg.lines) || [];
     tradeMarkerDefs = (msg && msg.markers) || [];
-    selectedTradeKey = (msg && msg.selectedKey) || null;
-    // A redraw mid-drag must not snap the line back under the finger.
-    if (dragKey) {
-      for (var i = 0; i < tradeLineDefs.length; i++) {
-        if (tradeLineDefs[i].key === dragKey && dragPrice !== null) tradeLineDefs[i].price = dragPrice;
-      }
-    }
     applyTradeLines();
     renderTradeMarkers();
     schedulePills();
-  }
-
-  // ── Trade line select / drag + the sheet's preview line (spec §4.2–4.3) ──
-  // Tap a trade line → RN selects it (it comes back as selectedKey: thicker,
-  // with a handle). Press on the SELECTED line and drag → the line follows
-  // the finger, RN gets 'move' reports (throttled to a frame) and one 'end'.
-  // Chart pan/zoom is suspended only for the length of that drag.
-  var selectedTradeKey = null;
-  var dragKey = null, dragPrice = null, dragFrame = false;
-  var DRAG_GRAB_PX = 16;
-  var handleEl = document.createElement('div');
-  handleEl.id = 'tlhandle';
-  document.body.appendChild(handleEl);
-  var previewDef = null, previewLine = null;
-
-  function tradeLineAt(y) {
-    var best = null, bestD = 9;
-    for (var i = 0; i < tradeLineDefs.length; i++) {
-      var ly = mainSeries.priceToCoordinate(tradeLineDefs[i].price);
-      if (ly === null || ly === undefined) continue;
-      var d = Math.abs(ly - y);
-      if (d <= bestD) { best = tradeLineDefs[i]; bestD = d; }
-    }
-    return best;
-  }
-  function layoutHandle() {
-    var def = null;
-    for (var i = 0; i < tradeLineDefs.length; i++) if (tradeLineDefs[i].key === selectedTradeKey) def = tradeLineDefs[i];
-    if (!def || !mainSeries || !chart) { handleEl.style.display = 'none'; return; }
-    var y = mainSeries.priceToCoordinate(dragKey === def.key && dragPrice !== null ? dragPrice : def.price);
-    if (y === null || y === undefined) { handleEl.style.display = 'none'; return; }
-    var axisW = 0;
-    try { axisW = chart.priceScale('right').width(); } catch (e) {}
-    handleEl.style.display = 'block';
-    handleEl.style.top = Math.round(y - 11) + 'px';
-    handleEl.style.right = (axisW + 6) + 'px';
-    handleEl.style.borderColor = def.color;
-    handleEl.style.color = def.color;
-    handleEl.style.background = theme.background;
-  }
-  function moveDraggedLine(y) {
-    var p = mainSeries.coordinateToPrice(y);
-    if (p === null || p === undefined) return;
-    dragPrice = Math.round(p * 100) / 100;
-    for (var i = 0; i < tradePriceLines.length; i++) {
-      if (tradePriceLines[i]._tmKind === dragKey) tradePriceLines[i].applyOptions({ price: dragPrice });
-    }
-    layoutHandle();
-    if (!dragFrame) {
-      dragFrame = true;
-      requestAnimationFrame(function () {
-        dragFrame = false;
-        if (dragKey) post({ type: 'tradeLineDrag', key: dragKey, price: dragPrice, phase: 'move' });
-      });
-    }
-  }
-  function dragStart(e) {
-    if (!selectedTradeKey || !mainSeries || !e.touches || e.touches.length !== 1) return;
-    var rect = chartEl.getBoundingClientRect();
-    var y = e.touches[0].clientY - rect.top;
-    var def = null;
-    for (var i = 0; i < tradeLineDefs.length; i++) if (tradeLineDefs[i].key === selectedTradeKey) def = tradeLineDefs[i];
-    if (!def) return;
-    var ly = mainSeries.priceToCoordinate(def.price);
-    if (ly === null || ly === undefined || Math.abs(ly - y) > DRAG_GRAB_PX) return;
-    dragKey = def.key;
-    dragPrice = def.price;
-    // Suspend pan/zoom for this gesture only (applied before LWC's own
-    // handlers see the touch — this listener runs in the capture phase).
-    try { chart.applyOptions({ handleScroll: false, handleScale: false }); } catch (err) {}
-    e.stopPropagation();
-  }
-  function dragMove(e) {
-    if (!dragKey || !e.touches || !e.touches.length) return;
-    var rect = chartEl.getBoundingClientRect();
-    moveDraggedLine(e.touches[0].clientY - rect.top);
-    e.preventDefault();
-    e.stopPropagation();
-  }
-  function dragEnd() {
-    if (!dragKey) return;
-    var key = dragKey, price = dragPrice;
-    dragKey = null;
-    try { chart.applyOptions({ handleScroll: true, handleScale: true }); } catch (err) {}
-    post({ type: 'tradeLineDrag', key: key, price: price, phase: 'end' });
-    // RN answers with a fresh overlay (saved) or the old one (cancelled).
-  }
-
-  function setPreviewLine(msg) {
-    previewDef = msg && msg.line ? msg.line : null;
-    if (previewLine && mainSeries) { try { mainSeries.removePriceLine(previewLine); } catch (e) {} }
-    previewLine = null;
-    if (previewDef && mainSeries) {
-      previewLine = mainSeries.createPriceLine({
-        price: previewDef.price, color: previewDef.color, lineWidth: 2,
-        lineStyle: previewDef.style === 'dotted' ? LWC.LineStyle.Dotted : LWC.LineStyle.Dashed,
-        lineVisible: true, axisLabelVisible: true, title: previewDef.title || '',
-        axisLabelColor: previewDef.color, axisLabelTextColor: '#0A0B0F',
-      });
-    }
   }
   function renderTradeMarkers() {
     var keep = {};
@@ -452,7 +343,6 @@
       if (m.label) html += '<span class="tm-label"></span>';
       html += '<span class="tm-count"></span><span class="tm-pnl"></span>';
       if (m.stale) html += '<span class="tm-stale">STALE</span>';
-      if (m.summary) html += '<span class="tm-sum"></span>';
       el.innerHTML = html;
       if (m.label) el.querySelector('.tm-label').textContent = m.label;
       var cnt = el.querySelector('.tm-count');
@@ -460,7 +350,6 @@
       cnt.style.background = m.edge;
       var pnl = el.querySelector('.tm-pnl');
       pnl.textContent = m.pnlText;
-      if (m.summary) el.querySelector('.tm-sum').textContent = m.summary;
       pnl.style.color = m.toneColor;
       el.style.borderColor = m.edge;
       el.style.background = theme.background;
@@ -712,12 +601,6 @@
     }
     var price = mainSeries.coordinateToPrice(param.point.y);
     if (price === null) { post({ type: 'chart-interact' }); return; }
-    // Trade lines (TP / BE / SL) select first — they're the actionable ones.
-    var tl = tradeLineAt(param.point.y);
-    if (tl) {
-      post({ type: 'tradeLineTap', key: tl.key, price: tl.price });
-      return;
-    }
     // Watch zones have no pills — hit-test the band directly. Tight ±6px so
     // only a deliberate tap on the line selects it (was ±14px).
     var TAP_TOL_PX = 6;
@@ -807,8 +690,6 @@
     setRefLines(saved);
     tradePriceLines = [];   // belonged to the removed series
     applyTradeLines();
-    previewLine = null;
-    if (previewDef) setPreviewLine({ line: previewDef });
   }
 
   var refLineDefs = [];
@@ -1351,11 +1232,6 @@
     var touchStartX = 0, touchStartY = 0;
     // Clean-tap tracking (see onChartClick) — capture phase, so these run
     // before LWC's own touch handlers decide it was a click.
-    // Trade-line drag first (capture, non-passive so a drag can stop the pan).
-    chartEl.addEventListener('touchstart', dragStart, { capture: true, passive: false });
-    chartEl.addEventListener('touchmove', dragMove, { capture: true, passive: false });
-    chartEl.addEventListener('touchend', dragEnd, { capture: true, passive: true });
-    chartEl.addEventListener('touchcancel', dragEnd, { capture: true, passive: true });
     chartEl.addEventListener('touchstart', tapStart, { capture: true, passive: true });
     chartEl.addEventListener('touchmove', tapMove, { capture: true, passive: true });
     chartEl.addEventListener('touchend', tapEnd, { capture: true, passive: true });
@@ -1435,7 +1311,6 @@
       case 'setZones': setZones(msg); break;
       case 'setRefLines': setRefLines(msg.lines); break;
       case 'setTradeOverlay': setTradeOverlay(msg); break;
-      case 'setPreviewLine': setPreviewLine(msg); break;
       case 'setEmaOverlays': setEmaOverlays(msg); break;
       case 'setVwap': setVwap(msg); break;
       case 'setCountdown': setCountdown(msg); break;

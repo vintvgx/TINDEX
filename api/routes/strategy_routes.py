@@ -1009,11 +1009,6 @@ def update_strategy_exits(strategy_id: str):
         # Cancel a running breakeven-grace countdown (hold the position) —
         # the edit sheet's Cancel button. In-memory only, nothing to persist.
         "cancel_be_grace": bool(data.get("cancel_be_grace", False)),
-        # Chart / Edit-card TP lines (spec 2026-11-10 §4.5–§6): the FULL
-        # desired list of user rungs [{id?, premium, qty, stock_price?,
-        # source?}]. Validated + reserved server-side in set_tp_rungs.
-        "tp_rungs": data["tp_rungs"] if "tp_rungs" in data else None,
-        "current_price": getattr(engine, "_current_option_price", None),
     }
     if "sl_grace_minutes" in data:
         raw = data["sl_grace_minutes"]
@@ -1023,7 +1018,6 @@ def update_strategy_exits(strategy_id: str):
     # getattr: v2 logging must never break the edit itself — a fake or
     # partially-built ExitManager may lack these attributes (CI: the
     # snapshot raised AttributeError on em.tp1 and returned HTTP 500).
-    _rungs_old = {r["id"]: dict(r) for r in (em.rungs_public() if hasattr(em, "rungs_public") else [])}
     _v2_old = {
         "hard_stop": getattr(em, "hard_stop", None),
         "tp1": getattr(em, "tp1", None),
@@ -1077,10 +1071,6 @@ def update_strategy_exits(strategy_id: str):
             # Grace turned off mid-countdown — drop the persisted start too,
             # or a restart would resurrect a countdown the user just killed.
             exit_overrides_patch["be_grace_start"] = None
-    if "tp_rungs" in changed:
-        # The whole ladder state (rungs + the TP1 carve), so recover_position
-        # rebuilds exactly this ladder — never an in-memory-only line (§6).
-        exit_overrides_patch["rung_state"] = em.rungs_state()
     if "be_grace_cancelled" in changed:
         # Cancel button: the in-memory countdown is already cleared by
         # apply_overrides() — clear the persisted start so a restart
@@ -1097,10 +1087,6 @@ def update_strategy_exits(strategy_id: str):
     # would be affected, so this logs rather than fails the request.
     # Queued (B1): the response no longer waits on Supabase — everything the
     # write needs is captured now, at request time.
-    _delta_info = {
-        "delta": getattr(engine, "_overlay_delta", None),
-        "delta_source": getattr(engine, "_overlay_delta_source", None),
-    }
     if engine.active_trade_id:
         trade_id = engine.active_trade_id
         persist_kwargs = dict(
@@ -1126,14 +1112,6 @@ def update_strategy_exits(strategy_id: str):
                     "[strategy] Failed to persist exit-level edit for trade %s: %s",
                     trade_id, e, exc_info=True,
                 )
-            # Trade Logging v2: one event per chart/Edit line set, moved or
-            # deleted (spec §6) — distinguishable from profile levels by
-            # its source, with the delta the conversion used.
-            if "tp_rungs" in changed:
-                try:
-                    _log_rung_events(trade_id, _rungs_old, changed["tp_rungs"], _delta_info)
-                except Exception:
-                    pass
             # Trade Logging v2 override trail (best-effort, same queue).
             try:
                 from services.strategy.trade_logger import utcnow_iso
@@ -1166,43 +1144,6 @@ def update_strategy_exits(strategy_id: str):
         "updated": changed,
         "exit_state": em.to_dict(),
     })
-
-
-def _log_rung_events(trade_id: str, old: dict, new_list: list, delta_info: dict) -> None:
-    """Diff the TP-line ladder before/after an edit into trade-log v2
-    events: TP_LINE_SET / TP_LINE_MOVED / TP_LINE_DELETED. Provenance is
-    VERIFIED when the stock↔premium conversion used snapshot Greeks, else
-    ENGINE (the premium itself is always what executes)."""
-    from services.strategy.trade_logger import utcnow_iso
-    when = utcnow_iso()
-    new = {r["id"]: r for r in new_list if not r.get("hit")}
-    prov = "VERIFIED" if (delta_info.get("delta_source") or "").startswith("snapshot") else "ENGINE"
-
-    def _ev(code, cur, prev):
-        return {
-            "t": when, "code": code, "p": prov,
-            "premium": (cur or prev or {}).get("premium"),
-            "qty_closed": 0,
-            "evidence": {
-                "line_id": (cur or prev or {}).get("id"),
-                "source": (cur or prev or {}).get("source"),
-                "old": {k: (prev or {}).get(k) for k in ("premium", "stock_price", "qty")} if prev else None,
-                "new": {k: (cur or {}).get(k) for k in ("premium", "stock_price", "qty")} if cur else None,
-                "delta": delta_info.get("delta"),
-                "delta_source": delta_info.get("delta_source"),
-                "note": "chart / Edit-card TP line",
-            },
-        }
-
-    for rid, cur in new.items():
-        prev = old.get(rid)
-        if prev is None:
-            logger_svc.log_v2_event(trade_id, _ev("TP_LINE_SET", cur, None))
-        elif any(prev.get(k) != cur.get(k) for k in ("premium", "qty", "stock_price")):
-            logger_svc.log_v2_event(trade_id, _ev("TP_LINE_MOVED", cur, prev))
-    for rid, prev in old.items():
-        if rid not in new and not prev.get("hit"):
-            logger_svc.log_v2_event(trade_id, _ev("TP_LINE_DELETED", None, prev))
 
 
 def _find_adjacent_strike(engine: ORBEngine, direction: str, default: dict) -> dict | None:

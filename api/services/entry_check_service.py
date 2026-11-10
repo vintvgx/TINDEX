@@ -687,62 +687,6 @@ def chart_signal(verdicts: dict) -> str:
     return "NA"
 
 
-# ── Chart lens (2026-11-10 spec §2.2) ──────────────────────────────────────────
-# One derived read every surface (strip, header, brief) shows, so they never
-# disagree silently. The INTRADAY lens follows the data the engine gates on:
-# CALL when the CALL composite is MODERATE+ AND price is above VWAP AND above
-# the ORB high AND the 5-min trend is bullish; PUT is the mirror on the PUT
-# composite; anything else is WAIT. The DAILY lens is the verdict signal
-# (daily-trend weighted) — context, shown labelled, never overwriting the
-# intraday side. Display only: the engine gate does not read this.
-LENS_MIN_TOTAL = 4   # MODERATE or better
-
-
-def _fmt_total(n: int) -> str:
-    return f"+{n}" if n > 0 else str(n)
-
-
-def chart_lens(price: float, composite: dict, rows: dict, rows_intraday: dict,
-               verdicts: dict, signal: str) -> dict:
-    vwap, orb = rows.get("vwap"), rows.get("orb")
-    i_trend = ((rows_intraday or {}).get("trend") or {}).get("label")
-    checks = {
-        "CALL": {
-            "composite": composite["CALL"]["total"] >= LENS_MIN_TOTAL,
-            "vwap": bool(vwap) and price > vwap["value"],
-            "orb": bool(orb) and orb["position"] == "Above high",
-            "trend": i_trend == "Bullish",
-        },
-        "PUT": {
-            "composite": composite["PUT"]["total"] >= LENS_MIN_TOTAL,
-            "vwap": bool(vwap) and price < vwap["value"],
-            "orb": bool(orb) and orb["position"] == "Below low",
-            "trend": i_trend == "Bearish",
-        },
-    }
-    side = "CALL" if all(checks["CALL"].values()) else "PUT" if all(checks["PUT"].values()) else "WAIT"
-    sides = {d: {"total": composite[d]["total"], "tier": composite[d]["tier"]} for d in ("CALL", "PUT")}
-    if side == "WAIT":
-        intraday_text = (f"Intraday: WAIT (CALL {_fmt_total(sides['CALL']['total'])} · "
-                         f"PUT {_fmt_total(sides['PUT']['total'])})")
-    else:
-        intraday_text = (f"Intraday: {side} {_fmt_total(sides[side]['total'])} "
-                         f"{sides[side]['tier'].replace('_', ' ')}")
-    daily_side = signal if signal in ("CALL", "PUT") else None
-    daily_verdict = verdicts[daily_side]["decision"] if daily_side else None
-    daily_text = (f"Daily: {daily_side} (verdict {daily_verdict.replace('_', ' ')})" if daily_side
-                  else f"Daily: {signal}")
-    agree = daily_side is not None and daily_side == side
-    return {
-        "intraday": {"side": side, "sides": sides, "checks": checks, "trend_5m": i_trend,
-                     "text": intraday_text},
-        "daily": {"signal": signal, "side": daily_side, "verdict": daily_verdict, "text": daily_text},
-        "agree": agree,
-        # Both lenses spelled out whenever they are not the same trade side.
-        "label": (f"{side} — daily and intraday agree" if agree else f"{daily_text} · {intraday_text}"),
-    }
-
-
 def _join(parts: list[str]) -> str:
     if not parts:
         return ""
@@ -824,8 +768,6 @@ def get_entry_check(ticker: str, direction: str) -> dict:
         for d in ("CALL", "PUT")
     }
     from services.utils.market_hours import is_market_hours
-    signal = chart_signal(verdicts)
-    rows_intraday = {"trend": i_trend, "rsi": i_rsi}
     return {
         "ticker": ticker,
         "direction": direction,
@@ -838,10 +780,9 @@ def get_entry_check(ticker: str, direction: str) -> dict:
         # Both directions + a single chart signal, so the Charts tab can show
         # "BUY CALL / BUY PUT / WAIT / N/A" from one request.
         "verdicts": verdicts,
-        "signal": signal,
+        "signal": chart_signal(verdicts),
         "composite": composite,
-        "rows_intraday": rows_intraday,
-        "lens": chart_lens(last, composite, rows, rows_intraday, verdicts, signal),
+        "rows_intraday": {"trend": i_trend, "rsi": i_rsi},
         "errors": errors or None,
     }
 

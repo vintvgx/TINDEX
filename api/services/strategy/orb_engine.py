@@ -142,8 +142,7 @@ EOD_CLOSE_TIMES = {
 # TIME_STOP is deliberately NOT here: it must close the whole position, and a
 # priced exit can't sell contracts reserved by resting ladder sells. The
 # protective path cancels the ladder first, then sells everything.
-# TP_RUNG (a chart / Edit-card TP line) is a take-profit like TP1/TP2.
-PRICE_SEEKING_REASONS = frozenset({"TP1", "TP2", "TP2_FULL_CLOSE", "TP_RUNG", "MANUAL_EXIT"})
+PRICE_SEEKING_REASONS = frozenset({"TP1", "TP2", "TP2_FULL_CLOSE", "MANUAL_EXIT"})
 PRICE_SEEK_SAMPLE_WINDOW_SEC = 3.0   # total time spent sampling the bid
 PRICE_SEEK_MIN_SAMPLES       = 4     # bid samples taken across that window
 PRICE_SEEK_TOTAL_BUDGET_SEC  = 10.0  # ceiling on how long we'll wait for a fill
@@ -607,7 +606,6 @@ class ORBEngine(GateWatchMixin):
             # of silently granting a fresh window.
             be_grace_was_active = self.exit_manager._be_grace_start is not None
             time_stop_met_before = self.exit_manager.time_stop_progress_met
-            rung_hits_before = sum(1 for r in getattr(self.exit_manager, "_rungs", ()) if r.get("hit"))
             action = self.exit_manager.evaluate(
                 current_option_price=current_option_price,
                 current_underlying_price=current_price,
@@ -673,17 +671,6 @@ class ORBEngine(GateWatchMixin):
                     )
                 except Exception:
                     logger.error("[ORBEngine] Failed to persist time_stop_progress_met", exc_info=True)
-            # A user TP line fired this tick: persist its hit flag (and the
-            # ladder) so a restart can never re-fire the same contracts (§4.5).
-            if (self.exit_manager and self.active_trade_id
-                    and sum(1 for r in getattr(self.exit_manager, "_rungs", ()) if r.get("hit")) != rung_hits_before):
-                try:
-                    self.logger.update_exit_levels(
-                        trade_id=self.active_trade_id,
-                        exit_overrides_patch={"rung_state": self.exit_manager.rungs_state()},
-                    )
-                except Exception:
-                    logger.error("[ORBEngine] Failed to persist TP line hit", exc_info=True)
             if self.exit_manager and self.active_trade_id:
                 be_grace_now = self.exit_manager._be_grace_start
                 if (be_grace_now is not None) != be_grace_was_active:
@@ -1962,7 +1949,6 @@ class ORBEngine(GateWatchMixin):
         # profile field — lift it out before the dict is used as a profile.
         stored_overrides = dict(row.get("exit_overrides") or {})
         be_grace_start_iso = stored_overrides.pop("be_grace_start", None)
-        rung_state = stored_overrides.pop("rung_state", None)
         time_stop_met = bool(stored_overrides.pop("time_stop_progress_met", False))
         profile = stored_overrides or get_profile(self.profile_key)
         fib_levels = dict(row.get("fib_targets") or {})
@@ -1999,9 +1985,6 @@ class ORBEngine(GateWatchMixin):
         # Time stop: entry_time (above) keeps the 60-min clock; a trade that
         # already made its progress stays disarmed.
         self.exit_manager.time_stop_progress_met = time_stop_met
-        # Chart / Edit-card TP lines + the TP1 carve, exactly as last saved
-        # (hit flags included) — lines never live in memory only (§6).
-        self.exit_manager.restore_rungs(rung_state)
 
         # Restore stop/TP progress so a restart never silently reverts to a
         # wider stop or re-fires an already-completed TP1/TP2.
@@ -3990,29 +3973,9 @@ class ORBEngine(GateWatchMixin):
             "be_level":             round(em.breakeven_level(), 4),
             "qty_entered":          em.qty,
             "strategy_name":        self.strategy_name,
-            # The one TP ladder (engine TP1/TP2 + chart/Edit lines, premium
-            # order) with each level's stock price from the snapshot delta
-            # (spec 2026-11-10 §7). stock_price is None — never guessed —
-            # when delta/underlying/mid is missing; the client labels that.
-            "tp_ladder":            self._ladder_with_stock(em, mid),
         })
         self._maybe_refresh_overlay_delta()
         return payload
-
-    def _ladder_with_stock(self, em, mid: float) -> list:
-        """em.ladder() + stock_price = underlying + (premium − mid) / delta.
-        A user line keeps the stock price it was drawn at only as its label
-        source; the live projection here is what the chart plots."""
-        try:
-            ladder = em.ladder() if hasattr(em, "ladder") else []
-        except Exception:
-            return []
-        delta = self._overlay_delta
-        u = self._last_underlying_price
-        for x in ladder:
-            x["stock_price"] = (round(u + (x["premium"] - mid) / delta, 2)
-                                if delta and u is not None and mid is not None else None)
-        return ladder
 
     @staticmethod
     def _snapshot_delta(snap):

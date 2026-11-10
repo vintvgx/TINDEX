@@ -224,23 +224,6 @@ class ExitManager:
         self._tp2_qty_override   = None
         self._sl_override_consumed = False
 
-        # User TP rungs (chart long-press / Edit card — spec 2026-11-10 §4.5).
-        # ONE ordered ladder: engine TP1 + TP2 stay the initial rungs and user
-        # lines join them; no line ever owns contracts another level owns.
-        #   • The FIRST user line takes its qty out of TP1's allocation
-        #     (engine TP1 then sells only what's left — nothing if the line
-        #     took it all, in which case that line IS TP1: it arms BE/cascade
-        #     when it fires).
-        #   • Further lines reserve qty from the unreserved pool; engine TP2,
-        #     cascade and trail only ever sell unreserved contracts, and the
-        #     last contract always stays the runner.
-        # Empty for every trade nobody edits from the chart → evaluate() takes
-        # exactly today's path (no rung branch runs).
-        self._rungs: list[dict] = []
-        self._tp1_replaced = False          # first line took ALL of TP1's qty
-        self._tp1_base_qty = None           # TP1's qty when the first line carved from it
-        self._tp1_override_before = _UNSET  # tp1_qty override to restore if the lines go
-
         # Pre-TP1 SL grace window (REVERSAL only, via profile flags — see
         # profiles.py for the full rationale). Once SL is confirmed hit and
         # grace is enabled, the exit doesn't fire immediately: it waits for
@@ -576,21 +559,11 @@ class ExitManager:
             return self._action("CLOSE_PARTIAL", qty_lv, "LOW_VOLUME_EXIT",
                                 current_option_price)
 
-        # User TP rungs — only when the trade has any (never for an untouched
-        # trade). Fires the lowest reached rung first; an engine level below
-        # it that's also reached goes first via its own branch below.
-        if self._rungs and not self._disable_tp1_exit:
-            rung_action = self._evaluate_rungs(current_option_price)
-            if rung_action is not None:
-                return rung_action
-
         # TP1 — requires tp1_confirm_ticks consecutive ticks at/above the level.
         # Price falling back below TP1 mid-count resets the counter.
         # disable_tp1_exit (NO_STOP_LOSS) skips this branch entirely — tp1 is
         # a display-only relative number for that profile, not a real target.
-        # A TP1 whose whole qty went to the first user line is skipped too:
-        # that line fires as TP1 (see _evaluate_rungs).
-        if not self._disable_tp1_exit and not self.tp1_hit and not self._tp1_replaced:
+        if not self._disable_tp1_exit and not self.tp1_hit:
             if current_option_price >= self.tp1:
                 self._tp1_ticks += 1
                 if self._tp1_ticks < self._tp1_ticks_needed:
@@ -612,12 +585,6 @@ class ExitManager:
                     qty_tp1 = min(self._tp1_qty_override, self.qty_remaining)
                 else:
                     qty_tp1 = max(1, math.floor(self.qty_remaining * self.profile["tp1_close_pct"]))
-                if self._rungs:
-                    # Never sell contracts reserved by a user line, or the runner.
-                    qty_tp1 = min(qty_tp1, self._free_qty())
-                    if qty_tp1 <= 0:
-                        self._log_decision("TP1_NOTHING_FREE", price=current_option_price)
-                        return self._action("HOLD", 0, "TP1_RESERVED")
                 return self._action("CLOSE_PARTIAL", qty_tp1, "TP1", current_option_price)
             else:
                 self._tp1_ticks = 0
@@ -625,22 +592,6 @@ class ExitManager:
         # TP2 — runner bonus target; only fires if the full move materialises.
         if self._use_tp2 and self.tp1_hit and not self.tp2_hit and current_option_price >= self.tp2:
             self.tp2_hit = True
-            if self._rungs:
-                # Laddered trade: TP2 is one rung among several — it sells only
-                # unreserved contracts and always leaves the runner (spec §7:
-                # on a laddered trade only the stop sells the last contract).
-                free = self._free_qty()
-                if self._tp2_qty_override is not None:
-                    want = self._tp2_qty_override
-                elif self.profile["tp2_close_pct"] >= 1.0:
-                    want = free
-                else:
-                    want = max(1, math.floor(self.qty_remaining * self.profile["tp2_close_pct"]))
-                qty_tp2 = min(want, free)
-                if qty_tp2 <= 0:
-                    self._log_decision("TP2_NOTHING_FREE", price=current_option_price)
-                    return self._action("HOLD", 0, "TP2_RESERVED")
-                return self._action("CLOSE_PARTIAL", qty_tp2, "TP2", current_option_price)
             # tp2_qty override replaces BOTH the profile's tp2_close_pct AND
             # its tp2_close_pct >= 1.0 full-close behavior when set.
             if self._tp2_qty_override is not None:
@@ -667,8 +618,7 @@ class ExitManager:
         # manual — trail alone can never fully close a position, only the
         # (breakeven-moved) hard stop can.
         if (not _RUNNER_TRAIL_HARD_DISABLED and self._runner_mode == "trail"
-                and self.tp1_hit and self.qty_remaining > 1
-                and (not self._rungs or self._free_qty() > 0)):
+                and self.tp1_hit and self.qty_remaining > 1):
             new_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
             if new_trail > self.runner_trail:
                 self.runner_trail = new_trail
@@ -714,8 +664,8 @@ class ExitManager:
         # closes it in full — see _use_tp2 above), so "manage your own runner,
         # or let the stop handle it" already holds for both the single-contract
         # case and the runner of any multi-contract trade.
-        if self._cascade_fire_pending and self._cascade_active() and (not self._rungs or self._free_qty() > 0):
-            sellable    = self._free_qty() if self._rungs else self.qty_remaining - 1
+        if self._cascade_fire_pending and self._cascade_active():
+            sellable    = self.qty_remaining - 1
             qty_cascade = min(max(1, math.floor(sellable * self._cascade_close_pct)),
                               sellable)
             self._cascade_close("CASCADE_FIRE", price=current_option_price, qty=qty_cascade)
@@ -999,236 +949,6 @@ class ExitManager:
         if price is not None and self._cascade_peak is not None:
             self._cascade_peak = max(price, self.entry_premium)
 
-    # ── User TP rungs ───────────────────────────────────────────────────────
-
-    def _reserved_qty(self) -> int:
-        """Contracts owned by user rungs that haven't fired yet."""
-        return sum(r["qty"] for r in self._rungs if not r["hit"])
-
-    def _free_qty(self) -> int:
-        """Contracts an engine level may sell: remaining minus user-line
-        reservations minus the runner."""
-        return max(0, self.qty_remaining - self._reserved_qty() - 1)
-
-    def _tp1_current_qty(self) -> int:
-        """What engine TP1 would sell now (0 once hit or fully replaced)."""
-        if self.tp1_hit or self._tp1_replaced or self._disable_tp1_exit:
-            return 0
-        if self._tp1_qty_override is not None:
-            return min(self._tp1_qty_override, self.qty_remaining)
-        return max(1, math.floor(self.qty_remaining * self.profile["tp1_close_pct"]))
-
-    def _tp1_side_effects(self, price: float) -> None:
-        """Everything the TP1 branch does besides selling — shared with a
-        user line that took all of TP1's qty (it fires AS TP1)."""
-        self.tp1_hit       = True
-        self._cascade_peak = price
-        if self._runner_mode != "none":
-            self.mark_breakeven(self.breakeven_level(cap=price))
-        if self._runner_mode == "trail":
-            self.runner_trail = price * (1 - self.profile["runner_trail_pct"])
-
-    def _evaluate_rungs(self, price: float) -> dict | None:
-        """Fire the lowest reached, unfired user rung (premium order — the
-        option's premium rises into profit for a CALL and a PUT alike), with
-        TP1's tick confirmation. Returns None to let the engine branches run."""
-        pending = sorted((r for r in self._rungs if not r["hit"]), key=lambda r: r["premium"])
-        for r in pending:
-            if price < r["premium"]:
-                r["_ticks"] = 0
-                continue
-            # An engine level priced at/below this rung and also reached
-            # fires first, in its own branch.
-            if (not self.tp1_hit and not self._tp1_replaced and not self._disable_tp1_exit
-                    and self.tp1 <= r["premium"] and price >= self.tp1):
-                return None
-            if (self._use_tp2 and self.tp1_hit and not self.tp2_hit
-                    and self.tp2 <= r["premium"] and price >= self.tp2):
-                return None
-            r["_ticks"] = r.get("_ticks", 0) + 1
-            if r["_ticks"] < self._tp1_ticks_needed:
-                return self._action("HOLD", 0, "TP_RUNG_CONFIRMING")
-            qty = min(r["qty"], max(0, self.qty_remaining - 1))   # never the runner
-            r["hit"] = True
-            r["hit_premium"] = round(price, 4)
-            r["hit_at"] = datetime.now(ET).isoformat(timespec="seconds")
-            self._log_decision("TP_RUNG_HIT", rung=r["id"], premium=r["premium"], qty=qty, price=price,
-                               source=r.get("source"))
-            if r.get("replaces_tp1") and not self.tp1_hit:
-                self._tp1_side_effects(price)          # this line IS TP1
-            elif not self.be_stop_active and self._runner_mode != "none":
-                # BE arms after the first TP hit, whichever rung it was.
-                self.mark_breakeven(self.breakeven_level(cap=price))
-            if qty <= 0:
-                return self._action("HOLD", 0, "TP_RUNG_NOTHING_LEFT")
-            return self._action("CLOSE_PARTIAL", qty, "TP_RUNG", price)
-        return None
-
-    def set_tp_rungs(self, rungs: list, current_price: float | None = None) -> list:
-        """
-        Replace this trade's user TP rungs with `rungs` (the full desired
-        list — fired rungs are kept as history and can't be edited). Each:
-        {id?, premium, qty, stock_price?, source?}. Validates server-side —
-        the UI's checks are a convenience, this is the guarantee (§9):
-          • premium > 0, qty ≥ 1, no two lines at the same premium (nor on
-            an engine TP1/TP2 premium);
-          • at most one rung per contract, and every rung + TP1's remaining
-            qty + 1 runner fits in qty_remaining.
-        The first user line takes its qty out of TP1's allocation (§4.5).
-        Raises ValueError without changing anything on invalid input.
-        """
-        import uuid
-        if not isinstance(rungs, list):
-            raise ValueError("tp_rungs must be a list")
-        fired = [r for r in self._rungs if r["hit"]]
-        fired_ids = {r["id"] for r in fired}
-        existing = {r["id"]: r for r in self._rungs}
-        now_iso = datetime.now(ET).isoformat(timespec="seconds")
-        new: list[dict] = []
-        for raw in rungs:
-            if not isinstance(raw, dict):
-                raise ValueError("each TP line must be an object")
-            rid = str(raw.get("id") or "")
-            if rid in fired_ids:
-                continue                                  # history, immutable
-            try:
-                premium = round(float(raw["premium"]), 4)
-                qty = int(raw["qty"])
-            except (KeyError, TypeError, ValueError):
-                raise ValueError("each TP line needs a premium and a quantity")
-            if not math.isfinite(premium) or premium <= 0:
-                raise ValueError("TP premium must be above $0")
-            if qty < 1:
-                raise ValueError("each TP line must sell at least 1 contract")
-            prev = existing.get(rid) or {}
-            sp = raw.get("stock_price")
-            new.append({
-                "id": rid or uuid.uuid4().hex[:10],
-                "premium": premium,
-                "qty": qty,
-                "stock_price": round(float(sp), 2) if isinstance(sp, (int, float)) and math.isfinite(sp) else None,
-                "source": raw.get("source") or prev.get("source") or "edit-card",
-                "created_at": prev.get("created_at") or now_iso,
-                "hit": False,
-            })
-        prices = [r["premium"] for r in new] + [r["premium"] for r in fired]
-        engine_prices = []
-        if not self.tp1_hit and not self._tp1_replaced:
-            engine_prices.append(("TP1", self.tp1))
-        if self._use_tp2 and not self.tp2_hit:
-            engine_prices.append(("TP2", self.tp2))
-        for i, p_ in enumerate(prices):
-            if any(abs(p_ - q) < 0.005 for q in prices[i + 1:]):
-                raise ValueError(f"Already a line at ${p_:.2f}")
-            for name, q in engine_prices:
-                if abs(p_ - q) < 0.005:
-                    raise ValueError(f"Already a line at ${p_:.2f} ({name})")
-        max_rungs = max(0, self.qty_remaining - 1)
-        if len(new) > max_rungs:
-            raise ValueError(f"At most {max_rungs} TP line{'s' if max_rungs != 1 else ''} — "
-                             f"one per open contract, and the last contract stays the runner")
-
-        # TP1 carve: the earliest-created user line takes from TP1 (only
-        # while TP1 hasn't fired).
-        base = self._tp1_base_qty
-        tp1_live = not self.tp1_hit and not self._disable_tp1_exit
-        if tp1_live and new and base is None:
-            base = self._tp1_current_qty() if not self._tp1_replaced else 0
-        first = min(new, key=lambda r: r["created_at"]) if (new and tp1_live) else None
-        for r in new:
-            r["from_tp1"] = min(r["qty"], base) if (r is first and base) else 0
-            r["replaces_tp1"] = bool(r is first and base and r["qty"] >= base)
-        tp1_left = (base - first["from_tp1"]) if (first and base) else (self._tp1_current_qty() if tp1_live and not new else 0)
-        need = sum(r["qty"] for r in new) + (tp1_left if tp1_live else 0) + 1
-        if new and need > self.qty_remaining:
-            raise ValueError(f"Not enough contracts: lines sell {sum(r['qty'] for r in new)}"
-                             f"{f', TP1 sells {tp1_left}' if tp1_live and tp1_left else ''}"
-                             f" and 1 stays the runner — {self.qty_remaining} open")
-
-        # Apply (validated — nothing above mutated state).
-        if tp1_live:
-            if new:
-                if self._tp1_override_before is _UNSET:
-                    self._tp1_override_before = self._tp1_qty_override
-                self._tp1_base_qty = base
-                if tp1_left > 0:
-                    self._tp1_qty_override, self._tp1_replaced = tp1_left, False
-                else:
-                    self._tp1_qty_override, self._tp1_replaced = None, True
-            elif self._tp1_override_before is not _UNSET:
-                # Every line removed before TP1 fired: TP1 gets its qty back.
-                self._tp1_qty_override = self._tp1_override_before
-                self._tp1_override_before = _UNSET
-                self._tp1_replaced, self._tp1_base_qty = False, None
-        self._rungs = fired + new
-        self._log_decision("TP_RUNGS_SET", rungs=[(r["premium"], r["qty"], r["from_tp1"]) for r in new],
-                           tp1_qty=self._tp1_qty_override, tp1_replaced=self._tp1_replaced)
-        return self.rungs_public()
-
-    def rungs_public(self) -> list:
-        return [{k: v for k, v in r.items() if not k.startswith("_")} for r in self._rungs]
-
-    def rungs_state(self) -> dict:
-        """Everything set_tp_rungs changed, for exit_overrides (restart)."""
-        return {
-            "tp_rungs": self.rungs_public(),
-            "tp1_qty_override": self._tp1_qty_override,
-            "tp1_replaced": self._tp1_replaced,
-            "tp1_base_qty": self._tp1_base_qty,
-            "tp1_override_before": None if self._tp1_override_before is _UNSET else self._tp1_override_before,
-            "tp1_override_before_set": self._tp1_override_before is not _UNSET,
-        }
-
-    def restore_rungs(self, state: dict | None) -> None:
-        """Inverse of rungs_state() — called by recover_position()."""
-        if not state or not state.get("tp_rungs") and not state.get("tp1_override_before_set"):
-            return
-        self._rungs = [dict(r) for r in (state.get("tp_rungs") or []) if isinstance(r, dict)]
-        self._tp1_qty_override = state.get("tp1_qty_override")
-        self._tp1_replaced = bool(state.get("tp1_replaced"))
-        self._tp1_base_qty = state.get("tp1_base_qty")
-        self._tp1_override_before = (state.get("tp1_override_before")
-                                     if state.get("tp1_override_before_set") else _UNSET)
-        # A fired line that had taken all of TP1 was TP1 — restore that
-        # progress the way recover_position restores an engine TP1 hit.
-        if any(r.get("hit") for r in self._rungs):
-            self.be_stop_active = True
-            if any(r.get("hit") and r.get("replaces_tp1") for r in self._rungs):
-                self.tp1_hit = True
-
-    def ladder(self) -> list:
-        """The one rung list (engine + user), premium order, for the Edit
-        card / chart / position strip. qty is what each rung sells; the
-        runner is whatever is left."""
-        out = []
-        reserved = self._reserved_qty()
-        tp1_qty = self._tp1_current_qty()
-        if not self._tp1_replaced and not self._disable_tp1_exit:
-            out.append({"key": "tp1", "source": "engine", "premium": round(self.tp1, 4),
-                        "qty": tp1_qty, "hit": self.tp1_hit})
-        for r in self._rungs:
-            out.append({"key": r["id"], "source": r.get("source") or "edit-card", "premium": r["premium"],
-                        "qty": r["qty"], "hit": r["hit"], "stock_price": r.get("stock_price"),
-                        "replaces_tp1": r.get("replaces_tp1", False), "hit_premium": r.get("hit_premium")})
-        if self._use_tp2 and not self._disable_tp1_exit:
-            pool = max(0, self.qty_remaining - tp1_qty - reserved)
-            if self.tp2_hit:
-                tp2_qty = 0
-            elif self._tp2_qty_override is not None:
-                tp2_qty = min(self._tp2_qty_override, pool)
-            elif self.profile.get("tp2_close_pct", 0) >= 1.0:
-                tp2_qty = max(0, pool - (1 if self._rungs else 0))
-            else:
-                tp2_qty = min(pool, max(1, math.floor(max(pool, 1) * self.profile.get("tp2_close_pct", 0))))
-                if self._rungs:
-                    tp2_qty = min(tp2_qty, max(0, pool - 1))
-            out.append({"key": "tp2", "source": "engine", "premium": round(self.tp2, 4),
-                        "qty": tp2_qty, "hit": self.tp2_hit})
-        out.sort(key=lambda x: x["premium"])
-        for i, x in enumerate(out, 1):
-            x["label"] = f"TP{i}"
-        return out
-
     def update_qty(self, qty_closed: int) -> None:
         """Call after executing a partial close so remaining contract count stays accurate."""
         self.qty_remaining = max(0, self.qty_remaining - qty_closed)
@@ -1260,9 +980,7 @@ class ExitManager:
                         sl_floor_enabled: bool | None = None,
                         sl_outer_floor: float | None = None,
                         be_grace_seconds: int | None = None,
-                        cancel_be_grace: bool = False,
-                        tp_rungs: list | None = None,
-                        current_price: float | None = None) -> dict:
+                        cancel_be_grace: bool = False) -> dict:
         """
         Validate and apply user-supplied SL/TP1/TP2 price and/or qty overrides
         to this (already open) position. Raises ValueError with a user-facing
@@ -1344,18 +1062,8 @@ class ExitManager:
         grace_fields = None
         if sl_grace_minutes is not _UNSET:
             grace_fields = grace_fields_for_minutes(sl_grace_minutes)  # raises ValueError on bad input
-        # TP rungs are validated + applied first: set_tp_rungs raises before
-        # mutating anything, so a rejected ladder leaves every other field
-        # in this call unapplied too.
-        rungs_changed = None
-        if tp_rungs is not None:
-            if tp1_qty is not None:
-                raise ValueError("Set TP1's quantity through the TP lines when lines are being saved")
-            rungs_changed = self.set_tp_rungs(tp_rungs, current_price)
 
         changed = {}
-        if rungs_changed is not None:
-            changed["tp_rungs"] = rungs_changed
         if hard_stop is not None:
             self.hard_stop = hard_stop
             changed["hard_stop"] = round(hard_stop, 4)
@@ -1536,10 +1244,4 @@ class ExitManager:
             ),
             "time_stop_progress_met": self.time_stop_progress_met,
             "peak_premium":          round(self._peak_premium, 4),
-            # One rung list (engine TP1/TP2 + chart/Edit lines), premium order —
-            # the chart lines, the Edit card rows and the strip summary all
-            # read this, so they can't drift apart (spec 2026-11-10 §4.6).
-            "tp_rungs":              self.rungs_public(),
-            "tp_ladder":             self.ladder(),
-            "tp1_replaced":          self._tp1_replaced,
         }

@@ -32,7 +32,7 @@ export interface ChartDisplayPrefs {
   /** Charts tab: the ticker's Morning Brief trigger / stop / target zone. */
   showBriefLevels: boolean;
   /** Charts tab: an open trade's TP2/TP1/BE/SL lines + position marker
-   *  (while drawn, the Morning Brief trigger/stop/target lines hide; the technicals strip stays). */
+   *  (Trade Mode — hides the brief pills and setup lines while shown). */
   showTradeLines: boolean;
   /** Timeframe moving-average overlays (computed from the loaded bars). */
   ema20: boolean;

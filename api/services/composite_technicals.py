@@ -8,14 +8,8 @@ RSI 20). This scores seven indicators -2..+2 instead and sums them:
     Intraday trend (5-min EMA-20/50)          Daily trend (EMA-20/50)
     VWAP position          ORB position
 
-Each side is scored on its own rules — how much each indicator favours a
-CALL, or how much it favours a PUT — never by negating the other side
-(2026-11-10 spec §2.2.3). A higher total always means "more in favour of
-THIS trade". Max |total| = 14. The PUT rules below are written as their own
-table; today they are the exact put-side reading of the CALL bands (so the
-engine's composite gate, frozen for the November paper run, is unchanged —
-tests/test_composite_sides.py pins that). Tune PUT_RSI_BANDS separately to
-make the sides asymmetric.
+Scores are computed bullish-positive, then sign-flipped for a PUT, so a
+higher total always means "more in favour of THIS trade". Max |total| = 14.
 
 Tiers (Muse's starting thresholds, not yet backtested — tune in TIERS):
     >= +6 STRONG · +4..+5 MODERATE (enter via confirm-first)
@@ -33,10 +27,8 @@ from typing import Optional
 
 import pandas as pd
 
-# RSI bands. CALL: value >= lo → score (first match wins; below 40 → -2).
-# PUT: value < hi → score (first match wins; 60 and above → -2).
-RSI_BANDS = ((60, 2), (55, 1), (45, 0), (40, -1))      # CALL: below 40 → -2
-PUT_RSI_BANDS = ((40, 2), (45, 1), (55, 0), (60, -1))  # PUT: 60+ → -2
+# RSI bands (bullish-signed): value >= lo → score. First match wins.
+RSI_BANDS = ((60, 2), (55, 1), (45, 0), (40, -1))      # below 40 → -2
 RSI_OVERBOUGHT, RSI_OVERSOLD = 70, 30
 
 # VWAP / ORB: beyond the level by this much (%) = ±2 instead of ±1.
@@ -139,16 +131,11 @@ def _with_price(closes: pd.Series, price: float) -> pd.Series:
     return s
 
 
-# ── Per-indicator scores, per side (higher = favours that side) ────────────────
+# ── Per-indicator scores (bullish-signed) ──────────────────────────────────────
 
-def _rsi_score(v: float, is_call: bool = True) -> int:
-    if is_call:
-        for lo, score in RSI_BANDS:
-            if v >= lo:
-                return score
-        return -2
-    for hi, score in PUT_RSI_BANDS:
-        if v < hi:
+def _rsi_score(v: float) -> int:
+    for lo, score in RSI_BANDS:
+        if v >= lo:
             return score
     return -2
 
@@ -169,30 +156,15 @@ def _rsi_desc(v: float) -> str:
     return "Oversold"
 
 
-def _trend_score(label: str, is_call: bool = True) -> int:
-    if is_call:
-        return {"Bullish": 2, "Bearish": -2}.get(label, 0)
-    return {"Bearish": 2, "Bullish": -2}.get(label, 0)
+def _trend_score(label: str) -> int:
+    return {"Bullish": 2, "Bearish": -2}.get(label, 0)
 
 
-def _macd_score(m: float, sg: float, is_call: bool) -> int:
-    """CALL: above signal (+2 if also above zero). PUT: below signal (+2 if
-    also below zero). The opposite crossover scores against the side."""
-    if m == sg:
-        return 0
-    if is_call:
-        return (2 if m > 0 else 1) if m > sg else (-2 if m < 0 else -1)
-    return (2 if m < 0 else 1) if m < sg else (-2 if m > 0 else -1)
-
-
-def _distance_score(position_sign: int, distance_pct: Optional[float], is_call: bool = True) -> int:
-    """position_sign: +1 price above the level, -1 below. A CALL is favoured
-    above, a PUT below; ±2 once beyond it by STRONG_DISTANCE_PCT."""
+def _distance_score(position_sign: int, distance_pct: Optional[float]) -> int:
     if position_sign == 0:
         return 0
     strong = distance_pct is not None and abs(distance_pct) >= STRONG_DISTANCE_PCT
-    favours = position_sign if is_call else -position_sign
-    return favours * (2 if strong else 1)
+    return position_sign * (2 if strong else 1)
 
 
 def _row(key: str, score: Optional[int], value: str, detail: str) -> dict:
@@ -222,6 +194,7 @@ def compute_composite(direction: str, price: float,
     Missing inputs score 0 and are listed in `missing` (never guessed).
     """
     is_call = direction.upper() == "CALL"
+    sign = 1 if is_call else -1
     rows: dict[str, dict] = {}
     turning: list[dict] = []
 
@@ -238,7 +211,7 @@ def compute_composite(direction: str, price: float,
 
     if d_rsi is not None:
         arrow = " ↗" if d_rsi > d_rsi_prev + 0.5 else " ↘" if d_rsi < d_rsi_prev - 0.5 else ""
-        rows["rsi_daily"] = _row("rsi_daily", _rsi_score(d_rsi, is_call), f"{d_rsi:.0f}{arrow}",
+        rows["rsi_daily"] = _row("rsi_daily", _rsi_score(d_rsi), f"{d_rsi:.0f}{arrow}",
                                  f"{d_rsi:.0f} — {_rsi_desc(d_rsi)}"
                                  + (", but rising ↗" if arrow == " ↗" and d_rsi < 55
                                     else ", but falling ↘" if arrow == " ↘" and d_rsi > 45 else ""))
@@ -251,7 +224,7 @@ def compute_composite(direction: str, price: float,
         detail = (f"EMA-20 {'above' if d_trend['ema50'] and d_trend['ema20'] > d_trend['ema50'] else 'below'} "
                   f"EMA-50, price {rel} EMA-20" if lbl != "Chop"
                   else f"Chop — price {rel} daily EMA-20 (${d_trend['ema20']:.2f})")
-        rows["trend_daily"] = _row("trend_daily", _trend_score(lbl, is_call), lbl, detail)
+        rows["trend_daily"] = _row("trend_daily", _trend_score(lbl), lbl, detail)
     else:
         rows["trend_daily"] = _row("trend_daily", None, "—", "Not enough daily bars")
 
@@ -261,7 +234,7 @@ def compute_composite(direction: str, price: float,
 
     if n5 >= MIN_BARS_RSI:
         i_rsi = float(wilder_rsi(s5).iloc[-1])
-        rows["rsi_intraday"] = _row("rsi_intraday", _rsi_score(i_rsi, is_call), f"{i_rsi:.0f}",
+        rows["rsi_intraday"] = _row("rsi_intraday", _rsi_score(i_rsi), f"{i_rsi:.0f}",
                                     f"{i_rsi:.0f} — {_rsi_desc(i_rsi)}")
     else:
         i_rsi = None
@@ -277,7 +250,7 @@ def compute_composite(direction: str, price: float,
         else:
             side = "above" if lbl == "Bullish" else "below"
             detail = f"EMA-20 {side} EMA-50, price {side} both"
-        rows["trend_intraday"] = _row("trend_intraday", _trend_score(lbl, is_call), lbl, detail)
+        rows["trend_intraday"] = _row("trend_intraday", _trend_score(lbl), lbl, detail)
         # Turning: EMA-20 crossed EMA-50 toward this trade in the last few bars.
         diff = (e20_s - e50_s).iloc[-(EMA_CROSS_BARS + 1):]
         crossed_up = (diff.iloc[0] <= 0 < diff.iloc[-1])
@@ -295,11 +268,16 @@ def compute_composite(direction: str, price: float,
         hist = macd - sig
         m, sg, h = float(macd.iloc[-1]), float(sig.iloc[-1]), float(hist.iloc[-1])
         h_prev = float(hist.iloc[-2])
-        score = _macd_score(m, sg, is_call)
+        if m > sg:
+            score = 2 if m > 0 else 1
+        elif m < sg:
+            score = -2 if m < 0 else -1
+        else:
+            score = 0
         rising = h > h_prev
-        value = "Bullish" if m > sg else "Bearish" if m < sg else "Flat"
+        value = "Bullish" if score > 0 else "Bearish" if score < 0 else "Flat"
         detail = (f"{'Above' if m > sg else 'Below' if m < sg else 'On'} signal"
-                  f"{', above zero' if m > 0 and m > sg else ', below zero' if m < 0 and m < sg else ''}"
+                  f"{', above zero' if m > 0 and score == 2 else ', below zero' if m < 0 and score == -2 else ''}"
                   f", histogram {'rising' if rising else 'falling'}")
         rows["macd"] = _row("macd", score, value, detail)
         recent = hist.iloc[-(MACD_TURN_BARS + 1):]
@@ -316,7 +294,7 @@ def compute_composite(direction: str, price: float,
     if vwap:
         dist = (price - vwap) / vwap * 100
         pos = 1 if price > vwap else -1 if price < vwap else 0
-        rows["vwap"] = _row("vwap", _distance_score(pos, dist, is_call),
+        rows["vwap"] = _row("vwap", _distance_score(pos, dist),
                             "Above" if pos > 0 else "Below" if pos < 0 else "At",
                             f"Price ${price:.2f} {'above' if pos > 0 else 'below' if pos < 0 else 'at'} VWAP ${vwap:.2f}")
     else:
@@ -326,17 +304,20 @@ def compute_composite(direction: str, price: float,
         rows["orb"] = _row("orb", None, "Forming", "Opening range still forming (locks 9:45 ET)")
     elif orh is not None and orl is not None:
         if price > orh:
-            rows["orb"] = _row("orb", _distance_score(1, (price - orh) / orh * 100, is_call), "Above high",
+            rows["orb"] = _row("orb", _distance_score(1, (price - orh) / orh * 100), "Above high",
                                f"Price above ORB high ${orh:.2f}")
         elif price < orl:
-            rows["orb"] = _row("orb", _distance_score(-1, (price - orl) / orl * 100, is_call), "Below low",
+            rows["orb"] = _row("orb", _distance_score(-1, (price - orl) / orl * 100), "Below low",
                                f"Price below ORB low ${orl:.2f}")
         else:
             rows["orb"] = _row("orb", 0, "Inside", f"Inside the range ${orl:.2f}–${orh:.2f}")
     else:
         rows["orb"] = _row("orb", None, "—", "No opening range yet")
 
-    # ── Total (scores above are already for this side) ──────────────────────
+    # ── Direction sign + total ──────────────────────────────────────────────
+    for r in rows.values():
+        if r["score"] is not None:
+            r["score"] = r["score"] * sign
     total = sum(r["score"] for r in rows.values() if r["score"] is not None)
     tier = _tier(total)
 

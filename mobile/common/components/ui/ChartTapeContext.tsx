@@ -8,24 +8,12 @@ import React, { createContext, useContext, useState, useCallback } from 'react';
  */
 export type ChartTapeSignal = 'CALL' | 'PUT' | 'WAIT' | 'NA' | null;
 
-export interface ChartTapeLens {
-  side: 'CALL' | 'PUT' | 'WAIT';
-  /** e.g. "CALL +5", "IN CALL +5", "WAIT". */
-  text: string;
-  /** The other lens, labelled — e.g. "Daily: PUT (verdict ENTER)". */
-  other: string | null;
-}
-
 export interface ChartTapeInfo {
   ticker: string;
   price: number | null;
   change: number | null;
   changePct: number | null;
   signal: ChartTapeSignal;
-  /** The derived read (spec 2026-11-10 §2.2) — when present the pill shows
-   *  it instead of the raw daily verdict `signal`, with the other lens as a
-   *  labelled second pill whenever the two disagree. */
-  lens?: ChartTapeLens | null;
   loading: boolean;
   /** In the Morning Brief — the tape shows an "MB" tag by the symbol. */
   brief?: boolean;

@@ -284,11 +284,6 @@ export async function simSell(id: string, qty?: number, limitPrice?: number) {
 
 export function simUpdateExits(id: string, patch: Record<string, unknown>) {
   const p = find(id);
-  if ('tp_rungs' in patch) {
-    // The TP ladder lives in the backend ExitManager; the client-side
-    // simulator has no engine to reserve contracts in.
-    throw new Error('TP lines are not available on simulated positions');
-  }
   const num = (k: string) => (typeof patch[k] === 'number' ? (patch[k] as number) : undefined);
   if (num('hard_stop') != null) p.hardStop = r2(num('hard_stop')!);
   if (num('tp1') != null) p.tp1 = r2(num('tp1')!);

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ActivityIndicator, ScrollView, Pressable } from
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery } from '@tanstack/react-query';
 import { fetchEntryCheck, type ChartSignal, type EntryCheck } from '@/hooks/queries/technicals/useEntryCheck';
-import { fmtScore, resolveLens, scoreColor, tierMeta } from './compositeMeta';
+import { chartComposite, fmtScore, scoreColor, tierMeta } from './compositeMeta';
 import { formatAsOf } from '@/common/components/trade/EntryTechnicalsPanel';
 import { CompositeTechnicalsPanel } from '@/common/components/ticker/CompositeTechnicalsPanel';
 import type { ChartReferenceLine } from '@/common/components/ticker/AdvancedPriceChart';
@@ -80,12 +80,10 @@ export function technicalsReferenceLines(
  * right-edge fade until scrolled to the end; tapping a chip opens the
  * detail sheet. Older API: the original four fixed chips.
  */
-export function ChartTechnicalsStrip({ check, isLoading, colors, onPress, tradeSide }: {
+export function ChartTechnicalsStrip({ check, isLoading, colors, onPress }: {
   check: EntryCheck | undefined; isLoading: boolean; colors: any;
   /** Tap on a chip → open the Technicals detail sheet. */
   onPress?: () => void;
-  /** Side of an open trade on this ticker — the strip leads with it. */
-  tradeSide?: 'CALL' | 'PUT' | null;
 }) {
   const muted = colors.textSecondary;
   const [atEnd, setAtEnd] = useState(false);
@@ -98,44 +96,22 @@ export function ChartTechnicalsStrip({ check, isLoading, colors, onPress, tradeS
     );
   }
   const sig = signalMeta(check.signal, colors);
-  const view = resolveLens(check, tradeSide);
-  if (view) {
+  const comp = chartComposite(check);
+  if (comp) {
     const bg = colors.background;
-    const comp = view.comp;
-    // The lead pill names its side and grades it on that side's own tier
-    // ("CALL +5 MODERATE"). WAIT shows both totals, neither as the trade
-    // direction. Indicator chips score for the lead side; on WAIT they
-    // show values only.
-    const tier = comp ? tierMeta(comp.tier, colors) : null;
-    const chips = (comp ?? view.call ?? view.put)!.indicators;
+    // The score leads the strip ("+2 WATCH"); the BUY CALL/PUT signal lives
+    // on the ticker tape's pill, so it isn't repeated here.
+    const tier = tierMeta(comp.tier, colors);
     return (
       <View style={s.strip}>
-        {comp && tier ? (
-          <Pressable
-            onPress={onPress}
-            style={[s.signal, { backgroundColor: tier.color }]}
-            hitSlop={4}
-            accessibilityLabel={`${comp.direction}${view.source === 'trade' ? ' (open trade)' : ''} score ${fmtScore(comp.total)} of ${comp.max}, ${tier.short}`}
-          >
-            <Text style={s.signalText}>{comp.direction} {fmtScore(comp.total)} {tier.short}</Text>
-          </Pressable>
-        ) : (
-          <Pressable
-            onPress={onPress}
-            style={[s.signal, { backgroundColor: colors.warning }]}
-            hitSlop={4}
-            accessibilityLabel={`Wait. Call ${fmtScore(view.call?.total ?? 0)}, put ${fmtScore(view.put?.total ?? 0)}`}
-          >
-            <Text style={s.signalText}>
-              WAIT · CALL {fmtScore(view.call?.total ?? 0)} · PUT {fmtScore(view.put?.total ?? 0)}
-            </Text>
-          </Pressable>
-        )}
-        {view.otherLens ? (
-          <View style={[s.chip, { borderColor: colors.separator, borderStyle: 'dashed' }]}>
-            <Text style={[s.chipText, { color: muted }]} numberOfLines={1}>{view.otherLens}</Text>
-          </View>
-        ) : null}
+        <Pressable
+          onPress={onPress}
+          style={[s.signal, { backgroundColor: tier.color }]}
+          hitSlop={4}
+          accessibilityLabel={`${comp.direction} score ${fmtScore(comp.total)} of ${comp.max}, ${tier.short}`}
+        >
+          <Text style={s.signalText}>{fmtScore(comp.total)} {tier.short}</Text>
+        </Pressable>
         <View style={{ flex: 1, height: 28, justifyContent: 'center' }}>
           <ScrollView
             horizontal
@@ -147,23 +123,21 @@ export function ChartTechnicalsStrip({ check, isLoading, colors, onPress, tradeS
               setAtEnd(contentOffset.x + layoutMeasurement.width >= contentSize.width - 8);
             }}
           >
-            {chips.map(ind => {
-              const c = comp ? scoreColor(ind.score, colors) : muted;
+            {comp.indicators.map(ind => {
+              const c = scoreColor(ind.score, colors);
               return (
                 <Pressable
                   key={ind.key}
                   onPress={onPress}
-                  style={[s.chip, { borderColor: comp && ind.score != null && ind.score > 0 ? colors.success + '66' : colors.separator }]}
-                  accessibilityLabel={`${ind.label} ${ind.value}${comp ? `, score ${ind.score ?? 'no data'}` : ''}`}
+                  style={[s.chip, { borderColor: ind.score != null && ind.score > 0 ? colors.success + '66' : colors.separator }]}
+                  accessibilityLabel={`${ind.label} ${ind.value}, score ${ind.score ?? 'no data'}`}
                 >
                   <View style={[s.dot, { backgroundColor: c }]} />
                   <Text style={[s.chipText, { color: colors.text }]}>{ind.label} </Text>
-                  <Text style={[s.chipText, { color: muted }]}>{ind.value}{comp ? ' ' : ''}</Text>
-                  {comp ? (
-                    <Text style={[s.chipText, { color: c, fontWeight: '800' }]}>
-                      {ind.score == null ? '—' : fmtScore(ind.score)}
-                    </Text>
-                  ) : null}
+                  <Text style={[s.chipText, { color: muted }]}>{ind.value} </Text>
+                  <Text style={[s.chipText, { color: c, fontWeight: '800' }]}>
+                    {ind.score == null ? '—' : fmtScore(ind.score)}
+                  </Text>
                 </Pressable>
               );
             })}
