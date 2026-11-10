@@ -213,6 +213,19 @@ class ORBEngine(GateWatchMixin):
         # keys that already exist on the base profile, so this can't inject
         # unknown fields.
         overrides = {**(exit_overrides or {}), **(custom_thresholds or {})}
+        # Stop-timer shorthand from the Edit Strategy modal (2026-11-10):
+        # exit_overrides carries sl_grace_minutes (null = Hard Stop, 5/10/15 =
+        # timer). Translate it here — before get_profile, which would warn
+        # and drop the unknown key — using the same shared translation as
+        # the confirm-entry path and PATCH /exits, so the modal only ever
+        # sends one number and the mapping can never drift.
+        if overrides and "sl_grace_minutes" in overrides:
+            try:
+                raw = overrides.pop("sl_grace_minutes")
+                overrides.update(grace_fields_for_minutes(
+                    int(raw) if raw is not None else None))
+            except (TypeError, ValueError) as e:
+                logger.warning("[ORBEngine] sl_grace_minutes override ignored (%s)", e)
         self.profile = get_profile(self.profile_key, overrides or None)
 
         trade_key    = os.getenv("ALPACA_PAPER_API_KEY" if self.paper else "ALPACA_LIVE_API_KEY")
@@ -927,6 +940,7 @@ class ORBEngine(GateWatchMixin):
                 self._muse_armed = True
                 self._muse_direction = direction
                 self._muse_hold_tracker = VwapSideTracker(direction, hold_bars)
+                self._muse_last_score_log = None  # fresh episode — log the failing score again if the gate stalls
                 # Reclaim tracker with the OPPOSITE direction so its
                 # "reversal side" is back across VWAP (the trend side).
                 self._muse_reclaim_tracker = VwapSideTracker(
@@ -4002,7 +4016,10 @@ class ORBEngine(GateWatchMixin):
     def _ladder_with_stock(self, em, mid: float) -> list:
         """em.ladder() + stock_price = underlying + (premium − mid) / delta.
         A user line keeps the stock price it was drawn at only as its label
-        source; the live projection here is what the chart plots."""
+        source; the live projection here is what the chart plots. A
+        stock-only line (no premium — set by stock price, no delta) has
+        nothing to project from: its stored stock price IS its position,
+        so it is kept as-is."""
         try:
             ladder = em.ladder() if hasattr(em, "ladder") else []
         except Exception:
@@ -4010,6 +4027,8 @@ class ORBEngine(GateWatchMixin):
         delta = self._overlay_delta
         u = self._last_underlying_price
         for x in ladder:
+            if x.get("premium") is None:
+                continue                                  # stock line: keep its trigger
             x["stock_price"] = (round(u + (x["premium"] - mid) / delta, 2)
                                 if delta and u is not None and mid is not None else None)
         return ladder
@@ -4228,34 +4247,37 @@ class ORBEngine(GateWatchMixin):
     def _muse_intraday_score(self, direction: str, price: float) -> tuple:
         """Intraday-only composite subtotal for MUSE_REVERSAL, 0..6.
 
-        Uses compute_composite with the hub's recent bars resampled to
-        5-minute closes (the hub feeds 1-minute bars; EMA periods are
-        5-minute periods, so raw 1-minute closes would distort them).
+        Uses compute_composite on 5-minute closes spanning several
+        sessions — prior sessions from entry_check_service's per-day cache
+        (prewarmed at ORB calc, so no mid-session download waits) + today
+        rebuilt from the hub's live 1-minute bars. This is the same series
+        the entry-check composite already uses.
         Daily closes are passed as None — daily rows become missing and
         are NOT counted, by design (spec §10.2). Returns (score, detail)
         where detail is the three intraday direction-adjusted scores.
         Fail closed: any error or too few bars returns (0, "insufficient").
+
+        2026-11-10: the previous version resampled ONLY the hub's recent
+        1-minute bars (240-bar cap = 48 five-minute buckets max) while
+        compute_composite needs 15/35/50 bars for RSI/MACD/trend — trend
+        could never score and the max was 4 < 5 required, so MUSE could
+        never enter (zero trades Nov 2–10 despite scorer fires, e.g. the
+        10:41 ET PUT @ $748.86 that armed and held but never entered).
+        Do not revert to hub-only bars.
         """
         try:
-            import pandas as pd
-            from services.composite_technicals import compute_composite
+            from services.composite_technicals import MIN_BARS_TREND, compute_composite
+            from services.entry_check_service import closes_5m
             recent = self._hub.get_recent_bars(self.ticker) or []
             if len(recent) < 30:
                 return 0, "insufficient bars"
-            # Resample 1m closes to 5m closes: last close per 5-min bucket.
-            buckets = {}
-            for b in recent:
-                ts = getattr(b, "ts", None)
-                close = getattr(b, "close", None)
-                if ts is None or close is None:
-                    continue
-                key = ts.replace(minute=(ts.minute // 5) * 5, second=0, microsecond=0)
-                buckets[key] = float(close)
-            if len(buckets) < 14:
+            closes_1m = [(getattr(b, "ts", None), getattr(b, "close", None))
+                         for b in recent]
+            closes = closes_5m(self.ticker, closes_1m)
+            if closes is None or len(closes) < MIN_BARS_TREND:
                 return 0, "insufficient 5m bars"
-            closes_5m = pd.Series(buckets, dtype=float).sort_index()
             comp = compute_composite(direction, price, daily_closes=None,
-                                     closes_5m=closes_5m,
+                                     closes_5m=closes,
                                      vwap=self._live_session_vwap(),
                                      orh=self.orh, orl=self.orl)
             rows = {r["key"]: r["score"] for r in comp.get("indicators", [])}
@@ -4331,7 +4353,16 @@ class ORBEngine(GateWatchMixin):
             # tracker complete and re-check each following bar. The
             # VWAP-side check above already reset the hold on any
             # close back across VWAP, so nothing is needed here.
-            pass
+            # Emit the failing score (once per distinct value) so a
+            # starved gate is visible in /strategy/debug-logs instead
+            # of failing silently every bar — 2026-11-10, the gate
+            # failed for 8 days with no row at all.
+            last = getattr(self, "_muse_last_score_log", None)
+            if detail != last:
+                self._muse_last_score_log = detail
+                self.debug.emit("INFO",
+                                f"MUSE_REVERSAL hold complete — technicals {score}/5 "
+                                f"({detail}) — waiting")
 
     def _feed_runner_exit(self, bar: OrbBar) -> None:
         """Bar-cadence feed for ExitManager's runner exit (runner_exit_enabled).

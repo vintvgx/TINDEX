@@ -80,6 +80,11 @@ export interface ProfileThresholds {
   eod_buffer_minutes: number;
   breakout_time_limit_min: number;
   vix_max_override: number;
+  /** Stop-timer default for the profile (api/services/strategy/profiles.py):
+   * sl_grace_enabled + sl_grace_seconds — the Edit Strategy modal reads
+   * these to seed the per-strategy timer. Absent = Hard Stop. */
+  sl_grace_enabled?: boolean;
+  sl_grace_seconds?: number;
 }
 
 export interface StrategyProfile {
@@ -107,6 +112,12 @@ export type OtmFibLevel = '1.0' | '1.618' | '2.618';
 
 export interface ExitOverrides {
   volume_exit: boolean;
+  /** Stop timer for this strategy, in minutes (null = Hard Stop: sell the
+   * moment the stop is hit). 5/10/15 arms the matching grace window —
+   * the backend translates it via profiles.grace_fields_for_minutes
+   * (see orb_engine.reload_config). Absent = the profile's default
+   * (5 min everywhere since 2026-11-10, 10 for SL_10). */
+  sl_grace_minutes?: number | null;
 }
 
 /** Pre-entry technicals an automated strategy requires — see

@@ -180,6 +180,14 @@ def _closes_5m(ticker: str, closes_1m: Optional[list[tuple]] = None):
     return pd.Series(values, dtype=float) if values else None
 
 
+def closes_5m(ticker: str, closes_1m: Optional[list[tuple]] = None):
+    """Public wrapper for _closes_5m — the MUSE_REVERSAL technicals gate
+    (orb_engine._muse_intraday_score) scores off this same multi-session
+    series instead of the hub's session-only bars (2026-11-10: hub-only
+    starved the gate — 48 five-minute buckets max vs 50 needed for trend)."""
+    return _closes_5m(ticker, closes_1m)
+
+
 def _day_change_pct(symbol: str) -> Optional[float]:
     import yfinance as yf
 

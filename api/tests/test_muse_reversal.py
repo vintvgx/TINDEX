@@ -7,12 +7,86 @@ live path itself stays paused (no strategy row) until Kareem arms it.
 """
 import os
 import sys
+from datetime import datetime, timedelta
+from unittest import mock
+
+import pytz
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from services.strategy.muse_reversal import (  # noqa: E402
     VwapSideTracker, muse_entry_ready, muse_technicals_pass)
 from services.strategy.profiles import get_profile  # noqa: E402
+
+ET = pytz.timezone("America/New_York")
+
+
+class _FakeHub:
+    def __init__(self, bars):
+        self._bars = bars
+
+    def get_recent_bars(self, ticker):
+        return list(self._bars)
+
+
+class _Bar:
+    def __init__(self, ts, close):
+        self.ts = ts
+        self.close = close
+
+
+def _session_1m_bars():
+    """71 session-only 1m bars, today 09:30 → 10:41 ET, closes declining
+    749.50 → 748.20 — exactly what the hub holds at the 2026-11-10 10:41
+    arming (240-bar cap, session-only)."""
+    today = datetime.now(ET).date()
+    start = ET.localize(datetime(today.year, today.month, today.day, 9, 30))
+    bars = []
+    for i in range(71):
+        ts = start + timedelta(minutes=i)
+        close = 749.50 - (1.30 * i / 70)
+        bars.append(_Bar(ts, round(close, 2)))
+    return bars
+
+
+def test_intraday_score_uses_prior_sessions_not_hub_only():
+    """Regression test for the 2026-11-10 starvation bug: the old
+    _muse_intraday_score resampled ONLY the hub's session bars (240-bar
+    cap = 48 five-minute buckets max) while compute_composite needs
+    15/35/50 bars for RSI/MACD/trend — trend could never score, max was
+    4 < 5, and MUSE never entered (zero trades Nov 2–10 despite scorer
+    fires). The fix scores off entry_check_service.closes_5m: prior
+    sessions (per-day cache) + today from the hub's live bars.
+    """
+    from services.strategy.orb_engine import ORBEngine
+
+    # Prior sessions: 4 sessions of 5-min closes declining 762 → 750.
+    prior = [762.0 - (12.0 * i / 311) for i in range(312)]
+    bars = _session_1m_bars()
+
+    # Control: the old hub-only resample starves MACD and trend.
+    buckets = {}
+    for b in bars:
+        key = b.ts.replace(minute=(b.ts.minute // 5) * 5, second=0, microsecond=0)
+        buckets[key] = b.close
+    assert len(buckets) < 35, "test setup: hub-only bars must starve MACD (35)"
+
+    eng = ORBEngine.__new__(ORBEngine)
+    eng._hub = _FakeHub(bars)
+    eng.ticker = "SPY"
+    eng.orh, eng.orl = 749.60, 747.06
+    eng._live_session_vwap = lambda: 749.33
+
+    with mock.patch("services.entry_check_service._prior_closes_5m",
+                    return_value=prior):
+        score, detail = eng._muse_intraday_score("PUT", 748.20)
+
+    # Steady decline: 5m RSI low, MACD bearish, trend bearish — all three
+    # rows score +2 for a PUT, so the gate passes (was 2/6 hub-only).
+    assert score == 6, f"expected 6, got {score} ({detail})"
+    assert "'rsi_intraday': 2" in detail
+    assert "'macd': 2" in detail
+    assert "'trend_intraday': 2" in detail
 
 
 def test_profile_exists_and_is_separate_from_reversal():
