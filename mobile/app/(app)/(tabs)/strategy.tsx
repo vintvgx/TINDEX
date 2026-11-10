@@ -118,6 +118,10 @@ type FormState = {
   smart_contracts:        boolean;
   confirm_entry:          boolean;
   volume_exit:            boolean;
+  /** Stop timer for this strategy: null = Hard Stop, 5/10/15 = minutes the
+   * stop waits for a recovery before selling. Seeded from the profile's
+   * default on open / profile change (see profileGraceMinutes). */
+  sl_grace_minutes:       number | null;
   paired_strategy_id:     string | null;
   technicals_gate:        TechnicalsGate | null;
 };
@@ -137,11 +141,32 @@ const DEFAULT_FORM: FormState = {
   smart_contracts:        false,
   confirm_entry:          false,
   volume_exit:            false,
+  sl_grace_minutes:       5,
   paired_strategy_id:     null,
   technicals_gate:        null,
 };
 
-function configToForm(cfg: StrategyConfig): FormState {
+/** Stop-timer steps shown in the Edit Strategy modal (null = Hard Stop). */
+const TIMER_STEPS: Array<number | null> = [null, 5, 10, 15];
+
+/** The profile's stop-timer default, in minutes (null = Hard Stop / no
+ * stop). Reads the profile's own grace fields when the profiles list is
+ * available; falls back to the backend defaults (5 min everywhere since
+ * 2026-11-10, 10 for SL_10, none for NO_STOP_LOSS — see
+ * api/services/strategy/profiles.py). */
+function profileGraceMinutes(key: ProfileKey, profiles?: StrategyProfile[]): number | null {
+  const t = profiles?.find(p => p.key === key)?.thresholds;
+  if (t && t.sl_grace_enabled !== undefined) {
+    if (!t.sl_grace_enabled) return null;
+    const secs = t.sl_grace_seconds ?? 300;
+    return secs >= 900 ? 15 : secs >= 600 ? 10 : 5;
+  }
+  if (key === 'SL_10') return 10;
+  if (key === 'NO_STOP_LOSS') return null;
+  return 5;
+}
+
+function configToForm(cfg: StrategyConfig, profiles?: StrategyProfile[]): FormState {
   return {
     strategy_name:          cfg.strategy_name ?? '',
     ticker:                 cfg.ticker,
@@ -157,6 +182,12 @@ function configToForm(cfg: StrategyConfig): FormState {
     smart_contracts:        cfg.smart_contracts ?? false,
     confirm_entry:          cfg.confirm_entry ?? false,
     volume_exit:            cfg.exit_overrides?.volume_exit ?? false,
+    // ?? would treat an explicit Hard Stop (null) as missing and fall back
+    // to the profile default — a saved Hard Stop reopened as "5 min" and
+    // silently overwrote itself on the next Save. Only undefined falls back.
+    sl_grace_minutes:       cfg.exit_overrides?.sl_grace_minutes !== undefined
+                              ? cfg.exit_overrides.sl_grace_minutes
+                              : profileGraceMinutes(cfg.profile, profiles),
     paired_strategy_id:     cfg.paired_strategy_id ?? null,
     technicals_gate:        cfg.technicals_gate ?? null,
   };
@@ -253,7 +284,7 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
   const [detailVisible, setDetailVisible]   = useState(false);
 
   const openCreate = () => { setEditingConfig(null); setForm(DEFAULT_FORM); setModalVisible(true); };
-  const openEdit   = (cfg: StrategyConfig) => { setEditingConfig(cfg); setForm(configToForm(cfg)); setModalVisible(true); };
+  const openEdit   = (cfg: StrategyConfig) => { setEditingConfig(cfg); setForm(configToForm(cfg, profiles)); setModalVisible(true); };
   const openDetail = (cfg: StrategyConfig) => { setDetailConfig(cfg); setDetailVisible(true); };
 
   // detailConfig is a snapshot taken when the modal opened — re-point it at
@@ -327,7 +358,13 @@ export default function StrategyScreen({ embedded = false }: StrategyScreenProps
       toast.error('Select at least one trade day');
       return;
     }
-    const exitOverrides: ExitOverrides = { volume_exit: form.volume_exit };
+    const exitOverrides: ExitOverrides = {
+      volume_exit: form.volume_exit,
+      // NO_STOP_LOSS hides the timer, but the form can still carry a stale
+      // value from another profile — never persist a timer on a profile
+      // that has no stop to time.
+      sl_grace_minutes: form.profile === 'NO_STOP_LOSS' ? null : form.sl_grace_minutes,
+    };
     const payload = {
       strategy_name:          form.strategy_name.trim(),
       ticker:                 form.ticker,
@@ -1032,8 +1069,25 @@ function StrategyFormModal({
   // Selecting a new archetype while overrides are on re-seeds the editor from
   // that profile's real defaults — otherwise a Bull Dog TP1 (+20%) would carry
   // over as a Wolf override, which reads as a different profile entirely.
+  // Stop timer steps: Hard Stop → 5 → 10 → 15 min (backend
+  // grace_fields_for_minutes). The stepper is the strategy's exit
+  // strategy: how long the stop waits for a recovery before selling.
+  const stepTimer = (dir: 1 | -1) => {
+    const i = TIMER_STEPS.indexOf(form.sl_grace_minutes);
+    const next = TIMER_STEPS[Math.min(TIMER_STEPS.length - 1, Math.max(0, i + dir))];
+    onPatch('sl_grace_minutes', next);
+  };
+
   const handleProfileSelect = (key: ProfileKey) => {
+    // Re-seed the stop timer from the new profile's default when the timer
+    // still equals the old profile's default (i.e. the user hasn't set
+    // their own) — so switching e.g. SL_10 → TREND_RIDER doesn't silently
+    // carry a 10-min timer onto a 5-min profile, or vice versa.
+    const prevDefault = profileGraceMinutes(form.profile, profiles);
     onPatch('profile', key);
+    if (form.sl_grace_minutes === prevDefault) {
+      onPatch('sl_grace_minutes', profileGraceMinutes(key, profiles));
+    }
     if (form.override_enabled && key !== 'CUSTOM') {
       const base = profiles.find(p => p.key === key)?.thresholds;
       if (base) onPatch('custom_thresholds', { ...DEFAULT_CUSTOM_THRESHOLDS, ...base });
@@ -1454,21 +1508,37 @@ function StrategyFormModal({
               />
             )}
 
-            {form.profile !== 'CUSTOM' && !form.override_enabled && (
-              <>
-                <SectionHeader title="Exit Controls" colors={colors} />
-                <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <View style={[styles.configRow, { borderBottomWidth: 0 }]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.configLabel, { color: colors.text }]}>Volume Exit</Text>
-                      <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>Close half position on low volume after 3 min</Text>
-                    </View>
-                    <Switch value={form.volume_exit} onValueChange={v => onPatch('volume_exit', v)} thumbColor={form.volume_exit ? '#4A9EFF' : '#ccc'} trackColor={{ true: '#4A9EFF55', false: colors.border }} />
+            {/* Exit Controls — always visible: the stop timer is the
+                strategy's exit strategy, not a thresholds override, so it
+                must not hide behind the Customize toggle. */}
+            <SectionHeader title="Exit Controls" colors={colors} />
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={[styles.configRow, { borderBottomWidth: form.profile !== 'NO_STOP_LOSS' ? 1 : 0, borderBottomColor: colors.border }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.configLabel, { color: colors.text }]}>Volume Exit</Text>
+                  <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>Close half position on low volume after 3 min</Text>
+                </View>
+                <Switch value={form.volume_exit} onValueChange={v => onPatch('volume_exit', v)} thumbColor={form.volume_exit ? '#4A9EFF' : '#ccc'} trackColor={{ true: '#4A9EFF55', false: colors.border }} />
+              </View>
+              {form.profile !== 'NO_STOP_LOSS' && (
+                <View style={[styles.configRow, { borderBottomWidth: 0 }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.configLabel, { color: colors.text }]}>Stop timer</Text>
+                    <Text style={[styles.hint, { marginTop: 2, marginBottom: 0, color: colors.tabBarInactive }]}>After the stop is hit, waits this long for a recovery before selling. A −50% floor still sells immediately.</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <TouchableOpacity onPress={() => stepTimer(-1)} hitSlop={8} style={[styles.stepBtn, { borderColor: colors.border }]}>
+                      <Text style={[styles.stepBtnText, { color: '#4A9EFF' }]}>−</Text>
+                    </TouchableOpacity>
+                    <Text style={[styles.stepValueText, { color: colors.text, minWidth: 64 }]}>{form.sl_grace_minutes == null ? 'Hard Stop' : `${form.sl_grace_minutes} min`}</Text>
+                    <TouchableOpacity onPress={() => stepTimer(1)} hitSlop={8} style={[styles.stepBtn, { borderColor: colors.border }]}>
+                      <Text style={[styles.stepBtnText, { color: '#4A9EFF' }]}>+</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
-                <Text style={[styles.hint, { color: colors.tabBarInactive }]}>Off by default.</Text>
-              </>
-            )}
+              )}
+            </View>
+            <Text style={[styles.hint, { color: colors.tabBarInactive }]}>Volume Exit is off by default. Stop timer defaults to 5 min.</Text>
 
             <View style={{ height: 60 }} />
           </ScrollView>
@@ -1668,6 +1738,9 @@ const styles = StyleSheet.create({
   card:       { borderRadius: 14, borderWidth: 1, overflow: 'hidden', marginBottom: 12 },
   configRow:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 13 },
   configLabel: { fontSize: 14, fontWeight: '500' },
+  stepBtn:       { width: 28, height: 28, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  stepBtnText:   { fontSize: 18, fontWeight: '600', lineHeight: 22 },
+  stepValueText: { fontSize: 13, fontWeight: '600', textAlign: 'center' },
   chipRow:    { flexDirection: 'row', gap: 6 },
   chip:       { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1 },
   chipText:   { fontSize: 13, fontWeight: '600' },

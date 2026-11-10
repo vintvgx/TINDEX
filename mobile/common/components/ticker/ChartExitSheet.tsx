@@ -1,9 +1,11 @@
 // Chart-set exits (spec 2026-11-10 §4): the sheet behind long-press → ⊕ and
 // behind tapping / dragging a trade line. Stock price is the input language;
-// the PREMIUM is what's saved and what executes (§5). Everything is written
-// through PATCH /strategy/configs/<id>/exits — the same path the Edit card
-// uses — so a line set here lives on the trade, survives a restart, and is
-// the same rung object the Edit card shows (§4.6, §6).
+// the PREMIUM is what's saved and what executes (§5) — except a stock-only
+// line (no delta to convert through): it saves with no premium and executes
+// when the stock trades at the line, selling at the market premium then
+// (2026-11-10). Everything is written through PATCH /strategy/configs/<id>/exits
+// — the same path the Edit card uses — so a line set here lives on the trade,
+// survives a restart, and is the same rung object the Edit card shows (§4.6, §6).
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TextInput, Pressable, Modal, StyleSheet, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
@@ -185,7 +187,14 @@ export function ChartExitSheet({
   const onPct = (t: string) => {
     setPctText(t); setConfirmArmed(null);
     const pc = parseFloat(t);
-    if (isNum(pc) && entry) {
+    if (!isNum(pc)) return;
+    if (!premOK && u != null) {
+      // No premium to work from (no delta): the % moves the stock line
+      // itself, relative to the current stock price.
+      setStockText(fmt(round2(u * (1 + pc / 100))));
+      return;
+    }
+    if (entry) {
       const p = premiumFromPct(pc, entry);
       setPremText(fmt(p));
       if (quote) setStockText(fmt(stockAt(quote, p)));
@@ -198,7 +207,10 @@ export function ChartExitSheet({
     if (!visible || !stockOK) { onPreview(null); return; }
     const color = kind === 'sl' ? colors.error : kind === 'be' ? colors.textSecondary : colors.success;
     onPreview({ price: round2(stock), color, style: kind === 'sl' ? 'dotted' : 'dashed',
-                title: `${kind.toUpperCase()} ≈ $${fmt(premOK ? prem : null) || '—'}` });
+                // Stock-only line (no delta, no premium): the stock price IS
+                // the trigger, so the line is labelled with it, not "≈ $—".
+                title: premOK ? `${kind.toUpperCase()} ≈ $${fmt(prem)}`
+                               : `${kind.toUpperCase()} @ $${fmt(stock)}` });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, stockText, premText, kind]);
 
@@ -210,6 +222,11 @@ export function ChartExitSheet({
     && Math.abs(stock - beStock) <= SNAP_TO_BE_STOCK;
   // A TP dragged across the price is offered as a stop — never flipped silently (§4.3).
   const flipped = request?.mode === 'edit' && editIsUser && kind === 'tp' && stockOK && u != null && !profitSide(stock);
+  // A TP set by stock price alone (no delta, no premium): the line fires on
+  // the stock and sells at the market premium (2026-11-10). Not for engine
+  // TP1/TP2 edits — those are premium levels.
+  const stockOnly = kind === 'tp' && !flipped && stockOK && !premOK && !convOK
+    && editKey !== 'tp1' && editKey !== 'tp2';
   const otherUser = userRungs(ladder).filter(r => r.id !== editKey);
   const qtyCap = Math.max(1, qtyRem - 1 - otherUser.reduce((n, r) => n + r.qty, 0));
   const tp1 = ladder.find(r => r.key === 'tp1');
@@ -218,7 +235,9 @@ export function ChartExitSheet({
   const floorOn = live?.sl_floor_enabled !== false && isNum(live?.sl_outer_floor);
   const problem = useMemo<string | null>(() => {
     if (!trade || !live) return 'No open contract on this ticker';
-    if (!premOK) return convOK ? 'Enter a price' : 'Enter the premium (delta unavailable — premium only)';
+    // A stock-only TP is valid — the line fires on the stock. Stops still
+    // need a premium, and engine TP1/TP2 edits are premium levels.
+    if (!premOK && !stockOnly) return convOK ? 'Enter a price' : 'Enter the premium (delta unavailable — premium only)';
     // Stops (SL, or the armed BE stop being moved): below the live premium,
     // and above an armed floor — the floor would otherwise sell first.
     if (kind === 'sl' || kind === 'be' || flipped) {
@@ -227,22 +246,27 @@ export function ChartExitSheet({
         return `Stop $${prem.toFixed(2)} is at or below the floor $${live.sl_outer_floor!.toFixed(2)}, which would sell first`;
       }
     }
-    if (kind === 'tp' && !flipped && prem <= entry) return `A TP sits above entry ($${entry.toFixed(2)}) — below it, set a stop`;
-    if (kind === 'tp' && !flipped && stockOK && u != null && !profitSide(stock) && convOK) {
+    if (kind === 'tp' && !flipped && premOK && prem <= entry) return `A TP sits above entry ($${entry.toFixed(2)}) — below it, set a stop`;
+    if (kind === 'tp' && !flipped && stockOK && u != null && !profitSide(stock)) {
       return `A TP sits ${dir === 'CALL' ? 'above' : 'below'} the current price ($${u.toFixed(2)})`;
     }
-    if (kind === 'sl' && stockOK && u != null && profitSide(stock) && convOK) {
+    if (kind === 'sl' && stockOK && u != null && profitSide(stock)) {
       return `A stop sits ${dir === 'CALL' ? 'below' : 'above'} the current price ($${u.toFixed(2)})`;
     }
     if (kind === 'tp' && !flipped) {
-      const clash = ladder.find(r => r.key !== editKey && !r.hit && Math.abs(r.premium - prem) < 0.005);
-      if (clash) return `Already a line at $${clash.premium.toFixed(2)} (${clash.label})`;
+      if (stockOnly) {
+        const clash = ladder.find(r => r.key !== editKey && !r.hit && isNum(r.stock_price) && Math.abs(r.stock_price! - stock) < 0.05);
+        if (clash) return `Already a line at $${clash.stock_price!.toFixed(2)} stock (${clash.label})`;
+      } else {
+        const clash = ladder.find(r => r.key !== editKey && !r.hit && r.premium != null && Math.abs(r.premium - prem) < 0.005);
+        if (clash) return `Already a line at $${clash.premium!.toFixed(2)} (${clash.label})`;
+      }
       if (qty < 1 || qty > qtyCap) return `Sell 1–${qtyCap} (the last contract stays the runner)`;
       if (qtyRem <= 1) return 'A 1-contract trade has no room for another TP';
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trade, live, premOK, convOK, kind, flipped, stockOK, stock, u, dir, prem, qty, qtyCap, qtyRem, editKey, ladder, cur, floorOn, entry]);
+  }, [trade, live, premOK, convOK, kind, flipped, stockOK, stock, u, dir, prem, qty, qtyCap, qtyRem, editKey, ladder, cur, floorOn, entry, stockOnly]);
 
   const immediate = kind === 'tp' && !flipped && premOK && cur != null && prem <= cur;
 
@@ -259,25 +283,27 @@ export function ChartExitSheet({
   const onSave = (as: Kind) => {
     if (!trade || !live || problem) return;
     if (as === 'tp' && immediate && confirmArmed !== 'immediate') { setConfirmArmed('immediate'); return; }
-    const p = round2(prem);
+    const p = premOK ? round2(prem) : null;
     const sp = stockOK ? round2(stock) : null;
     if (as === 'be' && editKey === 'be') {
       // The armed BE line IS the stop: moving it moves the stop to here.
-      submit({ hard_stop: p, sl_enabled: true }, `Stop moved to $${p.toFixed(2)}${sp != null ? ` (≈ ${sp.toFixed(2)})` : ''}`);
+      submit({ hard_stop: p, sl_enabled: true }, `Stop moved to $${p!.toFixed(2)}${sp != null ? ` (≈ ${sp.toFixed(2)})` : ''}`);
     } else if (as === 'be') {
       submit({ hard_stop: round2(entry), sl_enabled: true }, `Stop set to breakeven $${entry.toFixed(2)}`);
     } else if (as === 'sl') {
       const body: Record<string, unknown> = { hard_stop: p, sl_enabled: true };
       if (flipped && editKey) body.tp_rungs = otherUser;      // the TP line becomes the stop
-      submit(body, `Stop set at $${p.toFixed(2)}${sp != null ? ` (≈ ${sp.toFixed(2)})` : ''} — sells all remaining`);
+      submit(body, `Stop set at $${p!.toFixed(2)}${sp != null ? ` (≈ ${sp.toFixed(2)})` : ''} — sells all remaining`);
     } else if (editKey === 'tp1' || editKey === 'tp2') {
       // Send the stepper's qty too — it was shown but dropped (thread 9).
       submit({ [editKey]: p, [`${editKey}_qty`]: qty },
-        `${editRung?.label ?? 'TP'} moved to $${p.toFixed(2)} · ${qty} contract${qty === 1 ? '' : 's'}`);
+        `${editRung?.label ?? 'TP'} moved to $${p!.toFixed(2)} · ${qty} contract${qty === 1 ? '' : 's'}`);
     } else {
       const mine: TpRungInput = { id: editKey ?? undefined, premium: p, qty, stock_price: sp,
                                   source: editRung ? (editRung.source as TpRungInput['source']) : 'chart-long-press' };
-      submit({ tp_rungs: [...otherUser, mine], ...(immediate ? { allow_immediate: true } : {}) }, `TP set at $${p.toFixed(2)}${sp != null ? ` (≈ ${sp.toFixed(2)})` : ''}, sells ${qty}`);
+      submit({ tp_rungs: [...otherUser, mine], ...(immediate ? { allow_immediate: true } : {}) },
+        p != null ? `TP set at $${p.toFixed(2)}${sp != null ? ` (≈ ${sp.toFixed(2)})` : ''}, sells ${qty}`
+                  : `TP set at $${sp!.toFixed(2)} stock — sells ${qty} when the stock trades there`);
     }
   };
 
@@ -295,7 +321,12 @@ export function ChartExitSheet({
   const isNew = request!.mode === 'new';
   const lineName = editRung?.label ?? (editKey === 'sl' ? 'SL' : editKey === 'be' ? 'BE' : '');
   const effective: Kind = flipped ? 'sl' : kind;
-  const pctN = parseFloat(pctText);
+  // Stock-only line: no premium, so the % is the stock's move from the
+  // current price ("vs now"), not vs the entry premium.
+  const pctDisplay = premOK ? pctText
+    : stockOnly && u != null ? String(Math.round(((stock - u) / u) * 100)) : pctText;
+  const pctLabel = stockOnly ? 'vs now' : 'vs entry';
+  const pctN = parseFloat(pctDisplay);
 
   return (
     <Modal visible transparent animationType="slide" onRequestClose={close}>
@@ -339,20 +370,24 @@ export function ChartExitSheet({
             ) : null}
 
             <View style={s.inputs}>
-              <Field label="Stock price" value={stockText} onChange={onStock} editable={convOK} colors={colors} prefix="$" />
+              {/* The stock price is the input language — editable even with
+                  no delta, because a stock-only line is set by it alone. */}
+              <Field label="Stock price" value={stockText} onChange={onStock} colors={colors} prefix="$" />
               <Field label={convOK ? '≈ Premium' : 'Premium'} value={premText} onChange={onPrem} colors={colors} prefix="$" />
-              <Field label="vs entry" value={pctText} onChange={onPct} colors={colors} suffix="%"
+              <Field label={pctLabel} value={pctDisplay} onChange={onPct} colors={colors} suffix="%"
                 tone={isNum(pctN) ? (pctN >= 0 ? colors.success : colors.error) : undefined} />
             </View>
             <Text style={[s.note, { color: convOK ? colors.textTertiary : colors.warning }]}>
               {convOK ? deltaLabel(deltaInfo) : `${ud.reason ?? (u == null ? 'no underlying price' : 'no live premium')} — showing premium only`}
-              {'  ·  '}executes on the premium, never the stock price
+              {'  ·  '}{stockOnly
+                ? `executes when the stock trades at $${fmt(stock)} — sells at the market premium then`
+                : 'executes on the premium, never the stock price'}
             </Text>
 
             {!isNew ? (
               <View style={s.wrapRow}>
-                <Btn label="−$0.05" onPress={() => nudge(-0.05)} colors={colors} disabled={!convOK} />
-                <Btn label="+$0.05" onPress={() => nudge(0.05)} colors={colors} disabled={!convOK} />
+                <Btn label="−$0.05" onPress={() => nudge(-0.05)} colors={colors} disabled={!stockOK} />
+                <Btn label="+$0.05" onPress={() => nudge(0.05)} colors={colors} disabled={!stockOK} />
               </View>
             ) : null}
 

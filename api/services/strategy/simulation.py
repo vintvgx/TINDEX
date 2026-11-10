@@ -12,9 +12,10 @@ Scenarios
              profile uses one), peaks ~tick 9, exits by tick 10 via a
              trailing stop or a breakeven pullback, depending on the
              profile's runner_mode.  (~60 s)
-"loss"     — IWM CALL: steady decline, hard stop breached ~tick 4. (~24 s)
-"reversal" — IWM CALL stops out ~tick 4, reversal detected, IWM PUT
-             entered and runs the full profit sequence.  (~90 s)
+"loss"     — IWM CALL: steady decline, stop hit ~tick 4, closes once the
+             5-min stop timer elapses (compressed — see _settle_pending_grace). (~24 s)
+"reversal" — IWM CALL stops out ~tick 4 (after the same compressed timer),
+             reversal detected, IWM PUT entered and runs the full profit sequence.  (~90 s)
 
 Exit levels (TP1/TP2/hard_stop) are computed for whichever of the 6
 ORB-breakout profiles the caller passes (BULL_DOG/THUNDER_CAT/WOLF/
@@ -96,6 +97,28 @@ def _new_em(direction: str = SIM_DIRECTION, profile_key: str = "THUNDER_CAT") ->
         direction      = direction,
         eod_close_time = "23:59",  # never trigger EOD during simulation
         profile        = get_profile(profile_key),
+    )
+
+
+def _settle_pending_grace(em: ExitManager, price: float):
+    """Fast-forward a pending stop timer so the demo still closes.
+
+    The sim compresses market time (6 s ticks stand in for 1-min bars),
+    so a 5-min SL grace would never elapse inside a ~60 s demo — a loss
+    scenario would end with the position still open. Once the stop has
+    been hit and the grace is pending, jump the grace clock to its
+    deadline and re-evaluate at the same price. Returns the evaluate()
+    action, or None when no grace is pending.
+    """
+    if not getattr(em, "_sl_grace_active", False):
+        return None
+    start = getattr(em, "_sl_grace_start", None)
+    if start is None:
+        return None
+    em._sl_grace_start = start - timedelta(seconds=(em._sl_grace_seconds or 0) + 1)
+    return em.evaluate(
+        current_option_price=price,
+        current_underlying_price=_underlying_at(price, em.entry_premium, em.direction),
     )
 
 
@@ -374,6 +397,28 @@ class SimulationRunner:
                 self._push_ws(em, exit_p, tick_num, len(ticks), scenario, SIM_CONTRACT)
                 break
 
+        # Stop timer (2026-11-10): a loss now ends in SL_GRACE, not an
+        # instant close. Compress the wait so the demo still shows the close.
+        if em.qty_remaining > 0:
+            action = _settle_pending_grace(em, ticks[-1])
+            if action is not None and action["type"] != "HOLD":
+                qty_to_close = action.get("qty", em.qty_remaining)
+                exit_p = action.get("current_premium") or ticks[-1]
+                pnl = (exit_p - SIM_ENTRY) * qty_to_close * 100
+                self._realized[id(em)] = self._realized.get(id(em), 0.0) + pnl
+                em.qty_remaining = 0
+                self._notifier.notify_exit(
+                    ticker          = SIM_TICKER,
+                    contract_symbol = SIM_CONTRACT,
+                    exit_reason     = action["reason"],
+                    pnl             = pnl,
+                    qty             = qty_to_close,
+                    profile_key     = profile_key,
+                )
+                logger.info("[Sim] Exit after stop timer reason=%s qty=%d pnl=%.2f",
+                            action["reason"], qty_to_close, pnl)
+                self._push_ws(em, exit_p, len(ticks), len(ticks), scenario, SIM_CONTRACT)
+
         self._broadcast(json.dumps({"type": "sim_complete", "scenario": scenario}))
         logger.info("[Sim] Finished scenario=%s profile=%s", scenario, profile_key)
 
@@ -432,6 +477,29 @@ class SimulationRunner:
             self._push_ws(call_em, exit_p, tick_num, len(call_ticks),
                           "reversal", SIM_CONTRACT, sim_leg="call")
             break
+
+        # Stop timer (2026-11-10): the CALL leg now ends in SL_GRACE, not an
+        # instant close. Compress the wait so it still closes before the PUT
+        # phase starts.
+        if call_em.qty_remaining > 0:
+            action = _settle_pending_grace(call_em, call_ticks[-1])
+            if action is not None and action["type"] != "HOLD":
+                exit_p = action.get("current_premium") or call_ticks[-1]
+                call_pnl = (exit_p - SIM_ENTRY) * call_em.qty_remaining * 100
+                self._notifier.notify_exit(
+                    ticker          = SIM_TICKER,
+                    contract_symbol = SIM_CONTRACT,
+                    exit_reason     = action["reason"],
+                    pnl             = call_pnl,
+                    qty             = call_em.qty_remaining,
+                    profile_key     = profile_key,
+                )
+                logger.info("[Sim] Reversal CALL exit after stop timer reason=%s pnl=%.2f",
+                            action["reason"], call_pnl)
+                call_em.qty_remaining = 0
+                self._realized[id(call_em)] = call_pnl
+                self._push_ws(call_em, exit_p, len(call_ticks), len(call_ticks),
+                              "reversal", SIM_CONTRACT, sim_leg="call")
 
         # Signal the reversal to connected clients before the PUT entry
         self._broadcast(json.dumps({

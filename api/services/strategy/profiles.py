@@ -9,6 +9,13 @@ runner_mode controls what happens to remaining contracts after TP1 is hit:
   "trail"   — traditional high-water-mark trailing stop (runner_trail_pct from peak).
   "none"    — runner keeps its original pre-TP1 hard stop (max_loss_pct). No BE floor,
               no trail — exits only via TP2, cascade, EOD, or manual close.
+
+min_tp1_dollars / min_tp2_dollars are LEGACY (2026-11-10): the old
+compute_exit_levels took max(entry × mult, entry + min_dollars), which
+silently overrode a strategy's percentages on cheap entries. TPs now
+follow the strategy's percentages exactly (TP = entry × mult) and the
+floors are no longer read. The keys stay so stored strategy overrides
+still validate — do not re-add them to the computation.
 """
 
 import logging
@@ -32,6 +39,14 @@ PROFILES = {
         "runner_trail_pct": 0.15,
         "runner_mode": "be_hold",   # high-qty aggressive — ride the full move, B/E protects runner
         "sl_confirm_ticks": 2,      # require 2 consecutive ticks at/below SL before firing — filters one bad quote
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit": False,
         "volume_exit_threshold": 0.10,
         "strike_offset_min": 1.00,
@@ -60,6 +75,14 @@ PROFILES = {
         "runner_trail_pct": 0.22,   # loosened from 0.20 — less noise sensitivity
         "runner_mode": "trail",
         "sl_confirm_ticks": 2,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit": False,
         "volume_exit_threshold": 0.20,
         "strike_offset_min": 1.00,  # raised from 0.50 — confirmation entry is already past the ORH; 0.50 selects strikes that are ITM at fill
@@ -88,6 +111,14 @@ PROFILES = {
         "runner_trail_pct": 0.20,   # loosened from 0.10 — 10% was firing on bid/ask spread alone
         "runner_mode": "trail",
         "sl_confirm_ticks": 3,      # low qty/conservative — a bit more noise tolerance before cutting
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit": False,
         "volume_exit_threshold": 0.30,
         "strike_offset_min": 0.50,
@@ -116,6 +147,14 @@ PROFILES = {
         "runner_trail_pct": 0.18,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode": "be_hold",   # designed for this — lock TP1, ride runner to TP2/EOD risk-free
         "sl_confirm_ticks": 2,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit": False,
         "volume_exit_threshold": 0.10,
         "strike_offset_min": 1.25,  # raised from 0.50 — BREAK entry fires after confirmation, underlying is already past ORH; force at least 1.25 OTM so we're not buying ITM at fill
@@ -170,6 +209,7 @@ PROFILES = {
         "sl_grace_enabled":       True,
         "sl_grace_bars":          3,     # ~3 consecutive 1-min bars against = genuine move, don't wait
         "sl_grace_seconds":       300,   # 5 minutes max before forcing the exit regardless
+        "sl_grace_recovery_seconds": 60,
         "sl_outer_floor_pct":     0.50,  # hard floor at -50% of entry — bypasses grace/confirm (2026-09-15: flattened to a single 50%-of-entry floor across every grace-enabled profile, see grace_fields_for_minutes)
         "volume_exit":            False,
         "volume_exit_threshold":  0.20,
@@ -224,6 +264,7 @@ PROFILES = {
         "sl_grace_enabled":       True,
         "sl_grace_bars":          3,
         "sl_grace_seconds":       300,
+        "sl_grace_recovery_seconds": 60,
         "sl_outer_floor_pct":     0.50,
         "volume_exit":            False,
         "volume_exit_threshold":  0.20,
@@ -355,7 +396,15 @@ PROFILES = {
         "tp2_close_pct":           0.50,
         "runner_trail_pct":        0.25,   # intentionally tight — scalper exits fast
         "runner_mode":             "trail",
-        "sl_confirm_ticks":        1,   # scalper is designed to cut fast — no added delay on the SL either
+        "sl_confirm_ticks":        1,   # scalper cuts fast on confirm (1 tick); the 5-min stop timer (2026-11-10, all profiles) still applies — set Hard Stop in the modal for an instant cut
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.25,
         "strike_offset_min":       0.50,
@@ -387,6 +436,14 @@ PROFILES = {
         "runner_trail_pct":        0.25,
         "runner_mode":             "trail",
         "sl_confirm_ticks":        1,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.25,
         "strike_offset_min":       0.50,
@@ -409,6 +466,14 @@ PROFILES = {
         "runner_trail_pct":        0.25,
         "runner_mode":             "trail",
         "sl_confirm_ticks":        1,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.25,
         "strike_offset_min":       0.50,
@@ -432,6 +497,14 @@ PROFILES = {
         "runner_trail_pct":        0.25,
         "runner_mode":             "trail",
         "sl_confirm_ticks":        1,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.25,
         "strike_offset_min":       0.50,
@@ -462,6 +535,14 @@ PROFILES = {
         "runner_trail_pct":        0.25,
         "runner_mode":             "trail",
         "sl_confirm_ticks":        1,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.25,
         "strike_offset_min":       0.50,
@@ -483,6 +564,14 @@ PROFILES = {
         "runner_trail_pct":        0.25,
         "runner_mode":             "trail",
         "sl_confirm_ticks":        1,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.25,
         "strike_offset_min":       0.50,
@@ -504,6 +593,14 @@ PROFILES = {
         "runner_trail_pct":        0.25,
         "runner_mode":             "trail",
         "sl_confirm_ticks":        1,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.25,
         "strike_offset_min":       0.50,
@@ -524,6 +621,14 @@ PROFILES = {
         "runner_trail_pct":        0.22,   # loosened from 0.20
         "runner_mode":             "trail",
         "sl_confirm_ticks":        2,   # disciplined/tight by design — light noise filter only
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.20,
         "strike_offset_min":       0.50,
@@ -545,6 +650,14 @@ PROFILES = {
         "runner_trail_pct":        0.18,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode":             "be_hold", # small TP1 close → runner rides to TP2 then EOD
         "sl_confirm_ticks":        3,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.15,
         "strike_offset_min":       0.50,
@@ -566,6 +679,14 @@ PROFILES = {
         "runner_trail_pct":        0.15,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode":             "be_hold", # tiny TP1 close — almost all rides to TP2/EOD
         "sl_confirm_ticks":        3,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.10,
         "strike_offset_min":       0.50,
@@ -588,6 +709,14 @@ PROFILES = {
         "runner_trail_pct":        0.12,   # kept for reference; ignored when runner_mode="be_hold"
         "runner_mode":             "be_hold", # close half at TP1, ride the rest to EOD or B/E
         "sl_confirm_ticks":        2,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.08,
         "strike_offset_min":       0.50,
@@ -611,6 +740,14 @@ PROFILES = {
         "runner_trail_pct":        0.20,
         "runner_mode":             "trail",
         "sl_confirm_ticks":        4,   # sub-$0.25 contracts — noisiest quotes in the book, needs the most confirmation
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.10,
         "strike_offset_min":       1.00,
@@ -633,6 +770,14 @@ PROFILES = {
         "runner_trail_pct":        0.20,
         "runner_mode":             "be_hold",
         "sl_confirm_ticks":        3,   # $0.25-0.40 contracts — noisier than a normal ATM/OTM breakout play
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":             False,
         "volume_exit_threshold":   0.12,
         "strike_offset_min":       1.00,
@@ -660,6 +805,14 @@ PROFILES = {
         "runner_trail_pct":       0.00,
         "runner_mode":            "trail",
         "sl_confirm_ticks":       2,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit":            False,
         "volume_exit_threshold":  0.20,
         "strike_offset_min":      0.50,
@@ -686,6 +839,14 @@ PROFILES = {
         "runner_trail_pct": 0.22,   # loosened from 0.15 — entered at confirmed level, give room
         "runner_mode": "trail",     # retest entry = confirmed level; protect gains dynamically
         "sl_confirm_ticks": 2,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
         "volume_exit": False,
         "volume_exit_threshold": 0.20,
         "strike_offset_min": 1.00,  # raised from 0.50 — RETEST entry fires after underlying retests ORH; 0.50 selects near-ATM at fill
@@ -731,6 +892,14 @@ CUSTOM_DEFAULTS = {
     "runner_trail_pct":       0.20,
     "runner_mode":            "trail",
     "sl_confirm_ticks":       2,
+        # 5-min stop timer (2026-11-10): an SL hit starts a clock instead of
+        # selling instantly — see ExitManager's sl_grace_* handling. Matches
+        # grace_fields_for_minutes(5); per-strategy Hard Stop / 10 / 15 min
+        # via the Edit Strategy modal (exit_overrides.sl_grace_minutes).
+        "sl_grace_enabled": True,
+        "sl_grace_seconds": 300,
+        "sl_grace_recovery_seconds": 60,
+        "sl_outer_floor_pct": 0.50,
     "volume_exit":            False,
     "volume_exit_threshold":  0.20,
     "strike_offset_min":      0.50,

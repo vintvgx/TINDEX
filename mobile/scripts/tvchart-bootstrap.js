@@ -483,7 +483,6 @@
       if (m.label) html += '<span class="tm-label"></span>';
       html += '<span class="tm-count"></span><span class="tm-pnl"></span>';
       if (m.stale) html += '<span class="tm-stale">STALE</span>';
-      if (m.summary) html += '<span class="tm-sum"></span>';
       el.innerHTML = html;
       if (m.label) el.querySelector('.tm-label').textContent = m.label;
       var cnt = el.querySelector('.tm-count');
@@ -491,7 +490,6 @@
       cnt.style.background = m.edge;
       var pnl = el.querySelector('.tm-pnl');
       pnl.textContent = m.pnlText;
-      if (m.summary) el.querySelector('.tm-sum').textContent = m.summary;
       pnl.style.color = m.toneColor;
       el.style.borderColor = m.edge;
       el.style.background = theme.background;

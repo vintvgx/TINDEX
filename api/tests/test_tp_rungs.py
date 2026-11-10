@@ -209,7 +209,9 @@ def test_restart_seeds_cascade_peak_from_a_line_that_fired_as_tp1():
 
 
 # Nov 3 SPY RIDER paper trade shape (spec §10): entry $1.48 ×4, TP1 $1.924,
-# TP2 $2.38, SL $1.20 — replayed through the real ExitManager.
+# TP2 $2.22, SL $1.20 — replayed through the real ExitManager. (The live Nov 3
+# trade armed TP2 at $2.38 under the old dollar-floor rule; the strategy's
+# +50% gives $2.22 — see test_tp2_follows_percentage_not_dollar_floor.)
 NOV3 = {"tp1_mult": 1.30, "min_tp1_dollars": 0.0, "tp2_mult": 1.50, "min_tp2_dollars": 0.90,
         "max_loss_pct": 1 - 1.20 / 1.48, "tp1_close_pct": 0.50, "tp2_close_pct": 0.35}
 NOV3_PATH = [1.50, 1.62, 1.80, 1.93, 1.95, 2.02, 2.10, 2.12, 2.20, 2.31, 2.40, 2.41, 2.25, 2.05, 1.90]
@@ -231,22 +233,20 @@ def _run(em, path):
 
 def test_nov3_shape_levels():
     em = _nov3(__import__("services.strategy.exit_manager", fromlist=["x"]))
-    assert (round(em.tp1, 3), round(em.tp2, 2), round(em.hard_stop, 2)) == (1.924, 2.38, 1.20)
+    assert (round(em.tp1, 3), round(em.tp2, 2), round(em.hard_stop, 2)) == (1.924, 2.22, 1.20)
 
 
-def test_nov3_shape_untouched_matches_master_exactly():
-    import importlib.util, subprocess, tempfile
-    src = subprocess.run(["git", "show", "origin/Master:api/services/strategy/exit_manager.py"],
-                         capture_output=True, text=True, cwd=os.path.dirname(__file__))
-    if src.returncode != 0:
-        pytest.skip("origin/Master not available")
-    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-        f.write(src.stdout)
-    spec = importlib.util.spec_from_file_location("em_master", f.name)
-    master = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(master)
+def test_tp2_follows_percentage_not_dollar_floor():
+    # 2026-11-10: the old max(entry x mult, entry + min_dollars) armed TP2
+    # at $2.38 (+61%) on a $1.48 entry against a +50% strategy (mult 1.50
+    # vs the $0.90 floor). TPs now follow the strategy's percentages.
+    # (Was a git comparison against origin/Master — it broke the moment
+    # this merged, skipped silently in shallow clones, and leaked a temp
+    # file. The legacy formula is inlined instead.)
     import services.strategy.exit_manager as current
-    assert _run(_nov3(current), NOV3_PATH) == _run(_nov3(master), NOV3_PATH)
+    old_tp2 = max(1.48 * 1.50, 1.48 + 0.90)        # legacy dollar-floor formula
+    assert round(old_tp2, 2) == 2.38
+    assert round(_nov3(current).tp2, 2) == 2.22
 
 
 def test_nov3_shape_with_a_chart_line_sells_it_once():
@@ -258,3 +258,103 @@ def test_nov3_shape_with_a_chart_line_sells_it_once():
     assert reasons == ["TP1", "TP_RUNG", "TP2"]           # TP1 1, line 1, TP2 1
     assert seq[-1][3] == 1                                 # runner kept
     assert sum(1 for s in seq if s[2] == "TP_RUNG") == 1   # never twice
+
+
+# ── Stock-price TP lines (2026-11-10) ──────────────────────────────────────
+# A line set by stock price with no premium (no delta to convert through)
+# fires when the underlying crosses the line in the trade's favor and sells
+# at the market premium then. The Nov 10 case: SPY $745P 0DTE, long-pressed
+# at $745.18 with no delta — the sheet demanded a premium and could not save.
+
+
+def _put_em(entry=0.90, qty=4):
+    return ExitManager(entry, qty, ORB, "PUT", "23:59",
+                       get_profile("TREND_RIDER", {**SPEC, "tp1_mult": 1.30, "tp2_mult": 1.60}),
+                       is_zero_dte=False)
+
+
+def test_stock_only_line_sets_without_premium():
+    em = _em()
+    em.apply_overrides(tp_rungs=[{"stock_price": 772.00, "qty": 1, "source": "chart-long-press"}],
+                       current_underlying=768.0)
+    r = em.rungs_public()[0]
+    assert r["premium"] is None and r["stock_price"] == 772.00 and r["qty"] == 1
+
+
+def test_stock_only_line_fires_on_underlying_cross():
+    em = _em()
+    em.apply_overrides(tp_rungs=[{"stock_price": 772.00, "qty": 1, "source": "chart-long-press"}],
+                       current_underlying=768.0)
+    assert em.evaluate(1.10, 770.0)["type"] == "HOLD"          # below the line: nothing
+    a = em.evaluate(1.10, 772.00)
+    assert a["type"] == "HOLD" and a["reason"] == "TP_RUNG_CONFIRMING"
+    a = em.evaluate(1.10, 772.50)
+    assert (a["type"], a["reason"], a["qty"]) == ("CLOSE_PARTIAL", "TP_RUNG", 1)
+    em.update_qty(a["qty"])                     # evaluate proposes; the caller applies
+    assert em.qty_remaining == 3
+
+
+def test_stock_only_put_line_fires_when_stock_falls_to_it():
+    em = _put_em()
+    em.apply_overrides(tp_rungs=[{"stock_price": 745.18, "qty": 1, "source": "chart-long-press"}],
+                       current_underlying=746.22)
+    assert em.evaluate(1.06, 746.00)["type"] == "HOLD"          # above the line: nothing
+    a = em.evaluate(1.06, 745.18)
+    assert a["type"] == "HOLD" and a["reason"] == "TP_RUNG_CONFIRMING"
+    a = em.evaluate(1.06, 745.00)
+    assert (a["type"], a["reason"], a["qty"]) == ("CLOSE_PARTIAL", "TP_RUNG", 1)
+
+
+def test_stock_line_on_the_wrong_side_is_already_reached():
+    em = _em()   # CALL: a TP line must sit ABOVE the current stock
+    with pytest.raises(ValueError, match="already reached"):
+        em.apply_overrides(tp_rungs=[{"stock_price": 766.00, "qty": 1}],
+                           current_underlying=768.0)
+    put = _put_em()   # PUT: a TP line must sit BELOW the current stock
+    with pytest.raises(ValueError, match="already reached"):
+        put.apply_overrides(tp_rungs=[{"stock_price": 770.00, "qty": 1}],
+                            current_underlying=768.0)
+
+
+def test_line_needs_a_premium_or_a_stock_price():
+    em = _em()
+    with pytest.raises(ValueError, match="premium or a stock price"):
+        em.apply_overrides(tp_rungs=[{"qty": 1}])
+
+
+def test_bad_qty_names_qty_not_the_trigger():
+    em = _em()
+    with pytest.raises(ValueError, match="whole-number qty"):
+        em.apply_overrides(tp_rungs=[{"premium": 1.50}])       # qty missing
+    with pytest.raises(ValueError, match="whole-number qty"):
+        em.apply_overrides(tp_rungs=[{"premium": 1.50, "qty": "two"}])
+
+
+def test_bad_stock_price_is_rejected_not_silently_dropped():
+    em = _em()
+    # bool is an int subclass — True used to arm a $1.00 rung silently.
+    with pytest.raises(ValueError, match="stock price must be a number above \\$0"):
+        em.apply_overrides(tp_rungs=[{"stock_price": True, "qty": 1}])
+    # A string price used to vanish into "needs a premium or a stock price".
+    with pytest.raises(ValueError, match="stock price must be a number above \\$0"):
+        em.apply_overrides(tp_rungs=[{"stock_price": "772.5", "qty": 1}])
+    with pytest.raises(ValueError, match="stock price must be a number above \\$0"):
+        em.apply_overrides(tp_rungs=[{"stock_price": 0, "qty": 1}])
+
+
+def test_stock_line_that_takes_all_of_tp1_becomes_tp1():
+    em = _em()
+    em.apply_overrides(tp_rungs=[{"stock_price": 772.00, "qty": 2, "source": "chart-long-press"}],
+                       current_underlying=768.0)
+    assert _ladder(em)[0] == ("TP1", None, 2, "chart-long-press")
+    assert _ladder(em)[1][0] == "TP2"                          # engine TP2 keeps its label
+
+
+def test_stock_line_survives_restore():
+    em = _em()
+    em.apply_overrides(tp_rungs=[{"stock_price": 772.00, "qty": 1, "source": "chart-long-press"}],
+                       current_underlying=768.0)
+    fresh = _em()
+    fresh.restore_rungs(em.rungs_state())
+    r = fresh.rungs_public()[0]
+    assert r["stock_price"] == 772.00 and r["premium"] is None

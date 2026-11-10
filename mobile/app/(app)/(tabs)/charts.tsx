@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, Pressable, LayoutAnimation, Platform, UIManager,
-  LayoutChangeEvent, useWindowDimensions, Alert,
+  LayoutChangeEvent, useWindowDimensions, Alert, AppState, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
@@ -245,11 +245,34 @@ export function ChartsContent({ initialTicker, topInset }: {
     return () => clearTimeout(t);
   }, [tabFocused]);
 
+  // App backgrounding (another app, lock screen) is NOT a tab blur — the tab
+  // stays focused, so chartLive never flips, but iOS suspends the JS timers
+  // and the 30s tail poll stops. On return the chart sits on stale candles
+  // and the gap fills only when the next poll happens to land, up to 30s
+  // later (2026-11-10). After 60s away, force an immediate catch-up: the
+  // tail poll re-runs at once instead of waiting out the interval. Under
+  // 60s the gap is a bar or two and the normal poll covers it.
+  const [awayReloadNonce, setAwayReloadNonce] = useState(0);
+  const awayAtRef = useRef<number | null>(null);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'active') {
+        if (awayAtRef.current != null && Date.now() - awayAtRef.current > 60_000) {
+          setAwayReloadNonce(n => n + 1);
+        }
+        awayAtRef.current = null;
+      } else if (st === 'background' || st === 'inactive') {
+        awayAtRef.current ??= Date.now();
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   // Legacy engine's data — only when the legacy engine is actually showing.
   // Gated on chartLive alone, it fetched full history (and re-polled every
   // 30s on 1D) behind TVChart's back and threw it away: two /history calls
   // per Charts view (polling audit 2026-10-07, §3.7).
-  const { data: legacyHistoryResponse, isLoading: legacyHistoryLoading, isPlaceholderData: legacyHistoryIsStale } = useTickerHistoryQuery(
+  const { data: legacyHistoryResponse, isLoading: legacyHistoryLoading, isPlaceholderData: legacyHistoryIsStale, refetch: legacyHistoryRefetch } = useTickerHistoryQuery(
     activeTicker, period, period === '1D' ? 30_000 : undefined, chartInterval, displayPrefs.showExtendedHours,
     chartLive && !useTVChart,
   );
@@ -266,7 +289,22 @@ export function ChartsContent({ initialTicker, topInset }: {
     pollMs: 30_000,
     enabled: useTVChart && chartLive,
     extendedHours: displayPrefs.showExtendedHours,
+    // Away-gap catch-up: a bump re-runs the tail poll at once (see the
+    // AppState effect above).
+    refreshNonce: awayReloadNonce,
   });
+  // Legacy engine: same away-gap catch-up, via the query's own refetch.
+  // The refetch promise settles when the missing candles land, so the
+  // "Updating…" pill (below) shows for exactly that window.
+  const [legacyCatchingUp, setLegacyCatchingUp] = useState(false);
+  useEffect(() => {
+    if (awayReloadNonce === 0) return;
+    if (!useTVChart && chartLive) {
+      setLegacyCatchingUp(true);
+      legacyHistoryRefetch().finally(() => setLegacyCatchingUp(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [awayReloadNonce]);
   const historyData = useTVChart ? lazyHistory.data : legacyHistoryData;
   const historyLoading = useTVChart ? lazyHistory.isLoading : legacyHistoryLoading;
   const historyIsStale = useTVChart ? false : legacyHistoryIsStale;
@@ -872,7 +910,7 @@ export function ChartsContent({ initialTicker, topInset }: {
     const v = resolveLens(chart.technicals.data, tradeSide);
     if (!v) return null;
     // Spelled out (PR #121 N5): which lens the pill is reading.
-    const lensName = v.source === 'trade' ? 'Trade' : v.source === 'intraday' ? 'Intraday' : 'Signal';
+    const lensName = v.source === 'trade' ? 'Trade' : v.source === 'composite' ? 'Composite' : 'Signal';
     const text = v.comp ? `${lensName} ${v.side} ${fmtScore(v.comp.total)}` : `${lensName} WAIT`;
     return { side: v.side, text, other: v.otherLens };
   }, [chart.technicals.data, tradeSide]);
@@ -1026,6 +1064,19 @@ export function ChartsContent({ initialTicker, topInset }: {
               )
             )}
           />
+        )}
+        {/* Away catch-up in flight (Fix D): the missing candles are being
+            fetched right now. A small pill, not a skeleton — the existing
+            candles are still valid, this only says the newest ones are
+            being drawn. Drops down when the alert pill is showing so the
+            two never stack. */}
+        {(lazyHistory.catchingUp || legacyCatchingUp) && (
+          <View style={{ position: 'absolute', top: tappedAlert ? 64 : 16, left: 0, right: 0, alignItems: 'center' }} pointerEvents="none">
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.card, borderRadius: 10, borderWidth: 1, borderColor: colors.border, paddingVertical: 6, paddingHorizontal: 12, gap: 8 }}>
+              <ActivityIndicator size="small" color={colors.textSecondary} />
+              <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>Updating…</Text>
+            </View>
+          </View>
         )}
         {/* Tapped alert line → TradingView-style pill with delete. */}
         {tappedAlert && (

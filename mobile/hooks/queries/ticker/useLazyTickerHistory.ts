@@ -206,6 +206,11 @@ export interface LazyHistory {
   loadMore: () => void;
   loadingMore: boolean;
   exhausted: boolean;
+  /** A refreshNonce-triggered tail catch-up (e.g. after the app was
+   *  backgrounded) is in flight — the chart can show an "Updating…"
+   *  indicator while the missing candles are fetched. Routine 30s
+   *  polls never set this. */
+  catchingUp: boolean;
 }
 
 export function useLazyTickerHistory(opts: {
@@ -217,8 +222,12 @@ export function useLazyTickerHistory(opts: {
   enabled?: boolean;
   /** 1D/intraday: keep the extended-hours session (premarket candles). */
   extendedHours?: boolean;
+  /** Bump to force an immediate tail catch-up (e.g. after the app was
+   *  backgrounded — the 30s interval stalls while suspended, so the gap
+   *  would otherwise wait up to a full interval to fill). */
+  refreshNonce?: number;
 }): LazyHistory {
-  const { ticker, period, interval, pollMs, enabled = true, extendedHours = false } = opts;
+  const { ticker, period, interval, pollMs, enabled = true, extendedHours = false, refreshNonce = 0 } = opts;
   const [bars, setBars] = useState<TickerHistoryData | null>(null);
   // Which ticker|period|interval|extendedHours `bars` belong to. Set in the
   // same commit that clears `bars`, so for the one render between a key
@@ -229,12 +238,29 @@ export function useLazyTickerHistory(opts: {
   const [isError, setIsError] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [exhausted, setExhausted] = useState(false);
+  // True only while a refreshNonce-triggered catch-up tick is in flight
+  // (see the tail poll below). The chart shows an "Updating…" pill for
+  // exactly this window — the existing candles stay put, so there is no
+  // skeleton, just a signal that the newest ones are being drawn.
+  const [catchingUp, setCatchingUp] = useState(false);
+  // Last refreshNonce the tail-poll effect saw. A bump means "the app was
+  // away" — the next immediate tick is a catch-up, not a routine poll.
+  const prevNonce = useRef(refreshNonce);
   const live = useRef({ bars: null as TickerHistoryData | null, loadingMore: false, exhausted: false });
   live.current = { bars, loadingMore, exhausted };
   // Generation: bumped every time the initial-load effect (re)runs. An
   // in-flight backfill or tail poll from the previous ticker/period/interval
   // must not merge its bars — or its exhausted flag — into the new one.
   const gen = useRef(0);
+  // Tail-poll sequence: incremented per tick. A response from an older tick
+  // must not merge after a newer one started — a routine poll in flight
+  // when the nonce bumps would otherwise let its (older) window win the
+  // overlap and undo the catch-up until the next poll.
+  const tickSeq = useRef(0);
+  // Seq of the tick that turned the "Updating…" pill on (0 = none). Only
+  // that tick's settle clears it, so a superseded catch-up can't clear a
+  // newer catch-up's pill.
+  const catchUpSeq = useRef(0);
   // ticker|period|interval|extendedHours of the last successful initial
   // load. Re-enabling (tab refocus after the 30s blur pause) with the same
   // key keeps the bars and lets the tail poll catch up, instead of
@@ -387,10 +413,15 @@ export function useLazyTickerHistory(opts: {
   // ── Live tail poll ────────────────────────────────────────────────
   useEffect(() => {
     if (!enabled || !pollMs || !intraday) return;
-    const tick = async () => {
+    const tick = async (catchUp = false) => {
       const s = live.current;
       if (!s.bars?.dates?.length || s.loadingMore) return;
       const myGen = gen.current;
+      const mySeq = ++tickSeq.current;
+      if (catchUp) {
+        catchUpSeq.current = mySeq;
+        setCatchingUp(true);
+      }
       try {
         // Only from the newest loaded bar's day (usually today, ~1-80 bars),
         // not a fixed 5-day window re-downloaded every 30s.
@@ -401,17 +432,60 @@ export function useLazyTickerHistory(opts: {
         // A ticker/period/interval switch mid-flight: don't merge the old
         // ticker's tail into the new ticker's chart.
         if (myGen !== gen.current) return;
+        // Superseded by a newer tick (routine poll in flight when the nonce
+        // bumped): the newer window is fresher — don't let this one win the
+        // overlap.
+        if (mySeq !== tickSeq.current) return;
         setBars((prev) => (prev ? mergeHistory(prev, data, true) : data));
       } catch {
         /* next poll retries */
+      } finally {
+        if (catchUp && catchUpSeq.current === mySeq) setCatchingUp(false);
       }
     };
     // Catch up right away (no-op until bars exist) — on refocus the bars
-    // were kept, so don't leave them a full interval stale.
-    tick();
+    // were kept, so don't leave them a full interval stale. refreshNonce
+    // re-runs this effect after a background gap, for the same reason — and
+    // only that nonce-triggered tick reports itself as a catch-up, so the
+    // routine 30s polls stay silent.
+    const isCatchUp = refreshNonce !== prevNonce.current;
+    prevNonce.current = refreshNonce;
+    tick(isCatchUp);
     const id = setInterval(tick, pollMs);
     return () => clearInterval(id);
-  }, [enabled, pollMs, ticker, interval, intraday, extendedHours]);
+  }, [enabled, pollMs, ticker, interval, intraday, extendedHours, refreshNonce]);
+
+  // ── Daily+ refresh on return ────────────────────────────────────────
+  // The tail poll above only runs for intraday intervals, so a daily /
+  // weekly / monthly chart has no poll — a refreshNonce bump (return after
+  // >60s away) would otherwise leave its newest bar stale until the
+  // history key changes. Re-fetch just the tail window and merge it in:
+  // same shape as the tail poll, no spinner, no full reload. It reports
+  // itself as a catch-up so the "Updating…" pill shows for it too.
+  const prevDailyNonce = useRef(refreshNonce);
+  useEffect(() => {
+    if (!enabled || intraday) return;
+    if (refreshNonce === prevDailyNonce.current) return;
+    prevDailyNonce.current = refreshNonce;
+    const s = live.current;
+    if (!s.bars?.dates?.length) return;
+    const iv = interval ?? DEFAULT_INTERVAL[period];
+    const end = addDays(etToday(), 1);
+    const start = s.bars.dates[s.bars.dates.length - 1].slice(0, 10);
+    const myGen = gen.current;
+    setCatchingUp(true);
+    (async () => {
+      try {
+        const data = await postHistory(ticker, { interval: iv, start: start < end ? start : addDays(end, -1), end });
+        if (myGen !== gen.current) return;
+        setBars((prev) => (prev ? mergeHistory(prev, data) : data));
+      } catch {
+        /* next nonce bump retries */
+      } finally {
+        setCatchingUp(false);
+      }
+    })();
+  }, [enabled, intraday, ticker, period, interval, refreshNonce]);
 
   const fresh = barsKey === currentKey;
   return {
@@ -423,5 +497,6 @@ export function useLazyTickerHistory(opts: {
     loadMore,
     loadingMore,
     exhausted,
+    catchingUp,
   };
 }

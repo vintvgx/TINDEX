@@ -7,13 +7,15 @@ import { useUpdateStrategyConfig } from '@/hooks/mutations/strategy/useUpdateStr
 import { useToast } from '@/common/components/ui/Toast';
 import { GATE_MODES, GateModePicker, gateModeOf } from '@/common/components/strategy/GateModePicker';
 import type { StrategyConfig, TechnicalsGateMode } from '@/common/types/strategy';
-import { chartComposite, fmtScore, scoreColor, tierMeta } from './compositeMeta';
+import { chartComposite, fmtScore, isEnterTier, scoreColor, tierMeta } from './compositeMeta';
 
 /**
  * Composite Technicals detail sheet (TODO 9e09ca2f, Muse's mock
- * tindex-technicals-ui-mock.html): score hero + tier, -14..+14 bar, every
- * indicator with a mini score bar, turning signals with their caveats, the
- * Gate Mode picker for this ticker's strategy, and Review Entry.
+ * tindex-technicals-ui-mock.html, redesigned 2026-11-10): the strip above
+ * the chart shows one pill only, so THIS sheet carries everything —
+ * a readable focus line (ticker · strategy · side · updated), both sides
+ * in full (lead side first, with the score hero), both lenses, the price
+ * levels, both verdict reasons, the Gate Mode picker, and Review Entry.
  */
 export function CompositeTechnicalsPanel({ check, colors, onReviewEntry, tradeSide }: {
   check: EntryCheck;
@@ -24,6 +26,7 @@ export function CompositeTechnicalsPanel({ check, colors, onReviewEntry, tradeSi
   onReviewEntry?: (direction: 'CALL' | 'PUT') => void;
 }) {
   const comp = chartComposite(check, tradeSide)!;
+  const other = check.composite![comp.direction === 'CALL' ? 'PUT' : 'CALL'];
   const tier = tierMeta(comp.tier, colors);
   const muted = colors.textSecondary;
   const configs = useStrategyConfigs();
@@ -35,14 +38,24 @@ export function CompositeTechnicalsPanel({ check, colors, onReviewEntry, tradeSi
   const strategy = strategies.find(c => c.id === strategyId) ?? strategies[0] ?? null;
 
   const updated = formatTime(check.as_of);
-  const subtitle = [check.ticker, strategy?.profile, comp.direction, `${check.market_open ? 'Updated' : 'Closed ·'} ${updated} ET`]
-    .filter(Boolean).join(' • ');
+  const sideColor = comp.direction === 'CALL' ? colors.success : colors.error;
 
   return (
     <View style={{ gap: 16 }}>
-      <Text style={[s.subtitle, { color: muted }]}>{subtitle}</Text>
+      {/* Focus — the line the strip crowds out: ticker, strategy, the side
+          this sheet leads with, and when the read was taken. */}
+      <View>
+        <Text style={[s.focus, { color: colors.text }]}>
+          {check.ticker}
+          {strategy?.profile ? <Text style={{ color: muted }}> · {strategy.profile}</Text> : null}
+          <Text style={{ color: sideColor }}> · {comp.direction}</Text>
+        </Text>
+        <Text style={[s.focusSub, { color: muted }]}>
+          {check.market_open ? 'Updated' : 'Closed ·'} {updated} ET · {comp.direction} {fmtScore(comp.total)} / {comp.max} · {tier.label}
+        </Text>
+      </View>
 
-      {/* Score hero */}
+      {/* Lead side — score hero */}
       <LinearGradient
         colors={[tier.color + '26', tier.color + '0D']}
         start={{ x: 0, y: 0 }}
@@ -62,50 +75,24 @@ export function CompositeTechnicalsPanel({ check, colors, onReviewEntry, tradeSi
       </LinearGradient>
 
       <ScoreBar comp={comp} colors={colors} />
+      <IndicatorRows comp={comp} colors={colors} />
+      <TurningBox comp={comp} colors={colors} />
 
-      {/* Indicators */}
+      {/* Other side — same detail, no hero. The strip hides it; the sheet
+          must not, or a flip (PUT +10 while CALL was leading) is invisible. */}
       <View>
-        {comp.indicators.map((ind, i) => {
-          const c = scoreColor(ind.score, colors);
-          const w = ind.score ? `${(Math.abs(ind.score) / 2) * 50}%` : '0%';
-          return (
-            <View key={ind.key} style={[s.row, i < comp.indicators.length - 1 && { borderBottomColor: colors.separator, borderBottomWidth: StyleSheet.hairlineWidth }]}>
-              <View style={[s.rowDot, { backgroundColor: c }]} />
-              <View style={{ flex: 1 }}>
-                <Text style={[s.rowName, { color: colors.text }]}>
-                  {ind.label}{ind.key === 'rsi_intraday' ? ' (5-min)' : ''}
-                </Text>
-                <Text style={[s.rowValue, { color: muted }]}>{ind.detail}</Text>
-              </View>
-              <View style={[s.miniBar, { backgroundColor: colors.surfaceSecondary }]}>
-                {ind.score ? (
-                  <View style={[s.miniFill, { width: w as any, backgroundColor: c },
-                    ind.score > 0 ? { left: '50%' } : { right: '50%' }]} />
-                ) : null}
-              </View>
-              <Text style={[s.rowScore, { color: c }]}>{ind.score == null ? '—' : fmtScore(ind.score)}</Text>
-            </View>
-          );
-        })}
+        <Text style={[s.sectionTitle, { color: colors.textTertiary }]}>OTHER SIDE</Text>
+        <OtherSide comp={other} colors={colors} />
       </View>
 
-      {/* Turning signals */}
-      {comp.turning.length > 0 && (
-        <View style={[s.turning, { backgroundColor: colors.surfaceSecondary }]}>
-          <Text style={[s.turningTitle, { color: colors.warning }]}>⚡ Turning Signals Detected</Text>
-          {comp.turning.map((t, i) => (
-            <View key={i} style={s.turningItem}>
-              <Text style={[s.turningIcon, { color: t.kind === 'caveat' ? colors.warning : colors.success }]}>
-                {t.kind === 'caveat' ? '⚠' : comp.direction === 'CALL' ? '↗' : '↘'}
-              </Text>
-              <Text style={[s.turningText, { color: colors.text }]}>
-                <Text style={{ fontWeight: '700' }}>{t.title}: </Text>
-                <Text style={{ color: muted }}>{t.text}</Text>
-              </Text>
-            </View>
-          ))}
-        </View>
-      )}
+      {/* Lenses — intraday is what the engine gates on; daily is the verdict. */}
+      {check.lens ? <LensSection check={check} lead={comp.direction} colors={colors} /> : null}
+
+      {/* Levels — the price facts behind the scores. */}
+      <LevelsSection check={check} colors={colors} />
+
+      {/* Why — both verdict reasons, with blockers. */}
+      <WhySection check={check} colors={colors} />
 
       <GateModeSection
         strategies={strategies}
@@ -132,6 +119,196 @@ export function CompositeTechnicalsPanel({ check, colors, onReviewEntry, tradeSi
   );
 }
 
+function IndicatorRows({ comp, colors }: { comp: CompositeScore; colors: any }) {
+  const muted = colors.textSecondary;
+  return (
+    <View>
+      {comp.indicators.map((ind, i) => {
+        const c = scoreColor(ind.score, colors);
+        const w = ind.score ? `${(Math.abs(ind.score) / 2) * 50}%` : '0%';
+        return (
+          <View key={ind.key} style={[s.row, i < comp.indicators.length - 1 && { borderBottomColor: colors.separator, borderBottomWidth: StyleSheet.hairlineWidth }]}>
+            <View style={[s.rowDot, { backgroundColor: c }]} />
+            <View style={{ flex: 1 }}>
+              <Text style={[s.rowName, { color: colors.text }]}>
+                {ind.label}{ind.key === 'rsi_intraday' ? ' (5-min)' : ''}
+              </Text>
+              <Text style={[s.rowValue, { color: muted }]}>{ind.detail}</Text>
+            </View>
+            <View style={[s.miniBar, { backgroundColor: colors.surfaceSecondary }]}>
+              {ind.score ? (
+                <View style={[s.miniFill, { width: w as any, backgroundColor: c },
+                  ind.score > 0 ? { left: '50%' } : { right: '50%' }]} />
+              ) : null}
+            </View>
+            <Text style={[s.rowScore, { color: c }]}>{ind.score == null ? '—' : fmtScore(ind.score)}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function TurningBox({ comp, colors }: { comp: CompositeScore; colors: any }) {
+  if (comp.turning.length === 0) return null;
+  const muted = colors.textSecondary;
+  return (
+    <View style={[s.turning, { backgroundColor: colors.surfaceSecondary }]}>
+      <Text style={[s.turningTitle, { color: colors.warning }]}>⚡ Turning Signals Detected</Text>
+      {comp.turning.map((t, i) => (
+        <View key={i} style={s.turningItem}>
+          <Text style={[s.turningIcon, { color: t.kind === 'caveat' ? colors.warning : colors.success }]}>
+            {t.kind === 'caveat' ? '⚠' : comp.direction === 'CALL' ? '↗' : '↘'}
+          </Text>
+          <Text style={[s.turningText, { color: colors.text }]}>
+            <Text style={{ fontWeight: '700' }}>{t.title}: </Text>
+            <Text style={{ color: muted }}>{t.text}</Text>
+          </Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function OtherSide({ comp, colors }: { comp: CompositeScore; colors: any }) {
+  const tier = tierMeta(comp.tier, colors);
+  const enter = isEnterTier(comp.tier);
+  const sideColor = comp.direction === 'CALL' ? colors.success : colors.error;
+  return (
+    <View style={{ gap: 10 }}>
+      <View style={s.sideHead}>
+        <Text style={[s.sideName, { color: sideColor }]}>{comp.direction}</Text>
+        <Text style={[s.sideTotal, { color: colors.text }]}>{fmtScore(comp.total)} / {comp.max}</Text>
+        <View style={[s.tierBadge, { backgroundColor: tier.color }]}>
+          <Text style={s.tierText}>{tier.label}</Text>
+        </View>
+      </View>
+      <Text style={[s.sideState, { color: enter ? sideColor : colors.warning }]}>
+        {enter ? 'Enter — passes the gate' : 'Wait — below the gate'}
+      </Text>
+      <ScoreBar comp={comp} colors={colors} />
+      <IndicatorRows comp={comp} colors={colors} />
+      <TurningBox comp={comp} colors={colors} />
+      {comp.missing.length > 0 && (
+        <Text style={[s.missing, { color: colors.textTertiary }]}>Missing: {comp.missing.join(', ')}</Text>
+      )}
+    </View>
+  );
+}
+
+function LensSection({ check, lead, colors }: { check: EntryCheck; lead: 'CALL' | 'PUT'; colors: any }) {
+  const lens = check.lens!;
+  const muted = colors.textSecondary;
+  const checks = lens.intraday.checks[lead];
+  const checkItems: [string, boolean][] = [
+    ['Composite', checks.composite],
+    ['VWAP', checks.vwap],
+    ['ORB', checks.orb],
+    ['Trend', checks.trend],
+  ];
+  return (
+    <View>
+      <Text style={[s.sectionTitle, { color: colors.textTertiary }]}>LENSES</Text>
+      <View style={{ gap: 10 }}>
+        <View style={[s.lensCard, { backgroundColor: colors.surfaceSecondary, borderColor: colors.border }]}>
+          <Text style={[s.lensTitle, { color: colors.text }]}>Intraday — what the engine gates on</Text>
+          <Text style={[s.lensText, { color: muted }]}>{lens.intraday.text}</Text>
+          {lens.intraday.trend_5m ? (
+            <Text style={[s.lensText, { color: muted }]}>5-min trend: {lens.intraday.trend_5m}</Text>
+          ) : null}
+          <View style={s.checkRow}>
+            {checkItems.map(([label, ok]) => (
+              <View key={label} style={[s.checkChip, { borderColor: ok ? colors.success + '66' : colors.error + '66' }]}>
+                <Text style={[s.checkText, { color: ok ? colors.success : colors.error }]}>
+                  {ok ? '✓' : '✗'} {label}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </View>
+        <View style={[s.lensCard, { backgroundColor: colors.surfaceSecondary, borderColor: colors.border }]}>
+          <Text style={[s.lensTitle, { color: colors.text }]}>Daily — verdict</Text>
+          <Text style={[s.lensText, { color: muted }]}>{lens.daily.text}</Text>
+        </View>
+        {!lens.agree && (
+          <Text style={[s.disagree, { color: colors.warning }]}>
+            Intraday and daily lenses disagree — {lens.label}
+          </Text>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function LevelsSection({ check, colors }: { check: EntryCheck; colors: any }) {
+  const muted = colors.textSecondary;
+  const { trend, rsi, vwap, orb, sector } = check.rows;
+  const rows: [string, string, string?][] = [];
+  if (vwap) {
+    rows.push(['VWAP', `${vwap.position} (${vwap.distance_pct > 0 ? '+' : ''}${vwap.distance_pct.toFixed(2)}%)`, `$${vwap.value.toFixed(2)}`]);
+  }
+  if (orb) {
+    rows.push(['ORB', orb.position, `High $${orb.high.toFixed(2)} · Low $${orb.low.toFixed(2)}`]);
+  }
+  if (trend) {
+    rows.push(['Trend (daily)', trend.label,
+      `EMA-20 $${trend.ema20.toFixed(2)}${trend.ema50 != null ? ` · EMA-50 $${trend.ema50.toFixed(2)}` : ''}${trend.ema200 != null ? ` · EMA-200 $${trend.ema200.toFixed(2)}` : ''}`]);
+  }
+  if (rsi) {
+    rows.push(['RSI-14', `${rsi.value.toFixed(0)} · ${rsi.zone}`, 'Daily, Wilder-smoothed']);
+  }
+  if (sector && sector.label !== 'n/a') {
+    const rp = sector.relative_pct;
+    rows.push(['Sector', `${sector.label}${rp != null ? ` (${rp > 0 ? '+' : ''}${rp.toFixed(2)}%)` : ''}`, sector.etf ? `${sector.etf} vs SPY today` : undefined]);
+  }
+  if (rows.length === 0) return null;
+  return (
+    <View>
+      <Text style={[s.sectionTitle, { color: colors.textTertiary }]}>LEVELS</Text>
+      {rows.map(([k, v, sub]) => (
+        <View key={k} style={s.infoRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>{k}</Text>
+            {sub ? <Text style={{ color: muted, fontSize: 11 }}>{sub}</Text> : null}
+          </View>
+          <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>{v}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function WhySection({ check, colors }: { check: EntryCheck; colors: any }) {
+  const muted = colors.textSecondary;
+  const verdict = (d: 'CALL' | 'PUT') =>
+    check.verdicts?.[d] ?? (d === 'CALL' ? check.verdict : null);
+  return (
+    <View>
+      <Text style={[s.sectionTitle, { color: colors.textTertiary }]}>WHY</Text>
+      <View style={{ gap: 8 }}>
+        {(['CALL', 'PUT'] as const).map(d => {
+          const v = verdict(d);
+          const sideColor = d === 'CALL' ? colors.success : colors.error;
+          return (
+            <View key={d} style={[s.reasonCard, { backgroundColor: colors.surfaceSecondary, borderColor: colors.border }]}>
+              <Text style={[s.reasonSide, { color: sideColor }]}>
+                {d === 'CALL' ? 'Call' : 'Put'}
+                {v ? <Text style={{ color: muted, fontWeight: '600' }}> · {v.decision} · {v.factors_agree}/{v.factors_total} factors</Text> : null}
+              </Text>
+              <Text style={[s.reasonText, { color: muted }]}>
+                {v?.reason ?? 'Update the API to see this side'}
+              </Text>
+              {v && v.blockers.length > 0 ? (
+                <Text style={[s.reasonText, { color: colors.warning }]}>Blocked by: {v.blockers.join(', ')}</Text>
+              ) : null}
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 function ScoreBar({ comp, colors }: { comp: CompositeScore; colors: any }) {
   const pct = (Math.min(Math.abs(comp.total), comp.max) / comp.max) * 50;
   const c = scoreColor(comp.total, colors);
@@ -146,9 +323,9 @@ function ScoreBar({ comp, colors }: { comp: CompositeScore; colors: any }) {
         <View style={[s.barCenter, { backgroundColor: colors.textTertiary }]} />
       </View>
       <View style={s.barLabels}>
-        <Text style={[s.barLabel, { color: colors.textTertiary }]}>-{comp.max} Bearish</Text>
+        <Text style={[s.barLabel, { color: colors.textTertiary }]}>-{comp.max} Against</Text>
         <Text style={[s.barLabel, { color: colors.textTertiary }]}>0 Neutral</Text>
-        <Text style={[s.barLabel, { color: colors.textTertiary }]}>+{comp.max} Bullish</Text>
+        <Text style={[s.barLabel, { color: colors.textTertiary }]}>+{comp.max} Favors {comp.direction}</Text>
       </View>
     </View>
   );
@@ -245,7 +422,9 @@ function formatTime(iso: string): string {
 }
 
 const s = StyleSheet.create({
-  subtitle:    { fontSize: 12, marginTop: -6 },
+  focus:       { fontSize: 17, fontWeight: '800', letterSpacing: 0.2 },
+  focusSub:    { fontSize: 12, marginTop: 4 },
+  sectionTitle: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 8 },
   hero:        { borderRadius: 16, borderWidth: 1, padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   heroNum:     { fontSize: 36, fontWeight: '800', fontVariant: ['tabular-nums'] },
   heroMax:     { fontSize: 16, fontWeight: '600' },
@@ -269,6 +448,22 @@ const s = StyleSheet.create({
   turningItem: { flexDirection: 'row', gap: 8 },
   turningIcon: { fontSize: 13, lineHeight: 18 },
   turningText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  sideHead:    { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sideName:    { fontSize: 17, fontWeight: '800' },
+  sideTotal:   { fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  sideState:   { fontSize: 12, fontWeight: '700' },
+  missing:     { fontSize: 11.5, lineHeight: 15 },
+  lensCard:    { borderRadius: 12, borderWidth: 1, padding: 12, gap: 6 },
+  lensTitle:   { fontSize: 13, fontWeight: '700' },
+  lensText:    { fontSize: 12, lineHeight: 16 },
+  checkRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 2 },
+  checkChip:   { borderWidth: 1, borderRadius: 12, paddingHorizontal: 8, paddingVertical: 3 },
+  checkText:   { fontSize: 11, fontWeight: '700' },
+  disagree:    { fontSize: 12, lineHeight: 16 },
+  infoRow:     { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+  reasonCard:  { borderRadius: 12, borderWidth: 1, padding: 12, gap: 4 },
+  reasonSide:  { fontSize: 12, fontWeight: '800' },
+  reasonText:  { fontSize: 12, lineHeight: 16 },
   gateHead:    { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   gateLabel:   { fontSize: 13, fontWeight: '600' },
   gateWarn:    { fontSize: 11.5, marginTop: 6, lineHeight: 15 },

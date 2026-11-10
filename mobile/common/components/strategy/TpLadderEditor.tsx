@@ -58,8 +58,10 @@ export function TpLadderEditor({
     .filter(r => r.source !== 'engine' && !r.hit)
     .map(r => ({
       id: r.key, premium: f2(r.premium),
-      stock: f2(quote ? stockAt(quote, r.premium) : r.stock_price),
-      pct: entry ? String(Math.round(pctVsEntry(r.premium, entry))) : '',
+      // A stock-only line (no premium) shows its own stock price — never a
+      // conversion of a null premium (which would render as blank / NaN).
+      stock: f2(r.premium != null && quote ? stockAt(quote, r.premium) : r.stock_price),
+      pct: r.premium != null && entry ? String(Math.round(pctVsEntry(r.premium, entry))) : '',
       qty: r.qty, source: r.source === 'chart-long-press' ? 'chart-long-press' : 'edit-card',
     }));
   const [rows, setRows] = useState<Row[]>(fromLadder);
@@ -67,8 +69,8 @@ export function TpLadderEditor({
   const [engRows, setEngRows] = useState<Record<string, { premium: string; stock: string; pct: string }>>({});
   const engEdit: Record<string, string> = Object.fromEntries(Object.entries(engRows).map(([k, v]) => [k, v.premium]));
   const engFields = (r: LadderRung) => engRows[r.key] ?? {
-    premium: f2(r.premium), stock: quote ? f2(stockAt(quote, r.premium)) : '',
-    pct: entry ? String(Math.round(pctVsEntry(r.premium, entry))) : '',
+    premium: f2(r.premium), stock: quote && r.premium != null ? f2(stockAt(quote, r.premium)) : '',
+    pct: entry && r.premium != null ? String(Math.round(pctVsEntry(r.premium, entry))) : '',
   };
   const setEng = (r: LadderRung, patch: Partial<{ premium: string; stock: string; pct: string }>) =>
     setEngRows(e => ({ ...e, [r.key]: { ...engFields(r), ...patch } }));
@@ -96,7 +98,7 @@ export function TpLadderEditor({
       const r = fromLadder();
       setRows(r);
       setEngRows({});
-      baseline.current = JSON.stringify(r.map(x => [x.id, x.premium, x.qty]));
+      baseline.current = JSON.stringify(r.map(x => [x.id, x.premium, x.stock, x.qty]));
     }
     wasVisible.current = visible;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -122,7 +124,7 @@ export function TpLadderEditor({
     set(i, { pct: t, premium: f2(p), stock: quote ? f2(stockAt(quote, p)) : rows[i].stock });
   };
   const addRow = () => {
-    const top = Math.max(entry, ...ladder.map(r => r.premium), ...rows.map(r => parseFloat(r.premium) || 0));
+    const top = Math.max(entry, ...ladder.map(r => r.premium ?? 0), ...rows.map(r => parseFloat(r.premium) || 0));
     const p = round2(top * 1.15);
     setRows(rs => [...rs, { id: null, premium: f2(p), stock: quote ? f2(stockAt(quote, p)) : '',
       pct: entry ? String(Math.round(pctVsEntry(p, entry))) : '', qty: 1, source: 'edit-card' }]);
@@ -153,22 +155,34 @@ export function TpLadderEditor({
     const engVal = (k: string) => (engEdit[k] ? parseFloat(engEdit[k]) : undefined);
     const tp1New = engVal('tp1'), tp2New = engVal('tp2');
     const enginePrem = (r: LadderRung) => (engEdit[r.key] ? parseFloat(engEdit[r.key]) : r.premium);
+    // A row is valid with a premium above $0 OR a stock price (a stock-only
+    // line fires on the stock; the server checks the side on save).
+    const rowOk = (r: Row) => {
+      const p = parseFloat(r.premium);
+      const s = parseFloat(r.stock);
+      return (isNum(p) && p > 0) || isNum(s);
+    };
     let problem: string | null = null;
     if (tp1New !== undefined && (!isNum(tp1New) || tp1New <= entry)) problem = `TP1 must be above entry ($${entry.toFixed(2)})`;
     else if (tp2New !== undefined && (!isNum(tp2New) || tp2New <= (tp1New ?? tp1?.premium ?? entry))) problem = 'TP2 must be above TP1';
     else
-    if (prices.some(p => !isNum(p) || p <= 0)) problem = 'Every TP line needs a premium above $0';
+    if (rows.some(r => !rowOk(r))) problem = 'Every TP line needs a premium above $0 or a stock price';
     else if (rows.some(r => r.qty < 1)) problem = 'Every TP line sells at least 1 contract';
     else {
-      const all = [...prices, ...engine.filter(r => !r.hit).map(enginePrem)];
+      // Stock-only rows have a null premium — they can't clash on premium
+      // (the server checks their stock price instead), so drop the nulls.
+      const all = [...prices, ...engine.filter(r => !r.hit).map(enginePrem)]
+        .filter((p): p is number => p != null);
       const dup = all.find((p, i) => all.some((q, j) => j !== i && Math.abs(p - q) < 0.005));
       if (dup != null) problem = `Already a line at $${dup.toFixed(2)}`;
       else if (!qtyOk) problem = `Contracts don't add up — the last contract must stay the runner (${qtyRemaining} open)`;
     }
-    const sig = JSON.stringify(rows.map(x => [x.id, x.premium, x.qty]));
+    const sig = JSON.stringify(rows.map(x => [x.id, x.premium, x.stock, x.qty]));
     return {
       rungs: sig === baseline.current ? null : rows.map(r => ({
-        id: r.id ?? undefined, premium: round2(parseFloat(r.premium)), qty: r.qty,
+        id: r.id ?? undefined,
+        premium: isNum(parseFloat(r.premium)) ? round2(parseFloat(r.premium)) : null,
+        qty: r.qty,
         stock_price: isNum(parseFloat(r.stock)) ? round2(parseFloat(r.stock)) : null, source: r.source,
       })),
       problem,
@@ -179,13 +193,17 @@ export function TpLadderEditor({
   }, [rows, qtyOk, engRows]);
   useEffect(() => { onChange(state); }, [state, onChange]);
 
-  // Display rows: engine + user, premium order, renumbered.
-  type Disp = { key: string; premium: number; label?: string; user?: number; engine?: LadderRung; hit?: boolean };
+  // Display rows: engine + user, renumbered. Order matches the server's
+  // ladder(): the line that took all of TP1 (replaces_tp1) sorts first — it
+  // IS TP1 — then premium ascending, with a stock-only line (no premium)
+  // after the premium rungs. Premium 0 used to sort stock-only lines first,
+  // so the editor's TP1 disagreed with the server's.
+  type Disp = { key: string; premium: number; label?: string; user?: number; engine?: LadderRung; hit?: boolean; replacesTp1?: boolean };
   const disp: Disp[] = [
-    ...engine.map(r => ({ key: r.key, premium: engEdit[r.key] ? parseFloat(engEdit[r.key]) || r.premium : r.premium, engine: r, hit: r.hit })),
-    ...hitUser.map(r => ({ key: r.key, premium: r.premium, engine: r, hit: true })),
-    ...rows.map((r, i) => ({ key: r.id ?? `new-${i}`, premium: parseFloat(r.premium) || 0, user: i })),
-  ].sort((a, b) => a.premium - b.premium).map((d, i) => ({ ...d, label: `TP${i + 1}` }));
+    ...engine.map(r => ({ key: r.key, premium: engEdit[r.key] ? parseFloat(engEdit[r.key]) || (r.premium ?? Number.POSITIVE_INFINITY) : (r.premium ?? Number.POSITIVE_INFINITY), engine: r, hit: r.hit, replacesTp1: r.replaces_tp1 })),
+    ...hitUser.map(r => ({ key: r.key, premium: r.premium ?? r.hit_premium ?? Number.POSITIVE_INFINITY, engine: r, hit: true, replacesTp1: r.replaces_tp1 })),
+    ...rows.map((r, i) => ({ key: r.id ?? `new-${i}`, premium: parseFloat(r.premium) || Number.POSITIVE_INFINITY, user: i, replacesTp1: ladder.find(l => l.key === r.id)?.replaces_tp1 })),
+  ].sort((a, b) => (a.replacesTp1 ? 0 : 1) - (b.replacesTp1 ? 0 : 1) || a.premium - b.premium).map((d, i) => ({ ...d, label: `TP${i + 1}` }));
 
   const muted = colors.textTertiary;
   return (
@@ -225,9 +243,9 @@ export function TpLadderEditor({
           return (
             <View key={d.key} style={[st.row, { borderColor: colors.separator }]}>
               <Text style={[st.cell, { flex: 0.9, color: r.hit ? colors.success : colors.text }]}>{r.hit ? '✓ ' : ''}{d.label}</Text>
-              <Text style={[st.cell, st.num, { flex: 1.4, color: colors.textSecondary }]}>{quote ? `≈ ${f2(stockAt(quote, r.premium))}` : '—'}</Text>
+              <Text style={[st.cell, st.num, { flex: 1.4, color: colors.textSecondary }]}>{quote && r.premium != null ? `≈ ${f2(stockAt(quote, r.premium))}` : '—'}</Text>
               <Text style={[st.cell, st.num, { flex: 1.2, color: colors.text }]}>${f2(r.hit && r.hit_premium ? r.hit_premium : r.premium)}</Text>
-              <Text style={[st.cell, st.num, { flex: 0.9, color: colors.success }]}>{entry ? `${Math.round(pctVsEntry(r.premium, entry))}` : ''}</Text>
+              <Text style={[st.cell, st.num, { flex: 0.9, color: colors.success }]}>{entry && r.premium != null ? `${Math.round(pctVsEntry(r.premium, entry))}` : ''}</Text>
               <View style={{ flex: 1.4, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
                 <Text style={[st.cell, st.num, { color: colors.text }]}>{r.hit ? 'sold' : q}</Text>
                 <Text style={[st.tag, { color: muted, borderColor: colors.border }]}>{r.source === 'engine' ? 'engine' : 'chart'}</Text>
@@ -240,8 +258,10 @@ export function TpLadderEditor({
         return (
           <View key={d.key} style={[st.row, { borderColor: colors.separator }]}>
             <Text style={[st.cell, { flex: 0.9, color: colors.text }]}>{d.label}</Text>
-            <TextInput value={r.stock} onChangeText={t => onStock(i, t)} editable={!!quote} keyboardType="decimal-pad"
-              style={[st.input, { flex: 1.4, color: colors.text, borderColor: colors.border, opacity: quote ? 1 : 0.4 }]} accessibilityLabel={`${d.label} stock price`} />
+            {/* Stock is the trigger for a stock-only line — always editable,
+                even with no delta (it needs no conversion). */}
+            <TextInput value={r.stock} onChangeText={t => onStock(i, t)} keyboardType="decimal-pad"
+              style={[st.input, { flex: 1.4, color: colors.text, borderColor: colors.border }]} accessibilityLabel={`${d.label} stock price`} />
             <TextInput value={r.premium} onChangeText={t => onPremium(i, t)} keyboardType="decimal-pad"
               style={[st.input, { flex: 1.2, color: colors.success, borderColor: colors.border }]} accessibilityLabel={`${d.label} premium`} />
             <TextInput value={r.pct} onChangeText={t => onPct(i, t)} keyboardType="numbers-and-punctuation"

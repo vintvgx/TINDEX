@@ -66,7 +66,9 @@ def _at(h, m, s=0):
 
 def test_trigger_is_halfway_back_from_peak():
     em = _em()
-    assert em.tp1 == pytest.approx(1.30)
+    # 2026-11-10: TP1 is pure +15% now — the $0.30 floor that made it 1.30
+    # is gone (TPs follow the strategy's percentages exactly).
+    assert em.tp1 == pytest.approx(1.15)
     _hit_tp1(em, 1.30)
     assert em.cascade_trigger_level() == pytest.approx(1.15)     # still +15%, $0.15 above BE
 

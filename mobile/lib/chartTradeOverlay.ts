@@ -35,7 +35,8 @@ export interface OverlayLine {
    *  as entry; there's no stop there to move). */
   editable: boolean;
   price: number;          // where it sits on the underlying axis
-  premium: number;        // what the engine actually evaluates
+  premium: number | null; // what the engine actually evaluates (null = a
+                          // stock-only line — the engine evaluates the stock)
   style: OverlayLineStyle;
   /** Greyed: stale quote or low delta. (A hit rung is green, not grey.) */
   muted: boolean;
@@ -170,10 +171,12 @@ function marker(t: OverlayTradeInput, now: number, selected: boolean, multi: boo
 }
 
 /** The ladder rungs still to fire, in premium order — from the engine's
- *  tp_ladder, else the classic TP1/TP2 pair (older backend / simulation). */
+ *  tp_ladder, else the classic TP1/TP2 pair (older backend / simulation).
+ *  A rung counts if it has a premium OR a stock price — a stock-only line
+ *  (no delta, 2026-11-10) has no premium and must still draw. */
 function ladderOf(live: OverlayTradeInput['live']): LadderRung[] {
   if (Array.isArray(live.tp_ladder) && live.tp_ladder.length) {
-    return live.tp_ladder.filter(r => r && isNum(r.premium));
+    return live.tp_ladder.filter(r => r && (isNum(r.premium) || isNum(r.stock_price)));
   }
   const out: LadderRung[] = [];
   if (isNum(live.tp1)) out.push({ key: 'tp1', label: 'TP1', source: 'engine', premium: live.tp1, qty: 0, hit: !!live.tp1_hit });
@@ -188,7 +191,7 @@ function ladderOf(live: OverlayTradeInput['live']): LadderRung[] {
 export function ladderSummary(live: OverlayTradeInput['live']): string | null {
   const open = ladderOf(live).filter(r => !r.hit);
   if (!open.length) return null;
-  const left = open.map(r => `${r.label} ${isNum(r.stock_price) ? r.stock_price.toFixed(2) : `$${fmtPrem(r.premium)}`}`);
+  const left = open.map(r => `${r.label} ${isNum(r.stock_price) ? r.stock_price.toFixed(2) : `$${fmtPrem(r.premium ?? 0)}`}`);
   const sold = open.reduce((n, r) => n + (r.qty || 0), 0);
   const runner = Array.isArray(live.tp_ladder) && live.tp_ladder.length ? Math.max(0, live.qty_remaining - sold) : null;
   return [...left, ...(runner != null ? [`R${runner}`] : [])].join(' · ');
@@ -208,15 +211,19 @@ function linesFor(t: OverlayTradeInput, now: number): {
   const ladder = ladderOf(live);
   const anyTpHit = ladder.some(r => r.hit);
 
-  type Want = { key: string; kind: OverlayLineKind; label: string; premium: number; style: OverlayLineStyle;
+  type Want = { key: string; kind: OverlayLineKind; label: string; premium: number | null;
+                stockPrice?: number | null; style: OverlayLineStyle;
                 hit?: boolean; pending?: boolean; user?: boolean };
   const want: Want[] = [];
   // TP rungs: the highest-premium one solid, the rest dashed (§3.3) — two
-  // rungs keep today's TP2-solid / TP1-dashed look.
-  const top = ladder.reduce((m, r) => Math.max(m, r.premium), -Infinity);
+  // rungs keep today's TP2-solid / TP1-dashed look. A stock-only rung has no
+  // premium, so it never tops the max and draws dashed.
+  const top = ladder.reduce((m, r) => Math.max(m, r.premium ?? -Infinity), -Infinity);
   for (const r of ladder) {
     want.push({ key: r.key, kind: 'TP', label: r.label, premium: r.premium,
-                style: r.premium === top ? 'solid' : 'dashed', hit: r.hit, user: r.source !== 'engine' });
+                stockPrice: r.stock_price ?? null,
+                style: r.premium != null && r.premium === top ? 'solid' : 'dashed',
+                hit: r.hit, user: r.source !== 'engine' });
   }
   if (beArmed) {
     want.push({ key: 'be', kind: 'BE', label: 'BE', premium: isNum(live.hard_stop) ? live.hard_stop : beLevel, style: 'solid' });
@@ -237,6 +244,10 @@ function linesFor(t: OverlayTradeInput, now: number): {
   const lowDelta = !sim && delta != null && Math.abs(delta) < LOW_DELTA;
 
   const positionOf = (w: Want): number | null => {
+    // A stock-only line is placed at its stored stock price — no delta,
+    // no live premium, no projection. It draws even when the feed has
+    // no Greeks (2026-11-10).
+    if (isNum(w.stockPrice) && w.premium == null) return w.stockPrice;
     if (sim) {
       if (w.key === 'tp1') return live.tp1_underlying ?? null;
       if (w.key === 'tp2') return live.tp2_underlying ?? null;
@@ -244,27 +255,35 @@ function linesFor(t: OverlayTradeInput, now: number): {
       if (w.kind === 'SL') return live.stop_underlying ?? null;
       return null;
     }
-    if (delta == null || u == null || cur == null) return null;
+    if (delta == null || u == null || cur == null || w.premium == null) return null;
     return u + (w.premium - cur) / delta;
   };
 
   // Every line that can't be placed is explained once, on screen (§3.3).
+  // A stock-only line draws with no delta at all — when one exists, the
+  // "unavailable" note is about the premium lines, not every line.
   let note: string | null = null;
   if (!sim) {
     const src = live.delta_source ? `source ${live.delta_source}` : 'no source';
     const age = deltaAge != null ? ` · ${deltaAge < 60 ? `${Math.round(deltaAge)}s` : `${Math.round(deltaAge / 60)}m`} old` : '';
-    if (deltaRaw == null) note = `Lines unavailable — no delta (${src})`;
-    else if (deltaStale) note = `Lines unavailable — delta stale (${src}${age})`;
-    else if (u == null) note = 'Lines unavailable — no underlying price yet';
-    else if (cur == null) note = 'Lines unavailable — no live premium';
-    else if (lowDelta) note = `Lines are estimates — low delta Δ ${Math.abs(delta!).toFixed(2)}`;
+    const stockOnlyLine = ladder.some(r => !r.hit && isNum(r.stock_price) && r.premium == null);
+    const unavailable = stockOnlyLine ? 'Premium lines unavailable' : 'Lines unavailable';
+    if (deltaRaw == null) note = `${unavailable} — no delta (${src})`;
+    else if (deltaStale) note = `${unavailable} — delta stale (${src}${age})`;
+    else if (u == null) note = `${unavailable} — no underlying price yet`;
+    else if (cur == null) note = `${unavailable} — no live premium`;
+    else if (lowDelta && want.some(w => w.premium != null)) note = `Lines are estimates — low delta Δ ${Math.abs(delta!).toFixed(2)}`;
   }
 
   const lines: OverlayLine[] = [];
   for (const w of want) {
     const price = positionOf(w);
     if (!isNum(price)) continue;      // explained by `note` above
-    const suffix = (w.hit ? '' : w.pending ? ' · arms after first TP' : '') + (lowDelta ? ' · ≈' : '');
+    // A stock-only line sits at an exact stock price — no delta estimate,
+    // so no ≈ suffix and the title shows the stock price, not a premium.
+    const placedByStock = isNum(w.stockPrice) && w.premium == null;
+    const titlePrice = placedByStock ? w.stockPrice! : (w.premium ?? 0);
+    const suffix = (w.hit ? '' : w.pending ? ' · arms after first TP' : '') + (lowDelta && !placedByStock ? ' · ≈' : '');
     lines.push({
       key: w.key,
       kind: w.kind,
@@ -275,13 +294,13 @@ function linesFor(t: OverlayTradeInput, now: number): {
       price: Math.round(price * 100) / 100,
       premium: w.premium,
       style: w.style,
-      muted: stale || lowDelta,
-      title: `${sim ? 'SIM ' : ''}${w.hit ? '✓ ' : ''}${w.label} · $${fmtPrem(w.premium)}${suffix}`,
+      muted: stale || (lowDelta && !placedByStock),
+      title: `${sim ? 'SIM ' : ''}${w.hit ? '✓ ' : ''}${w.label} · $${fmtPrem(titlePrice)}${suffix}`,
     });
   }
   const sig = [
     live.qty_remaining, tp1Hit, !!live.tp2_hit, beArmed, stale, lowDelta, note ?? '',
-    ladder.map(r => `${r.key}:${r.premium}:${r.qty}:${r.hit}`).join(','),
+    ladder.map(r => `${r.key}:${r.premium}:${r.stock_price ?? ''}:${r.qty}:${r.hit}`).join(','),
     live.runner_mode ?? '', live.sl_enabled ?? '', live.hard_stop ?? '',
   ].join('|');
   const quote = !sim && delta != null && u != null && cur != null ? { stock: u, premium: cur, delta, entry } : null;
