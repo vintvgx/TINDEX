@@ -79,6 +79,11 @@ export function PositionEditSheet({
     runner_mode: pick('runner_mode'),
     runner_trail: pick('runner_trail'),
     cascade_enabled: pick('cascade_enabled'),
+    tp_ladder: live?.tp_ladder ?? null,
+    underlying_price: live?.underlying_price ?? null,
+    delta: live?.delta ?? null,
+    delta_source: live?.delta_source ?? null,
+    delta_age_s: live?.delta_age_s ?? null,
   };
 
   return (

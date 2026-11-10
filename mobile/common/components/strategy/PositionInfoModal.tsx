@@ -19,7 +19,8 @@ import { useToast } from '@/common/components/ui/Toast';
 import { SlGraceBadge, useSlGracePulse } from '@/common/components/strategy/SlGraceBadge';
 import { ExitSafetyControls, BE_GRACE_DEFAULT } from '@/common/components/strategy/ExitSafetyControls';
 import type { ProfileKey } from '@/common/types/strategy';
-import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import type { LadderRung, LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import { TpLadderEditor, type LadderEditState } from '@/common/components/strategy/TpLadderEditor';
 import { WorkingLimitOrders } from '@/common/components/strategy/WorkingLimitOrders';
 
 export interface PositionInfoData {
@@ -59,6 +60,12 @@ export interface PositionInfoData {
   runner_mode?: 'trail' | 'be_hold' | 'none';
   runner_trail?: number;
   cascade_enabled?: boolean;
+  /** The TP ladder + live quote for stock-price ↔ premium (spec 2026-11-10 §4.6). */
+  tp_ladder?: LadderRung[] | null;
+  underlying_price?: number | null;
+  delta?: number | null;
+  delta_source?: string | null;
+  delta_age_s?: number | null;
 }
 
 interface Props {
@@ -172,6 +179,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const [runnerMode, setRunnerMode] = useState<'trail' | 'be_hold' | 'none'>('trail');
   const [cascadeOn, setCascadeOn] = useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [ladderEdit, setLadderEdit] = useState<LadderEditState>({ rungs: null, problem: null });
 
   const initial = useRef({
     sl: true, tp: true, stopMode: 'HARD' as 'HARD' | 'TIMER', minutes: 5 as GraceMinutes, floor: true,
@@ -187,6 +195,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
       setTp2Val('');
       setAlertPriceVal('');
       setFloorPriceVal('');
+      setLadderEdit({ rungs: null, problem: null });   // never carry an old ladder edit over (thread 6)
       const sl = data.slEnabled !== false;
       const tp = data.tpEnabled !== false;
       setSlOn(sl);
@@ -211,10 +220,15 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   }, [visible, data]);
 
   const canSplit = data.qty_remaining > 1;
+  const hasLadder = tpOn && canSplit && !!data.tp_ladder && data.tp_ladder.length > 0;
+  // Only a mounted ladder editor's edits count — otherwise (TP turned off,
+  // can't split) a stale edit could save over lines set on the chart (thread 6).
+  const ladder: LadderEditState = hasLadder ? ladderEdit : { rungs: null, problem: null };
   const tp2Editable = data.showTp2 !== false;
   const entry = data.entry_premium;
 
   const dirty =
+    ladder.rungs != null || ladder.tp1 !== undefined || ladder.tp2 !== undefined ||
     !!stopVal || !!tp1Val || !!tp2Val || !!floorPriceVal ||
     slOn !== initial.current.sl || tpOn !== initial.current.tp ||
     (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && graceMinutes !== initial.current.minutes))) ||
@@ -243,8 +257,9 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
 
   const handleSave = async () => {
     const stop  = stopVal ? parseFloat(stopVal) : undefined;
-    const tp1   = tp1Val ? parseFloat(tp1Val) : undefined;
-    const tp2   = tp2Val ? parseFloat(tp2Val) : undefined;
+    // With a ladder, TP1 / TP2 come from the ladder editor (the only TP editor).
+    const tp1   = hasLadder ? ladder.tp1 : tp1Val ? parseFloat(tp1Val) : undefined;
+    const tp2   = hasLadder ? ladder.tp2 : tp2Val ? parseFloat(tp2Val) : undefined;
     const floor = floorPriceVal ? parseFloat(floorPriceVal) : undefined;
 
     if (stop !== undefined && (isNaN(stop) || stop <= 0)) {
@@ -276,6 +291,10 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
       return;
     }
 
+    if ((ladder.rungs != null || ladder.tp1 !== undefined || ladder.tp2 !== undefined) && ladder.problem) {
+      Alert.alert('TP lines', ladder.problem);
+      return;
+    }
     const slChanged = slOn !== initial.current.sl;
     const tpChanged = tpOn !== initial.current.tp;
     if (slChanged && slOn && stop === undefined && !(data.hard_stop > 0)) {
@@ -311,6 +330,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
     }
     if (canSplit && runnerMode !== initial.current.runnerMode) payload.runner_mode = runnerMode;
     if (canSplit && cascadeOn !== initial.current.cascade) payload.cascade_enabled = cascadeOn;
+    if (ladder.rungs != null) payload.tp_rungs = ladder.rungs;
 
     try {
       await mutation.mutateAsync(payload);
@@ -495,6 +515,8 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
             />
             {editable ? (
               <View style={{ opacity: (tpOn || data.tp1_hit) ? 1 : 0.45 }}>
+                {/* With a ladder, the ladder below is the ONE TP editor (§4.6). */}
+                {!hasLadder && <>
                 <View style={s.editRow}>
                   <TextInput
                     value={tp1Val}
@@ -523,11 +545,26 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
                     />
                   </View>
                 )}
+                </>}
                 {!tpOn && !data.tp1_hit && (
                   <Text style={[s.hintText, { color: colors.textTertiary }]}>
                     No take profit — this runner rides its own course, including into close.
                   </Text>
                 )}
+                {/* One row per rung — engine + chart lines (§4.6). */}
+                {hasLadder ? (
+                  <TpLadderEditor
+                    ladder={data.tp_ladder ?? []}
+                    entry={entry}
+                    qtyRemaining={data.qty_remaining}
+                    stock={data.underlying_price}
+                    mid={data.mid_price}
+                    delta={{ delta: data.delta, source: data.delta_source, ageS: data.delta_age_s }}
+                    colors={colors}
+                    visible={visible}
+                    onChange={setLadderEdit}
+                  />
+                ) : null}
               </View>
             ) : (
               <Text style={[s.readonlyValue, { color: tpOn ? colors.success : colors.textTertiary }]}>

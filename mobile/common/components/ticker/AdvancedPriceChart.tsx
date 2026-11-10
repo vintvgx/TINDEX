@@ -1,6 +1,6 @@
 import type React from 'react';
 import { Fragment, useMemo, useState, useCallback, useEffect, useRef } from 'react';
-import { View, Text, Pressable, LayoutChangeEvent, SafeAreaView, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, Pressable, LayoutChangeEvent, SafeAreaView, ActivityIndicator, Alert, PanResponder } from 'react-native';
 import Svg, { Path, Rect, Line, Circle, Defs, LinearGradient, Stop, Text as SvgText } from 'react-native-svg';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useSharedValue, runOnJS } from 'react-native-reanimated';
@@ -142,6 +142,58 @@ export interface ChartZoneContext {
 
 export { AUTO_ZONE_RESISTANCE_COLOR, AUTO_ZONE_SUPPORT_COLOR };
 
+/** A trade line on the legacy engine (spec 2026-11-10 §8) — the TV chart
+ *  draws the same lines in-page. */
+export interface LegacyTradeLine {
+  key: string;
+  /** TP1 / TP2 / BE / SL … — used for the live label while dragging. */
+  label: string;
+  kind: 'TP' | 'BE' | 'SL';
+  /** False for a fired rung or a not-yet-armed BE: no tap / drag strip. */
+  editable: boolean;
+  title: string;
+  price: number;
+  color: string;
+  dash?: string;
+  width?: number;
+}
+
+/** The position pill — contracts | P&L | rung summary — on the current price. */
+export interface LegacyTradeMarker {
+  count: string;
+  pnlText: string;
+  color: string;
+  summary: string | null;
+}
+
+/** Thin touch strip over the SELECTED trade line: dragging moves it and
+ *  reports the new price on release; a tap re-selects. Only the selected line
+ *  gets one, so the strip never blocks chart gestures elsewhere. */
+function TradeLineStrip({ y, width, selected, onTap, onDrag, onDragEnd }: {
+  y: number; width: number; selected: boolean;
+  onTap: () => void; onDrag: (dy: number) => void; onDragEnd: (dy: number) => void;
+}) {
+  const cb = useRef({ selected, onTap, onDrag, onDragEnd });
+  cb.current = { selected, onTap, onDrag, onDragEnd };
+  const responder = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => cb.current.selected,
+    onPanResponderTerminationRequest: () => !cb.current.selected,
+    onPanResponderMove: (_e, g) => { if (cb.current.selected) cb.current.onDrag(g.dy); },
+    onPanResponderRelease: (_e, g) => {
+      if (Math.abs(g.dy) < 4 && Math.abs(g.dx) < 8) cb.current.onTap();
+      else if (cb.current.selected) cb.current.onDragEnd(g.dy);
+    },
+  })).current;
+  return (
+    <View
+      {...responder.panHandlers}
+      accessibilityRole="adjustable"
+      style={{ position: 'absolute', left: 0, width, top: y - 12, height: 24 }}
+    />
+  );
+}
+
 interface AdvancedPriceChartProps {
   data: TickerHistoryData | undefined;
   isLoading?: boolean;
@@ -220,6 +272,17 @@ interface AdvancedPriceChartProps {
   /** See ChartDisplaySettings — moves style/session/watch controls out of
    *  this toolbar and under the caller's control. */
   settings?: ChartDisplaySettings;
+  /** Trade overlay on the legacy engine (spec 2026-11-10 §8). */
+  tradeLines?: LegacyTradeLine[] | null;
+  tradeMarker?: LegacyTradeMarker | null;
+  selectedTradeLineKey?: string | null;
+  onTradeLineTap?: (key: string) => void;
+  /** A selected line was dragged and let go at this price. */
+  onTradeLineDragEnd?: (key: string, price: number) => void;
+  /** Live quote for relabelling a dragged line (premium / %), or null. */
+  tradeQuote?: { stock: number; premium: number; delta: number; entry: number } | null;
+  /** The exit sheet's dashed preview line, or null. */
+  previewLine?: { price: number; color: string; style: 'dashed' | 'dotted'; title: string } | null;
 }
 
 // ── Layout constants ─────────────────────────────────────────────────────
@@ -405,9 +468,18 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   onAutoZoneTap,
   zoneContext = null,
   resetKey,
+  tradeLines,
+  tradeMarker,
+  selectedTradeLineKey,
+  onTradeLineTap,
+  onTradeLineDragEnd,
+  tradeQuote,
+  previewLine,
 }) => {
   const colors = useThemeColors();
   const [width, setWidth] = useState(0);
+  // A trade line being dragged: its key and the pixel Y it's at now.
+  const [tradeDrag, setTradeDrag] = useState<{ key: string; y: number } | null>(null);
 
   // `chartData` used to be `data` merged with lazily-loaded earlier trading
   // days (panning past the left edge on 1D used to fetch and prepend prior
@@ -1176,6 +1248,15 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
   // makes this wait to see whether a second tap follows before firing, so
   // a real double-tap (reset) never also fires this as a false single-tap
   // first — the standard gesture-handler pattern for disambiguating the two.
+  // Unselected trade lines have no touch strip (it would block pan / scrub /
+  // pinch along the line — PR #121 thread 7): a tap is hit-tested here
+  // instead, ±12px like the strip, before the scrub.
+  const tradeLineHits = useMemo(
+    () => (scale ? (tradeLines ?? []).filter(l => l.editable && l.key !== selectedTradeLineKey)
+      .map(l => ({ key: l.key, y: scale.yForPrice(l.price) })) : []),
+    [scale, tradeLines, selectedTradeLineKey],
+  );
+  const selectTradeLine = useCallback((key: string) => onTradeLineTap?.(key), [onTradeLineTap]);
   const singleTapGesture = useMemo(
     () =>
       Gesture.Tap()
@@ -1183,6 +1264,13 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
         .requireExternalGestureToFail(doubleTapGesture)
         .onEnd((e) => {
           'worklet';
+          let hit: string | null = null, best = 13;
+          for (let i = 0; i < tradeLineHits.length; i++) {
+            const d = Math.abs(tradeLineHits[i].y - e.y);
+            if (d < best) { best = d; hit = tradeLineHits[i].key; }
+          }
+          if (hit != null) { runOnJS(selectTradeLine)(hit); return; }
+          if (!crosshairEnabled) return;     // here only for the line hit test
           if (visibleCount < 2 || plotW === 0) return;
           // layoutVisibleCount, not visibleCount — must match scale.step
           // exactly (see its doc above) or a touch on the visually-last
@@ -1195,7 +1283,8 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           runOnJS(notifyScrub)(idx);
         }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doubleTapGesture, visibleStart, visibleEnd, visibleCount, layoutVisibleCount, plotW, notifyScrub, triggerHaptic],
+    [doubleTapGesture, visibleStart, visibleEnd, visibleCount, layoutVisibleCount, plotW, notifyScrub, triggerHaptic,
+      tradeLineHits, selectTradeLine, crosshairEnabled],
   );
 
   // ── Pan/zoom gestures ────────────────────────────────────────────────
@@ -1416,9 +1505,12 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
           ? Gesture.Race(doubleTapGesture, drawGesture)
           : crosshairEnabled
             ? Gesture.Race(doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture)
-            : Gesture.Race(doubleTapGesture, manipulateGesture),
+            : tradeLineHits.length
+              ? Gesture.Race(doubleTapGesture, singleTapGesture, manipulateGesture)
+              : Gesture.Race(doubleTapGesture, manipulateGesture),
       ),
-    [pinchGesture, doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture, drawGesture, watchMode, crosshairEnabled],
+    [pinchGesture, doubleTapGesture, singleTapGesture, scrubGesture, manipulateGesture, drawGesture, watchMode, crosshairEnabled,
+      tradeLineHits.length],
   );
 
   const onLayout = (e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width);
@@ -1788,6 +1880,67 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                 );
               })}
 
+              {/* Trade lines (TP rungs / BE / SL) — selected one thicker. */}
+              {(tradeLines ?? []).map((line) => {
+                const y = tradeDrag?.key === line.key ? tradeDrag.y : scale.yForPrice(line.price);
+                const selected = line.key === selectedTradeLineKey;
+                const dragging = tradeDrag?.key === line.key;
+                const price = dragging ? scale.priceForY(y) : line.price;
+                // While dragging: premium + % at the finger's price, and a TP
+                // dragged past the current price reads as a stop (§4.3).
+                let title = line.title;
+                let color = line.color;
+                if (dragging) {
+                  if (!tradeQuote) title = `${line.label} · ≈ — (no delta)`;
+                  else {
+                    const prem = tradeQuote.premium + (price - tradeQuote.stock) * tradeQuote.delta;
+                    const pct = tradeQuote.entry ? Math.round(((prem - tradeQuote.entry) / tradeQuote.entry) * 100) : 0;
+                    const tail = ` ≈ $${prem.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct}%)`;
+                    const flipped = line.kind === 'TP' && prem < tradeQuote.premium;
+                    title = `${flipped ? '→ SL' : line.label}${tail}`;
+                    if (flipped) color = colors.error;
+                  }
+                }
+                const label = `${title} · ${formatAxisPrice(price)}`;
+                return (
+                  <Fragment key={`trade-${line.key}`}>
+                    <Line x1={0} x2={plotW} y1={y} y2={y} stroke={color}
+                      strokeWidth={selected ? 3 : (line.width ?? 1.25)} strokeDasharray={line.dash} />
+                    <Rect x={plotW - label.length * 6 - 14} y={y - 8} width={label.length * 6 + 10} height={16} rx={4} fill={color} />
+                    <SvgText x={plotW - 9} y={y + 3.5} fill={colors.background} fontSize={10} fontWeight="700" textAnchor="end">{label}</SvgText>
+                    {selected ? <Circle cx={plotW - label.length * 6 - 28} cy={y} r={8} fill={colors.background} stroke={color} strokeWidth={2} /> : null}
+                  </Fragment>
+                );
+              })}
+
+              {/* Exit sheet preview at the pressed / edited price. */}
+              {previewLine && previewLine.price >= scale.lo && previewLine.price <= scale.hi && (() => {
+                const y = scale.yForPrice(previewLine.price);
+                const label = `${previewLine.title} · ${formatAxisPrice(previewLine.price)}`;
+                return (
+                  <>
+                    <Line x1={0} x2={plotW} y1={y} y2={y} stroke={previewLine.color} strokeWidth={2}
+                      strokeDasharray={previewLine.style === 'dotted' ? '2,3' : '6,4'} />
+                    <Rect x={plotW - label.length * 6 - 14} y={y - 8} width={label.length * 6 + 10} height={16} rx={4} fill={previewLine.color} />
+                    <SvgText x={plotW - 9} y={y + 3.5} fill={colors.background} fontSize={10} fontWeight="700" textAnchor="end">{label}</SvgText>
+                  </>
+                );
+              })()}
+
+              {/* Position pill on the current price: contracts | P&L | rungs. */}
+              {tradeMarker && lastPrice != null && lastPrice >= scale.lo && lastPrice <= scale.hi && (() => {
+                const y = scale.yForPrice(lastPrice);
+                const text = `${tradeMarker.count}  ${tradeMarker.pnlText}${tradeMarker.summary ? `  ${tradeMarker.summary}` : ''}`;
+                const w = text.length * 6 + 14;
+                return (
+                  <>
+                    <Rect x={Math.max(4, plotW - w - 8)} y={y - 8} width={w} height={16} rx={8}
+                      fill={colors.background} stroke={tradeMarker.color} strokeWidth={1.2} />
+                    <SvgText x={Math.max(4, plotW - w - 8) + 7} y={y + 3.5} fill={tradeMarker.color} fontSize={10} fontWeight="700">{text}</SvgText>
+                  </>
+                );
+              })()}
+
               {/* Auto-detected zones (ZoneEngine) — drawn BEFORE (so
                   underneath) the user's own watched zones below, on
                   purpose: this layer never competes with or restyles a
@@ -2074,6 +2227,26 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
             </Svg>
           </GestureDetector>
         )}
+        {/* Drag strip over the SELECTED trade line only (above the chart's own
+            gestures); unselected lines are tapped via singleTapGesture. */}
+        {scale && !isLoading && hasData && (tradeLines ?? []).filter(l => l.editable && l.key === selectedTradeLineKey).map((line) => {
+          const y0 = scale.yForPrice(line.price);
+          const selected = line.key === selectedTradeLineKey;
+          return (
+            <TradeLineStrip
+              key={`strip-${line.key}`}
+              y={tradeDrag?.key === line.key ? tradeDrag.y : y0}
+              width={plotW}
+              selected={selected}
+              onTap={() => onTradeLineTap?.(line.key)}
+              onDrag={(dy) => setTradeDrag({ key: line.key, y: y0 + dy })}
+              onDragEnd={(dy) => {
+                setTradeDrag(null);
+                onTradeLineDragEnd?.(line.key, Math.round(scale.priceForY(y0 + dy) * 100) / 100);
+              }}
+            />
+          );
+        })}
 
         {/* Confirm bar — appears once a Watch-mode drag is released, floating
             over the top of the chart. Direction defaults from which side of

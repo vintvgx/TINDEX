@@ -15,13 +15,15 @@ import { chartComposite, fmtScore, scoreColor, tierMeta } from './compositeMeta'
  * indicator with a mini score bar, turning signals with their caveats, the
  * Gate Mode picker for this ticker's strategy, and Review Entry.
  */
-export function CompositeTechnicalsPanel({ check, colors, onReviewEntry }: {
+export function CompositeTechnicalsPanel({ check, colors, onReviewEntry, tradeSide }: {
   check: EntryCheck;
   colors: any;
+  /** Open trade's side — the sheet leads with it, like the strip. */
+  tradeSide?: 'CALL' | 'PUT' | null;
   /** Opens the contract chain → trade sheet (confirm-first applies there). */
   onReviewEntry?: (direction: 'CALL' | 'PUT') => void;
 }) {
-  const comp = chartComposite(check)!;
+  const comp = chartComposite(check, tradeSide)!;
   const tier = tierMeta(comp.tier, colors);
   const muted = colors.textSecondary;
   const configs = useStrategyConfigs();

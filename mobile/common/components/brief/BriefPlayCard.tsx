@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { fmtEtTime } from '@/lib/formatEtTime';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useToast } from '@/common/components/ui/Toast';
@@ -71,6 +72,19 @@ export function BriefPlayCard({ play, colors, clockOffsetMs, onOpenChart, settin
           {play.technicals.sector ? <TechChip label="" value={play.technicals.sector} colors={colors} /> : null}
           <Ionicons name="stats-chart-outline" size={14} color={colors.textTertiary} style={{ marginLeft: 'auto' }} />
         </View>
+        {/* The frozen entry-check read this play was composed from — the same
+            payload the chart reads, labelled with its side and as-of time. */}
+        {play.entry_check ? (
+          // No line cap — a both-lenses-disagree caption must show in full (thread 5).
+          <Text style={{ color: colors.textTertiary, fontSize: 11, marginTop: 6 }}>
+            Composed {fmtEtTime(play.entry_check.as_of)} ET · {play.entry_check.side ?? play.direction}
+            {play.entry_check.composite_total != null
+              ? ` ${play.entry_check.composite_total > 0 ? '+' : ''}${play.entry_check.composite_total} ${(play.entry_check.composite_tier ?? '').replace('_', ' ')}`
+              : ''}
+            {play.entry_check.verdict ? ` · verdict ${play.entry_check.verdict.replace('_', ' ')}` : ''}
+            {play.entry_check.lens_label ? ` · ${play.entry_check.lens_label}` : ''}
+          </Text>
+        ) : null}
       </TouchableOpacity>
 
       <StatusLine play={play} colors={colors} />

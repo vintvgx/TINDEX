@@ -408,7 +408,12 @@ export function TickerTape() {
       });
     }
   }, [chartInfo?.ticker]); // eslint-disable-line react-hooks/exhaustive-deps
-  const chartSignal = chartInfo ? signalMeta(chartInfo.signal ?? undefined, colors) : null;
+  const chartLens = chartInfo?.lens ?? null;
+  const chartSignal = chartInfo
+    ? (chartLens
+        ? { label: chartLens.text, color: chartLens.side === 'CALL' ? colors.success : chartLens.side === 'PUT' ? colors.error : colors.warning }
+        : signalMeta(chartInfo.signal ?? undefined, colors))
+    : null;
   //
   // 2026-08-10: this (and the sell-status takeover below it) used to be a
   // full early `return` swapping in a completely different tree — which
@@ -472,7 +477,7 @@ export function TickerTape() {
                 {chartInfo.change >= 0 ? '+' : ''}{chartInfo.change.toFixed(2)} ({chartInfo.changePct.toFixed(2)}%)
               </Text>
             ) : null}
-            {chartSignal && chartInfo.signal ? (
+            {chartSignal && (chartInfo.signal || chartLens) ? (
               // Unstyled tap wrapper — the pill itself renders exactly as before.
               <Pressable
                 onPress={chartInfo.onSignalPress}
@@ -485,6 +490,17 @@ export function TickerTape() {
                   <Text style={[styles.signalText, { color: chartSignal.color }]}>{chartSignal.label}</Text>
                 </View>
               </Pressable>
+            ) : null}
+            {chartLens?.other ? (
+              // The other lens, labelled — never silently overwritten (§2.2.4).
+              <View
+                accessibilityLabel={chartLens.other}
+                style={[styles.signalPill, { borderColor: colors.tapeText + '55', borderStyle: 'dashed', maxWidth: 140 }]}
+              >
+                <Text style={[styles.signalText, { color: colors.tapeText, opacity: 0.75 }]} numberOfLines={1}>
+                  {chartLens.other.replace(/^Daily: (\w+) \(verdict ([^)]+)\)/, 'Daily: $1 $2')}
+                </Text>
+              </View>
             ) : null}
           </Animated.View>
         ) : null}

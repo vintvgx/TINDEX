@@ -7,6 +7,7 @@ import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { useMorningBrief } from '@/hooks/queries/brief/useMorningBrief';
 import { BriefPlayCard } from '@/common/components/brief/BriefPlayCard';
+import { fmtEtTime } from '@/lib/formatEtTime';
 import { BriefReviewModal } from '@/common/components/brief/BriefReviewModal';
 import { useBriefConfig } from '@/hooks/queries/brief/useBriefReview';
 import type { BriefPlay, MorningBrief } from '@/common/types/morningBrief';
@@ -52,6 +53,11 @@ export default function MorningBriefScreen({ embedded = false }: Props) {
   const plays = brief?.plays ?? [];
   const live = plays.filter(p => ['checking', 'awaiting_confirmation', 'working'].includes(p.status));
   const rest = plays.filter(p => !live.includes(p));
+  // "As of" = when the reads were taken, never updated_at — that's stamped on
+  // every save, incl. post-lock status changes (PR #121 thread 4). Newest
+  // play read wins; generated_at (first build) when no play carries one.
+  const asOf = plays.map(p => p.entry_check?.as_of).filter((t): t is string => !!t && !Number.isNaN(Date.parse(t)))
+    .sort((a, b) => Date.parse(a) - Date.parse(b)).pop() ?? brief?.generated_at ?? null;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
@@ -96,6 +102,10 @@ export default function MorningBriefScreen({ embedded = false }: Props) {
                 <Ionicons name={brief.locked ? 'lock-closed' : 'sunny'} size={14} color={brief.locked ? colors.accent : '#F59E0B'} />
                 <Text style={[styles.summaryTitle, { color: colors.text }]}>{PHASE_LABEL[brief.phase]}</Text>
               </View>
+              {/* A frozen morning read must never pass for live (spec §2.2). */}
+              <Text style={[styles.summaryNote, { color: colors.textSecondary, fontWeight: '600' }]}>
+                Brief as of {fmtEtTime(asOf)} ET · {brief.phase === 'build' ? 'premarket snapshot' : brief.locked ? 'locked snapshot' : 're-scored snapshot'} — the chart's live read may differ
+              </Text>
               <Text style={[styles.summaryNote, { color: colors.textSecondary }]}>
                 Paper only · score ≥ {cfg?.min_setup_score ?? 80} + Technicals Gate ENTER · 0DTE ·{' '}
                 {cfg?.max_losses_per_day ?? 2} losses ends the day · max {cfg?.max_open_trades ?? 2} open
