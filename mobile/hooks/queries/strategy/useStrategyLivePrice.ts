@@ -11,7 +11,9 @@ export interface LadderRung {
   key: string;
   label: string;                 // TP1, TP2, … in premium order
   source: 'engine' | 'chart-long-press' | 'edit-card' | string;
-  premium: number;
+  /** Null for a stock-only line (set by stock price, no delta) — the stock
+   *  price is the trigger and the premium is unknown until it fires. */
+  premium: number | null;
   qty: number;
   hit: boolean;
   stock_price?: number | null;
@@ -24,7 +26,8 @@ export interface LadderRung {
 /** A user TP line as sent to PATCH /exits (tp_rungs). */
 export interface TpRungInput {
   id?: string;
-  premium: number;
+  /** Null for a stock-only line — the stock price is the trigger. */
+  premium: number | null;
   qty: number;
   stock_price?: number | null;
   source?: 'chart-long-press' | 'edit-card';

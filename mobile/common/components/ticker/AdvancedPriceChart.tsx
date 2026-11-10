@@ -1927,10 +1927,13 @@ export const AdvancedPriceChart: React.FC<AdvancedPriceChartProps> = ({
                 );
               })()}
 
-              {/* Position pill on the current price: contracts | P&L | rungs. */}
+              {/* Position pill on the current price: contracts | P&L. */}
               {tradeMarker && lastPrice != null && lastPrice >= scale.lo && lastPrice <= scale.hi && (() => {
                 const y = scale.yForPrice(lastPrice);
-                const text = `${tradeMarker.count}  ${tradeMarker.pnlText}${tradeMarker.summary ? `  ${tradeMarker.summary}` : ''}`;
+                // The position pill — contracts | P&L only (2026-11-10: the
+                // TP rung summary lived here and crowded out the price; the
+                // TPs still show on the bottom position card).
+                const text = `${tradeMarker.count}  ${tradeMarker.pnlText}`;
                 const w = text.length * 6 + 14;
                 return (
                   <>

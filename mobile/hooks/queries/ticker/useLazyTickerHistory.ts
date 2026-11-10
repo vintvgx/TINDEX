@@ -206,6 +206,11 @@ export interface LazyHistory {
   loadMore: () => void;
   loadingMore: boolean;
   exhausted: boolean;
+  /** A refreshNonce-triggered tail catch-up (e.g. after the app was
+   *  backgrounded) is in flight — the chart can show an "Updating…"
+   *  indicator while the missing candles are fetched. Routine 30s
+   *  polls never set this. */
+  catchingUp: boolean;
 }
 
 export function useLazyTickerHistory(opts: {
@@ -217,8 +222,12 @@ export function useLazyTickerHistory(opts: {
   enabled?: boolean;
   /** 1D/intraday: keep the extended-hours session (premarket candles). */
   extendedHours?: boolean;
+  /** Bump to force an immediate tail catch-up (e.g. after the app was
+   *  backgrounded — the 30s interval stalls while suspended, so the gap
+   *  would otherwise wait up to a full interval to fill). */
+  refreshNonce?: number;
 }): LazyHistory {
-  const { ticker, period, interval, pollMs, enabled = true, extendedHours = false } = opts;
+  const { ticker, period, interval, pollMs, enabled = true, extendedHours = false, refreshNonce = 0 } = opts;
   const [bars, setBars] = useState<TickerHistoryData | null>(null);
   // Which ticker|period|interval|extendedHours `bars` belong to. Set in the
   // same commit that clears `bars`, so for the one render between a key
@@ -229,6 +238,14 @@ export function useLazyTickerHistory(opts: {
   const [isError, setIsError] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [exhausted, setExhausted] = useState(false);
+  // True only while a refreshNonce-triggered catch-up tick is in flight
+  // (see the tail poll below). The chart shows an "Updating…" pill for
+  // exactly this window — the existing candles stay put, so there is no
+  // skeleton, just a signal that the newest ones are being drawn.
+  const [catchingUp, setCatchingUp] = useState(false);
+  // Last refreshNonce the tail-poll effect saw. A bump means "the app was
+  // away" — the next immediate tick is a catch-up, not a routine poll.
+  const prevNonce = useRef(refreshNonce);
   const live = useRef({ bars: null as TickerHistoryData | null, loadingMore: false, exhausted: false });
   live.current = { bars, loadingMore, exhausted };
   // Generation: bumped every time the initial-load effect (re)runs. An
@@ -387,10 +404,11 @@ export function useLazyTickerHistory(opts: {
   // ── Live tail poll ────────────────────────────────────────────────
   useEffect(() => {
     if (!enabled || !pollMs || !intraday) return;
-    const tick = async () => {
+    const tick = async (catchUp = false) => {
       const s = live.current;
       if (!s.bars?.dates?.length || s.loadingMore) return;
       const myGen = gen.current;
+      if (catchUp) setCatchingUp(true);
       try {
         // Only from the newest loaded bar's day (usually today, ~1-80 bars),
         // not a fixed 5-day window re-downloaded every 30s.
@@ -404,14 +422,21 @@ export function useLazyTickerHistory(opts: {
         setBars((prev) => (prev ? mergeHistory(prev, data, true) : data));
       } catch {
         /* next poll retries */
+      } finally {
+        if (catchUp) setCatchingUp(false);
       }
     };
     // Catch up right away (no-op until bars exist) — on refocus the bars
-    // were kept, so don't leave them a full interval stale.
-    tick();
+    // were kept, so don't leave them a full interval stale. refreshNonce
+    // re-runs this effect after a background gap, for the same reason — and
+    // only that nonce-triggered tick reports itself as a catch-up, so the
+    // routine 30s polls stay silent.
+    const isCatchUp = refreshNonce !== prevNonce.current;
+    prevNonce.current = refreshNonce;
+    tick(isCatchUp);
     const id = setInterval(tick, pollMs);
     return () => clearInterval(id);
-  }, [enabled, pollMs, ticker, interval, intraday, extendedHours]);
+  }, [enabled, pollMs, ticker, interval, intraday, extendedHours, refreshNonce]);
 
   const fresh = barsKey === currentKey;
   return {
@@ -423,5 +448,6 @@ export function useLazyTickerHistory(opts: {
     loadMore,
     loadingMore,
     exhausted,
+    catchingUp,
   };
 }
