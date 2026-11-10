@@ -17,7 +17,8 @@ from services.strategy import orb_engine as oe  # noqa: E402
 from services.strategy.exit_manager import ExitManager  # noqa: E402
 from services.strategy.profiles import get_profile  # noqa: E402
 
-ENTRY = 1.00   # TREND_RIDER: TP1 = max(1.15, 1.00 + 0.30) = 1.30 → halfway = 1.15
+ENTRY = 1.00   # TREND_RIDER: TP1 = 1.00 x 1.15 = 1.15 -> halfway = 1.075
+               # (2026-11-10: dollar floors removed — TPs are pure percentages)
 
 
 def _em(minutes=60, progress=None, held_min=0):
@@ -51,12 +52,12 @@ def test_holds_before_the_window():
     em = _em(held_min=59)
     assert _tick(em, 1.02)["type"] == "HOLD"
     assert em.to_dict()["time_stop_deadline"] is not None
-    assert em.tp1 == pytest.approx(1.30) and em.to_dict()["time_stop_target"] == pytest.approx(1.15)
+    assert em.tp1 == pytest.approx(1.15) and em.to_dict()["time_stop_target"] == pytest.approx(1.075)
 
 
 def test_fires_at_window_with_no_progress():
     em = _em(held_min=30)
-    assert _tick(em, 1.10)["type"] == "HOLD"        # peak 1.10 < 1.15 target
+    assert _tick(em, 1.05)["type"] == "HOLD"        # peak 1.05 < 1.075 target
     em.entry_time -= timedelta(minutes=31)
     a = _tick(em, 1.03)
     assert (a["type"], a["reason"], a["qty"], a["current_premium"]) == ("CLOSE_ALL", "TIME_STOP", 4, 1.03)
@@ -64,7 +65,7 @@ def test_fires_at_window_with_no_progress():
 
 def test_peak_progress_disarms_even_after_pullback():
     em = _em(held_min=10)
-    _tick(em, 1.16)                          # peak reached 1.15
+    _tick(em, 1.16)                          # peak 1.16 ≥ 1.075 target
     assert em.time_stop_progress_met
     em.entry_time -= timedelta(minutes=60)
     assert _tick(em, 1.02)["type"] == "HOLD"
@@ -79,7 +80,7 @@ def test_not_after_tp1():
 
 def test_custom_progress():
     # A first qualifying quote AT/AFTER the deadline is late, not earned:
-    # 61 min held on a 60-min stop, target 1.075, tick 1.08 → TIME_STOP.
+    # 61 min held on a 60-min stop, target 1.0375, tick 1.08 → TIME_STOP.
     em = _em(progress=0.25, held_min=61)    # target 1.075
     a = _tick(em, 1.08)
     assert (a["type"], a["reason"]) == ("CLOSE_ALL", "TIME_STOP")
@@ -88,7 +89,7 @@ def test_custom_progress():
 
 def test_custom_progress_in_time_disarms():
     # Same custom progress, but the qualifying quote arrives BEFORE the
-    # deadline: 59 min held, tick 1.08 ≥ 1.075 target → disarm, HOLD.
+    # deadline: 59 min held, tick 1.08 ≥ 1.0375 target → disarm, HOLD.
     em = _em(progress=0.25, held_min=59)    # target 1.075
     assert _tick(em, 1.08)["type"] == "HOLD" and em.time_stop_progress_met
 

@@ -88,15 +88,17 @@ def compute_exit_levels(entry_premium: float, profile: dict) -> tuple[float, flo
     and by ORBEngine's pending-confirmation preview (before any order is
     placed), so the two numbers never drift apart.
 
-    Dollar-floored TP targets: TP = max(entry × mult, entry + min_dollars).
-    Prevents cheap OTM contracts from locking in noise-level gains on a
-    %-only target.
+    TPs follow the strategy's percentages exactly: TP = entry × mult.
+    (2026-11-10: the old max(entry × mult, entry + min_dollars) floors
+    silently overrode the strategy's percentages on cheap entries — a $0.90
+    entry armed TP2 at $1.80 (+100%) against a +60% strategy, and the
+    strategy screen (which shows only the percentages) looked wrong.
+    min_tp1_dollars/min_tp2_dollars are no longer read; the keys stay in
+    the profiles as legacy so stored strategy overrides still validate.)
     """
     hard_stop = entry_premium * (1 - profile["max_loss_pct"])
-    min_tp1 = profile.get("min_tp1_dollars", 0.0)
-    min_tp2 = profile.get("min_tp2_dollars", 0.0)
-    tp1 = max(entry_premium * profile["tp1_mult"], entry_premium + min_tp1)
-    tp2 = max(entry_premium * profile["tp2_mult"], entry_premium + min_tp2)
+    tp1 = entry_premium * profile["tp1_mult"]
+    tp2 = entry_premium * profile["tp2_mult"]
     return hard_stop, tp1, tp2
 
 
@@ -580,7 +582,7 @@ class ExitManager:
         # trade). Fires the lowest reached rung first; an engine level below
         # it that's also reached goes first via its own branch below.
         if self._rungs and not self._disable_tp1_exit:
-            rung_action = self._evaluate_rungs(current_option_price)
+            rung_action = self._evaluate_rungs(current_option_price, current_underlying_price)
             if rung_action is not None:
                 return rung_action
 
@@ -1032,12 +1034,24 @@ class ExitManager:
         if self._runner_mode == "trail":
             self.runner_trail = price * (1 - self.profile["runner_trail_pct"])
 
-    def _evaluate_rungs(self, price: float) -> dict | None:
-        """Fire the lowest reached, unfired user rung (premium order — the
-        option's premium rises into profit for a CALL and a PUT alike), with
-        TP1's tick confirmation. Returns None to let the engine branches run."""
-        pending = sorted((r for r in self._rungs if not r["hit"]), key=lambda r: r["premium"])
-        for r in pending:
+    def _evaluate_rungs(self, price: float, underlying: float | None = None) -> dict | None:
+        """Fire the lowest reached, unfired user rung, with TP1's tick
+        confirmation. Premium rungs fire on the option premium (the premium
+        rises into profit for a CALL and a PUT alike); stock rungs — lines
+        set by stock price with no premium (no delta to convert through) —
+        fire when the underlying crosses the line in the trade's favor
+        (PUT: at/below, CALL: at/above) and sell at the market premium.
+        Returns None to let the engine branches run."""
+        pending = [r for r in self._rungs if not r["hit"]]
+        prem_rungs = sorted((r for r in pending if r.get("premium") is not None),
+                            key=lambda r: r["premium"])
+        stock_rungs = [r for r in pending
+                       if r.get("premium") is None and r.get("stock_price") is not None]
+        # Stock lines are reached in the direction the stock moves: a PUT
+        # meets its highest line first as the stock falls, a CALL its
+        # lowest line first as it rises.
+        stock_rungs.sort(key=lambda r: r["stock_price"], reverse=(self.direction == "PUT"))
+        for r in prem_rungs:
             if price < r["premium"]:
                 r["_ticks"] = 0
                 continue
@@ -1049,40 +1063,75 @@ class ExitManager:
             if (self._use_tp2 and self.tp1_hit and not self.tp2_hit
                     and self.tp2 <= r["premium"] and price >= self.tp2):
                 return None
-            r["_ticks"] = r.get("_ticks", 0) + 1
-            if r["_ticks"] < self._tp1_ticks_needed:
-                return self._action("HOLD", 0, "TP_RUNG_CONFIRMING")
-            qty = min(r["qty"], max(0, self.qty_remaining - 1))   # never the runner
-            r["hit"] = True
-            r["hit_premium"] = round(price, 4)
-            r["hit_at"] = datetime.now(ET).isoformat(timespec="seconds")
-            self._log_decision("TP_RUNG_HIT", rung=r["id"], premium=r["premium"], qty=qty, price=price,
-                               source=r.get("source"))
-            if r.get("replaces_tp1") and not self.tp1_hit:
-                self._tp1_side_effects(price)          # this line IS TP1
-            elif not self.be_stop_active and self._runner_mode != "none" and price > self.entry_premium:
-                # BE arms after the first TP hit, whichever rung it was.
-                self.mark_breakeven(self.breakeven_level(cap=price))
-            if qty <= 0:
-                return self._action("HOLD", 0, "TP_RUNG_NOTHING_LEFT")
-            return self._action("CLOSE_PARTIAL", qty, "TP_RUNG", price)
+            action = self._fire_rung(r, price)
+            if action is not None:
+                return action
+        for r in stock_rungs:
+            if underlying is None:
+                r["_ticks"] = 0
+                continue
+            reached = ((underlying <= r["stock_price"]) if self.direction == "PUT"
+                       else (underlying >= r["stock_price"]))
+            if not reached:
+                r["_ticks"] = 0
+                continue
+            # An engine premium level also reached this tick fires first.
+            if (not self.tp1_hit and not self._tp1_replaced and not self._disable_tp1_exit
+                    and price >= self.tp1):
+                return None
+            if (self._use_tp2 and self.tp1_hit and not self.tp2_hit and price >= self.tp2):
+                return None
+            action = self._fire_rung(r, price)
+            if action is not None:
+                return action
+        return None
+
+    def _fire_rung(self, r: dict, price: float) -> dict | None:
+        """Confirm-tick + sell for one reached rung (premium or stock)."""
+        r["_ticks"] = r.get("_ticks", 0) + 1
+        if r["_ticks"] < self._tp1_ticks_needed:
+            return self._action("HOLD", 0, "TP_RUNG_CONFIRMING")
+        qty = min(r["qty"], max(0, self.qty_remaining - 1))   # never the runner
+        r["hit"] = True
+        r["hit_premium"] = round(price, 4)
+        r["hit_at"] = datetime.now(ET).isoformat(timespec="seconds")
+        self._log_decision("TP_RUNG_HIT", rung=r["id"], premium=r.get("premium"),
+                           stock_price=r.get("stock_price"), qty=qty, price=price,
+                           source=r.get("source"))
+        if r.get("replaces_tp1") and not self.tp1_hit:
+            self._tp1_side_effects(price)          # this line IS TP1
+        elif not self.be_stop_active and self._runner_mode != "none" and price > self.entry_premium:
+            # BE arms after the first TP hit, whichever rung it was.
+            self.mark_breakeven(self.breakeven_level(cap=price))
+        if qty <= 0:
+            return self._action("HOLD", 0, "TP_RUNG_NOTHING_LEFT")
+        return self._action("CLOSE_PARTIAL", qty, "TP_RUNG", price)
         return None
 
     def set_tp_rungs(self, rungs: list, current_price: float | None = None,
-                     allow_immediate: bool = False) -> list:
+                     allow_immediate: bool = False,
+                     current_underlying: float | None = None) -> list:
         """
         Replace this trade's user TP rungs with `rungs` (the full desired
         list — fired rungs are kept as history and can't be edited). Each:
-        {id?, premium, qty, stock_price?, source?}. Enforced here, whatever
+        {id?, premium?, qty, stock_price?, source?}. A rung needs a premium,
+        a stock price, or both — a stock-only line fires when the underlying
+        crosses the line in the trade's favor (PUT: at/below, CALL: at/above)
+        and sells at the market premium then. Enforced here, whatever
         the client sent (§9):
           • TP must be on: refused while take-profit is off for this trade
             (the rungs could never fire);
-          • every premium is above entry (a TP never sells at a loss);
+          • a premium, when set, is above entry (a TP never sells at a loss);
           • a new or moved line's premium is above `current_price` — it
             would fire on the next tick — unless `allow_immediate` (the
             app's second confirm, §4.4). Skipped when current_price is None;
+          • a new or moved stock line must sit on the profitable side of
+            `current_underlying` (PUT: below it, CALL: above it) — a line
+            the stock already crossed is already reached, same guard as the
+            premium, same `allow_immediate` escape. Skipped when the
+            underlying is unknown;
           • qty ≥ 1, no two lines at the same premium (nor on an engine
-            TP1/TP2 premium);
+            TP1/TP2 premium), no two lines at the same stock price;
           • at most one rung per contract, and every rung + TP1's remaining
             qty + 1 runner fits in qty_remaining.
         The first user line takes its qty out of TP1's allocation (§4.5).
@@ -1104,35 +1153,60 @@ class ExitManager:
             rid = str(raw.get("id") or "")
             if rid in fired_ids:
                 continue                                  # history, immutable
+            # Premium is optional when the line is stock-triggered.
+            raw_prem = raw.get("premium")
+            premium = None
+            if raw_prem is not None:
+                try:
+                    premium = round(float(raw_prem), 4)
+                except (TypeError, ValueError):
+                    raise ValueError("each TP line needs a premium or a stock price")
+                if not math.isfinite(premium) or premium <= 0:
+                    raise ValueError("TP premium must be above $0")
             try:
-                premium = round(float(raw["premium"]), 4)
                 qty = int(raw["qty"])
             except (KeyError, TypeError, ValueError):
-                raise ValueError("each TP line needs a premium and a quantity")
-            if not math.isfinite(premium) or premium <= 0:
-                raise ValueError("TP premium must be above $0")
+                raise ValueError("each TP line needs a premium or a stock price")
             if qty < 1:
                 raise ValueError("each TP line must sell at least 1 contract")
-            if premium <= self.entry_premium:
+            sp_raw = raw.get("stock_price")
+            sp = (round(float(sp_raw), 2)
+                  if isinstance(sp_raw, (int, float)) and math.isfinite(sp_raw) else None)
+            if premium is None and sp is None:
+                raise ValueError("each TP line needs a premium or a stock price")
+            if premium is not None and premium <= self.entry_premium:
                 raise ValueError(f"A TP at ${premium:.2f} is at or below entry (${self.entry_premium:.2f}) "
                                  f"— it would sell at a loss; set a stop instead")
             prev = existing.get(rid) or {}
-            moved = not prev or abs(prev.get("premium", 0) - premium) >= 0.005
-            if (moved and current_price is not None and not allow_immediate
-                    and premium <= current_price):
-                raise ValueError(f"A TP at ${premium:.2f} is already reached (premium now "
-                                 f"${current_price:.2f}) — it would fire on the next tick")
-            sp = raw.get("stock_price")
+            prev_prem = prev.get("premium")
+            prev_sp = prev.get("stock_price")
+            moved = (not prev
+                     or (premium is not None and (prev_prem is None or abs(prev_prem - premium) >= 0.005))
+                     or (sp is not None and (prev_sp is None or abs(prev_sp - sp) >= 0.05)))
+            if moved and not allow_immediate:
+                if premium is not None and current_price is not None and premium <= current_price:
+                    raise ValueError(f"A TP at ${premium:.2f} is already reached (premium now "
+                                     f"${current_price:.2f}) — it would fire on the next tick")
+                if sp is not None and current_underlying is not None:
+                    if self.direction == "PUT" and sp >= current_underlying:
+                        raise ValueError(f"A TP at ${sp:.2f} stock is already reached (stock now "
+                                         f"${current_underlying:.2f}) — it would fire on the next tick")
+                    if self.direction == "CALL" and sp <= current_underlying:
+                        raise ValueError(f"A TP at ${sp:.2f} stock is already reached (stock now "
+                                         f"${current_underlying:.2f}) — it would fire on the next tick")
             new.append({
                 "id": rid or uuid.uuid4().hex[:10],
                 "premium": premium,
                 "qty": qty,
-                "stock_price": round(float(sp), 2) if isinstance(sp, (int, float)) and math.isfinite(sp) else None,
+                "stock_price": sp,
                 "source": raw.get("source") or prev.get("source") or "edit-card",
                 "created_at": prev.get("created_at") or now_iso,
                 "hit": False,
             })
-        prices = [r["premium"] for r in new] + [r["premium"] for r in fired]
+        prices = ([r["premium"] for r in new if r["premium"] is not None]
+                  + [r["premium"] for r in fired if r.get("premium") is not None])
+        stocks = ([r["stock_price"] for r in new if r["stock_price"] is not None]
+                  + [r["stock_price"] for r in fired if r.get("stock_price") is not None])
         engine_prices = []
         if not self.tp1_hit and not self._tp1_replaced:
             engine_prices.append(("TP1", self.tp1))
@@ -1144,6 +1218,9 @@ class ExitManager:
             for name, q in engine_prices:
                 if abs(p_ - q) < 0.005:
                     raise ValueError(f"Already a line at ${p_:.2f} ({name})")
+        for i, s_ in enumerate(stocks):
+            if any(abs(s_ - q) < 0.05 for q in stocks[i + 1:]):
+                raise ValueError(f"Already a line at ${s_:.2f} stock")
         max_rungs = max(0, self.qty_remaining - 1)
         if len(new) > max_rungs:
             raise ValueError(f"At most {max_rungs} TP line{'s' if max_rungs != 1 else ''} — "
@@ -1216,9 +1293,13 @@ class ExitManager:
             if not isinstance(r, dict):
                 continue
             try:
-                premium, qty = float(r["premium"]), int(r["qty"])
+                qty = int(r["qty"])
+                premium = (round(float(r["premium"]), 4)
+                           if r.get("premium") is not None else None)
             except (KeyError, TypeError, ValueError):
                 continue
+            if premium is None and r.get("stock_price") is None:
+                continue                                  # a rung needs a trigger
             rungs.append({**r, "premium": premium, "qty": qty, "hit": bool(r.get("hit")),
                           "id": str(r.get("id") or f"restored-{len(rungs)}")})
         self._rungs = rungs
@@ -1237,7 +1318,9 @@ class ExitManager:
     def ladder(self) -> list:
         """The one rung list (engine + user), premium order, for the Edit
         card / chart / position strip. qty is what each rung sells; the
-        runner is whatever is left."""
+        runner is whatever is left. The line that took all of TP1's qty
+        (replaces_tp1) sorts first — it IS TP1 — and a stock-only line (no
+        premium) sorts after the premium rungs."""
         out = []
         reserved = self._reserved_qty()
         tp1_qty = self._tp1_current_qty()
@@ -1265,7 +1348,8 @@ class ExitManager:
                     tp2_qty = min(tp2_qty, max(0, pool - 1))
             out.append({"key": "tp2", "source": "engine", "premium": round(self.tp2, 4),
                         "qty": tp2_qty, "hit": self.tp2_hit})
-        out.sort(key=lambda x: x["premium"])
+        out.sort(key=lambda x: (0 if x.get("replaces_tp1") else 1,
+                                x["premium"] if x["premium"] is not None else float("inf")))
         for i, x in enumerate(out, 1):
             x["label"] = f"TP{i}"
         return out
@@ -1304,6 +1388,7 @@ class ExitManager:
                         cancel_be_grace: bool = False,
                         tp_rungs: list | None = None,
                         current_price: float | None = None,
+                        current_underlying: float | None = None,
                         allow_immediate: bool = False) -> dict:
         """
         Validate and apply user-supplied SL/TP1/TP2 price and/or qty overrides
@@ -1403,7 +1488,8 @@ class ExitManager:
         if tp_rungs is not None:
             if tp1_qty is not None:
                 raise ValueError("Set TP1's quantity through the TP lines when lines are being saved")
-            rungs_changed = self.set_tp_rungs(tp_rungs, current_price, allow_immediate)
+            rungs_changed = self.set_tp_rungs(tp_rungs, current_price, allow_immediate,
+                                              current_underlying=current_underlying)
 
         changed = {}
         if rungs_changed is not None:

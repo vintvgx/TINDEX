@@ -1011,10 +1011,15 @@ def update_strategy_exits(strategy_id: str):
         # the edit sheet's Cancel button. In-memory only, nothing to persist.
         "cancel_be_grace": bool(data.get("cancel_be_grace", False)),
         # Chart / Edit-card TP lines (spec 2026-11-10 §4.5–§6): the FULL
-        # desired list of user rungs [{id?, premium, qty, stock_price?,
-        # source?}]. Validated + reserved server-side in set_tp_rungs.
+        # desired list of user rungs [{id?, premium?, qty, stock_price?,
+        # source?}]. A rung needs a premium, a stock price, or both — a
+        # stock-only line fires on the underlying (no delta to convert
+        # through). Validated + reserved server-side in set_tp_rungs.
         "tp_rungs": data["tp_rungs"] if "tp_rungs" in data else None,
         "current_price": getattr(engine, "_current_option_price", None),
+        # The underlying at the moment of the edit — set_tp_rungs checks a
+        # stock line sits on the profitable side of it.
+        "current_underlying": getattr(engine, "_last_underlying_price", None),
         # The app's second confirm on a TP that's already reached (§4.4).
         "allow_immediate": bool(data.get("allow_immediate", False)),
     }
