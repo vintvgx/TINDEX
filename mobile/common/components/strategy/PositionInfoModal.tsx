@@ -19,7 +19,8 @@ import { useToast } from '@/common/components/ui/Toast';
 import { SlGraceBadge, useSlGracePulse } from '@/common/components/strategy/SlGraceBadge';
 import { ExitSafetyControls, BE_GRACE_DEFAULT } from '@/common/components/strategy/ExitSafetyControls';
 import type { ProfileKey } from '@/common/types/strategy';
-import type { LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import type { LadderRung, LivePriceData } from '@/hooks/queries/strategy/useStrategyLivePrice';
+import { TpLadderEditor, type LadderEditState } from '@/common/components/strategy/TpLadderEditor';
 import { WorkingLimitOrders } from '@/common/components/strategy/WorkingLimitOrders';
 
 export interface PositionInfoData {
@@ -59,6 +60,12 @@ export interface PositionInfoData {
   runner_mode?: 'trail' | 'be_hold' | 'none';
   runner_trail?: number;
   cascade_enabled?: boolean;
+  /** The TP ladder + live quote for stock-price ↔ premium (spec 2026-11-10 §4.6). */
+  tp_ladder?: LadderRung[] | null;
+  underlying_price?: number | null;
+  delta?: number | null;
+  delta_source?: string | null;
+  delta_age_s?: number | null;
 }
 
 interface Props {
@@ -172,6 +179,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const [runnerMode, setRunnerMode] = useState<'trail' | 'be_hold' | 'none'>('trail');
   const [cascadeOn, setCascadeOn] = useState(true);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [ladderEdit, setLadderEdit] = useState<LadderEditState>({ rungs: null, problem: null });
 
   const initial = useRef({
     sl: true, tp: true, stopMode: 'HARD' as 'HARD' | 'TIMER', minutes: 5 as GraceMinutes, floor: true,
@@ -215,6 +223,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
   const entry = data.entry_premium;
 
   const dirty =
+    ladderEdit.rungs != null ||
     !!stopVal || !!tp1Val || !!tp2Val || !!floorPriceVal ||
     slOn !== initial.current.sl || tpOn !== initial.current.tp ||
     (slOn && (stopMode !== initial.current.stopMode || (stopMode === 'TIMER' && graceMinutes !== initial.current.minutes))) ||
@@ -276,6 +285,10 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
       return;
     }
 
+    if (ladderEdit.rungs != null && ladderEdit.problem) {
+      Alert.alert('TP lines', ladderEdit.problem);
+      return;
+    }
     const slChanged = slOn !== initial.current.sl;
     const tpChanged = tpOn !== initial.current.tp;
     if (slChanged && slOn && stop === undefined && !(data.hard_stop > 0)) {
@@ -311,6 +324,7 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
     }
     if (canSplit && runnerMode !== initial.current.runnerMode) payload.runner_mode = runnerMode;
     if (canSplit && cascadeOn !== initial.current.cascade) payload.cascade_enabled = cascadeOn;
+    if (ladderEdit.rungs != null) payload.tp_rungs = ladderEdit.rungs;
 
     try {
       await mutation.mutateAsync(payload);
@@ -528,6 +542,20 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
                     No take profit — this runner rides its own course, including into close.
                   </Text>
                 )}
+                {/* One row per rung — engine + chart lines (§4.6). */}
+                {tpOn && canSplit && data.tp_ladder ? (
+                  <TpLadderEditor
+                    ladder={data.tp_ladder}
+                    entry={entry}
+                    qtyRemaining={data.qty_remaining}
+                    stock={data.underlying_price}
+                    mid={data.mid_price}
+                    delta={{ delta: data.delta, source: data.delta_source, ageS: data.delta_age_s }}
+                    colors={colors}
+                    visible={visible}
+                    onChange={setLadderEdit}
+                  />
+                ) : null}
               </View>
             ) : (
               <Text style={[s.readonlyValue, { color: tpOn ? colors.success : colors.textTertiary }]}>

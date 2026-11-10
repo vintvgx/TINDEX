@@ -11,6 +11,7 @@ import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { TickerContractsModal } from '@/common/components/ticker/TickerContractsModal';
 import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft, ChartAutoZone } from '@/common/components/ticker/AdvancedPriceChart';
+import type { LegacyTradeLine, LegacyTradeMarker } from '@/common/components/ticker/AdvancedPriceChart';
 import { TVChart } from '@/common/components/ticker/TVChart';
 import { ZoneDetailSheet } from '@/common/components/ticker/ZoneDetailSheet';
 import { ChartBottomToolbar } from '@/common/components/ticker/ChartBottomToolbar';
@@ -538,17 +539,27 @@ export function ChartsContent({ initialTicker, topInset }: {
   const briefOn = showBriefLevels && briefLevels != null && !tradeLinesDrawn;
   // Legacy engine has no overlay layer: trade lines join its reference
   // lines (no marker). TVChart draws them itself via tradeOverlay.
-  const legacyTradeLines = useMemo<ChartReferenceLine[]>(() => {
+  // Legacy engine: the same overlay, drawn by AdvancedPriceChart itself
+  // (lines + pill, tap to select, drag the selected line — §8).
+  const legacyTradeLines = useMemo<LegacyTradeLine[]>(() => {
     if (useTVChart || !overlayFrame) return [];
     return overlayFrame.lines.map(l => ({
-      label: l.title,
+      key: l.key,
+      title: l.title,
       price: l.price,
-      color: l.muted ? colors.textTertiary : l.kind === 'SL' ? colors.error : l.kind === 'BE' ? colors.textSecondary : colors.success,
+      color: l.hit ? colors.success
+        : l.muted ? colors.textTertiary : l.kind === 'SL' ? colors.error : l.kind === 'BE' ? colors.textSecondary : colors.success,
       dash: l.style === 'dotted' ? '2,3' : l.style === 'dashed' ? '5,4' : undefined,
+      width: l.hit || (l.kind === 'BE' && l.style === 'solid') ? 2 : 1.25,
     }));
   }, [useTVChart, overlayFrame, colors.textTertiary, colors.error, colors.textSecondary, colors.success]);
+  const legacyTradeMarker = useMemo<LegacyTradeMarker | null>(() => {
+    const m = !useTVChart ? overlayFrame?.markers[0] : null;
+    if (!m) return null;
+    const color = m.stale ? colors.textTertiary : m.tone === 'up' ? colors.success : m.tone === 'down' ? colors.error : colors.textSecondary;
+    return { count: m.count, pnlText: m.pnlText, color: m.runner && !m.stale ? colors.warning : color, summary: m.summary };
+  }, [useTVChart, overlayFrame, colors.textTertiary, colors.success, colors.error, colors.textSecondary, colors.warning]);
   const chartReferenceLines = useMemo<ChartReferenceLine[] | null>(() => {
-    if (legacyTradeLines.length) return [...(chart.referenceLines ?? []), ...legacyTradeLines];
     if (!briefOn || !briefLevels) return chart.referenceLines ?? null;
     const { trigger, stop, target, long } = briefLevels;
     return [
@@ -557,7 +568,7 @@ export function ChartsContent({ initialTicker, topInset }: {
       ...(stop != null ? [{ label: 'Stop', price: stop, color: long ? colors.success : colors.error, dash: '6,4' }] : []),
       ...(!useTVChart && target != null ? [{ label: 'Target', price: target, color: colors.error, dash: '4,3' }] : []),
     ];
-  }, [briefOn, briefLevels, chart.referenceLines, colors.warning, colors.success, colors.error, useTVChart, legacyTradeLines]);
+  }, [briefOn, briefLevels, chart.referenceLines, colors.warning, colors.success, colors.error, useTVChart]);
   const briefLevelBands = useMemo<ChartLevelBand[] | null>(() => {
     if (!briefOn || !briefLevels?.zone) return null;
     const { zone, target } = briefLevels;
@@ -988,6 +999,11 @@ export function ChartsContent({ initialTicker, topInset }: {
                   // Includes the ticker's Morning Brief trigger / stop (+ target on legacy).
                   referenceLines={chartReferenceLines}
                   settings={chart.chartSettings}
+                  tradeLines={legacyTradeLines}
+                  tradeMarker={legacyTradeMarker}
+                  selectedTradeLineKey={selectedLineKey}
+                  onTradeLineTap={handleTradeLineTap}
+                  onTradeLineDragEnd={(key, price) => handleTradeLineDrag(key, price, 'end')}
                 />
               )
             )}

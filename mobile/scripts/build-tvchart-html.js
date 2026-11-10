@@ -128,7 +128,7 @@ function main() {
     width: 22px; height: 22px; border-radius: 11px; border: 2px solid; box-sizing: border-box;
     font: 700 11px/18px -apple-system, 'SF Pro Text', sans-serif; text-align: center;
   }
-  #tlhandle::after { content: '⇕'; }
+  #tlhandle::after { content: '↕'; }
 </style>
 </head>
 <body>

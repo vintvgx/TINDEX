@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { ladderSummary } from '@/lib/chartTradeOverlay';
 import {
   View, Text, TouchableOpacity, StyleSheet, FlatList, Animated, LayoutAnimation, type LayoutChangeEvent,
 } from 'react-native';
@@ -194,6 +195,9 @@ function PositionStrip({ pos, onPress, onLiveUpdate, colors }: {
   const pnlPct = live?.pnl_pct ?? pos.unrealized_pnl_pct;
   const pnlColor = pnl >= 0 ? colors.success : colors.error;
   const money = (v: number | null | undefined) => (v == null ? '—' : `$${v.toFixed(2)}`);
+  // Same ladder summary the chart pill carries (spec §4.6) — updates live
+  // as lines are set, moved or hit.
+  const rungs = live ? ladderSummary(live) : null;
 
   return (
     <TouchableOpacity
@@ -212,6 +216,9 @@ function PositionStrip({ pos, onPress, onLiveUpdate, colors }: {
           {'  ·  '}Qty {qty}
           {working > 0 && <Text style={{ color: colors.warning, fontWeight: '700' }}>{`  ·  ${working} working`}</Text>}
         </Text>}
+        {!resyncing && rungs ? (
+          <Text style={[s.mono, { fontSize: 10.5, color: colors.textTertiary, marginTop: 2 }]} numberOfLines={1}>{rungs}</Text>
+        ) : null}
       </View>
       <View style={{ alignItems: 'flex-end' }}>
         {resyncing ? <ValueSkeleton width={64} height={13} /> : <Text style={[s.mono, { fontSize: 13, fontWeight: '800', color: pnlColor }]}>

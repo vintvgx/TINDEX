@@ -135,3 +135,22 @@ def test_rung_state_round_trips_for_restart():
     assert fresh.to_dict()["tp_rungs"][0]["hit"] is True
     assert fresh.tp1_hit and fresh.be_stop_active
     assert _tick(fresh, 1.45, 3)["reason"] != "TP_RUNG"      # never re-fires
+
+
+def test_ladder_reports_the_tp1_carve():
+    em = _em()
+    em.apply_overrides(tp_rungs=[{"premium": 1.57, "qty": 1}])
+    line = next(x for x in em.ladder() if x["source"] != "engine")
+    assert line["from_tp1"] == 1 and not line["replaces_tp1"]
+
+
+def test_push_ladder_projects_stock_prices_from_delta():
+    from types import SimpleNamespace
+    from services.strategy.orb_engine import ORBEngine
+    em = _em()
+    em.apply_overrides(tp_rungs=[{"premium": 1.57, "qty": 1}])
+    eng = SimpleNamespace(_overlay_delta=0.42, _last_underlying_price=768.32)
+    ladder = ORBEngine._ladder_with_stock(eng, em, 1.20)
+    assert [x["stock_price"] for x in ladder] == [768.56, 769.2, 769.99]   # §5 worked example
+    eng._overlay_delta = None
+    assert all(x["stock_price"] is None for x in ORBEngine._ladder_with_stock(eng, em, 1.20))   # never guessed

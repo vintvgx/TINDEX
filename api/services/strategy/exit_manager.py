@@ -1209,7 +1209,10 @@ class ExitManager:
         for r in self._rungs:
             out.append({"key": r["id"], "source": r.get("source") or "edit-card", "premium": r["premium"],
                         "qty": r["qty"], "hit": r["hit"], "stock_price": r.get("stock_price"),
-                        "replaces_tp1": r.get("replaces_tp1", False), "hit_premium": r.get("hit_premium")})
+                        "replaces_tp1": r.get("replaces_tp1", False), "hit_premium": r.get("hit_premium"),
+                        # How much of this line's qty came out of TP1 (§4.5) —
+                        # lets the Edit card show the exact TP1 qty while editing.
+                        "from_tp1": r.get("from_tp1", 0)})
         if self._use_tp2 and not self._disable_tp1_exit:
             pool = max(0, self.qty_remaining - tp1_qty - reserved)
             if self.tp2_hit:

@@ -405,6 +405,11 @@ export function LivePositionPanel({
             runner_mode: display.runner_mode,
             runner_trail: display.runner_trail,
             cascade_enabled: display.cascade_enabled,
+            tp_ladder: live?.tp_ladder ?? null,
+            underlying_price: live?.underlying_price ?? null,
+            delta: live?.delta ?? null,
+            delta_source: live?.delta_source ?? null,
+            delta_age_s: live?.delta_age_s ?? null,
           }}
         />
       )}

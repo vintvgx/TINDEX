@@ -16,6 +16,8 @@ export interface LadderRung {
   hit: boolean;
   stock_price?: number | null;
   replaces_tp1?: boolean;
+  /** Contracts this user line took out of TP1's allocation (the first line). */
+  from_tp1?: number;
   hit_premium?: number | null;
 }
 

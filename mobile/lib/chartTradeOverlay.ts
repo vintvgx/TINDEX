@@ -178,7 +178,7 @@ function ladderOf(live: OverlayTradeInput['live']): LadderRung[] {
 
 /** "TP1 768.56 · TP2 769.20 · R1": rungs left to fire (stock price when the
  *  engine could project it, else premium) and the runner count. */
-function ladderSummary(live: OverlayTradeInput['live']): string | null {
+export function ladderSummary(live: OverlayTradeInput['live']): string | null {
   const open = ladderOf(live).filter(r => !r.hit);
   if (!open.length) return null;
   const left = open.map(r => `${r.label} ${isNum(r.stock_price) ? r.stock_price.toFixed(2) : `$${fmtPrem(r.premium)}`}`);

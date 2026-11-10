@@ -336,6 +336,7 @@
   var selectedTradeKey = null;
   var dragKey = null, dragPrice = null, dragFrame = false;
   var DRAG_GRAB_PX = 16;
+  var handleRetries = 0;
   var handleEl = document.createElement('div');
   handleEl.id = 'tlhandle';
   document.body.appendChild(handleEl);
@@ -356,12 +357,20 @@
     for (var i = 0; i < tradeLineDefs.length; i++) if (tradeLineDefs[i].key === selectedTradeKey) def = tradeLineDefs[i];
     if (!def || !mainSeries || !chart) { handleEl.style.display = 'none'; return; }
     var y = mainSeries.priceToCoordinate(dragKey === def.key && dragPrice !== null ? dragPrice : def.price);
-    if (y === null || y === undefined) { handleEl.style.display = 'none'; return; }
     var axisW = 0;
     try { axisW = chart.priceScale('right').width(); } catch (e) {}
+    // Before the chart's first paint there's no scale yet — retry next frame
+    // (bounded, on a timer: frames can outrun the first paint), same as the markers.
+    if (y === null || y === undefined || !isFinite(y) || !axisW) {
+      handleEl.style.display = 'none';
+      if (handleRetries++ < 100) setTimeout(layoutHandle, 50);   // up to ~5s, until the first paint
+      return;
+    }
+    handleRetries = 0;
     handleEl.style.display = 'block';
     handleEl.style.top = Math.round(y - 11) + 'px';
-    handleEl.style.right = (axisW + 6) + 'px';
+    // Just left of the line's own title, never on top of it.
+    handleEl.style.right = (axisW + lineTitleWidth(def.title) + 6) + 'px';
     handleEl.style.borderColor = def.color;
     handleEl.style.color = def.color;
     handleEl.style.background = theme.background;
@@ -507,7 +516,7 @@
     // Before the chart's first paint there are no coordinates yet — try again
     // next frame (bounded) instead of waiting for some later redraw.
     if (y === null || y === undefined || !H || !axisW) {
-      if (tmLayoutRetries++ < 120) requestAnimationFrame(layoutTradeMarkers);
+      if (tmLayoutRetries++ < 100) setTimeout(layoutTradeMarkers, 50);   // up to ~5s, until the first paint
       return;
     }
     tmLayoutRetries = 0;
