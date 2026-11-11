@@ -35,6 +35,8 @@ export interface PositionInfoData {
   pnl: number;
   pnl_pct: number;
   hard_stop: number;
+  /** Stop set on the chart by stock price — shown as "SL @ $X" (§7). */
+  sl_stock_price?: number | null;
   tp1: number;
   tp2?: number;
   tp1_hit?: boolean;
@@ -307,7 +309,11 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
     }
 
     const payload: Parameters<typeof mutation.mutateAsync>[0] = { strategy_id: strategyId! };
-    if (stop !== undefined && !isNaN(stop)) payload.hard_stop = stop;
+    if (stop !== undefined && !isNaN(stop)) {
+      payload.hard_stop = stop;
+      // A premium typed here replaces the chart's stock stop (one stop).
+      if (data.sl_stock_price != null) payload.sl_stock_price = null;
+    }
     if (tp1 !== undefined && !isNaN(tp1)) payload.tp1 = tp1;
     if (tp2Editable && tp2 !== undefined && !isNaN(tp2)) payload.tp2 = tp2;
     if (slChanged) payload.sl_enabled = slOn;
@@ -448,6 +454,12 @@ export function PositionInfoModal({ visible, onClose, colors, profile, data, str
                 />
               )}
             />
+            {slOn && data.sl_stock_price != null ? (
+              <Text style={[s.hintText, { color: colors.error, fontWeight: '700' }]}>
+                SL @ ${data.sl_stock_price.toFixed(2)} stock — sells all remaining when the stock closes there
+                {editable ? '. A premium below replaces it.' : ''}
+              </Text>
+            ) : null}
             {editable ? (
               <Animated.View style={[{ opacity: slOn ? 1 : 0.45 }, slPulseStyle]}>
                 <View style={s.editRow}>

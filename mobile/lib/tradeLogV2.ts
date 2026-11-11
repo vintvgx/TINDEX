@@ -84,7 +84,7 @@ const REASON: Record<string, string> = {
   CASCADE_EXIT: 'Cascade', CASCADE_FIRE: 'Cascade',
   BREAKEVEN_STOP: 'Breakeven stop', RUNNER_FLOOR_STOP: 'Runner profit floor',
   RUNNER_TRAIL_STOP: 'Runner trailing stop', RUNNER_INVALIDATION: 'Runner exit · trend invalidated',
-  HARD_STOP: 'Hard stop', HARD_STOP_FLOOR: 'Hard stop floor', TIME_STOP: 'Time stop',
+  HARD_STOP: 'Hard stop', HARD_STOP_STOCK: 'Stop (stock line)', HARD_STOP_FLOOR: 'Hard stop floor', TIME_STOP: 'Time stop',
   EOD_CLOSE: 'EOD close', EOD_HARD_CLOSE: 'EOD hard close',
   MANUAL_EXIT: 'Manual exit', MANUAL_CLOSE: 'Manual close', FORCE_CLOSE: 'Force closed',
   EXPIRED_WORTHLESS: 'Expired worthless', LOW_VOLUME_EXIT: 'Low volume exit',

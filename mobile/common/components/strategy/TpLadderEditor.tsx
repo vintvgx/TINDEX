@@ -142,13 +142,15 @@ export function TpLadderEditor({
   const tp1Base = tp1Live ? tp1!.qty + (savedCarver?.from_tp1 ?? 0) : 0;
   const carver = rows.find(r => r.id != null && r.id === savedCarver?.key) ?? rows[0];
   const carve = tp1Live && carver ? Math.min(carver.qty, tp1Base) : 0;
-  const tp1Qty = tp1Base - carve;
   const userQty = rows.reduce((n, r) => n + r.qty, 0);
+  // Lines come first: TP1 gives up contracts they need, and the runner may
+  // take a line (inline exit lines §3) — same rule as the server.
+  const tp1Qty = Math.max(0, Math.min(tp1Base - carve, qtyRemaining - userQty));
   const free = qtyRemaining - tp1Qty - userQty;          // TP2 + runner share this
   const tp2Qty = tp2 && !tp2.hit ? Math.max(0, Math.min(tp2.qty, free - 1)) : 0;
   const runner = free - tp2Qty;
   const parts = [...(tp1Qty ? [tp1Qty] : []), ...rows.map(r => r.qty), ...(tp2Qty ? [tp2Qty] : [])];
-  const qtyOk = runner >= 1 && rows.length <= qtyRemaining - 1;
+  const qtyOk = userQty <= qtyRemaining;
 
   const state = useMemo<LadderEditState>(() => {
     const prices = rows.map(r => parseFloat(r.premium));
@@ -175,7 +177,7 @@ export function TpLadderEditor({
         .filter((p): p is number => p != null);
       const dup = all.find((p, i) => all.some((q, j) => j !== i && Math.abs(p - q) < 0.005));
       if (dup != null) problem = `Already a line at $${dup.toFixed(2)}`;
-      else if (!qtyOk) problem = `Contracts don't add up — the last contract must stay the runner (${qtyRemaining} open)`;
+      else if (!qtyOk) problem = `Not enough contracts: lines sell ${userQty} — ${qtyRemaining} open`;
     }
     const sig = JSON.stringify(rows.map(x => [x.id, x.premium, x.stock, x.qty]));
     return {
@@ -204,6 +206,14 @@ export function TpLadderEditor({
     ...hitUser.map(r => ({ key: r.key, premium: r.premium ?? r.hit_premium ?? Number.POSITIVE_INFINITY, engine: r, hit: true, replacesTp1: r.replaces_tp1 })),
     ...rows.map((r, i) => ({ key: r.id ?? `new-${i}`, premium: parseFloat(r.premium) || Number.POSITIVE_INFINITY, user: i, replacesTp1: ladder.find(l => l.key === r.id)?.replaces_tp1 })),
   ].sort((a, b) => (a.replacesTp1 ? 0 : 1) - (b.replacesTp1 ? 0 : 1) || a.premium - b.premium).map((d, i) => ({ ...d, label: `TP${i + 1}` }));
+  // A stock line reads "TP @ $X" (its stock is the trigger, §7): no rung
+  // number — except the line that took all of TP1, which keeps TP1.
+  const stockOnly = (d: Disp) => d.user != null
+    ? !isNum(parseFloat(rows[d.user].premium)) && isNum(parseFloat(rows[d.user].stock))
+    : d.engine != null && d.engine.source !== 'engine' && d.engine.premium == null && isNum(d.engine.stock_price);
+  for (const d of disp) if (stockOnly(d)) d.label = d.replacesTp1 ? 'TP1' : 'TP';
+  const realized = (fill: number | null | undefined) =>
+    isNum(fill) && entry ? `${fill >= entry ? '+' : '−'}${Math.abs(Math.round(pctVsEntry(fill, entry)))}` : '';
 
   const muted = colors.textTertiary;
   return (
@@ -243,9 +253,15 @@ export function TpLadderEditor({
           return (
             <View key={d.key} style={[st.row, { borderColor: colors.separator }]}>
               <Text style={[st.cell, { flex: 0.9, color: r.hit ? colors.success : colors.text }]}>{r.hit ? '✓ ' : ''}{d.label}</Text>
-              <Text style={[st.cell, st.num, { flex: 1.4, color: colors.textSecondary }]}>{quote && r.premium != null ? `≈ ${f2(stockAt(quote, r.premium))}` : '—'}</Text>
-              <Text style={[st.cell, st.num, { flex: 1.2, color: colors.text }]}>${f2(r.hit && r.hit_premium ? r.hit_premium : r.premium)}</Text>
-              <Text style={[st.cell, st.num, { flex: 0.9, color: colors.success }]}>{entry && r.premium != null ? `${Math.round(pctVsEntry(r.premium, entry))}` : ''}</Text>
+              {/* Stock line: its own stock price ("TP @ $X"); premium line: a conversion. */}
+              <Text style={[st.cell, st.num, { flex: 1.4, color: colors.textSecondary }]}>
+                {isNum(r.stock_price) && r.premium == null ? `@ $${f2(r.stock_price)}` : quote && r.premium != null ? `≈ ${f2(stockAt(quote, r.premium))}` : '—'}
+              </Text>
+              <Text style={[st.cell, st.num, { flex: 1.2, color: colors.text }]}>{r.hit && r.hit_premium ? `$${f2(r.hit_premium)}` : r.premium != null ? `$${f2(r.premium)}` : 'market'}</Text>
+              {/* Sold: the realized % from the fill, signed as filled (§7). */}
+              <Text style={[st.cell, st.num, { flex: 0.9, color: r.hit && isNum(r.hit_premium) && entry && r.hit_premium < entry ? colors.error : colors.success }]}>
+                {r.hit ? realized(r.hit_premium) : entry && r.premium != null ? `${Math.round(pctVsEntry(r.premium, entry))}` : ''}
+              </Text>
               <View style={{ flex: 1.4, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
                 <Text style={[st.cell, st.num, { color: colors.text }]}>{r.hit ? 'sold' : q}</Text>
                 <Text style={[st.tag, { color: muted, borderColor: colors.border }]}>{r.source === 'engine' ? 'engine' : 'chart'}</Text>
@@ -262,7 +278,8 @@ export function TpLadderEditor({
                 even with no delta (it needs no conversion). */}
             <TextInput value={r.stock} onChangeText={t => onStock(i, t)} keyboardType="decimal-pad"
               style={[st.input, { flex: 1.4, color: colors.text, borderColor: colors.border }]} accessibilityLabel={`${d.label} stock price`} />
-            <TextInput value={r.premium} onChangeText={t => onPremium(i, t)} keyboardType="decimal-pad"
+            <TextInput value={r.premium} onChangeText={t => onPremium(i, t)} keyboardType="decimal-pad" placeholder="market"
+              placeholderTextColor={muted}
               style={[st.input, { flex: 1.2, color: colors.success, borderColor: colors.border }]} accessibilityLabel={`${d.label} premium`} />
             <TextInput value={r.pct} onChangeText={t => onPct(i, t)} keyboardType="numbers-and-punctuation"
               style={[st.input, { flex: 0.9, color: colors.success, borderColor: colors.border }]} accessibilityLabel={`${d.label} percent vs entry`} />
@@ -278,10 +295,12 @@ export function TpLadderEditor({
         );
       })}
       <View style={[st.row, { borderColor: colors.separator }]}>
-        <Text style={[st.cell, { flex: 1, color: colors.textSecondary }]}>Runner</Text>
+        <Text style={[st.cell, { flex: 1, color: colors.textSecondary }]}>
+          {runner <= 0 && rows.length ? 'Runner — taken by a line: the trade fully closes at the last one' : 'Runner'}
+        </Text>
         <Text style={[st.cell, st.num, { color: colors.text }]}>{Math.max(0, runner)}</Text>
       </View>
-      {qtyRemaining > 1 + rows.length ? (
+      {userQty < qtyRemaining ? (
         <Pressable onPress={addRow} style={[st.add, { borderColor: colors.border }]} accessibilityRole="button">
           <Text style={{ color: colors.accent, fontWeight: '700', fontSize: 13 }}>+ Add TP line</Text>
         </Pressable>

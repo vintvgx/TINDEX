@@ -171,7 +171,8 @@ export function LivePositionPanel({
   const tpEnabled = display?.tp_enabled !== false;
   const noSL = isNoStopLoss || !slEnabled;
 
-  const showSL  = !noSL && !!display && display.hard_stop > 0;
+  const stockStop = display?.sl_stock_price ?? null;
+  const showSL  = !noSL && !!display && (display.hard_stop > 0 || stockStop != null);
   const showTp1 = tpEnabled && !!display && display.tp1 > 0;
   const showTp2Chip = tpEnabled && showTp2 && !!display && display.tp2 > 0 && display.tp2 !== display.tp1;
   const slPulseStyle = useSlGracePulse(!!display?.sl_grace_active || !!display?.be_grace_active);
@@ -296,9 +297,9 @@ export function LivePositionPanel({
                 <View style={styles.exitsRow}>
                   {showSL && (
                     <Animated.View style={[styles.exitChip, slPulseStyle]}>
-                      <Text style={[styles.exitLabel, { color: colors.error }]}>SL</Text>
+                      <Text style={[styles.exitLabel, { color: colors.error }]}>{stockStop != null ? 'SL @' : 'SL'}</Text>
                       <Text style={[styles.exitPrice, { color: colors.error }]}>
-                        ${display.hard_stop.toFixed(2)}
+                        ${(stockStop ?? display.hard_stop).toFixed(2)}
                       </Text>
                     </Animated.View>
                   )}
@@ -385,6 +386,7 @@ export function LivePositionPanel({
             pnl: display.pnl,
             pnl_pct: display.pnl_pct,
             hard_stop: display.hard_stop,
+            sl_stock_price: stockStop,
             tp1: display.tp1,
             tp2: display.tp2,
             tp1_hit: display.tp1_hit,

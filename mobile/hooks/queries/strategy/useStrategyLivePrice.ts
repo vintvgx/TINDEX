@@ -81,6 +81,9 @@ export interface LivePriceData {
    *  position — see ExitManager.to_dict(). Defaults true when absent. */
   sl_enabled?: boolean;
   tp_enabled?: boolean;
+  /** Chart stop set by stock price (inline exit lines §4) — fires on the
+   *  underlying, no delta. Null/absent when the stop is a premium. */
+  sl_stock_price?: number | null;
   /** Absolute worst-case floor price under the SL grace timer — null if
    *  this trade's profile never defined one. Bypasses the grace window
    *  entirely and force-sells if hit. See exit_manager.py's

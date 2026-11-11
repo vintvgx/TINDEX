@@ -31,6 +31,7 @@ const EXIT_COLORS: Record<string, string> = {
   BREAKEVEN_STOP: '#F59E0B',
   CASCADE_EXIT: '#F59E0B',
   HARD_STOP: '#EF4444',
+  HARD_STOP_STOCK: '#EF4444',
   EOD_CLOSE: '#8B5CF6',
   EOD_HARD_CLOSE: '#EF4444',
 };

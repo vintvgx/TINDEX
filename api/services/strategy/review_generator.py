@@ -107,6 +107,8 @@ below.
 
 ─── Exit Reason Glossary ────────────────────────────────────────────────────
 HARD_STOP           Full stop before TP1. Worst outcome — full position loss.
+HARD_STOP_STOCK     The user's chart stop by STOCK price: the underlying closed
+                    through the line (confirmed on 1-min closes) — sold all.
 BREAKEVEN_STOP      Runner hit entry price after TP1. Net positive or flat.
 TP1                 Partial close (50%) at first target. SL moves to entry.
 TP2                 Partial close at second target.

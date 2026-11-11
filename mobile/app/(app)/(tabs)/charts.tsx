@@ -47,9 +47,9 @@ import { useTradeOverlay } from '@/hooks/useTradeOverlay';
 import type { OverlayTradeInput } from '@/lib/chartTradeOverlay';
 import { router } from 'expo-router';
 import { useContractDelta } from '@/hooks/queries/strategy/useContractDelta';
-import { formatContractSymbol } from '@/lib/formatContract';
-import { ChartExitSheet, type ExitSheetRequest, type ExitSheetTrade } from '@/common/components/ticker/ChartExitSheet';
-import type { TradePreviewLine } from '@/common/components/ticker/TVChart';
+import { chipState, crossesPrice, planChip, planDelete, planMove, type ExitLive, type ExitPlan } from '@/lib/chartExitLines';
+import { useUpdateStrategyExits } from '@/hooks/mutations/strategy/useUpdateStrategyExits';
+import type { PendingExitCommand } from '@/common/components/ticker/TVChart';
 
 const NO_OVERLAY_TRADES: OverlayTradeInput[] = [];
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
@@ -799,44 +799,87 @@ export function ChartsContent({ initialTicker, topInset }: {
     }
   }, [user?.id, activeTicker, createKeyLevel, toast]);
 
-  // ── Chart-set exits (spec 2026-11-10 §4) ───────────────────────────
-  // Long-press → ⊕ opens the exit sheet when a contract is open on this
-  // ticker (TP / SL / BE, or an alert instead); with nothing open it's the
-  // plain alert, exactly as before. Tap a trade line to select it (thicker,
-  // with a drag handle); tap it again — or let go of a drag — to edit it.
-  const exitTrades = useMemo<ExitSheetTrade[]>(() => overlayTrades
+  // ── Chart-set exits (inline exit lines spec 2026-11-10) ────────────
+  // Long-press → a pending line with + / TP / SL chips (TP and SL only when
+  // a contract is open on this ticker); a chip saves at once through the
+  // same PATCH /exits the edit sheet used. Tap a set line to select it:
+  // × deletes it, dragging moves it and saves on release, and a line dragged
+  // across the current price brings the chips back instead of flipping.
+  // No sheet anywhere in this path.
+  const exitTrades = useMemo(() => overlayTrades
     .filter(t => (t.live?.qty_remaining ?? 0) > 0)
     .map(t => {
       const pos = overlayPositions.find(p => p.strategy_id === t.strategyId);
-      const direction = (pos?.direction === 'PUT' ? 'PUT' : 'CALL') as 'CALL' | 'PUT';
-      const contract = t.live.contract ?? pos?.contract ?? '';
-      return {
-        strategyId: t.strategyId, contract, direction, live: t.live,
-        label: `${formatContractSymbol(contract)} · ${t.live.qty_remaining} open`,
-      };
+      return { strategyId: t.strategyId, direction: (pos?.direction === 'PUT' ? 'PUT' : 'CALL') as 'CALL' | 'PUT',
+               live: t.live as ExitLive };
     }), [overlayTrades, overlayPositions]);
-  const [exitRequest, setExitRequest] = useState<ExitSheetRequest | null>(null);
+  // The chips act on the trade whose lines are drawn (§1.1) — the same pick
+  // the overlay makes: the selected marker's trade, else the latest one.
+  const exitTrade = exitTrades.find(t => t.strategyId === selectedTradeKey) ?? exitTrades[exitTrades.length - 1] ?? null;
+  const exitChips = useMemo(() => chipState(exitTrade?.live), [exitTrade?.live]);
   const [selectedLineKey, setSelectedLineKey] = useState<string | null>(null);
-  const [previewLine, setPreviewLine] = useState<TradePreviewLine | null>(null);
-  useEffect(() => { setSelectedLineKey(null); setExitRequest(null); setPreviewLine(null); }, [activeTicker]);
-  const handleAddAlertAtPrice = useCallback((price: number) => {
-    if (exitTrades.length > 0) setExitRequest({ mode: 'new', stock: Math.round(price * 100) / 100 });
-    else createAlertAt(price);
-  }, [exitTrades.length, createAlertAt]);
-  const handleTradeLineTap = useCallback((key: string) => {
-    if (selectedLineKey === key) setExitRequest({ mode: 'edit', key, stock: null });
-    else setSelectedLineKey(key);
-  }, [selectedLineKey]);
-  const handleTradeLineDrag = useCallback((key: string, price: number, phase: 'move' | 'end') => {
-    if (phase === 'end') setExitRequest({ mode: 'edit', key, stock: Math.round(price * 100) / 100 });
+  const [pendingExit, setPendingExit] = useState<PendingExitCommand | null>(null);
+  const pendingSeqRef = useRef(0);
+  // The line dragged across the price, kept in place until a chip or a
+  // dismissal decides it (§1.3).
+  const pendingOriginRef = useRef<string | null>(null);
+  const { mutate: saveExits } = useUpdateStrategyExits();
+  useEffect(() => { setSelectedLineKey(null); pendingOriginRef.current = null; }, [activeTicker]);
+  const runExitPlan = useCallback((plan: ExitPlan, after: () => void) => {
+    if (!exitTrade) return;
+    // The chart never invents a guard: anything else is the backend's reason.
+    if ('error' in plan) { toast.error(plan.error); after(); return; }
+    saveExits({ strategy_id: exitTrade.strategyId, ...plan.body } as any, {
+      onSuccess: () => { toast.success(plan.done); after(); },
+      onError: (e: Error) => { toast.error(e.message || 'Save failed — nothing changed'); after(); },
+    });
+  }, [exitTrade, saveExits, toast]);
+  // + chip: the alert path, unchanged (the page hides its pending line).
+  const handleAddAlertAtPrice = createAlertAt;
+  const handleExitChip = useCallback((kind: 'tp' | 'sl', price: number) => {
+    if (!exitTrade) return;
+    const plan = planChip(kind, price, exitTrade.live, pendingOriginRef.current);
+    if ('error' in plan) { toast.error(plan.error); return; }      // pending line stays up
+    saveExits({ strategy_id: exitTrade.strategyId, ...plan.body } as any, {
+      onSuccess: () => {
+        toast.success(plan.done);
+        pendingOriginRef.current = null;
+        setSelectedLineKey(null);
+        setPendingExit({ id: ++pendingSeqRef.current, show: false });
+      },
+      // A failed save keeps the pending line so the tap can be retried.
+      onError: (e: Error) => toast.error(e.message || 'Save failed — nothing changed'),
+    });
+  }, [exitTrade, saveExits, toast]);
+  const handlePendingDismiss = useCallback(() => {
+    pendingOriginRef.current = null;
+    setSelectedLineKey(null);     // re-sends the overlay: a held line snaps back
   }, []);
-  const closeExitSheet = useCallback(() => {
-    setExitRequest(null);
-    setPreviewLine(null);
-    // Clearing the selection also re-sends the overlay, so a dragged line
-    // that wasn't saved snaps back to its real level.
-    setSelectedLineKey(null);
-  }, []);
+  const handleTradeLineTap = useCallback((key: string) => setSelectedLineKey(key), []);
+  const lineByKey = (key: string) => overlayFrame?.lines.find(l => l.key === key) ?? null;
+  const handleTradeLineDrag = useCallback((key: string, price: number, phase: 'move' | 'end', legacy = false) => {
+    if (phase !== 'end' || !exitTrade) return;
+    const line = overlayFrame?.lines.find(l => l.key === key);
+    if (!line) { setSelectedLineKey(null); return; }
+    if (crossesPrice(line.kind, price, overlayFrame?.stock ?? null, exitTrade.direction)) {
+      setSelectedLineKey(null);   // the line goes back where it was…
+      if (legacy) {
+        toast.info('Switching a line between TP and SL is done on the TradingView chart');
+        return;
+      }
+      // …and the chips come back at the dragged price.
+      pendingOriginRef.current = key;
+      setPendingExit({ id: ++pendingSeqRef.current, show: true, price: Math.round(price * 100) / 100 });
+      return;
+    }
+    runExitPlan(planMove(key, line.kind, price, exitTrade.live, overlayFrame?.quote ?? null), () => setSelectedLineKey(null));
+  }, [exitTrade, overlayFrame, runExitPlan, toast]);
+  const handleTradeLineDelete = useCallback((key: string) => {
+    const line = lineByKey(key);
+    if (!line || !exitTrade) return;
+    runExitPlan(planDelete(key, line.kind, exitTrade.live), () => setSelectedLineKey(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exitTrade, overlayFrame, runExitPlan]);
   const handleWatchConfirm = async (draft: ChartWatchDraft): Promise<boolean> => {
     if (!user?.id) {
       toast.error('Not authenticated');
@@ -1028,7 +1071,12 @@ export function ChartsContent({ initialTicker, topInset }: {
                   selectedTradeLineKey={selectedLineKey}
                   onTradeLineTap={handleTradeLineTap}
                   onTradeLineDrag={handleTradeLineDrag}
-                  previewLine={previewLine}
+                  tradeDirection={exitTrade?.direction ?? null}
+                  exitChips={exitChips}
+                  pendingExit={pendingExit}
+                  onExitChip={handleExitChip}
+                  onPendingDismiss={handlePendingDismiss}
+                  onTradeLineDelete={handleTradeLineDelete}
                 />
               ) : (
                 <AdvancedPriceChart
@@ -1057,9 +1105,8 @@ export function ChartsContent({ initialTicker, topInset }: {
                   tradeMarker={legacyTradeMarker}
                   selectedTradeLineKey={selectedLineKey}
                   onTradeLineTap={handleTradeLineTap}
-                  onTradeLineDragEnd={(key, price) => handleTradeLineDrag(key, price, 'end')}
+                  onTradeLineDragEnd={(key, price) => handleTradeLineDrag(key, price, 'end', true)}
                   tradeQuote={overlayFrame?.quote ?? null}
-                  previewLine={previewLine}
                 />
               )
             )}
@@ -1160,16 +1207,6 @@ export function ChartsContent({ initialTicker, topInset }: {
         onExpandedChange={setExpanded}
         onLiveUpdate={handlePositionLiveUpdate}
         bottomInset={bottomInset}
-      />
-
-      <ChartExitSheet
-        request={exitRequest}
-        trades={exitTrades}
-        defaultStrategyId={overlayFrame?.markers[0]?.key ?? null}
-        colors={colors}
-        onClose={closeExitSheet}
-        onSetAlert={createAlertAt}
-        onPreview={setPreviewLine}
       />
 
       <SearchBottomSheet

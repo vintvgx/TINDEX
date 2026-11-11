@@ -42,6 +42,13 @@ export interface OverlayLine {
   muted: boolean;
   /** Text drawn on the line beside its axis label (which shows `price`). */
   title: string;
+  /** Line alpha — encodes live vs hit (inline exit lines §9): user TP 0.5
+   *  live / 0.85 hit, SL 0.7; engine lines 1. */
+  opacity: number;
+  /** Shows × when selected: a user TP line or the stop. */
+  deletable: boolean;
+  /** Placed by stock price (no premium) — drags relabel as "TP @ $X". */
+  stockLine: boolean;
 }
 
 export interface OverlayMarker {
@@ -72,6 +79,8 @@ export interface TradeOverlayFrame {
   /** Live quote behind the lines (null when delta/underlying/mid is missing) —
    *  lets the chart relabel a line's premium / % while it's being dragged. */
   quote: { stock: number; premium: number; delta: number; entry: number } | null;
+  /** Live underlying (null before the first quote) — drag relabel + chips. */
+  stock: number | null;
   /** Changes on any state transition → redraw immediately (see shouldRedraw). */
   stateSig: string;
   /** For the "line moved ≥ threshold" check. */
@@ -116,6 +125,14 @@ const fmtPrem = (n: number) => (Math.abs(n * 100 - Math.round(n * 100)) > 1e-6 ?
 export function moveThreshold(price: number | null, ticker?: string | null): number {
   if (ticker === 'SPY' || ticker === 'QQQ' || !isNum(price)) return 0.1;
   return Math.max(0.1, price * 0.0005);
+}
+
+/** " · +84%" — a sold line's realized percent from its fill premium (§7),
+ *  signed as filled: a stock TP that filled under entry reads negative. */
+export function realizedPct(fill: number, entry: number | null | undefined): string | null {
+  if (!isNum(fill) || !isNum(entry) || entry <= 0) return null;
+  const p = Math.round((fill - entry) / entry * 100);
+  return ` · ${p >= 0 ? '+' : '−'}${Math.abs(p)}%`;
 }
 
 /** Underlying root of an OCC option symbol ("SPY261030P00758000" → "SPY"). */
@@ -186,15 +203,26 @@ function ladderOf(live: OverlayTradeInput['live']): LadderRung[] {
   return out;
 }
 
-/** "TP1 768.56 · TP2 769.20 · R1": rungs left to fire (stock price when the
- *  engine could project it, else premium) and the runner count. */
-export function ladderSummary(live: OverlayTradeInput['live']): string | null {
-  const open = ladderOf(live).filter(r => !r.hit);
-  if (!open.length) return null;
-  const left = open.map(r => `${r.label} ${isNum(r.stock_price) ? r.stock_price.toFixed(2) : `$${fmtPrem(r.premium ?? 0)}`}`);
+/** "TP1 768.56 · TP @ 769.20 · R1": rungs left to fire (stock price when
+ *  the engine could project it, else premium) and the runner count. A stock
+ *  line reads "TP @ X" (inline exit lines §7). `withHits` (the position
+ *  card) leads with the sold lines and their realized % from the fill. */
+export function ladderSummary(live: OverlayTradeInput['live'], withHits = false): string | null {
+  const all = ladderOf(live);
+  const open = all.filter(r => !r.hit);
+  const name = (r: LadderRung) => {
+    const stockOnly = r.premium == null && isNum(r.stock_price) && r.source !== 'engine';
+    const lbl = stockOnly ? (r.replaces_tp1 ? 'TP1' : 'TP') : r.label;
+    return stockOnly ? `${lbl} @ ${r.stock_price!.toFixed(2)}`
+      : `${lbl} ${isNum(r.stock_price) ? r.stock_price.toFixed(2) : `$${fmtPrem(r.premium ?? 0)}`}`;
+  };
+  const hits = withHits
+    ? all.filter(r => r.hit).map(r => `✓ ${name(r)}${isNum(r.hit_premium) ? (realizedPct(r.hit_premium, live.entry_premium) ?? '') : ''}`)
+    : [];
+  if (!open.length && !hits.length) return null;
   const sold = open.reduce((n, r) => n + (r.qty || 0), 0);
-  const runner = Array.isArray(live.tp_ladder) && live.tp_ladder.length ? Math.max(0, live.qty_remaining - sold) : null;
-  return [...left, ...(runner != null ? [`R${runner}`] : [])].join(' · ');
+  const runner = open.length && Array.isArray(live.tp_ladder) && live.tp_ladder.length ? Math.max(0, live.qty_remaining - sold) : null;
+  return [...hits, ...open.map(name), ...(runner != null ? [`R${runner}`] : [])].join(' · ');
 }
 
 /** The selected trade's lines, per brief §2 (projection) and §4 (states). */
@@ -210,28 +238,39 @@ function linesFor(t: OverlayTradeInput, now: number): {
   const beLevel = isNum(live.be_level) ? live.be_level : entry;
   const ladder = ladderOf(live);
   const anyTpHit = ladder.some(r => r.hit);
+  const stockStop = isNum(live.sl_stock_price) ? live.sl_stock_price : null;
 
   type Want = { key: string; kind: OverlayLineKind; label: string; premium: number | null;
                 stockPrice?: number | null; style: OverlayLineStyle;
-                hit?: boolean; pending?: boolean; user?: boolean };
+                hit?: boolean; hitPremium?: number | null; pending?: boolean; user?: boolean };
   const want: Want[] = [];
   // TP rungs: the highest-premium one solid, the rest dashed (§3.3) — two
   // rungs keep today's TP2-solid / TP1-dashed look. A stock-only rung has no
   // premium, so it never tops the max and draws dashed.
   const top = ladder.reduce((m, r) => Math.max(m, r.premium ?? -Infinity), -Infinity);
   for (const r of ladder) {
-    want.push({ key: r.key, kind: 'TP', label: r.label, premium: r.premium,
+    // A stock line reads "TP @ $X" (no rung number); the line that took all
+    // of TP1 keeps the TP1 name (inline exit lines §3).
+    const stockOnly = r.premium == null && isNum(r.stock_price);
+    const label = stockOnly && r.source !== 'engine' ? (r.replaces_tp1 ? 'TP1' : 'TP') : r.label;
+    want.push({ key: r.key, kind: 'TP', label, premium: r.premium,
                 stockPrice: r.stock_price ?? null,
                 style: r.premium != null && r.premium === top ? 'solid' : 'dashed',
-                hit: r.hit, user: r.source !== 'engine' });
+                hit: r.hit, hitPremium: r.hit_premium ?? null, user: r.source !== 'engine' });
   }
   if (beArmed) {
-    want.push({ key: 'be', kind: 'BE', label: 'BE', premium: isNum(live.hard_stop) ? live.hard_stop : beLevel, style: 'solid' });
+    // A user's stock stop stays the live stop after breakeven arms
+    // (redesign §3.2) — draw only the stop that can actually sell.
+    if (stockStop == null) want.push({ key: 'be', kind: 'BE', label: 'BE', premium: isNum(live.hard_stop) ? live.hard_stop : beLevel, style: 'solid' });
   } else {
     if (!anyTpHit && isNum(beLevel)) want.push({ key: 'be', kind: 'BE', label: 'BE', premium: beLevel, style: 'dashed', pending: true });
-    if (isNum(live.hard_stop) && live.hard_stop > 0 && live.sl_enabled !== false) {
+    // A stock stop replaces the premium stop until breakeven arms.
+    if (stockStop == null && isNum(live.hard_stop) && live.hard_stop > 0 && live.sl_enabled !== false) {
       want.push({ key: 'sl', kind: 'SL', label: 'SL', premium: live.hard_stop, style: 'dotted' });
     }
+  }
+  if (stockStop != null) {
+    want.push({ key: 'sl', kind: 'SL', label: 'SL', premium: null, stockPrice: stockStop, style: 'dotted', user: true });
   }
 
   const stale = !sim && quoteAgeMs(t, now) > STALE_AFTER_MS;
@@ -282,26 +321,35 @@ function linesFor(t: OverlayTradeInput, now: number): {
     // A stock-only line sits at an exact stock price — no delta estimate,
     // so no ≈ suffix and the title shows the stock price, not a premium.
     const placedByStock = isNum(w.stockPrice) && w.premium == null;
-    const titlePrice = placedByStock ? w.stockPrice! : (w.premium ?? 0);
-    const suffix = (w.hit ? '' : w.pending ? ' · arms after first TP' : '') + (lowDelta && !placedByStock ? ' · ≈' : '');
+    const realized = w.hit && isNum(w.hitPremium) ? realizedPct(w.hitPremium, entry) : null;
+    const suffix = (w.hit ? (realized ?? '') : w.pending ? ' · arms after first TP' : '')
+      + (lowDelta && !placedByStock ? ' · ≈' : '');
+    // "TP @ $793.12" for a stock line; a premium line keeps "TP1 · $1.30".
+    const body = placedByStock ? `${w.label} @ $${w.stockPrice!.toFixed(2)}` : `${w.label} · $${fmtPrem(w.premium ?? 0)}`;
     lines.push({
       key: w.key,
       kind: w.kind,
       label: w.label,
       user: !!w.user,
       hit: !!w.hit,
-      editable: !w.hit && !w.pending && !sim,
+      // BE lives in the edit modal only (§6); engine premium lines move only
+      // while a delta can place them.
+      editable: !w.hit && !w.pending && !sim && w.kind !== 'BE' && (placedByStock || delta != null),
       price: Math.round(price * 100) / 100,
       premium: w.premium,
       style: w.style,
       muted: stale || (lowDelta && !placedByStock),
-      title: `${sim ? 'SIM ' : ''}${w.hit ? '✓ ' : ''}${w.label} · $${fmtPrem(titlePrice)}${suffix}`,
+      title: `${sim ? 'SIM ' : ''}${w.hit ? '✓ ' : ''}${body}${suffix}`,
+      opacity: w.kind === 'SL' ? 0.7 : w.kind === 'TP' && w.user ? (w.hit ? 0.85 : 0.5) : 1,
+      deletable: !sim && !w.hit && ((w.kind === 'TP' && !!w.user) || w.kind === 'SL'),
+      stockLine: placedByStock,
     });
   }
   const sig = [
     live.qty_remaining, tp1Hit, !!live.tp2_hit, beArmed, stale, lowDelta, note ?? '',
     ladder.map(r => `${r.key}:${r.premium}:${r.stock_price ?? ''}:${r.qty}:${r.hit}`).join(','),
-    live.runner_mode ?? '', live.sl_enabled ?? '', live.hard_stop ?? '',
+    live.runner_mode ?? '', live.sl_enabled ?? '', live.hard_stop ?? '', stockStop ?? '',
+    ladder.map(r => r.hit_premium ?? '').join(','),
   ].join('|');
   const quote = !sim && delta != null && u != null && cur != null ? { stock: u, premium: cur, delta, entry } : null;
   return { lines, note, sig, refPrice: u, quote };
@@ -322,6 +370,7 @@ export function buildOverlayFrame(
   const sel = open.find(t => t.strategyId === selectedKey) ?? open[open.length - 1];
   const multi = open.length > 1;
   const { lines, note, sig, refPrice, quote } = linesFor(sel, now);
+  const stock = isNum(sel.live.underlying_price) ? sel.live.underlying_price : null;
   // Selected marker first: it sits on the current price, others stack above.
   const markers = [sel, ...open.filter(t => t !== sel)].map(t => marker(t, now, t === sel, multi));
   const tradeKey = `${sel.strategyId}:${sel.live.contract}`;
@@ -332,6 +381,7 @@ export function buildOverlayFrame(
     linesNote: note,
     markers,
     quote,
+    stock,
     stateSig: `${tradeKey}|${sig}|${markers.map(m => `${m.key}:${m.count}:${m.stale}`).join(',')}`,
     refPrice,
     ticker: occRoot(sel.live.contract),

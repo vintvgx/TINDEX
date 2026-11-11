@@ -960,8 +960,11 @@ def update_strategy_exits(strategy_id: str):
     Update the live ExitManager's stop-loss and/or TP levels mid-trade.
     Body: { hard_stop?, tp1?, tp2?, sl_qty?, tp1_qty?, tp2_qty?, sl_grace_minutes?,
             runner_mode?, cascade_enabled?, sl_enabled?, tp_enabled?, sl_floor_enabled?,
-            sl_outer_floor?, be_grace_seconds?, cancel_be_grace? }
-    — all optional, only provided fields are changed. sl_qty/tp1_qty/tp2_qty
+            sl_outer_floor?, be_grace_seconds?, cancel_be_grace?, tp_rungs?,
+            sl_stock_price? }
+    — all optional, only provided fields are changed. sl_stock_price is the
+    chart's stop by stock price (number sets/moves it, null clears it);
+    tp_rungs with tp_enabled=true turns take profit on in the same call. sl_qty/tp1_qty/tp2_qty
     are per-level contract counts; sl_grace_minutes is the stop-type choice
     (null = Hard Stop, 5/10/15 = SL timer); runner_mode is "trail"/"be_hold"/
     "none"; cascade_enabled toggles cascade on/off for the rest of this trade;
@@ -1026,6 +1029,10 @@ def update_strategy_exits(strategy_id: str):
     if "sl_grace_minutes" in data:
         raw = data["sl_grace_minutes"]
         kwargs["sl_grace_minutes"] = int(raw) if raw is not None else None
+    # Chart stop by stock price (inline exit lines §4): a number sets/moves
+    # it, null clears it. Validated in apply_overrides.
+    if "sl_stock_price" in data:
+        kwargs["sl_stock_price"] = data["sl_stock_price"]
     # v2 override trail: snapshot the pre-edit levels (apply_overrides
     # returns only new values, so old values must be captured first).
     # getattr: v2 logging must never break the edit itself — a fake or
@@ -1075,6 +1082,8 @@ def update_strategy_exits(strategy_id: str):
         )
     if "tp_enabled" in changed:
         exit_overrides_patch["disable_tp1_exit"] = not changed["tp_enabled"]
+    if "sl_stock_price" in changed:
+        exit_overrides_patch["sl_stock_price"] = changed["sl_stock_price"]
     if "sl_floor_enabled" in changed:
         exit_overrides_patch["sl_floor_enabled"] = changed["sl_floor_enabled"]
     if "sl_outer_floor" in changed:
@@ -2800,6 +2809,7 @@ def _engine_position_response(engine: ORBEngine):
             "tp1_hit":             em.tp1_hit if em else False,
             "tp2_hit":             em.tp2_hit if em else False,
             "be_stop_active":      em.be_stop_active if em else False,
+            "sl_stock_price":      getattr(em, "_sl_stock", None) if em else None,
             "runner_trail":        em.runner_trail if em else None,
             "fib_levels":          engine.fib_levels,
             # Whether TP2 is even reachable for this trade — false for a

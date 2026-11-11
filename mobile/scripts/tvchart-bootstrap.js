@@ -33,62 +33,115 @@
   var chartEl = document.getElementById('chart');
   var pillsEl = document.getElementById('pills');
 
-  // ── Pending alert (TradingView-style ⊕) ─────────────────────────────
-  // After a long-press, the released price keeps a dashed line with a ⊕
-  // button beside its axis label; tapping ⊕ creates the alert (RN does the
-  // write, no popup). Any other tap on the chart dismisses it.
+  // ── Pending line + chips (inline exit lines spec 2026-11-10) ────────
+  // After a long-press, the released price keeps a dashed pending line with
+  // chips on it: + (alert), and — when the ticker has an open trade — TP
+  // and SL. Nothing is saved until a chip is tapped. + saves and hides at
+  // once (alerts are optimistic); TP/SL post to RN, which saves and sends
+  // 'pendingExit' hide on success — a failed save leaves the line up to
+  // retry. A tap elsewhere, or on the pending line itself, dismisses it;
+  // the line can be dragged to fine-tune the price.
   var pendingAlertPrice = null;
   var pendingShownAt = 0;
+  var pendingX = null;                     // press x (chart px) — the chips centre on it
+  var pendingDrag = false, pendingDragMoved = false, pendingDragEndAt = 0;
+  var exitChips = { open: false, tpAllowed: true, colors: null };
+  var CHIP_W = 34, CHIP_H = 28, CHIP_GAP = 10;
   var alertAddEl = document.createElement('div');
   alertAddEl.id = 'alertadd';
   alertAddEl.innerHTML =
     '<div class="aa-line"></div>' +
-    '<div class="aa-btn" role="button" aria-label="Add alert">' +
-      '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
-      '<path d="M12 7v10M7 12h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>' +
+    '<div class="aa-chips">' +
+      '<div class="aa-chip aa-add" data-k="alert" role="button" aria-label="Set price alert">+</div>' +
+      '<div class="aa-chip aa-tp" data-k="tp" role="button" aria-label="Set take profit">TP</div>' +
+      '<div class="aa-chip aa-sl" data-k="sl" role="button" aria-label="Set stop loss">SL</div>' +
     '</div>' +
     '<div class="aa-label"></div>';
   document.body.appendChild(alertAddEl);
   var aaLine = alertAddEl.querySelector('.aa-line');
-  var aaBtn = alertAddEl.querySelector('.aa-btn');
+  var aaChips = alertAddEl.querySelector('.aa-chips');
+  var aaAdd = alertAddEl.querySelector('.aa-add');
+  var aaTp = alertAddEl.querySelector('.aa-tp');
+  var aaSl = alertAddEl.querySelector('.aa-sl');
   var aaLabel = alertAddEl.querySelector('.aa-label');
-  function onAlertAddTap(ev) {
+  function onChipTap(ev) {
     if (ev) { ev.preventDefault(); ev.stopPropagation(); }
     if (pendingAlertPrice === null) return;
-    post({ type: 'addAlert', price: pendingAlertPrice });
-    hidePendingAlert();
+    var k = ev && ev.currentTarget ? ev.currentTarget.getAttribute('data-k') : 'alert';
+    var price = Math.round(pendingAlertPrice * 100) / 100;
+    if (k === 'alert') {
+      post({ type: 'addAlert', price: price });
+      hidePendingAlert(false);
+      return;
+    }
+    // A grayed TP still answers — RN toasts the reason (§3).
+    post({ type: 'exitChip', kind: k, price: price, blocked: k === 'tp' && !exitChips.tpAllowed });
   }
-  aaBtn.addEventListener('click', onAlertAddTap);
-  aaBtn.addEventListener('touchend', onAlertAddTap);
-  function showPendingAlert(price) {
+  [aaAdd, aaTp, aaSl].forEach(function (el) {
+    el.addEventListener('click', onChipTap);
+    el.addEventListener('touchend', onChipTap);
+  });
+  function showPendingAlert(price, x) {
+    if (pendingAlertPrice !== null) post({ type: 'pendingDismiss' });   // replaced by a new press
     pendingAlertPrice = price;
+    pendingX = (x === undefined) ? null : x;
     pendingShownAt = Date.now();
     aaLabel.textContent = price.toFixed(2);
     layoutPendingAlert();
   }
-  function hidePendingAlert() {
+  // byUser: a dismissal (tap away / on the line / a new press) — RN forgets
+  // any line it was holding in place for this pending price.
+  function hidePendingAlert(byUser) {
+    if (pendingAlertPrice !== null && byUser) post({ type: 'pendingDismiss' });
     pendingAlertPrice = null;
+    pendingX = null;
     alertAddEl.style.display = 'none';
   }
   function layoutPendingAlert() {
     if (pendingAlertPrice === null || !mainSeries || !chart) { alertAddEl.style.display = 'none'; return; }
     var y = mainSeries.priceToCoordinate(pendingAlertPrice);
     var H = chartEl.clientHeight, W = chartEl.clientWidth;
-    if (y === null || y === undefined || y < 0 || y > H - 28) { alertAddEl.style.display = 'none'; return; }
+    if (y === null || y === undefined || y < 0 || y > H) { alertAddEl.style.display = 'none'; return; }
     var axisW = 0;
     try { axisW = chart.priceScale('right').width(); } catch (e) {}
+    var plotW = W - axisW;
     alertAddEl.style.display = 'block';
     aaLine.style.top = Math.round(y) + 'px';
-    aaLine.style.width = Math.max(0, W - axisW - 30) + 'px';
+    aaLine.style.width = Math.max(0, plotW) + 'px';
     // Theme the dashed line in JS — the CSS hardcodes a light color that
     // vanishes on the light theme.
     aaLine.style.borderTop = '1px dashed ' + theme.text;
     aaLine.style.opacity = '0.75';
-    aaBtn.style.top = Math.round(y - 13) + 'px';
-    aaBtn.style.right = (axisW + 2) + 'px';
+    // Chips: TP / SL only with an open trade on this ticker (§1.1).
+    var c = exitChips.colors || {};
+    aaTp.hidden = !exitChips.open;
+    aaSl.hidden = !exitChips.open;
+    aaTp.classList.toggle('dim', !exitChips.tpAllowed);
+    aaAdd.style.color = aaAdd.style.borderColor = c.alert || theme.text;
+    aaTp.style.color = aaTp.style.borderColor = c.tp || '#30D158';
+    aaSl.style.color = aaSl.style.borderColor = c.sl || '#FF453A';
+    [aaAdd, aaTp, aaSl].forEach(function (el) { el.style.background = theme.background; });
+    // Centred on the press point, inside the plot; near the right edge the
+    // row sits LEFT of the press point; never under the price axis (§2).
+    var n = exitChips.open ? 3 : 1;
+    var rowW = n * CHIP_W + (n - 1) * CHIP_GAP;
+    var cx = pendingX === null ? plotW - rowW / 2 - 8 : pendingX;
+    var left = cx - rowW / 2;
+    if (cx + rowW / 2 > plotW - 6) left = cx - rowW - 10;
+    left = Math.max(6, Math.min(plotW - 6 - rowW, left));
+    aaChips.style.left = Math.round(left) + 'px';
+    aaChips.style.top = Math.round(Math.max(2, Math.min(H - CHIP_H - 2, y - CHIP_H / 2))) + 'px';
     aaLabel.style.top = Math.round(y - 11) + 'px';
     aaLabel.style.width = axisW + 'px';
     aaLabel.style.color = theme.text;
+  }
+  function setExitChips(msg) {
+    exitChips = { open: !!msg.open, tpAllowed: msg.tpAllowed !== false, colors: msg.colors || null };
+    layoutPendingAlert();
+  }
+  function pendingExit(msg) {
+    if (msg && msg.show && isFinite(msg.price)) showPendingAlert(msg.price, null);
+    else hidePendingAlert(false);
   }
   var refLabelsEl = document.getElementById('reflabels');
 
@@ -319,6 +372,9 @@
     selectedTradeKey = (msg && msg.selectedKey) || null;
     tradeQuote = (msg && msg.quote) || null;
     tradeStopColor = (msg && msg.stopColor) || '#FF453A';
+    tradeTpColor = (msg && msg.tpColor) || '#30D158';
+    tradeStock = (msg && isFinite(msg.stock)) ? msg.stock : null;
+    tradeIsPut = !!(msg && msg.direction === 'PUT');
     // A redraw mid-drag must not snap the line back under the finger.
     if (dragKey) {
       for (var i = 0; i < tradeLineDefs.length; i++) {
@@ -336,7 +392,19 @@
   // the finger, RN gets 'move' reports (throttled to a frame) and one 'end'.
   // Chart pan/zoom is suspended only for the length of that drag.
   var selectedTradeKey = null;
-  var tradeQuote = null, tradeStopColor = '#FF453A';
+  var tradeQuote = null, tradeStopColor = '#FF453A', tradeTpColor = '#30D158';
+  var tradeStock = null, tradeIsPut = false;
+  var delEl = document.createElement('div');
+  delEl.id = 'tldel';
+  delEl.setAttribute('role', 'button');
+  delEl.setAttribute('aria-label', 'Delete line');
+  document.body.appendChild(delEl);
+  function onDelTap(ev) {
+    if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+    if (selectedTradeKey) post({ type: 'tradeLineDelete', key: selectedTradeKey });
+  }
+  delEl.addEventListener('click', onDelTap);
+  delEl.addEventListener('touchend', onDelTap);
   var dragKey = null, dragPrice = null, dragFrame = false;
   var DRAG_GRAB_PX = 16;
   var handleRetries = 0;
@@ -359,7 +427,7 @@
   function layoutHandle() {
     var def = null;
     for (var i = 0; i < tradeLineDefs.length; i++) if (tradeLineDefs[i].key === selectedTradeKey) def = tradeLineDefs[i];
-    if (!def || !mainSeries || !chart) { handleEl.style.display = 'none'; return; }
+    if (!def || !mainSeries || !chart) { handleEl.style.display = 'none'; delEl.style.display = 'none'; return; }
     var y = mainSeries.priceToCoordinate(dragKey === def.key && dragPrice !== null ? dragPrice : def.price);
     var axisW = 0;
     try { axisW = chart.priceScale('right').width(); } catch (e) {}
@@ -367,6 +435,7 @@
     // (bounded, on a timer: frames can outrun the first paint), same as the markers.
     if (y === null || y === undefined || !isFinite(y) || !axisW) {
       handleEl.style.display = 'none';
+      delEl.style.display = 'none';
       if (handleRetries++ < 100) setTimeout(layoutHandle, 50);   // up to ~5s, until the first paint
       return;
     }
@@ -378,6 +447,17 @@
     handleEl.style.borderColor = def.color;
     handleEl.style.color = def.color;
     handleEl.style.background = theme.background;
+    // × sits left of the handle: delete without opening anything (§1.3).
+    if (def.deletable && dragKey !== def.key) {
+      delEl.style.display = 'block';
+      delEl.style.top = Math.round(y - 11) + 'px';
+      delEl.style.right = (axisW + lineTitleWidth(def.title) + 6 + 30) + 'px';
+      delEl.style.borderColor = def.color;
+      delEl.style.color = def.color;
+      delEl.style.background = theme.background;
+    } else {
+      delEl.style.display = 'none';
+    }
   }
   function moveDraggedLine(y) {
     var p = mainSeries.coordinateToPrice(y);
@@ -403,6 +483,20 @@
     var def = null;
     for (var i = 0; i < tradeLineDefs.length; i++) if (tradeLineDefs[i].key === key) def = tradeLineDefs[i];
     if (!def) return { price: price };
+    // A stock line (no premium): its label is its stock price; crossing the
+    // current price relabels it as the other kind before anything saves —
+    // on release the chips come back instead of a silent flip (§1.3).
+    if (def.stockLine) {
+      var crossed = tradeStock !== null && (
+        def.kind === 'TP' ? (tradeIsPut ? price >= tradeStock : price <= tradeStock)
+          : def.kind === 'SL' ? (tradeIsPut ? price <= tradeStock : price >= tradeStock) : false);
+      var at = ' @ $' + price.toFixed(2);
+      if (crossed) {
+        var to = def.kind === 'TP' ? 'SL' : 'TP', col = def.kind === 'TP' ? tradeStopColor : tradeTpColor;
+        return { price: price, title: '→ ' + to + at, color: col, axisLabelColor: col };
+      }
+      return { price: price, title: def.label + at, color: def.color, axisLabelColor: def.color };
+    }
     var q = tradeQuote;
     if (!q || !q.delta) return { price: price, title: def.label + ' · ≈ — (no delta)' };
     var prem = q.premium + (price - q.stock) * q.delta;
@@ -414,9 +508,21 @@
     return { price: price, title: def.label + tail, color: def.color, axisLabelColor: def.color };
   }
   function dragStart(e) {
-    if (!selectedTradeKey || !mainSeries || !e.touches || e.touches.length !== 1) return;
+    if (!mainSeries || !e.touches || e.touches.length !== 1) return;
     var rect = chartEl.getBoundingClientRect();
     var y = e.touches[0].clientY - rect.top;
+    // The pending line drags to fine-tune its price (§1.1).
+    if (pendingAlertPrice !== null) {
+      var py = mainSeries.priceToCoordinate(pendingAlertPrice);
+      if (py !== null && py !== undefined && Math.abs(py - y) <= 12) {
+        pendingDrag = true;
+        pendingDragMoved = false;
+        try { chart.applyOptions({ handleScroll: false, handleScale: false }); } catch (err) {}
+        e.stopPropagation();
+        return;
+      }
+    }
+    if (!selectedTradeKey) return;
     var def = null;
     for (var i = 0; i < tradeLineDefs.length; i++) if (tradeLineDefs[i].key === selectedTradeKey) def = tradeLineDefs[i];
     if (!def) return;
@@ -430,6 +536,19 @@
     e.stopPropagation();
   }
   function dragMove(e) {
+    if (pendingDrag && e.touches && e.touches.length) {
+      var r = chartEl.getBoundingClientRect();
+      var pp = mainSeries.coordinateToPrice(e.touches[0].clientY - r.top);
+      if (pp !== null && pp !== undefined) {
+        pendingDragMoved = true;
+        pendingAlertPrice = Math.round(pp * 100) / 100;
+        aaLabel.textContent = pendingAlertPrice.toFixed(2);
+        layoutPendingAlert();
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (!dragKey || !e.touches || !e.touches.length) return;
     var rect = chartEl.getBoundingClientRect();
     moveDraggedLine(e.touches[0].clientY - rect.top);
@@ -437,6 +556,14 @@
     e.stopPropagation();
   }
   function dragEnd() {
+    if (pendingDrag) {
+      pendingDrag = false;
+      pendingDragEndAt = Date.now();
+      try { chart.applyOptions({ handleScroll: true, handleScale: true }); } catch (err) {}
+      // Pressing the pending line itself (no drag) dismisses it (§1.1).
+      if (!pendingDragMoved && Date.now() - pendingShownAt > 400) hidePendingAlert(true);
+      return;
+    }
     if (!dragKey) return;
     var key = dragKey, price = dragPrice;
     dragKey = null;
@@ -728,7 +855,8 @@
   function onChartClick(param) {
     // A tap elsewhere dismisses a pending ⊕ (but not the click LWC may emit
     // as the long-press itself ends).
-    if (pendingAlertPrice !== null && Date.now() - pendingShownAt > 400) hidePendingAlert();
+    if (pendingAlertPrice !== null && Date.now() - pendingShownAt > 400
+        && Date.now() - pendingDragEndAt > 400) hidePendingAlert(true);
     // Only a clean tap (one finger, barely moved, quick) can select an alert
     // line — the end of a pan, a pinch or a long-press never does
     // (2026-10-13: lines were opening by accident). Recorded in the capture
@@ -789,7 +917,7 @@
   function tapMove(e) {
     // A trade-line drag owns this gesture — don't let it read as a pan
     // (chart-interact clears the selection mid-drag; PR #121 thread 11).
-    if (dragKey) return;
+    if (dragKey || pendingDrag) return;
     if (e.touches && e.touches.length > 1) tapMulti = true;
     var t = e.touches && e.touches[0];
     if (!t) return;
@@ -952,7 +1080,7 @@
       };
     }));
     if (msg.fit) {
-      hidePendingAlert(); // new ticker/range — a pending ⊕ no longer applies
+      hidePendingAlert(true); // new ticker/range — a pending line no longer applies
       // The date range is only the initial viewport now — frame it after fit.
       frameFrom = msg.visibleFrom || null;
       touchedSinceFit = false;
@@ -1423,7 +1551,9 @@
           ' price=' + (lastCrosshairPrice === null ? 'null' : lastCrosshairPrice.toFixed(2)));
       }
       if (longPressArmed && lastCrosshairPrice !== null) {
-        showPendingAlert(lastCrosshairPrice);
+        var ct = e && e.changedTouches && e.changedTouches[0];
+        var px = ct ? ct.clientX - chartEl.getBoundingClientRect().left : null;
+        showPendingAlert(lastCrosshairPrice, px);
       }
       longPressArmed = false;
       lastCrosshairPrice = null;
@@ -1468,6 +1598,8 @@
       case 'setRefLines': setRefLines(msg.lines); break;
       case 'setTradeOverlay': setTradeOverlay(msg); break;
       case 'setPreviewLine': setPreviewLine(msg); break;
+      case 'setExitChips': setExitChips(msg); break;
+      case 'pendingExit': pendingExit(msg); break;
       case 'setEmaOverlays': setEmaOverlays(msg); break;
       case 'setVwap': setVwap(msg); break;
       case 'setCountdown': setCountdown(msg); break;
