@@ -244,6 +244,16 @@ class ExitManager:
         self._tp1_replaced = False          # first line took ALL of TP1's qty
         self._tp1_base_qty = None           # TP1's qty when the first line carved from it
         self._tp1_override_before = _UNSET  # tp1_qty override to restore if the lines go
+        # Stop set by STOCK price from the chart (spec 2026-11-10 inline exit
+        # lines §4): confirmed on 1m underlying closes beyond the line, then
+        # the normal SL grace flow. While set it replaces the premium stop
+        # (one stop per trade) until breakeven arms; the floor still
+        # backstops on the premium. None for every untouched trade.
+        self._sl_stock: float | None = None
+        self._sl_stock_bars = 0
+        # Fill premiums of the engine TP1/TP2 — display only (realized %).
+        self.tp1_hit_premium: float | None = None
+        self.tp2_hit_premium: float | None = None
 
         # Pre-TP1 SL grace window (REVERSAL only, via profile flags — see
         # profiles.py for the full rationale). Once SL is confirmed hit and
@@ -470,19 +480,26 @@ class ExitManager:
         # below exactly as if price were back above the stop. This never
         # applies to the post-TP1 breakeven stop, which always protects the
         # full remaining runner regardless of any earlier SL-override history.
-        if current_option_price <= self.hard_stop and not (self._sl_override_consumed and not self.be_stop_active):
-            self._sl_ticks += 1
-            if self._sl_ticks < self._sl_ticks_needed:
-                return self._action("HOLD", 0, "SL_CONFIRMING")
+        # A stock stop (chart SL by stock price) is confirmed by 1m closes in
+        # on_underlying_bar; while one is set, the premium stop only acts as
+        # the breakeven stop. With no stock stop this is exactly the old test.
+        stock_breach = self._sl_stock is not None and self._sl_stock_bars >= max(1, self._sl_ticks_needed)
+        premium_breach = ((self._sl_stock is None or self.be_stop_active)
+                          and current_option_price <= self.hard_stop)
+        if (stock_breach or premium_breach) and not (self._sl_override_consumed and not self.be_stop_active):
+            if not stock_breach:
+                self._sl_ticks += 1
+                if self._sl_ticks < self._sl_ticks_needed:
+                    return self._action("HOLD", 0, "SL_CONFIRMING")
 
-            reason = ("HARD_STOP" if not self.be_stop_active
+            reason = ("HARD_STOP" if stock_breach or not self.be_stop_active
                       else "RUNNER_FLOOR_STOP" if self.hard_stop > self.entry_premium + 1e-9
                       else "BREAKEVEN_STOP")
 
             # Post-TP1 breakeven grace — a fixed window from the first breach;
             # at its end, still at/below breakeven → sell. The BE guard (old
             # stop) and the worst-case floor (checked above) bypass it.
-            if self.be_stop_active and self._be_grace_seconds > 0:
+            if not stock_breach and self.be_stop_active and self._be_grace_seconds > 0:
                 if self._be_guard is not None and current_option_price <= self._be_guard:
                     self._log_decision("BE_GRACE_BYPASSED", price=current_option_price, be_guard=self._be_guard)
                     self._be_grace_start = None
@@ -499,7 +516,7 @@ class ExitManager:
             # Grace window only applies to the pre-TP1 hard stop — post-TP1 this
             # is protecting already-banked TP1 profit (breakeven), not giving a
             # fresh entry room to develop, so it exits on confirmation like normal.
-            if self._sl_grace_enabled and not self.be_stop_active:
+            if self._sl_grace_enabled and (stock_breach or not self.be_stop_active):
                 if not self._sl_grace_active:
                     self._sl_grace_active    = True
                     self._sl_grace_start     = datetime.now(ET)
@@ -600,6 +617,7 @@ class ExitManager:
                 if self._tp1_ticks < self._tp1_ticks_needed:
                     return self._action("HOLD", 0, "TP1_CONFIRMING")
                 self.tp1_hit        = True
+                self.tp1_hit_premium = round(current_option_price, 4)
                 self._cascade_peak  = current_option_price   # arms cascade v2
                 # "none" leaves the runner on its original pre-TP1 hard stop —
                 # no BE floor, no trail. It only exits via TP2/cascade/EOD/manual.
@@ -629,6 +647,7 @@ class ExitManager:
         # TP2 — runner bonus target; only fires if the full move materialises.
         if self._use_tp2 and self.tp1_hit and not self.tp2_hit and current_option_price >= self.tp2:
             self.tp2_hit = True
+            self.tp2_hit_premium = round(current_option_price, 4)
             if self._rungs:
                 # Laddered trade: TP2 is one rung among several — it sells only
                 # unreserved contracts and always leaves the runner (spec §7:
@@ -843,6 +862,17 @@ class ExitManager:
         (close == open) is no information either way, same as an equal close
         was under the old comparison — counter unchanged.
         """
+        if self._sl_stock is not None:
+            # Stock stop: count consecutive 1m closes at/beyond the line
+            # (CALL: at/below, PUT: at/above); a close back on the safe side
+            # resets it — the same confirm-ticks shape, on bars.
+            beyond = close <= self._sl_stock if self.direction == "CALL" else close >= self._sl_stock
+            if beyond:
+                self._sl_stock_bars += 1
+                if self._sl_stock_bars == max(1, self._sl_ticks_needed):
+                    self._log_decision("SL_STOCK_CONFIRMED", stock=self._sl_stock, close=close)
+            else:
+                self._sl_stock_bars = 0
         if not self.tp1_hit:
             # Pre-TP1: feed the SL grace window's consecutive-adverse-bar
             # counter (only meaningful while sl_grace_active — see evaluate()
@@ -1093,7 +1123,9 @@ class ExitManager:
         r["_ticks"] = r.get("_ticks", 0) + 1
         if r["_ticks"] < self._tp1_ticks_needed:
             return self._action("HOLD", 0, "TP_RUNG_CONFIRMING")
-        qty = min(r["qty"], max(0, self.qty_remaining - 1))   # never the runner
+        # The runner may take a line (inline exit lines §3): a line that owns
+        # the last contract closes the trade.
+        qty = min(r["qty"], self.qty_remaining)
         r["hit"] = True
         r["hit_premium"] = round(price, 4)
         r["hit_at"] = datetime.now(ET).isoformat(timespec="seconds")
@@ -1107,8 +1139,9 @@ class ExitManager:
             self.mark_breakeven(self.breakeven_level(cap=price))
         if qty <= 0:
             return self._action("HOLD", 0, "TP_RUNG_NOTHING_LEFT")
+        if qty >= self.qty_remaining:
+            return self._action("CLOSE_ALL", qty, "TP_RUNG", price)
         return self._action("CLOSE_PARTIAL", qty, "TP_RUNG", price)
-        return None
 
     def set_tp_rungs(self, rungs: list, current_price: float | None = None,
                      allow_immediate: bool = False,
@@ -1135,7 +1168,8 @@ class ExitManager:
           • qty ≥ 1, no two lines at the same premium (nor on an engine
             TP1/TP2 premium), no two lines at the same stock price;
           • at most one rung per contract, and every rung + TP1's remaining
-            qty + 1 runner fits in qty_remaining.
+            qty fits in qty_remaining — the runner may take a line
+            (inline exit lines spec §3), so N contracts hold N lines.
         The first user line takes its qty out of TP1's allocation (§4.5).
         Raises ValueError without changing anything on invalid input.
         """
@@ -1197,12 +1231,11 @@ class ExitManager:
                     raise ValueError(f"A TP at ${premium:.2f} is already reached (premium now "
                                      f"${current_price:.2f}) — it would fire on the next tick")
                 if sp is not None and current_underlying is not None:
+                    # Wording the chart toasts verbatim (inline exit lines §10).
                     if self.direction == "PUT" and sp >= current_underlying:
-                        raise ValueError(f"A TP at ${sp:.2f} stock is already reached (stock now "
-                                         f"${current_underlying:.2f}) — it would fire on the next tick")
+                        raise ValueError(f"A TP sits below the current price (${current_underlying:.2f})")
                     if self.direction == "CALL" and sp <= current_underlying:
-                        raise ValueError(f"A TP at ${sp:.2f} stock is already reached (stock now "
-                                         f"${current_underlying:.2f}) — it would fire on the next tick")
+                        raise ValueError(f"A TP sits above the current price (${current_underlying:.2f})")
             new.append({
                 "id": rid or uuid.uuid4().hex[:10],
                 "premium": premium,
@@ -1229,11 +1262,14 @@ class ExitManager:
                     raise ValueError(f"Already a line at ${p_:.2f} ({name})")
         for i, s_ in enumerate(stocks):
             if any(abs(s_ - q) < 0.05 for q in stocks[i + 1:]):
-                raise ValueError(f"Already a line at ${s_:.2f} stock")
-        max_rungs = max(0, self.qty_remaining - 1)
+                raise ValueError(f"A TP line already sits at ${s_:.2f}")
+        max_rungs = max(0, self.qty_remaining)
+        line_qty = sum(r["qty"] for r in new)
         if len(new) > max_rungs:
-            raise ValueError(f"At most {max_rungs} TP line{'s' if max_rungs != 1 else ''} — "
-                             f"one per open contract, and the last contract stays the runner")
+            raise ValueError(f"All {max_rungs} contract{'s' if max_rungs != 1 else ''} already have TP lines — "
+                             f"delete one to add another")
+        if line_qty > max_rungs:
+            raise ValueError(f"Not enough contracts: lines sell {line_qty} — {max_rungs} open")
 
         # TP1 carve: the earliest-created user line takes from TP1 (only
         # while TP1 hasn't fired).
@@ -1246,11 +1282,11 @@ class ExitManager:
             r["from_tp1"] = min(r["qty"], base) if (r is first and base) else 0
             r["replaces_tp1"] = bool(r is first and base and r["qty"] >= base)
         tp1_left = (base - first["from_tp1"]) if (first and base) else (self._tp1_current_qty() if tp1_live and not new else 0)
-        need = sum(r["qty"] for r in new) + (tp1_left if tp1_live else 0) + 1
-        if new and need > self.qty_remaining:
-            raise ValueError(f"Not enough contracts: lines sell {sum(r['qty'] for r in new)}"
-                             f"{f', TP1 sells {tp1_left}' if tp1_live and tp1_left else ''}"
-                             f" and 1 stays the runner — {self.qty_remaining} open")
+        # Lines are the user's instructions: when they need TP1's remaining
+        # contracts, TP1 gives them up (down to nothing — then it's skipped,
+        # like a fully replaced TP1). N contracts hold N lines (§3).
+        if new and tp1_live:
+            tp1_left = max(0, min(tp1_left, self.qty_remaining - line_qty))
 
         # Apply (validated — nothing above mutated state).
         if tp1_live:
@@ -1335,7 +1371,7 @@ class ExitManager:
         tp1_qty = self._tp1_current_qty()
         if not self._tp1_replaced and not self._disable_tp1_exit:
             out.append({"key": "tp1", "source": "engine", "premium": round(self.tp1, 4),
-                        "qty": tp1_qty, "hit": self.tp1_hit})
+                        "qty": tp1_qty, "hit": self.tp1_hit, "hit_premium": self.tp1_hit_premium})
         for r in self._rungs:
             out.append({"key": r["id"], "source": r.get("source") or "edit-card", "premium": r["premium"],
                         "qty": r["qty"], "hit": r["hit"], "stock_price": r.get("stock_price"),
@@ -1356,7 +1392,7 @@ class ExitManager:
                 if self._rungs:
                     tp2_qty = min(tp2_qty, max(0, pool - 1))
             out.append({"key": "tp2", "source": "engine", "premium": round(self.tp2, 4),
-                        "qty": tp2_qty, "hit": self.tp2_hit})
+                        "qty": tp2_qty, "hit": self.tp2_hit, "hit_premium": self.tp2_hit_premium})
         out.sort(key=lambda x: (0 if x.get("replaces_tp1") else 1,
                                 x["premium"] if x["premium"] is not None else float("inf")))
         for i, x in enumerate(out, 1):
@@ -1398,6 +1434,7 @@ class ExitManager:
                         tp_rungs: list | None = None,
                         current_price: float | None = None,
                         current_underlying: float | None = None,
+                        sl_stock_price=_UNSET,
                         allow_immediate: bool = False) -> dict:
         """
         Validate and apply user-supplied SL/TP1/TP2 price and/or qty overrides
@@ -1490,6 +1527,29 @@ class ExitManager:
         grace_fields = None
         if sl_grace_minutes is not _UNSET:
             grace_fields = grace_fields_for_minutes(sl_grace_minutes)  # raises ValueError on bad input
+        # Stock stop: a number sets/moves it, None clears it. It sits on the
+        # adverse side of the stock (CALL: below, PUT: above) — a stop the
+        # stock already crossed would sell on the next confirmed bar.
+        if sl_stock_price is not _UNSET and sl_stock_price is not None:
+            try:
+                sl_stock_price = round(float(sl_stock_price), 2)
+            except (TypeError, ValueError):
+                raise ValueError("sl_stock_price must be a number") from None
+            if not math.isfinite(sl_stock_price) or sl_stock_price <= 0:
+                raise ValueError("sl_stock_price must be above $0")
+            if current_underlying is not None:
+                if self.direction == "CALL" and sl_stock_price >= current_underlying:
+                    raise ValueError(f"A stop sits below the current price (${current_underlying:.2f})")
+                if self.direction == "PUT" and sl_stock_price <= current_underlying:
+                    raise ValueError(f"A stop sits above the current price (${current_underlying:.2f})")
+        # A TP line saved with tp_enabled=true turns take profit on (inline
+        # exit lines §3): flip it BEFORE the lines are validated (they're
+        # refused while TP is off), and back if they're rejected.
+        tp_on_first = tp_enabled is True and self._disable_tp1_exit and tp_rungs
+        if tp_on_first:
+            if tp1 is None and (self.tp1 is None or self.tp1 <= self.entry_premium):
+                raise ValueError("Set a TP1 price to re-enable Take Profit")
+            self._disable_tp1_exit = False
         # TP rungs are validated + applied first: set_tp_rungs raises before
         # mutating anything, so a rejected ladder leaves every other field
         # in this call unapplied too.
@@ -1497,8 +1557,13 @@ class ExitManager:
         if tp_rungs is not None:
             if tp1_qty is not None:
                 raise ValueError("Set TP1's quantity through the TP lines when lines are being saved")
-            rungs_changed = self.set_tp_rungs(tp_rungs, current_price, allow_immediate,
-                                              current_underlying=current_underlying)
+            try:
+                rungs_changed = self.set_tp_rungs(tp_rungs, current_price, allow_immediate,
+                                                  current_underlying=current_underlying)
+            except ValueError:
+                if tp_on_first:
+                    self._disable_tp1_exit = True
+                raise
 
         changed = {}
         if rungs_changed is not None:
@@ -1551,6 +1616,10 @@ class ExitManager:
             if not sl_enabled:
                 self.hard_stop = 0.0
                 self.profile["max_loss_pct"] = 1.0
+                # Stop off means no stop of either kind.
+                if self._sl_stock is not None and sl_stock_price is _UNSET:
+                    self._sl_stock, self._sl_stock_bars = None, 0
+                    changed["sl_stock_price"] = None
                 # Also stamp "hard_stop" itself so the route's existing
                 # persist-to-orb_trades call (keyed off changed.get(
                 # "hard_stop")) captures the 0.0 too — otherwise a restart
@@ -1559,7 +1628,8 @@ class ExitManager:
                 # update_exit_levels' docstring describes.
                 changed["hard_stop"] = 0.0
             else:
-                if hard_stop is None and self.hard_stop <= 0:
+                stock_on = sl_stock_price is not _UNSET and sl_stock_price is not None
+                if hard_stop is None and self.hard_stop <= 0 and not stock_on and self._sl_stock is None:
                     raise ValueError("Set a stop-loss price to re-enable Stop Loss")
                 self.profile["max_loss_pct"] = (
                     max(0.01, min(0.99, (self.entry_premium - self.hard_stop) / self.entry_premium))
@@ -1586,6 +1656,11 @@ class ExitManager:
             if be_grace_seconds == 0:
                 self._be_grace_start = None
             changed["be_grace_seconds"] = be_grace_seconds
+        if sl_stock_price is not _UNSET:
+            if sl_stock_price != self._sl_stock:
+                self._sl_stock_bars = 0
+            self._sl_stock = sl_stock_price
+            changed["sl_stock_price"] = sl_stock_price
         if cancel_be_grace and self._be_grace_start is not None:
             # Trader chose to hold through this breach: stop the countdown,
             # keep the position. The breakeven stop stays armed — still below
@@ -1628,7 +1703,9 @@ class ExitManager:
             # NO_STOP_LOSS convention (max_loss_pct >= 1.0 == unreachable);
             # tp_enabled mirrors disable_tp1_exit (2026-08-30 — the SL/TP
             # enable toggle, see immediate-trade route).
-            "sl_enabled":          self.profile.get("max_loss_pct", 0) < 1.0,
+            "sl_enabled":          self.profile.get("max_loss_pct", 0) < 1.0 or self._sl_stock is not None,
+            # Chart stop set by stock price (None when the stop is a premium).
+            "sl_stock_price":      self._sl_stock,
             "tp_enabled":          not self._disable_tp1_exit,
             # Current runner/cascade CONFIGURATION for this open trade — lets
             # a client (EditExitsModal) pre-select the toggle to what's

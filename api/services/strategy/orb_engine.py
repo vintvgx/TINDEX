@@ -1977,6 +1977,7 @@ class ORBEngine(GateWatchMixin):
         stored_overrides = dict(row.get("exit_overrides") or {})
         be_grace_start_iso = stored_overrides.pop("be_grace_start", None)
         rung_state = stored_overrides.pop("rung_state", None)
+        sl_stock_price = stored_overrides.pop("sl_stock_price", None)
         time_stop_met = bool(stored_overrides.pop("time_stop_progress_met", False))
         profile = stored_overrides or get_profile(self.profile_key)
         fib_levels = dict(row.get("fib_targets") or {})
@@ -2016,6 +2017,9 @@ class ORBEngine(GateWatchMixin):
         # Chart / Edit-card TP lines + the TP1 carve, exactly as last saved
         # (hit flags included) — lines never live in memory only (§6).
         self.exit_manager.restore_rungs(rung_state)
+        # Chart stop by stock price, as last saved (inline exit lines §4).
+        if isinstance(sl_stock_price, (int, float)) and sl_stock_price > 0:
+            self.exit_manager._sl_stock = float(sl_stock_price)
 
         # Restore stop/TP progress so a restart never silently reverts to a
         # wider stop or re-fires an already-completed TP1/TP2.
@@ -2023,9 +2027,13 @@ class ORBEngine(GateWatchMixin):
         reasons_hit = {s.get("reason") for s in stages}
         if "TP1" in reasons_hit or row.get("tp1_premium") is not None:
             self.exit_manager.tp1_hit = True
+            if row.get("tp1_premium") is not None:
+                self.exit_manager.tp1_hit_premium = float(row["tp1_premium"])
             self.exit_manager.be_stop_active = True
         if {"TP2", "TP2_FULL_CLOSE"} & reasons_hit or row.get("tp2_premium") is not None:
             self.exit_manager.tp2_hit = True
+            if row.get("tp2_premium") is not None:
+                self.exit_manager.tp2_hit_premium = float(row["tp2_premium"])
 
         # Resume an in-flight breakeven-grace countdown instead of granting
         # a fresh window: the tick handler persists be_grace_start into
@@ -4002,6 +4010,8 @@ class ORBEngine(GateWatchMixin):
             "quote_age_s":          round(time.time() - getattr(self, "_last_stream_tick_wall", time.time()), 1),
             "be_stop_active":       em.be_stop_active,
             "be_level":             round(em.breakeven_level(), 4),
+            # Chart stop set by stock price (None: the stop is a premium).
+            "sl_stock_price":       em_state.get("sl_stock_price"),
             "qty_entered":          em.qty,
             "strategy_name":        self.strategy_name,
             # The one TP ladder (engine TP1/TP2 + chart/Edit lines, premium

@@ -53,6 +53,9 @@ interface UpdateStrategyExitsPayload {
   /** The FULL list of user TP lines (chart / Edit card) — the server
    *  validates, reserves qty and carves the first line out of TP1. */
   tp_rungs?: TpRungInput[];
+  /** Chart stop set by stock price (inline exit lines §4): a number sets or
+   *  moves it, null clears it. Fires on 1m underlying closes, no delta. */
+  sl_stock_price?: number | null;
 }
 
 export function useUpdateStrategyExits() {

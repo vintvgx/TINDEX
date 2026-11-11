@@ -197,7 +197,7 @@ function PositionStrip({ pos, onPress, onLiveUpdate, colors }: {
   const money = (v: number | null | undefined) => (v == null ? '—' : `$${v.toFixed(2)}`);
   // Same ladder summary the chart pill carries (spec §4.6) — updates live
   // as lines are set, moved or hit.
-  const rungs = live ? ladderSummary(live) : null;
+  const rungs = live ? ladderSummary(live, true) : null;
 
   return (
     <TouchableOpacity

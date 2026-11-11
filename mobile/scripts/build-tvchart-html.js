@@ -75,17 +75,23 @@ function main() {
     position: absolute; white-space: nowrap;
     font: 600 9px/11px -apple-system, 'SF Pro Text', sans-serif;
   }
-  /* Pending-alert ⊕ after a long-press (TradingView-style). */
+  /* Long-press pending line + its chips: + alert, TP, SL (inline exit
+     lines spec). Compact chips; each one's touch area reaches 6px past it
+     vertically and 4px sideways, so the 10px gaps never overlap. */
   #alertadd { position: absolute; inset: 0; z-index: 12; pointer-events: none; display: none; }
   #alertadd .aa-line { position: absolute; left: 0; height: 0; border-top: 1px dashed rgba(242,242,240,0.75); }
-  #alertadd .aa-btn {
-    position: absolute; width: 26px; height: 26px; pointer-events: auto;
-    display: flex; align-items: center; justify-content: center;
-    color: #F2F2F0; background: #3A3A3C; border-radius: 5px; cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
+  #alertadd .aa-chips { position: absolute; display: flex; gap: 10px; }
+  #alertadd .aa-chip {
+    position: relative; min-width: 34px; height: 28px; padding: 0 7px; box-sizing: border-box;
+    display: flex; align-items: center; justify-content: center; pointer-events: auto; cursor: pointer;
+    border: 1.5px solid; border-radius: 8px; background: #0A0B0F;
+    font: 700 12px/1 -apple-system, 'SF Pro Text', sans-serif; letter-spacing: 0.02em;
+    -webkit-tap-highlight-color: transparent; user-select: none;
   }
-  #alertadd .aa-btn::before { content: ''; position: absolute; inset: -9px; }
-  #alertadd .aa-btn svg { width: 18px; height: 18px; }
+  #alertadd .aa-chip::before { content: ''; position: absolute; inset: -6px -4px; }
+  #alertadd .aa-chip.aa-add { font-size: 17px; font-weight: 500; }
+  #alertadd .aa-chip.dim { opacity: 0.35; }
+  #alertadd .aa-chip[hidden] { display: none; }
   #alertadd .aa-label {
     position: absolute; right: 0; height: 22px; line-height: 22px; text-align: center;
     background: #3A3A3C; border-radius: 3px;
@@ -127,6 +133,15 @@ function main() {
     font: 700 11px/18px -apple-system, 'SF Pro Text', sans-serif; text-align: center;
   }
   #tlhandle::after { content: '↕'; }
+  /* Delete × on the selected trade line (inline exit lines §1.3). */
+  #tldel {
+    position: absolute; z-index: 12; display: none; cursor: pointer;
+    width: 22px; height: 22px; border-radius: 11px; border: 2px solid; box-sizing: border-box;
+    font: 700 13px/18px -apple-system, 'SF Pro Text', sans-serif; text-align: center;
+    -webkit-tap-highlight-color: transparent; user-select: none;
+  }
+  #tldel::before { content: ''; position: absolute; inset: -8px; }
+  #tldel::after { content: '×'; }
 </style>
 </head>
 <body>

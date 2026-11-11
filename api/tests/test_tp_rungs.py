@@ -96,14 +96,17 @@ def test_validation_duplicate_overflow_and_one_contract():
         em.apply_overrides(tp_rungs=[{"premium": 1.30, "qty": 1}])     # on TP1
     with pytest.raises(ValueError, match="Already a line"):
         em.apply_overrides(tp_rungs=[{"premium": 1.5, "qty": 1}, {"premium": 1.5, "qty": 1}])
-    with pytest.raises(ValueError, match="At most 3"):
-        em.apply_overrides(tp_rungs=[{"premium": 1.4 + i / 10, "qty": 1} for i in range(4)])
+    # As many lines as open contracts — the runner may take one (inline
+    # exit lines spec §3); a fifth line on 4 contracts is refused.
+    with pytest.raises(ValueError, match="All 4 contracts already have TP lines"):
+        em.apply_overrides(tp_rungs=[{"premium": 1.4 + i / 10, "qty": 1} for i in range(5)])
     with pytest.raises(ValueError, match="Not enough contracts"):
-        em.apply_overrides(tp_rungs=[{"premium": 1.5, "qty": 1}, {"premium": 1.7, "qty": 2}])
+        em.apply_overrides(tp_rungs=[{"premium": 1.5, "qty": 2}, {"premium": 1.7, "qty": 3}])
     assert em.to_dict()["tp_rungs"] == []                   # nothing applied on a rejection
     one = _em(qty=1)
-    with pytest.raises(ValueError, match="At most 0"):
-        one.apply_overrides(tp_rungs=[{"premium": 1.5, "qty": 1}])
+    one.apply_overrides(tp_rungs=[{"premium": 1.5, "qty": 1}])   # takes the runner
+    with pytest.raises(ValueError, match="All 1 contract already"):
+        one.apply_overrides(tp_rungs=[{"premium": 1.5, "qty": 1}, {"premium": 1.6, "qty": 1}])
 
 
 def test_delete_returns_tp1_its_qty():
@@ -307,11 +310,11 @@ def test_stock_only_put_line_fires_when_stock_falls_to_it():
 
 def test_stock_line_on_the_wrong_side_is_already_reached():
     em = _em()   # CALL: a TP line must sit ABOVE the current stock
-    with pytest.raises(ValueError, match="already reached"):
+    with pytest.raises(ValueError, match=r"A TP sits above the current price \(\$768.00\)"):
         em.apply_overrides(tp_rungs=[{"stock_price": 766.00, "qty": 1}],
                            current_underlying=768.0)
     put = _put_em()   # PUT: a TP line must sit BELOW the current stock
-    with pytest.raises(ValueError, match="already reached"):
+    with pytest.raises(ValueError, match=r"A TP sits below the current price"):
         put.apply_overrides(tp_rungs=[{"stock_price": 770.00, "qty": 1}],
                             current_underlying=768.0)
 

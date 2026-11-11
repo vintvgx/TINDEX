@@ -78,7 +78,15 @@ interface TVRefLine {
 interface TVTradeLine {
   key: string; kind: OverlayLine['kind']; label: string; price: number; color: string; labelText: string;
   style: OverlayLine['style']; width: 1 | 2; title: string; editable: boolean;
+  deletable: boolean; stockLine: boolean;
 }
+/** Long-press chip state (inline exit lines §2) — sent on every change so
+ *  the TP gray-out is never stale. */
+export interface ExitChipState { open: boolean; tpAllowed: boolean }
+/** RN → page: show the pending line + chips at a price (a line dragged
+ *  across the current price, §1.3), or hide it after a saved chip. `id`
+ *  makes each command fire once. */
+export type PendingExitCommand = { id: number; show: true; price: number } | { id: number; show: false };
 interface TVTradeMarker {
   key: string; label: string | null; count: string; pnlText: string;
   edge: string; toneColor: string; selected: boolean; sim: boolean; stale: boolean;
@@ -98,8 +106,11 @@ type WVOutbound =
   | { type: 'setZones'; auto: TVZoneBand[]; watch: TVZoneBand[]; bands: TVZoneBand[] }
   | { type: 'setRefLines'; lines: TVRefLine[] }
   | { type: 'setTradeOverlay'; lines: TVTradeLine[]; markers: TVTradeMarker[]; selectedKey: string | null;
-      quote: TradeOverlayFrame['quote']; stopColor: string }
+      quote: TradeOverlayFrame['quote']; stopColor: string; tpColor: string;
+      stock: number | null; direction: 'CALL' | 'PUT' | null }
   | { type: 'setPreviewLine'; line: TradePreviewLine | null }
+  | { type: 'setExitChips'; open: boolean; tpAllowed: boolean; colors: { alert: string; tp: string; sl: string } }
+  | { type: 'pendingExit'; show: boolean; price?: number }
   | { type: 'setEmaOverlays'; emas: TVEmaOverlay[] }
   | { type: 'setVwap'; visible: boolean }
   | { type: 'setHistoryExhausted'; exhausted: boolean }
@@ -110,8 +121,14 @@ type WVInbound =
   | { type: 'loaded' }
   | { type: 'ready' }
   | { type: 'requestMoreHistory' }
-  /** The page's ⊕ (shown after a long-press) was tapped at this price. */
+  /** The pending line's + chip was tapped at this price. */
   | { type: 'addAlert'; price: number }
+  /** The pending line's TP / SL chip (blocked: TP tapped while grayed). */
+  | { type: 'exitChip'; kind: 'tp' | 'sl'; price: number; blocked?: boolean }
+  /** The pending line was dismissed (tap away / on it / a new press). */
+  | { type: 'pendingDismiss' }
+  /** × on the selected trade line. */
+  | { type: 'tradeLineDelete'; key: string }
   | { type: 'zone-tap'; id: string; kind: 'auto' | 'watch' }
   /** A chart trade overlay marker was tapped. */
   | { type: 'tradeMarkerTap'; key: string }
@@ -188,7 +205,31 @@ export interface TVChartProps {
   onTradeLineDrag?: (key: string, price: number, phase: 'move' | 'end') => void;
   /** Long-press sheet preview line; null when no sheet is open. */
   previewLine?: TradePreviewLine | null;
+  /** The open trade's side — drag relabel of stock lines (TP ↔ SL). */
+  tradeDirection?: 'CALL' | 'PUT' | null;
+  /** Which chips the long-press shows (inline exit lines §1.1, §3). */
+  exitChips?: ExitChipState | null;
+  pendingExit?: PendingExitCommand | null;
+  onExitChip?: (kind: 'tp' | 'sl', price: number, blocked: boolean) => void;
+  onPendingDismiss?: () => void;
+  onTradeLineDelete?: (key: string) => void;
   style?: any;
+}
+
+/** '#30D158' / 'rgb(…)' + alpha → an rgba() string (1 = unchanged). */
+function withAlpha(color: string, a: number): string {
+  if (a >= 1) return color;
+  const hex = /^#([0-9a-f]{6})$/i.exec(color);
+  if (hex) {
+    const n = parseInt(hex[1], 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  }
+  const rgb = /^rgba?\(([^)]+)\)$/i.exec(color);
+  if (rgb) {
+    const [r, g, b, a0] = rgb[1].split(',').map(x => parseFloat(x));
+    return `rgba(${r},${g},${b},${(Number.isFinite(a0) ? a0 : 1) * a})`;
+  }
+  return color;
 }
 
 // Auto zones stay deliberately quiet (fill 0.03-0.08, faint edges) so the
@@ -298,6 +339,7 @@ export function TVChart({
   visibleSeconds, onRequestMoreHistory, historyExhausted, onAddAlertAtPrice, livePrice,
   selectedWatchZoneId, onChartInteract, tradeOverlay, onTradeMarkerPress,
   selectedTradeLineKey, onTradeLineTap, onTradeLineDrag, previewLine,
+  tradeDirection, exitChips, pendingExit, onExitChip, onPendingDismiss, onTradeLineDelete,
 }: TVChartProps) {
   const colors = useThemeColors();
   const { visible: showWatchZones } = useWatchZonesVisibility();
@@ -327,6 +369,12 @@ export function TVChart({
   onTradeLineTapRef.current = onTradeLineTap;
   const onTradeLineDragRef = useRef(onTradeLineDrag);
   onTradeLineDragRef.current = onTradeLineDrag;
+  const onExitChipRef = useRef(onExitChip);
+  onExitChipRef.current = onExitChip;
+  const onPendingDismissRef = useRef(onPendingDismiss);
+  onPendingDismissRef.current = onPendingDismiss;
+  const onTradeLineDeleteRef = useRef(onTradeLineDelete);
+  onTradeLineDeleteRef.current = onTradeLineDelete;
 
   // The chart HTML is bundled as a TS string (generated by
   // scripts/build-tvchart-html.js) — no expo-asset, no file:// URLs, no
@@ -742,10 +790,14 @@ export function TVChart({
     const lineColor = (l: OverlayLine) =>
       l.hit ? colors.success
         : l.muted ? colors.textTertiary : l.kind === 'SL' ? colors.error : l.kind === 'BE' ? colors.textSecondary : colors.success;
+    // Opacity is the line's alpha (inline exit lines §9) — it composes with
+    // muting (a muted line is a dimmed tertiary, not dimmed green/red).
     const lines: TVTradeLine[] = (f?.lines ?? []).map((l) => ({
-      key: l.key, kind: l.kind, label: l.label, editable: l.editable, price: l.price, color: lineColor(l),
+      key: l.key, kind: l.kind, label: l.label, editable: l.editable, price: l.price,
+      color: withAlpha(lineColor(l), l.opacity ?? 1),
       labelText: (l.kind === 'BE' || l.muted) && !l.hit ? colors.background : '#0A0B0F',
       style: l.style, width: (l.kind === 'BE' && l.style === 'solid') || l.hit ? 2 : 1, title: l.title,
+      deletable: !!l.deletable, stockLine: !!l.stockLine,
     }));
     const tone = (m: OverlayMarker) =>
       m.tone === 'up' ? colors.success : m.tone === 'down' ? colors.error : m.tone === 'stale' ? colors.textTertiary : colors.textSecondary;
@@ -758,8 +810,20 @@ export function TVChart({
       summary: m.selected ? m.summary : null,
     }));
     return { type: 'setTradeOverlay' as const, lines, markers, selectedKey: selectedTradeLineKey ?? null,
-             quote: f?.quote ?? null, stopColor: colors.error };
-  }, [tradeOverlay, colors, selectedTradeLineKey]);
+             quote: f?.quote ?? null, stopColor: colors.error, tpColor: colors.success,
+             stock: f?.stock ?? null, direction: tradeDirection ?? null };
+  }, [tradeOverlay, colors, selectedTradeLineKey, tradeDirection]);
+  useEffect(() => {
+    if (!chartReady) return;
+    send({ type: 'setExitChips', open: !!exitChips?.open, tpAllowed: exitChips?.tpAllowed !== false,
+           colors: { alert: colors.text, tp: colors.success, sl: colors.error } });
+  }, [chartReady, exitChips?.open, exitChips?.tpAllowed, colors, send]);
+  const pendingSentRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!chartReady || !pendingExit || pendingSentRef.current === pendingExit.id) return;
+    pendingSentRef.current = pendingExit.id;
+    send(pendingExit.show ? { type: 'pendingExit', show: true, price: pendingExit.price } : { type: 'pendingExit', show: false });
+  }, [chartReady, pendingExit, send]);
   useEffect(() => {
     if (!chartReady) return;
     send({ type: 'setPreviewLine', line: previewLine ?? null });
@@ -838,6 +902,14 @@ export function TVChart({
       if (typeof msg.price === 'number' && isFinite(msg.price)) {
         onAddAlertRef.current?.(msg.price);
       }
+    } else if (msg.type === 'exitChip') {
+      if ((msg.kind === 'tp' || msg.kind === 'sl') && typeof msg.price === 'number' && isFinite(msg.price)) {
+        onExitChipRef.current?.(msg.kind, msg.price, !!msg.blocked);
+      }
+    } else if (msg.type === 'pendingDismiss') {
+      onPendingDismissRef.current?.();
+    } else if (msg.type === 'tradeLineDelete') {
+      if (typeof msg.key === 'string') onTradeLineDeleteRef.current?.(msg.key);
     } else if (msg.type === 'chart-interact') {
       onChartInteractRef.current?.();
     } else if (msg.type === 'tradeMarkerTap') {
