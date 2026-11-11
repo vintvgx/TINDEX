@@ -180,12 +180,14 @@ def test_rejects_tp_at_or_below_entry_and_skips_price_check_without_quote():
     em.apply_overrides(tp_rungs=[{"premium": 1.6, "qty": 1}], current_price=None)   # no crash
 
 
-def test_rejects_lines_while_take_profit_is_off():
+def test_saving_lines_while_take_profit_is_off_turns_it_on():
+    # Redesign spec §4: the refusal became an enable.
     em = _em()
     em.apply_overrides(tp_enabled=False)
-    with pytest.raises(ValueError, match="Take profit is off"):
-        em.apply_overrides(tp_rungs=[{"premium": 1.6, "qty": 1}])
-    em.apply_overrides(tp_rungs=[])          # clearing is always allowed
+    em.apply_overrides(tp_rungs=[])          # clearing never flips anything
+    assert em.to_dict()["tp_enabled"] is False
+    changed = em.apply_overrides(tp_rungs=[{"premium": 1.6, "qty": 1}])
+    assert changed["tp_enabled"] is True and em.to_dict()["tp_enabled"] is True
 
 
 def test_stop_at_or_below_an_armed_floor_is_refused():

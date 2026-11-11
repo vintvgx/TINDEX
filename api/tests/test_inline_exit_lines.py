@@ -75,12 +75,44 @@ def test_last_line_sells_the_runner_too():
 def test_tp_tap_while_tp_off_turns_it_on():
     em = _em()
     em.apply_overrides(tp_enabled=False)
-    with pytest.raises(ValueError, match="Take profit is off"):
-        em.apply_overrides(tp_rungs=[{"stock_price": 770.0, "qty": 1}], current_underlying=768.0)
-    changed = em.apply_overrides(tp_rungs=[{"stock_price": 770.0, "qty": 1}], tp_enabled=True,
-                                 current_underlying=768.0)
+    # With or without tp_enabled in the body (redesign §4.2).
+    changed = em.apply_overrides(tp_rungs=[{"stock_price": 770.0, "qty": 1}], current_underlying=768.0)
     assert changed["tp_enabled"] is True and em.to_dict()["tp_enabled"] is True
     assert len(em.rungs_public()) == 1
+    em.apply_overrides(tp_rungs=[])                     # sticky: deleting lines leaves TP on
+    assert em.to_dict()["tp_enabled"] is True
+
+
+def test_stock_only_line_is_the_reenable_price():
+    em = _em()
+    em.apply_overrides(tp_enabled=False)
+    em.tp1 = em.entry_premium                            # no usable engine TP1
+    em.apply_overrides(tp_rungs=[{"stock_price": 770.0, "qty": 1}], tp_enabled=True,
+                       current_underlying=768.0)
+    assert em.to_dict()["tp_enabled"] is True
+
+
+def test_reenable_skips_engine_tp1_already_passed_without_side_effects():
+    em = _em()
+    em.apply_overrides(tp_enabled=False)
+    em.apply_overrides(tp_rungs=[{"stock_price": 770.0, "qty": 1}], current_price=1.40,
+                       current_underlying=768.0)       # premium already past TP1 $1.30
+    assert em._tp1_skipped and not em.tp1_hit and not em.be_stop_active
+    assert all(x["key"] != "tp1" for x in em.ladder())
+    for _ in range(4):
+        a = _tick(em, 1.45)
+        assert a["reason"] not in ("TP1",)               # never fires retroactively
+    assert not em.be_stop_active and em._cascade_peak is None
+    assert em.qty_remaining == 4
+
+
+def test_reenable_keeps_engine_tp1_when_not_passed():
+    em = _em()
+    em.apply_overrides(tp_enabled=False)
+    em.apply_overrides(tp_rungs=[{"stock_price": 770.0, "qty": 1}], current_price=1.10,
+                       current_underlying=768.0)
+    assert not em._tp1_skipped
+    assert _tick(em, 1.31, n=em._tp1_ticks_needed)["reason"] == "TP1"
 
 
 def test_rejected_line_leaves_tp_off():
@@ -110,6 +142,13 @@ def test_sl_tap_moves_the_one_stop():
     assert em.to_dict()["sl_stock_price"] == 766.4
 
 
+def test_premium_stop_clears_the_stock_stop():
+    em = _em()
+    em.apply_overrides(sl_stock_price=767.0, current_underlying=768.0)
+    changed = em.apply_overrides(hard_stop=0.80)
+    assert changed["sl_stock_price"] is None and em.to_dict()["sl_stock_price"] is None
+
+
 def test_stock_stop_fires_on_confirmed_closes_and_sells_all():
     em = _em()
     em.apply_overrides(sl_stock_price=767.0, current_underlying=768.0, sl_grace_minutes=None)
@@ -123,7 +162,7 @@ def test_stock_stop_fires_on_confirmed_closes_and_sells_all():
     _bars(em, 767.2, 1)                                            # a close back above resets
     _bars(em, 766.9, need)
     a = _tick(em, 0.80)
-    assert (a["type"], a["reason"], a["qty"]) == ("CLOSE_ALL", "HARD_STOP", 4)
+    assert (a["type"], a["reason"], a["qty"]) == ("CLOSE_ALL", "HARD_STOP_STOCK", 4)
 
 
 def test_stock_stop_goes_through_the_sl_grace_window():
@@ -134,14 +173,21 @@ def test_stock_stop_goes_through_the_sl_grace_window():
     assert (a["type"], a["reason"]) == ("HOLD", "SL_GRACE")
 
 
-def test_breakeven_stop_still_protects_after_tp1_with_a_stock_stop():
+def test_breakeven_move_never_overrides_a_stock_stop():
+    # Redesign §3.2: the BE-after-TP1 move updates hard_stop but the premium
+    # stop stays inert while the user's stock stop is set.
     em = _em()
-    em.apply_overrides(sl_stock_price=767.0, current_underlying=768.0)
+    em.apply_overrides(sl_stock_price=767.0, current_underlying=768.0, sl_grace_minutes=None)
     assert _tick(em, 1.30, n=em._tp1_ticks_needed)["reason"] == "TP1"
-    assert em.be_stop_active
+    assert em.be_stop_active and em.to_dict()["sl_stock_price"] == 767.0
     em.apply_overrides(be_grace_seconds=0)
-    a = _tick(em, em.hard_stop - 0.01, n=em._sl_ticks_needed)
-    assert a["type"] == "CLOSE_ALL" and a["reason"] in ("BREAKEVEN_STOP", "RUNNER_FLOOR_STOP")
+    floor = em._sl_outer_floor if em._sl_floor_enabled else None
+    probe = em.hard_stop - 0.01
+    if floor is None or probe > floor:
+        assert _tick(em, probe, n=em._sl_ticks_needed + 1)["type"] == "HOLD"
+    _bars(em, 766.9, max(1, em._sl_ticks_needed))
+    a = _tick(em, 1.10)
+    assert (a["type"], a["reason"]) == ("CLOSE_ALL", "HARD_STOP_STOCK")
 
 
 def test_clearing_and_sl_off():

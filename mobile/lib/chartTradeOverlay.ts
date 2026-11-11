@@ -259,7 +259,9 @@ function linesFor(t: OverlayTradeInput, now: number): {
                 hit: r.hit, hitPremium: r.hit_premium ?? null, user: r.source !== 'engine' });
   }
   if (beArmed) {
-    want.push({ key: 'be', kind: 'BE', label: 'BE', premium: isNum(live.hard_stop) ? live.hard_stop : beLevel, style: 'solid' });
+    // A user's stock stop stays the live stop after breakeven arms
+    // (redesign §3.2) — draw only the stop that can actually sell.
+    if (stockStop == null) want.push({ key: 'be', kind: 'BE', label: 'BE', premium: isNum(live.hard_stop) ? live.hard_stop : beLevel, style: 'solid' });
   } else {
     if (!anyTpHit && isNum(beLevel)) want.push({ key: 'be', kind: 'BE', label: 'BE', premium: beLevel, style: 'dashed', pending: true });
     // A stock stop replaces the premium stop until breakeven arms.

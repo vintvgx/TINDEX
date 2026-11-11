@@ -254,6 +254,11 @@ class ExitManager:
         # Fill premiums of the engine TP1/TP2 — display only (realized %).
         self.tp1_hit_premium: float | None = None
         self.tp2_hit_premium: float | None = None
+        # Engine levels the premium had already passed when a TP line turned
+        # TP back on (redesign spec §4.3): skipped for this trade WITHOUT the
+        # post-TP1 side effects (no BE move, no TP1 exit, no cascade arm).
+        self._tp1_skipped = False
+        self._tp2_skipped = False
 
         # Pre-TP1 SL grace window (REVERSAL only, via profile flags — see
         # profiles.py for the full rationale). Once SL is confirmed hit and
@@ -480,19 +485,21 @@ class ExitManager:
         # below exactly as if price were back above the stop. This never
         # applies to the post-TP1 breakeven stop, which always protects the
         # full remaining runner regardless of any earlier SL-override history.
-        # A stock stop (chart SL by stock price) is confirmed by 1m closes in
-        # on_underlying_bar; while one is set, the premium stop only acts as
-        # the breakeven stop. With no stock stop this is exactly the old test.
+        # Stop precedence (redesign spec §3.2): floor (above), then the stock
+        # stop if one is set — confirmed by 1m closes in on_underlying_bar —
+        # then the premium stop ONLY if no stock stop is set. The BE-after-TP1
+        # move updates hard_stop but never makes it live over a user's stock
+        # stop. With no stock stop this is exactly the old test.
         stock_breach = self._sl_stock is not None and self._sl_stock_bars >= max(1, self._sl_ticks_needed)
-        premium_breach = ((self._sl_stock is None or self.be_stop_active)
-                          and current_option_price <= self.hard_stop)
+        premium_breach = self._sl_stock is None and current_option_price <= self.hard_stop
         if (stock_breach or premium_breach) and not (self._sl_override_consumed and not self.be_stop_active):
             if not stock_breach:
                 self._sl_ticks += 1
                 if self._sl_ticks < self._sl_ticks_needed:
                     return self._action("HOLD", 0, "SL_CONFIRMING")
 
-            reason = ("HARD_STOP" if stock_breach or not self.be_stop_active
+            reason = ("HARD_STOP_STOCK" if stock_breach
+                      else "HARD_STOP" if not self.be_stop_active
                       else "RUNNER_FLOOR_STOP" if self.hard_stop > self.entry_premium + 1e-9
                       else "BREAKEVEN_STOP")
 
@@ -611,7 +618,7 @@ class ExitManager:
         # a display-only relative number for that profile, not a real target.
         # A TP1 whose whole qty went to the first user line is skipped too:
         # that line fires as TP1 (see _evaluate_rungs).
-        if not self._disable_tp1_exit and not self.tp1_hit and not self._tp1_replaced:
+        if not self._disable_tp1_exit and not self.tp1_hit and not self._tp1_replaced and not self._tp1_skipped:
             if current_option_price >= self.tp1:
                 self._tp1_ticks += 1
                 if self._tp1_ticks < self._tp1_ticks_needed:
@@ -645,7 +652,8 @@ class ExitManager:
                 self._tp1_ticks = 0
 
         # TP2 — runner bonus target; only fires if the full move materialises.
-        if self._use_tp2 and self.tp1_hit and not self.tp2_hit and current_option_price >= self.tp2:
+        if (self._use_tp2 and (self.tp1_hit or self._tp1_skipped) and not self.tp2_hit and not self._tp2_skipped
+                and current_option_price >= self.tp2):
             self.tp2_hit = True
             self.tp2_hit_premium = round(current_option_price, 4)
             if self._rungs:
@@ -1050,7 +1058,7 @@ class ExitManager:
 
     def _tp1_current_qty(self) -> int:
         """What engine TP1 would sell now (0 once hit or fully replaced)."""
-        if self.tp1_hit or self._tp1_replaced or self._disable_tp1_exit:
+        if self.tp1_hit or self._tp1_replaced or self._disable_tp1_exit or self._tp1_skipped:
             return 0
         if self._tp1_qty_override is not None:
             return min(self._tp1_qty_override, self.qty_remaining)
@@ -1154,8 +1162,9 @@ class ExitManager:
         crosses the line in the trade's favor (PUT: at/below, CALL: at/above)
         and sells at the market premium then. Enforced here, whatever
         the client sent (§9):
-          • TP must be on: refused while take-profit is off for this trade
-            (the rungs could never fire);
+          • saving lines turns take-profit on (apply_overrides flips it
+            first — redesign spec §4); lines kept while TP is off reserve
+            nothing (see _reserved_qty);
           • a premium, when set, is above entry (a TP never sells at a loss);
           • a new or moved line's premium is above `current_price` — it
             would fire on the next tick — unless `allow_immediate` (the
@@ -1176,8 +1185,6 @@ class ExitManager:
         import uuid
         if not isinstance(rungs, list):
             raise ValueError("tp_rungs must be a list")
-        if rungs and self._disable_tp1_exit:
-            raise ValueError("Take profit is off for this trade — turn TP on to add TP lines")
         fired = [r for r in self._rungs if r["hit"]]
         fired_ids = {r["id"] for r in fired}
         existing = {r["id"]: r for r in self._rungs}
@@ -1250,9 +1257,9 @@ class ExitManager:
         stocks = ([r["stock_price"] for r in new if r["stock_price"] is not None]
                   + [r["stock_price"] for r in fired if r.get("stock_price") is not None])
         engine_prices = []
-        if not self.tp1_hit and not self._tp1_replaced:
+        if not self.tp1_hit and not self._tp1_replaced and not self._tp1_skipped:
             engine_prices.append(("TP1", self.tp1))
-        if self._use_tp2 and not self.tp2_hit:
+        if self._use_tp2 and not self.tp2_hit and not self._tp2_skipped:
             engine_prices.append(("TP2", self.tp2))
         for i, p_ in enumerate(prices):
             if any(abs(p_ - q) < 0.005 for q in prices[i + 1:]):
@@ -1274,7 +1281,7 @@ class ExitManager:
         # TP1 carve: the earliest-created user line takes from TP1 (only
         # while TP1 hasn't fired).
         base = self._tp1_base_qty
-        tp1_live = not self.tp1_hit and not self._disable_tp1_exit
+        tp1_live = not self.tp1_hit and not self._disable_tp1_exit and not self._tp1_skipped
         if tp1_live and new and base is None:
             base = self._tp1_current_qty() if not self._tp1_replaced else 0
         first = min(new, key=lambda r: r["created_at"]) if (new and tp1_live) else None
@@ -1325,11 +1332,17 @@ class ExitManager:
             "tp1_base_qty": self._tp1_base_qty,
             "tp1_override_before": None if self._tp1_override_before is _UNSET else self._tp1_override_before,
             "tp1_override_before_set": self._tp1_override_before is not _UNSET,
+            "tp1_skipped": self._tp1_skipped,
+            "tp2_skipped": self._tp2_skipped,
         }
 
     def restore_rungs(self, state: dict | None) -> None:
         """Inverse of rungs_state() — called by recover_position()."""
-        if not state or not state.get("tp_rungs") and not state.get("tp1_override_before_set"):
+        if not state:
+            return
+        self._tp1_skipped = bool(state.get("tp1_skipped"))
+        self._tp2_skipped = bool(state.get("tp2_skipped"))
+        if not state.get("tp_rungs") and not state.get("tp1_override_before_set"):
             return
         # Normalise every stored line — a malformed row is dropped, never
         # allowed to crash evaluate() (which reads these keys every tick).
@@ -1369,7 +1382,7 @@ class ExitManager:
         out = []
         reserved = self._reserved_qty()
         tp1_qty = self._tp1_current_qty()
-        if not self._tp1_replaced and not self._disable_tp1_exit:
+        if not self._tp1_replaced and not self._disable_tp1_exit and not self._tp1_skipped:
             out.append({"key": "tp1", "source": "engine", "premium": round(self.tp1, 4),
                         "qty": tp1_qty, "hit": self.tp1_hit, "hit_premium": self.tp1_hit_premium})
         for r in self._rungs:
@@ -1379,7 +1392,7 @@ class ExitManager:
                         # How much of this line's qty came out of TP1 (§4.5) —
                         # lets the Edit card show the exact TP1 qty while editing.
                         "from_tp1": r.get("from_tp1", 0)})
-        if self._use_tp2 and not self._disable_tp1_exit:
+        if self._use_tp2 and not self._disable_tp1_exit and not self._tp2_skipped:
             pool = max(0, self.qty_remaining - tp1_qty - reserved)
             if self.tp2_hit:
                 tp2_qty = 0
@@ -1545,11 +1558,21 @@ class ExitManager:
         # A TP line saved with tp_enabled=true turns take profit on (inline
         # exit lines §3): flip it BEFORE the lines are validated (they're
         # refused while TP is off), and back if they're rejected.
-        tp_on_first = tp_enabled is True and self._disable_tp1_exit and tp_rungs
+        # Saving lines implies TP on — sent or not (redesign §4.2). A user line
+        # in the same call is itself the TP price, so the TP1 check is moot.
+        tp_on_first = bool(tp_rungs) and self._disable_tp1_exit and tp_enabled is not False
+        skip_before = (self._tp1_skipped, self._tp2_skipped)
         if tp_on_first:
-            if tp1 is None and (self.tp1 is None or self.tp1 <= self.entry_premium):
-                raise ValueError("Set a TP1 price to re-enable Take Profit")
+            tp_enabled = True
             self._disable_tp1_exit = False
+            # Already-passed engine levels don't fire retroactively — the
+            # user's line is the live TP (§4.3). Marked before the lines are
+            # validated so TP1's carve sees a skipped TP1 as selling nothing.
+            if current_price is not None:
+                if not self.tp1_hit and not self._tp1_replaced and current_price >= self.tp1:
+                    self._tp1_skipped = True
+                if self._use_tp2 and not self.tp2_hit and current_price >= self.tp2:
+                    self._tp2_skipped = True
         # TP rungs are validated + applied first: set_tp_rungs raises before
         # mutating anything, so a rejected ladder leaves every other field
         # in this call unapplied too.
@@ -1563,7 +1586,11 @@ class ExitManager:
             except ValueError:
                 if tp_on_first:
                     self._disable_tp1_exit = True
+                    self._tp1_skipped, self._tp2_skipped = skip_before
                 raise
+            if tp_on_first and (self._tp1_skipped, self._tp2_skipped) != skip_before:
+                    self._log_decision("TP_REENABLE_SKIPPED_PASSED", tp1=self._tp1_skipped,
+                                       tp2=self._tp2_skipped, price=current_price)
 
         changed = {}
         if rungs_changed is not None:
@@ -1571,6 +1598,10 @@ class ExitManager:
         if hard_stop is not None:
             self.hard_stop = hard_stop
             changed["hard_stop"] = round(hard_stop, 4)
+            # One live stop: a premium stop replaces a stock stop (§3.2).
+            if self._sl_stock is not None and sl_stock_price is _UNSET:
+                self._sl_stock, self._sl_stock_bars = None, 0
+                changed["sl_stock_price"] = None
         if tp1 is not None:
             self.tp1 = tp1
             changed["tp1"] = round(tp1, 4)
@@ -1640,7 +1671,8 @@ class ExitManager:
             if not tp_enabled:
                 self._disable_tp1_exit = True
             else:
-                if tp1 is None and (self.tp1 is None or self.tp1 <= self.entry_premium):
+                if (not tp_on_first and tp1 is None
+                        and (self.tp1 is None or self.tp1 <= self.entry_premium)):
                     raise ValueError("Set a TP1 price to re-enable Take Profit")
                 self._disable_tp1_exit = False
             changed["tp_enabled"] = tp_enabled

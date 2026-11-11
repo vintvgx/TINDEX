@@ -56,7 +56,9 @@ export function planChip(kind: 'tp' | 'sl', price: number, live: ExitLive, origi
     // A TP tap turns take profit on — never blocked by TP-off (§3).
     if (live.tp_enabled === false) {
       body.tp_enabled = true;
-      return { body, done: `Take profit on — TP line set at ${$(p)} stock` };
+      // An engine TP1 the premium already passed is skipped, not fired (§4.3).
+      const passed = isNum(live.tp1) && !live.tp1_hit && isNum(live.mid_price) && live.mid_price >= live.tp1;
+      return { body, done: `Take profit on — TP line set at ${$(p)} stock${passed ? ' · your line is live; engine TP1 already passed' : ''}` };
     }
     const moved = originIsUserTp;
     return { body, done: moved ? `TP moved to ${$(p)} stock` : `TP set at ${$(p)} stock — sells 1 when the stock trades there` };
@@ -96,7 +98,8 @@ export function planMove(key: string, kind: 'TP' | 'SL' | 'BE', price: number, l
 
 /** × on a selected line: a user TP or the stop (§1.3). */
 export function planDelete(key: string, kind: 'TP' | 'SL' | 'BE', live: ExitLive): ExitPlan {
-  if (kind === 'SL') return { body: { sl_enabled: false }, done: 'Stop cleared' };
+  // Clears the stock and premium stop together (redesign spec §3.4).
+  if (kind === 'SL') return { body: { sl_enabled: false }, done: 'Stop-loss removed — no stop is active' };
   const rungs = userRungs(live.tp_ladder);
   if (!rungs.some(r => r.id === key)) return { error: 'Only your own TP lines can be deleted here' };
   return { body: { tp_rungs: rungs.filter(r => r.id !== key) }, done: 'TP line deleted — its contract returns to the pool' };

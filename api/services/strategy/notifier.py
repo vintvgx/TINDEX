@@ -298,6 +298,7 @@ class StrategyNotifier:
 
         labels = {
             "HARD_STOP":          "Stopped out",
+            "HARD_STOP_STOCK":    "Stopped out — stock hit your stop line",
             "TP1":                "TP1 hit — partial close",
             "TP_RUNG":            "TP line hit — partial close",
             "TP2":                "TP2 hit — partial close",
