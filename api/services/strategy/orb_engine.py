@@ -2474,6 +2474,15 @@ class ORBEngine(GateWatchMixin):
             return False
         if datetime.now(ET) > datetime.fromisoformat(pc["expires_at"]):
             return False  # too late — the sweep owns expiry now
+        # R7: a ticker conflict arising during the confirmation window must
+        # block unattended entry. Leave the row open for the user — the
+        # expiry sweep owns the expiry (spec §6: conflict pauses die on
+        # expiry; do NOT auto-resolve as EXPIRED here).
+        if self._find_ticker_conflict(pc["direction"]) is not None:
+            self.debug.emit("INFO",
+                f"Auto-enter blocked — ticker conflict on {pc['direction']} "
+                f"{pc['contract_symbol']} — leaving confirmation open")
+            return False
         self._enter_pending(pc, overrides=None, status="AUTO_ENTERED")
         return True
 
@@ -2515,24 +2524,35 @@ class ORBEngine(GateWatchMixin):
             if (pc.get("_auto_enter") and self.config.get("active", True)
                     and not self._session_halted and not self.trade_taken):
                 deadline = pc.get("_watch_deadline")
-                self.debug.emit("WARN",
-                    f"Confirmation expired unanswered — re-arming watch — "
-                    f"{pc['direction']} {pc['contract_symbol']}")
-                self._resolve_pending("EXPIRED_REARMED")
-                self._rearm_gate_watch(pc, deadline)
+                # R8: attempt the re-arm first — EXPIRED_REARMED must mean a
+                # watch actually started, not merely an attempted one.
+                rearmed = self._rearm_gate_watch(pc, deadline)
+                if rearmed:
+                    self.debug.emit("WARN",
+                        f"Confirmation expired unanswered — re-arming watch — "
+                        f"{pc['direction']} {pc['contract_symbol']}")
+                    self._resolve_pending("EXPIRED_REARMED")
+                else:
+                    self.debug.emit("WARN",
+                        f"Confirmation expired unanswered — watch deadline passed, "
+                        f"no re-arm — {pc['direction']} {pc['contract_symbol']}")
+                    self._resolve_pending("EXPIRED")
                 return True
             self.debug.emit("WARN",
                 f"Confirmation expired unanswered — {pc['direction']} {pc['contract_symbol']}")
             self._resolve_pending("EXPIRED")
             return True
 
-    def _rearm_gate_watch(self, pc: dict, deadline) -> None:
+    def _rearm_gate_watch(self, pc: dict, deadline) -> bool:
         """
         Re-arm the gate watch after a MODERATE confirmation expired with no
         user input. Caller must hold _tick_lock. Silent (no second prompt):
         the watch keeps the original deadline when one was captured, and is
         marked auto_enter so a MODERATE re-check keeps watching instead of
         pausing again — only STRONG enters, after the 2-close confirmation.
+
+        Returns True when a watch actually started (R8: the sweep resolves
+        EXPIRED_REARMED only then, EXPIRED when the deadline already passed).
         """
         gate = pc.get("_gate_snapshot") or {
             "mode": "composite", "matched": 4, "total": 14,
@@ -2546,10 +2566,16 @@ class ORBEngine(GateWatchMixin):
                                          silent=True)
         if not started:
             self.debug.emit("WARN", "Could not re-arm gate watch — deadline already passed")
-            return
+            return False
         w = self._gate_watch
         if w:
             w["auto_enter"] = True
+            # R9: persist the flag so a backend restart restores the watch
+            # even when technicals_gate.watch is off (migration
+            # 20261112_orb_gate_watches_auto_enter adds the column; without
+            # it the update logs an error and the in-memory watch still runs).
+            self._persist_gate_watch(w, {"auto_enter": True})
+        return True
 
     def _resolve_pending(self, status: str):
         """

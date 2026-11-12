@@ -257,8 +257,13 @@ class GateWatchMixin:
                 return
             # Paused / halted / awaiting a confirmation: keep watching, don't
             # spend a re-check whose pass couldn't enter anyway.
-            if (self._gate_watch_inflight or self._pending_confirmation is not None
+            if (self._pending_confirmation is not None
                     or not self.config.get("active", True) or self._session_halted):
+                return
+            if self._gate_watch_inflight:
+                # R4: this close was never evaluated — an unchecked close
+                # breaks the 2-consecutive-STRONG requirement.
+                self._reset_auto_enter_streak()
                 return
             self._gate_watch_inflight = True
             watch_id = w["id"]
@@ -280,7 +285,12 @@ class GateWatchMixin:
             pc = self._pending_confirmation
             if not pc or not pc.get("_auto_enter"):
                 return
-            if (self._pending_recheck_inflight or not self.config.get("active", True)
+            if self._pending_recheck_inflight:
+                # R4: this close was never evaluated — an unchecked close
+                # breaks the 2-consecutive-STRONG requirement.
+                self._reset_auto_enter_streak()
+                return
+            if (not self.config.get("active", True)
                     or self._session_halted or self.trade_taken):
                 return
             self._pending_recheck_inflight = True
@@ -298,20 +308,43 @@ class GateWatchMixin:
             pc = self._pending_confirmation
             if not pc or not pc.get("_auto_enter"):
                 return
+            # R3: the confirmation this evaluation belongs to — a Skip + new
+            # signal while it runs must not let the old result enter the new
+            # setup, so the id is checked again under the lock below.
+            pc_id = pc.get("id")
             direction = pc["direction"]
             gate_cfg = self.config.get("technicals_gate") or {}
             mode = self._gate_mode(gate_cfg)
+            # R1: evaluate the gate at the current close, not the trigger
+            # price — a STRONG verdict must describe this bar.
             ok, needs_confirm, gate = self._check_technicals_gate(
-                direction, pc.get("trigger_price"), gate_cfg.get("required") or [], mode=mode, quiet=True)
+                direction, close, gate_cfg.get("required") or [], mode=mode, quiet=True)
             with self._tick_lock:
                 pc = self._pending_confirmation
-                if not pc or not pc.get("_auto_enter"):
+                if not pc or not pc.get("_auto_enter") or pc.get("id") != pc_id:
+                    return  # replaced or skipped while evaluating — discard
+                # R2: re-check the entry guards — the strategy may have been
+                # paused, halted, or filled while the evaluation was running.
+                if (not self.config.get("active", True)
+                        or self._session_halted or self.trade_taken):
                     return
                 if gate is None:
+                    # R4: an unevaluated close breaks the streak — a STRONG
+                    # print on either side of it is not 2 consecutive closes.
+                    self._reset_auto_enter_streak()
                     return  # data hiccup — try again on the next bar
-                strong = bool(ok and not needs_confirm) and self._beyond_breakout_level(direction, close)
+                # R5: tier is the authority — only a composite STRONG verdict
+                # counts. (ok and not needs_confirm alone would also pass a
+                # daily/binary-mode gate, which has no tier at all.)
+                tier = ((gate.get("composite") or {}).get("tier") or "")
+                strong = (bool(ok and not needs_confirm) and mode == "composite"
+                          and tier == "STRONG"
+                          and self._beyond_breakout_level(direction, close))
                 count = self._auto_enter_streak_count(direction, strong)
                 if count >= AUTO_ENTER_STRONG_CLOSES:
+                    # R6: record the STRONG gate that authorized the order,
+                    # not the MODERATE snapshot the pause was created with.
+                    pc["_gate_snapshot"] = gate
                     self.debug.emit("SUCCESS",
                         f"Gate now STRONG {gate_score_label(gate)} while awaiting confirmation — "
                         f"auto-entering {direction} {pc['contract_symbol']} (no user input)")
@@ -348,8 +381,13 @@ class GateWatchMixin:
                 self.debug.emit("INFO", f"Reversal watch {w['direction']} — reversal trigger "
                                         f"{'present' if w['trigger'] else 'not present'} "
                                         f"(score {status.get('score')}/{status.get('threshold')})")
-            if (self._gate_watch_inflight or self._pending_confirmation is not None
+            if (self._pending_confirmation is not None
                     or not self.config.get("active", True) or self._session_halted or price is None):
+                return
+            if self._gate_watch_inflight:
+                # R4: this close was never evaluated — an unchecked close
+                # breaks the 2-consecutive-STRONG requirement.
+                self._reset_auto_enter_streak()
                 return
             self._gate_watch_inflight = True
             watch_id = w["id"]
@@ -365,7 +403,12 @@ class GateWatchMixin:
             if not w or w["id"] != watch_id:
                 return
             gate_cfg = self.config.get("technicals_gate") or {}
-            if not gate_cfg.get("enabled") or not self._gate_watch_eligible(gate_cfg):
+            # R9 (option A): a re-armed watch (auto_enter) stays eligible for
+            # rechecks even when technicals_gate.watch is off — auto-enter
+            # eligibility never depended on that flag. The gate-enabled check
+            # still applies: a disabled gate cancels the watch.
+            if not gate_cfg.get("enabled") or not (self._gate_watch_eligible(gate_cfg)
+                                                   or (w and w.get("auto_enter"))):
                 with self._tick_lock:
                     if self._gate_watch and self._gate_watch["id"] == watch_id:
                         self._end_gate_watch("cancelled", "gate or watch turned off")
@@ -383,6 +426,9 @@ class GateWatchMixin:
                     self._end_gate_watch("expired", reason)
                     return
                 if gate is None:
+                    # R4: an unevaluated close breaks the streak — a STRONG
+                    # print on either side of it is not 2 consecutive closes.
+                    self._reset_auto_enter_streak()
                     return  # data hiccup — try again on the next bar
                 w["checks"] += 1
                 score = gate_score_label(gate)
@@ -423,7 +469,11 @@ class GateWatchMixin:
                         return
                     # STRONG — but only enter once the move confirms (2
                     # consecutive STRONG closes with price beyond the level).
-                    strong = self._beyond_breakout_level(direction, price)
+                    # R5: tier is the authority — only a composite STRONG
+                    # verdict counts, never a daily/binary-mode pass.
+                    tier = ((gate.get("composite") or {}).get("tier") or "")
+                    strong = (mode == "composite" and tier == "STRONG"
+                              and self._beyond_breakout_level(direction, price))
                     count = self._auto_enter_streak_count(direction, strong)
                     if count < AUTO_ENTER_STRONG_CLOSES:
                         if count == 1:
@@ -498,7 +548,8 @@ class GateWatchMixin:
                 created = expires = None
             if (live is None and created and expires and created.date() == now.date() and expires > now
                     and (row.get("kind") or "breakout") == "breakout"
-                    and gate_cfg.get("enabled") and self._gate_watch_eligible(gate_cfg)):
+                    and gate_cfg.get("enabled") and (self._gate_watch_eligible(gate_cfg)
+                                                     or row.get("auto_enter"))):
                 live = (row, created, expires)
                 continue
             try:
@@ -516,6 +567,8 @@ class GateWatchMixin:
             "mode": row.get("gate_mode") or "daily", "score": "?", "failed": row.get("failed_factors") or [],
             "summary": row.get("summary") or "", "created_at": created, "expires_at": expires,
             "expiry_reason": row.get("expiry_reason") or "expired", "checks": 0,
+            # R9: a restored re-armed watch keeps its auto_enter eligibility.
+            "auto_enter": bool(row.get("auto_enter")),
         }
         self.debug.emit("INFO", f"Gate watch restored after restart — {row['direction']} until "
                                 f"{expires:%H:%M} ET")
