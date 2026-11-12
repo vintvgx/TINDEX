@@ -369,6 +369,13 @@ class ORBEngine(GateWatchMixin):
         # survives the expiry → re-arm handoff.
         self._pending_recheck_inflight: bool = False
         self._auto_enter_streak = {"direction": None, "count": 0}
+        # Bar-generation counters for the auto-enter workers: each bar close
+        # the hooks process advances the generation, so a worker still
+        # evaluating an older close can tell its result is stale and discard
+        # it instead of counting a non-consecutive STRONG close (a skipped
+        # close resets the streak, and a stale result must not rebuild it).
+        self._pending_recheck_generation: int = 0
+        self._gate_watch_generation: int = 0
         # MUSE_REVERSAL state (spec §10) — armed by a scorer fire, entered
         # only after the 3-bar VWAP hold + intraday technicals >= 5.
         self._muse_armed:           bool = False

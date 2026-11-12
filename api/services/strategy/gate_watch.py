@@ -255,10 +255,19 @@ class GateWatchMixin:
             if reason:
                 self._end_gate_watch("expired", reason)
                 return
-            # Paused / halted / awaiting a confirmation: keep watching, don't
-            # spend a re-check whose pass couldn't enter anyway.
-            if (self._pending_confirmation is not None
-                    or not self.config.get("active", True) or self._session_halted):
+            # Every close the hook processes advances the generation — a
+            # worker still evaluating an older close is stale after this.
+            self._gate_watch_generation += 1
+            generation = self._gate_watch_generation
+            # A pending confirmation owns this close: the watch stands down
+            # and the pending path evaluates it — no streak reset here, the
+            # pending worker advances (or resets) the shared streak.
+            if self._pending_confirmation is not None:
+                return
+            # Paused / halted: this close was never evaluated — an unchecked
+            # close breaks the 2-consecutive-STRONG requirement.
+            if not self.config.get("active", True) or self._session_halted:
+                self._reset_auto_enter_streak()
                 return
             if self._gate_watch_inflight:
                 # R4: this close was never evaluated — an unchecked close
@@ -268,7 +277,7 @@ class GateWatchMixin:
             self._gate_watch_inflight = True
             watch_id = w["id"]
         try:
-            _WATCH_EXECUTOR.submit(self._recheck_gate_watch, watch_id, close)
+            _WATCH_EXECUTOR.submit(self._recheck_gate_watch, watch_id, close, None, generation)
         except Exception:
             self._gate_watch_inflight = False
             raise
@@ -285,6 +294,10 @@ class GateWatchMixin:
             pc = self._pending_confirmation
             if not pc or not pc.get("_auto_enter"):
                 return
+            # Every close the hook processes advances the generation — a
+            # worker still evaluating an older close is stale after this.
+            self._pending_recheck_generation += 1
+            generation = self._pending_recheck_generation
             if self._pending_recheck_inflight:
                 # R4: this close was never evaluated — an unchecked close
                 # breaks the 2-consecutive-STRONG requirement.
@@ -292,15 +305,18 @@ class GateWatchMixin:
                 return
             if (not self.config.get("active", True)
                     or self._session_halted or self.trade_taken):
+                # Paused / halted / filled: this close was never evaluated —
+                # an unchecked close breaks the 2-consecutive-STRONG rule.
+                self._reset_auto_enter_streak()
                 return
             self._pending_recheck_inflight = True
         try:
-            _WATCH_EXECUTOR.submit(self._recheck_pending_confirmation, close)
+            _WATCH_EXECUTOR.submit(self._recheck_pending_confirmation, close, generation)
         except Exception:
             self._pending_recheck_inflight = False
             raise
 
-    def _recheck_pending_confirmation(self, close: float) -> None:
+    def _recheck_pending_confirmation(self, close: float, generation: Optional[int] = None) -> None:
         """Worker: re-evaluate the gate for a pending MODERATE confirmation.
         A STRONG print with price beyond the breakout level advances the
         2-close confirmation; reaching it auto-enters without user input."""
@@ -328,6 +344,11 @@ class GateWatchMixin:
                 if (not self.config.get("active", True)
                         or self._session_halted or self.trade_taken):
                     return
+                # A newer bar close arrived while this evaluation was running
+                # — this result is stale: the newer bar's hook already reset
+                # the streak, and only the newer bar's evaluation may count.
+                if generation is not None and generation != self._pending_recheck_generation:
+                    return
                 if gate is None:
                     # R4: an unevaluated close breaks the streak — a STRONG
                     # print on either side of it is not 2 consecutive closes.
@@ -344,11 +365,17 @@ class GateWatchMixin:
                 if count >= AUTO_ENTER_STRONG_CLOSES:
                     # R6: record the STRONG gate that authorized the order,
                     # not the MODERATE snapshot the pause was created with.
+                    # If the auto-enter is blocked (conflict / expired), the
+                    # confirmation stays open — restore the snapshot the
+                    # confirm card showed, so a later manual approval records
+                    # the original gate, not this STRONG one.
+                    previous_snapshot = pc.get("_gate_snapshot")
                     pc["_gate_snapshot"] = gate
                     self.debug.emit("SUCCESS",
                         f"Gate now STRONG {gate_score_label(gate)} while awaiting confirmation — "
                         f"auto-entering {direction} {pc['contract_symbol']} (no user input)")
-                    self._auto_enter_pending()
+                    if not self._auto_enter_pending():
+                        pc["_gate_snapshot"] = previous_snapshot
         except Exception:
             logger.error("[GateWatch] pending re-check failed for %s", self.ticker, exc_info=True)
         finally:
@@ -381,8 +408,16 @@ class GateWatchMixin:
                 self.debug.emit("INFO", f"Reversal watch {w['direction']} — reversal trigger "
                                         f"{'present' if w['trigger'] else 'not present'} "
                                         f"(score {status.get('score')}/{status.get('threshold')})")
-            if (self._pending_confirmation is not None
-                    or not self.config.get("active", True) or self._session_halted or price is None):
+            # Every status the hook processes advances the generation — a
+            # worker still evaluating an older close is stale after this.
+            self._gate_watch_generation += 1
+            generation = self._gate_watch_generation
+            if self._pending_confirmation is not None or price is None:
+                return
+            if not self.config.get("active", True) or self._session_halted:
+                # Paused / halted: this close was never evaluated — an
+                # unchecked close breaks the 2-consecutive-STRONG rule.
+                self._reset_auto_enter_streak()
                 return
             if self._gate_watch_inflight:
                 # R4: this close was never evaluated — an unchecked close
@@ -392,12 +427,13 @@ class GateWatchMixin:
             self._gate_watch_inflight = True
             watch_id = w["id"]
         try:
-            _WATCH_EXECUTOR.submit(self._recheck_gate_watch, watch_id, price, bool(status.get("trigger")))
+            _WATCH_EXECUTOR.submit(self._recheck_gate_watch, watch_id, price, bool(status.get("trigger")), generation)
         except Exception:
             self._gate_watch_inflight = False
             raise
 
-    def _recheck_gate_watch(self, watch_id: str, price: float, trigger: Optional[bool] = None) -> None:
+    def _recheck_gate_watch(self, watch_id: str, price: float, trigger: Optional[bool] = None,
+                            generation: Optional[int] = None) -> None:
         try:
             w = self._gate_watch
             if not w or w["id"] != watch_id:
@@ -420,6 +456,12 @@ class GateWatchMixin:
             with self._tick_lock:
                 w = self._gate_watch
                 if not w or w["id"] != watch_id:
+                    return
+                # A newer bar close arrived while this evaluation was running
+                # — this result is stale: the newer bar's hook already reset
+                # the streak, and only the newer bar's evaluation may count
+                # (or end the watch, on its own price).
+                if generation is not None and generation != self._gate_watch_generation:
                     return
                 reason = self._gate_watch_end_reason(price, datetime.now(ET))
                 if reason:

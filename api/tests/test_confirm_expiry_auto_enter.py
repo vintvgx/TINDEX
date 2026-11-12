@@ -440,15 +440,131 @@ def test_r9_watch_off_rearm_survives_restart_restore():
     eng.expire_pending_if_stale()
     w = eng._gate_watch
     assert w is not None
+    # The restore row must come from what _rearm_gate_watch actually
+    # persisted — not a fabricated auto_enter=True, which would pass even
+    # if the persist never happened and a real restart could not restore
+    # the watch when technicals_gate.watch is off.
+    create_row = eng.logger.create_gate_watch.call_args[0][0]
+    updates = [c[0][1] for c in eng.logger.update_gate_watch.call_args_list]
+    assert {"auto_enter": True} in updates
+    persisted = next(u for u in updates if u.get("auto_enter") is True)
     now = datetime.now(ET)
-    row = {"id": w["id"], "strategy_id": "s1", "ticker": "SPY", "direction": "CALL",
-           "trigger_price": 765.0, "gate_mode": "composite", "failed_factors": [],
-           "summary": w["summary"], "created_at": now.isoformat(),
-           "expires_at": deadline[0].isoformat(), "expiry_reason": deadline[1],
-           "kind": "breakout", "auto_enter": True}
+    row = dict(create_row)
+    row.update(created_at=now.isoformat(), kind="breakout",
+               auto_enter=persisted["auto_enter"])
     eng.logger.list_gate_watches.return_value = [row]
     eng._gate_watch = None   # simulate the restart clearing in-memory state
     eng.restore_gate_watch()
     assert eng._gate_watch is not None
     assert eng._gate_watch["auto_enter"] is True
     assert eng._gate_watch["id"] == w["id"]
+
+
+# ── CodeRabbit second review (5879731114) ────────────────────────────────────
+
+class _CaptureExecutor:
+    """Executor that captures submissions instead of running them."""
+
+    def __init__(self):
+        self.submitted = []
+
+    def submit(self, fn, *args):
+        self.submitted.append((fn, args))
+
+
+def test_stale_pending_worker_discarded_after_newer_close():
+    eng = _engine(gate_results=[STRONG, STRONG, STRONG])
+    _pause(eng)
+    ex = _CaptureExecutor()
+    orig = gw._WATCH_EXECUTOR
+    gw._WATCH_EXECUTOR = ex
+    try:
+        eng._on_bar_pending_confirmation(765.0)   # submits worker(gen=1)
+        assert len(ex.submitted) == 1
+        eng._on_bar_pending_confirmation(765.0)   # newer bar: inflight → reset, gen=2
+        assert eng._auto_enter_streak == {"direction": None, "count": 0}
+        fn, args = ex.submitted[0]
+        fn(*args)                                  # stale worker — discarded
+        eng._execute_entry.assert_not_called()
+        assert eng._auto_enter_streak == {"direction": None, "count": 0}
+        eng._on_bar_pending_confirmation(765.0)   # fresh worker(gen=3) — STRONG 1
+        fn, args = ex.submitted[-1]
+        fn(*args)
+        eng._execute_entry.assert_not_called()
+        assert eng._auto_enter_streak == {"direction": "CALL", "count": 1}
+        eng._on_bar_pending_confirmation(765.0)   # fresh worker(gen=4) — STRONG 2 → enter
+        fn, args = ex.submitted[-1]
+        fn(*args)
+        eng._execute_entry.assert_called_once()
+    finally:
+        gw._WATCH_EXECUTOR = orig
+
+
+def test_stale_watch_worker_discarded_after_newer_close():
+    eng = _engine(gate_results=[STRONG, STRONG, STRONG])
+    _pause(eng)
+    _backdate_expired(eng)
+    eng.expire_pending_if_stale()
+    w = eng._gate_watch
+    eng._enter_trade = MagicMock()
+    ex = _CaptureExecutor()
+    orig = gw._WATCH_EXECUTOR
+    gw._WATCH_EXECUTOR = ex
+    try:
+        eng._on_bar_gate_watch(765.0)             # submits worker(gen=1)
+        assert len(ex.submitted) == 1
+        eng._on_bar_gate_watch(765.0)             # newer bar: inflight → reset, gen=2
+        assert eng._auto_enter_streak == {"direction": None, "count": 0}
+        fn, args = ex.submitted[0]
+        fn(*args)                                  # stale worker — discarded, no check counted
+        eng._enter_trade.assert_not_called()
+        assert w["checks"] == 0
+        eng._on_bar_gate_watch(765.0)             # fresh worker(gen=3) — STRONG 1
+        fn, args = ex.submitted[-1]
+        fn(*args)
+        eng._enter_trade.assert_not_called()
+        eng._on_bar_gate_watch(765.0)             # fresh worker(gen=4) — STRONG 2 → enter
+        fn, args = ex.submitted[-1]
+        fn(*args)
+        eng._enter_trade.assert_called_once()
+        assert w["checks"] == 2
+    finally:
+        gw._WATCH_EXECUTOR = orig
+
+
+def test_inactive_skip_resets_streak_pending_path():
+    eng = _engine(gate_results=[STRONG])
+    _pause(eng)
+    eng._recheck_pending_confirmation(765.0)   # streak 1
+    eng.config["active"] = False
+    eng._on_bar_pending_confirmation(765.0)   # skipped while paused — reset
+    assert eng._auto_enter_streak == {"direction": None, "count": 0}
+
+
+def test_inactive_skip_resets_streak_watch_path():
+    eng = _engine(gate_results=[STRONG])
+    _pause(eng)
+    _backdate_expired(eng)
+    eng.expire_pending_if_stale()
+    w = eng._gate_watch
+    eng._recheck_gate_watch(w["id"], 765.0)   # streak 1
+    eng.config["active"] = False
+    eng._on_bar_gate_watch(765.0)             # skipped while paused — reset
+    assert eng._auto_enter_streak == {"direction": None, "count": 0}
+
+
+def test_blocked_auto_enter_restores_original_snapshot():
+    eng = _engine(gate_results=[STRONG, STRONG])
+    _pause(eng)
+    eng._find_ticker_conflict = lambda d: object()   # block the auto-enter
+    eng._recheck_pending_confirmation(765.0)   # STRONG 1
+    eng._recheck_pending_confirmation(765.0)   # STRONG 2 — blocked, snapshot restored
+    eng._execute_entry.assert_not_called()
+    assert eng._pending_confirmation is not None
+    snapshot = eng._pending_confirmation["_gate_snapshot"]
+    assert snapshot["composite"]["tier"] == "MODERATE" and snapshot["matched"] == 4
+    # A later manual approval still records the gate the card showed.
+    eng._find_ticker_conflict = lambda d: None
+    assert eng.approve_pending_entry("p1") == {"status": "ok"}
+    snapshot = eng._execute_entry.call_args.kwargs["gate_snapshot"]
+    assert snapshot["composite"]["tier"] == "MODERATE" and snapshot["matched"] == 4
