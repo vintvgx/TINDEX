@@ -360,6 +360,22 @@ class ORBEngine(GateWatchMixin):
         # gate on each 1-min close and enters the first time it passes.
         self._gate_watch:           Optional[dict] = None
         self._gate_watch_inflight:  bool = False
+        # Confirm-first auto-enter (2026-11-12): a MODERATE pending confirmation
+        # is re-checked on each 1-min close, and an unanswered expiry re-arms
+        # the watch instead of discarding the setup. _pending_recheck_inflight
+        # mirrors _gate_watch_inflight (one gate evaluation at a time);
+        # _auto_enter_streak counts consecutive STRONG closes with price beyond
+        # the breakout level, shared by both paths so the 2-close confirmation
+        # survives the expiry → re-arm handoff.
+        self._pending_recheck_inflight: bool = False
+        self._auto_enter_streak = {"direction": None, "count": 0}
+        # Bar-generation counters for the auto-enter workers: each bar close
+        # the hooks process advances the generation, so a worker still
+        # evaluating an older close can tell its result is stale and discard
+        # it instead of counting a non-consecutive STRONG close (a skipped
+        # close resets the streak, and a stale result must not rebuild it).
+        self._pending_recheck_generation: int = 0
+        self._gate_watch_generation: int = 0
         # MUSE_REVERSAL state (spec §10) — armed by a scorer fire, entered
         # only after the 3-bar VWAP hold + intraday technicals >= 5.
         self._muse_armed:           bool = False
@@ -1217,7 +1233,9 @@ class ORBEngine(GateWatchMixin):
         return False, False, gate
 
     def _enter_trade(self, direction: str, trigger_price: float,
-                     gate_result: Optional[bool] = None):
+                     gate_result: Optional[bool] = None,
+                     gate_snapshot: Optional[dict] = None,
+                     watch_deadline: Optional[tuple] = None):
         """
         Select a contract, validate buying power, and submit a market order
         via Alpaca.  Sets trade state and initialises ExitManager on success.
@@ -1225,6 +1243,11 @@ class ORBEngine(GateWatchMixin):
         gate_result — set only by a confirmed gate watch (gate_watch.py): the
         gate already passed on this bar, so it isn't re-run; the value is its
         needs_confirm (composite MODERATE → confirm-first).
+
+        gate_snapshot — the gate dict from a confirmed gate watch, carried to
+        the pending row so an expired confirmation can re-arm the watch with
+        the same score. watch_deadline — the confirmed watch's (expires_at,
+        expiry_reason), preserved across the re-arm.
 
         NOTE: Called by on_price_tick when price closes above ORH (CALL) or
         below ORL (PUT) for the first time in the session.
@@ -1285,8 +1308,7 @@ class ORBEngine(GateWatchMixin):
         gate_cfg = self.config.get("technicals_gate") or {}
         gate_mode = self._gate_mode(gate_cfg)
         gate_needs_confirm = False
-        gate_snapshot = None
-        if self.profile_key == "MUSE_REVERSAL":
+        if gate_snapshot is None and self.profile_key == "MUSE_REVERSAL":
             # MUSE has no composite gate (bypassed by design); its internal
             # gate — scorer fire + 3-bar VWAP hold + intraday technicals ≥5 —
             # already passed in _muse_on_bar before this entry was attempted.
@@ -1578,7 +1600,8 @@ class ORBEngine(GateWatchMixin):
             # the confirmation can't be persisted (unlike plain opt-in).
             self._pause_for_confirmation(direction, trigger_price, contract, qty, effective_profile,
                                          require_confirm=gate_needs_confirm and not self.confirm_entry,
-                                         gate_snapshot=gate_snapshot)
+                                         gate_snapshot=gate_snapshot,
+                                         watch_deadline=watch_deadline)
             return
 
         self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels,
@@ -2208,7 +2231,8 @@ class ORBEngine(GateWatchMixin):
                                  contract: dict, qty: int, effective_profile: dict,
                                  conflict_context: dict | None = None,
                                  require_confirm: bool = False,
-                                 gate_snapshot: dict | None = None):
+                                 gate_snapshot: dict | None = None,
+                                 watch_deadline: Optional[tuple] = None):
         """
         Instead of submitting the order, persist the candidate trade, push a
         notification, and stream the live premium so the user can Enter or
@@ -2292,6 +2316,16 @@ class ORBEngine(GateWatchMixin):
             # snapshot, carried to _execute_entry if the user approves.
             "_gate_snapshot":      gate_snapshot,
         }
+        if require_confirm:
+            # MODERATE path only (not the confirm_entry opt-in, not a ticker
+            # conflict): this confirmation may auto-enter — the gate is
+            # re-checked on each 1-min close while it is pending, and on
+            # expiry with no user input the watch is re-armed instead of
+            # discarding the setup (2026-11-12 confirm-first auto-enter spec).
+            # _watch_deadline is the confirmed watch's (expires_at,
+            # expiry_reason), preserved across the re-arm.
+            self._pending_confirmation["_auto_enter"] = True
+            self._pending_confirmation["_watch_deadline"] = watch_deadline
 
         if self.stream_manager:
             self.stream_manager.subscribe(contract["symbol"], self._on_pending_quote)
@@ -2311,6 +2345,100 @@ class ORBEngine(GateWatchMixin):
             paper_mode=self.paper,
             conflict_context=conflict_context,
         )
+
+    def _enter_pending(self, pc: dict, overrides: dict | None, status: str) -> None:
+        """
+        Execute a paused entry. Caller must hold _tick_lock.
+
+        `status` is the terminal pending-confirmation status: APPROVED for a
+        user tap, AUTO_ENTERED for the auto-enter paths (the gate strengthened
+        to STRONG while waiting / after an unanswered expiry). `overrides` is
+        the user-edited qty/stop/floor from the confirm card, or None for an
+        auto-enter (no user edits exist there).
+        """
+        contract          = pc["_contract"]
+        qty               = pc["_qty"]
+        effective_profile = pc["_effective_profile"]
+        direction         = pc["direction"]
+
+        # qty is an entry-time decision (how many contracts the order
+        # itself buys), not a post-fill exit-level tweak like hard_stop/
+        # tp1/tp2 — pulled out of `overrides` here, before _execute_entry,
+        # rather than left for the apply_overrides() call below (which
+        # only knows about exit levels).
+        if overrides and overrides.get("qty") is not None:
+            try:
+                requested_qty = int(overrides.pop("qty"))
+                if requested_qty > 0:
+                    qty = requested_qty
+                else:
+                    self.debug.emit("WARN",
+                        f"Approve requested qty={requested_qty} (must be > 0) — "
+                        f"using original qty={qty} instead")
+            except (TypeError, ValueError):
+                self.debug.emit("WARN",
+                    f"Approve requested a non-numeric qty override — using "
+                    f"original qty={qty} instead")
+
+        # Stop type, floor and breakeven grace chosen on the confirm card
+        # (2026-10-02 — set at entry, not hand-armed afterward). Merged into
+        # the effective profile BEFORE the order so the trade's persisted
+        # profile snapshot carries them through a restart.
+        if overrides:
+            effective_profile = dict(effective_profile)
+            try:
+                if "sl_grace_minutes" in overrides:
+                    from services.strategy.profiles import grace_fields_for_minutes
+                    raw = overrides.pop("sl_grace_minutes")
+                    effective_profile.update(grace_fields_for_minutes(int(raw) if raw is not None else None))
+                if overrides.get("sl_outer_floor_pct") is not None:
+                    pct = float(overrides.pop("sl_outer_floor_pct"))
+                    if 0.05 <= pct <= 0.99:
+                        effective_profile.update(sl_outer_floor_pct=pct, sl_floor_custom=True,
+                                                 sl_floor_enabled=True)
+                if overrides.get("be_grace_seconds") is not None:
+                    secs = int(overrides.pop("be_grace_seconds"))
+                    if 0 <= secs <= 120:
+                        effective_profile["be_grace_seconds"] = secs
+            except (TypeError, ValueError) as e:
+                self.debug.emit("WARN", f"Confirm-entry stop/floor/grace override ignored ({e})")
+
+        if self.stream_manager:
+            self.stream_manager.unsubscribe(contract["symbol"], self._on_pending_quote)
+
+        self.debug.emit("SUCCESS",
+            f"Confirmation {'approved by user' if status == 'APPROVED' else 'auto-entered — gate STRONG'}"
+            f" — entering {direction} {contract['symbol']}")
+        try:
+            self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels,
+                                gate_snapshot=pc.get("_gate_snapshot"),
+                                trigger_price=pc.get("trigger_price"))
+        except Exception:
+            # Either the order itself failed (broker rejection — nothing
+            # happened, safe to mark EXPIRED) or a downstream step in
+            # _execute_entry raised AFTER the order already filled
+            # (self.trade_taken flips True before logging/notifying) — in
+            # that case a real trade IS open, so the confirmation's audit
+            # trail should say APPROVED/AUTO_ENTERED, not EXPIRED. Either way,
+            # clear _pending_confirmation so this engine isn't stuck refusing
+            # every future signal (_enter_trade's guard blocks while it's
+            # set), then let the error surface to the caller.
+            self._resolve_pending(status if self.trade_taken else "EXPIRED")
+            raise
+
+        if overrides and self.exit_manager:
+            try:
+                self.exit_manager.apply_overrides(
+                    hard_stop=overrides.get("hard_stop"),
+                    tp1=overrides.get("tp1"),
+                    tp2=overrides.get("tp2"),
+                )
+            except ValueError as e:
+                self.debug.emit("WARN",
+                    f"Confirmation SL/TP override rejected post-fill ({e}) — "
+                    "using profile-computed defaults instead")
+
+        self._resolve_pending(status)
 
     def approve_pending_entry(self, pending_id: str,
                                overrides: dict | None = None) -> dict:
@@ -2338,89 +2466,32 @@ class ORBEngine(GateWatchMixin):
                 self._resolve_pending("EXPIRED")
                 return {"status": "error", "message": "Confirmation expired"}
 
-            contract          = pc["_contract"]
-            qty               = pc["_qty"]
-            effective_profile = pc["_effective_profile"]
-            direction         = pc["direction"]
-
-            # qty is an entry-time decision (how many contracts the order
-            # itself buys), not a post-fill exit-level tweak like hard_stop/
-            # tp1/tp2 — pulled out of `overrides` here, before _execute_entry,
-            # rather than left for the apply_overrides() call below (which
-            # only knows about exit levels).
-            if overrides and overrides.get("qty") is not None:
-                try:
-                    requested_qty = int(overrides.pop("qty"))
-                    if requested_qty > 0:
-                        qty = requested_qty
-                    else:
-                        self.debug.emit("WARN",
-                            f"Approve requested qty={requested_qty} (must be > 0) — "
-                            f"using original qty={qty} instead")
-                except (TypeError, ValueError):
-                    self.debug.emit("WARN",
-                        f"Approve requested a non-numeric qty override — using "
-                        f"original qty={qty} instead")
-
-            # Stop type, floor and breakeven grace chosen on the confirm card
-            # (2026-10-02 — set at entry, not hand-armed afterward). Merged into
-            # the effective profile BEFORE the order so the trade's persisted
-            # profile snapshot carries them through a restart.
-            if overrides:
-                effective_profile = dict(effective_profile)
-                try:
-                    if "sl_grace_minutes" in overrides:
-                        from services.strategy.profiles import grace_fields_for_minutes
-                        raw = overrides.pop("sl_grace_minutes")
-                        effective_profile.update(grace_fields_for_minutes(int(raw) if raw is not None else None))
-                    if overrides.get("sl_outer_floor_pct") is not None:
-                        pct = float(overrides.pop("sl_outer_floor_pct"))
-                        if 0.05 <= pct <= 0.99:
-                            effective_profile.update(sl_outer_floor_pct=pct, sl_floor_custom=True,
-                                                     sl_floor_enabled=True)
-                    if overrides.get("be_grace_seconds") is not None:
-                        secs = int(overrides.pop("be_grace_seconds"))
-                        if 0 <= secs <= 120:
-                            effective_profile["be_grace_seconds"] = secs
-                except (TypeError, ValueError) as e:
-                    self.debug.emit("WARN", f"Confirm-entry stop/floor/grace override ignored ({e})")
-
-            if self.stream_manager:
-                self.stream_manager.unsubscribe(contract["symbol"], self._on_pending_quote)
-
-            self.debug.emit("SUCCESS",
-                f"Confirmation approved by user — entering {direction} {contract['symbol']}")
-            try:
-                self._execute_entry(direction, contract, qty, effective_profile, self.fib_levels,
-                                    gate_snapshot=pc.get("_gate_snapshot"),
-                                    trigger_price=pc.get("trigger_price"))
-            except Exception:
-                # Either the order itself failed (broker rejection — nothing
-                # happened, safe to mark EXPIRED) or a downstream step in
-                # _execute_entry raised AFTER the order already filled
-                # (self.trade_taken flips True before logging/notifying) — in
-                # that case a real trade IS open, so the confirmation's audit
-                # trail should say APPROVED, not EXPIRED. Either way, clear
-                # _pending_confirmation so this engine isn't stuck refusing
-                # every future signal (_enter_trade's guard blocks while it's
-                # set), then let the error surface to the caller.
-                self._resolve_pending("APPROVED" if self.trade_taken else "EXPIRED")
-                raise
-
-            if overrides and self.exit_manager:
-                try:
-                    self.exit_manager.apply_overrides(
-                        hard_stop=overrides.get("hard_stop"),
-                        tp1=overrides.get("tp1"),
-                        tp2=overrides.get("tp2"),
-                    )
-                except ValueError as e:
-                    self.debug.emit("WARN",
-                        f"Confirmation SL/TP override rejected post-fill ({e}) — "
-                        "using profile-computed defaults instead")
-
-            self._resolve_pending("APPROVED")
+            self._enter_pending(pc, overrides, "APPROVED")
             return {"status": "ok"}
+
+    def _auto_enter_pending(self) -> bool:
+        """
+        Enter a MODERATE pending confirmation without user input: the gate
+        strengthened to STRONG and the move confirmed (2 consecutive STRONG
+        closes, rule 2a/2c of the 2026-11-12 confirm-first auto-enter spec).
+        Caller must hold _tick_lock. Returns True if an entry executed.
+        """
+        pc = self._pending_confirmation
+        if not pc or not pc.get("_auto_enter"):
+            return False
+        if datetime.now(ET) > datetime.fromisoformat(pc["expires_at"]):
+            return False  # too late — the sweep owns expiry now
+        # R7: a ticker conflict arising during the confirmation window must
+        # block unattended entry. Leave the row open for the user — the
+        # expiry sweep owns the expiry (spec §6: conflict pauses die on
+        # expiry; do NOT auto-resolve as EXPIRED here).
+        if self._find_ticker_conflict(pc["direction"]) is not None:
+            self.debug.emit("INFO",
+                f"Auto-enter blocked — ticker conflict on {pc['direction']} "
+                f"{pc['contract_symbol']} — leaving confirmation open")
+            return False
+        self._enter_pending(pc, overrides=None, status="AUTO_ENTERED")
+        return True
 
     def skip_pending_entry(self, pending_id: str) -> dict:
         """
@@ -2444,6 +2515,12 @@ class ORBEngine(GateWatchMixin):
         """
         Called by the periodic sweep (pg_cron → POST /pending-confirmations/sweep).
         Returns True if a stale confirmation was found and expired.
+
+        A MODERATE confirmation that lapses with no user input is NOT a decline:
+        the setup lives — the gate watch is re-armed (same direction, level and
+        deadline) and the entry proceeds automatically if the gate reaches STRONG
+        (2026-11-12 confirm-first auto-enter spec). A user Skip, a confirm_entry
+        opt-in pause, or a ticker-conflict pause still dies on expiry.
         """
         with self._tick_lock:
             pc = self._pending_confirmation
@@ -2451,10 +2528,61 @@ class ORBEngine(GateWatchMixin):
                 return False
             if datetime.now(ET) <= datetime.fromisoformat(pc["expires_at"]):
                 return False
+            if (pc.get("_auto_enter") and self.config.get("active", True)
+                    and not self._session_halted and not self.trade_taken):
+                deadline = pc.get("_watch_deadline")
+                # R8: attempt the re-arm first — EXPIRED_REARMED must mean a
+                # watch actually started, not merely an attempted one.
+                rearmed = self._rearm_gate_watch(pc, deadline)
+                if rearmed:
+                    self.debug.emit("WARN",
+                        f"Confirmation expired unanswered — re-arming watch — "
+                        f"{pc['direction']} {pc['contract_symbol']}")
+                    self._resolve_pending("EXPIRED_REARMED")
+                else:
+                    self.debug.emit("WARN",
+                        f"Confirmation expired unanswered — watch deadline passed, "
+                        f"no re-arm — {pc['direction']} {pc['contract_symbol']}")
+                    self._resolve_pending("EXPIRED")
+                return True
             self.debug.emit("WARN",
                 f"Confirmation expired unanswered — {pc['direction']} {pc['contract_symbol']}")
             self._resolve_pending("EXPIRED")
             return True
+
+    def _rearm_gate_watch(self, pc: dict, deadline) -> bool:
+        """
+        Re-arm the gate watch after a MODERATE confirmation expired with no
+        user input. Caller must hold _tick_lock. Silent (no second prompt):
+        the watch keeps the original deadline when one was captured, and is
+        marked auto_enter so a MODERATE re-check keeps watching instead of
+        pausing again — only STRONG enters, after the 2-close confirmation.
+
+        Returns True when a watch actually started (R8: the sweep resolves
+        EXPIRED_REARMED only then, EXPIRED when the deadline already passed).
+        """
+        gate = pc.get("_gate_snapshot") or {
+            "mode": "composite", "matched": 4, "total": 14,
+            "summary": "MODERATE — expired unanswered, watching for STRONG",
+            "composite": {"tier": "MODERATE"},
+        }
+        expires_at, expiry_reason = deadline or (None, None)
+        started = self._start_gate_watch(pc["direction"], pc.get("trigger_price"), gate,
+                                         gate.get("mode", "composite"),
+                                         expires_at=expires_at, expiry_reason=expiry_reason,
+                                         silent=True)
+        if not started:
+            self.debug.emit("WARN", "Could not re-arm gate watch — deadline already passed")
+            return False
+        w = self._gate_watch
+        if w:
+            w["auto_enter"] = True
+            # R9: persist the flag so a backend restart restores the watch
+            # even when technicals_gate.watch is off (migration
+            # 20261112_orb_gate_watches_auto_enter adds the column; without
+            # it the update logs an error and the in-memory watch still runs).
+            self._persist_gate_watch(w, {"auto_enter": True})
+        return True
 
     def _resolve_pending(self, status: str):
         """
@@ -2476,6 +2604,31 @@ class ORBEngine(GateWatchMixin):
         })
         self._pending_confirmation = None
         self._pending_last_price = None
+        if status != "EXPIRED_REARMED":
+            # The 2-close STRONG streak survives the expiry → re-arm handoff so
+            # a confirming close isn't lost to the sweep; every other terminal
+            # state starts the next setup at zero.
+            self._reset_auto_enter_streak()
+
+    def _beyond_breakout_level(self, direction: str, close: float) -> bool:
+        """True when the bar closed on the trade's side of the ORB level."""
+        level = self.orh if direction == "CALL" else self.orl
+        if level is None:
+            return False
+        return close > level if direction == "CALL" else close < level
+
+    def _auto_enter_streak_count(self, direction: str, strong: bool) -> int:
+        """Consecutive STRONG closes with price beyond the breakout level, for
+        the auto-enter paths. Caller must hold _tick_lock."""
+        s = self._auto_enter_streak
+        if s["direction"] != direction:
+            s.update(direction=direction, count=0)
+        s["count"] = s["count"] + 1 if strong else 0
+        return s["count"]
+
+    def _reset_auto_enter_streak(self) -> None:
+        """Zero the STRONG-close streak (setup ended, skipped, or entered)."""
+        self._auto_enter_streak.update(direction=None, count=0)
 
     def _on_pending_quote(self, mid: float):
         """
@@ -4466,6 +4619,7 @@ class ORBEngine(GateWatchMixin):
             return
 
         self._on_bar_gate_watch(bar.close)
+        self._on_bar_pending_confirmation(bar.close)
 
         if self.profile_key == "MUSE_REVERSAL":
             self._muse_on_bar(bar)
