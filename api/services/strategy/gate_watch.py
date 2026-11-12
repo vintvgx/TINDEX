@@ -53,6 +53,13 @@ ET = pytz.timezone("America/New_York")
 GATE_WATCH_MAX_MIN = 120
 REVERSAL_WATCH_MAX_MIN = 30   # reversal setups go stale fast
 
+# Confirm-first auto-enter (2026-11-12): after a MODERATE entry pauses for
+# confirmation, a STRONG gate auto-enters without waiting on the user — but
+# only once the move is confirmed by this many consecutive STRONG closes with
+# price beyond the breakout level, so a single STRONG print from a reversing
+# bar can never enter on its own.
+AUTO_ENTER_STRONG_CLOSES = 2
+
 # Re-checks run off the hub's bar thread — a cold-cache gate evaluation can
 # take seconds and must never stall bar delivery or exit evaluation.
 _WATCH_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="gate-watch")
@@ -124,10 +131,17 @@ class GateWatchMixin:
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
-    def _start_gate_watch(self, direction: str, trigger_price: float, gate: dict, mode: str) -> bool:
+    def _start_gate_watch(self, direction: str, trigger_price: float, gate: dict, mode: str,
+                          expires_at=None, expiry_reason: str | None = None,
+                          silent: bool = False) -> bool:
         """Called from _enter_trade when the gate blocks a watch-eligible
         signal. Returns False when no watch could start (deadline already
-        passed) — the caller then sends the plain "blocked" push."""
+        passed) — the caller then sends the plain "blocked" push.
+
+        expires_at/expiry_reason override the fresh deadline (the expiry
+        re-arm preserves the original watch's deadline); silent skips the
+        "watching" push and debug line (the re-arm logs its own line).
+        """
         now = datetime.now(ET)
         kind = self._watch_kind()
         score = gate_score_label(gate)
@@ -144,7 +158,8 @@ class GateWatchMixin:
                                     f"watch continues until {w['expires_at']:%H:%M} ET")
             return True
 
-        expires_at, expiry_reason = self._gate_watch_deadline(now, kind)
+        if expires_at is None or expiry_reason is None:
+            expires_at, expiry_reason = self._gate_watch_deadline(now, kind)
         if expires_at <= now:
             return False
         if w:
@@ -175,12 +190,13 @@ class GateWatchMixin:
             # In-memory watch still runs; only restart-survival is lost.
             logger.error("[GateWatch] persist failed for %s %s", self.ticker, direction, exc_info=True)
         self._gate_watch = w
-        self.debug.emit("WARN", f"Entry blocked — technicals gate [{mode}] {score}: {gate['summary']} "
-                                f"— watching{' reversal' if kind == 'reversal' else ''}, re-checking "
-                                f"each 1-min close until {expires_at:%H:%M} ET ({expiry_reason})")
-        self.notifier.notify_gate_watch_started(
-            self.ticker, self.strategy_name or self.profile_key, direction, gate["summary"], expires_at,
-            kind=kind)
+        if not silent:
+            self.debug.emit("WARN", f"Entry blocked — technicals gate [{mode}] {score}: {gate['summary']} "
+                                    f"— watching{' reversal' if kind == 'reversal' else ''}, re-checking "
+                                    f"each 1-min close until {expires_at:%H:%M} ET ({expiry_reason})")
+            self.notifier.notify_gate_watch_started(
+                self.ticker, self.strategy_name or self.profile_key, direction, gate["summary"], expires_at,
+                kind=kind)
         return True
 
     @staticmethod
@@ -205,6 +221,9 @@ class GateWatchMixin:
         if not w:
             return
         self._gate_watch = None
+        # A setup ending resets the STRONG-close streak so a stale count can
+        # never fast-track the next setup's auto-enter.
+        self._reset_auto_enter_streak()
         self._persist_gate_watch(w, {"status": status, "reason": reason,
                                      "resolved_at": datetime.now(ET).isoformat()})
         if status != "confirmed":
@@ -248,6 +267,59 @@ class GateWatchMixin:
         except Exception:
             self._gate_watch_inflight = False
             raise
+
+    def _on_bar_pending_confirmation(self, close: float) -> None:
+        """on_bar hook (hub thread). While a MODERATE confirmation is pending,
+        re-check the composite on each 1-min close: a STRONG gate stops the
+        wait on the user and auto-enters once the move confirms (rule 2a/2c of
+        the 2026-11-12 confirm-first auto-enter spec)."""
+        pc = getattr(self, "_pending_confirmation", None)
+        if not pc or not pc.get("_auto_enter"):
+            return
+        with self._tick_lock:
+            pc = self._pending_confirmation
+            if not pc or not pc.get("_auto_enter"):
+                return
+            if (self._pending_recheck_inflight or not self.config.get("active", True)
+                    or self._session_halted or self.trade_taken):
+                return
+            self._pending_recheck_inflight = True
+        try:
+            _WATCH_EXECUTOR.submit(self._recheck_pending_confirmation, close)
+        except Exception:
+            self._pending_recheck_inflight = False
+            raise
+
+    def _recheck_pending_confirmation(self, close: float) -> None:
+        """Worker: re-evaluate the gate for a pending MODERATE confirmation.
+        A STRONG print with price beyond the breakout level advances the
+        2-close confirmation; reaching it auto-enters without user input."""
+        try:
+            pc = self._pending_confirmation
+            if not pc or not pc.get("_auto_enter"):
+                return
+            direction = pc["direction"]
+            gate_cfg = self.config.get("technicals_gate") or {}
+            mode = self._gate_mode(gate_cfg)
+            ok, needs_confirm, gate = self._check_technicals_gate(
+                direction, pc.get("trigger_price"), gate_cfg.get("required") or [], mode=mode, quiet=True)
+            with self._tick_lock:
+                pc = self._pending_confirmation
+                if not pc or not pc.get("_auto_enter"):
+                    return
+                if gate is None:
+                    return  # data hiccup — try again on the next bar
+                strong = bool(ok and not needs_confirm) and self._beyond_breakout_level(direction, close)
+                count = self._auto_enter_streak_count(direction, strong)
+                if count >= AUTO_ENTER_STRONG_CLOSES:
+                    self.debug.emit("SUCCESS",
+                        f"Gate now STRONG {gate_score_label(gate)} while awaiting confirmation — "
+                        f"auto-entering {direction} {pc['contract_symbol']} (no user input)")
+                    self._auto_enter_pending()
+        except Exception:
+            logger.error("[GateWatch] pending re-check failed for %s", self.ticker, exc_info=True)
+        finally:
+            self._pending_recheck_inflight = False
 
     def _on_reversal_status(self, status: dict) -> None:
         """Hub callback (OrbService loop thread), once per scored bar while
@@ -320,6 +392,9 @@ class GateWatchMixin:
                         w.update(score=score, failed=gate_failed_factors(gate), summary=gate["summary"])
                         self.debug.emit("INFO", f"Gate watch {w['direction']} — now {score}: {gate['summary']}")
                         self._persist_gate_watch(w, {"failed_factors": w["failed"], "summary": gate["summary"]})
+                    if w.get("auto_enter"):
+                        # A failed close breaks the STRONG streak.
+                        self._reset_auto_enter_streak()
                     return
                 if (self._pending_confirmation is not None or not self.config.get("active", True)
                         or self._session_halted):
@@ -334,6 +409,28 @@ class GateWatchMixin:
                                                 f"reversal trigger isn't present; not entering")
                     return
                 direction = w["direction"]
+                if w.get("auto_enter"):
+                    if needs_confirm:
+                        # Re-armed watch, still MODERATE: keep watching silently.
+                        # No second confirmation prompt — only STRONG enters.
+                        if score != w["score"]:
+                            w.update(score=score, failed=gate_failed_factors(gate), summary=gate["summary"])
+                            self.debug.emit("INFO", f"Gate watch {direction} — still {score} MODERATE, "
+                                                  f"watching for STRONG")
+                            self._persist_gate_watch(w, {"failed_factors": w["failed"],
+                                                        "summary": gate["summary"]})
+                        self._reset_auto_enter_streak()
+                        return
+                    # STRONG — but only enter once the move confirms (2
+                    # consecutive STRONG closes with price beyond the level).
+                    strong = self._beyond_breakout_level(direction, price)
+                    count = self._auto_enter_streak_count(direction, strong)
+                    if count < AUTO_ENTER_STRONG_CLOSES:
+                        if count == 1:
+                            self.debug.emit("INFO", f"Gate watch {direction} — STRONG {score}, "
+                                                  f"confirming ({count}/{AUTO_ENTER_STRONG_CLOSES})")
+                        return
+                    # 2 sustained STRONG closes — fall through to end + enter.
                 self._end_gate_watch("confirmed", f"gate now {score}")
                 self.debug.emit("SUCCESS", f"Watch confirmed — {self.ticker} {direction}"
                                            f"{' reversal, VWAP aligned' if kind == 'reversal' else f' gate now {score}'}"
@@ -342,15 +439,20 @@ class GateWatchMixin:
                     self.ticker, self.strategy_name or self.profile_key, direction, score,
                     confirm_first=bool(needs_confirm or self.confirm_entry), kind=kind)
                 # The gate just passed — hand its verdict to _enter_trade so it
-                # doesn't re-run (and can't loop back into a new watch).
+                # doesn't re-run (and can't loop back into a new watch). The
+                # gate dict and the watch deadline ride along so a MODERATE
+                # pause can re-arm the watch with the same score and deadline.
+                watch_deadline = (w["expires_at"], w["expiry_reason"])
                 if kind == "reversal":
                     self._reversal_entry_in_progress = True
                     try:
-                        self._enter_trade(direction, price, gate_result=bool(needs_confirm))
+                        self._enter_trade(direction, price, gate_result=bool(needs_confirm),
+                                          gate_snapshot=gate, watch_deadline=watch_deadline)
                     finally:
                         self._reversal_entry_in_progress = False
                 else:
-                    self._enter_trade(direction, price, gate_result=bool(needs_confirm))
+                    self._enter_trade(direction, price, gate_result=bool(needs_confirm),
+                                      gate_snapshot=gate, watch_deadline=watch_deadline)
         except Exception:
             logger.error("[GateWatch] re-check failed for %s", self.ticker, exc_info=True)
         finally:

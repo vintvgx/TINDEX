@@ -172,12 +172,17 @@ def test_moderate_confirm_routes_to_confirm_first(clock, monkeypatch):
     monkeypatch.setattr(oe, "select_contract", MagicMock(return_value={"symbol": "X", "strike": 765, "ask": 1.0}))
     seen = {}
 
-    def stop_after_gate(direction, trigger_price, gate_result=None):
+    def stop_after_gate(direction, trigger_price, gate_result=None, gate_snapshot=None,
+                        watch_deadline=None):
         seen["gate_result"] = gate_result
+        seen["gate_snapshot"] = gate_snapshot
+        seen["watch_deadline"] = watch_deadline
     _block(eng)
     eng._enter_trade = stop_after_gate
     eng._on_bar_gate_watch(765.10)
     assert seen["gate_result"] is True
+    assert seen["gate_snapshot"]["matched"] == 5     # the confirmed gate rides along
+    assert seen["watch_deadline"][0].isoformat().startswith("2026-10-26T12:40")  # watch deadline preserved
     assert eng.notifier.notify_gate_watch_confirmed.call_args.kwargs["confirm_first"] is True
 
 
