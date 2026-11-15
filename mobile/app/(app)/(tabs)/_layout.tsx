@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { TabNavBar } from '@/common/components/ui/TabNavBar';
 import {
   ChartOverlayProvider,
+  chartOverlayRendered,
   useChartOverlay,
 } from '@/common/components/ui/ChartOverlayContext';
 import { ChartsContent } from './charts';
@@ -101,6 +102,7 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
       // Mount at progress 0 (the card's rect); the next pass animates.
       progress.value = 0;
       justMounted.current = true;
+      chartOverlayRendered.current = true;
       setRendered(true);
       return;
     }
@@ -142,6 +144,11 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs on intent/mount changes only
   }, [chartOpen, rendered]);
+
+  // Tells the ticker card not to measure while Home may be scaled.
+  useEffect(() => {
+    chartOverlayRendered.current = rendered;
+  }, [rendered]);
 
   // Android back collapses the chart.
   useEffect(() => {

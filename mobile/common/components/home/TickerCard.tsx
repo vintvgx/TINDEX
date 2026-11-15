@@ -9,10 +9,12 @@ import { useMarketStream } from '@/hooks/useMarketStream';
 import { useChartTechnicals } from '@/common/components/ticker/ChartTechnicals';
 import { resolveLens, isEnterTier, fmtScore, tierMeta } from '@/common/components/ticker/compositeMeta';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
+import { isMarketHours } from '@/lib/marketHours';
 import { Glass } from '@/common/components/ui/WheelTabBar';
 import {
   useChartOverlay,
   lastTickerCardRect,
+  chartOverlayRendered,
   type ChartOriginRect,
 } from '@/common/components/ui/ChartOverlayContext';
 
@@ -62,7 +64,7 @@ function sparkPath(closes: number[]): string | null {
 export function TickerCard({ onLayout }: { onLayout?: (height: number) => void }) {
   const colors = useThemeColors();
   const { isDarkColorScheme: isDark } = useAppColorScheme();
-  const { prefs } = useChartDisplayPrefs();
+  const { prefs, loaded: prefsLoaded } = useChartDisplayPrefs();
   const ticker = (prefs.lastChartTicker ?? 'SPY').toUpperCase();
   const { openChart } = useChartOverlay();
   const ref = useRef<View>(null);
@@ -81,7 +83,9 @@ export function TickerCard({ onLayout }: { onLayout?: (height: number) => void }
   const changeColor = up ? colors.success : colors.error;
 
   // The chart's technicals query (same key → shared cache with charts.tsx).
-  const technicals = useChartTechnicals(ticker, true);
+  // Market hours only: the card is mounted on every tab all session, and each
+  // run re-runs the gate (1m bars + 2y dailies) on a 60s poll.
+  const technicals = useChartTechnicals(ticker, isMarketHours());
   const signal = useMemo(() => {
     const v = resolveLens(technicals.data);
     if (!v || !v.comp || (v.side !== 'CALL' && v.side !== 'PUT')) return null;
@@ -94,26 +98,43 @@ export function TickerCard({ onLayout }: { onLayout?: (height: number) => void }
 
   const path = useMemo(() => sparkPath(closes), [closes]);
 
-  const onPress = () => {
+  // Before prefs load the card shows the SPY default — open with no ticker
+  // so charts.tsx restores the saved one instead of overwriting it with SPY.
+  const openTicker = prefsLoaded ? ticker : null;
+
+  /** Record the card's window rect — only while the overlay is unmounted:
+   *  mid-animation Home is scaled, so the measurement would be transformed. */
+  const measure = (then?: (rect: ChartOriginRect | null) => void) => {
     const node = ref.current;
-    if (!node) {
-      openChart(ticker);
+    if (!node || chartOverlayRendered.current) {
+      then?.(lastTickerCardRect.current);
       return;
     }
-    // Open INSIDE the measure callback so the expand starts from this tap's
-    // rect, not the previous one.
     node.measureInWindow((x, y, width, height) => {
+      if (chartOverlayRendered.current) {
+        then?.(lastTickerCardRect.current);
+        return;
+      }
       const rect = { x, y, width, height };
       lastTickerCardRect.current = rect;
-      openChart(ticker, rect);
+      then?.(rect);
     });
   };
+
+  // Open INSIDE the measure callback so the expand starts from this tap's
+  // rect, not the previous one. Mid-collapse taps reuse the last rect.
+  const onPress = () => measure((rect) => openChart(openTicker, rect));
 
   return (
     <Pressable
       ref={ref}
       onPress={onPress}
-      onLayout={(e) => onLayout?.(e.nativeEvent.layout.height)}
+      onLayout={(e) => {
+        onLayout?.(e.nativeEvent.layout.height);
+        // Keep the rect fresh so openChartOverlay() callers (ticker sheet,
+        // deck, digest) expand from the real card, not the fallback box.
+        measure();
+      }}
       accessibilityRole="button"
       accessibilityLabel={`Expand ${ticker} chart`}
       style={({ pressed }) => [styles.card, styles.shadow, pressed && { transform: [{ scale: 0.985 }] }]}

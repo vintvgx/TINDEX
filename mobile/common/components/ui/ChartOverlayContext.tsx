@@ -10,6 +10,12 @@ export interface ChartOriginRect { x: number; y: number; width: number; height: 
  *  doesn't import TickerCard (which imports this) — TickerCard re-exports it. */
 export const lastTickerCardRect: { current: ChartOriginRect | null } = { current: null };
 
+/** Is the overlay still mounted (open, expanding or collapsing)? Written by
+ *  the tabs `_layout.tsx`. While true, Home may be scaled (it recedes), so
+ *  `measureInWindow` on the card returns a transformed rect — the card must
+ *  not record measurements then. A ref, not state: nothing re-renders on it. */
+export const chartOverlayRendered: { current: boolean } = { current: false };
+
 /** No card measured yet: a card-sized rect at the bottom center. */
 function fallbackRect(): ChartOriginRect {
   const { width, height } = Dimensions.get('window');
