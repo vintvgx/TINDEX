@@ -89,7 +89,7 @@ const PINNED_TICKERS = ['SPY', 'IWM', 'QQQ'];
  * ChartsContent is the route-independent body; the default export is the
  * thin route wrapper that feeds ?ticker= in as initialTicker.
  */
-export function ChartsContent({ initialTicker, topInset, headerRightInset = 0 }: {
+export function ChartsContent({ initialTicker, topInset, headerRightInset = 0, active = true }: {
   initialTicker?: string | null;
   /** Override the top safe-area padding — 0 when rendered under the global
    *  ticker tape (the tape already clears the notch). */
@@ -98,6 +98,10 @@ export function ChartsContent({ initialTicker, topInset, headerRightInset = 0 }:
    *  nothing renders behind a control overlaid at the top right — the
    *  chart overlay's collapse button. */
   headerRightInset?: number;
+  /** False while the chart overlay is fully collapsed (it stays mounted
+   *  between opens): pauses every poll/stream below and hands the tape back
+   *  to the marquee. Always true for the route. */
+  active?: boolean;
 }) {
   const colors = useThemeColors();
   const [contractsModalOpen, setContractsModalOpen] = useState(false);
@@ -105,10 +109,10 @@ export function ChartsContent({ initialTicker, topInset, headerRightInset = 0 }:
   // ── Ticker list, by priority: open positions (live, then paper-only) →
   // tickers with an active watch level → SPY/IWM/QQQ → followed
   // (alphabetical). Each ticker appears once, at its highest tier. ──────
-  const allLive = useLivePositionsData('live');
-  const allPaper = useLivePositionsData('paper');
+  const allLive = useLivePositionsData('live', undefined, active);
+  const allPaper = useLivePositionsData('paper', undefined, active);
   const { data: follows } = useUserORBFollows();
-  const { data: allKeyLevels } = useKeyLevels();
+  const { data: allKeyLevels } = useKeyLevels(undefined, active);
 
   const liveTickers = useMemo(
     // Dev sim positions don't pull their ticker into the wheel (no fetches).
@@ -172,9 +176,11 @@ export function ChartsContent({ initialTicker, topInset, headerRightInset = 0 }:
   // A tapped zone-alert push lands here with ?ticker= (see
   // NotificationNavigationService) — open that ticker's chart. The overlay
   // passes its ticker in as a prop instead of route params.
+  // The overlay keeps this mounted between opens, so re-run on each open
+  // (`active` false → true) too — not just when the prop changes.
   useEffect(() => {
-    if (initialTicker) openTicker(initialTicker);
-  }, [initialTicker, openTicker]);
+    if (active && initialTicker) openTicker(initialTicker);
+  }, [active, initialTicker, openTicker]);
 
   // Last-viewed ticker, persisted (useChartDisplayPrefs.lastChartTicker):
   // the overlay unmounts on close, so without this every reopen fell back
@@ -239,7 +245,9 @@ export function ChartsContent({ initialTicker, topInset, headerRightInset = 0 }:
   // background, heating the phone. Keep them alive 30s after blur (in case
   // he's just peeking at another tab), then halt everything until refocus.
   const tabFocused = useIsFocused();
-  const [chartLive, setChartLive] = useState(true);
+  const [chartLiveTail, setChartLive] = useState(true);
+  // Collapsed overlay: halt at once (no 30s tail — it's not a peek).
+  const chartLive = chartLiveTail && active;
   useEffect(() => {
     if (tabFocused) {
       setChartLive(true);
@@ -424,7 +432,10 @@ export function ChartsContent({ initialTicker, topInset, headerRightInset = 0 }:
     () => positionsData.filteredPositions.filter(p => !isHidden(positionHideKey(p))),
     [positionsData.filteredPositions, isHidden],
   );
-  const liveValues = useStrategyLiveValues(useMemo(() => overlayPositions.map(p => p.strategy_id), [overlayPositions]));
+  const liveValues = useStrategyLiveValues(useMemo(
+    () => (active ? overlayPositions.map(p => p.strategy_id) : []),
+    [overlayPositions, active],
+  ));
   const receivedAtRef = useRef(new Map<object, number>());
   // The lines' delta comes from the open contract's own snapshot (spec §3.2):
   // refetched every 5 minutes and whenever the trade's state changes; the
@@ -433,7 +444,7 @@ export function ChartsContent({ initialTicker, topInset, headerRightInset = 0 }:
   const lineLive = lineTrade ? liveValues[lineTrade.strategy_id]?.data ?? null : null;
   const deltaNonce = lineLive ? `${lineLive.qty_remaining}:${lineLive.tp1_hit}:${lineLive.tp2_hit}` : '';
   const contractDelta = useContractDelta(lineTrade?.contract, deltaNonce,
-                                         !!lineTrade && tickerPrefs.showTradeLines, 5 * 60_000);
+                                         !!lineTrade && tickerPrefs.showTradeLines && active, 5 * 60_000);
   const overlayTrades = useMemo<OverlayTradeInput[]>(() => {
     const out: OverlayTradeInput[] = [];
     const seen = new Map<object, number>();
@@ -455,7 +466,7 @@ export function ChartsContent({ initialTicker, topInset, headerRightInset = 0 }:
   }, [overlayPositions, liveValues, liveByStrategy, contractDelta.data, lineTrade]);
   const [selectedTradeKey, setSelectedTradeKey] = useState<string | null>(null);
   useEffect(() => { setSelectedTradeKey(null); }, [activeTicker]);
-  const overlayFocused = useIsFocused();
+  const overlayFocused = useIsFocused() && active;
   const tradeLinesOn = tickerPrefs.showTradeLines;
   const overlayFrame = useTradeOverlay(tradeLinesOn ? overlayTrades : NO_OVERLAY_TRADES, selectedTradeKey, overlayFocused);
   // Trade Mode engages on an OPEN TRADE (spec 2026-11-10 §3.3), not on a
@@ -1039,7 +1050,8 @@ export function ChartsContent({ initialTicker, topInset, headerRightInset = 0 }:
           <ChartLivePane
             ticker={activeTicker}
             stockData={stockData}
-            tapeActive={isFocused}
+            tapeActive={isFocused && active}
+            streamActive={active}
             tapeSignal={tapeSignal}
             tapeLens={tapeLens}
             tapeLoading={tickerLoading && !stockData}
@@ -1214,14 +1226,15 @@ export function ChartsContent({ initialTicker, topInset, headerRightInset = 0 }:
           position strip pager that expands in place into the full cards
           (pushing the chart up — it keeps its min-height guard). The
           toolbar's positions button drives the same expanded state. */}
-      <ChartPositionStrip
+      {/* Collapsed: unmounted — its rows each hold a live-price socket. */}
+      {active && <ChartPositionStrip
         data={positionsData}
         ticker={activeTicker}
         expanded={expanded}
         onExpandedChange={setExpanded}
         onLiveUpdate={handlePositionLiveUpdate}
         bottomInset={bottomInset}
-      />
+      />}
 
       <SearchBottomSheet
         visible={searchOpen}
@@ -1273,7 +1286,7 @@ const TAPE_PUBLISH_MS = 1_000;
  * Alpaca connection falls back instantly) or the last REST snapshot.
  */
 function ChartLivePane({
-  ticker, stockData, tapeActive, tapeSignal, tapeLens, tapeLoading, onSignalPress, onTickerPress, setTapeInfo, renderChart,
+  ticker, stockData, tapeActive, streamActive = true, tapeSignal, tapeLens, tapeLoading, onSignalPress, onTickerPress, setTapeInfo, renderChart,
   isBrief = false,
 }: {
   ticker: string;
@@ -1281,6 +1294,8 @@ function ChartLivePane({
   isBrief?: boolean;
   stockData: { current_price?: number | null; price_change?: number | null; price_change_percent?: number | null } | undefined;
   tapeActive: boolean;
+  /** Live price subscriptions on (off while the chart overlay is collapsed). */
+  streamActive?: boolean;
   tapeSignal: ChartTapeInfo['signal'];
   tapeLens: ChartTapeLens | null;
   tapeLoading: boolean;
@@ -1291,8 +1306,8 @@ function ChartLivePane({
 }) {
   const { source: chartPriceSource } = useChartPriceSource();
   const useAlpacaStream = chartPriceSource === 'alpaca';
-  const chartStream = useChartLiveStream(ticker, useAlpacaStream);
-  const { livePrices } = useMarketStream([ticker], { enabled: true });
+  const chartStream = useChartLiveStream(ticker, useAlpacaStream && streamActive);
+  const { livePrices } = useMarketStream([ticker], { enabled: streamActive });
   const alpacaUsable = useAlpacaStream && !chartStream.error && chartStream.price != null;
   const streamPrice = alpacaUsable ? chartStream.price! : livePrices[ticker] ?? null;
   const resolvedLivePrice = streamPrice ?? stockData?.current_price ?? null;

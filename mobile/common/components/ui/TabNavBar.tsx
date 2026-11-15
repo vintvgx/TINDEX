@@ -113,7 +113,7 @@ export const TabNavBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =>
       ]}
       pointerEvents="box-none"
     >
-      <TickerCard onLayout={setCardHeight} />
+      <TickerCard onLayout={setCardHeight} layoutKey={floating} />
       <View
         style={[styles.pill, styles.shadow]}
         onLayout={(e) => setTabW((e.nativeEvent.layout.width - PILL_PAD * 2) / TAB_NAV_TABS.length)}

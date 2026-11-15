@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Tabs } from 'expo-router';
-import { View, TouchableOpacity, StyleSheet, BackHandler } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, BackHandler, AppState } from 'react-native';
 import Animated, {
   Easing,
   interpolate,
@@ -65,9 +65,13 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
   const [tapeH, setTapeH] = useState(0);
 
   // ── Expand / collapse (spec §4) ────────────────────────────────────────
-  // `chartOpen` is intent; `rendered` keeps the overlay mounted through the
-  // collapse; `covered` hides the tab bar once the expand has finished.
+  // `chartOpen` is intent. `rendered`: the chart has mounted. It stays
+  // mounted after the first open (collapsed, it sits invisible at the card's
+  // rect), so a re-open only animates. `active`: open or animating — false
+  // only once fully collapsed; it gates the chart's polls/streams/tape.
+  // `covered` hides the tab bar once the expand has finished.
   const [rendered, setRendered] = useState(false);
+  const [active, setActive] = useState(false);
   const [covered, setCovered] = useState(false);
   const reduceMotion = useReducedMotion();
   /** 0 = at the card, 1 = full screen. */
@@ -103,10 +107,13 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
       progress.value = 0;
       justMounted.current = true;
       chartOverlayRendered.current = true;
+      setActive(true);
       setRendered(true);
       return;
     }
     if (chartOpen) {
+      chartOverlayRendered.current = true;
+      setActive(true);
       const expand = () => {
         progress.value = withTiming(
           1,
@@ -116,8 +123,8 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
           },
         );
       };
-      // Mid-collapse re-open: still mounted, animate on from the current
-      // progress right away (no remount).
+      // Already mounted (re-open, or mid-collapse): animate on from the
+      // current progress right away — no mount, no frame wait.
       if (!justMounted.current) {
         expand();
         return;
@@ -133,22 +140,35 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
     justMounted.current = false;
     if (rendered) {
       // Tab bar back first (under the overlay), then shrink into the card.
+      // The chart stays mounted; it just goes inactive once collapsed.
       setCovered(false);
       progress.value = withTiming(
         0,
         { duration: reduceMotion ? 0 : 250, easing: Easing.bezier(0.4, 0, 0.2, 1) },
         (fin) => {
-          if (fin) runOnJS(setRendered)(false);
+          if (fin) runOnJS(setActive)(false);
         },
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs on intent/mount changes only
   }, [chartOpen, rendered]);
 
-  // Tells the ticker card not to measure while Home may be scaled.
+  // Tells the ticker card not to measure while Home may be scaled (open or
+  // animating — NOT merely mounted: the kept chart is mounted while collapsed).
   useEffect(() => {
-    chartOverlayRendered.current = rendered;
-  }, [rendered]);
+    chartOverlayRendered.current = active;
+  }, [active]);
+
+  // Memory pressure: drop the kept (collapsed) chart; the next open mounts it
+  // again (+ one frame wait).
+  const idleRef = useRef(true);
+  idleRef.current = !chartOpen && !active;
+  useEffect(() => {
+    const sub = AppState.addEventListener('memoryWarning', () => {
+      if (idleRef.current) setRendered(false);
+    });
+    return () => sub.remove();
+  }, []);
 
   // Android back collapses the chart.
   useEffect(() => {
@@ -209,7 +229,7 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
       <AppSocketBridge />
 
       {/* Home (header + tabs + tab bar/card) — recedes while the chart is up. */}
-      <Animated.View style={[{ flex: 1 }, rendered && { overflow: 'hidden' }, homeStyle]}>
+      <Animated.View style={[{ flex: 1 }, active && { overflow: 'hidden' }, homeStyle]}>
       <AppHeader />
       <View style={{ flex: 1 }}>
         <SafeAreaInsetsContext.Provider
@@ -253,7 +273,8 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
       </Animated.View>
 
       {/* Chart overlay host — the area below the tape. Always mounted (so it
-          stays measured); the clip frame mounts only while `rendered`. */}
+          stays measured); the clip frame mounts on the first open and then
+          stays (invisible + untouchable at the card's rect while collapsed). */}
       <View
         ref={hostRef}
         onLayout={measureHost}
@@ -269,7 +290,7 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
               style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.background }, frameBgStyle]}
             />
             <Animated.View style={[styles.content, contentStyle]}>
-              <ChartsContent initialTicker={chartTicker} topInset={0} headerRightInset={CHART_COLLAPSE_INSET} />
+              <ChartsContent initialTicker={chartTicker} topInset={0} headerRightInset={CHART_COLLAPSE_INSET} active={active} />
               <ChartCollapseButton onPress={closeChart} />
             </Animated.View>
           </Animated.View>

@@ -92,9 +92,11 @@ export interface UseLivePositionsDataResult {
   handleLiveUpdate: (strategyId: string, data: LivePriceData | null) => void;
 }
 
-export function useLivePositionsData(mode: 'live' | 'paper', tickerFilter?: string): UseLivePositionsDataResult {
-  const { data: stratPositions = [], isLoading: stratLoading } = useStrategyPositions();
-  const { data: immPositions = [], isLoading: immLoading } = useImmediatePositions();
+/** `enabled` (default true) pauses this caller's position polls (an idle,
+ *  collapsed chart); cached rows still read through. */
+export function useLivePositionsData(mode: 'live' | 'paper', tickerFilter?: string, enabled: boolean = true): UseLivePositionsDataResult {
+  const { data: stratPositions = [], isLoading: stratLoading } = useStrategyPositions(enabled);
+  const { data: immPositions = [], isLoading: immLoading } = useImmediatePositions(enabled);
   const isLoading = stratLoading || immLoading;
   // Dev simulated positions (Profile → Developer) ride along as ordinary rows.
   const simPositions = useSimPositionEntries();

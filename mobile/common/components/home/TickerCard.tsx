@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path, Circle } from 'react-native-svg';
@@ -61,7 +61,12 @@ function sparkPath(closes: number[]): { d: string; end: { x: number; y: number }
   return { d, end: pts[pts.length - 1] };
 }
 
-export function TickerCard({ onLayout }: { onLayout?: (height: number) => void }) {
+export function TickerCard({ onLayout, layoutKey }: {
+  onLayout?: (height: number) => void;
+  /** Changes when the parent (TabNavBar) moves the card without the card's
+   *  own frame changing — floating vs in-flow screens — so it re-measures. */
+  layoutKey?: string | number | boolean;
+}) {
   const colors = useThemeColors();
   const { isDarkColorScheme: isDark } = useAppColorScheme();
   const { prefs, loaded: prefsLoaded } = useChartDisplayPrefs();
@@ -102,8 +107,9 @@ export function TickerCard({ onLayout }: { onLayout?: (height: number) => void }
   // so charts.tsx restores the saved one instead of overwriting it with SPY.
   const openTicker = prefsLoaded ? ticker : null;
 
-  /** Record the card's window rect — only while the overlay is unmounted:
-   *  mid-animation Home is scaled, so the measurement would be transformed. */
+  /** Record the card's window rect — only while the chart is neither open
+   *  nor animating (`chartOverlayRendered`): then Home is scaled, so the
+   *  measurement would be transformed. */
   const measure = (then?: (rect: ChartOriginRect | null) => void) => {
     const node = ref.current;
     if (!node || chartOverlayRendered.current) {
@@ -121,9 +127,23 @@ export function TickerCard({ onLayout }: { onLayout?: (height: number) => void }
     });
   };
 
-  // Open INSIDE the measure callback so the expand starts from this tap's
-  // rect, not the previous one. Mid-collapse taps reuse the last rect.
-  const onPress = () => measure((rect) => openChart(openTicker, rect));
+  // The rect is kept fresh from layout (onLayout + layoutKey below), so a tap
+  // opens synchronously from it — no async measure on the press path. Only
+  // before the first measurement lands: measure, then open in the callback.
+  // Mid-collapse taps also land here and reuse the last (unscaled) rect.
+  const onPress = () => {
+    const rect = lastTickerCardRect.current;
+    if (rect) openChart(openTicker, rect);
+    else measure((r) => openChart(openTicker, r));
+  };
+
+  // Parent re-layout that doesn't change the card's own frame: re-measure
+  // once it has settled.
+  useEffect(() => {
+    if (layoutKey === undefined) return;
+    const raf = requestAnimationFrame(() => measure());
+    return () => cancelAnimationFrame(raf);
+  }, [layoutKey]);
 
   // Press feedback on an inner Animated.View — never a Pressable style
   // function: NativeWind's css-interop (0.1.22) treats a function `style` as
