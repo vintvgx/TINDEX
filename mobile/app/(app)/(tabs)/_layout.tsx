@@ -269,7 +269,7 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
               style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.background }, frameBgStyle]}
             />
             <Animated.View style={[styles.content, contentStyle]}>
-              <ChartsContent initialTicker={chartTicker} topInset={0} />
+              <ChartsContent initialTicker={chartTicker} topInset={0} headerRightInset={CHART_COLLAPSE_INSET} />
               <ChartCollapseButton onPress={closeChart} />
             </Animated.View>
           </Animated.View>
@@ -278,6 +278,15 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
     </View>
   );
 }
+
+const COLLAPSE_BTN = 32;
+const COLLAPSE_RIGHT = 14;
+/** Centered on the technicals strip row (ChartsContent: 4 paddingTop + a
+ *  28-tall strip → center at 18). */
+const COLLAPSE_TOP = 4 + 28 / 2 - COLLAPSE_BTN / 2;
+/** The collapse button's footprint from the right edge (right offset +
+ *  button + an 8px gap) — ChartsContent pads its top rows by this. */
+export const CHART_COLLAPSE_INSET = COLLAPSE_RIGHT + COLLAPSE_BTN + 8;
 
 /** Collapses the chart back into the ticker card (top right of the chart). */
 function ChartCollapseButton({ onPress }: { onPress: () => void }) {
@@ -290,10 +299,10 @@ function ChartCollapseButton({ onPress }: { onPress: () => void }) {
       accessibilityLabel="Collapse chart"
       style={[
         styles.closeBtn,
-        { top: 8, backgroundColor: colors.surfaceSecondary, borderColor: colors.border },
+        { top: COLLAPSE_TOP, backgroundColor: colors.surfaceSecondary, borderColor: colors.border },
       ]}
     >
-      <Ionicons name="chevron-down" size={20} color={colors.text} />
+      <Ionicons name="chevron-down" size={18} color={colors.text} />
     </TouchableOpacity>
   );
 }
@@ -303,10 +312,10 @@ const styles = StyleSheet.create({
   content: { position: 'absolute' },
   closeBtn: {
     position: 'absolute',
-    right: 14,
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    right: COLLAPSE_RIGHT,
+    width: COLLAPSE_BTN,
+    height: COLLAPSE_BTN,
+    borderRadius: COLLAPSE_BTN / 2,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',

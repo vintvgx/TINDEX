@@ -120,6 +120,7 @@ export function ChartTechnicalsStrip({ check, isLoading, colors, onPress, tradeS
             <Text style={s.signalText}>{comp.direction} {fmtScore(comp.total)}</Text>
           </Pressable>
         ) : (
+          // WAIT: the higher side + its score; the orange says WAIT.
           <Pressable
             onPress={onPress}
             style={[s.signal, { backgroundColor: colors.warning }]}
@@ -127,15 +128,12 @@ export function ChartTechnicalsStrip({ check, isLoading, colors, onPress, tradeS
             accessibilityLabel={`Wait. Call ${fmtScore(view.call?.total ?? 0)}, put ${fmtScore(view.put?.total ?? 0)}`}
           >
             <Text style={s.signalText}>
-              WAIT · CALL {fmtScore(view.call?.total ?? 0)} · PUT {fmtScore(view.put?.total ?? 0)}
+              {(view.put?.total ?? 0) > (view.call?.total ?? 0)
+                ? `PUT ${fmtScore(view.put?.total ?? 0)}`
+                : `CALL ${fmtScore(view.call?.total ?? 0)}`}
             </Text>
           </Pressable>
         )}
-        {view.otherLens ? (
-          <View style={[s.chip, { borderColor: colors.separator, borderStyle: 'dashed' }]}>
-            <Text style={[s.chipText, { color: muted }]} numberOfLines={1}>{view.otherLens}</Text>
-          </View>
-        ) : null}
         <View style={{ flex: 1, height: 28, justifyContent: 'center' }}>
           <ScrollView
             horizontal

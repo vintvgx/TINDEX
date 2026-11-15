@@ -89,11 +89,15 @@ const PINNED_TICKERS = ['SPY', 'IWM', 'QQQ'];
  * ChartsContent is the route-independent body; the default export is the
  * thin route wrapper that feeds ?ticker= in as initialTicker.
  */
-export function ChartsContent({ initialTicker, topInset }: {
+export function ChartsContent({ initialTicker, topInset, headerRightInset = 0 }: {
   initialTicker?: string | null;
   /** Override the top safe-area padding — 0 when rendered under the global
    *  ticker tape (the tape already clears the notch). */
   topInset?: number;
+  /** Right padding for the top rows (technicals strip, trade status) so
+   *  nothing renders behind a control overlaid at the top right — the
+   *  chart overlay's collapse button. */
+  headerRightInset?: number;
 }) {
   const colors = useThemeColors();
   const [contractsModalOpen, setContractsModalOpen] = useState(false);
@@ -947,15 +951,22 @@ export function ChartsContent({ initialTicker, topInset }: {
   const { setInfo: setTapeInfo } = useChartTape();
   const tapeSignal = chart.technicals.data?.signal ?? null;
   // Header pill = the same lens the strip leads with (spec §2.2): the open
-  // trade's side, else the derived intraday side, with the daily verdict as
-  // a labelled second pill whenever it reads differently.
+  // trade's side, else the derived intraday side — just direction + score
+  // ("CALL +4"). The lens names and the other lens live in the Technicals
+  // sheet; no second pill (0.8 device feedback).
   const tapeLens = useMemo<ChartTapeLens | null>(() => {
     const v = resolveLens(chart.technicals.data, tradeSide);
     if (!v) return null;
-    // Spelled out (PR #121 N5): which lens the pill is reading.
-    const lensName = v.source === 'trade' ? 'Trade' : v.source === 'composite' ? 'Composite' : 'Signal';
-    const text = v.comp ? `${lensName} ${v.side} ${fmtScore(v.comp.total)}` : `${lensName} WAIT`;
-    return { side: v.side, text, other: v.otherLens };
+    let text: string;
+    if (v.comp) {
+      text = `${v.side} ${fmtScore(v.comp.total)}`;
+    } else {
+      // No composite for the lens side — the higher side, like the strip.
+      const call = v.call?.total ?? 0;
+      const put = v.put?.total ?? 0;
+      text = put > call ? `PUT ${fmtScore(put)}` : `CALL ${fmtScore(call)}`;
+    }
+    return { side: v.side, text, other: null };
   }, [chart.technicals.data, tradeSide]);
   const openContracts = useCallback(() => setContractsModalOpen(true), []);
 
@@ -994,7 +1005,7 @@ export function ChartsContent({ initialTicker, topInset }: {
           saying — SIM, lines that can't be drawn (and why), or a frame that
           hasn't arrived. A missing line always explains itself (§3.3). */}
       {tradeMode && (overlayFrame?.sim || overlayUnavailable || overlayFrame?.linesNote) ? (
-        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', paddingHorizontal: 12, paddingTop: 4, gap: 8 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', paddingHorizontal: 12, paddingRight: headerRightInset || 12, paddingTop: 4, gap: 8 }}>
           {overlayFrame?.sim && (
             <Text style={{ color: '#111', backgroundColor: colors.warning, fontSize: 10, fontWeight: '800', paddingHorizontal: 5, borderRadius: 4, overflow: 'hidden' }}>SIM</Text>
           )}
@@ -1008,7 +1019,7 @@ export function ChartsContent({ initialTicker, topInset }: {
         </View>
       ) : null}
       {chart.showStrip && (
-        <View style={{ paddingHorizontal: 12, paddingTop: 4 }}>
+        <View style={{ paddingHorizontal: 12, paddingRight: headerRightInset || 12, paddingTop: 4 }}>
           <ChartTechnicalsStrip
             check={chart.technicals.data}
             isLoading={chart.technicals.isLoading}
