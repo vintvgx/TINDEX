@@ -10,7 +10,11 @@ import { useChartTechnicals } from '@/common/components/ticker/ChartTechnicals';
 import { resolveLens, isEnterTier, fmtScore, tierMeta } from '@/common/components/ticker/compositeMeta';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import { Glass } from '@/common/components/ui/WheelTabBar';
-import { useChartOverlay } from '@/common/components/ui/ChartOverlayContext';
+import {
+  useChartOverlay,
+  lastTickerCardRect,
+  type ChartOriginRect,
+} from '@/common/components/ui/ChartOverlayContext';
 
 /**
  * 0.8 ticker card — floats above the TabNavBar pill (spec §3.2). Shows the
@@ -24,11 +28,12 @@ import { useChartOverlay } from '@/common/components/ui/ChartOverlayContext';
  * own technicals query (shared react-query cache key — no new endpoint).
  */
 
-export interface TickerCardRect { x: number; y: number; width: number; height: number }
+export type TickerCardRect = ChartOriginRect;
 
 /** Window rect of the card at the last tap (`.current`) — the chart
- *  overlay's expand animation starts from here (0.8 chart transition). */
-export const lastTickerCardRect: { current: TickerCardRect | null } = { current: null };
+ *  overlay's expand animation starts from here (0.8 chart transition).
+ *  Defined in ChartOverlayContext (avoids an import cycle). */
+export { lastTickerCardRect };
 
 const SPARK_W = 64;
 const SPARK_H = 30;
@@ -91,12 +96,17 @@ export function TickerCard({ onLayout }: { onLayout?: (height: number) => void }
 
   const onPress = () => {
     const node = ref.current;
-    if (node) {
-      node.measureInWindow((x, y, width, height) => {
-        lastTickerCardRect.current = { x, y, width, height };
-      });
+    if (!node) {
+      openChart(ticker);
+      return;
     }
-    openChart(ticker);
+    // Open INSIDE the measure callback so the expand starts from this tap's
+    // rect, not the previous one.
+    node.measureInWindow((x, y, width, height) => {
+      const rect = { x, y, width, height };
+      lastTickerCardRect.current = rect;
+      openChart(ticker, rect);
+    });
   };
 
   return (
