@@ -20,19 +20,18 @@ type SheetKind = 'technicals' | 'positioning' | 'settings' | 'more' | 'switcher'
 const MODAL_HANDOFF_MS = 350;
 
 const PILL_H = 52;
-const PILL_BOTTOM = 12;
-/** Vertical footprint of the floating pill row (pill + its bottom offset +
- *  breathing room). The chart area pads its plot by this much so the time
- *  axis and newest candles stay visible above the pills, while the area's
- *  background still runs underneath them. */
-export const CHART_PILLS_CLEARANCE = PILL_H + PILL_BOTTOM + 8;
+const PILL_BOTTOM = 8;
+/** Vertical footprint of the floating pill row (pill + its bottom offset,
+ *  no extra room — close to 0.7's ~51px strip). The chart area pads its
+ *  plot by this much so the time axis and newest candles stay visible
+ *  above the pills, while the area's background still runs underneath. */
+export const CHART_PILLS_CLEARANCE = PILL_H + PILL_BOTTOM;
 
 interface ToolButton {
   key: string;
   icon: IconName;
   label: string;
   onPress: () => void;
-  badge?: number;
 }
 
 /**
@@ -130,7 +129,7 @@ export function ChartBottomToolbar({
     { key: 'technicals', icon: 'pulse-outline', label: 'Technicals', onPress: () => setSheet('technicals') },
     { key: 'positioning', icon: 'bar-chart-outline', label: 'Positioning', onPress: () => setSheet('positioning') },
     { key: 'settings', icon: 'options-outline', label: 'Settings', onPress: () => setSheet('settings') },
-    { key: 'more', icon: 'ellipsis-horizontal', label: 'More', onPress: () => setSheet('more'), badge: openPositionCount || undefined },
+    { key: 'more', icon: 'ellipsis-horizontal', label: 'More', onPress: () => setSheet('more') },
   ];
 
   return (
@@ -174,14 +173,7 @@ export function ChartBottomToolbar({
               accessibilityRole="button"
               accessibilityLabel={b.label}
             >
-              <View style={{ position: 'relative' }}>
-                <Ionicons name={b.icon} size={21} color={colors.textSecondary} />
-                {b.badge ? (
-                  <View style={[s.badge, { backgroundColor: colors.accent }]}>
-                    <Text style={[s.badgeText, { color: colors.accentForeground }]}>{b.badge}</Text>
-                  </View>
-                ) : null}
-              </View>
+              <Ionicons name={b.icon} size={21} color={colors.textSecondary} />
             </Pressable>
           ))}
         </View>
@@ -493,21 +485,6 @@ const s = StyleSheet.create({
     borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  badge: {
-    position: 'absolute',
-    top: -6,
-    right: -10,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-  },
-  badgeText: {
-    fontSize: 10,
-    fontWeight: '800',
   },
   // More sheet
   moreRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 4 },
