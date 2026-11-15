@@ -20,12 +20,12 @@ type SheetKind = 'technicals' | 'positioning' | 'settings' | 'more' | 'switcher'
 const MODAL_HANDOFF_MS = 350;
 
 const PILL_H = 52;
-const PILL_BOTTOM = 12;
-/** Vertical footprint of the floating pill row (pill + its bottom offset +
- *  breathing room). The chart area pads its plot by this much so the time
- *  axis and newest candles stay visible above the pills, while the area's
- *  background still runs underneath them. */
-export const CHART_PILLS_CLEARANCE = PILL_H + PILL_BOTTOM + 8;
+const PILL_BOTTOM = 8;
+/** Vertical footprint of the floating pill row (pill + its bottom offset,
+ *  no extra room — close to 0.7's ~51px strip). The chart area pads its
+ *  plot by this much so the time axis and newest candles stay visible
+ *  above the pills, while the area's background still runs underneath. */
+export const CHART_PILLS_CLEARANCE = PILL_H + PILL_BOTTOM;
 
 interface ToolButton {
   key: string;
