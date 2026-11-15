@@ -14,7 +14,7 @@ import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft
 import type { LegacyTradeLine, LegacyTradeMarker } from '@/common/components/ticker/AdvancedPriceChart';
 import { TVChart } from '@/common/components/ticker/TVChart';
 import { ZoneDetailSheet } from '@/common/components/ticker/ZoneDetailSheet';
-import { ChartBottomToolbar } from '@/common/components/ticker/ChartBottomToolbar';
+import { ChartBottomToolbar, CHART_PILLS_CLEARANCE } from '@/common/components/ticker/ChartBottomToolbar';
 import { ChartPositionStrip } from '@/common/components/ticker/ChartPositionStrip';
 import { TechnicalsSheet } from '@/common/components/ticker/TechnicalsSheet';
 import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals';
@@ -1021,7 +1021,9 @@ export function ChartsContent({ initialTicker, topInset }: {
       {/* Chart — fills everything above the toolbar now that the identity
           header, ticker chips, and chrome rows are gone. Keyed on the
           ticker so switching fully remounts it (see the old comment). */}
-      <View style={{ flex: 1, minHeight: screenH * 0.5, paddingHorizontal: 12, paddingTop: 8 }} onLayout={onChartAreaLayout}>
+      {/* paddingBottom keeps the plot (time axis, newest candles) above the
+          floating pills; the area's background still runs under them. */}
+      <View style={{ flex: 1, minHeight: screenH * 0.5, paddingHorizontal: 12, paddingTop: 8, paddingBottom: CHART_PILLS_CLEARANCE }} onLayout={onChartAreaLayout}>
         {chartAreaHeight > 0 && (
           <ChartLivePane
             ticker={activeTicker}
@@ -1086,7 +1088,9 @@ export function ChartsContent({ initialTicker, topInset }: {
                   period={period}
                   onPeriodChange={setPeriod}
                   positive={displayPositive}
-                  height={Math.max(220, chartAreaHeight)}
+                  // onLayout measures the padded box — take the pill
+                  // clearance back off so the plot ends above the pills.
+                  height={Math.max(220, chartAreaHeight - CHART_PILLS_CLEARANCE)}
                   orbRange={effectiveOrb}
                   showOrbRange={chart.showOrb}
                   livePrice={resolvedLivePrice ?? null}

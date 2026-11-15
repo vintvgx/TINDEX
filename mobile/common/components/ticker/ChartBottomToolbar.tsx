@@ -19,6 +19,14 @@ type SheetKind = 'technicals' | 'positioning' | 'settings' | 'more' | 'switcher'
  *  (same as charts.tsx reviewEntryFromTechnicals). */
 const MODAL_HANDOFF_MS = 350;
 
+const PILL_H = 52;
+const PILL_BOTTOM = 12;
+/** Vertical footprint of the floating pill row (pill + its bottom offset +
+ *  breathing room). The chart area pads its plot by this much so the time
+ *  axis and newest candles stay visible above the pills, while the area's
+ *  background still runs underneath them. */
+export const CHART_PILLS_CLEARANCE = PILL_H + PILL_BOTTOM + 8;
+
 interface ToolButton {
   key: string;
   icon: IconName;
@@ -452,7 +460,7 @@ const s = StyleSheet.create({
     position: 'absolute',
     left: 12,
     right: 12,
-    bottom: 12,
+    bottom: PILL_BOTTOM,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -461,7 +469,7 @@ const s = StyleSheet.create({
   pill: {
     flex: 1,
     minWidth: 0,
-    height: 52,
+    height: PILL_H,
     borderRadius: 28,
     borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
