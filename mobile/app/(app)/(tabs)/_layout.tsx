@@ -4,7 +4,7 @@ import { View, TouchableOpacity, StyleSheet } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaInsetsContext, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { WheelTabBar } from '@/common/components/ui/WheelTabBar';
+import { TabNavBar } from '@/common/components/ui/TabNavBar';
 import {
   ChartOverlayProvider,
   useChartOverlay,
@@ -19,13 +19,13 @@ import { TradeEntryNavigator } from '@/common/components/trade/TradeEntryNavigat
 import { AppSocketBridge } from '@/common/services/appSocket';
 
 /**
- * 0.7 redesign app shell: ticker tape → app header → tab navigator →
- * 3-button wheel tab bar (Home wheel / Chart / Profile).
+ * 0.8 app shell: ticker tape → app header → tab navigator → TabNavBar
+ * (floating TickerCard over a labeled 5-tab pill: Home · Monitor · Log ·
+ * Menu · Profile).
  *
- * The Home button scrubs through Home → Monitor → Daily → Log → Account →
- * Menu (single tap spins back to Home). The Chart button opens the chart as
- * a full-screen overlay covering tape, header, and tab bar — only an X
- * (where the Profile button was) remains to close it. All routes stay
+ * Tapping the ticker card opens the chart as a full-screen overlay covering
+ * the header and tab bar (not the tape) — only an X remains to close it.
+ * Daily, Account and Positions are reached from Menu. All routes stay
  * registered so deep links and notifications keep working.
  */
 function Shell() {
@@ -73,7 +73,7 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
             // Theme background behind every screen — the default scene
             // color showed through as black around/below shorter content.
             screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: colors.background } }}
-            tabBar={chartOpen ? () => null : (props) => <WheelTabBar {...props} />}
+            tabBar={chartOpen ? () => null : (props) => <TabNavBar {...props} />}
           >
             {/* Wheel screens */}
             <Tabs.Screen name="feed" options={{ title: 'Home' }} />

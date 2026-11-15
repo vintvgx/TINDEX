@@ -10,7 +10,7 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { useLiveEquity } from '@/hooks/queries/strategy/useLiveEquity';
 import { useLivePositionsData, type UseLivePositionsDataResult } from '@/common/components/strategy/LivePositionsSection';
 import { BriefPositionsBody } from '@/common/components/home/BriefPositionsBody';
-import { useWheelTabBarHeight } from '@/common/components/ui/WheelTabBar';
+import { useTabNavHeight } from '@/common/components/ui/TabNavBar';
 
 interface Props {
   /**
@@ -26,7 +26,7 @@ export default function PositionScreen({ embedded = false }: Props) {
   const colors = useThemeColors();
   const [mode, setMode] = useState<'live' | 'paper'>('live');
   // The 0.7 tab bar floats over this screen — clear its full height.
-  const tabBarHeight = useWheelTabBarHeight() + 12;
+  const tabBarHeight = useTabNavHeight() + 12;
 
   // Deep-link from a notification tap (see NotificationNavigationService) —
   // consume `paper_mode` exactly once, same pattern as orb.tsx's `section`

@@ -7,7 +7,7 @@ import { MarketDigestModal } from '@/common/components/digest/MarketDigestModal'
 import { DynamicCard, EXPANDED_H, COLLAPSE_RANGE } from '@/common/components/home/DynamicCard';
 import PositionScreen from './position';
 import { useThemeColors } from '@/lib/useColorScheme';
-import { useWheelTabBarHeight } from '@/common/components/ui/WheelTabBar';
+import { useTabNavHeight } from '@/common/components/ui/TabNavBar';
 
 /**
  * 0.7 redesign Home — the dynamic card ("dynamic island") pinned at top,
@@ -24,7 +24,7 @@ export default function HomeScreen() {
   const [digestModalDate, setDigestModalDate] = useState<string | null>(null);
   const colors = useThemeColors();
   // The floating tab bar covers the bottom of the list — clear it (+ a gap).
-  const tabBarClearance = useWheelTabBarHeight() + 12;
+  const tabBarClearance = useTabNavHeight() + 12;
   const scrollY = useSharedValue(0);
   const [viewportH, setViewportH] = useState(0);
   const onLayout = useCallback((e: LayoutChangeEvent) => setViewportH(e.nativeEvent.layout.height), []);

@@ -178,7 +178,7 @@ function WheelIcon({
 
 /** Blurred, hairline-rimmed glass backing shared by the pill and the
  *  round Profile button. */
-function Glass({ radius, isDark }: { radius: number; isDark: boolean }) {
+export function Glass({ radius, isDark }: { radius: number; isDark: boolean }) {
   return (
     <View style={[StyleSheet.absoluteFillObject, { borderRadius: radius, overflow: 'hidden' }]}>
       <BlurView tint={isDark ? 'dark' : 'light'} intensity={70} style={StyleSheet.absoluteFill} />
