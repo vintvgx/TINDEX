@@ -1161,39 +1161,38 @@ export function ChartsContent({ initialTicker, topInset }: {
             </View>
           </View>
         )}
+        {/* Bottom toolbar — two floating pills (ticker + interval wheels |
+            tools) over the bottom of the chart, which runs under them. */}
+        <ChartBottomToolbar
+          tickers={effectiveTickerList}
+          activeTicker={activeTicker}
+          onSelectTicker={setSelectedTicker}
+          onSearchPress={() => setSearchOpen(true)}
+          isFollowed={isActiveFollowed}
+          onToggleFollow={handleToggleFollow}
+          period={period}
+          onPeriodChange={setPeriod}
+          interval={chartInterval}
+          allowedIntervals={allowedIntervals}
+          onIntervalChange={setChartInterval}
+          technicalsContent={
+            <TechnicalsSheet
+              check={chart.technicals.data}
+              isLoading={chart.technicals.isLoading}
+              error={chart.technicals.error}
+              onReviewEntry={reviewEntryFromTechnicals}
+              tradeSide={tradeSide}
+            />
+          }
+          technicalsOpen={technicalsOpen}
+          onTechnicalsOpenChange={setTechnicalsOpen}
+          positioningContent={<OptionsPositioningPanel ticker={activeTicker} />}
+          settingsSections={chart.sections}
+          onPositionsPress={toggleExpanded}
+          openPositionCount={totalPositionsForTicker}
+          tickerStatus={tickerStatus}
+        />
       </View>
-
-      {/* Bottom toolbar — TradingView-style: ticker wheel + period slider
-          fixed left, tool buttons scroll right. Hugs the chart. */}
-      <ChartBottomToolbar
-        tickers={effectiveTickerList}
-        activeTicker={activeTicker}
-        onSelectTicker={setSelectedTicker}
-        onSearchPress={() => setSearchOpen(true)}
-        isFollowed={isActiveFollowed}
-        onToggleFollow={handleToggleFollow}
-        period={period}
-        onPeriodChange={setPeriod}
-        interval={chartInterval}
-        allowedIntervals={allowedIntervals}
-        onIntervalChange={setChartInterval}
-        technicalsContent={
-          <TechnicalsSheet
-            check={chart.technicals.data}
-            isLoading={chart.technicals.isLoading}
-            error={chart.technicals.error}
-            onReviewEntry={reviewEntryFromTechnicals}
-            tradeSide={tradeSide}
-          />
-        }
-        technicalsOpen={technicalsOpen}
-        onTechnicalsOpenChange={setTechnicalsOpen}
-        positioningContent={<OptionsPositioningPanel ticker={activeTicker} />}
-        settingsSections={chart.sections}
-        onPositionsPress={toggleExpanded}
-        openPositionCount={totalPositionsForTicker}
-        tickerStatus={tickerStatus}
-      />
 
       {/* Bottom slot, position-aware: the live account summary when this
           ticker has no open position (not tappable), else a compact
